@@ -21,7 +21,7 @@ except ImportError:
 # إعدادات المصادقة
 # ============================================
 # يتم قراءتها من متغيرات البيئة فقط - لا توجد قيم افتراضية غير آمنة
-ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
+ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin-mohamed')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
 
 # التحقق من وجود كلمة المرور في بيئة الإنتاج
@@ -34,7 +34,7 @@ if not ADMIN_PASSWORD:
         UserWarning
     )
     # كلمة مرور مؤقتة للتطوير فقط - يجب تغييرها في الإنتاج
-    ADMIN_PASSWORD = 'dev_temp_password_change_me'
+    ADMIN_PASSWORD = 'admin916732007'
 
 # ============================================
 # إعدادات Flask
