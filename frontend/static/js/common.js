@@ -79,7 +79,78 @@ function setLoading(elementId, isLoading, loadingText = 'جاري التحميل
 }
 
 // ============================================
-// Error Handling
+// API Helper Functions (Enhanced)
+// ============================================
+
+/**
+ * فئة خطأ API مخصصة
+ */
+class ApiError extends Error {
+    constructor(message, code, status) {
+        super(message);
+        this.code = code;
+        this.status = status;
+        this.name = 'ApiError';
+    }
+}
+
+/**
+ * إرسال طلب API مع معالجة الأخطاء
+ */
+async function apiRequest(url, options = {}) {
+    const defaultOptions = {
+        credentials: 'include',
+        headers: {
+            'Content-Type': 'application/json',
+            ...options.headers
+        }
+    };
+    
+    try {
+        const response = await fetch(url, { ...defaultOptions, ...options });
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new ApiError(data.message || 'حدث خطأ غير متوقع', data.code, response.status);
+        }
+        
+        return data;
+    } catch (error) {
+        if (error instanceof ApiError) {
+            throw error;
+        }
+        throw new ApiError('فشل الاتصال بالخادم', 'NETWORK_ERROR', 0);
+    }
+}
+
+/** إرسال طلب GET */
+async function apiGet(url) {
+    return apiRequest(url, { method: 'GET' });
+}
+
+/** إرسال طلب POST */
+async function apiPost(url, data) {
+    return apiRequest(url, {
+        method: 'POST',
+        body: JSON.stringify(data)
+    });
+}
+
+/** إرسال طلب PUT */
+async function apiPut(url, data) {
+    return apiRequest(url, {
+        method: 'PUT',
+        body: JSON.stringify(data)
+    });
+}
+
+/** إرسال طلب DELETE */
+async function apiDelete(url) {
+    return apiRequest(url, { method: 'DELETE' });
+}
+
+// ============================================
+// Error Handling (Legacy)
 // ============================================
 async function fetchWithErrorHandling(url, options = {}) {
     try {

@@ -1,11 +1,16 @@
 import os
+import sys
 import sqlite3
 import io
 import pandas as pd
 import shutil
 import tempfile
+import logging
 from flask import send_file, render_template, jsonify
 from datetime import datetime
+from contextlib import contextmanager
+
+logger = logging.getLogger(__name__)
 
 # حاول استيراد pdfkit بشكل اختياري
 try:
@@ -13,10 +18,20 @@ try:
 except Exception:
     pdfkit = None
 
-# خزن ملف قاعدة البيانات في مجلد مركزي داخل backend/database
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'database'))
-DB_FILE = os.path.join(BASE_DIR, "mechanical.db")
-SEMESTER_LABEL = "خريف 25-26"
+# استيراد الإعدادات من config.py
+try:
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    if root_dir not in sys.path:
+        sys.path.insert(0, root_dir)
+    from config import DATABASE_PATH
+    DB_FILE = DATABASE_PATH
+except ImportError:
+    # fallback للمسار الافتراضي
+    BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'database'))
+    DB_FILE = os.path.join(BASE_DIR, "mechanical.db")
+
+# الفصل الدراسي الحالي - يمكن نقله إلى config.py لاحقاً
+SEMESTER_LABEL = os.environ.get('CURRENT_SEMESTER', 'خريف 25-26')
 
 # ------------------------------------------------------------------
 # تهيئة PDFKIT مركزية (الخيار A)

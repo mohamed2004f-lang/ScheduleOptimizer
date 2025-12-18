@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="نظام إدارة الجداول الدراسية - كلية الهندسة، جامعة درنة">
+    <meta name="theme-color" content="#072f5f">
+    
+    <title>{% block title %}نظام الجداول الدراسية{% endblock %} | كلية الهندسة</title>
+    
+    <!-- Bootstrap RTL -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css">
+    <!-- Custom Styles -->
+    <link rel="stylesheet" href="/static/styles.css">
+    <!-- Favicon -->
+    <link rel="icon" href="/static/images/favicon.ico" type="image/x-icon">
+    
+    <style>
+        :root {
+            --derna-blue-900: #072f5f;
+            --derna-blue-600: #1e6fb8;
+            --derna-gold: #d6a12a;
+            --derna-light: #f8f9fa;
+            --derna-success: #28a745;
+            --derna-danger: #dc3545;
+            --derna-warning: #ffc107;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--derna-light);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        /* Logo Styling */
+        .mech-logo {
+            height: 56px;
+            width: auto;
+            object-fit: contain;
+            border-radius: 8px;
+            background: #fff;
+            padding: 4px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        
+        @media (max-width: 576px) {
+            .mech-logo { height: 44px; }
+        }
+        
+        /* Top Navigation */
+        .top-nav {
+            background: linear-gradient(90deg, var(--derna-blue-900), var(--derna-blue-600));
+            color: #fff;
+            padding: 10px 14px;
+            box-shadow: 0 6px 18px rgba(3,19,40,0.12);
+        }
+        
+        .top-nav .brand-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            text-decoration: none;
+            color: inherit;
+        }
+        
+        .top-nav .brand-title {
+            display: flex;
+            flex-direction: column;
+            line-height: 1;
+            color: #fff;
+        }
+        
+        .top-nav .brand-title h1 {
+            margin: 0;
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+        }
+        
+        .top-nav .brand-title p {
+            margin: 0;
+            font-size: 12px;
+            opacity: 0.95;
+        }
+        
+        /* Main Title */
+        .site-main-title {
+            text-align: center;
+            color: var(--derna-blue-900);
+            font-weight: 800;
+            font-size: 20px;
+            margin: 10px 0;
+        }
+        
+        /* Main Navigation */
+        .main-nav {
+            background: #fff;
+            border-bottom: 1px solid rgba(0,0,0,0.06);
+        }
+        
+        .nav-link {
+            color: var(--derna-blue-900) !important;
+            font-weight: 600;
+            transition: color 0.2s;
+        }
+        
+        .nav-link:hover {
+            color: var(--derna-blue-600) !important;
+        }
+        
+        .nav-link.active {
+            color: var(--derna-gold) !important;
+            border-bottom: 2px solid var(--derna-gold);
+        }
+        
+        /* Buttons */
+        .btn-logout {
+            background: var(--derna-gold);
+            color: var(--derna-blue-900);
+            border: none;
+            padding: 6px 10px;
+            font-weight: 700;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+        
+        .btn-logout:hover {
+            background: #c4911f;
+            color: #fff;
+        }
+        
+        .btn-primary {
+            background: var(--derna-blue-600);
+            border-color: var(--derna-blue-600);
+        }
+        
+        .btn-primary:hover {
+            background: var(--derna-blue-900);
+            border-color: var(--derna-blue-900);
+        }
+        
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            padding: 20px 0;
+        }
+        
+        /* Cards */
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        }
+        
+        .card-header {
+            background: var(--derna-blue-900);
+            color: #fff;
+            border-radius: 12px 12px 0 0 !important;
+            font-weight: 600;
+        }
+        
+        /* Tables */
+        .table thead {
+            background: var(--derna-blue-900);
+            color: #fff;
+        }
+        
+        .table-hover tbody tr:hover {
+            background-color: rgba(30, 111, 184, 0.1);
+        }
+        
+        /* Alerts */
+        .alert {
+            border-radius: 8px;
+            border: none;
+        }
+        
+        /* Footer */
+        .site-footer {
+            background: var(--derna-blue-900);
+            color: #fff;
+            padding: 15px 0;
+            text-align: center;
+            font-size: 14px;
+            margin-top: auto;
+        }
+        
+        .site-footer a {
+            color: var(--derna-gold);
+            text-decoration: none;
+        }
+        
+        /* Loading Spinner */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255,255,255,0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+        }
+        
+        .loading-overlay.active {
+            display: flex;
+        }
+        
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 9999;
+        }
+        
+        @media (max-width: 768px) {
+            .site-main-title { font-size: 18px; }
+            .top-nav .brand-row { gap: 8px; }
+        }
+        
+        {% block extra_styles %}{% endblock %}
+    </style>
+</head>
+<body>
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;">
+            <span class="visually-hidden">جاري التحميل...</span>
+        </div>
+    </div>
+    
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+    
+    <!-- Top Banner -->
+    <header class="top-nav">
+        <div class="container-fluid">
+            <div class="d-flex align-items-center justify-content-between">
+                <a class="brand-row" href="/">
+                    <img
+                        src="/static/images/mech_logo_small.png"
+                        srcset="/static/images/mech_logo_small@2x.png 2x"
+                        alt="شعار كلية الهندسة — جامعة درنة"
+                        class="mech-logo"
+                        onerror="this.style.display='none'">
+                    <div class="brand-title">
+                        <h1>جامعة درنة</h1>
+                        <p>كلية الهندسة</p>
+                    </div>
+                </a>
+                
+                <div class="d-flex align-items-center gap-2">
+                    <span class="d-none d-md-inline text-white-50 me-2" id="currentUser"></span>
+                    <button class="btn btn-logout" type="button" id="logoutBtn" onclick="handleLogout()">
+                        <i class="bi bi-box-arrow-right"></i> خروج
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+    
+    <!-- Main Title -->
+    <div class="container-fluid">
+        <div class="site-main-title" role="banner">
+            {% block page_title %}كلية الهندسة - جامعة درنة{% endblock %}
+        </div>
+    </div>
+    
+    <!-- Main Navigation -->
+    <nav class="main-nav navbar navbar-expand-lg navbar-light">
+        <div class="container-fluid">
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            
+            <div class="collapse navbar-collapse" id="mainNav">
+                <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                    <li class="nav-item">
+                        <a class="nav-link {% if active_page == 'dashboard' %}active{% endif %}" href="/dashboard">لوحة القيادة</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if active_page == 'students' %}active{% endif %}" href="/students_form">الطلبة</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if active_page == 'courses' %}active{% endif %}" href="/courses_form">المقررات</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if active_page == 'prereqs' %}active{% endif %}" href="/prereqs_form">المتطلبات المسبقة</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if active_page == 'registrations' %}active{% endif %}" href="/registrations_form">التسجيلات</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if active_page == 'schedule' %}active{% endif %}" href="/schedule_form">الجدول</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if active_page == 'attendance' %}active{% endif %}" href="/attendance_export">الحضور والغياب</a>
+                    </li>
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle {% if active_page == 'exams' %}active{% endif %}" href="#" data-bs-toggle="dropdown">الامتحانات</a>
+                        <ul class="dropdown-menu">
+                            <li><a class="dropdown-item" href="/exams/midterms">الامتحانات الجزئية</a></li>
+                            <li><a class="dropdown-item" href="/exams/finals">الامتحانات النهائية</a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item" href="/exams/conflicts">تقرير التعارضات</a></li>
+                        </ul>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if active_page == 'transcript' %}active{% endif %}" href="/transcript_page">كشف الدرجات</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if active_page == 'results' %}active{% endif %}" href="/results">النتائج</a>
+                    </li>
+                </ul>
+                
+                {% block nav_actions %}{% endblock %}
+            </div>
+        </div>
+    </nav>
+    
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <div class="container-fluid mt-3">
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    {% endwith %}
+    
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="container-fluid">
+            {% block content %}{% endblock %}
+        </div>
+    </main>
+    
+    <!-- Footer -->
+    <footer class="site-footer">
+        <div class="container">
+            <p class="mb-0">
+                &copy; {{ current_year|default('2024') }} كلية الهندسة - جامعة درنة | 
+                نظام إدارة الجداول الدراسية
+            </p>
+        </div>
+    </footer>
+    
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Common JS -->
+    <script src="/static/js/common.js"></script>
+    
+    <script>
+        // دالة تسجيل الخروج
+        async function handleLogout() {
+            try {
+                showLoading();
+                const response = await fetch('/auth/logout', {
+                    method: 'POST',
+                    credentials: 'include'
+                });
+                
+                if (response.ok) {
+                    window.location.href = '/login';
+                } else {
+                    showToast('حدث خطأ أثناء تسجيل الخروج', 'error');
+                }
+            } catch (error) {
+                console.error('Logout error:', error);
+                window.location.href = '/login';
+            } finally {
+                hideLoading();
+            }
+        }
+        
+        // إظهار/إخفاء التحميل
+        function showLoading() {
+            document.getElementById('loadingOverlay').classList.add('active');
+        }
+        
+        function hideLoading() {
+            document.getElementById('loadingOverlay').classList.remove('active');
+        }
+        
+        // إظهار Toast
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toastId = 'toast-' + Date.now();
+            
+            const bgClass = {
+                'success': 'bg-success',
+                'error': 'bg-danger',
+                'warning': 'bg-warning',
+                'info': 'bg-info'
+            }[type] || 'bg-info';
+            
+            const toastHtml = `
+                <div id="${toastId}" class="toast ${bgClass} text-white" role="alert">
+                    <div class="toast-body d-flex justify-content-between align-items-center">
+                        <span>${message}</span>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast"></button>
+                    </div>
+                </div>
+            `;
+            
+            container.insertAdjacentHTML('beforeend', toastHtml);
+            const toastEl = document.getElementById(toastId);
+            const toast = new bootstrap.Toast(toastEl, { delay: 5000 });
+            toast.show();
+            
+            toastEl.addEventListener('hidden.bs.toast', () => toastEl.remove());
+        }
+        
+        // التحقق من حالة تسجيل الدخول
+        window.addEventListener('load', async function() {
+            try {
+                const response = await fetch('/auth/check', { credentials: 'include' });
+                const data = await response.json();
+                
+                if (!data.authenticated) {
+                    if (window.location.pathname !== '/login') {
+                        window.location.href = '/login';
+                    }
+                } else {
+                    // عرض اسم المستخدم
+                    const userEl = document.getElementById('currentUser');
+                    if (userEl && data.user) {
+                        userEl.textContent = 'مرحباً، ' + data.user;
+                    }
+                }
+            } catch (error) {
+                console.error('Auth check error:', error);
+                if (window.location.pathname !== '/login') {
+                    window.location.href = '/login';
+                }
+            }
+        });
+    </script>
+    
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

@@ -1,23 +1,86 @@
 """
 Service Layer - فصل منطق العمل عن Routes
+يوفر واجهة موحدة للتعامل مع البيانات
 """
 import logging
-from typing import List, Dict, Optional, Any
-from ..services.utilities import get_connection
-from ..core.exceptions import ValidationError, NotFoundError, DatabaseError
+from typing import List, Dict, Optional, Any, Tuple
+from datetime import datetime
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
+# استيراد الأدوات المساعدة
+try:
+    from ..services.utilities import get_connection, DB_FILE, SEMESTER_LABEL
+except ImportError:
+    from backend.services.utilities import get_connection, DB_FILE, SEMESTER_LABEL
+
+# استيراد الاستثناءات
+try:
+    from .exceptions import ValidationError, NotFoundError, DatabaseError
+except ImportError:
+    from backend.core.exceptions import ValidationError, NotFoundError, DatabaseError
+
+# استيراد أدوات التحقق
+try:
+    from .validators import normalize_student_id, normalize_grade, normalize_units, sanitize_input
+except ImportError:
+    # fallback functions
+    def normalize_student_id(sid):
+        if sid is None:
+            return ""
+        sid_str = str(sid).strip()
+        if sid_str.endswith('.0'):
+            sid_str = sid_str[:-2]
+        return sid_str
+    
+    def normalize_grade(grade):
+        if grade is None or grade == '':
+            return None
+        try:
+            return float(grade)
+        except:
+            return None
+    
+    def normalize_units(units):
+        if units is None or units == '':
+            return 0
+        try:
+            return max(0, int(units))
+        except:
+            return 0
+    
+    def sanitize_input(value, max_length=500):
+        if value is None:
+            return ""
+        return str(value).strip()[:max_length]
+
+
+# ============================================
+# Context Manager للتعاملات
+# ============================================
+
+@contextmanager
+def db_transaction():
+    """Context manager للتعاملات مع قاعدة البيانات"""
+    conn = get_connection()
+    try:
+        yield conn
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Database transaction failed: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+# ============================================
+# خدمة الطلاب
+# ============================================
 
 class StudentService:
     """خدمة إدارة الطلاب"""
-    
-    @staticmethod
-    def normalize_sid(sid):
-        """تطبيع معرّف الطالب"""
-        if sid is None:
-            return ""
-        return str(sid).strip()
     
     @staticmethod
     def get_all_students() -> List[Dict]:
@@ -25,53 +88,134 @@ class StudentService:
         try:
             with get_connection() as conn:
                 cur = conn.cursor()
-                rows = cur.execute("SELECT student_id, student_name FROM students").fetchall()
-                return [{'student_id': r[0], 'student_name': r[1]} for r in rows]
+                rows = cur.execute("""
+                    SELECT student_id, student_name 
+                    FROM students 
+                    ORDER BY student_name, student_id
+                """).fetchall()
+                return [{'student_id': r[0], 'student_name': r[1] or ''} for r in rows]
         except Exception as e:
             logger.error(f"Error getting students: {e}")
             raise DatabaseError(f"فشل جلب قائمة الطلاب: {str(e)}")
     
     @staticmethod
-    def add_student(student_id: str, student_name: str) -> Dict:
-        """إضافة طالب جديد"""
-        sid = StudentService.normalize_sid(student_id)
+    def get_student(student_id: str) -> Optional[Dict]:
+        """جلب طالب بالمعرف"""
+        sid = normalize_student_id(student_id)
         if not sid:
             raise ValidationError("معرّف الطالب مطلوب")
+        
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                row = cur.execute(
+                    "SELECT student_id, student_name FROM students WHERE student_id = ?",
+                    (sid,)
+                ).fetchone()
+                
+                if row:
+                    return {'student_id': row[0], 'student_name': row[1] or ''}
+                return None
+        except Exception as e:
+            logger.error(f"Error getting student {sid}: {e}")
+            raise DatabaseError(f"فشل جلب بيانات الطالب: {str(e)}")
+    
+    @staticmethod
+    def add_student(student_id: str, student_name: str = "") -> Dict:
+        """إضافة طالب جديد"""
+        sid = normalize_student_id(student_id)
+        if not sid:
+            raise ValidationError("معرّف الطالب مطلوب")
+        
+        name = sanitize_input(student_name, 200)
         
         try:
             with get_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(
-                    "INSERT OR REPLACE INTO students (student_id, student_name) VALUES (?,?)",
-                    (sid, student_name)
+                    "INSERT OR REPLACE INTO students (student_id, student_name) VALUES (?, ?)",
+                    (sid, name)
                 )
                 conn.commit()
-                return {'status': 'ok', 'message': 'تم إضافة الطالب'}
+                logger.info(f"Student added/updated: {sid}")
+                return {'status': 'ok', 'message': 'تم إضافة الطالب', 'student_id': sid}
         except Exception as e:
             logger.error(f"Error adding student: {e}")
             raise DatabaseError(f"فشل إضافة الطالب: {str(e)}")
     
     @staticmethod
-    def delete_student(student_id: str) -> Dict:
+    def update_student(student_id: str, student_name: str) -> Dict:
+        """تحديث بيانات طالب"""
+        sid = normalize_student_id(student_id)
+        if not sid:
+            raise ValidationError("معرّف الطالب مطلوب")
+        
+        name = sanitize_input(student_name, 200)
+        
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "UPDATE students SET student_name = ? WHERE student_id = ?",
+                    (name, sid)
+                )
+                if cur.rowcount == 0:
+                    raise NotFoundError("الطالب غير موجود")
+                conn.commit()
+                return {'status': 'ok', 'message': 'تم تحديث بيانات الطالب'}
+        except NotFoundError:
+            raise
+        except Exception as e:
+            logger.error(f"Error updating student: {e}")
+            raise DatabaseError(f"فشل تحديث بيانات الطالب: {str(e)}")
+    
+    @staticmethod
+    def delete_student(student_id: str, cascade: bool = True) -> Dict:
         """حذف طالب"""
-        sid = StudentService.normalize_sid(student_id)
+        sid = normalize_student_id(student_id)
         if not sid:
             raise ValidationError("معرّف الطالب مطلوب")
         
         try:
             with get_connection() as conn:
                 cur = conn.cursor()
+                
+                # حذف البيانات المرتبطة إذا طُلب ذلك
+                if cascade:
+                    cur.execute("DELETE FROM registrations WHERE student_id = ?", (sid,))
+                    cur.execute("DELETE FROM grades WHERE student_id = ?", (sid,))
+                    cur.execute("DELETE FROM grade_audit WHERE student_id = ?", (sid,))
+                    cur.execute("DELETE FROM conflict_report WHERE student_id = ?", (sid,))
+                
                 cur.execute("DELETE FROM students WHERE student_id = ?", (sid,))
                 if cur.rowcount == 0:
                     raise NotFoundError("الطالب غير موجود")
+                
                 conn.commit()
+                logger.info(f"Student deleted: {sid}")
                 return {'status': 'ok', 'message': 'تم حذف الطالب'}
         except NotFoundError:
             raise
         except Exception as e:
             logger.error(f"Error deleting student: {e}")
             raise DatabaseError(f"فشل حذف الطالب: {str(e)}")
+    
+    @staticmethod
+    def get_student_count() -> int:
+        """الحصول على عدد الطلاب"""
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                row = cur.execute("SELECT COUNT(*) FROM students").fetchone()
+                return row[0] if row else 0
+        except Exception as e:
+            logger.error(f"Error counting students: {e}")
+            return 0
 
+
+# ============================================
+# خدمة المقررات
+# ============================================
 
 class CourseService:
     """خدمة إدارة المقررات"""
@@ -82,9 +226,12 @@ class CourseService:
         try:
             with get_connection() as conn:
                 cur = conn.cursor()
-                rows = cur.execute(
-                    "SELECT course_name, course_code, units FROM courses"
-                ).fetchall()
+                rows = cur.execute("""
+                    SELECT course_name, course_code, units 
+                    FROM courses 
+                    WHERE COALESCE(course_name, '') <> ''
+                    ORDER BY course_name
+                """).fetchall()
                 return [
                     {
                         'course_name': r[0],
@@ -98,37 +245,142 @@ class CourseService:
             raise DatabaseError(f"فشل جلب قائمة المقررات: {str(e)}")
     
     @staticmethod
+    def get_course(course_name: str) -> Optional[Dict]:
+        """جلب مقرر بالاسم"""
+        name = sanitize_input(course_name, 200)
+        if not name:
+            raise ValidationError("اسم المقرر مطلوب")
+        
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                row = cur.execute(
+                    "SELECT course_name, course_code, units FROM courses WHERE course_name = ?",
+                    (name,)
+                ).fetchone()
+                
+                if row:
+                    return {
+                        'course_name': row[0],
+                        'course_code': row[1] or '',
+                        'units': row[2] or 0
+                    }
+                return None
+        except Exception as e:
+            logger.error(f"Error getting course {name}: {e}")
+            raise DatabaseError(f"فشل جلب بيانات المقرر: {str(e)}")
+    
+    @staticmethod
     def add_course(course_name: str, course_code: str = "", units: int = 0) -> Dict:
         """إضافة مقرر جديد"""
-        if not course_name or not course_name.strip():
+        name = sanitize_input(course_name, 200)
+        if not name:
             raise ValidationError("اسم المقرر مطلوب")
+        
+        code = sanitize_input(course_code, 50)
+        units_val = normalize_units(units)
         
         try:
             with get_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(
                     "INSERT OR REPLACE INTO courses (course_name, course_code, units) VALUES (?, ?, ?)",
-                    (course_name.strip(), course_code or "", int(units) if units else 0)
+                    (name, code, units_val)
                 )
                 conn.commit()
-                return {'status': 'ok', 'message': 'تم إضافة المقرر'}
+                logger.info(f"Course added/updated: {name}")
+                return {'status': 'ok', 'message': 'تم إضافة المقرر', 'course_name': name}
         except Exception as e:
             logger.error(f"Error adding course: {e}")
             raise DatabaseError(f"فشل إضافة المقرر: {str(e)}")
     
     @staticmethod
-    def delete_course(course_name: str) -> Dict:
+    def update_course(old_name: str, new_name: str, course_code: str = None, units: int = None) -> Dict:
+        """تحديث بيانات مقرر"""
+        old = sanitize_input(old_name, 200)
+        new = sanitize_input(new_name, 200)
+        
+        if not old or not new:
+            raise ValidationError("اسم المقرر القديم والجديد مطلوبان")
+        
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                
+                # تحديث المقرر
+                if course_code is not None and units is not None:
+                    cur.execute(
+                        "UPDATE courses SET course_name=?, course_code=?, units=? WHERE course_name=?",
+                        (new, sanitize_input(course_code, 50), normalize_units(units), old)
+                    )
+                elif course_code is not None:
+                    cur.execute(
+                        "UPDATE courses SET course_name=?, course_code=? WHERE course_name=?",
+                        (new, sanitize_input(course_code, 50), old)
+                    )
+                elif units is not None:
+                    cur.execute(
+                        "UPDATE courses SET course_name=?, units=? WHERE course_name=?",
+                        (new, normalize_units(units), old)
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE courses SET course_name=? WHERE course_name=?",
+                        (new, old)
+                    )
+                
+                if cur.rowcount == 0:
+                    raise NotFoundError("المقرر غير موجود")
+                
+                # تحديث الجداول المرتبطة
+                for table in ('grades', 'schedule', 'registrations', 'prereqs'):
+                    try:
+                        cur.execute(f"UPDATE {table} SET course_name=? WHERE course_name=?", (new, old))
+                    except Exception:
+                        pass
+                
+                # تحديث المتطلبات
+                cur.execute(
+                    "UPDATE prereqs SET required_course_name=? WHERE required_course_name=?",
+                    (new, old)
+                )
+                
+                conn.commit()
+                return {'status': 'ok', 'message': 'تم تحديث بيانات المقرر'}
+        except NotFoundError:
+            raise
+        except Exception as e:
+            logger.error(f"Error updating course: {e}")
+            raise DatabaseError(f"فشل تحديث بيانات المقرر: {str(e)}")
+    
+    @staticmethod
+    def delete_course(course_name: str, cascade: bool = True) -> Dict:
         """حذف مقرر"""
-        if not course_name or not course_name.strip():
+        name = sanitize_input(course_name, 200)
+        if not name:
             raise ValidationError("اسم المقرر مطلوب")
         
         try:
             with get_connection() as conn:
                 cur = conn.cursor()
-                cur.execute("DELETE FROM courses WHERE course_name = ?", (course_name.strip(),))
+                
+                if cascade:
+                    for table in ('schedule', 'registrations', 'grades'):
+                        try:
+                            cur.execute(f"DELETE FROM {table} WHERE course_name = ?", (name,))
+                        except Exception:
+                            pass
+                    cur.execute(
+                        "DELETE FROM prereqs WHERE course_name = ? OR required_course_name = ?",
+                        (name, name)
+                    )
+                
+                cur.execute("DELETE FROM courses WHERE course_name = ?", (name,))
                 if cur.rowcount == 0:
                     raise NotFoundError("المقرر غير موجود")
+                
                 conn.commit()
+                logger.info(f"Course deleted: {name}")
                 return {'status': 'ok', 'message': 'تم حذف المقرر'}
         except NotFoundError:
             raise
@@ -137,12 +389,16 @@ class CourseService:
             raise DatabaseError(f"فشل حذف المقرر: {str(e)}")
 
 
+# ============================================
+# خدمة الجدول الدراسي
+# ============================================
+
 class ScheduleService:
     """خدمة إدارة الجدول الدراسي"""
     
     @staticmethod
     def get_all_schedule_rows() -> List[Dict]:
-        """جلب جميع صفوف الجدول الدراسي"""
+        """جلب جميع صفوف الجدول الدراسي مع عدد الطلاب"""
         try:
             with get_connection() as conn:
                 cur = conn.cursor()
@@ -167,9 +423,9 @@ class ScheduleService:
                         'course_name': r[1],
                         'day': r[2],
                         'time': r[3],
-                        'room': r[4],
-                        'instructor': r[5],
-                        'semester': r[6],
+                        'room': r[4] or '',
+                        'instructor': r[5] or '',
+                        'semester': r[6] or '',
                         'student_count': r[7] or 0
                     }
                     for r in rows
@@ -182,11 +438,15 @@ class ScheduleService:
     def add_schedule_row(course_name: str, day: str, time: str, 
                         room: str = "", instructor: str = "", semester: str = "") -> Dict:
         """إضافة صف جديد للجدول الدراسي"""
-        if not course_name or not course_name.strip():
+        name = sanitize_input(course_name, 200)
+        day_val = sanitize_input(day, 20)
+        time_val = sanitize_input(time, 20)
+        
+        if not name:
             raise ValidationError("اسم المقرر مطلوب")
-        if not day or not day.strip():
+        if not day_val:
             raise ValidationError("اليوم مطلوب")
-        if not time or not time.strip():
+        if not time_val:
             raise ValidationError("الوقت مطلوب")
         
         try:
@@ -195,14 +455,53 @@ class ScheduleService:
                 cur.execute(
                     """INSERT INTO schedule (course_name, day, time, room, instructor, semester) 
                        VALUES (?, ?, ?, ?, ?, ?)""",
-                    (course_name.strip(), day.strip(), time.strip(), 
-                     room or "", instructor or "", semester or "")
+                    (name, day_val, time_val, 
+                     sanitize_input(room, 50), 
+                     sanitize_input(instructor, 100), 
+                     sanitize_input(semester, 50) or SEMESTER_LABEL)
                 )
+                rowid = cur.lastrowid
                 conn.commit()
-                return {'status': 'ok', 'message': 'تم إضافة الصف للجدول الدراسي'}
+                logger.info(f"Schedule row added: {name} on {day_val}")
+                return {'status': 'ok', 'message': 'تم إضافة الصف للجدول الدراسي', 'rowid': rowid}
         except Exception as e:
             logger.error(f"Error adding schedule row: {e}")
             raise DatabaseError(f"فشل إضافة الصف: {str(e)}")
+    
+    @staticmethod
+    def update_schedule_row(section_id: int, **kwargs) -> Dict:
+        """تحديث صف في الجدول الدراسي"""
+        if not section_id:
+            raise ValidationError("معرّف الصف مطلوب")
+        
+        allowed_fields = {'course_name', 'day', 'time', 'room', 'instructor', 'semester'}
+        updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
+        
+        if not updates:
+            raise ValidationError("لا توجد بيانات للتحديث")
+        
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                
+                set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+                values = list(updates.values()) + [section_id]
+                
+                cur.execute(
+                    f"UPDATE schedule SET {set_clause} WHERE rowid = ?",
+                    values
+                )
+                
+                if cur.rowcount == 0:
+                    raise NotFoundError("الصف غير موجود")
+                
+                conn.commit()
+                return {'status': 'ok', 'message': 'تم تحديث الصف'}
+        except NotFoundError:
+            raise
+        except Exception as e:
+            logger.error(f"Error updating schedule row: {e}")
+            raise DatabaseError(f"فشل تحديث الصف: {str(e)}")
     
     @staticmethod
     def delete_schedule_row(section_id: int) -> Dict:
@@ -217,6 +516,7 @@ class ScheduleService:
                 if cur.rowcount == 0:
                     raise NotFoundError("الصف غير موجود")
                 conn.commit()
+                logger.info(f"Schedule row deleted: {section_id}")
                 return {'status': 'ok', 'message': 'تم حذف الصف'}
         except NotFoundError:
             raise
@@ -224,3 +524,211 @@ class ScheduleService:
             logger.error(f"Error deleting schedule row: {e}")
             raise DatabaseError(f"فشل حذف الصف: {str(e)}")
 
+
+# ============================================
+# خدمة التسجيلات
+# ============================================
+
+class RegistrationService:
+    """خدمة إدارة التسجيلات"""
+    
+    @staticmethod
+    def get_student_registrations(student_id: str) -> List[str]:
+        """جلب تسجيلات طالب"""
+        sid = normalize_student_id(student_id)
+        if not sid:
+            raise ValidationError("معرّف الطالب مطلوب")
+        
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                rows = cur.execute(
+                    "SELECT course_name FROM registrations WHERE student_id = ?",
+                    (sid,)
+                ).fetchall()
+                return [r[0] for r in rows]
+        except Exception as e:
+            logger.error(f"Error getting registrations for {sid}: {e}")
+            raise DatabaseError(f"فشل جلب التسجيلات: {str(e)}")
+    
+    @staticmethod
+    def save_registrations(student_id: str, courses: List[str]) -> Dict:
+        """حفظ تسجيلات طالب"""
+        sid = normalize_student_id(student_id)
+        if not sid:
+            raise ValidationError("معرّف الطالب مطلوب")
+        
+        # إزالة التكرارات
+        unique_courses = list(dict.fromkeys(courses))
+        
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                
+                # حذف التسجيلات القديمة
+                cur.execute("DELETE FROM registrations WHERE student_id = ?", (sid,))
+                
+                # إضافة التسجيلات الجديدة
+                if unique_courses:
+                    cur.executemany(
+                        "INSERT INTO registrations (student_id, course_name) VALUES (?, ?)",
+                        [(sid, c) for c in unique_courses]
+                    )
+                
+                conn.commit()
+                logger.info(f"Registrations saved for {sid}: {len(unique_courses)} courses")
+                return {
+                    'status': 'ok', 
+                    'message': 'تم حفظ التسجيلات',
+                    'count': len(unique_courses)
+                }
+        except Exception as e:
+            logger.error(f"Error saving registrations: {e}")
+            raise DatabaseError(f"فشل حفظ التسجيلات: {str(e)}")
+    
+    @staticmethod
+    def delete_registrations(student_id: str) -> Dict:
+        """حذف جميع تسجيلات طالب"""
+        sid = normalize_student_id(student_id)
+        if not sid:
+            raise ValidationError("معرّف الطالب مطلوب")
+        
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute("DELETE FROM registrations WHERE student_id = ?", (sid,))
+                deleted = cur.rowcount
+                conn.commit()
+                return {'status': 'ok', 'message': f'تم حذف {deleted} تسجيل'}
+        except Exception as e:
+            logger.error(f"Error deleting registrations: {e}")
+            raise DatabaseError(f"فشل حذف التسجيلات: {str(e)}")
+
+
+# ============================================
+# خدمة الدرجات
+# ============================================
+
+class GradeService:
+    """خدمة إدارة الدرجات"""
+    
+    @staticmethod
+    def get_student_grades(student_id: str, semester: str = None) -> List[Dict]:
+        """جلب درجات طالب"""
+        sid = normalize_student_id(student_id)
+        if not sid:
+            raise ValidationError("معرّف الطالب مطلوب")
+        
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                
+                if semester:
+                    rows = cur.execute("""
+                        SELECT semester, course_name, course_code, units, grade
+                        FROM grades
+                        WHERE student_id = ? AND semester = ?
+                        ORDER BY course_name
+                    """, (sid, semester)).fetchall()
+                else:
+                    rows = cur.execute("""
+                        SELECT semester, course_name, course_code, units, grade
+                        FROM grades
+                        WHERE student_id = ?
+                        ORDER BY semester, course_name
+                    """, (sid,)).fetchall()
+                
+                return [
+                    {
+                        'semester': r[0],
+                        'course_name': r[1],
+                        'course_code': r[2] or '',
+                        'units': r[3] or 0,
+                        'grade': r[4]
+                    }
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.error(f"Error getting grades for {sid}: {e}")
+            raise DatabaseError(f"فشل جلب الدرجات: {str(e)}")
+    
+    @staticmethod
+    def save_grade(student_id: str, semester: str, course_name: str, 
+                   grade: float = None, course_code: str = "", units: int = 0,
+                   changed_by: str = "system") -> Dict:
+        """حفظ درجة"""
+        sid = normalize_student_id(student_id)
+        if not sid:
+            raise ValidationError("معرّف الطالب مطلوب")
+        if not semester:
+            raise ValidationError("الفصل الدراسي مطلوب")
+        if not course_name:
+            raise ValidationError("اسم المقرر مطلوب")
+        
+        grade_val = normalize_grade(grade)
+        if grade_val is not None and (grade_val < 0 or grade_val > 100):
+            raise ValidationError("الدرجة يجب أن تكون بين 0 و 100")
+        
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                
+                # جلب الدرجة القديمة للتدقيق
+                old = cur.execute(
+                    "SELECT grade FROM grades WHERE student_id = ? AND semester = ? AND course_name = ?",
+                    (sid, semester, course_name)
+                ).fetchone()
+                old_grade = old[0] if old else None
+                
+                # تسجيل التعديل
+                cur.execute("""
+                    INSERT INTO grade_audit 
+                    (student_id, semester, course_name, old_grade, new_grade, changed_by, ts)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (sid, semester, course_name, old_grade, grade_val, 
+                      changed_by, datetime.utcnow().isoformat()))
+                
+                # حفظ الدرجة
+                cur.execute("""
+                    INSERT OR REPLACE INTO grades 
+                    (student_id, semester, course_name, course_code, units, grade)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (sid, semester, course_name, course_code, normalize_units(units), grade_val))
+                
+                conn.commit()
+                logger.info(f"Grade saved for {sid} in {course_name}: {grade_val}")
+                return {'status': 'ok', 'message': 'تم حفظ الدرجة'}
+        except Exception as e:
+            logger.error(f"Error saving grade: {e}")
+            raise DatabaseError(f"فشل حفظ الدرجة: {str(e)}")
+    
+    @staticmethod
+    def calculate_gpa(student_id: str, semester: str = None) -> Dict:
+        """حساب المعدل التراكمي"""
+        sid = normalize_student_id(student_id)
+        if not sid:
+            raise ValidationError("معرّف الطالب مطلوب")
+        
+        try:
+            grades = GradeService.get_student_grades(sid, semester)
+            
+            total_points = 0.0
+            total_units = 0
+            
+            for g in grades:
+                if g['grade'] is not None and g['units'] > 0:
+                    total_points += g['grade'] * g['units']
+                    total_units += g['units']
+            
+            gpa = round(total_points / total_units, 2) if total_units > 0 else 0.0
+            
+            return {
+                'student_id': sid,
+                'semester': semester,
+                'gpa': gpa,
+                'total_units': total_units,
+                'courses_count': len([g for g in grades if g['grade'] is not None])
+            }
+        except Exception as e:
+            logger.error(f"Error calculating GPA for {sid}: {e}")
+            raise DatabaseError(f"فشل حساب المعدل: {str(e)}")
