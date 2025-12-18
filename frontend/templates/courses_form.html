@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>إدخال المقررات</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <style>
+    body { padding: 18px; background: #f8f9fa; }
+    .mono { font-family: ui-monospace, Menlo, Monaco, "Roboto Mono", monospace; }
+    .pointer { cursor: pointer; }
+    .muted { color:#6c757d; }
+    .container-main { max-width: 1100px; margin: 0 auto; }
+    .btn-group-gap > .btn { margin-inline-end: 6px; margin-block: 6px; }
+  </style>
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main">
+
+    <div class="container">
+      <h3 class="mb-3">إدخال المقررات</h3>
+
+      <!-- أدوات الاستيراد والتصدير -->
+      <div class="card mb-3">
+        <div class="card-body">
+          <div class="d-flex flex-wrap align-items-center justify-content-between">
+            <div class="btn-group-gap">
+              <a class="btn btn-outline-success btn-sm" href="/courses/export/excel">⬇️ تصدير Excel</a>
+              <a class="btn btn-outline-danger btn-sm" href="/courses/export/pdf" target="_blank">⬇️ تصدير PDF</a>
+              <button id="btnExportCSV" class="btn btn-outline-secondary btn-sm">تصدير CSV</button>
+            </div>
+            <form id="courses-import-form" class="d-flex align-items-center" enctype="multipart/form-data" onsubmit="return false;">
+              <label class="form-label mb-0 me-2">📂 استيراد مقررات (Excel):</label>
+              <input class="form-control form-control-sm" style="max-width: 280px;" type="file" name="file" accept=".xlsx,.xls" />
+              <button type="button" class="btn btn-primary btn-sm ms-2" onclick="importCourses()">استيراد</button>
+            </form>
+          </div>
+          <div id="import_msg" class="mt-2"></div>
+        </div>
+      </div>
+
+      <!-- نموذج إضافة مقرر -->
+      <div class="card mb-3">
+        <div class="card-body">
+          <form id="courseForm" onsubmit="return false;">
+            <div class="row g-2 align-items-end">
+              <div class="col-md-4">
+                <label class="form-label">اسم المقرر</label>
+                <input id="course_name" class="form-control" required placeholder="مثال: ديناميكا حرارية 1">
+              </div>
+              <div class="col-md-3">
+                <label class="form-label">رمز المقرر (اختياري)</label>
+                <input id="course_code" class="form-control" placeholder="مثال: ME201">
+              </div>
+              <div class="col-md-3">
+                <label class="form-label">عدد الوحدات</label>
+                <input id="course_units" type="number" class="form-control" min="0" placeholder="مثلاً: 3">
+              </div>
+              <div class="col-md-2 d-grid">
+                <button id="btnAddCourse" class="btn btn-primary" type="button">أضف</button>
+              </div>
+            </div>
+          </form>
+          <div id="cr_msg" class="mt-2"></div>
+        </div>
+      </div>
+
+      <!-- قائمة المقررات -->
+      <div class="card">
+        <div class="card-body">
+          <div class="d-flex align-items-center justify-content-between mb-2">
+            <h6 class="mb-0">قائمة المقررات</h6>
+            <div class="d-flex gap-2">
+              <input id="filterInput" class="form-control form-control-sm" placeholder="فلترة بالاسم/الرمز" style="max-width: 220px;">
+            </div>
+          </div>
+          <div id="coursesList" class="small mono"></div>
+          <div class="mt-3">
+            <a href="/" class="btn btn-outline-secondary btn-sm">العودة</a>
+            <a href="/schedule_form" class="btn btn-primary btn-sm ms-2">إضافة الجدول الدراسي</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- نافذة تحرير مقرر -->
+    <div class="modal fade" id="editCourseModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h6 class="modal-title">تحرير بيانات المقرر</h6>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-2"><strong>اسم المقرر:</strong> <span id="ecName" class="mono"></span></div>
+            <div class="mb-2">
+              <label class="form-label">الرمز</label>
+              <input id="ecCode" class="form-control" placeholder="مثال: ME201">
+            </div>
+            <div class="mb-2">
+              <label class="form-label">الوحدات</label>
+              <input id="ecUnits" type="number" class="form-control" min="0" placeholder="مثلاً: 3">
+              <div class="form-text">0 يبقي القيمة كما هي إن كانت غير معروفة سابقاً.</div>
+            </div>
+            <div id="ecMsg" class="mt-2"></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">إلغاء</button>
+            <button class="btn btn-primary btn-sm" id="ecSaveBtn" type="button">حفظ</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+<script>
+let ALL_COURSES = [];
+let editModal;
+let editCourseName = '';
+
+function showAlert(elId, kind, text){
+  const el = document.getElementById(elId);
+  el.innerHTML = `<div class="alert alert-${kind} p-2 mb-0">${text}</div>`;
+  setTimeout(()=>{ if(el) el.innerHTML=''; }, 3500);
+}
+
+/* استيراد المقررات من Excel */
+async function importCourses(){
+  const form = document.getElementById('courses-import-form');
+  const fileInput = form.querySelector('input[type="file"]');
+  const msg = document.getElementById('import_msg');
+  msg.innerHTML = '';
+  if(!fileInput.files || !fileInput.files.length){
+    msg.innerHTML = '<div class="alert alert-warning p-1">الرجاء اختيار ملف Excel أولاً.</div>';
+    return;
+  }
+  try {
+    const data = new FormData(form);
+    const res = await fetch('/courses/import/excel', { method:'POST', body: data });
+    const j = await res.json().catch(()=>({}));
+    if(res.ok){
+      msg.innerHTML = `<div class="alert alert-success p-1">تم استيراد ${j.imported ?? 'عدد'} مقرر</div>`;
+      await loadCourses();
+      form.reset();
+    } else {
+      msg.innerHTML = `<div class="alert alert-danger p-1">خطأ: ${j.message || 'فشل الاستيراد'}</div>`;
+    }
+  } catch (err) {
+    console.error(err);
+    msg.innerHTML = '<div class="alert alert-danger p-1">خطأ في الاتصال بالخادم أثناء الاستيراد.</div>';
+  }
+}
+
+/* تحميل المقررات */
+async function loadCourses(){
+  try {
+    const r = await fetch('/list_courses'); // wrapper -> /courses/list
+    const arr = r.ok ? await r.json() : [];
+    ALL_COURSES = Array.isArray(arr) ? arr : [];
+    renderCourses(ALL_COURSES);
+    await loadCoursePrereqs();
+  } catch (err) {
+    console.error(err);
+    document.getElementById('coursesList').textContent = 'حدث خطأ أثناء جلب المقررات.';
+  }
+}
+
+function renderCourses(list){
+  const el = document.getElementById('coursesList');
+  if(!list.length){ el.textContent = 'لا يوجد مقررات.'; return; }
+  el.innerHTML = '';
+  const table = document.createElement('table');
+  table.className = 'table table-sm table-bordered mb-0';
+  table.innerHTML = `
+    <thead class="table-light">
+      <tr>
+        <th>الاسم</th>
+        <th>الرمز</th>
+        <th class="text-center">الوحدات</th>
+        <th class="text-center">إجراءات</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  `;
+  const tbody = table.querySelector('tbody');
+
+  list.forEach(c=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(c.course_name)}</td>
+      <td>${escapeHtml(c.course_code || '')}</td>
+      <td class="text-center">${(typeof c.units === 'number' ? c.units : (c.units || 0))}</td>
+      <td class="text-center">
+        <button class="btn btn-sm btn-outline-primary me-1" data-action="edit" data-name="${escapeAttr(c.course_name)}">تحرير</button>
+        <button class="btn btn-sm btn-danger" data-action="delete" data-name="${escapeAttr(c.course_name)}">حذف</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  el.appendChild(table);
+
+  tbody.querySelectorAll('button').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      const action = e.currentTarget.dataset.action;
+      const name = e.currentTarget.dataset.name;
+      if(action === 'delete') deleteCourse(name);
+      if(action === 'edit') openEdit(name);
+    });
+  });
+}
+
+function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+function escapeAttr(s){ return String(s||'').replaceAll('"','&quot;'); }
+
+async function deleteCourse(course_name){
+  if(!confirm('هل تريد حذف المقرر "' + course_name + '"؟')) return;
+  try {
+    const resp = await fetch('/delete_course', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({course_name})
+    });
+    const j = await resp.json().catch(()=>null);
+    alert(j?.message || (resp.ok ? 'تم' : 'خطأ'));
+    await loadCourses();
+  } catch (err) {
+    console.error(err);
+    alert('خطأ في الاتصال بالخادم.');
+  }
+}
+
+/* add (upsert) course via wrapper -> /courses/add */
+document.getElementById('btnAddCourse').addEventListener('click', async () => {
+  const name = document.getElementById('course_name').value.trim();
+  const code = document.getElementById('course_code').value.trim();
+  const unitsRaw = document.getElementById('course_units').value;
+  const units = Number(unitsRaw || 0);
+
+  if(!name){
+    showAlert('cr_msg', 'warning', 'أدخل اسم المقرر');
+    return;
+  }
+  if(unitsRaw !== '' && (isNaN(units) || units < 0)){
+    showAlert('cr_msg', 'warning', 'عدد الوحدات يجب أن يكون رقماً صحيحاً >= 0');
+    return;
+  }
+
+  if(ALL_COURSES.some(c=> (c.course_name||'').trim().toLowerCase() === name.toLowerCase())){
+    showAlert('cr_msg', 'info', 'المقرر موجود بالفعل — استخدم زر "تحرير" لتحديث الرمز/الوحدات.');
+    return;
+  }
+
+  try {
+    const resp = await fetch('/add_course',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({course_name: name, course_code: code, units})
+    });
+    const j = await resp.json().catch(()=>({}));
+    showAlert('cr_msg', resp.ok ? 'success' : 'danger', j.message||j.status||'');
+    if(resp.ok){
+      document.getElementById('course_name').value='';
+      document.getElementById('course_code').value='';
+      document.getElementById('course_units').value='';
+      await loadCourses();
+    }
+  } catch (err) {
+    console.error(err);
+    showAlert('cr_msg', 'danger', 'خطأ في الاتصال بالخادم.');
+  }
+});
+
+/* inline edit (upsert via wrapper -> /courses/add) */
+function openEdit(name){
+  const c = ALL_COURSES.find(x=>x.course_name === name);
+  if(!c) return;
+  if(!editModal){
+    editModal = new bootstrap.Modal(document.getElementById('editCourseModal'));
+  }
+  editCourseName = name;
+  document.getElementById('ecName').textContent = name;
+  document.getElementById('ecCode').value = c.course_code || '';
+  document.getElementById('ecUnits').value = (typeof c.units === 'number' ? c.units : (c.units || ''));
+  document.getElementById('ecMsg').innerHTML = '';
+  editModal.show();
+}
+
+document.getElementById('ecSaveBtn').addEventListener('click', async ()=>{
+  const code = document.getElementById('ecCode').value.trim();
+  const unitsRaw = document.getElementById('ecUnits').value;
+  const units = Number(unitsRaw || 0);
+  if(unitsRaw !== '' && (isNaN(units) || units < 0)){
+    showInModal('ecMsg', 'warning', 'عدد الوحدات يجب أن يكون رقماً صحيحاً >= 0');
+    return;
+  }
+  try {
+    const resp = await fetch('/add_course',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({course_name: editCourseName, course_code: code, units})
+    });
+    const j = await resp.json().catch(()=>({}));
+    if(resp.ok){
+      showInModal('ecMsg', 'success', 'تم حفظ التعديلات');
+      setTimeout(async ()=>{ editModal.hide(); await loadCourses(); }, 800);
+    } else {
+      showInModal('ecMsg', 'danger', j.message || 'فشل الحفظ');
+    }
+  } catch (err) {
+    console.error(err);
+    showInModal('ecMsg', 'danger', 'خطأ في الاتصال بالخادم.');
+  }
+});
+
+function showInModal(elId, kind, text){
+  const el = document.getElementById(elId);
+  el.innerHTML = `<div class="alert alert-${kind} p-2 mb-0">${text}</div>`;
+}
+
+/* filter */
+document.getElementById('filterInput').addEventListener('input', (e)=>{
+  const q = e.target.value.trim().toLowerCase();
+  const filtered = !q ? ALL_COURSES : ALL_COURSES.filter(c=>{
+    return (c.course_name||'').toLowerCase().includes(q)
+        || (c.course_code||'').toLowerCase().includes(q);
+  });
+  renderCourses(filtered);
+});
+
+/* export CSV (client-side) */
+document.getElementById('btnExportCSV').addEventListener('click', ()=>{
+  if(!ALL_COURSES.length){ return alert('لا توجد بيانات للتصدير'); }
+  const rows = [['course_name','course_code','units']];
+  ALL_COURSES.forEach(c=>{
+    rows.push([c.course_name||'', c.course_code||'', (typeof c.units==='number'? c.units : (c.units||''))]);
+  });
+  const csv = rows.map(r=>r.map(v=>String(v).replaceAll('"','""')).map(v=>`"${v}"`).join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download='courses.csv'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+});
+
+/* تحميل وعرض المتطلبات المسبقة أسفل كل مقرر */
+async function loadCoursePrereqs(){
+  try {
+    const r = await fetch('/list_prereqs'); // wrapper -> /courses/prereqs/list
+    const arr = r.ok ? await r.json() : [];
+    const byCourse = {};
+    arr.forEach(x=>{
+      if(!x.course_name) return;
+      byCourse[x.course_name] = byCourse[x.course_name] || [];
+      byCourse[x.course_name].push(x.required_course_name);
+    });
+
+    const el = document.getElementById('coursesList');
+    if(!el) return;
+    const table = el.querySelector('table');
+    if(!table) return;
+
+    const rows = Array.from(table.querySelectorAll('tbody tr'));
+    rows.forEach(tr=>{
+      const firstTd = tr.querySelector('td');
+      if(!firstTd) return;
+      const old = firstTd.querySelector('.pr-req-list');
+      if(old) old.remove();
+      const name = (firstTd.textContent||'').split(' (')[0].trim();
+      const reqs = byCourse[name] || [];
+      const small = document.createElement('div');
+      small.className = 'small text-muted pr-req-list mt-1';
+      small.textContent = reqs.length ? `المتطلبات: ${reqs.join(', ')}` : 'لا متطلبات';
+      firstTd.appendChild(small);
+    });
+  } catch (err) {
+    console.error('loadCoursePrereqs error', err);
+  }
+}
+
+/* البداية */
+window.addEventListener('load', loadCourses);
+</script>
+
+<!-- Bootstrap JS for modal -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

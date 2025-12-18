@@ -1,0 +1,204 @@
+<!-- frontend/templates/base_nav.html -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css">
+<link rel="stylesheet" href="/static/styles.css">
+<script src="/static/js/common.js"></script>
+
+<style>
+  :root{
+    --derna-blue-900: #072f5f;
+    --derna-blue-600: #1e6fb8;
+    --derna-gold: #d6a12a;
+  }
+
+  /* logo sizing and small responsive tweaks */
+  .mech-logo{
+    height:56px;
+    width:auto;
+    object-fit:contain;
+    border-radius:8px;
+    background:#fff;
+    padding:4px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  }
+  @media (max-width:576px){
+    .mech-logo{ height:44px; }
+  }
+
+  /* top nav wrapper */
+  .top-nav {
+    background: linear-gradient(90deg, var(--derna-blue-900), var(--derna-blue-600));
+    color: #fff;
+    padding: 10px 14px;
+    box-shadow: 0 6px 18px rgba(3,19,40,0.12);
+  }
+  .top-nav .brand-row {
+    display:flex;
+    align-items:center;
+    gap:12px;
+    text-decoration:none;
+    color:inherit;
+  }
+  .top-nav .brand-title {
+    display:flex;
+    flex-direction:column;
+    line-height:1;
+    color:#fff;
+  }
+  .top-nav .brand-title h1{
+    margin:0;
+    font-size:18px;
+    font-weight:700;
+    letter-spacing:0.2px;
+  }
+  .top-nav .brand-title p{
+    margin:0;
+    font-size:12px;
+    opacity:0.95;
+  }
+
+  /* centered main heading (replaces duplicated titles) */
+  .site-main-title {
+    text-align:center;
+    color: var(--derna-blue-900);
+    font-weight:800;
+    font-size:20px;
+    margin:10px 0;
+  }
+
+  /* standard navbar below */
+  .main-nav {
+    background: #fff;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+  }
+  .nav-link { color: var(--derna-blue-900) !important; font-weight:600; }
+  .nav-link:hover { color: var(--derna-blue-600) !important; }
+
+  /* logout button style */
+  .btn-logout {
+    background: var(--derna-gold);
+    color: var(--derna-blue-900);
+    border: none;
+    padding: 6px 10px;
+    font-weight:700;
+    border-radius:6px;
+  }
+
+  @media (max-width:768px){
+    .site-main-title { font-size:18px; }
+    .top-nav .brand-row { gap:8px; }
+  }
+</style>
+
+<!-- top banner with logo and small subtitle -->
+<header class="top-nav">
+  <div class="container-fluid">
+    <div class="d-flex align-items-center justify-content-between">
+      <a class="brand-row" href="/">
+        <!-- college logo (1x + 2x) -->
+        <img
+          src="/static/images/mech_logo_small.png"
+          srcset="/static/images/mech_logo_small@2x.png 2x"
+          alt="شعار كلية الهندسة — جامعة درنة"
+          class="mech-logo">
+        <div class="brand-title">
+          <h1>جامعة درنة</h1>
+          <p>كلية الهندسة</p>
+        </div>
+      </a>
+
+      <!-- compact logout control on the right -->
+      <div>
+        <button class="btn btn-logout" type="button" id="logoutBtn" onclick="handleLogout()">خروج</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- main centered title under the banner -->
+<div class="container-fluid">
+  <div class="site-main-title" role="banner" aria-live="polite">
+    كلية الهندسة - جامعة درنة
+  </div>
+</div>
+
+<!-- primary navigation (Bootstrap) -->
+<nav class="main-nav navbar navbar-expand-lg navbar-light">
+  <div class="container-fluid">
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav" aria-controls="mainNav" aria-expanded="false" aria-label="تبديل التنقل">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+
+    <div class="collapse navbar-collapse" id="mainNav">
+      <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+        <li class="nav-item"><a class="nav-link" href="/dashboard">لوحة القيادة</a></li>
+        <li class="nav-item"><a class="nav-link" href="/students_form">الطلبة</a></li>
+        <li class="nav-item"><a class="nav-link" href="/courses_form">المقررات</a></li>
+        <li class="nav-item"><a class="nav-link" href="/prereqs_form">المتطلبات المسبقة</a></li>
+        <li class="nav-item"><a class="nav-link" href="/registrations_form">التسجيلات</a></li>
+        <li class="nav-item"><a class="nav-link" href="/schedule_form">الجدول</a></li>
+        <li class="nav-item"><a class="nav-link" href="/attendance_export">الحضور والغياب</a></li>
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="examsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">الامتحانات</a>
+          <ul class="dropdown-menu" aria-labelledby="examsMenu">
+            <li><a class="dropdown-item" href="/exams/midterms">الامتحانات الجزئية (Midterms)</a></li>
+            <li><a class="dropdown-item" href="/exams/finals">الامتحانات النهائية (Finals)</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" href="/exams/conflicts">تقرير تعارضات الامتحانات</a></li>
+          </ul>
+        </li>
+        <li class="nav-item"><a class="nav-link" href="/transcript_page">كشف الدرجات</a></li>
+        <li class="nav-item"><a class="nav-link" href="/results">النتائج</a></li>
+      </ul>
+
+      <!-- action area: removed duplicated/redundant buttons (those inside the red circle) -->
+      <div class="d-flex align-items-center gap-2">
+        <!-- intentionally left empty; page-specific action buttons should be placed inside each page -->
+      </div>
+    </div>
+  </div>
+</nav>
+
+<script>
+  // دالة تسجيل الخروج
+  async function handleLogout() {
+    try {
+      const response = await fetch('/auth/logout', {
+        method: 'POST',
+        credentials: 'include'
+      });
+      
+      if (response.ok) {
+        window.location.href = '/login';
+      } else {
+        alert('حدث خطأ أثناء تسجيل الخروج');
+      }
+    } catch (error) {
+      console.error('Logout error:', error);
+      // حتى لو فشل الطلب، توجيه المستخدم لصفحة تسجيل الدخول
+      window.location.href = '/login';
+    }
+  }
+
+  // التحقق من حالة تسجيل الدخول عند تحميل الصفحة
+  window.addEventListener('load', async function() {
+    try {
+      const response = await fetch('/auth/check', {
+        credentials: 'include'
+      });
+      const data = await response.json();
+      
+      if (!data.authenticated) {
+        // المستخدم غير مسجل دخول، توجيهه لصفحة تسجيل الدخول
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
+      }
+    } catch (error) {
+      console.error('Auth check error:', error);
+      // في حالة الخطأ، توجيه المستخدم لصفحة تسجيل الدخول
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
+    }
+  });
+</script>

@@ -1,0 +1,121 @@
+<!-- التقويم الأسبوعي للجدول والامتحانات مخفي بناءً على طلب المستخدم -->
+<!-- frontend/templates/dashboard.html -->
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Dashboard — Schedule Optimizer</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <style>
+    body{background:#f8f9fa;padding:32px 0 0 0;}
+    .dashboard-widgets{display:flex;gap:32px;flex-wrap:wrap;margin-bottom:32px;justify-content:center;}
+    .widget-card{background:#fff;border-radius:16px;box-shadow:0 2px 12px rgba(30,111,184,0.08);padding:32px 24px;min-width:220px;flex:1;max-width:340px;display:flex;flex-direction:column;align-items:center;}
+    .widget-title{font-size:1.1rem;font-weight:600;color:#1e6fb8;margin-bottom:12px;}
+    .widget-value{font-size:2.5rem;font-weight:700;color:#072f5f;margin-bottom:8px;}
+    .widget-desc{font-size:0.95rem;color:#888;}
+    .dashboard-section{background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(30,111,184,0.06);padding:24px;margin-bottom:24px;}
+    .fade-in{animation:fadeIn 0.3s ease-out;}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
+    .btn-lg{font-size:1.1rem;padding:0.75rem 1.5rem;border-radius:8px;}
+  </style>
+</head>
+<body> {% include "base_nav.html" %} <main class="container-main"> ...
+    <h2 class="mb-4" style="text-align:center;font-weight:800;color:#072f5f">لوحة القيادة</h2>
+    <div class="dashboard-widgets fade-in">
+      <div class="widget-card">
+        <div class="widget-title">عدد الطلبة</div>
+        <div id="studentCount" class="widget-value">—</div>
+        <div class="widget-desc">إجمالي عدد الطلبة المسجلين</div>
+      </div>
+      <div class="widget-card">
+        <div class="widget-title">المقاعد المتاحة</div>
+        <div id="openSeats" class="widget-value">—</div>
+        <div class="widget-desc">عدد المقاعد المتبقية في جميع المقررات</div>
+      </div>
+      <div class="widget-card">
+        <div class="widget-title">الامتحانات القادمة</div>
+        <div id="upcomingExams" class="widget-value">—</div>
+        <div class="widget-desc">عدد الامتحانات المجدولة للأسبوع القادم</div>
+      </div>
+      <div class="widget-card">
+        <div class="widget-title">مشاكل التعارض الحالية</div>
+        <div id="conflictCount" class="widget-value" style="color:#d32f2f">—</div>
+        <div class="widget-desc">عدد مشاكل التعارض الحالية</div>
+      </div>
+    </div>
+    <div class="dashboard-section fade-in">
+      <h4 style="color:#1e6fb8;font-weight:700">آخر التعديلات</h4>
+      <ul id="recentChanges" class="small mb-0"></ul>
+    </div>
+    <div class="dashboard-section fade-in">
+      <h4 style="color:#1e6fb8;font-weight:700">تفاصيل التعارضات</h4>
+      <div id="conflictList" class="list-group"></div>
+    </div>
+  </div>
+
+<script>
+async function fetchJSON(url){ const r=await fetch(url); const j=await r.json().catch(()=>null); return {ok:r.ok,json:j}; }
+async function loadDashboard(){
+  const s = await fetchJSON('/list_students');
+  document.getElementById('studentCount').textContent = (s.ok && Array.isArray(s.json)) ? s.json.length : '0';
+
+  // المقاعد المتاحة: احسب من جدول schedule وعدد المسجلين في كل مقرر
+  const sch = await fetchJSON('/schedule_rows');
+  const regs = await fetchJSON('/registrations_list');
+  let openSeats = 0;
+  if(sch.ok && Array.isArray(sch.json) && regs.ok && Array.isArray(regs.json)){
+    // assume each schedule row has max_seats (default 40 if missing)
+    const regMap = {};
+    regs.json.forEach(r=>{ regMap[r.course_name] = (regMap[r.course_name]||0)+1; });
+    sch.json.forEach(row=>{
+      const maxSeats = row.max_seats ? parseInt(row.max_seats) : 40;
+      const used = regMap[row.course_name]||0;
+      openSeats += Math.max(0, maxSeats - used);
+    });
+  }
+  document.getElementById('openSeats').textContent = openSeats;
+
+  // الامتحانات القادمة: من جدول exams خلال 7 أيام القادمة
+  const exams = await fetchJSON('/exams/finals/rows');
+  let upcoming = 0;
+  if(exams.ok && Array.isArray(exams.json)){
+    const now = new Date();
+    const weekAhead = new Date(now.getTime()+7*24*60*60*1000);
+    upcoming = exams.json.filter(e=>{
+      if(!e.exam_date) return false;
+      const ed = new Date(e.exam_date);
+      return ed >= now && ed <= weekAhead;
+    }).length;
+  }
+  document.getElementById('upcomingExams').textContent = upcoming;
+
+  // conflict_report table exists; get top conflicts
+  const c = await fetchJSON('/results_data'); // reuse existing endpoint for optimized/conflict info
+  let conflicts = [];
+  if(c.ok && c.json && c.json.conflict_report) conflicts = c.json.conflict_report;
+  document.getElementById('conflictCount').textContent = conflicts.length || '0';
+  const confList = document.getElementById('conflictList');
+  confList.innerHTML = '';
+  conflicts.slice(0,10).forEach(row=>{
+    const item = document.createElement('a'); item.href='#'; item.className='list-group-item list-group-item-action';
+    item.innerHTML = `<div><strong>${row.student_id}</strong> — ${row.day} ${row.time}</div><div class="small text-muted">تفاصيل: ${row.conflicting_sections}</div>`;
+    confList.appendChild(item);
+  });
+
+  // recent changes: we'll show latest rows from proposed_moves and optimized_schedule as a proxy
+  const rec = [];
+  if(c.ok && c.json && c.json.proposed_moves){
+    c.json.proposed_moves.slice(-6).reverse().forEach(pm=>{
+      rec.push(`نقل قسم ${pm.section_id} من ${pm.orig_day} ${pm.orig_time} إلى ${pm.new_day} ${pm.new_time}`);
+    });
+  }
+  const rc = document.getElementById('recentChanges');
+  rc.innerHTML = '';
+  if(rec.length===0) rc.innerHTML = '<li class="text-muted">لا توجد تعديلات حديثة</li>';
+  else rec.forEach(x=>{ const li=document.createElement('li'); li.textContent = x; rc.appendChild(li); });
+}
+loadDashboard();
+</script>
+</body>
+</html>

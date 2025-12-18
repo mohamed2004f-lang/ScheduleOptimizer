@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>تصدير الجدول</title>
+  <style>
+    body{font-family: Tahoma, Arial, sans-serif; direction: rtl; margin:20px; color:#222}
+    h1{font-size:18px; margin-bottom:12px}
+    table{border-collapse:collapse; width:100%; font-size:12px}
+    th, td{border:1px solid #bbb; padding:8px; text-align:center}
+    th{background:#f0f0f0}
+    .meta{margin-bottom:10px; font-size:12px; color:#444}
+  </style>
+</head>
+<body>
+  <div class="meta">
+    <strong>الكلية:</strong> كلية الهندسة — <strong>الفصل:</strong> {{ semester if semester is defined else '' }}
+  </div>
+
+  <h1>الجدول الدراسي</h1>
+
+  <table>
+    <thead>
+      <tr>
+        <th>القسم</th>
+        <th>المادة</th>
+        <th>اليوم</th>
+        <th>الزمن</th>
+        <th>القاعة</th>
+        <th>المحاضر</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% set rows = rows if (rows is defined) else (schedule if (schedule is defined) else []) %}
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.section_id if r.section_id is defined else '' }}</td>
+        <td style="text-align:right">{{ r.course_name if r.course_name is defined else '' }}</td>
+        <td>{{ r.day if r.day is defined else '' }}</td>
+        <td>{{ r.time if r.time is defined else '' }}</td>
+        <td>{{ r.room if r.room is defined else '' }}</td>
+        <td>{{ r.instructor if r.instructor is defined else '' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" style="text-align:center">لا توجد بيانات</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

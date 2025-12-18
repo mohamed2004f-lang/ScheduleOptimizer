@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>محرر جدول المقررات</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <style>
+    body { padding: 18px; background: #f8f9fa; }
+    .container-main { max-width: 1400px; margin: 0 auto; }
+    .mono { font-family: ui-monospace, Menlo, Monaco, "Roboto Mono", monospace; }
+    .btn-group-gap > .btn { margin-inline-end: 6px; margin-block: 6px; }
+    
+    /* Timetable styles */
+    .timetable-wrapper { overflow-x: auto; margin: 20px 0; }
+    .timetable { border-collapse: collapse; width: 100%; min-width: 800px; background: white; }
+    .timetable th, .timetable td { border: 1px solid #dee2e6; padding: 8px; text-align: center; vertical-align: top; }
+    .timetable th { background: #f1f3f5; font-weight: 600; position: sticky; top: 0; z-index: 10; }
+    .timetable th.day-header { background: #e9ecef; width: 120px; }
+    .timetable th.time-header { background: #f1f3f5; min-width: 150px; }
+    .timetable td { min-height: 80px; height: auto; }
+    
+    .time-slot-cell { position: relative; padding: 4px; }
+    .course-buttons-container { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; align-items: flex-start; margin-bottom: 4px; }
+    .course-btn { 
+      font-size: 0.75rem; 
+      padding: 4px 8px; 
+      border: none; 
+      border-radius: 4px; 
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+      color: white;
+      font-weight: 500;
+    }
+    .course-btn:hover { opacity: 0.85; transform: scale(1.02); }
+    .manage-courses-btn {
+      background: #5dade2;
+      color: white;
+      border: none;
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 4px;
+    }
+    .manage-courses-btn:hover { background: #3498db; }
+    
+    .small-muted { color: #6c757d; font-size: 0.85rem; }
+    .instruction-text { margin: 10px 0; padding: 10px; background: #e7f3ff; border-radius: 6px; border-right: 4px solid #1e6fb8; }
+  </style>
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main">
+
+    <div class="container">
+      <h3 class="mb-3">محرر جدول المقررات</h3>
+
+      <div class="instruction-text">
+        <strong>تعليمات:</strong> انقر على زر <strong>إدارة المقررات</strong> في أي خانة لتحديد محاضرات متعددة. <strong>الأيام عموديًا، التوقيت أفقيًا</strong>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-body">
+          <div class="d-flex flex-wrap align-items-center justify-content-between">
+            <div class="btn-group-gap">
+              <a class="btn btn-outline-success btn-sm" href="/schedule/export/excel" target="_blank">⬇️ تصدير Excel</a>
+              <a class="btn btn-outline-danger btn-sm" href="/schedule/export/pdf" target="_blank">⬇️ تصدير PDF</a>
+            </div>
+            <form id="schedule-import-form" class="d-flex align-items-center" enctype="multipart/form-data" onsubmit="return false;">
+              <label class="form-label mb-0 me-2">📂 استيراد جدول (Excel):</label>
+              <input class="form-control form-control-sm" style="max-width: 280px;" type="file" name="file" accept=".xlsx,.xls" aria-label="ملف استيراد جدول" />
+              <button type="button" class="btn btn-primary btn-sm ms-2" onclick="importSchedule()">استيراد</button>
+            </form>
+          </div>
+          <div id="import_msg" class="mt-2"></div>
+        </div>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h6 class="mb-0">الجدول الزمني</h6>
+            <div>
+              <button id="btnRun" class="btn btn-success btn-sm" type="button">انتاج الجداول وعرض التعارضات</button>
+              <a href="/results" class="btn btn-outline-secondary btn-sm">عرض النتائج</a>
+            </div>
+          </div>
+          <div id="scheduleList" class="timetable-wrapper"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal لعرض التعارضات -->
+    <div class="modal fade" id="conflictsModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header bg-warning">
+            <h5 class="modal-title">⚠️ تحذير: تعارضات محتملة</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div class="alert alert-warning">
+              <strong>تم اكتشاف تعارضات للطلبة عند إضافة المقرر:</strong>
+              <div id="conflictDetails" class="mt-3"></div>
+            </div>
+            <p class="text-muted">هل تريد المتابعة مع الإضافة رغم وجود التعارضات؟</p>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" id="conflictsCancelBtn">إلغاء</button>
+            <button type="button" class="btn btn-warning" id="conflictsConfirmBtn">متابعة رغم التعارضات</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal لإدارة المقررات في خلية معينة -->
+    <div class="modal fade" id="manageCoursesModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h6 class="modal-title">إدارة المقررات</h6>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-3">
+              <strong>اليوم:</strong> <span id="modalDay"></span> — <strong>الوقت:</strong> <span id="modalTime"></span>
+            </div>
+            <div id="existingCoursesList" class="mb-3"></div>
+            <hr>
+            <h6 class="mb-2">إضافة مقرر جديد</h6>
+            <form id="addCourseForm" class="row g-2">
+              <div class="col-md-6">
+                <label class="form-label">المقرر</label>
+                <select id="newCourseSelect" class="form-select" required>
+                  <option value="">-- اختر مقرر --</option>
+                </select>
+              </div>
+              <div class="col-md-3">
+                <label class="form-label">القاعة</label>
+                <input id="newRoom" class="form-control" placeholder="A1">
+              </div>
+              <div class="col-md-3">
+                <label class="form-label">الأستاذ</label>
+                <input id="newInstructor" class="form-control" placeholder="د.علي">
+              </div>
+              <div class="col-12">
+                <button type="submit" class="btn btn-primary btn-sm">إضافة</button>
+              </div>
+            </form>
+            <div id="modalMsg" class="mt-2"></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">إغلاق</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+<script>
+/* ---------- Helpers ---------- */
+function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+function showMsg(text, type='info', timeout=4000, targetId='sd_msg'){
+  const box = document.getElementById(targetId);
+  if(!box) return;
+  box.innerHTML = `<div class="alert alert-${type}">${text}</div>`;
+  if(timeout>0){ setTimeout(()=> { box.innerHTML = ''; }, timeout); }
+}
+async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok, status:r.status, json:j}; }
+
+/* ---------- Color generation for courses ---------- */
+const courseColors = {};
+const colorPalette = [
+  '#ffc107', '#28a745', '#17a2b8', '#6f42c1', '#fd7e14', 
+  '#20c997', '#e83e8c', '#6610f2', '#ff6b6b', '#4ecdc4'
+];
+let colorIndex = 0;
+function getCourseColor(courseName){
+  if(!courseColors[courseName]){
+    courseColors[courseName] = colorPalette[colorIndex % colorPalette.length];
+    colorIndex++;
+  }
+  return courseColors[courseName];
+}
+
+/* ---------- Import / Export ---------- */
+async function importSchedule(){
+  const form = document.getElementById('schedule-import-form');
+  const fileInput = form.querySelector('input[type="file"]');
+  const msg = document.getElementById('import_msg');
+  msg.innerHTML = '';
+  if(!fileInput.files || !fileInput.files.length){
+    msg.innerHTML = '<div class="alert alert-warning p-1">الرجاء اختيار ملف Excel أولاً.</div>';
+    return;
+  }
+  try {
+    const data = new FormData(form);
+    const res = await fetch('/schedule/import/excel', { method:'POST', body: data });
+    const j = await res.json().catch(()=>({}));
+    if(res.ok){
+      msg.innerHTML = `<div class="alert alert-success p-1">تم استيراد ${j.imported || 0} صف</div>`;
+      await loadSchedule();
+      form.reset();
+    } else {
+      msg.innerHTML = `<div class="alert alert-danger p-1">خطأ: ${j.message || 'فشل الاستيراد'}</div>`;
+    }
+  } catch (err) {
+    console.error(err);
+    msg.innerHTML = '<div class="alert alert-danger p-1">خطأ في الاتصال بالخادم أثناء الاستيراد.</div>';
+  }
+}
+
+/* ---------- Courses loading ---------- */
+let COURSES = [];
+async function loadCourses(){
+  try {
+    const r = await fetch('/list_courses');
+    const arr = r.ok ? await r.json() : [];
+    COURSES = Array.isArray(arr) ? arr : [];
+    const sel = document.getElementById('newCourseSelect');
+    if(sel){
+      sel.innerHTML = '<option value="">-- اختر مقرر --</option>';
+      COURSES.forEach(c => {
+        const o = document.createElement('option');
+        o.value = c.course_name ?? '';
+        const code = c.course_code ? ` (${c.course_code})` : '';
+        o.text = (c.course_name ?? '') + code;
+        sel.appendChild(o);
+      });
+    }
+  } catch (err) {
+    console.error('loadCourses error', err);
+  }
+}
+
+/* ---------- Timetable building ---------- */
+const DAYS = ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'];
+let currentScheduleData = [];
+let currentModalDay = '';
+let currentModalTime = '';
+
+function parseTimeRange(timeStr){
+  if(!timeStr) return {start: '', end: ''};
+  const parts = timeStr.split('-').map(s => s.trim());
+  return {start: parts[0] || '', end: parts[1] || ''};
+}
+
+function groupByTimeSlot(scheduleRows){
+  const slots = {};
+  scheduleRows.forEach(row => {
+    const day = (row.day || '').trim();
+    const time = (row.time || '').trim();
+    if(!day || !time) return;
+    const key = `${day}|${time}`;
+    if(!slots[key]) slots[key] = [];
+    slots[key].push(row);
+  });
+  return slots;
+}
+
+function extractUniqueTimeSlots(scheduleRows){
+  const times = new Set();
+  scheduleRows.forEach(row => {
+    if(row.time) times.add(row.time.trim());
+  });
+  // إذا لم تكن هناك توقيتات، أضف توقيتات افتراضية شائعة
+  if(times.size === 0){
+    // توقيتات افتراضية من 9 صباحاً إلى 5 مساءً
+    const defaultTimes = [
+      '09:00-11:00', '11:00-12:00',
+      '12:00-13:00', '13:00-14:00', '14:00-15:00', '15:00-16:00', '16:00-17:00'
+    ];
+    defaultTimes.forEach(t => times.add(t));
+  }
+  // ترتيب التوقيتات بشكل ذكي (حسب وقت البداية)
+  return Array.from(times).sort((a, b) => {
+    const getStartTime = (timeStr) => {
+      const match = timeStr.match(/^(\d+):(\d+)/);
+      if(match) return parseInt(match[1]) * 60 + parseInt(match[2]);
+      return 0;
+    };
+    return getStartTime(a) - getStartTime(b);
+  });
+}
+
+async function loadSchedule(){
+  try {
+    const r = await fetch('/list_schedule_rows');
+    const list = r.ok ? await r.json() : [];
+    currentScheduleData = Array.isArray(list) ? list : [];
+    const el = document.getElementById('scheduleList');
+    
+    // دائماً نعرض الجدول حتى لو لم تكن هناك بيانات
+    const timeSlots = extractUniqueTimeSlots(currentScheduleData);
+    const slotsMap = groupByTimeSlot(currentScheduleData);
+
+    let html = '<table class="timetable"><thead><tr><th class="day-header">اليوم / الوقت</th>';
+    timeSlots.forEach(time => {
+      html += `<th class="time-header">${escapeHtml(time)}</th>`;
+    });
+    html += '</tr></thead><tbody>';
+
+    DAYS.forEach(day => {
+      html += `<tr><th class="day-header">${day}</th>`;
+      timeSlots.forEach(time => {
+        const key = `${day}|${time}`;
+        const courses = slotsMap[key] || [];
+        html += `<td class="time-slot-cell">`;
+        html += `<div class="course-buttons-container">`;
+        courses.forEach(course => {
+          const color = getCourseColor(course.course_name);
+          const roomText = course.room ? ` (${escapeHtml(course.room)})` : '';
+          const studentCount = course.student_count || 0;
+          const studentCountText = studentCount > 0 ? ` - (ط ${studentCount})` : '';
+          const displayText = `${escapeHtml(course.course_name)}${roomText}${studentCountText}${course.section_id ? ` (${course.section_id})` : ''}`;
+          html += `<button class="course-btn" style="background: ${color};" 
+                   data-section-id="${course.section_id}" 
+                   title="${escapeHtml(course.room || '')} - ${escapeHtml(course.instructor || '')}">
+                   ${displayText}
+                 </button>`;
+        });
+        html += `</div>`;
+        html += `<button class="manage-courses-btn" onclick="openManageCourses('${escapeHtml(day)}', '${escapeHtml(time)}')">إدارة المقررات</button>`;
+        html += `</td>`;
+      });
+      html += '</tr>';
+    });
+
+    html += '</tbody></table>';
+    el.innerHTML = html;
+
+    // Attach delete handlers to course buttons
+    el.querySelectorAll('.course-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const sectionId = btn.dataset.sectionId;
+        if(sectionId && confirm('هل تريد حذف هذا المقرر من الجدول؟')){
+          deleteScheduleRow(Number(sectionId));
+        }
+      });
+    });
+
+    await markConflicts();
+  } catch (err) {
+    console.error('loadSchedule error', err);
+    document.getElementById('scheduleList').innerHTML = '<p class="text-danger">خطأ في تحميل صفوف الجدول</p>';
+  }
+}
+
+/* ---------- Manage Courses Modal ---------- */
+function openManageCourses(day, time){
+  currentModalDay = day;
+  currentModalTime = time;
+  document.getElementById('modalDay').textContent = day;
+  document.getElementById('modalTime').textContent = time;
+  
+  const key = `${day}|${time}`;
+  const slotsMap = groupByTimeSlot(currentScheduleData);
+  const courses = slotsMap[key] || [];
+  
+  const existingDiv = document.getElementById('existingCoursesList');
+  if(courses.length === 0){
+    existingDiv.innerHTML = '<p class="text-muted small">لا توجد مقررات في هذا الوقت</p>';
+  } else {
+    existingDiv.innerHTML = '<h6 class="mb-2">المقررات الحالية:</h6><ul class="list-group">';
+    courses.forEach(course => {
+      existingDiv.innerHTML += `
+        <li class="list-group-item d-flex justify-content-between align-items-center">
+          <div>
+            <strong>${escapeHtml(course.course_name)}</strong>
+            ${course.room ? ` — القاعة: ${escapeHtml(course.room)}` : ''}
+            ${course.instructor ? ` — الأستاذ: ${escapeHtml(course.instructor)}` : ''}
+          </div>
+          <button class="btn btn-sm btn-danger" onclick="deleteScheduleRow(${course.section_id})">حذف</button>
+        </li>
+      `;
+    });
+    existingDiv.innerHTML += '</ul>';
+  }
+  
+  const modal = new bootstrap.Modal(document.getElementById('manageCoursesModal'));
+  modal.show();
+}
+
+document.getElementById('addCourseForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const course = document.getElementById('newCourseSelect').value;
+  const room = document.getElementById('newRoom').value;
+  const instructor = document.getElementById('newInstructor').value;
+  
+  if(!course){
+    showMsg('اختر مقرراً', 'warning', 3000, 'modalMsg');
+    return;
+  }
+  
+  // التحقق من التعارضات أولاً
+  try {
+    showMsg('جاري التحقق من التعارضات...', 'info', 0, 'modalMsg');
+    const checkResp = await fetch('/schedule/check_conflicts', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        course_name: course,
+        day: currentModalDay,
+        time: currentModalTime,
+        room: room,
+        instructor: instructor,
+        semester: ''
+      })
+    });
+    const checkData = await checkResp.json().catch(()=>null);
+    
+    if(checkResp.ok && checkData && checkData.has_conflicts && checkData.conflicts.length > 0){
+      // عرض نافذة تنبيه بالتعارضات
+      const confirmed = await showConflictsModal(checkData.conflicts, course, currentModalDay, currentModalTime);
+      if(!confirmed){
+        showMsg('تم إلغاء الإضافة', 'warning', 2000, 'modalMsg');
+        return;
+      }
+    }
+    
+    // المتابعة مع الإضافة
+    showMsg('جاري إضافة المقرر...', 'info', 0, 'modalMsg');
+    const resp = await fetch('/add_schedule_row', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        course_name: course,
+        day: currentModalDay,
+        time: currentModalTime,
+        room: room,
+        instructor: instructor,
+        semester: ''
+      })
+    });
+    const j = await resp.json().catch(()=>null);
+    if(resp.ok && j && j.status === 'ok'){
+      showMsg('تم إضافة المقرر', 'success', 2000, 'modalMsg');
+      document.getElementById('addCourseForm').reset();
+      await loadSchedule();
+      setTimeout(() => {
+        const modal = bootstrap.Modal.getInstance(document.getElementById('manageCoursesModal'));
+        if(modal) modal.hide();
+      }, 1000);
+    } else {
+      showMsg('خطأ: ' + (j?.message || resp.statusText), 'danger', 3000, 'modalMsg');
+    }
+  } catch (err) {
+    console.error('addCourseForm error', err);
+    showMsg('خطأ في الاتصال بالخادم', 'danger', 3000, 'modalMsg');
+  }
+});
+
+/* ---------- Conflicts Modal ---------- */
+function showConflictsModal(conflicts, courseName, day, time) {
+  return new Promise((resolve) => {
+    const modal = new bootstrap.Modal(document.getElementById('conflictsModal'));
+    const detailsDiv = document.getElementById('conflictDetails');
+    
+    // عرض تفاصيل التعارضات
+    let html = `<p><strong>المقرر:</strong> ${escapeHtml(courseName)}</p>`;
+    html += `<p><strong>اليوم:</strong> ${escapeHtml(day)} | <strong>الوقت:</strong> ${escapeHtml(time)}</p>`;
+    html += `<p><strong>عدد التعارضات:</strong> ${conflicts.length}</p>`;
+    html += `<div class="table-responsive mt-3"><table class="table table-sm table-bordered">`;
+    html += `<thead><tr><th>رقم الطالب</th><th>اليوم</th><th>الوقت</th><th>المقررات المتعارضة</th></tr></thead><tbody>`;
+    
+    conflicts.forEach(conflict => {
+      html += `<tr>`;
+      html += `<td>${escapeHtml(conflict.student_id || '')}</td>`;
+      html += `<td>${escapeHtml(conflict.day || '')}</td>`;
+      html += `<td>${escapeHtml(conflict.time || '')}</td>`;
+      html += `<td>${escapeHtml(conflict.conflicting_sections || '')}</td>`;
+      html += `</tr>`;
+    });
+    
+    html += `</tbody></table></div>`;
+    detailsDiv.innerHTML = html;
+    
+    // إعداد الأزرار
+    const confirmBtn = document.getElementById('conflictsConfirmBtn');
+    const cancelBtn = document.getElementById('conflictsCancelBtn');
+    
+    const handleConfirm = () => {
+      modal.hide();
+      resolve(true);
+    };
+    
+    const handleCancel = () => {
+      modal.hide();
+      resolve(false);
+    };
+    
+    // إزالة المعالجات السابقة وإضافة جديدة
+    const newConfirmBtn = confirmBtn.cloneNode(true);
+    const newCancelBtn = cancelBtn.cloneNode(true);
+    confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
+    cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
+    
+    // إضافة معالجات جديدة
+    document.getElementById('conflictsConfirmBtn').addEventListener('click', handleConfirm);
+    document.getElementById('conflictsCancelBtn').addEventListener('click', handleCancel);
+    
+    // عند إغلاق الـ modal بدون الضغط على الأزرار
+    const conflictsModalEl = document.getElementById('conflictsModal');
+    const handleHidden = () => {
+      resolve(false);
+    };
+    conflictsModalEl.addEventListener('hidden.bs.modal', handleHidden, { once: true });
+    
+    modal.show();
+  });
+}
+
+/* ---------- CRUD actions ---------- */
+async function deleteScheduleRow(section_id){
+  if(!confirm('هل تريد حذف هذا المقرر من الجدول؟')) return;
+  try {
+    const resp = await fetch('/delete_schedule_row', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({section_id})
+    });
+    const j = await resp.json().catch(()=>null);
+    if (resp.ok && j && j.status === 'ok') {
+      showMsg('تم حذف المقرر', 'success');
+      await loadSchedule();
+      // Refresh modal if open
+      if(currentModalDay && currentModalTime){
+        openManageCourses(currentModalDay, currentModalTime);
+      }
+    } else {
+      showMsg('خطأ: ' + (j?.message || resp.statusText), 'danger');
+    }
+  } catch (err) {
+    console.error(err);
+    showMsg('خطأ في الاتصال بالخادم', 'danger');
+  }
+}
+
+async function runOptimize(){
+  try {
+    showMsg('جاري إنتاج الجداول وحساب التعارضات...', 'info');
+    const resp = await fetch('/run-optimize', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({})
+    });
+    const j = await resp.json().catch(()=>null);
+    if (resp.ok && j && j.status === 'ok') {
+      showMsg('تم إنتاج الجداول وحساب التعارضات بنجاح. سيتم فتح صفحة النتائج...', 'success', 2000);
+      await loadSchedule();
+      // فتح صفحة النتائج في نفس النافذة بعد ثانية ونصف
+      setTimeout(() => {
+        window.location.href = '/results';
+      }, 1500);
+    } else {
+      showMsg('فشل التحسين: ' + (j?.message || resp.statusText), 'danger');
+    }
+  } catch (err) {
+    console.error('runOptimize error', err);
+    showMsg('خطأ في الاتصال بالخادم', 'danger');
+  }
+}
+
+/* ---------- Conflicts: fetch, mark, details ---------- */
+async function fetchConflicts(){
+  try {
+    const r = await fetch('/students/timetable/conflicts');
+    if(!r.ok) return [];
+    const j = await r.json();
+    return Array.isArray(j.conflicts) ? j.conflicts : [];
+  } catch (e) {
+    console.error('fetchConflicts failed', e);
+    return [];
+  }
+}
+
+let lastConflicts = [];
+async function markConflicts(){
+  const conflicts = await fetchConflicts();
+  lastConflicts = conflicts || [];
+
+  // Mark conflicts in timetable cells
+  document.querySelectorAll('.time-slot-cell').forEach(cell => {
+    cell.classList.remove('conflict');
+  });
+
+  if(!conflicts || !conflicts.length) return;
+
+  conflicts.forEach(slot => {
+    const day = (slot.day || '').trim();
+    const start = (slot.start_time || '').trim();
+    const end = (slot.end_time || '').trim();
+    
+    document.querySelectorAll('.time-slot-cell').forEach(cell => {
+      const row = cell.closest('tr');
+      const dayHeader = row.querySelector('th.day-header');
+      if(!dayHeader) return;
+      const cellDay = dayHeader.textContent.trim();
+      if(cellDay !== day) return;
+      
+      const colIndex = Array.from(cell.parentElement.children).indexOf(cell);
+      const timeHeader = document.querySelectorAll('.time-header')[colIndex - 1];
+      if(!timeHeader) return;
+      const cellTime = timeHeader.textContent.trim();
+      
+      const timeMatch = cellTime.includes(start) || cellTime.includes(end) || 
+                       (start && cellTime.startsWith(start)) || 
+                       (end && cellTime.includes(end));
+      
+      if(timeMatch){
+        cell.classList.add('conflict');
+        cell.style.background = 'rgba(220,53,69,0.12)';
+      }
+    });
+  });
+
+  const total = conflicts.reduce((s, c)=> s + (Array.isArray(c.entries)?c.entries.length:1), 0);
+  if(total>0) showMsg(`تم العثور على ${total} حالة تعارض في التسجيلات`, 'warning', 6000);
+}
+
+/* ---------- Init ---------- */
+document.addEventListener('DOMContentLoaded', () => {
+  loadCourses();
+  loadSchedule();
+
+  const btnRun = document.getElementById('btnRun');
+  if(btnRun) btnRun.addEventListener('click', runOptimize);
+
+  // Periodic conflict check
+  setInterval(markConflicts, 30000);
+});
+</script>
+
+<!-- Bootstrap JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

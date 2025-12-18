@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>تقرير تعارضات الامتحانات</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:6px}</style>
+</head>
+<body>
+  <h2>تقرير تعارضات الامتحانات</h2>
+
+  <div>
+    <label>نوع الامتحان:</label>
+    <select id="examTypeSelect">
+      <option value="midterm">منصف الفصل (Midterms)</option>
+      <option value="final">نهائي (Finals)</option>
+    </select>
+    <button id="btnReload">عرض التعارضات</button>
+    <button id="btnPersist">احفظ التعارضات في قاعدة البيانات</button>
+  </div>
+
+  <h3>التعارضات</h3>
+  <table id="tblConf">
+    <thead><tr><th>student_id</th><th>exam_date</th><th>conflicting_courses</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+<script>
+function escapeHtml(s){ if(!s) return ''; return String(s).replace(/[&<>\"']/g, function(m){ return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":"&#39;"}[m]; }); }
+
+async function loadConflicts(){
+  const t = document.getElementById('examTypeSelect').value;
+  const r = await fetch(`/exams/${t}/conflicts`);
+  const j = await r.json();
+  const tbody = document.querySelector('#tblConf tbody'); tbody.innerHTML='';
+  for(const c of j.conflicts || []){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${escapeHtml(c.student_id)}</td><td>${escapeHtml(c.exam_date)}</td><td>${escapeHtml(c.conflicting_courses)}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+async function persistConflicts(){
+  const t = document.getElementById('examTypeSelect').value;
+  const r = await fetch(`/exams/${t}/results_data`);
+  const j = await r.json();
+  // call persist endpoint via POST (we'll call the helper via a simple ad-hoc route if available) -- fallback: call backend persist (not exposed)
+  // Instead we call the distribute endpoint with same dates to force refresh OR ask server to persist via an existing function.
+  // For now we just show message about persistence availability.
+  alert('لحفظ التعارضات في قاعدة البيانات استعمل زر الخادم (لم تُفعّل وظيفة الحفظ التلقائي في الواجهة).');
+}
+
+document.getElementById('btnReload').addEventListener('click', loadConflicts);
+document.getElementById('btnPersist').addEventListener('click', persistConflicts);
+// initial load
+loadConflicts();
+</script>
+</body>
+</html>

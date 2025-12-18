@@ -1,0 +1,89 @@
+<!-- frontend/templates/student_view.html -->
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>عرض طالب — Schedule Optimizer</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <style>body{padding:18px;background:#f8f9fa}</style>
+</head>
+<body> {% include "base_nav.html" %} <main class="container-main"> ...
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h4>صفحة الطالب</h4>
+      <div id="alertsArea"></div>
+    </div>
+
+    <div class="row g-3">
+      <div class="col-md-4">
+        <div class="card shadow-sm">
+          <div class="card-body">
+            <h6 id="stuName">—</h6>
+            <div id="stuId" class="small text-muted">—</div>
+            <div class="mt-2"><a id="viewTranscriptLink" class="btn btn-primary btn-sm" href="#">عرض السجل</a></div>
+          </div>
+        </div>
+        <div class="card mt-3 shadow-sm">
+          <div class="card-body">
+            <h6>خطة التخرج المتوقعة</h6>
+            <div id="gradPlan" class="small text-muted">لا توجد خطة</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-md-8">
+        <div class="card shadow-sm">
+          <div class="card-body">
+            <h6>ملخص سريع</h6>
+            <div id="summary" class="mb-2"></div>
+            <h6 class="mt-3">التسجيلات الحالية</h6>
+            <ul id="regList" class="list-group"></ul>
+            <h6 class="mt-3">إشعارات</h6>
+            <div id="notifList"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+async function fetchJSON(url){ const r=await fetch(url); const j=await r.json().catch(()=>null); return {ok:r.ok,json:j}; }
+async function loadStudentPage(studentId){
+  const s = await fetchJSON('/list_students');
+  const student = (s.ok && Array.isArray(s.json)) ? s.json.find(x=>x.student_id===studentId) : null;
+  if(student){ document.getElementById('stuName').textContent = student.student_name || student.student_id; document.getElementById('stuId').textContent = student.student_id; }
+
+  // registrations
+  const regs = await fetchJSON('/get_registrations?student_id=' + encodeURIComponent(studentId));
+  const rl = document.getElementById('regList'); rl.innerHTML = '';
+  if(regs.ok && Array.isArray(regs.json)){
+    regs.json.forEach(c=>{ const li=document.createElement('li'); li.className='list-group-item'; li.textContent = c; rl.appendChild(li); });
+  } else rl.innerHTML = '<li class="list-group-item text-muted">لا توجد تسجيلات</li>';
+
+  // conflicts relevant to this student
+  const res = await fetchJSON('/results_data');
+  let userConflicts = [];
+  if(res.ok && res.json && res.json.conflict_report){
+    userConflicts = res.json.conflict_report.filter(r=>r.student_id === studentId);
+  }
+  const notif = document.getElementById('notifList'); notif.innerHTML = '';
+  if(userConflicts.length){
+    userConflicts.forEach(c=>{ const d = document.createElement('div'); d.className='alert alert-warning p-2'; d.innerHTML = `<strong>تعارض</strong> ${c.day} ${c.time} — ${c.conflicting_sections}`; notif.appendChild(d); });
+  } else {
+    notif.innerHTML = '<div class="small text-muted">لا إشعارات حالياً</div>';
+  }
+
+  document.getElementById('viewTranscriptLink').href = '/transcript_page?student_id=' + encodeURIComponent(studentId);
+}
+
+// auto detect student_id from query or pick first
+const params = new URLSearchParams(location.search);
+const sid = params.get('student_id') || '';
+if(sid) loadStudentPage(sid);
+else {
+  // choose first student from list
+  (async ()=>{ const s = await fetchJSON('/list_students'); if(s.ok && Array.isArray(s.json) && s.json.length){ loadStudentPage(s.json[0].student_id); } })();
+}
+</script>
+</body>
+</html>

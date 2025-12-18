@@ -1,0 +1,3661 @@
+import sys
+import os
+from collections import defaultdict, OrderedDict
+import datetime
+import io
+import math
+import pandas as pd
+
+# ensure parent package is importable when running as package
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from flask import Blueprint, request, jsonify, Response, send_file
+from models.models import Grade
+from .utilities import get_connection, df_from_query, excel_response_from_df, pdf_response_from_html
+
+
+grades_bp = Blueprint("grades", __name__)
+
+
+def validate_grade_value(g):
+    if g is None:
+        return True, None
+    try:
+        v = float(g)
+    except (TypeError, ValueError):
+        return False, "grade must be numeric or null"
+    if v < 0 or v > 100:
+        return False, "grade must be between 0 and 100"
+    return True, v
+
+
+@grades_bp.route("/save", methods=["POST"])
+def save_grades():
+    data = request.get_json(force=True)
+    sid = data.get("student_id")
+    semester = data.get("semester")
+    grades = data.get("grades", [])
+    changed_by = data.get("changed_by", "system")
+    if not sid or not semester:
+        return jsonify({"status": "error", "message": "student_id و semester مطلوبة"}), 400
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        try:
+            for g in grades:
+                course = g.get("course_name")
+                new_grade_raw = g.get("grade", None)
+                ok, val_or_msg = validate_grade_value(new_grade_raw)
+                if not ok:
+                    raise ValueError(f"القيمة للمقرر {course} غير صحيحة: {val_or_msg}")
+                new_grade = val_or_msg
+
+                old = cur.execute(
+                    "SELECT grade FROM grades WHERE student_id = ? AND semester = ? AND course_name = ?",
+                    (sid, semester, course)
+                ).fetchone()
+                old_grade = old[0] if old else None
+
+                cur.execute(
+                    "INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (sid, semester, course, old_grade, (float(new_grade) if new_grade is not None else None),
+                     changed_by, datetime.datetime.utcnow().isoformat())
+                )
+
+                cur.execute(
+                    "INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES (?, ?, ?, ?, ?, ?)",
+                    (sid, semester, course, g.get("course_code", ""), int(g.get("units", 0) or 0),
+                     (float(new_grade) if new_grade is not None else None))
+                )
+            conn.commit()
+            return jsonify({"status": "ok", "message": "تم حفظ الدرجات وتسجيل التعديلات"}), 200
+        except Exception as e:
+            conn.rollback()
+            return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@grades_bp.route("/import/transcript", methods=["POST"])
+def import_transcript_excel():
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"status": "error", "message": "ملف Excel مفقود"}), 400
+    try:
+        raw_bytes = file.read()
+    except Exception:
+        return jsonify({"status": "error", "message": "تعذر قراءة الملف"}), 400
+    if not raw_bytes:
+        return jsonify({"status": "error", "message": "الملف فارغ"}), 400
+
+    try:
+        df_export = pd.read_excel(io.BytesIO(raw_bytes), header=None)
+    except Exception as exc:
+        return jsonify({"status": "error", "message": f"فشل قراءة ملف Excel: {exc}"}), 400
+
+    # form values
+    student_id_form = _normalize_student_id(request.form.get("student_id"))
+    semester_label = (request.form.get("semester") or "").strip()
+    academic_year = (request.form.get("year") or "").strip()
+    student_name = (request.form.get("student_name") or "").strip()
+    changed_by = (request.form.get("changed_by") or "import").strip() or "import"
+
+    provided_semester = semester_label.strip()
+    if academic_year:
+        provided_semester = f"{provided_semester} {academic_year}".strip()
+
+    # try export-style parse first
+    parsed_export = _parse_export_style_single_student(df_export)
+    if parsed_export.get("ok"):
+        return _import_export_style_single_student(
+            parsed_export,
+            student_id_form,
+            student_name,
+            provided_semester,
+            changed_by,
+        )
+
+    # fallback simple 4-column
+    if not student_id_form:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
+    if not provided_semester:
+        return jsonify({"status": "error", "message": "يرجى إدخال اسم الفصل أو السنة"}), 400
+
+    try:
+        df_simple = pd.read_excel(io.BytesIO(raw_bytes))
+    except Exception as exc:
+        return jsonify({"status": "error", "message": f"فشل قراءة ملف Excel: {exc}"}), 400
+
+    if df_simple.empty:
+        return jsonify({"status": "error", "message": "الملف لا يحتوي على بيانات"}), 400
+    if df_simple.shape[1] < 4:
+        return jsonify({"status": "error", "message": "يجب أن يحتوي الملف على أربعة أعمدة على الأقل"}), 400
+
+    df_simple = df_simple.iloc[:, :4].copy()
+    df_simple.columns = ["course_name", "course_code", "units", "grade"]
+    df_simple["course_name"] = df_simple["course_name"].astype(str).str.strip()
+    df_simple["course_code"] = df_simple["course_code"].astype(str).str.strip()
+    df_simple["units"] = pd.to_numeric(df_simple["units"], errors="coerce").fillna(0).astype(int)
+    df_simple["grade"] = pd.to_numeric(df_simple["grade"], errors="coerce")
+    df_simple = df_simple[df_simple["course_name"].astype(bool)]
+
+    if df_simple.empty:
+        return jsonify({"status": "error", "message": "لم يتم العثور على مقررات صالحة في الملف"}), 400
+
+    rows = df_simple.to_dict(orient="records")
+    semester = provided_semester
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+
+        if student_name:
+            cur.execute(
+                """
+                INSERT INTO students (student_id, student_name)
+                VALUES (?, ?)
+                ON CONFLICT(student_id) DO UPDATE SET student_name = excluded.student_name
+                """,
+                (student_id_form, student_name),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO students (student_id, student_name)
+                VALUES (?, COALESCE((SELECT student_name FROM students WHERE student_id = ?), ''))
+                """,
+                (student_id_form, student_id_form),
+            )
+
+        inserted = 0
+        now_iso = datetime.datetime.utcnow().isoformat()
+        for row in rows:
+            cname = row["course_name"]
+            ccode = row["course_code"] or ""
+            units = int(row["units"] or 0)
+            grade = row["grade"]
+
+            if grade is not None and (grade < 0 or grade > 100):
+                conn.rollback()
+                return jsonify({"status": "error", "message": f"الدرجة للمقرر {cname} يجب أن تكون بين 0 و 100"}), 400
+
+            cur.execute(
+                """
+                INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    student_id_form,
+                    semester,
+                    cname,
+                    None,
+                    float(grade) if grade is not None else None,
+                    changed_by,
+                    now_iso,
+                ),
+            )
+
+            cur.execute(
+                """
+                INSERT INTO grades (student_id, semester, course_name, course_code, units, grade)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    student_id_form,
+                    semester,
+                    cname,
+                    ccode,
+                    units,
+                    float(grade) if grade is not None else None,
+                ),
+            )
+            inserted += 1
+
+        conn.commit()
+
+    return jsonify({
+        "status": "ok",
+        "message": f"تم استيراد {inserted} مقرر للفصل {semester}",
+        "student_id": student_id_form,
+        "semester": semester,
+    }), 200
+
+
+@grades_bp.route("/migrate_registrations_to_transcript", methods=["POST"])
+def migrate_registrations_to_transcript():
+    data = request.get_json(force=True)
+    student_id = data.get("student_id")
+    semester = data.get("semester")
+    year = data.get("year")
+    changed_by = data.get("changed_by", "migrate-ui")
+    if not student_id or not semester or not year:
+        return jsonify({"status": "error", "message": "student_id، الفصل، السنة مطلوبة"}), 400
+    semester_label = f"{semester} {year}".strip()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        regs = cur.execute(
+            "SELECT course_name, course_code, units FROM registrations WHERE student_id = ?",
+            (student_id,)
+        ).fetchall()
+        if not regs:
+            return jsonify({"status": "error", "message": "لا توجد مقررات مسجلة لهذا الطالب"}), 404
+
+        existing = cur.execute(
+            "SELECT course_name FROM grades WHERE student_id = ? AND semester = ?",
+            (student_id, semester_label)
+        ).fetchall()
+        existing_courses = set(row[0] for row in existing)
+        inserted = 0
+        now_iso = datetime.datetime.utcnow().isoformat()
+        for reg in regs:
+            cname, ccode, units = reg
+            if cname in existing_courses:
+                continue
+            cur.execute(
+                "INSERT INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES (?, ?, ?, ?, ?, NULL)",
+                (student_id, semester_label, cname, ccode or "", int(units or 0))
+            )
+            cur.execute(
+                "INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts) VALUES (?, ?, ?, NULL, NULL, ?, ?)",
+                (student_id, semester_label, cname, changed_by, now_iso)
+            )
+            inserted += 1
+        conn.commit()
+    return jsonify({"status": "ok", "message": f"تم ترحيل {inserted} مقرر للفصل {semester_label}", "semester": semester_label, "inserted": inserted}), 200
+
+
+def _load_transcript_data(student_id: str):
+    with get_connection() as conn:
+        cur = conn.cursor()
+        student_row = cur.execute(
+            "SELECT COALESCE(student_name, '') AS student_name FROM students WHERE student_id = ?",
+            (student_id,),
+        ).fetchone()
+        student_name = student_row["student_name"] if student_row else ""
+
+        grade_rows = cur.execute(
+            """
+            SELECT semester, course_name, course_code, units, grade
+            FROM grades
+            WHERE student_id = ?
+            ORDER BY semester, course_name
+            """,
+            (student_id,),
+        ).fetchall()
+
+    transcript = OrderedDict()
+    gpa_by_semester = defaultdict(list)
+    best_map = {}
+
+    for row in grade_rows:
+        sem = row["semester"] or ""
+        course_name = row["course_name"] or ""
+        course_code = row["course_code"] or ""
+        units = row["units"] or 0
+        grade = row["grade"]
+
+        transcript.setdefault(sem, []).append(
+            {
+                "course_name": course_name,
+                "course_code": course_code,
+                "units": units,
+                "grade": grade,
+            }
+        )
+
+        if grade is not None:
+            gpa_by_semester[sem].append((grade, units))
+
+        if grade is not None:
+            if course_name not in best_map or grade > best_map[course_name]["best_grade"]:
+                best_map[course_name] = {"best_grade": grade, "units": units}
+            else:
+                if units and (not best_map[course_name]["units"] or units > best_map[course_name]["units"]):
+                    best_map[course_name]["units"] = units
+
+    semester_gpas = {}
+    for sem, lst in gpa_by_semester.items():
+        total_units = sum(max(u, 0) for _, u in lst)
+        semester_gpas[sem] = round(
+            sum(grade * (max(units, 0)) for grade, units in lst) / total_units, 2
+        ) if total_units else 0.0
+
+    total_points = 0.0
+    total_units = 0.0
+    for info in best_map.values():
+        units = max(info["units"] or 0, 0)
+        total_units += units
+        total_points += (info["best_grade"] * units)
+    cumulative_gpa = round(total_points / total_units, 2) if total_units else 0.0
+
+    ordered_semesters = list(transcript.keys())
+
+    return {
+        "student_id": student_id,
+        "student_name": student_name,
+        "transcript": transcript,
+        "ordered_semesters": ordered_semesters,
+        "semester_gpas": semester_gpas,
+        "cumulative_gpa": cumulative_gpa,
+    }
+
+
+def _normalize_student_id(value):
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text.endswith(".0"):
+        text = text[:-2]
+    return text
+
+
+def _parse_units(value):
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return 0
+    try:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if not cleaned:
+                return 0
+            return max(int(round(float(cleaned.replace(",", ".")))), 0)
+        return max(int(round(float(value))), 0)
+    except Exception:
+        return 0
+
+
+def _parse_grade_value(value):
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        if all(ch in {"/", "\\", "-"} for ch in trimmed):
+            return None
+        trimmed = trimmed.replace(",", ".")
+        try:
+            return float(trimmed)
+        except ValueError:
+            return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _cell_to_str(value):
+    if value is None:
+        return ""
+    if isinstance(value, float) and math.isnan(value):
+        return ""
+    return str(value).strip()
+
+
+def _parse_export_style_single_student(df):
+    matrix = df.where(pd.notnull(df), None).values.tolist()
+    if not matrix or not matrix[0]:
+        return {"ok": False}
+
+    first_label = _cell_to_str(matrix[0][0])
+    if first_label != "اسم الطالب":
+        return {"ok": False}
+
+    student_name = _cell_to_str(matrix[0][1]) if len(matrix[0]) > 1 else ""
+    student_id = ""
+    if len(matrix) > 1 and len(matrix[1]) > 1 and _cell_to_str(matrix[1])[0] == "الرقم الدراسي":
+        # defensive check; try to extract from second row
+        try:
+            student_id = _normalize_student_id(matrix[1][1])
+        except Exception:
+            student_id = ""
+
+    semesters = []
+    idx = 0
+    total_rows = len(matrix)
+    while idx < total_rows:
+        row = matrix[idx]
+        first = _cell_to_str(row[0]) if row else ""
+        if first.startswith("الفصل"):
+            sem = first.split(":", 1)[1].strip() if ":" in first else first.replace("الفصل", "", 1).strip()
+            idx += 1
+
+            while idx < total_rows:
+                header_row = matrix[idx]
+                header_label = _cell_to_str(header_row[0]) if header_row else ""
+                if header_label == "المقرر":
+                    idx += 1
+                    break
+                idx += 1
+
+            courses = []
+            while idx < total_rows:
+                course_row = matrix[idx]
+                cells = [course_row[col] if course_row and col < len(course_row) else None for col in range(4)]
+                course_name = _cell_to_str(cells[0])
+                if not course_name:
+                    idx += 1
+                    break
+                course_code = _cell_to_str(cells[1])
+                units = _parse_units(cells[2])
+                grade_val = _parse_grade_value(cells[3])
+                courses.append(
+                    {
+                        "course_name": course_name,
+                        "course_code": course_code,
+                        "units": units,
+                        "grade": grade_val,
+                    }
+                )
+                idx += 1
+
+            semesters.append((sem, courses))
+            continue
+        idx += 1
+
+    return {
+        "ok": True,
+        "student_name": student_name,
+        "student_id": student_id,
+        "semesters": semesters,
+    }
+
+
+def _import_export_style_single_student(parsed, student_id_override, student_name_override, provided_semester, changed_by):
+    student_id_file = parsed.get("student_id") or ""
+    student_name_file = parsed.get("student_name") or ""
+    semesters = parsed.get("semesters") or []
+
+    if not semesters:
+        return jsonify({"status": "error", "message": "الملف لا يحتوي على فصول دراسية صالحة"}), 400
+
+    if student_id_override and student_id_file and student_id_override != student_id_file:
+        return jsonify({"status": "error", "message": "رقم الطالب في الملف لا يطابق الرقم المحدد"}), 400
+
+    student_id = student_id_override or student_id_file
+    if not student_id:
+        return jsonify({"status": "error", "message": "تعذر تحديد رقم الطالب من الملف أو الحقول"}), 400
+
+    student_name = student_name_override or student_name_file
+
+    normalized_semesters = []
+    default_semester = provided_semester.strip()
+    for sem_name, courses in semesters:
+        sem = (sem_name or "").strip()
+        if not sem:
+            sem = default_semester
+        if not sem:
+            return jsonify({"status": "error", "message": "أحد الفصول في الملف يفتقد للاسم ولا يوجد فصل بديل محدد"}), 400
+        filtered_courses = [c for c in courses if c.get("course_name")]
+        if filtered_courses:
+            normalized_semesters.append((sem, filtered_courses))
+
+    if not normalized_semesters:
+        return jsonify({"status": "error", "message": "لا توجد مقررات صالحة للاستيراد"}), 400
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+
+        if student_name:
+            cur.execute(
+                """
+                INSERT INTO students (student_id, student_name)
+                VALUES (?, ?)
+                ON CONFLICT(student_id) DO UPDATE SET student_name = excluded.student_name
+                """,
+                (student_id, student_name),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO students (student_id, student_name)
+                VALUES (?, COALESCE((SELECT student_name FROM students WHERE student_id = ?), ''))
+                """,
+                (student_id, student_id),
+            )
+
+        inserted_total = 0
+        now_iso = datetime.datetime.utcnow().isoformat()
+
+        for sem, courses in normalized_semesters:
+            existing_rows = cur.execute(
+                "SELECT course_name, grade FROM grades WHERE student_id = ? AND semester = ?",
+                (student_id, sem),
+            ).fetchall()
+            existing_map = {row[0]: row[1] for row in existing_rows}
+
+            cur.execute(
+                "DELETE FROM grades WHERE student_id = ? AND semester = ?",
+                (student_id, sem),
+            )
+
+            for course in courses:
+                cname = course.get("course_name") or ""
+                if not cname:
+                    continue
+                ccode = course.get("course_code") or ""
+                units = int(course.get("units") or 0)
+                grade_val = course.get("grade")
+
+                if grade_val is not None and (grade_val < 0 or grade_val > 100):
+                    conn.rollback()
+                    return jsonify({"status": "error", "message": f"الدرجة للمقرر {cname} في الفصل {sem} يجب أن تكون بين 0 و 100"}), 400
+
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO courses (course_name, course_code, units)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(course_name) DO UPDATE SET
+                            course_code = CASE
+                                WHEN excluded.course_code IS NOT NULL AND excluded.course_code <> '' THEN excluded.course_code
+                                ELSE course_code
+                            END,
+                            units = CASE
+                                WHEN excluded.units IS NOT NULL AND excluded.units > 0 THEN excluded.units
+                                ELSE units
+                            END
+                        """,
+                        (cname, ccode, units),
+                    )
+                except Exception:
+                    pass
+
+                old_grade = existing_map.get(cname)
+
+                cur.execute(
+                    """
+                    INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        student_id,
+                        sem,
+                        cname,
+                        float(old_grade) if old_grade is not None else None,
+                        float(grade_val) if grade_val is not None else None,
+                        changed_by,
+                        now_iso,
+                    ),
+                )
+
+                cur.execute(
+                    """
+                    INSERT INTO grades (student_id, semester, course_name, course_code, units, grade)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        student_id,
+                        sem,
+                        cname,
+                        ccode,
+                        units,
+                        float(grade_val) if grade_val is not None else None,
+                    ),
+                )
+                inserted_total += 1
+
+        conn.commit()
+
+    sem_list = [sem for sem, _ in normalized_semesters]
+    return jsonify({
+        "status": "ok",
+        "message": f"تم استيراد {inserted_total} درجة",
+        "student_id": student_id,
+        "semesters": sem_list,
+    }), 200
+
+@grades_bp.route("/import/semester", methods=["POST"])
+def import_semester_excel():
+    semester_label = (request.form.get("semester") or "").strip()
+    academic_year = (request.form.get("year") or "").strip()
+    changed_by = (request.form.get("changed_by") or "semester-import").strip() or "semester-import"
+    file = request.files.get("file")
+
+    if not semester_label and not academic_year:
+        return jsonify({"status": "error", "message": "يرجى إدخال الفصل أو السنة"}), 400
+    if not file:
+        return jsonify({"status": "error", "message": "ملف Excel مفقود"}), 400
+
+    semester = semester_label
+    if academic_year:
+        semester = f"{semester} {academic_year}".strip()
+    if not semester:
+        return jsonify({"status": "error", "message": "تعذر تحديد اسم الفصل"}), 400
+
+    try:
+        df = pd.read_excel(file, header=None)
+    except Exception as exc:
+        return jsonify({"status": "error", "message": f"فشل قراءة ملف Excel: {exc}"}), 400
+
+    if df.shape[0] < 3 or df.shape[1] < 3:
+        return jsonify({"status": "error", "message": "ملف الاستيراد يجب أن يحتوي على عناوين ووحدات وبيانات طلبة"}), 400
+
+    header_row = df.iloc[0].tolist()
+    units_row = df.iloc[1].tolist()
+
+    course_columns = []
+    for idx, name in enumerate(header_row):
+        if idx < 2:
+            continue
+        if name is None or (isinstance(name, float) and math.isnan(name)):
+            continue
+        cname = str(name).strip()
+        if not cname:
+            continue
+        units = _parse_units(units_row[idx] if idx < len(units_row) else None)
+        course_columns.append((idx, cname, units))
+
+    if not course_columns:
+        return jsonify({"status": "error", "message": "لم يتم العثور على عناوين مقررات في الصف الأول"}), 400
+
+    student_rows = df.iloc[2:]
+    if student_rows.empty:
+        return jsonify({"status": "error", "message": "لا توجد سجلات طلبة للاستيراد"}), 400
+
+    students_data = []
+    for _, row in student_rows.iterrows():
+        name_raw = row.iloc[0] if len(row) > 0 else None
+        sid_raw = row.iloc[1] if len(row) > 1 else None
+        student_name = str(name_raw).strip() if name_raw is not None else ""
+        student_id = _normalize_student_id(sid_raw)
+        if not student_id and not student_name:
+            continue
+        if not student_id:
+            continue
+
+        grades = []
+        for col_idx, cname, units in course_columns:
+            value = row.iloc[col_idx] if col_idx < len(row) else None
+            grade_val = _parse_grade_value(value)
+            grades.append((cname, units, grade_val))
+        students_data.append((student_id, student_name, grades))
+
+    if not students_data:
+        return jsonify({"status": "error", "message": "لم يتم العثور على طلبة صالحين في الملف"}), 400
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+
+        course_names = [cname for (_, cname, _) in course_columns]
+        existing_rows = cur.execute(
+            "SELECT student_id, course_name, grade FROM grades WHERE semester = ?",
+            (semester,),
+        ).fetchall()
+        existing_map = {(row["student_id"], row["course_name"]): row["grade"] for row in existing_rows}
+
+        for _, cname, units in course_columns:
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO courses (course_name, course_code, units)
+                    VALUES (?, '', ?)
+                    ON CONFLICT(course_name) DO UPDATE SET
+                        units = CASE
+                            WHEN excluded.units IS NOT NULL AND excluded.units > 0 THEN excluded.units
+                            ELSE units
+                        END
+                    """,
+                    (cname, units),
+                )
+            except Exception:
+                pass
+
+        inserted_records = 0
+        affected_students = set()
+
+        now_iso = datetime.datetime.utcnow().isoformat()
+        for student_id, student_name, grades in students_data:
+            affected_students.add(student_id)
+            if student_name:
+                cur.execute(
+                    """
+                    INSERT INTO students (student_id, student_name)
+                    VALUES (?, ?)
+                    ON CONFLICT(student_id) DO UPDATE SET student_name = excluded.student_name
+                    """,
+                    (student_id, student_name),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT OR IGNORE INTO students (student_id, student_name)
+                    VALUES (?, COALESCE((SELECT student_name FROM students WHERE student_id = ?), ''))
+                    """,
+                    (student_id, student_id),
+                )
+
+            for cname, units, grade_val in grades:
+                if grade_val is not None and (grade_val < 0 or grade_val > 100):
+                    conn.rollback()
+                    return jsonify({"status": "error", "message": f"الدرجة للمقرر {cname} للطالب {student_id} يجب أن تكون بين 0 و 100"}), 400
+
+                key = (student_id, cname)
+                old_grade = existing_map.get(key)
+
+                cur.execute(
+                    """
+                    INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        student_id,
+                        semester,
+                        cname,
+                        float(old_grade) if old_grade is not None else None,
+                        float(grade_val) if grade_val is not None else None,
+                        changed_by,
+                        now_iso,
+                    ),
+                )
+
+                cur.execute(
+                    """
+                    INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        student_id,
+                        semester,
+                        cname,
+                        "",
+                        units,
+                        float(grade_val) if grade_val is not None else None,
+                    ),
+                )
+                inserted_records += 1
+
+        conn.commit()
+
+    return jsonify({
+        "status": "ok",
+        "message": f"تم استيراد نتيجة الفصل {semester} لعدد {len(affected_students)} طالب/ة",
+        "semester": semester,
+        "students": len(affected_students),
+        "courses": len(course_columns),
+        "records": inserted_records,
+    }), 200
+
+
+@grades_bp.route("/update", methods=["POST"])
+def update_grade():
+    data = request.get_json(force=True)
+    sid = data.get("student_id")
+    semester = data.get("semester")
+    course = data.get("course_name")
+    new_grade_raw = data.get("grade")
+    changed_by = data.get("changed_by", "admin")
+
+    if not sid or not semester or not course:
+        return jsonify({"status": "error", "message": "student_id و semester و course_name مطلوبة"}), 400
+
+    ok, val_or_msg = validate_grade_value(new_grade_raw)
+    if not ok:
+        return jsonify({"status": "error", "message": val_or_msg}), 400
+    new_grade = val_or_msg
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        old = cur.execute(
+            "SELECT grade FROM grades WHERE student_id=? AND semester=? AND course_name=?", (sid, semester, course)
+        ).fetchone()
+        old_grade = old[0] if old else None
+
+        cur.execute(
+            "INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts) VALUES (?,?,?,?,?,?,?)",
+            (sid, semester, course, old_grade, (float(new_grade) if new_grade is not None else None),
+             changed_by, datetime.datetime.utcnow().isoformat())
+        )
+
+        cur.execute(
+            "INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES (?, ?, ?, ?, ?, ?)",
+            (sid, semester, course, "", 0, (float(new_grade) if new_grade is not None else None))
+        )
+        conn.commit()
+
+    return jsonify({"status": "ok", "message": "تم تعديل الدرجة"}), 200
+
+
+@grades_bp.route("/transcript/<student_id>")
+def get_transcript(student_id):
+    data = _load_transcript_data(student_id)
+    return jsonify({
+        "student_id": data["student_id"],
+        "student_name": data.get("student_name", ""),
+        "transcript": data["transcript"],
+        "semester_gpas": data["semester_gpas"],
+        "cumulative_gpa": data["cumulative_gpa"]
+    })
+
+
+def _export_transcript_excel(data):
+    buf = io.BytesIO()
+    now = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename = f"transcript_{data['student_id']}_{now}.xlsx"
+
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        workbook = writer.book
+        worksheet = workbook.add_worksheet("Transcript")
+        writer.sheets["Transcript"] = worksheet
+
+        bold = workbook.add_format({"bold": True})
+        header_fmt = workbook.add_format({"bold": True, "bg_color": "#f0f0f0"})
+        number_fmt = workbook.add_format({"num_format": "0.00"})
+
+        row = 0
+        worksheet.write(row, 0, "اسم الطالب", bold)
+        worksheet.write(row, 1, data.get("student_name") or "")
+        row += 1
+        worksheet.write(row, 0, "الرقم الدراسي", bold)
+        worksheet.write(row, 1, data.get("student_id") or "")
+        row += 1
+        worksheet.write(row, 0, "المعدل التراكمي", bold)
+        worksheet.write(row, 1, data.get("cumulative_gpa") or 0, number_fmt)
+        row += 2
+
+        transcript = data.get("transcript", {})
+        semester_gpas = data.get("semester_gpas", {})
+        ordered_semesters = data.get("ordered_semesters", [])
+
+        if not ordered_semesters:
+            worksheet.write(row, 0, "لا توجد بيانات درجات متاحة", bold)
+        else:
+            for sem in ordered_semesters:
+                worksheet.write(row, 0, f"الفصل: {sem}", bold)
+                worksheet.write(row, 4, "المعدل الفصلي", bold)
+                worksheet.write(row, 5, semester_gpas.get(sem, 0.0), number_fmt)
+                row += 1
+
+                headers = ["المقرر", "الرمز", "الوحدات", "الدرجة"]
+                for col, title in enumerate(headers):
+                    worksheet.write(row, col, title, header_fmt)
+                row += 1
+
+                for course in transcript.get(sem, []):
+                    worksheet.write(row, 0, course.get("course_name") or "")
+                    worksheet.write(row, 1, course.get("course_code") or "")
+                    worksheet.write(row, 2, course.get("units") or 0)
+                    grade = course.get("grade")
+                    if grade is None:
+                        worksheet.write(row, 3, "-")
+                    else:
+                        worksheet.write(row, 3, float(grade), number_fmt)
+                    row += 1
+
+                row += 1
+
+        worksheet.set_column(0, 0, 32)
+        worksheet.set_column(1, 1, 16)
+        worksheet.set_column(2, 3, 12)
+        worksheet.set_column(4, 5, 18)
+
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
+def _export_transcript_text(data):
+    lines = []
+    lines.append(f"اسم الطالب: {data.get('student_name') or '-'}")
+    lines.append(f"الرقم الدراسي: {data.get('student_id') or '-'}")
+    lines.append(f"المعدل التراكمي: {data.get('cumulative_gpa') or 0}")
+    lines.append("")
+
+    transcript = data.get("transcript", {})
+    semester_gpas = data.get("semester_gpas", {})
+    ordered_semesters = data.get("ordered_semesters", [])
+
+    if not ordered_semesters:
+        lines.append("لا توجد بيانات درجات متاحة.")
+    else:
+        for sem in ordered_semesters:
+            lines.append(f"الفصل: {sem}")
+            lines.append(f"المعدل الفصلي: {semester_gpas.get(sem, 0.0)}")
+            lines.append("المقرر | الرمز | الوحدات | الدرجة")
+            for course in transcript.get(sem, []):
+                grade = course.get("grade")
+                grade_str = "-" if grade is None else f"{grade}"
+                lines.append(f"{course.get('course_name') or ''} | {course.get('course_code') or ''} | {course.get('units') or 0} | {grade_str}")
+            lines.append("")
+
+    output = "\n".join(lines)
+    now = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename = f"transcript_{data['student_id']}_{now}.txt"
+    return Response(output, mimetype="text/plain; charset=utf-8", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+@grades_bp.route("/export/<student_id>")
+def export_transcript(student_id):
+    fmt = (request.args.get("format") or "excel").lower()
+    data = _load_transcript_data(student_id)
+    if fmt in ("excel", "xlsx"):
+        return _export_transcript_excel(data)
+    if fmt in ("text", "txt"):
+        return _export_transcript_text(data)
+    return jsonify({"status": "error", "message": "صيغة تصدير غير مدعومة"}), 400
+
+
+@grades_bp.route("/export/excel/<student_id>")
+def export_transcript_excel(student_id):
+    return _export_transcript_excel(_load_transcript_data(student_id))
+
+
+@grades_bp.route("/export/pdf/<student_id>")
+def export_transcript_pdf(student_id):
+    try:
+        df = df_from_query(
+            "SELECT semester, course_name, course_code, units, grade FROM grades WHERE student_id = ? ORDER BY semester, course_name",
+            params=(student_id,)
+        )
+    except Exception:
+        df = None
+
+    if df is None or df.empty:
+        html = "<html><head><meta charset='utf-8'><title>السجل الأكاديمي</title></head><body><h3>لا توجد بيانات للسجل</h3></body></html>"
+        return pdf_response_from_html(html, filename_prefix=f"transcript_{student_id}")
+
+    grades = [Grade(student_id, row['semester'], row['course_name'], row.get('grade')) for _, row in df.iterrows()]
+    for g, (_, row) in zip(grades, df.iterrows()):
+        g.course_code = row.get('course_code')
+        g.units = row.get('units')
+    dicts = [g.__dict__ for g in grades]
+    df2 = pd.DataFrame(dicts)
+
+    html_sections = []
+    for sem in sorted(df2['semester'].unique()):
+        sub = df2[df2['semester'] == sem][['course_name', 'course_code', 'units', 'grade']]
+        table_html = sub.to_html(index=False, border=0, classes="table table-sm table-bordered")
+        html_sections.append(f"<h4>{sem}</h4>{table_html}")
+
+    html = f"""
+    <!doctype html>
+    <html lang="ar" dir="rtl">
+        <head>
+            <meta charset="utf-8"/>
+            <title>السجل الأكاديمي - {student_id}</title>
+            <style>body {{ font-family: DejaVu Sans, Arial, Tahoma; direction: rtl; }} table {{ border-collapse: collapse; width: 100%; }} table th, table td {{ border: 1px solid #ccc; padding: 6px; text-align: left; }} th {{ background: #f0f0f0; }}</style>
+        </head>
+        <body>
+            <h2>السجل الأكاديمي للطالب: {student_id}</h2>
+            {''.join(html_sections)}
+        </body>
+    </html>
+    """
+    return pdf_response_from_html(html, filename_prefix=f"transcript_{student_id}")
+
+
+
+
+def _load_transcript_data(student_id: str):
+    with get_connection() as conn:
+        cur = conn.cursor()
+        student_row = cur.execute(
+            "SELECT COALESCE(student_name, '') AS student_name FROM students WHERE student_id = ?",
+            (student_id,),
+        ).fetchone()
+        student_name = student_row["student_name"] if student_row else ""
+
+        grade_rows = cur.execute(
+            """
+            SELECT semester, course_name, course_code, units, grade
+            FROM grades
+            WHERE student_id = ?
+            ORDER BY semester, course_name
+            """,
+            (student_id,),
+        ).fetchall()
+
+    transcript = OrderedDict()
+    gpa_by_semester = defaultdict(list)
+    best_map = {}
+
+    for row in grade_rows:
+        sem = row["semester"] or ""
+        course_name = row["course_name"] or ""
+        course_code = row["course_code"] or ""
+        units = row["units"] or 0
+        grade = row["grade"]
+
+        transcript.setdefault(sem, []).append(
+            {
+                "course_name": course_name,
+                "course_code": course_code,
+                "units": units,
+                "grade": grade,
+            }
+        )
+
+        if grade is not None:
+            gpa_by_semester[sem].append((grade, units))
+
+        if grade is not None:
+            if course_name not in best_map or grade > best_map[course_name]["best_grade"]:
+                best_map[course_name] = {"best_grade": grade, "units": units}
+            else:
+                if units and (not best_map[course_name]["units"] or units > best_map[course_name]["units"]):
+                    best_map[course_name]["units"] = units
+
+    semester_gpas = {}
+    for sem, lst in gpa_by_semester.items():
+        total_units = sum(max(u, 0) for _, u in lst)
+        semester_gpas[sem] = round(
+            sum(grade * (max(units, 0)) for grade, units in lst) / total_units, 2
+        ) if total_units else 0.0
+
+    total_points = 0.0
+    total_units = 0.0
+    for info in best_map.values():
+        units = max(info["units"] or 0, 0)
+        total_units += units
+        total_points += (info["best_grade"] * units)
+    cumulative_gpa = round(total_points / total_units, 2) if total_units else 0.0
+
+    ordered_semesters = list(transcript.keys())
+
+    return {
+        "student_id": student_id,
+        "student_name": student_name,
+        "transcript": transcript,
+        "ordered_semesters": ordered_semesters,
+        "semester_gpas": semester_gpas,
+        "cumulative_gpa": cumulative_gpa,
+    }
+
+
+def _normalize_student_id(value):
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text.endswith(".0"):
+        text = text[:-2]
+    return text
+
+
+def _parse_units(value):
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return 0
+    try:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if not cleaned:
+                return 0
+            return max(int(round(float(cleaned.replace(",", ".")))), 0)
+        return max(int(round(float(value))), 0)
+    except Exception:
+        return 0
+
+
+def _parse_grade_value(value):
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        if all(ch in {"/", "\\", "-"} for ch in trimmed):
+            return None
+        trimmed = trimmed.replace(",", ".")
+        try:
+            return float(trimmed)
+        except ValueError:
+            return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _cell_to_str(value):
+    if value is None:
+        return ""
+    if isinstance(value, float) and math.isnan(value):
+        return ""
+    return str(value).strip()
+
+
+def _parse_export_style_single_student(df):
+    matrix = df.where(pd.notnull(df), None).values.tolist()
+    if not matrix or not matrix[0]:
+        return {"ok": False}
+
+    first_label = _cell_to_str(matrix[0][0])
+    if first_label != "اسم الطالب":
+        return {"ok": False}
+
+    student_name = _cell_to_str(matrix[0][1]) if len(matrix[0]) > 1 else ""
+    student_id = ""
+    if len(matrix) > 1 and len(matrix[1]) > 1 and _cell_to_str(matrix[1][0]) == "الرقم الدراسي":
+        student_id = _normalize_student_id(matrix[1][1])
+
+    semesters = []
+    idx = 0
+    total_rows = len(matrix)
+    while idx < total_rows:
+        row = matrix[idx]
+        first = _cell_to_str(row[0]) if row else ""
+        if first.startswith("الفصل"):
+            sem = first.split(":", 1)[1].strip() if ":" in first else first.replace("الفصل", "", 1).strip()
+            idx += 1
+
+            while idx < total_rows:
+                header_row = matrix[idx]
+                header_label = _cell_to_str(header_row[0]) if header_row else ""
+                if header_label == "المقرر":
+                    idx += 1
+                    break
+                idx += 1
+
+            courses = []
+            while idx < total_rows:
+                course_row = matrix[idx]
+                cells = [course_row[col] if course_row and col < len(course_row) else None for col in range(4)]
+                course_name = _cell_to_str(cells[0])
+                if not course_name:
+                    idx += 1
+                    break
+                course_code = _cell_to_str(cells[1])
+                units = _parse_units(cells[2])
+                grade_val = _parse_grade_value(cells[3])
+                courses.append(
+                    {
+                        "course_name": course_name,
+                        "course_code": course_code,
+                        "units": units,
+                        "grade": grade_val,
+                    }
+                )
+                idx += 1
+
+            semesters.append((sem, courses))
+            continue
+        idx += 1
+
+    return {
+        "ok": True,
+        "student_name": student_name,
+        "student_id": student_id,
+        "semesters": semesters,
+    }
+
+
+def _import_export_style_single_student(parsed, student_id_override, student_name_override, provided_semester, changed_by):
+    student_id_file = parsed.get("student_id") or ""
+    student_name_file = parsed.get("student_name") or ""
+    semesters = parsed.get("semesters") or []
+
+    if not semesters:
+        return jsonify({"status": "error", "message": "الملف لا يحتوي على فصول دراسية صالحة"}), 400
+
+    if student_id_override and student_id_file and student_id_override != student_id_file:
+        return jsonify({"status": "error", "message": "رقم الطالب في الملف لا يطابق الرقم المحدد"}), 400
+
+    student_id = student_id_override or student_id_file
+    if not student_id:
+        return jsonify({"status": "error", "message": "تعذر تحديد رقم الطالب من الملف أو الحقول"}), 400
+
+    student_name = student_name_override or student_name_file
+
+    normalized_semesters = []
+    default_semester = provided_semester.strip()
+    for sem_name, courses in semesters:
+        sem = (sem_name or "").strip()
+        if not sem:
+            sem = default_semester
+        if not sem:
+            return jsonify({"status": "error", "message": "أحد الفصول في الملف يفتقد للاسم ولا يوجد فصل بديل محدد"}), 400
+        filtered_courses = [c for c in courses if c.get("course_name")]
+        if filtered_courses:
+            normalized_semesters.append((sem, filtered_courses))
+
+    if not normalized_semesters:
+        return jsonify({"status": "error", "message": "لا توجد مقررات صالحة للاستيراد"}), 400
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+
+        if student_name:
+            cur.execute(
+                """
+                INSERT INTO students (student_id, student_name)
+                VALUES (?, ?)
+                ON CONFLICT(student_id) DO UPDATE SET student_name = excluded.student_name
+                """,
+                (student_id, student_name),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO students (student_id, student_name)
+                VALUES (?, COALESCE((SELECT student_name FROM students WHERE student_id = ?), ''))
+                """,
+                (student_id, student_id),
+            )
+
+        inserted_total = 0
+        now_iso = datetime.datetime.utcnow().isoformat()
+
+        for sem, courses in normalized_semesters:
+            existing_rows = cur.execute(
+                "SELECT course_name, grade FROM grades WHERE student_id = ? AND semester = ?",
+                (student_id, sem),
+            ).fetchall()
+            existing_map = {row[0]: row[1] for row in existing_rows}
+
+            cur.execute(
+                "DELETE FROM grades WHERE student_id = ? AND semester = ?",
+                (student_id, sem),
+            )
+
+            for course in courses:
+                cname = course.get("course_name") or ""
+                if not cname:
+                    continue
+                ccode = course.get("course_code") or ""
+                units = int(course.get("units") or 0)
+                grade_val = course.get("grade")
+
+                if grade_val is not None and (grade_val < 0 or grade_val > 100):
+                    conn.rollback()
+                    return jsonify({"status": "error", "message": f"الدرجة للمقرر {cname} في الفصل {sem} يجب أن تكون بين 0 و 100"}), 400
+
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO courses (course_name, course_code, units)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(course_name) DO UPDATE SET
+                            course_code = CASE
+                                WHEN excluded.course_code IS NOT NULL AND excluded.course_code <> '' THEN excluded.course_code
+                                ELSE course_code
+                            END,
+                            units = CASE
+                                WHEN excluded.units IS NOT NULL AND excluded.units > 0 THEN excluded.units
+                                ELSE units
+                            END
+                        """,
+                        (cname, ccode, units),
+                    )
+                except Exception:
+                    pass
+
+                old_grade = existing_map.get(cname)
+
+                cur.execute(
+                    """
+                    INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        student_id,
+                        sem,
+                        cname,
+                        float(old_grade) if old_grade is not None else None,
+                        float(grade_val) if grade_val is not None else None,
+                        changed_by,
+                        now_iso,
+                    ),
+                )
+
+                cur.execute(
+                    """
+                    INSERT INTO grades (student_id, semester, course_name, course_code, units, grade)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        student_id,
+                        sem,
+                        cname,
+                        ccode,
+                        units,
+                        float(grade_val) if grade_val is not None else None,
+                    ),
+                )
+                inserted_total += 1
+
+        conn.commit()
+
+    sem_list = [sem for sem, _ in normalized_semesters]
+    return jsonify({
+        "status": "ok",
+        "message": f"تم استيراد {inserted_total} درجة",
+        "student_id": student_id,
+        "semesters": sem_list,
+    }), 200
+
+
+@grades_bp.route("/import/semester", methods=["POST"])
+def import_semester_excel():
+    semester_label = (request.form.get("semester") or "").strip()
+    academic_year = (request.form.get("year") or "").strip()
+    changed_by = (request.form.get("changed_by") or "semester-import").strip() or "semester-import"
+    file = request.files.get("file")
+
+    if not semester_label and not academic_year:
+        return jsonify({"status": "error", "message": "يرجى إدخال الفصل أو السنة"}), 400
+    if not file:
+        return jsonify({"status": "error", "message": "ملف Excel مفقود"}), 400
+
+    semester = semester_label
+    if academic_year:
+        semester = f"{semester} {academic_year}".strip()
+    if not semester:
+        return jsonify({"status": "error", "message": "تعذر تحديد اسم الفصل"}), 400
+
+    try:
+        df = pd.read_excel(file, header=None)
+    except Exception as exc:
+        return jsonify({"status": "error", "message": f"فشل قراءة ملف Excel: {exc}"}), 400
+
+    if df.shape[0] < 3 or df.shape[1] < 3:
+        return jsonify({"status": "error", "message": "ملف الاستيراد يجب أن يحتوي على عناوين ووحدات وبيانات طلبة"}), 400
+
+    header_row = df.iloc[0].tolist()
+    units_row = df.iloc[1].tolist()
+
+    course_columns = []
+    for idx, name in enumerate(header_row):
+        if idx < 2:
+            continue
+        if name is None or (isinstance(name, float) and math.isnan(name)):
+            continue
+        cname = str(name).strip()
+        if not cname:
+            continue
+        units = _parse_units(units_row[idx] if idx < len(units_row) else None)
+        course_columns.append((idx, cname, units))
+
+    if not course_columns:
+        return jsonify({"status": "error", "message": "لم يتم العثور على عناوين مقررات في الصف الأول"}), 400
+
+    student_rows = df.iloc[2:]
+    if student_rows.empty:
+        return jsonify({"status": "error", "message": "لا توجد سجلات طلبة للاستيراد"}), 400
+
+    students_data = []
+    for _, row in student_rows.iterrows():
+        name_raw = row.iloc[0] if len(row) > 0 else None
+        sid_raw = row.iloc[1] if len(row) > 1 else None
+        student_name = str(name_raw).strip() if name_raw is not None else ""
+        student_id = _normalize_student_id(sid_raw)
+        if not student_id and not student_name:
+            continue
+        if not student_id:
+            continue
+
+        grades = []
+        for col_idx, cname, units in course_columns:
+            value = row.iloc[col_idx] if col_idx < len(row) else None
+            grade_val = _parse_grade_value(value)
+            grades.append((cname, units, grade_val))
+        students_data.append((student_id, student_name, grades))
+
+    if not students_data:
+        return jsonify({"status": "error", "message": "لم يتم العثور على طلبة صالحين في الملف"}), 400
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+
+        course_names = [cname for (_, cname, _) in course_columns]
+        existing_rows = cur.execute(
+            "SELECT student_id, course_name, grade FROM grades WHERE semester = ?",
+            (semester,),
+        ).fetchall()
+        existing_map = {(row["student_id"], row["course_name"]): row["grade"] for row in existing_rows}
+
+        for _, cname, units in course_columns:
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO courses (course_name, course_code, units)
+                    VALUES (?, '', ?)
+                    ON CONFLICT(course_name) DO UPDATE SET
+                        units = CASE
+                            WHEN excluded.units IS NOT NULL AND excluded.units > 0 THEN excluded.units
+                            ELSE units
+                        END
+                    """,
+                    (cname, units),
+                )
+            except Exception:
+                pass
+
+        inserted_records = 0
+        affected_students = set()
+
+        now_iso = datetime.datetime.utcnow().isoformat()
+        for student_id, student_name, grades in students_data:
+            affected_students.add(student_id)
+            if student_name:
+                cur.execute(
+                    """
+                    INSERT INTO students (student_id, student_name)
+                    VALUES (?, ?)
+                    ON CONFLICT(student_id) DO UPDATE SET student_name = excluded.student_name
+                    """,
+                    (student_id, student_name),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT OR IGNORE INTO students (student_id, student_name)
+                    VALUES (?, COALESCE((SELECT student_name FROM students WHERE student_id = ?), ''))
+                    """,
+                    (student_id, student_id),
+                )
+
+            for cname, units, grade_val in grades:
+                if grade_val is not None and (grade_val < 0 or grade_val > 100):
+                    conn.rollback()
+                    return jsonify({"status": "error", "message": f"الدرجة للمقرر {cname} للطالب {student_id} يجب أن تكون بين 0 و 100"}), 400
+
+                key = (student_id, cname)
+                old_grade = existing_map.get(key)
+
+                cur.execute(
+                    """
+                    INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        student_id,
+                        semester,
+                        cname,
+                        float(old_grade) if old_grade is not None else None,
+                        float(grade_val) if grade_val is not None else None,
+                        changed_by,
+                        now_iso,
+                    ),
+                )
+
+                cur.execute(
+                    """
+                    INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        student_id,
+                        semester,
+                        cname,
+                        "",
+                        units,
+                        float(grade_val) if grade_val is not None else None,
+                    ),
+                )
+                inserted_records += 1
+
+        conn.commit()
+
+    return jsonify({
+        "status": "ok",
+        "message": f"تم استيراد نتيجة الفصل {semester} لعدد {len(affected_students)} طالب/ة",
+        "semester": semester,
+        "students": len(affected_students),
+        "courses": len(course_columns),
+        "records": inserted_records,
+    }), 200
+
+
+@grades_bp.route("/update", methods=["POST"])
+def update_grade():
+    data = request.get_json(force=True)
+    sid = data.get("student_id")
+    semester = data.get("semester")
+    course = data.get("course_name")
+    new_grade_raw = data.get("grade")
+    changed_by = data.get("changed_by", "admin")
+
+    if not sid or not semester or not course:
+        return jsonify({"status": "error", "message": "student_id و semester و course_name مطلوبة"}), 400
+
+    ok, val_or_msg = validate_grade_value(new_grade_raw)
+    if not ok:
+        return jsonify({"status": "error", "message": val_or_msg}), 400
+    new_grade = val_or_msg
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        old = cur.execute(
+            "SELECT grade FROM grades WHERE student_id=? AND semester=? AND course_name=?", (sid, semester, course)
+        ).fetchone()
+        old_grade = old[0] if old else None
+
+        cur.execute(
+            "INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts) VALUES (?,?,?,?,?,?,?)",
+            (sid, semester, course, old_grade, (float(new_grade) if new_grade is not None else None),
+             changed_by, datetime.datetime.utcnow().isoformat())
+        )
+
+        cur.execute(
+            "INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES (?, ?, ?, ?, ?, ?)",
+            (sid, semester, course, "", 0, (float(new_grade) if new_grade is not None else None))
+        )
+        conn.commit()
+
+    return jsonify({"status": "ok", "message": "تم تعديل الدرجة"}), 200
+
+
+@grades_bp.route("/transcript/<student_id>")
+def get_transcript(student_id):
+    data = _load_transcript_data(student_id)
+    return jsonify({
+        "student_id": data["student_id"],
+        "student_name": data.get("student_name", ""),
+        "transcript": data["transcript"],
+        "semester_gpas": data["semester_gpas"],
+        "cumulative_gpa": data["cumulative_gpa"]
+    })
+
+
+# Export helpers
+def _export_transcript_excel(data):
+    buf = io.BytesIO()
+    now = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename = f"transcript_{data['student_id']}_{now}.xlsx"
+
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        workbook = writer.book
+        worksheet = workbook.add_worksheet("Transcript")
+        writer.sheets["Transcript"] = worksheet
+
+        bold = workbook.add_format({"bold": True})
+        header_fmt = workbook.add_format({"bold": True, "bg_color": "#f0f0f0"})
+        number_fmt = workbook.add_format({"num_format": "0.00"})
+
+        row = 0
+        worksheet.write(row, 0, "اسم الطالب", bold)
+        worksheet.write(row, 1, data.get("student_name") or "")
+        row += 1
+        worksheet.write(row, 0, "الرقم الدراسي", bold)
+        worksheet.write(row, 1, data.get("student_id") or "")
+        row += 1
+        worksheet.write(row, 0, "المعدل التراكمي", bold)
+        worksheet.write(row, 1, data.get("cumulative_gpa") or 0, number_fmt)
+        row += 2
+
+        transcript = data.get("transcript", {})
+        semester_gpas = data.get("semester_gpas", {})
+        ordered_semesters = data.get("ordered_semesters", [])
+
+        if not ordered_semesters:
+            worksheet.write(row, 0, "لا توجد بيانات درجات متاحة", bold)
+        else:
+            for sem in ordered_semesters:
+                worksheet.write(row, 0, f"الفصل: {sem}", bold)
+                worksheet.write(row, 4, "المعدل الفصلي", bold)
+                worksheet.write(row, 5, semester_gpas.get(sem, 0.0), number_fmt)
+                row += 1
+
+                headers = ["المقرر", "الرمز", "الوحدات", "الدرجة"]
+                for col, title in enumerate(headers):
+                    worksheet.write(row, col, title, header_fmt)
+                row += 1
+
+                for course in transcript.get(sem, []):
+                    worksheet.write(row, 0, course.get("course_name") or "")
+                    worksheet.write(row, 1, course.get("course_code") or "")
+                    worksheet.write(row, 2, course.get("units") or 0)
+                    grade = course.get("grade")
+                    if grade is None:
+                        worksheet.write(row, 3, "-")
+                    else:
+                        worksheet.write(row, 3, float(grade), number_fmt)
+                    row += 1
+
+                row += 1
+
+        worksheet.set_column(0, 0, 32)
+        worksheet.set_column(1, 1, 16)
+        worksheet.set_column(2, 3, 12)
+        worksheet.set_column(4, 5, 18)
+
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
+def _export_transcript_text(data):
+    lines = []
+    lines.append(f"اسم الطالب: {data.get('student_name') or '-'}")
+    lines.append(f"الرقم الدراسي: {data.get('student_id') or '-'}")
+    lines.append(f"المعدل التراكمي: {data.get('cumulative_gpa') or 0}")
+    lines.append("")
+
+    transcript = data.get("transcript", {})
+    semester_gpas = data.get("semester_gpas", {})
+    ordered_semesters = data.get("ordered_semesters", [])
+
+    if not ordered_semesters:
+        lines.append("لا توجد بيانات درجات متاحة.")
+    else:
+        for sem in ordered_semesters:
+            lines.append(f"الفصل: {sem}")
+            lines.append(f"المعدل الفصلي: {semester_gpas.get(sem, 0.0)}")
+            lines.append("المقرر | الرمز | الوحدات | الدرجة")
+            for course in transcript.get(sem, []):
+                grade = course.get("grade")
+                grade_str = "-" if grade is None else f"{grade}"
+                lines.append(f"{course.get('course_name') or ''} | {course.get('course_code') or ''} | {course.get('units') or 0} | {grade_str}")
+            lines.append("")
+
+    output = "\n".join(lines)
+    now = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename = f"transcript_{data['student_id']}_{now}.txt"
+    return Response(output, mimetype="text/plain; charset=utf-8", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+@grades_bp.route("/export/<student_id>")
+def export_transcript(student_id):
+    fmt = (request.args.get("format") or "excel").lower()
+    data = _load_transcript_data(student_id)
+    if fmt in ("excel", "xlsx"):
+        return _export_transcript_excel(data)
+    if fmt in ("text", "txt"):
+        return _export_transcript_text(data)
+    return jsonify({"status": "error", "message": "صيغة تصدير غير مدعومة"}), 400
+
+
+@grades_bp.route("/export/excel/<student_id>")
+def export_transcript_excel(student_id):
+    return _export_transcript_excel(_load_transcript_data(student_id))
+
+
+@grades_bp.route("/export/pdf/<student_id>")
+def export_transcript_pdf(student_id):
+    try:
+        df = df_from_query(
+            "SELECT semester, course_name, course_code, units, grade FROM grades WHERE student_id = ? ORDER BY semester, course_name",
+            params=(student_id,)
+        )
+    except Exception:
+        df = None
+
+    if df is None or df.empty:
+        html = "<html><head><meta charset='utf-8'><title>السجل الأكاديمي</title></head><body><h3>لا توجد بيانات للسجل</h3></body></html>"
+        return pdf_response_from_html(html, filename_prefix=f"transcript_{student_id}")
+
+    grades = [Grade(student_id, row['semester'], row['course_name'], row.get('grade')) for _, row in df.iterrows()]
+    for g, (_, row) in zip(grades, df.iterrows()):
+        g.course_code = row.get('course_code')
+        g.units = row.get('units')
+    dicts = [g.__dict__ for g in grades]
+    df2 = pd.DataFrame(dicts)
+
+    html_sections = []
+    for sem in sorted(df2['semester'].unique()):
+        sub = df2[df2['semester'] == sem][['course_name', 'course_code', 'units', 'grade']]
+        table_html = sub.to_html(index=False, border=0, classes="table table-sm table-bordered")
+        html_sections.append(f"<h4>{sem}</h4>{table_html}")
+
+    html = f"""
+    <!doctype html>
+    <html lang="ar" dir="rtl">
+        <head>
+            <meta charset="utf-8"/>
+            <title>السجل الأكاديمي - {student_id}</title>
+            <style>body {{ font-family: DejaVu Sans, Arial, Tahoma; direction: rtl; }} table {{ border-collapse: collapse; width: 100%; }} table th, table td {{ border: 1px solid #ccc; padding: 6px; text-align: left; }} th {{ background: #f0f0f0; }}</style>
+        </head>
+        <body>
+            <h2>السجل الأكاديمي للطالب: {student_id}</h2>
+            {''.join(html_sections)}
+        </body>
+    </html>
+    """
+    return pdf_response_from_html(html, filename_prefix=f"transcript_{student_id}")
+
+
+
+@grades_bp.route("/import/transcript", methods=["POST"])
+def import_transcript_excel():
+    """
+    استيراد كشف درجات لطالب واحد.
+    """
+    # Read uploaded file and form fields
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"status": "error", "message": "ملف Excel مفقود"}), 400
+    try:
+        raw_bytes = file.read()
+    except Exception:
+        return jsonify({"status": "error", "message": "تعذر قراءة الملف"}), 400
+    if not raw_bytes:
+        return jsonify({"status": "error", "message": "الملف فارغ"}), 400
+
+    try:
+        df_export = pd.read_excel(io.BytesIO(raw_bytes), header=None)
+    except Exception as exc:
+        return jsonify({"status": "error", "message": f"فشل قراءة ملف Excel: {exc}"}), 400
+
+    # extract form values
+    student_id_form = _normalize_student_id(request.form.get("student_id"))
+    semester_label = (request.form.get("semester") or "").strip()
+    academic_year = (request.form.get("year") or "").strip()
+    student_name = (request.form.get("student_name") or "").strip()
+    changed_by = (request.form.get("changed_by") or "import").strip() or "import"
+
+    provided_semester = semester_label.strip()
+    if academic_year:
+        provided_semester = f"{provided_semester} {academic_year}".strip()
+
+    parsed_export = _parse_export_style_single_student(df_export)
+    if parsed_export.get("ok"):
+        return _import_export_style_single_student(
+            parsed_export,
+            student_id_form,
+            student_name,
+            provided_semester,
+            changed_by,
+        )
+
+    # fallback: simple 4-column format
+    if not student_id_form:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
+    if not provided_semester:
+        return jsonify({"status": "error", "message": "يرجى إدخال اسم الفصل أو السنة"}), 400
+
+    try:
+        df_simple = pd.read_excel(io.BytesIO(raw_bytes))
+    except Exception as exc:
+        return jsonify({"status": "error", "message": f"فشل قراءة ملف Excel: {exc}"}), 400
+
+    if df_simple.empty:
+        return jsonify({"status": "error", "message": "الملف لا يحتوي على بيانات"}), 400
+    if df_simple.shape[1] < 4:
+        return jsonify({"status": "error", "message": "يجب أن يحتوي الملف على أربعة أعمدة على الأقل"}), 400
+
+    df_simple = df_simple.iloc[:, :4].copy()
+    df_simple.columns = ["course_name", "course_code", "units", "grade"]
+    df_simple["course_name"] = df_simple["course_name"].astype(str).str.strip()
+    df_simple["course_code"] = df_simple["course_code"].astype(str).str.strip()
+    df_simple["units"] = pd.to_numeric(df_simple["units"], errors="coerce").fillna(0).astype(int)
+    df_simple["grade"] = pd.to_numeric(df_simple["grade"], errors="coerce")
+    df_simple = df_simple[df_simple["course_name"].astype(bool)]
+
+    if df_simple.empty:
+        return jsonify({"status": "error", "message": "لم يتم العثور على مقررات صالحة في الملف"}), 400
+
+    rows = df_simple.to_dict(orient="records")
+    semester = provided_semester
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+
+        if student_name:
+            cur.execute(
+                """
+                INSERT INTO students (student_id, student_name)
+                VALUES (?, ?)
+                ON CONFLICT(student_id) DO UPDATE SET student_name = excluded.student_name
+                """,
+                (student_id_form, student_name),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO students (student_id, student_name)
+                VALUES (?, COALESCE((SELECT student_name FROM students WHERE student_id = ?), ''))
+                """,
+                (student_id_form, student_id_form),
+            )
+
+        existing_rows = cur.execute(
+            "SELECT course_name, grade FROM grades WHERE student_id = ? AND semester = ?",
+            (student_id_form, semester),
+        ).fetchall()
+        existing_map = {row[0]: row[1] for row in existing_rows}
+
+        for row in rows:
+            cname = row["course_name"]
+            ccode = row["course_code"] or ""
+            units = int(row["units"] or 0)
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO courses (course_name, course_code, units)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(course_name) DO UPDATE SET
+                        course_code = CASE
+                            WHEN excluded.course_code IS NOT NULL AND excluded.course_code <> '' THEN excluded.course_code
+                            ELSE course_code
+                        END,
+                        units = CASE
+                            WHEN excluded.units IS NOT NULL AND excluded.units > 0 THEN excluded.units
+                            ELSE units
+                        END
+                    """,
+                    (cname, ccode, units),
+                )
+            except Exception:
+                pass
+
+        cur.execute(
+            "DELETE FROM grades WHERE student_id = ? AND semester = ?",
+            (student_id_form, semester),
+        )
+
+        inserted = 0
+        now_iso = datetime.datetime.utcnow().isoformat()
+        for row in rows:
+            cname = row["course_name"]
+            ccode = row["course_code"] or ""
+            units = int(row["units"] or 0)
+            grade = row["grade"]
+
+            if grade is not None and (grade < 0 or grade > 100):
+                conn.rollback()
+                return jsonify({"status": "error", "message": f"الدرجة للمقرر {cname} يجب أن تكون بين 0 و 100"}), 400
+
+            old_grade = existing_map.get(cname)
+
+            cur.execute(
+                """
+                INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    student_id_form,
+                    semester,
+                    cname,
+                    float(old_grade) if old_grade is not None else None,
+                    float(grade) if grade is not None else None,
+                    changed_by,
+                    now_iso,
+                ),
+            )
+
+            cur.execute(
+                """
+                INSERT INTO grades (student_id, semester, course_name, course_code, units, grade)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    student_id_form,
+                    semester,
+                    cname,
+                    ccode,
+                    units,
+                    float(grade) if grade is not None else None,
+                ),
+            )
+            inserted += 1
+
+        conn.commit()
+
+    return jsonify(
+        {
+            "status": "ok",
+            "message": f"تم استيراد {inserted} مقرر للفصل {semester}",
+            "student_id": student_id_form,
+            "semester": semester,
+        }
+    ), 200
+
+
+@grades_bp.route("/migrate_registrations_to_transcript", methods=["POST"])
+def migrate_registrations_to_transcript():
+    data = request.get_json(force=True)
+    student_id = data.get("student_id")
+    semester = data.get("semester")
+    year = data.get("year")
+    changed_by = data.get("changed_by", "migrate-ui")
+    if not student_id or not semester or not year:
+        return jsonify({"status": "error", "message": "student_id، الفصل، السنة مطلوبة"}), 400
+    semester_label = f"{semester} {year}".strip()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        # جلب المقررات المسجلة للطالب من جدول registrations
+        regs = cur.execute(
+            "SELECT course_name, course_code, units FROM registrations WHERE student_id = ?",
+            (student_id,)
+        ).fetchall()
+        if not regs:
+            return jsonify({"status": "error", "message": "لا توجد مقررات مسجلة لهذا الطالب"}), 404
+        # جلب المقررات الموجودة بالفعل في كشف الدرجات لهذا الفصل
+        existing = cur.execute(
+            "SELECT course_name FROM grades WHERE student_id = ? AND semester = ?",
+            (student_id, semester_label)
+        ).fetchall()
+        existing_courses = set(row[0] for row in existing)
+        inserted = 0
+        now_iso = datetime.datetime.utcnow().isoformat()
+        for reg in regs:
+            cname, ccode, units = reg
+            if cname in existing_courses:
+                continue  # لا تكرر المقررات
+            # أضف المقرر إلى جدول الدرجات بدون درجة
+            cur.execute(
+                "INSERT INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES (?, ?, ?, ?, ?, NULL)",
+                (student_id, semester_label, cname, ccode or "", int(units or 0))
+            )
+            cur.execute(
+                "INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts) VALUES (?, ?, ?, NULL, NULL, ?, ?)",
+                (student_id, semester_label, cname, changed_by, now_iso)
+            )
+            inserted += 1
+        conn.commit()
+    return jsonify({"status": "ok", "message": f"تم ترحيل {inserted} مقرر للفصل {semester_label}", "semester": semester_label, "inserted": inserted}), 200
+
+
+def _load_transcript_data(student_id: str):
+    with get_connection() as conn:
+        cur = conn.cursor()
+        student_row = cur.execute(
+            "SELECT COALESCE(student_name, '') AS student_name FROM students WHERE student_id = ?",
+            (student_id,),
+        ).fetchone()
+        student_name = student_row["student_name"] if student_row else ""
+
+        grade_rows = cur.execute(
+            """
+            SELECT semester, course_name, course_code, units, grade
+            FROM grades
+            WHERE student_id = ?
+            ORDER BY semester, course_name
+            """,
+            (student_id,),
+        ).fetchall()
+
+    transcript = OrderedDict()
+    gpa_by_semester = defaultdict(list)
+    best_map = {}
+
+    for row in grade_rows:
+        sem = row["semester"] or ""
+        course_name = row["course_name"] or ""
+        course_code = row["course_code"] or ""
+        units = row["units"] or 0
+        grade = row["grade"]
+
+        transcript.setdefault(sem, []).append(
+            {
+                "course_name": course_name,
+                "course_code": course_code,
+                "units": units,
+                "grade": grade,
+            }
+        )
+
+        if grade is not None:
+            gpa_by_semester[sem].append((grade, units))
+
+        if grade is not None:
+            if course_name not in best_map or grade > best_map[course_name]["best_grade"]:
+                best_map[course_name] = {"best_grade": grade, "units": units}
+            else:
+                if units and (not best_map[course_name]["units"] or units > best_map[course_name]["units"]):
+                    best_map[course_name]["units"] = units
+
+    semester_gpas = {}
+    for sem, lst in gpa_by_semester.items():
+        total_units = sum(max(u, 0) for _, u in lst)
+        semester_gpas[sem] = round(
+            sum(grade * (max(units, 0)) for grade, units in lst) / total_units, 2
+        ) if total_units else 0.0
+
+    total_points = 0.0
+    total_units = 0.0
+    for info in best_map.values():
+        units = max(info["units"] or 0, 0)
+        total_units += units
+        total_points += (info["best_grade"] * units)
+    cumulative_gpa = round(total_points / total_units, 2) if total_units else 0.0
+
+    ordered_semesters = list(transcript.keys())
+
+    return {
+        "student_id": student_id,
+        "student_name": student_name,
+        "transcript": transcript,
+        "ordered_semesters": ordered_semesters,
+        "semester_gpas": semester_gpas,
+        "cumulative_gpa": cumulative_gpa,
+    }
+
+
+def _normalize_student_id(value):
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text.endswith(".0"):
+        text = text[:-2]
+    return text
+
+
+def _parse_units(value):
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return 0
+    try:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if not cleaned:
+                return 0
+            return max(int(round(float(cleaned.replace(",", ".")))), 0)
+        return max(int(round(float(value))), 0)
+    except Exception:
+        return 0
+
+
+def _parse_grade_value(value):
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        if all(ch in {"/", "\\", "-"} for ch in trimmed):
+            return None
+        trimmed = trimmed.replace(",", ".")
+        try:
+            return float(trimmed)
+        except ValueError:
+            return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _cell_to_str(value):
+    if value is None:
+        return ""
+    if isinstance(value, float) and math.isnan(value):
+        return ""
+    return str(value).strip()
+
+
+def _parse_export_style_single_student(df):
+    matrix = df.where(pd.notnull(df), None).values.tolist()
+    if not matrix or not matrix[0]:
+        return {"ok": False}
+
+    first_label = _cell_to_str(matrix[0][0])
+    if first_label != "اسم الطالب":
+        return {"ok": False}
+
+    student_name = _cell_to_str(matrix[0][1]) if len(matrix[0]) > 1 else ""
+    student_id = ""
+    if len(matrix) > 1 and len(matrix[1]) > 1 and _cell_to_str(matrix[1][0]) == "الرقم الدراسي":
+        student_id = _normalize_student_id(matrix[1][1])
+
+    semesters = []
+    idx = 0
+    total_rows = len(matrix)
+    while idx < total_rows:
+        row = matrix[idx]
+        first = _cell_to_str(row[0]) if row else ""
+        if first.startswith("الفصل"):
+            sem = first.split(":", 1)[1].strip() if ":" in first else first.replace("الفصل", "", 1).strip()
+            idx += 1
+
+            # skip to header
+            while idx < total_rows:
+                header_row = matrix[idx]
+                header_label = _cell_to_str(header_row[0]) if header_row else ""
+                if header_label == "المقرر":
+                    idx += 1
+                    break
+                idx += 1
+
+            courses = []
+            while idx < total_rows:
+                course_row = matrix[idx]
+                cells = [course_row[col] if course_row and col < len(course_row) else None for col in range(4)]
+                course_name = _cell_to_str(cells[0])
+                if not course_name:
+                    idx += 1
+                    break
+                course_code = _cell_to_str(cells[1])
+                units = _parse_units(cells[2])
+                grade_val = _parse_grade_value(cells[3])
+                courses.append({"course_name": course_name, "course_code": course_code, "units": units, "grade": grade_val})
+                idx += 1
+
+            semesters.append((sem, courses))
+            continue
+        idx += 1
+
+    return {"ok": True, "student_name": student_name, "student_id": student_id, "semesters": semesters}
+
+
+def _import_export_style_single_student(parsed, student_id_override, student_name_override, provided_semester, changed_by):
+    student_id_file = parsed.get("student_id") or ""
+    student_name_file = parsed.get("student_name") or ""
+    semesters = parsed.get("semesters") or []
+
+    if not semesters:
+        return jsonify({"status": "error", "message": "الملف لا يحتوي على فصول دراسية صالحة"}), 400
+
+    if student_id_override and student_id_file and student_id_override != student_id_file:
+        return jsonify({"status": "error", "message": "رقم الطالب في الملف لا يطابق الرقم المحدد"}), 400
+
+    student_id = student_id_override or student_id_file
+    if not student_id:
+        return jsonify({"status": "error", "message": "تعذر تحديد رقم الطالب من الملف أو الحقول"}), 400
+
+    student_name = student_name_override or student_name_file
+
+    normalized_semesters = []
+    default_semester = provided_semester.strip()
+    for sem_name, courses in semesters:
+        sem = (sem_name or "").strip()
+        if not sem:
+            sem = default_semester
+        if not sem:
+            return jsonify({"status": "error", "message": "أحد الفصول في الملف يفتقد للاسم ولا يوجد فصل بديل محدد"}), 400
+        filtered_courses = [c for c in courses if c.get("course_name")]
+        if filtered_courses:
+            normalized_semesters.append((sem, filtered_courses))
+
+    if not normalized_semesters:
+        return jsonify({"status": "error", "message": "لا توجد مقررات صالحة للاستيراد"}), 400
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+
+        if student_name:
+            cur.execute(
+                """
+                INSERT INTO students (student_id, student_name)
+                VALUES (?, ?)
+                ON CONFLICT(student_id) DO UPDATE SET student_name = excluded.student_name
+                """,
+                (student_id, student_name),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO students (student_id, student_name)
+                VALUES (?, COALESCE((SELECT student_name FROM students WHERE student_id = ?), ''))
+                """,
+                (student_id, student_id),
+            )
+
+        inserted_total = 0
+        now_iso = datetime.datetime.utcnow().isoformat()
+
+        for sem, courses in normalized_semesters:
+            existing_rows = cur.execute(
+                "SELECT course_name, grade FROM grades WHERE student_id = ? AND semester = ?",
+                (student_id, sem),
+            ).fetchall()
+            existing_map = {row["course_name"]: row["grade"] for row in existing_rows}
+
+            cur.execute(
+                "DELETE FROM grades WHERE student_id = ? AND semester = ?",
+                (student_id, sem),
+            )
+
+            for course in courses:
+                cname = course.get("course_name") or ""
+                if not cname:
+                    continue
+                ccode = course.get("course_code") or ""
+                units = int(course.get("units") or 0)
+                grade_val = course.get("grade")
+
+                if grade_val is not None and (grade_val < 0 or grade_val > 100):
+                    conn.rollback()
+                    return jsonify({"status": "error", "message": f"الدرجة للمقرر {cname} في الفصل {sem} يجب أن تكون بين 0 و 100"}), 400
+
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO courses (course_name, course_code, units)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(course_name) DO UPDATE SET
+                            course_code = CASE
+                                WHEN excluded.course_code IS NOT NULL AND excluded.course_code <> '' THEN excluded.course_code
+                                ELSE course_code
+                            END,
+                            units = CASE
+                                WHEN excluded.units IS NOT NULL AND excluded.units > 0 THEN excluded.units
+                                ELSE units
+                            END
+                        """,
+                        (cname, ccode, units),
+                    )
+                except Exception:
+                    pass
+
+                old_grade = existing_map.get(cname)
+
+                cur.execute(
+                    """
+                    INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        student_id,
+                        sem,
+                        cname,
+                        float(old_grade) if old_grade is not None else None,
+                        float(grade_val) if grade_val is not None else None,
+                        changed_by,
+                        now_iso,
+                    ),
+                )
+
+                cur.execute(
+                    """
+                    INSERT INTO grades (student_id, semester, course_name, course_code, units, grade)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        student_id,
+                        sem,
+                        cname,
+                        ccode,
+                        units,
+                        float(grade_val) if grade_val is not None else None,
+                    ),
+                )
+                inserted_total += 1
+
+        conn.commit()
+
+    sem_list = [sem for sem, _ in normalized_semesters]
+    return jsonify({"status": "ok", "message": f"تم استيراد {inserted_total} درجة", "student_id": student_id, "semesters": sem_list}), 200
+
+
+@grades_bp.route("/import/semester", methods=["POST"])
+def import_semester_excel():
+    semester_label = (request.form.get("semester") or "").strip()
+    academic_year = (request.form.get("year") or "").strip()
+    changed_by = (request.form.get("changed_by") or "semester-import").strip() or "semester-import"
+    file = request.files.get("file")
+
+    if not semester_label and not academic_year:
+        return jsonify({"status": "error", "message": "يرجى إدخال الفصل أو السنة"}), 400
+    if not file:
+        return jsonify({"status": "error", "message": "ملف Excel مفقود"}), 400
+
+    semester = semester_label
+    if academic_year:
+        semester = f"{semester} {academic_year}".strip()
+    if not semester:
+        return jsonify({"status": "error", "message": "تعذر تحديد اسم الفصل"}), 400
+
+    try:
+        df = pd.read_excel(file, header=None)
+    except Exception as exc:
+        return jsonify({"status": "error", "message": f"فشل قراءة ملف Excel: {exc}"}), 400
+
+    if df.shape[0] < 3 or df.shape[1] < 3:
+        return jsonify({"status": "error", "message": "ملف الاستيراد يجب أن يحتوي على عناوين ووحدات وبيانات طلبة"}), 400
+
+    header_row = df.iloc[0].tolist()
+    units_row = df.iloc[1].tolist()
+
+    course_columns = []
+    for idx, name in enumerate(header_row):
+        if idx < 2:
+            continue
+        if name is None or (isinstance(name, float) and math.isnan(name)):
+            continue
+        cname = str(name).strip()
+        if not cname:
+            continue
+        units = _parse_units(units_row[idx] if idx < len(units_row) else None)
+        course_columns.append((idx, cname, units))
+
+    if not course_columns:
+        return jsonify({"status": "error", "message": "لم يتم العثور على عناوين مقررات في الصف الأول"}), 400
+
+    student_rows = df.iloc[2:]
+    if student_rows.empty:
+        return jsonify({"status": "error", "message": "لا توجد سجلات طلبة للاستيراد"}), 400
+
+    students_data = []
+    for _, row in student_rows.iterrows():
+        name_raw = row.iloc[0] if len(row) > 0 else None
+        sid_raw = row.iloc[1] if len(row) > 1 else None
+        student_name = str(name_raw).strip() if name_raw is not None else ""
+        student_id = _normalize_student_id(sid_raw)
+        if not student_id:
+            continue
+
+        grades = []
+        for col_idx, cname, units in course_columns:
+            value = row.iloc[col_idx] if col_idx < len(row) else None
+            grade_val = _parse_grade_value(value)
+            grades.append((cname, units, grade_val))
+        students_data.append((student_id, student_name, grades))
+
+    if not students_data:
+        return jsonify({"status": "error", "message": "لم يتم العثور على طلبة صالحين في الملف"}), 400
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+
+        course_names = [cname for (_, cname, _) in course_columns]
+        existing_rows = cur.execute(
+            "SELECT student_id, course_name, grade FROM grades WHERE semester = ?",
+            (semester,),
+        ).fetchall()
+        existing_map = {(row["student_id"], row["course_name"]): row["grade"] for row in existing_rows}
+
+        for _, cname, units in course_columns:
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO courses (course_name, course_code, units)
+                    VALUES (?, '', ?)
+                    ON CONFLICT(course_name) DO UPDATE SET
+                        units = CASE
+                            WHEN excluded.units IS NOT NULL AND excluded.units > 0 THEN excluded.units
+                            ELSE units
+                        END
+                    """,
+                    (cname, units),
+                )
+            except Exception:
+                pass
+
+        inserted_records = 0
+        affected_students = set()
+
+        now_iso = datetime.datetime.utcnow().isoformat()
+        for student_id, student_name, grades in students_data:
+            affected_students.add(student_id)
+            if student_name:
+                cur.execute(
+                    """
+                    INSERT INTO students (student_id, student_name)
+                    VALUES (?, ?)
+                    ON CONFLICT(student_id) DO UPDATE SET student_name = excluded.student_name
+                    """,
+                    (student_id, student_name),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT OR IGNORE INTO students (student_id, student_name)
+                    VALUES (?, COALESCE((SELECT student_name FROM students WHERE student_id = ?), ''))
+                    """,
+                    (student_id, student_id),
+                )
+
+            for cname, units, grade_val in grades:
+                if grade_val is not None and (grade_val < 0 or grade_val > 100):
+                    conn.rollback()
+                    return jsonify({"status": "error", "message": f"الدرجة للمقرر {cname} للطالب {student_id} يجب أن تكون بين 0 و 100"}), 400
+
+                key = (student_id, cname)
+                old_grade = existing_map.get(key)
+
+                cur.execute(
+                    """
+                    INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        student_id,
+                        semester,
+                        cname,
+                        float(old_grade) if old_grade is not None else None,
+                        float(grade_val) if grade_val is not None else None,
+                        changed_by,
+                        now_iso,
+                    ),
+                )
+
+                cur.execute(
+                    """
+                    INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        student_id,
+                        semester,
+                        cname,
+                        "",
+                        units,
+                        float(grade_val) if grade_val is not None else None,
+                    ),
+                )
+                inserted_records += 1
+
+        conn.commit()
+
+    return jsonify({
+        "status": "ok",
+        "message": f"تم استيراد نتيجة الفصل {semester} لعدد {len(affected_students)} طالب/ة",
+        "semester": semester,
+        "students": len(affected_students),
+        "courses": len(course_columns),
+        "records": inserted_records,
+    }), 200
+
+
+@grades_bp.route("/update", methods=["POST"])
+def update_grade():
+    data = request.get_json(force=True)
+    sid = data.get("student_id")
+    semester = data.get("semester")
+    course = data.get("course_name")
+    new_grade_raw = data.get("grade")
+    changed_by = data.get("changed_by", "admin")
+
+    if not sid or not semester or not course:
+        return jsonify({"status": "error", "message": "student_id و semester و course_name مطلوبة"}), 400
+
+    ok, val_or_msg = validate_grade_value(new_grade_raw)
+    if not ok:
+        return jsonify({"status": "error", "message": val_or_msg}), 400
+    new_grade = val_or_msg
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        old = cur.execute(
+            "SELECT grade FROM grades WHERE student_id=? AND semester=? AND course_name=?", (sid, semester, course)
+        ).fetchone()
+        old_grade = old[0] if old else None
+
+        cur.execute(
+            "INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts) VALUES (?,?,?,?,?,?,?)",
+            (sid, semester, course, old_grade, (float(new_grade) if new_grade is not None else None),
+             changed_by, datetime.datetime.utcnow().isoformat())
+        )
+
+        cur.execute(
+            "INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES (?, ?, ?, ?, ?, ?)",
+            (sid, semester, course, "", 0, (float(new_grade) if new_grade is not None else None))
+        )
+        conn.commit()
+
+    return jsonify({"status": "ok", "message": "تم تعديل الدرجة"}), 200
+
+
+@grades_bp.route("/transcript/<student_id>")
+def get_transcript(student_id):
+    data = _load_transcript_data(student_id)
+    return jsonify({
+        "student_id": data["student_id"],
+        "student_name": data.get("student_name", ""),
+        "transcript": data["transcript"],
+        "semester_gpas": data["semester_gpas"],
+        "cumulative_gpa": data["cumulative_gpa"]
+    })
+
+
+# Export helpers and routes
+def _export_transcript_excel(data):
+    buf = io.BytesIO()
+    now = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename = f"transcript_{data['student_id']}_{now}.xlsx"
+
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        workbook = writer.book
+        worksheet = workbook.add_worksheet("Transcript")
+        writer.sheets["Transcript"] = worksheet
+
+        bold = workbook.add_format({"bold": True})
+        header_fmt = workbook.add_format({"bold": True, "bg_color": "#f0f0f0"})
+        number_fmt = workbook.add_format({"num_format": "0.00"})
+
+        row = 0
+        worksheet.write(row, 0, "اسم الطالب", bold)
+        worksheet.write(row, 1, data.get("student_name") or "")
+        row += 1
+        worksheet.write(row, 0, "الرقم الدراسي", bold)
+        worksheet.write(row, 1, data.get("student_id") or "")
+        row += 1
+        worksheet.write(row, 0, "المعدل التراكمي", bold)
+        worksheet.write(row, 1, data.get("cumulative_gpa") or 0, number_fmt)
+        row += 2
+
+        transcript = data.get("transcript", {})
+        semester_gpas = data.get("semester_gpas", {})
+        ordered_semesters = data.get("ordered_semesters", [])
+
+        if not ordered_semesters:
+            worksheet.write(row, 0, "لا توجد بيانات درجات متاحة", bold)
+        else:
+            for sem in ordered_semesters:
+                worksheet.write(row, 0, f"الفصل: {sem}", bold)
+                worksheet.write(row, 4, "المعدل الفصلي", bold)
+                worksheet.write(row, 5, semester_gpas.get(sem, 0.0), number_fmt)
+                row += 1
+
+                headers = ["المقرر", "الرمز", "الوحدات", "الدرجة"]
+                for col, title in enumerate(headers):
+                    worksheet.write(row, col, title, header_fmt)
+                row += 1
+
+                for course in transcript.get(sem, []):
+                    worksheet.write(row, 0, course.get("course_name") or "")
+                    worksheet.write(row, 1, course.get("course_code") or "")
+                    worksheet.write(row, 2, course.get("units") or 0)
+                    grade = course.get("grade")
+                    if grade is None:
+                        worksheet.write(row, 3, "-")
+                    else:
+                        worksheet.write(row, 3, float(grade), number_fmt)
+                    row += 1
+
+                row += 1
+
+        worksheet.set_column(0, 0, 32)
+        worksheet.set_column(1, 1, 16)
+        worksheet.set_column(2, 3, 12)
+        worksheet.set_column(4, 5, 18)
+
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
+def _export_transcript_text(data):
+    lines = []
+    lines.append(f"اسم الطالب: {data.get('student_name') or '-'}")
+    lines.append(f"الرقم الدراسي: {data.get('student_id') or '-'}")
+    lines.append(f"المعدل التراكمي: {data.get('cumulative_gpa') or 0}")
+    lines.append("")
+
+    transcript = data.get("transcript", {})
+    semester_gpas = data.get("semester_gpas", {})
+    ordered_semesters = data.get("ordered_semesters", [])
+
+    if not ordered_semesters:
+        lines.append("لا توجد بيانات درجات متاحة.")
+    else:
+        for sem in ordered_semesters:
+            lines.append(f"الفصل: {sem}")
+            lines.append(f"المعدل الفصلي: {semester_gpas.get(sem, 0.0)}")
+            lines.append("المقرر | الرمز | الوحدات | الدرجة")
+            for course in transcript.get(sem, []):
+                grade = course.get("grade")
+                grade_str = "-" if grade is None else f"{grade}"
+                lines.append(f"{course.get('course_name') or ''} | {course.get('course_code') or ''} | {course.get('units') or 0} | {grade_str}")
+            lines.append("")
+
+    output = "\n".join(lines)
+    now = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename = f"transcript_{data['student_id']}_{now}.txt"
+    return Response(output, mimetype="text/plain; charset=utf-8", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+@grades_bp.route("/export/<student_id>")
+def export_transcript(student_id):
+    fmt = (request.args.get("format") or "excel").lower()
+    data = _load_transcript_data(student_id)
+    if fmt in ("excel", "xlsx"):
+        return _export_transcript_excel(data)
+    if fmt in ("text", "txt"):
+        return _export_transcript_text(data)
+    return jsonify({"status": "error", "message": "صيغة تصدير غير مدعومة"}), 400
+
+
+@grades_bp.route("/export/excel/<student_id>")
+def export_transcript_excel(student_id):
+    return _export_transcript_excel(_load_transcript_data(student_id))
+
+
+@grades_bp.route("/export/pdf/<student_id>")
+def export_transcript_pdf(student_id):
+    try:
+        df = df_from_query(
+            "SELECT semester, course_name, course_code, units, grade FROM grades WHERE student_id = ? ORDER BY semester, course_name",
+            params=(student_id,)
+        )
+    except Exception:
+        df = None
+
+    if df is None or df.empty:
+        html = "<html><head><meta charset='utf-8'><title>السجل الأكاديمي</title></head><body><h3>لا توجد بيانات للسجل</h3></body></html>"
+        return pdf_response_from_html(html, filename_prefix=f"transcript_{student_id}")
+
+    grades = [Grade(student_id, row['semester'], row['course_name'], row.get('grade')) for _, row in df.iterrows()]
+    for g, (_, row) in zip(grades, df.iterrows()):
+        g.course_code = row.get('course_code')
+        g.units = row.get('units')
+    dicts = [g.__dict__ for g in grades]
+    df2 = pd.DataFrame(dicts)
+
+    html_sections = []
+    for sem in sorted(df2['semester'].unique()):
+        sub = df2[df2['semester'] == sem][['course_name', 'course_code', 'units', 'grade']]
+        table_html = sub.to_html(index=False, border=0, classes="table table-sm table-bordered")
+        html_sections.append(f"<h4>{sem}</h4>{table_html}")
+
+    html = f"""
+    <!doctype html>
+    <html lang="ar" dir="rtl">
+        <head>
+            <meta charset="utf-8"/>
+            <title>السجل الأكاديمي - {student_id}</title>
+            <style>body {{ font-family: DejaVu Sans, Arial, Tahoma; direction: rtl; }} table {{ border-collapse: collapse; width: 100%; }} table th, table td {{ border: 1px solid #ccc; padding: 6px; text-align: left; }} th {{ background: #f0f0f0; }}</style>
+        </head>
+        <body>
+            <h2>السجل الأكاديمي للطالب: {student_id}</h2>
+            {''.join(html_sections)}
+        </body>
+    </html>
+    """
+    return pdf_response_from_html(html, filename_prefix=f"transcript_{student_id}")
+
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from models.models import Grade
+from flask import Blueprint, request, jsonify, Response, send_file
+import datetime
+from collections import defaultdict, OrderedDict
+import io
+import math
+import pandas as pd
+from .utilities import get_connection, df_from_query, excel_response_from_df, pdf_response_from_html
+ 
+
+grades_bp = Blueprint("grades", __name__)
+
+def validate_grade_value(g):
+    if g is None:
+        return True, None
+    try:
+        v = float(g)
+    except (TypeError, ValueError):
+        return False, "grade must be numeric or null"
+    if v < 0 or v > 100:
+        return False, "grade must be between 0 and 100"
+    return True, v
+
+@grades_bp.route("/save", methods=["POST"])
+def save_grades():
+    data = request.get_json(force=True)
+    sid = data.get("student_id")
+    semester = data.get("semester")
+
+    import sys, os
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    from models.models import Grade
+    from flask import Blueprint, request, jsonify, Response, send_file
+    import datetime
+    from collections import defaultdict, OrderedDict
+    import io
+    import math
+    import pandas as pd
+    from .utilities import get_connection, df_from_query, excel_response_from_df, pdf_response_from_html
+
+    # اقرأ الملف مرة واحدة للاستخدام في كلا النمطين
+
+    @grades_bp.route("/migrate_registrations_to_transcript", methods=["POST"])
+    def migrate_registrations_to_transcript():
+        data = request.get_json(force=True)
+        student_id = data.get("student_id")
+        semester = data.get("semester")
+        year = data.get("year")
+        changed_by = data.get("changed_by", "migrate-ui")
+        if not student_id or not semester or not year:
+            return jsonify({"status": "error", "message": "student_id، الفصل، السنة مطلوبة"}), 400
+        semester_label = f"{semester} {year}".strip()
+        with get_connection() as conn:
+            cur = conn.cursor()
+            # جلب المقررات المسجلة للطالب من جدول registrations
+            regs = cur.execute(
+                "SELECT course_name, course_code, units FROM registrations WHERE student_id = ?",
+                (student_id,)
+            ).fetchall()
+            if not regs:
+                return jsonify({"status": "error", "message": "لا توجد مقررات مسجلة لهذا الطالب"}), 404
+            # جلب المقررات الموجودة بالفعل في كشف الدرجات لهذا الفصل
+            existing = cur.execute(
+                "SELECT course_name FROM grades WHERE student_id = ? AND semester = ?",
+                (student_id, semester_label)
+            ).fetchall()
+            existing_courses = set(row[0] for row in existing)
+            inserted = 0
+            now_iso = datetime.datetime.utcnow().isoformat()
+            for reg in regs:
+                cname, ccode, units = reg
+                if cname in existing_courses:
+                    continue  # لا تكرر المقررات
+                # أضف المقرر إلى جدول الدرجات بدون درجة
+                cur.execute(
+                    "INSERT INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES (?, ?, ?, ?, ?, NULL)",
+                    (student_id, semester_label, cname, ccode or "", int(units or 0))
+                )
+                cur.execute(
+                    "INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts) VALUES (?, ?, ?, NULL, NULL, ?, ?)",
+                    (student_id, semester_label, cname, changed_by, now_iso)
+                )
+                inserted += 1
+            conn.commit()
+        return jsonify({"status": "ok", "message": f"تم ترحيل {inserted} مقرر للفصل {semester_label}", "semester": semester_label, "inserted": inserted}), 200
+    try:
+        raw_bytes = file.read()
+    except Exception:
+        return jsonify({"status": "error", "message": "تعذر قراءة الملف"}), 400
+
+    if not raw_bytes:
+        return jsonify({"status": "error", "message": "الملف فارغ"}), 400
+
+    try:
+        df_export = pd.read_excel(io.BytesIO(raw_bytes), header=None)
+    except Exception as exc:
+        return jsonify({"status": "error", "message": f"فشل قراءة ملف Excel: {exc}"}), 400
+
+    provided_semester = semester_label.strip()
+    if academic_year:
+        academic_year = academic_year.strip()
+        provided_semester = f"{provided_semester} {academic_year}".strip()
+
+    parsed_export = _parse_export_style_single_student(df_export)
+    if parsed_export["ok"]:
+        return _import_export_style_single_student(
+            parsed_export,
+            student_id_form,
+            student_name,
+            provided_semester,
+            changed_by,
+        )
+
+    # fallback إلى النمط القديم (أربعة أعمدة) إذا لم يكن التنسيق مطابقًا للتصدير
+    if not student_id_form:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
+
+    if not provided_semester:
+        return jsonify({"status": "error", "message": "يرجى إدخال اسم الفصل أو السنة"}), 400
+
+    try:
+        df_simple = pd.read_excel(io.BytesIO(raw_bytes))
+    except Exception as exc:
+        return jsonify({"status": "error", "message": f"فشل قراءة ملف Excel: {exc}"}), 400
+
+    if df_simple.empty:
+        return jsonify({"status": "error", "message": "الملف لا يحتوي على بيانات"}), 400
+
+    if df_simple.shape[1] < 4:
+        return jsonify({"status": "error", "message": "يجب أن يحتوي الملف على أربعة أعمدة على الأقل"}), 400
+
+    df_simple = df_simple.iloc[:, :4].copy()
+    df_simple.columns = ["course_name", "course_code", "units", "grade"]
+    df_simple["course_name"] = df_simple["course_name"].astype(str).str.strip()
+    df_simple["course_code"] = df_simple["course_code"].astype(str).str.strip()
+    df_simple["units"] = pd.to_numeric(df_simple["units"], errors="coerce").fillna(0).astype(int)
+    df_simple["grade"] = pd.to_numeric(df_simple["grade"], errors="coerce")
+    df_simple = df_simple[df_simple["course_name"].astype(bool)]
+
+    if df_simple.empty:
+        return jsonify({"status": "error", "message": "لم يتم العثور على مقررات صالحة في الملف"}), 400
+
+    rows = df_simple.to_dict(orient="records")
+    semester = provided_semester
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+
+        if student_name:
+            cur.execute(
+                """
+                INSERT INTO students (student_id, student_name)
+                VALUES (?, ?)
+                ON CONFLICT(student_id) DO UPDATE SET student_name = excluded.student_name
+                """,
+                (student_id_form, student_name),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO students (student_id, student_name)
+                VALUES (?, COALESCE((SELECT student_name FROM students WHERE student_id = ?), ''))
+                """,
+                (student_id_form, student_id_form),
+            )
+
+        existing_rows = cur.execute(
+            "SELECT course_name, grade FROM grades WHERE student_id = ? AND semester = ?",
+            (student_id_form, semester),
+        ).fetchall()
+        existing_map = {row[0]: row[1] for row in existing_rows}
+
+        for row in rows:
+            cname = row["course_name"]
+            ccode = row["course_code"] or ""
+            units = int(row["units"] or 0)
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO courses (course_name, course_code, units)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(course_name) DO UPDATE SET
+                        course_code = CASE
+                            WHEN excluded.course_code IS NOT NULL AND excluded.course_code <> '' THEN excluded.course_code
+                            ELSE course_code
+                        END,
+                        units = CASE
+                            WHEN excluded.units IS NOT NULL AND excluded.units > 0 THEN excluded.units
+                            ELSE units
+                        END
+                    """,
+                    (cname, ccode, units),
+                )
+            except Exception:
+                pass
+
+        cur.execute(
+            "DELETE FROM grades WHERE student_id = ? AND semester = ?",
+            (student_id_form, semester),
+        )
+
+        inserted = 0
+        now_iso = datetime.datetime.utcnow().isoformat()
+        for row in rows:
+            cname = row["course_name"]
+            ccode = row["course_code"] or ""
+            units = int(row["units"] or 0)
+            grade = row["grade"]
+
+            if grade is not None and (grade < 0 or grade > 100):
+                conn.rollback()
+                return jsonify({"status": "error", "message": f"الدرجة للمقرر {cname} يجب أن تكون بين 0 و 100"}), 400
+
+            old_grade = existing_map.get(cname)
+
+            cur.execute(
+                """
+                INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    student_id_form,
+                    semester,
+                    cname,
+                    float(old_grade) if old_grade is not None else None,
+                    float(grade) if grade is not None else None,
+                    changed_by,
+                    now_iso,
+                ),
+            )
+
+            cur.execute(
+                """
+                INSERT INTO grades (student_id, semester, course_name, course_code, units, grade)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    student_id_form,
+                    semester,
+                    cname,
+                    ccode,
+                    units,
+                    float(grade) if grade is not None else None,
+                ),
+            )
+            inserted += 1
+
+        conn.commit()
+
+    return jsonify(
+        {
+            "status": "ok",
+            "message": f"تم استيراد {inserted} مقرر للفصل {semester}",
+            "student_id": student_id_form,
+            "semester": semester,
+        }
+    ), 200
+
+
+def _load_transcript_data(student_id: str):
+    with get_connection() as conn:
+        cur = conn.cursor()
+        student_row = cur.execute(
+            "SELECT COALESCE(student_name, '') AS student_name FROM students WHERE student_id = ?",
+            (student_id,),
+        ).fetchone()
+        student_name = student_row["student_name"] if student_row else ""
+
+        grade_rows = cur.execute(
+            """
+            SELECT semester, course_name, course_code, units, grade
+            FROM grades
+            WHERE student_id = ?
+            ORDER BY semester, course_name
+            """,
+            (student_id,),
+        ).fetchall()
+
+    transcript = OrderedDict()
+    gpa_by_semester = defaultdict(list)
+    best_map = {}
+
+    for row in grade_rows:
+        sem = row["semester"] or ""
+        course_name = row["course_name"] or ""
+        course_code = row["course_code"] or ""
+        units = row["units"] or 0
+        grade = row["grade"]
+
+        transcript.setdefault(sem, []).append(
+            {
+                "course_name": course_name,
+                "course_code": course_code,
+                "units": units,
+                "grade": grade,
+            }
+        )
+
+        if grade is not None:
+            gpa_by_semester[sem].append((grade, units))
+
+        if grade is not None:
+            if course_name not in best_map or grade > best_map[course_name]["best_grade"]:
+                best_map[course_name] = {"best_grade": grade, "units": units}
+            else:
+                if units and (not best_map[course_name]["units"] or units > best_map[course_name]["units"]):
+                    best_map[course_name]["units"] = units
+
+    semester_gpas = {}
+    for sem, lst in gpa_by_semester.items():
+        total_units = sum(max(u, 0) for _, u in lst)
+        semester_gpas[sem] = round(
+            sum(grade * (max(units, 0)) for grade, units in lst) / total_units, 2
+        ) if total_units else 0.0
+
+    total_points = 0.0
+    total_units = 0.0
+    for info in best_map.values():
+        units = max(info["units"] or 0, 0)
+        total_units += units
+        total_points += (info["best_grade"] * units)
+    cumulative_gpa = round(total_points / total_units, 2) if total_units else 0.0
+
+    ordered_semesters = list(transcript.keys())
+
+    return {
+        "student_id": student_id,
+        "student_name": student_name,
+        "transcript": transcript,
+        "ordered_semesters": ordered_semesters,
+        "semester_gpas": semester_gpas,
+        "cumulative_gpa": cumulative_gpa,
+    }
+
+
+def _normalize_student_id(value):
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text.endswith(".0"):
+        text = text[:-2]
+    return text
+
+
+def _parse_units(value):
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return 0
+    try:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if not cleaned:
+                return 0
+            return max(int(round(float(cleaned.replace(",", ".")))), 0)
+        return max(int(round(float(value))), 0)
+    except Exception:
+        return 0
+
+
+def _parse_grade_value(value):
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        if all(ch in {"/", "\\", "-"} for ch in trimmed):
+            return None
+        trimmed = trimmed.replace(",", ".")
+        try:
+            return float(trimmed)
+        except ValueError:
+            return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _cell_to_str(value):
+    if value is None:
+        return ""
+    if isinstance(value, float) and math.isnan(value):
+        return ""
+    return str(value).strip()
+
+
+def _parse_export_style_single_student(df):
+    matrix = df.where(pd.notnull(df), None).values.tolist()
+    if not matrix or not matrix[0]:
+        return {"ok": False}
+
+    first_label = _cell_to_str(matrix[0][0])
+    if first_label != "اسم الطالب":
+        return {"ok": False}
+
+    student_name = _cell_to_str(matrix[0][1]) if len(matrix[0]) > 1 else ""
+    student_id = ""
+    if len(matrix) > 1 and len(matrix[1]) > 1 and _cell_to_str(matrix[1][0]) == "الرقم الدراسي":
+        student_id = _normalize_student_id(matrix[1][1])
+
+    semesters = []
+    idx = 0
+    total_rows = len(matrix)
+    while idx < total_rows:
+        row = matrix[idx]
+        first = _cell_to_str(row[0]) if row else ""
+        if first.startswith("الفصل"):
+            sem = first.split(":", 1)[1].strip() if ":" in first else first.replace("الفصل", "", 1).strip()
+            idx += 1
+
+            # تخطى الصفوف حتى نصل إلى رؤوس الجدول (المقرر ...)
+            while idx < total_rows:
+                header_row = matrix[idx]
+                header_label = _cell_to_str(header_row[0]) if header_row else ""
+                if header_label == "المقرر":
+                    idx += 1
+                    break
+                idx += 1
+
+            courses = []
+            while idx < total_rows:
+                course_row = matrix[idx]
+                cells = [course_row[col] if course_row and col < len(course_row) else None for col in range(4)]
+                course_name = _cell_to_str(cells[0])
+                if not course_name:
+                    idx += 1
+                    break
+                course_code = _cell_to_str(cells[1])
+                units = _parse_units(cells[2])
+                grade_val = _parse_grade_value(cells[3])
+                courses.append(
+                    {
+                        "course_name": course_name,
+                        "course_code": course_code,
+                        "units": units,
+                        "grade": grade_val,
+                    }
+                )
+                idx += 1
+
+            semesters.append((sem, courses))
+            continue
+        idx += 1
+
+    return {
+        "ok": True,
+        "student_name": student_name,
+        "student_id": student_id,
+        "semesters": semesters,
+    }
+
+
+def _import_export_style_single_student(parsed, student_id_override, student_name_override, provided_semester, changed_by):
+    student_id_file = parsed.get("student_id") or ""
+    student_name_file = parsed.get("student_name") or ""
+    semesters = parsed.get("semesters") or []
+
+    if not semesters:
+        return jsonify({"status": "error", "message": "الملف لا يحتوي على فصول دراسية صالحة"}), 400
+
+    if student_id_override and student_id_file and student_id_override != student_id_file:
+        return jsonify({"status": "error", "message": "رقم الطالب في الملف لا يطابق الرقم المحدد"}), 400
+
+    student_id = student_id_override or student_id_file
+    if not student_id:
+        return jsonify({"status": "error", "message": "تعذر تحديد رقم الطالب من الملف أو الحقول"}), 400
+
+    student_name = student_name_override or student_name_file
+
+    normalized_semesters = []
+    default_semester = provided_semester.strip()
+    for sem_name, courses in semesters:
+        sem = (sem_name or "").strip()
+        if not sem:
+            sem = default_semester
+        if not sem:
+            return jsonify({"status": "error", "message": "أحد الفصول في الملف يفتقد للاسم ولا يوجد فصل بديل محدد"}), 400
+        filtered_courses = [c for c in courses if c.get("course_name")]
+        if filtered_courses:
+            normalized_semesters.append((sem, filtered_courses))
+
+    if not normalized_semesters:
+        return jsonify({"status": "error", "message": "لا توجد مقررات صالحة للاستيراد"}), 400
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+
+        if student_name:
+            cur.execute(
+                """
+                INSERT INTO students (student_id, student_name)
+                VALUES (?, ?)
+                ON CONFLICT(student_id) DO UPDATE SET student_name = excluded.student_name
+                """,
+                (student_id, student_name),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO students (student_id, student_name)
+                VALUES (?, COALESCE((SELECT student_name FROM students WHERE student_id = ?), ''))
+                """,
+                (student_id, student_id),
+            )
+
+        inserted_total = 0
+        now_iso = datetime.datetime.utcnow().isoformat()
+
+        for sem, courses in normalized_semesters:
+            existing_rows = cur.execute(
+                "SELECT course_name, grade FROM grades WHERE student_id = ? AND semester = ?",
+                (student_id, sem),
+            ).fetchall()
+            existing_map = {row["course_name"]: row["grade"] for row in existing_rows}
+
+            cur.execute(
+                "DELETE FROM grades WHERE student_id = ? AND semester = ?",
+                (student_id, sem),
+            )
+
+            for course in courses:
+                cname = course.get("course_name") or ""
+                if not cname:
+                    continue
+                ccode = course.get("course_code") or ""
+                units = int(course.get("units") or 0)
+                grade_val = course.get("grade")
+
+                if grade_val is not None and (grade_val < 0 or grade_val > 100):
+                    conn.rollback()
+                    return jsonify({"status": "error", "message": f"الدرجة للمقرر {cname} في الفصل {sem} يجب أن تكون بين 0 و 100"}), 400
+
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO courses (course_name, course_code, units)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(course_name) DO UPDATE SET
+                            course_code = CASE
+                                WHEN excluded.course_code IS NOT NULL AND excluded.course_code <> '' THEN excluded.course_code
+                                ELSE course_code
+                            END,
+                            units = CASE
+                                WHEN excluded.units IS NOT NULL AND excluded.units > 0 THEN excluded.units
+                                ELSE units
+                            END
+                        """,
+                        (cname, ccode, units),
+                    )
+                except Exception:
+                    pass
+
+                old_grade = existing_map.get(cname)
+
+                cur.execute(
+                    """
+                    INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        student_id,
+                        sem,
+                        cname,
+                        float(old_grade) if old_grade is not None else None,
+                        float(grade_val) if grade_val is not None else None,
+                        changed_by,
+                        now_iso,
+                    ),
+                )
+
+                cur.execute(
+                    """
+                    INSERT INTO grades (student_id, semester, course_name, course_code, units, grade)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        student_id,
+                        sem,
+                        cname,
+                        ccode,
+                        units,
+                        float(grade_val) if grade_val is not None else None,
+                    ),
+                )
+                inserted_total += 1
+
+        conn.commit()
+
+    sem_list = [sem for sem, _ in normalized_semesters]
+    return jsonify(
+        {
+            "status": "ok",
+            "message": f"تم استيراد {inserted_total} درجة",
+            "student_id": student_id,
+            "semesters": sem_list,
+        }
+    ), 200
+
+
+@grades_bp.route("/import/semester", methods=["POST"])
+def import_semester_excel():
+    """
+    استيراد نتيجة فصل كاملة من ملف Excel بالصيغة المبينة في الصورة:
+    - الصف الأول يحتوي أسماء المقررات (بعد عمود الاسم والرقم الدراسي).
+    - الصف الثاني يحتوي الوحدات لكل مقرر.
+    - الصفوف التالية تحتوي اسم الطالب، رقمه، ثم درجاته لكل مقرر.
+    """
+    semester_label = (request.form.get("semester") or "").strip()
+    academic_year = (request.form.get("year") or "").strip()
+    changed_by = (request.form.get("changed_by") or "semester-import").strip() or "semester-import"
+    file = request.files.get("file")
+
+    if not semester_label and not academic_year:
+        return jsonify({"status": "error", "message": "يرجى إدخال الفصل أو السنة"}), 400
+    if not file:
+        return jsonify({"status": "error", "message": "ملف Excel مفقود"}), 400
+
+    semester = semester_label
+    if academic_year:
+        semester = f"{semester} {academic_year}".strip()
+    if not semester:
+        return jsonify({"status": "error", "message": "تعذر تحديد اسم الفصل"}), 400
+
+    try:
+        df = pd.read_excel(file, header=None)
+    except Exception as exc:
+        return jsonify({"status": "error", "message": f"فشل قراءة ملف Excel: {exc}"}), 400
+
+    if df.shape[0] < 3 or df.shape[1] < 3:
+        return jsonify({"status": "error", "message": "ملف الاستيراد يجب أن يحتوي على عناوين ووحدات وبيانات طلبة"}), 400
+
+    header_row = df.iloc[0].tolist()
+    units_row = df.iloc[1].tolist()
+
+    # تحديد أعمدة المقررات (نفترض أن أول عمودين للاسم والرقم)
+    course_columns = []
+    for idx, name in enumerate(header_row):
+        if idx < 2:
+            continue
+        if name is None or (isinstance(name, float) and math.isnan(name)):
+            continue
+        cname = str(name).strip()
+        if not cname:
+            continue
+        units = _parse_units(units_row[idx] if idx < len(units_row) else None)
+        course_columns.append((idx, cname, units))
+
+    if not course_columns:
+        return jsonify({"status": "error", "message": "لم يتم العثور على عناوين مقررات في الصف الأول"}), 400
+
+    student_rows = df.iloc[2:]
+    if student_rows.empty:
+        return jsonify({"status": "error", "message": "لا توجد سجلات طلبة للاستيراد"}), 400
+
+    students_data = []
+    for _, row in student_rows.iterrows():
+        name_raw = row.iloc[0] if len(row) > 0 else None
+        sid_raw = row.iloc[1] if len(row) > 1 else None
+        student_name = str(name_raw).strip() if name_raw is not None else ""
+        student_id = _normalize_student_id(sid_raw)
+        if not student_id and not student_name:
+            continue
+        if not student_id:
+            # تجاهل الصفوف التي لا تحتوي رقم طالب واضح
+            continue
+
+        grades = []
+        for col_idx, cname, units in course_columns:
+            value = row.iloc[col_idx] if col_idx < len(row) else None
+            grade_val = _parse_grade_value(value)
+            grades.append((cname, units, grade_val))
+        students_data.append((student_id, student_name, grades))
+
+    if not students_data:
+        return jsonify({"status": "error", "message": "لم يتم العثور على طلبة صالحين في الملف"}), 400
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+
+        course_names = [cname for (_, cname, _) in course_columns]
+        existing_rows = cur.execute(
+            "SELECT student_id, course_name, grade FROM grades WHERE semester = ?",
+            (semester,),
+        ).fetchall()
+        existing_map = {(row["student_id"], row["course_name"]): row["grade"] for row in existing_rows}
+
+        # تحديث بيانات المقررات
+        for _, cname, units in course_columns:
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO courses (course_name, course_code, units)
+                    VALUES (?, '', ?)
+                    ON CONFLICT(course_name) DO UPDATE SET
+                        units = CASE
+                            WHEN excluded.units IS NOT NULL AND excluded.units > 0 THEN excluded.units
+                            ELSE units
+                        END
+                    """,
+                    (cname, units),
+                )
+            except Exception:
+                pass
+
+        inserted_records = 0
+        affected_students = set()
+
+        now_iso = datetime.datetime.utcnow().isoformat()
+        for student_id, student_name, grades in students_data:
+            affected_students.add(student_id)
+            if student_name:
+                cur.execute(
+                    """
+                    INSERT INTO students (student_id, student_name)
+                    VALUES (?, ?)
+                    ON CONFLICT(student_id) DO UPDATE SET student_name = excluded.student_name
+                    """,
+                    (student_id, student_name),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT OR IGNORE INTO students (student_id, student_name)
+                    VALUES (?, COALESCE((SELECT student_name FROM students WHERE student_id = ?), ''))
+                    """,
+                    (student_id, student_id),
+                )
+
+            for cname, units, grade_val in grades:
+                if grade_val is not None and (grade_val < 0 or grade_val > 100):
+                    conn.rollback()
+                    return jsonify({"status": "error", "message": f"الدرجة للمقرر {cname} للطالب {student_id} يجب أن تكون بين 0 و 100"}), 400
+
+                key = (student_id, cname)
+                old_grade = existing_map.get(key)
+
+                cur.execute(
+                    """
+                    INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        student_id,
+                        semester,
+                        cname,
+                        float(old_grade) if old_grade is not None else None,
+                        float(grade_val) if grade_val is not None else None,
+                        changed_by,
+                        now_iso,
+                    ),
+                )
+
+                cur.execute(
+                    """
+                    INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        student_id,
+                        semester,
+                        cname,
+                        "",
+                        units,
+                        float(grade_val) if grade_val is not None else None,
+                    ),
+                )
+                inserted_records += 1
+
+        conn.commit()
+
+    return jsonify(
+        {
+            "status": "ok",
+            "message": f"تم استيراد نتيجة الفصل {semester} لعدد {len(affected_students)} طالب/ة",
+            "semester": semester,
+            "students": len(affected_students),
+            "courses": len(course_columns),
+            "records": inserted_records,
+        }
+    ), 200
+
+
+@grades_bp.route("/update", methods=["POST"])
+def update_grade():
+    data = request.get_json(force=True)
+    sid = data.get("student_id")
+    semester = data.get("semester")
+    course = data.get("course_name")
+    new_grade_raw = data.get("grade")
+    changed_by = data.get("changed_by", "admin")
+
+    if not sid or not semester or not course:
+        return jsonify({"status": "error", "message": "student_id و semester و course_name مطلوبة"}), 400
+
+    ok, val_or_msg = validate_grade_value(new_grade_raw)
+    if not ok:
+        return jsonify({"status": "error", "message": val_or_msg}), 400
+    new_grade = val_or_msg
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        old = cur.execute(
+            "SELECT grade FROM grades WHERE student_id=? AND semester=? AND course_name=?", (sid, semester, course)
+        ).fetchone()
+        old_grade = old[0] if old else None
+
+        cur.execute(
+            "INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts) VALUES (?,?,?,?,?,?,?)",
+            (sid, semester, course, old_grade, (float(new_grade) if new_grade is not None else None),
+             changed_by, datetime.datetime.utcnow().isoformat())
+        )
+
+        cur.execute(
+            "INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES (?, ?, ?, ?, ?, ?)",
+            (sid, semester, course, "", 0, (float(new_grade) if new_grade is not None else None))
+        )
+        conn.commit()
+
+    return jsonify({"status": "ok", "message": "تم تعديل الدرجة"}), 200
+
+@grades_bp.route("/transcript/<student_id>")
+def get_transcript(student_id):
+    data = _load_transcript_data(student_id)
+    return jsonify({
+        "student_id": data["student_id"],
+        "student_name": data.get("student_name", ""),
+        "transcript": data["transcript"],
+        "semester_gpas": data["semester_gpas"],
+        "cumulative_gpa": data["cumulative_gpa"]
+    })
+
+# -----------------------
+# Export endpoints for transcripts
+# -----------------------
+
+def _export_transcript_excel(data):
+    buf = io.BytesIO()
+    now = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename = f"transcript_{data['student_id']}_{now}.xlsx"
+
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        workbook = writer.book
+        worksheet = workbook.add_worksheet("Transcript")
+        writer.sheets["Transcript"] = worksheet
+
+        bold = workbook.add_format({"bold": True})
+        header_fmt = workbook.add_format({"bold": True, "bg_color": "#f0f0f0"})
+        number_fmt = workbook.add_format({"num_format": "0.00"})
+
+        row = 0
+        worksheet.write(row, 0, "اسم الطالب", bold)
+        worksheet.write(row, 1, data.get("student_name") or "")
+        row += 1
+        worksheet.write(row, 0, "الرقم الدراسي", bold)
+        worksheet.write(row, 1, data.get("student_id") or "")
+        row += 1
+        worksheet.write(row, 0, "المعدل التراكمي", bold)
+        worksheet.write(row, 1, data.get("cumulative_gpa") or 0, number_fmt)
+        row += 2
+
+        transcript = data.get("transcript", {})
+        semester_gpas = data.get("semester_gpas", {})
+        ordered_semesters = data.get("ordered_semesters", [])
+
+        if not ordered_semesters:
+            worksheet.write(row, 0, "لا توجد بيانات درجات متاحة", bold)
+        else:
+            for sem in ordered_semesters:
+                worksheet.write(row, 0, f"الفصل: {sem}", bold)
+                worksheet.write(row, 4, "المعدل الفصلي", bold)
+                worksheet.write(row, 5, semester_gpas.get(sem, 0.0), number_fmt)
+                row += 1
+
+                headers = ["المقرر", "الرمز", "الوحدات", "الدرجة"]
+                for col, title in enumerate(headers):
+                    worksheet.write(row, col, title, header_fmt)
+                row += 1
+
+                for course in transcript.get(sem, []):
+                    worksheet.write(row, 0, course.get("course_name") or "")
+                    worksheet.write(row, 1, course.get("course_code") or "")
+                    worksheet.write(row, 2, course.get("units") or 0)
+                    grade = course.get("grade")
+                    if grade is None:
+                        worksheet.write(row, 3, "-")
+                    else:
+                        worksheet.write(row, 3, float(grade), number_fmt)
+                    row += 1
+
+                row += 1  # blank line between semesters
+
+        worksheet.set_column(0, 0, 32)
+        worksheet.set_column(1, 1, 16)
+        worksheet.set_column(2, 3, 12)
+        worksheet.set_column(4, 5, 18)
+
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
+def _export_transcript_text(data):
+    lines = []
+    lines.append(f"اسم الطالب: {data.get('student_name') or '-'}")
+    lines.append(f"الرقم الدراسي: {data.get('student_id') or '-'}")
+    lines.append(f"المعدل التراكمي: {data.get('cumulative_gpa') or 0}")
+    lines.append("")
+
+    transcript = data.get("transcript", {})
+    semester_gpas = data.get("semester_gpas", {})
+    ordered_semesters = data.get("ordered_semesters", [])
+
+    if not ordered_semesters:
+        lines.append("لا توجد بيانات درجات متاحة.")
+    else:
+        for sem in ordered_semesters:
+            lines.append(f"الفصل: {sem}")
+            lines.append(f"المعدل الفصلي: {semester_gpas.get(sem, 0.0)}")
+            lines.append("المقرر | الرمز | الوحدات | الدرجة")
+            for course in transcript.get(sem, []):
+                grade = course.get("grade")
+                grade_str = "-" if grade is None else f"{grade}"
+                lines.append(
+                    f"{course.get('course_name') or ''} | "
+                    f"{course.get('course_code') or ''} | "
+                    f"{course.get('units') or 0} | "
+                    f"{grade_str}"
+                )
+            lines.append("")
+
+    output = "\n".join(lines)
+    now = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename = f"transcript_{data['student_id']}_{now}.txt"
+    return Response(
+        output,
+        mimetype="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@grades_bp.route("/export/<student_id>")
+def export_transcript(student_id):
+    fmt = (request.args.get("format") or "excel").lower()
+    data = _load_transcript_data(student_id)
+    if fmt in ("excel", "xlsx"):
+        return _export_transcript_excel(data)
+    if fmt in ("text", "txt"):
+        return _export_transcript_text(data)
+    return jsonify({"status": "error", "message": "صيغة تصدير غير مدعومة"}), 400
+
+
+@grades_bp.route("/export/excel/<student_id>")
+def export_transcript_excel(student_id):
+    return _export_transcript_excel(_load_transcript_data(student_id))
+
+@grades_bp.route("/export/pdf/<student_id>")
+def export_transcript_pdf(student_id):
+    try:
+        df = df_from_query(
+            "SELECT semester, course_name, course_code, units, grade FROM grades WHERE student_id = ? ORDER BY semester, course_name",
+            params=(student_id,)
+        )
+    except Exception:
+        df = None
+
+        if df is None or df.empty:
+                html = "<html><head><meta charset='utf-8'><title>السجل الأكاديمي</title></head><body><h3>لا توجد بيانات للسجل</h3></body></html>"
+                return pdf_response_from_html(html, filename_prefix=f"transcript_{student_id}")
+
+        # تحويل النتائج إلى قائمة من Grade ثم إلى dict
+        grades = [Grade(student_id, row['semester'], row['course_name'], row['grade']) for _, row in df.iterrows()]
+        for g, (_, row) in zip(grades, df.iterrows()):
+                g.course_code = row['course_code']
+                g.units = row['units']
+        dicts = [g.__dict__ for g in grades]
+        import pandas as pd
+        df = pd.DataFrame(dicts)
+
+        html_sections = []
+        for sem in sorted(df['semester'].unique()):
+                sub = df[df['semester'] == sem][['course_name', 'course_code', 'units', 'grade']]
+                table_html = sub.to_html(index=False, border=0, classes="table table-sm table-bordered")
+                html_sections.append(f"<h4>{sem}</h4>{table_html}")
+
+        html = f"""
+        <!doctype html>
+        <html lang="ar" dir="rtl">
+            <head>
+                <meta charset="utf-8"/>
+                <title>السجل الأكاديمي - {student_id}</title>
+                <style>
+                    body {{ font-family: DejaVu Sans, Arial, Tahoma; direction: rtl; }}
+                    table {{ border-collapse: collapse; width: 100%; }}
+                    table th, table td {{ border: 1px solid #ccc; padding: 6px; text-align: left; }}
+                    th {{ background: #f0f0f0; }}
+                </style>
+            </head>
+            <body>
+                <h2>السجل الأكاديمي للطالب: {student_id}</h2>
+                {''.join(html_sections)}
+            </body>
+        </html>
+        """
+        return pdf_response_from_html(html, filename_prefix=f"transcript_{student_id}")

@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>تصدير سجلات الحضور والغياب</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <style>
+    body { background: #f4f6f9; font-family: "Segoe UI", Tahoma, Arial; }
+    main { max-width: 1100px; margin: 20px auto; }
+    .card { border-radius: 14px; box-shadow: 0 16px 38px rgba(7, 47, 95, 0.08); border: none; }
+    .card h2 { font-size: 20px; font-weight: 700; color: #072f5f; }
+    .helper { color: #6c757d; font-size: 14px; }
+    select.form-select { min-height: 280px; }
+    .badge-course { background: #1e6fb8; }
+  </style>
+</head>
+<body>
+  {% include "base_nav.html" %}
+
+  <main class="container">
+    <div class="card mb-4">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-4">
+          <div>
+            <h2>تصدير سجلات الحضور والغياب</h2>
+            <p class="helper mb-0">
+              اختر المقررات المراد تصديرها وحدد عدد الأسابيع ليتم إنشاء ملف Excel يحتوي على ورقة لكل مقرر وملخص عام.
+            </p>
+          </div>
+          <div class="text-muted small">
+            الحد الأقصى للأسابيع: <strong class="text-primary">30 أسبوعًا</strong>
+          </div>
+        </div>
+
+        <form id="attendance-export-form" class="row g-4 align-items-stretch" method="GET" action="/students/export/attendance" target="_blank">
+          <div class="col-md-4">
+            <label for="weeks-input" class="form-label fw-semibold">عدد الأسابيع</label>
+            <input type="number" id="weeks-input" name="weeks" class="form-control" min="1" max="30" value="14" required>
+            <div class="form-text">يمكنك اختيار أي عدد من 1 إلى 30 أسبوعًا.</div>
+
+            <div class="mt-4">
+              <button type="button" class="btn btn-outline-primary btn-sm w-100 mb-2" id="select-all-btn">تحديد كل المقررات</button>
+              <button type="button" class="btn btn-outline-secondary btn-sm w-100" id="clear-selection-btn">إلغاء التحديد</button>
+            </div>
+          </div>
+
+          <div class="col-md-8">
+            <label for="courses-select" class="form-label fw-semibold">المقررات المتاحة</label>
+            <select id="courses-select" class="form-select" name="course" multiple></select>
+            <div class="form-text">
+              استخدم مفتاح <kbd>Ctrl</kbd> (أو <kbd>⌘</kbd> في ماك) لتحديد أكثر من مقرر. اترك القائمة بدون اختيار لتصدير كل المقررات المسجل بها طلبة.
+            </div>
+          </div>
+
+          <div class="col-12">
+            <label class="form-label fw-semibold">المقررات المختارة</label>
+            <div id="selection-preview" class="border rounded p-3 bg-light small" style="min-height: 76px;">
+              لا توجد مقررات محددة — سيتم تصدير جميع المقررات التي لديها تسجيلات.
+            </div>
+          </div>
+
+          <div class="col-12 d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div id="form-feedback" class="text-danger small"></div>
+            <div class="d-flex gap-2">
+              <a href="/dashboard" class="btn btn-light">الرجوع للوحة القيادة</a>
+              <button type="submit" class="btn btn-primary">⬇️ تنزيل ملف الحضور</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    async function loadCourses() {
+      const select = document.getElementById('courses-select');
+      const preview = document.getElementById('selection-preview');
+      try {
+        const resp = await fetch('/courses/list');
+        const data = resp.ok ? await resp.json() : [];
+        if (!data.length) {
+          select.innerHTML = '';
+          const opt = document.createElement('option');
+          opt.textContent = 'لا توجد مقررات مسجلة';
+          opt.disabled = true;
+          select.appendChild(opt);
+          preview.textContent = 'لم يتم العثور على مقررات في قاعدة البيانات.';
+          return;
+        }
+        data
+          .filter(item => item?.course_name)
+          .sort((a, b) => (a.course_name || '').localeCompare(b.course_name || '', 'ar'))
+          .forEach(item => {
+            const opt = document.createElement('option');
+            opt.value = item.course_name;
+            opt.textContent = item.course_code
+              ? `${item.course_name} — ${item.course_code}`
+              : item.course_name;
+            select.appendChild(opt);
+          });
+      } catch (err) {
+        console.error('Failed to load courses', err);
+        preview.textContent = 'تعذر تحميل المقررات. تحقق من الاتصال أو تواصل مع مسؤول النظام.';
+      }
+    }
+
+    function updateSelectionPreview() {
+      const select = document.getElementById('courses-select');
+      const preview = document.getElementById('selection-preview');
+      const chosen = Array.from(select.selectedOptions).map(opt => opt.textContent);
+      if (!chosen.length) {
+        preview.textContent = 'لا توجد مقررات محددة — سيتم تصدير جميع المقررات التي لديها تسجيلات.';
+        return;
+      }
+      preview.innerHTML = chosen.map(name => `<span class="badge rounded-pill badge-course me-1 mb-1">${name}</span>`).join('');
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      loadCourses().then(updateSelectionPreview);
+
+      const select = document.getElementById('courses-select');
+      select.addEventListener('change', updateSelectionPreview);
+
+      const selectAllBtn = document.getElementById('select-all-btn');
+      const clearBtn = document.getElementById('clear-selection-btn');
+      selectAllBtn.addEventListener('click', () => {
+        Array.from(select.options).forEach(opt => { if (!opt.disabled) opt.selected = true; });
+        updateSelectionPreview();
+      });
+      clearBtn.addEventListener('click', () => {
+        Array.from(select.options).forEach(opt => { opt.selected = false; });
+        updateSelectionPreview();
+      });
+
+      const form = document.getElementById('attendance-export-form');
+      form.addEventListener('submit', evt => {
+        const feedback = document.getElementById('form-feedback');
+        feedback.textContent = '';
+        const weeksInput = document.getElementById('weeks-input');
+        const weeks = parseInt(weeksInput.value, 10);
+        if (Number.isNaN(weeks) || weeks < 1 || weeks > 30) {
+          evt.preventDefault();
+          feedback.textContent = 'الرجاء إدخال عدد أسابيع بين 1 و 30.';
+        }
+      });
+    });
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
+

@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>إدارة التسجيلات</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <style>
+    body { background:#f8f9fa; }
+    .student-row { transition: background .15s; }
+    .courses-badges .badge { margin-left: .25rem; margin-right: .25rem; max-width: 220px; }
+    .import-input { display:none; }
+    .badge-course { display:inline-flex; gap:6px; align-items:center; white-space:nowrap; }
+    .badge-course .code { font-weight:600; opacity:.9; }
+    .completed-list .badge { margin: 0 .25rem .25rem 0; }
+    .completed-label { font-weight:600; margin-top: .75rem; display:block; }
+  </style>
+</head>
+<body> {% include "base_nav.html" %}
+
+<main class="container py-3">
+  <h4 class="mb-3">إدارة التسجيل</h4>
+
+  <div class="card mb-3">
+    <div class="card-body d-flex gap-2 align-items-center flex-wrap">
+      <button id="btnExportCSV" class="btn btn-outline-secondary btn-sm">تصدير CSV</button>
+      <button id="btnExportTXT" class="btn btn-outline-secondary btn-sm">تصدير TXT</button>
+      <button id="btnExportExcel" class="btn btn-outline-secondary btn-sm">تصدير Excel</button>
+
+      <label class="btn btn-outline-primary btn-sm mb-0">
+        استيراد ملف
+        <input id="fileImport" class="import-input" type="file" accept=".csv,.txt,.xlsx">
+      </label>
+
+      <div class="ms-auto small text-muted">يمكن حذف تسجيلات طالب بالكامل أو تعديلها</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-body">
+      <div class="mb-2 d-flex align-items-center gap-2">
+        <input id="searchInput" class="form-control form-control-sm" placeholder="بحث باسم الطالب أو الرقم" style="max-width:420px">
+        <div id="stats" class="small text-muted ms-auto"></div>
+      </div>
+
+      <div id="studentsList" class="list-group"></div>
+    </div>
+  </div>
+</main>
+
+<!-- Modal تعديل التسجيلات -->
+<div class="modal fade" id="editModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content" dir="rtl">
+      <div class="modal-header">
+        <h5 class="modal-title">تعديل تسجيلات الطالب</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+      </div>
+      <div class="modal-body">
+        <div id="editStudentInfo" class="mb-2 small text-muted"></div>
+
+        <label class="form-label">اختر المقررات (فقط المقررات التي لم تُنجَز بعد)</label>
+        <select id="editCoursesSelect" class="form-select" multiple size="8"></select>
+        <div class="form-text mt-2">اضغط Ctrl أو Shift لاختيار متعدد. لإلغاء تسجيل طالب من جميع المقررات - أزل جميع الاختيارات ثم اضغط حفظ.</div>
+
+        <span class="completed-label">المقررات المكتملة (للمعلومية)</span>
+        <div id="completedList" class="completed-list small text-muted mb-2"></div>
+
+        <div id="editMsg" class="mt-2"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="btnSaveEdit" class="btn btn-primary">حفظ</button>
+        <button class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* state */
+let STUDENTS = []; // {student_id, student_name, university_number, registrations: [course_name,...]}
+let COURSES = [];  // cached courses metadata
+let editing = null; // current student object
+
+/* helpers */
+async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok,status:r.status,json:j}; }
+function el(tag, cls, html){ const e=document.createElement(tag); if(cls) e.className=cls; if(html!==undefined) e.innerHTML=html; return e; }
+function setEditMsg(kind, text){ document.getElementById('editMsg').innerHTML = `<div class="alert alert-${kind} p-2 mb-0">${text}</div>`; setTimeout(()=>document.getElementById('editMsg').innerHTML='',3000);}
+function setStats(){ document.getElementById('stats').textContent = `الطلاب: ${STUDENTS.length}`; }
+
+/* load data */
+async function loadData(){
+  const [r1, r2] = await Promise.all([fetchJSON('/list_students'), fetchJSON('/list_courses')]);
+  STUDENTS = Array.isArray(r1.json) ? r1.json.map(s=>{
+    return {
+      student_id: s.student_id || s.id || s.studentId || '',
+      student_name: s.student_name || s.name || s.full_name || '',
+      university_number: s.university_number || s.university || s.student_number || ''
+    };
+  }) : [];
+  STUDENTS.forEach(s=> s.registrations = []);
+
+  COURSES = Array.isArray(r2.json) ? r2.json.map(c=>{
+    return { course_name: c.course_name || '', course_code: c.course_code || c.code || '', units: (c.units==null?0:c.units) };
+  }) : [];
+
+  const regs = await fetchJSON('/get_registrations');
+  let rows = Array.isArray(regs.json) ? regs.json : [];
+  const map = {};
+  rows.forEach(r => {
+    const sid = r.student_id || r.studentId || r.student || r['student_id'];
+    const cn = r.course_name || r.course || r['course_name'];
+    if(!sid || !cn) return;
+    map[sid] = map[sid] || [];
+    map[sid].push(cn);
+  });
+  STUDENTS.forEach(s => { s.registrations = map[s.student_id] || []; });
+
+  renderStudents(STUDENTS);
+  setStats();
+}
+
+/* render UI */
+function renderStudents(list){
+  const container = document.getElementById('studentsList');
+  container.innerHTML = '';
+  if(!list.length){ container.innerHTML = '<div class="text-muted p-3">لا يوجد طلاب.</div>'; return; }
+
+  list.forEach(s => {
+    const item = el('div','list-group-item student-row d-flex align-items-start');
+    const left = el('div','flex-grow-1');
+    const displayName = escapeHtml(s.student_name || s.name || s.full_name || '');
+    const displayNum = escapeHtml(s.university_number || s.student_number || '');
+    left.innerHTML = `<div><strong>${displayName}</strong> <small class="text-muted">(${displayNum})</small></div>`;
+
+    const badges = el('div','courses-badges mt-2 d-flex flex-wrap');
+    if((s.registrations||[]).length){
+      s.registrations.forEach(cn=>{
+        const cobj = COURSES.find(x => x.course_name === cn) || {};
+        const inner = `<span class="badge-course"><span>${escapeHtml(cn)}</span>${cobj.course_code ? '<span class="code text-muted"> — '+escapeHtml(cobj.course_code)+'</span>' : ''}</span>`;
+        const b = el('span','badge bg-primary text-truncate', inner);
+        b.title = `${cn}${cobj.course_code ? ' — '+cobj.course_code : ''} — وحدات: ${cobj.units || 0}`;
+        badges.appendChild(b);
+      });
+    } else {
+      badges.innerHTML = '<div class="small text-muted">لا توجد تسجيلات</div>';
+    }
+    left.appendChild(badges);
+
+    const right = el('div','ms-3 text-end');
+    const btnEdit = el('button','btn btn-sm btn-outline-secondary mb-1','تعديل');
+    btnEdit.addEventListener('click', ()=> openEditModal(s));
+    const btnDelete = el('button','btn btn-sm btn-danger mb-1','حذف');
+    btnDelete.addEventListener('click', ()=> deleteAllRegistrations(s));
+    right.appendChild(btnEdit);
+    right.appendChild(el('br'));
+    right.appendChild(btnDelete);
+
+    item.appendChild(left);
+    item.appendChild(right);
+    container.appendChild(item);
+  });
+}
+
+/* utilities */
+function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
+/* edit modal: fetch eligible courses and completed list for this student */
+async function openEditModal(student){
+  editing = student;
+  document.getElementById('editStudentInfo').textContent = `${student.student_name || student.name || ''} — ${student.university_number || ''}`;
+  const sel = document.getElementById('editCoursesSelect');
+  const completedDiv = document.getElementById('completedList');
+  sel.innerHTML = '';
+  completedDiv.innerHTML = '';
+
+  // fetch eligible + completed lists from backend
+  const resp = await fetchJSON(`/students/eligible_courses?student_id=${encodeURIComponent(student.student_id || '')}`);
+  const eligible = Array.isArray(resp.json?.eligible) ? resp.json.eligible : [];
+  const completed = Array.isArray(resp.json?.completed) ? resp.json.completed : [];
+
+  // Build options from eligible courses
+  eligible.forEach(c=>{
+    const opt = document.createElement('option');
+    opt.value = c.course_name;
+    opt.text = c.course_name + (c.course_code ? ' — ' + c.course_code : '');
+    // keep selected if student already registered (so they can remove it)
+    if( (student.registrations||[]).includes(c.course_name) ) opt.selected = true;
+    sel.appendChild(opt);
+  });
+
+  // Render completed courses as read-only badges with grade
+  if(completed.length){
+    completed.forEach(c=>{
+      const txt = `${c.course_name}${c.course_code ? ' — '+c.course_code : ''} ${c.grade ? ' | ' + c.grade : ''}`;
+      const b = el('span','badge bg-success text-white', escapeHtml(txt));
+      completedDiv.appendChild(b);
+    });
+  } else {
+    completedDiv.innerHTML = '<div class="small text-muted">لا توجد مقررات مكتملة</div>';
+  }
+
+  const modalEl = new bootstrap.Modal(document.getElementById('editModal'));
+  modalEl.show();
+}
+
+/* save edit */
+document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
+  if(!editing) return;
+  const sel = document.getElementById('editCoursesSelect');
+  const selected = Array.from(sel.selectedOptions).map(o=> o.value);
+  const payload = { student_id: editing.student_id || editing.id || editing.studentId, registrations: selected };
+  const res = await fetchJSON('/save_registrations', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+  });
+  if(res.ok){
+    editing.registrations = selected;
+    renderStudents(STUDENTS);
+    setEditMsg('success','تم الحفظ');
+    const modal = bootstrap.Modal.getInstance(document.getElementById('editModal'));
+    modal.hide();
+  } else {
+    setEditMsg('danger', res.json?.message || `خطأ (${res.status})`);
+  }
+});
+
+/* delete all regs for student */
+async function deleteAllRegistrations(student){
+  if(!confirm(`حذف كل تسجيلات ${student.student_name || student.name || ''}?`)) return;
+  const payload = { student_id: student.student_id || student.id || student.studentId };
+  const res = await fetchJSON('/delete_registrations', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+  });
+  if(res.ok){
+    student.registrations = [];
+    renderStudents(STUDENTS);
+  } else {
+    alert(res.json?.message || `فشل الحذف (${res.status})`);
+  }
+}
+
+/* search */
+document.getElementById('searchInput').addEventListener('input', (e)=>{
+  const q = e.target.value.trim().toLowerCase();
+  if(!q) return renderStudents(STUDENTS);
+  const filtered = STUDENTS.filter(s=>{
+    return (s.student_name||'').toLowerCase().includes(q) || (s.university_number||'').toLowerCase().includes(q) || (s.student_id||'').toLowerCase().includes(q);
+  });
+  renderStudents(filtered);
+});
+
+/* export CSV/TXT/Excel (one row per registration with course code and units) */
+document.getElementById('btnExportCSV').addEventListener('click', ()=>{
+  const header = ['student_id','student_name','university_number','course_name','course_code','units'];
+  const rows = [header];
+  STUDENTS.forEach(s=>{
+    const sid = s.student_id||'';
+    const name = s.student_name || s.name || '';
+    const uni = s.university_number || '';
+    const regs = s.registrations || [];
+    if(regs.length){
+      regs.forEach(cn=>{
+        const cobj = COURSES.find(x=> x.course_name === cn) || {};
+        rows.push([sid, name, uni, cn || '', cobj.course_code || '', cobj.units || 0]);
+      });
+    } else {
+      rows.push([sid, name, uni, '', '', 0]);
+    }
+  });
+  const esc = v => `"${String(v||'').replace(/"/g,'""')}"`;
+  const csv = '\uFEFF' + rows.map(r=> r.map(esc).join(',')).join('\r\n');
+  downloadBlob(csv, 'registrations.csv','text/csv;charset=utf-8;');
+});
+document.getElementById('btnExportTXT').addEventListener('click', ()=>{
+  const header = ['student_id','student_name','university_number','course_name','course_code','units'];
+  const lines = [header.join('\t')];
+  STUDENTS.forEach(s=>{
+    const sid = s.student_id||'';
+    const name = s.student_name || s.name || '';
+    const uni = s.university_number || '';
+    const regs = s.registrations || [];
+    if(regs.length){
+      regs.forEach(cn=>{
+        const cobj = COURSES.find(x=> x.course_name === cn) || {};
+        lines.push([sid, name, uni, cn || '', cobj.course_code || '', cobj.units || 0].join('\t'));
+      });
+    } else {
+      lines.push([sid, name, uni, '', '', 0].join('\t'));
+    }
+  });
+  downloadBlob(lines.join('\r\n'), 'registrations.txt','text/plain;charset=utf-8;');
+});
+document.getElementById('btnExportExcel').addEventListener('click', async ()=>{
+  const url = '/students/export/registrations';
+  try {
+    const res = await fetch(url, { method: 'GET' });
+    if (!res.ok) {
+      let j = null;
+      try { j = await res.json(); } catch(e){/* ignore */ }
+      alert(j?.message || `فشل التصدير (HTTP ${res.status})`);
+      return;
+    }
+    const blob = await res.blob();
+    downloadBlob(blob, 'registrations.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  } catch (err) {
+    console.error('export excel failed', err);
+    alert('فشل الاتصال بالخادم أثناء التصدير');
+  }
+});
+
+function downloadBlob(content, filename, type){
+  const blob = (content instanceof Blob) ? content : new Blob([content], {type});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+
+/* import file (CSV simple format: student_id,name,university_number,course1;course2;... ) */
+document.getElementById('fileImport').addEventListener('change', async (ev)=>{
+  const f = ev.target.files[0];
+  if(!f) return;
+  const text = await f.text();
+  const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  if(lines.length && lines[0].toLowerCase().includes('student_id')) lines.shift();
+  const items = lines.map(l=>{
+    const cols = l.split(',');
+    return {
+      student_id: cols[0]?.trim(),
+      name: cols[1]?.trim(),
+      university_number: cols[2]?.trim(),
+      registrations: (cols[3]||'').split(';').map(x=>x.trim()).filter(Boolean)
+    };
+  });
+  const res = await fetchJSON('/students/import_registrations', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ items })
+  });
+  if(res.ok){
+    await loadData();
+    alert('تم الاستيراد');
+  } else {
+    alert(res.json?.message || 'فشل الاستيراد');
+  }
+});
+
+/* startup */
+(async function init(){ await loadData(); })();
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

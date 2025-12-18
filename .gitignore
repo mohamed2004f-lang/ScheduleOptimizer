@@ -1,0 +1,5 @@
+# Ignore local SQLite databases to avoid accidental commits and duplicate DBs
+mechanical.db
+*.db
+# backups directory (keep local backups out of VCS)
+backups/

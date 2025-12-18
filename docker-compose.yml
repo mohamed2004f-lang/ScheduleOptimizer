@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    container_name: schedule-optimizer
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - SECRET_KEY=${SECRET_KEY:-change-this-secret-key}
+      - DB_FILE=backend/database/mechanical.db
+    volumes:
+      # حفظ قاعدة البيانات خارج الحاوية
+      - ./backend/database:/app/backend/database
+      - ./logs:/app/logs
+      - ./backups:/app/backups
+    restart: unless-stopped
+    networks:
+      - schedule-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  schedule-network:
+    driver: bridge
+
