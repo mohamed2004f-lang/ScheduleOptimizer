@@ -8,11 +8,12 @@ from pathlib import Path
 
 # تحميل متغيرات البيئة من ملف .env إذا كان موجوداً
 try:
-    from dotenv import load_dotenv
+    from dotenv import load_dotenv  # pyright: ignore[reportMissingImports]
     # البحث عن ملف .env في المجلد الجذر للمشروع
     env_path = Path(__file__).parent / '.env'
     if env_path.exists():
-        load_dotenv(env_path)
+        # override=True لضمان أن القيم في .env هي المصدر الرئيسي
+        load_dotenv(env_path, override=True)
 except ImportError:
     # إذا لم تكن مكتبة python-dotenv مثبتة، نستمر بدونها
     pass
@@ -20,21 +21,20 @@ except ImportError:
 # ============================================
 # إعدادات المصادقة
 # ============================================
-# يتم قراءتها من متغيرات البيئة فقط - لا توجد قيم افتراضية غير آمنة
+# يتم قراءتها من متغيرات البيئة أو ملف .env
+# في حال عدم التعيين، يتم التحذير واستخدام قيم تطوير فقط
 ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin-mohamed')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
 
-# التحقق من وجود كلمة المرور في بيئة الإنتاج
 if not ADMIN_PASSWORD:
     import warnings
     warnings.warn(
-        "⚠️ تحذير: لم يتم تعيين ADMIN_PASSWORD في متغيرات البيئة! "
-        "يرجى إنشاء ملف .env أو تعيين المتغير. "
-        "سيتم استخدام كلمة مرور مؤقتة للتطوير فقط.",
-        UserWarning
+        "تحذير أمان: ADMIN_PASSWORD غير معيَّنة في متغيرات البيئة أو ملف .env. "
+        "سيتم استخدام كلمة مرور افتراضية لأغراض التطوير فقط، ويجب تغييرها في الإنتاج.",
+        UserWarning,
     )
-    # كلمة مرور مؤقتة للتطوير فقط - يجب تغييرها في الإنتاج
-    ADMIN_PASSWORD = 'admin916732007'
+    # كلمة مرور افتراضية للتطوير فقط
+    ADMIN_PASSWORD = "change-me-now"
 
 # ============================================
 # إعدادات Flask

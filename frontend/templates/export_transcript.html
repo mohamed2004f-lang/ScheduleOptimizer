@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <title>كشف درجات الطالب</title>
+  <style>
+    body {
+      font-family: "Cairo", "Tahoma", sans-serif;
+      font-size: 12pt;
+      color: #111827;
+      margin: 20px;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .header h1 {
+      font-size: 18pt;
+      margin: 0 0 5px;
+    }
+    .header h2 {
+      font-size: 14pt;
+      margin: 0 0 5px;
+    }
+    .header .university {
+      font-weight: bold;
+    }
+    .student-info {
+      margin-bottom: 15px;
+      border: 1px solid #ccc;
+      padding: 8px 10px;
+      border-radius: 4px;
+    }
+    .student-info table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .student-info td {
+      padding: 2px 4px;
+      vertical-align: top;
+    }
+    .gpa-box {
+      text-align: left;
+      font-weight: bold;
+      margin-bottom: 15px;
+    }
+    .semester-block {
+      margin-bottom: 18px;
+      page-break-inside: avoid;
+    }
+    .semester-title {
+      font-weight: bold;
+      margin-bottom: 6px;
+    }
+    table.grades {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11pt;
+    }
+    table.grades th,
+    table.grades td {
+      border: 1px solid #ccc;
+      padding: 4px 6px;
+      text-align: center;
+    }
+    table.grades th {
+      background-color: #e5e7eb;
+      font-weight: bold;
+    }
+    .footer {
+      margin-top: 30px;
+      font-size: 10pt;
+    }
+    .sign-row {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 15px;
+    }
+    .sign-box {
+      width: 32%;
+      border-top: 1px solid #000;
+      padding-top: 4px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="university">جامعة درنة</div>
+    <div>كلية الهندسة</div>
+    <div>قسم الهندسة الميكانيكية</div>
+    <h1>كشف درجات الطالب</h1>
+  </div>
+
+  <div class="student-info">
+    <table>
+      <tr>
+        <td><strong>اسم الطالب:</strong> {{ student_name or '' }}</td>
+        <td><strong>الرقم الدراسي:</strong> {{ student_id or '' }}</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="gpa-box">
+    المعدل التراكمي: {{ "%.2f"|format(cumulative_gpa or 0) }}
+    &nbsp;&nbsp;|&nbsp;&nbsp;
+    الوحدات المنجزة: {{ completed_units or 0 }}
+  </div>
+
+  {% for sem in ordered_semesters %}
+  <div class="semester-block">
+    <div class="semester-title">
+      الفصل: {{ sem }}
+      &nbsp;&nbsp;|&nbsp;&nbsp;
+      معدل الفصل: {{ "%.2f"|format(semester_gpas.get(sem, 0) or 0) }}
+      {% set st = semester_totals.get(sem, {}) %}
+      &nbsp;&nbsp;|&nbsp;&nbsp;
+      مجموع وحدات الفصل: {{ st.units or 0 }}
+      &nbsp;&nbsp;|&nbsp;&nbsp;
+      مجموع الدرجات: {{ "%.2f"|format(st.points or 0) }}
+    </div>
+    <table class="grades">
+      <thead>
+        <tr>
+          <th>م</th>
+          <th>اسم المقرر</th>
+          <th>رمز المقرر</th>
+          <th>الوحدات</th>
+          <th>الدرجة</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% set idx = 1 %}
+        {% for c in transcript.get(sem, []) %}
+        <tr>
+          <td>{{ idx }}</td>
+          <td style="text-align:right">{{ c.course_name or '' }}</td>
+          <td>{{ c.course_code or '' }}</td>
+          <td>{{ c.units or 0 }}</td>
+          <td>{{ c.grade if c.grade is not none else '—' }}</td>
+        </tr>
+        {% set idx = idx + 1 %}
+        {% endfor %}
+        {% if not transcript.get(sem, []) %}
+        <tr>
+          <td colspan="5">لا توجد درجات مسجلة لهذا الفصل</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+  {% endfor %}
+
+  {% if academic_status %}
+  <div class="gpa-box" style="margin-top: 10px;">
+    <strong>ملاحظات أكاديمية:</strong>
+    {{ academic_status.label or '' }}
+    {% if academic_status.extra_chance %}
+      — فرصة استثنائية{% if academic_status.extra_note %} ({{ academic_status.extra_note }}){% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="gpa-box" style="margin-top: 4px; font-size: 10pt;">
+    هذا الكشف لغرض <strong>المتابعة الداخلية فقط</strong>، ولا يُعتد به لأي إجراءات رسمية مثل النقل أو التسجيل الخارجي.
+    الإجراء الأكاديمي والمالي الرسمي يتم حصراً عن طريق <strong>مكتب المسجّل</strong> و<strong>مكتب الدراسة والامتحانات بالكلية</strong>.
+  </div>
+
+  <div class="footer">
+    <div class="sign-row">
+      <div class="sign-box">توقيع الطالب</div>
+      <div class="sign-box">توقيع المشرف الأكاديمي</div>
+      <div class="sign-box">اعتماد رئيس القسم</div>
+    </div>
+  </div>
+</body>
+</html>
+

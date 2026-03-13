@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>إدارة المستخدمين</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">إدارة المستخدمين</h1>
+        <p class="page-subtitle">إضافة وتعديل وحذف المستخدمين حسب الدور</p>
+      </div>
+    </div>
+
+    <div id="adminWarning" class="alert alert-warning p-2 d-none">
+      هذه الصفحة مخصصة للمسؤول (admin) فقط. إذا لم تكن تملك صلاحيات كافية، ستظهر لك أخطاء عند حفظ البيانات.
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5 class="card-title mb-3">إضافة / تعديل مستخدم</h5>
+        <div class="row g-2 align-items-end">
+          <div class="col-md-4">
+            <label class="form-label">اسم المستخدم</label>
+            <input id="usernameInput" class="form-control form-control-sm">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">كلمة المرور (تُترك فارغة لعدم التغيير)</label>
+            <input id="passwordInput" type="password" class="form-control form-control-sm">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">الدور</label>
+            <select id="roleSelect" class="form-select form-select-sm">
+              <option value="admin">مسؤول (admin)</option>
+              <option value="supervisor">مشرف (supervisor)</option>
+              <option value="student">طالب (student)</option>
+            </select>
+          </div>
+        </div>
+        <div class="row g-2 align-items-end mt-2">
+          <div class="col-md-4">
+            <label class="form-label">الرقم الدراسي (لطالب فقط)</label>
+            <input id="studentIdInput" class="form-control form-control-sm">
+          </div>
+          <div class="col-md-4">
+            <button id="btnSaveUser" class="btn btn-primary btn-sm mt-3">حفظ المستخدم</button>
+          </div>
+        </div>
+        <div id="userMsg" class="mt-2"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <h5 class="card-title mb-3">قائمة المستخدمين</h5>
+        <div id="usersList" class="list-group small"></div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok,status:r.status,json:j}; }
+
+    function setUserMsg(kind, text){
+      document.getElementById('userMsg').innerHTML = text ? `<div class="alert alert-${kind} p-2 mb-0">${text}</div>` : '';
+    }
+
+    async function loadUsers(){
+      const container = document.getElementById('usersList');
+      container.innerHTML = '';
+      const res = await fetchJSON('/users/list');
+      if(!res.ok){
+        container.innerHTML = `<div class="text-danger p-2">فشل جلب المستخدمين: ${res.json?.message || res.status}</div>`;
+        return;
+      }
+      const arr = Array.isArray(res.json?.users) ? res.json.users : [];
+      if(!arr.length){
+        container.innerHTML = '<div class="text-muted p-2">لا توجد حسابات مستخدمين بعد.</div>';
+        return;
+      }
+      arr.forEach(u=>{
+        const item = document.createElement('div');
+        item.className = 'list-group-item d-flex justify-content-between align-items-center';
+        const left = document.createElement('div');
+        left.innerHTML = `<div><strong>${u.username}</strong> — الدور: ${u.role}</div>
+                          <div class="text-muted small">الرقم الدراسي: ${u.student_id || '—'}</div>`;
+        const right = document.createElement('div');
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn btn-sm btn-danger';
+        delBtn.textContent = 'حذف';
+        delBtn.addEventListener('click', ()=> deleteUser(u.username));
+        right.appendChild(delBtn);
+        item.appendChild(left);
+        item.appendChild(right);
+        item.addEventListener('click', ()=>{
+          document.getElementById('usernameInput').value = u.username;
+          document.getElementById('passwordInput').value = '';
+          document.getElementById('roleSelect').value = u.role;
+          document.getElementById('studentIdInput').value = u.student_id || '';
+        });
+        container.appendChild(item);
+      });
+    }
+
+    async function saveUser(){
+      const username = document.getElementById('usernameInput').value.trim();
+      const password = document.getElementById('passwordInput').value;
+      const role = document.getElementById('roleSelect').value;
+      const studentId = document.getElementById('studentIdInput').value.trim();
+      if(!username){
+        setUserMsg('warning','يرجى إدخال اسم المستخدم.');
+        return;
+      }
+      const body = {username, role};
+      if(password) body.password = password;
+      if(studentId) body.student_id = studentId;
+      const res = await fetchJSON('/users/add', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body)
+      });
+      if(res.ok){
+        setUserMsg('success','تم حفظ المستخدم بنجاح.');
+        await loadUsers();
+      } else {
+        setUserMsg('danger', res.json?.message || `فشل الحفظ (${res.status})`);
+      }
+    }
+
+    async function deleteUser(username){
+      if(!confirm(`هل تريد حذف المستخدم ${username} ؟`)) return;
+      const res = await fetchJSON('/users/delete', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({username})
+      });
+      if(res.ok){
+        setUserMsg('success','تم حذف المستخدم.');
+        await loadUsers();
+      } else {
+        setUserMsg('danger', res.json?.message || `فشل الحذف (${res.status})`);
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', async ()=>{
+      // تحذير بسيط إن لم يكن الدور admin
+      try {
+        const auth = await fetchJSON('/auth/check');
+        if(auth.ok && auth.json?.role !== 'admin'){
+          document.getElementById('adminWarning').classList.remove('d-none');
+        }
+      } catch(e){}
+      document.getElementById('btnSaveUser').addEventListener('click', saveUser);
+      await loadUsers();
+    });
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
+

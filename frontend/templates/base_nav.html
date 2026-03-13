@@ -1,128 +1,43 @@
 <!-- frontend/templates/base_nav.html -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css">
 <link rel="stylesheet" href="/static/styles.css">
 <script src="/static/js/common.js"></script>
 
-<style>
-  :root{
-    --derna-blue-900: #072f5f;
-    --derna-blue-600: #1e6fb8;
-    --derna-gold: #d6a12a;
-  }
-
-  /* logo sizing and small responsive tweaks */
-  .mech-logo{
-    height:56px;
-    width:auto;
-    object-fit:contain;
-    border-radius:8px;
-    background:#fff;
-    padding:4px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-  }
-  @media (max-width:576px){
-    .mech-logo{ height:44px; }
-  }
-
-  /* top nav wrapper */
-  .top-nav {
-    background: linear-gradient(90deg, var(--derna-blue-900), var(--derna-blue-600));
-    color: #fff;
-    padding: 10px 14px;
-    box-shadow: 0 6px 18px rgba(3,19,40,0.12);
-  }
-  .top-nav .brand-row {
-    display:flex;
-    align-items:center;
-    gap:12px;
-    text-decoration:none;
-    color:inherit;
-  }
-  .top-nav .brand-title {
-    display:flex;
-    flex-direction:column;
-    line-height:1;
-    color:#fff;
-  }
-  .top-nav .brand-title h1{
-    margin:0;
-    font-size:18px;
-    font-weight:700;
-    letter-spacing:0.2px;
-  }
-  .top-nav .brand-title p{
-    margin:0;
-    font-size:12px;
-    opacity:0.95;
-  }
-
-  /* centered main heading (replaces duplicated titles) */
-  .site-main-title {
-    text-align:center;
-    color: var(--derna-blue-900);
-    font-weight:800;
-    font-size:20px;
-    margin:10px 0;
-  }
-
-  /* standard navbar below */
-  .main-nav {
-    background: #fff;
-    border-bottom: 1px solid rgba(0,0,0,0.06);
-  }
-  .nav-link { color: var(--derna-blue-900) !important; font-weight:600; }
-  .nav-link:hover { color: var(--derna-blue-600) !important; }
-
-  /* logout button style */
-  .btn-logout {
-    background: var(--derna-gold);
-    color: var(--derna-blue-900);
-    border: none;
-    padding: 6px 10px;
-    font-weight:700;
-    border-radius:6px;
-  }
-
-  @media (max-width:768px){
-    .site-main-title { font-size:18px; }
-    .top-nav .brand-row { gap:8px; }
-  }
-</style>
-
 <!-- top banner with logo and small subtitle -->
-<header class="top-nav">
+<header class="app-topbar">
   <div class="container-fluid">
+    <div id="scheduleChangeBanner" class="alert alert-warning py-2 px-3 mb-2 d-none" style="border-radius:10px;">
+      <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div>
+          <strong>تنبيه</strong>: تم تعديل الجدول الدراسي بعد اعتماده.
+          <span class="small text-muted">تاريخ آخر تعديل: <span id="scheduleUpdatedAt">—</span></span>
+        </div>
+        <a href="/schedule_form" class="btn btn-sm btn-outline-dark">عرض الجدول</a>
+      </div>
+    </div>
     <div class="d-flex align-items-center justify-content-between">
-      <a class="brand-row" href="/">
+      <a class="app-brand" href="/">
         <!-- college logo (1x + 2x) -->
         <img
           src="/static/images/mech_logo_small.png"
           srcset="/static/images/mech_logo_small@2x.png 2x"
           alt="شعار كلية الهندسة — جامعة درنة"
-          class="mech-logo">
-        <div class="brand-title">
-          <h1>جامعة درنة</h1>
-          <p>كلية الهندسة</p>
+          class="app-logo">
+        <div class="app-brand-title">
+          <p class="t1">جامعة درنة</p>
+          <p class="t2">كلية الهندسة</p>
         </div>
       </a>
 
       <!-- compact logout control on the right -->
-      <div>
+      <div class="app-actions">
         <button class="btn btn-logout" type="button" id="logoutBtn" onclick="handleLogout()">خروج</button>
       </div>
     </div>
   </div>
 </header>
 
-<!-- main centered title under the banner -->
-<div class="container-fluid">
-  <div class="site-main-title" role="banner" aria-live="polite">
-    كلية الهندسة - جامعة درنة
-  </div>
-</div>
-
 <!-- primary navigation (Bootstrap) -->
-<nav class="main-nav navbar navbar-expand-lg navbar-light">
+<nav class="app-navbar navbar navbar-expand-lg navbar-light">
   <div class="container-fluid">
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav" aria-controls="mainNav" aria-expanded="false" aria-label="تبديل التنقل">
       <span class="navbar-toggler-icon"></span>
@@ -130,14 +45,18 @@
 
     <div class="collapse navbar-collapse" id="mainNav">
       <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-        <li class="nav-item"><a class="nav-link" href="/dashboard">لوحة القيادة</a></li>
-        <li class="nav-item"><a class="nav-link" href="/students_form">الطلبة</a></li>
-        <li class="nav-item"><a class="nav-link" href="/courses_form">المقررات</a></li>
-        <li class="nav-item"><a class="nav-link" href="/prereqs_form">المتطلبات المسبقة</a></li>
-        <li class="nav-item"><a class="nav-link" href="/registrations_form">التسجيلات</a></li>
-        <li class="nav-item"><a class="nav-link" href="/schedule_form">الجدول</a></li>
-        <li class="nav-item"><a class="nav-link" href="/attendance_export">الحضور والغياب</a></li>
-        <li class="nav-item dropdown">
+        <li class="nav-item"><a class="nav-link" id="navDashboard" href="/dashboard">لوحة القيادة</a></li>
+        <li class="nav-item"><a class="nav-link" id="navAcademicCalendar" href="/academic_calendar_page">التقويم الأكاديمي</a></li>
+        <li class="nav-item"><a class="nav-link" id="navStudents" href="/students_form">الطلبة</a></li>
+        <li class="nav-item"><a class="nav-link" id="navCourses" href="/courses_form">المقررات</a></li>
+        <li class="nav-item"><a class="nav-link" id="navInstructors" href="/instructors_form">أعضاء هيئة التدريس</a></li>
+        <li class="nav-item"><a class="nav-link" id="navSupervision" href="/supervision_form">الإشراف الأكاديمي</a></li>
+        <li class="nav-item"><a class="nav-link" id="navPrereqs" href="/prereqs_form">المتطلبات المسبقة</a></li>
+        <li class="nav-item"><a class="nav-link" id="navRegistrations" href="/registrations_form">التسجيلات</a></li>
+        <li class="nav-item"><a class="nav-link" id="navEnrollmentPlans" href="/enrollment_plans">خطط التسجيل</a></li>
+        <li class="nav-item"><a class="nav-link" id="navScheduleForm" href="/schedule_form">الجدول</a></li>
+        <li class="nav-item"><a class="nav-link" id="navAttendance" href="/attendance_export">الحضور والغياب</a></li>
+        <li class="nav-item dropdown" id="navExamsMenuWrapper">
           <a class="nav-link dropdown-toggle" href="#" id="examsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">الامتحانات</a>
           <ul class="dropdown-menu" aria-labelledby="examsMenu">
             <li><a class="dropdown-item" href="/exams/midterms">الامتحانات الجزئية (Midterms)</a></li>
@@ -146,8 +65,12 @@
             <li><a class="dropdown-item" href="/exams/conflicts">تقرير تعارضات الامتحانات</a></li>
           </ul>
         </li>
-        <li class="nav-item"><a class="nav-link" href="/transcript_page">كشف الدرجات</a></li>
-        <li class="nav-item"><a class="nav-link" href="/results">النتائج</a></li>
+        <li class="nav-item"><a class="nav-link" id="navTranscript" href="/transcript_page">كشف الدرجات</a></li>
+        <li class="nav-item"><a class="nav-link" id="navPerformance" href="/performance_report">تقرير الأداء</a></li>
+        <li class="nav-item"><a class="nav-link" id="navSupervisorDashboard" href="/supervisor_dashboard">لوحة المشرف</a></li>
+        <li class="nav-item"><a class="nav-link" id="navResults" href="/results">التعارضات</a></li>
+        <li class="nav-item"><a class="nav-link" id="navNotifications" href="/notifications_center">الإشعارات</a></li>
+        <li class="nav-item"><a class="nav-link" id="navUsersAdmin" href="/users_admin">المستخدمون</a></li>
       </ul>
 
       <!-- action area: removed duplicated/redundant buttons (those inside the red circle) -->
@@ -192,6 +115,88 @@
         if (window.location.pathname !== '/login') {
           window.location.href = '/login';
         }
+        return;
+      }
+      // إخفاء بعض الروابط حسب الدور
+      const role = data.role;
+      if (role !== 'admin') {
+        const elUsers = document.getElementById('navUsersAdmin');
+        if (elUsers) elUsers.style.display = 'none';
+        const elSup = document.getElementById('navSupervision');
+        if (elSup) elSup.style.display = 'none';
+      }
+      // إخفاء لوحة المشرف عن غير المشرفين
+      if (role !== 'supervisor') {
+        const elSD = document.getElementById('navSupervisorDashboard');
+        if (elSD) elSD.style.display = 'none';
+      }
+      if (role === 'student') {
+        // الطالب لا يحتاج لرؤية بعض الروابط الإدارية
+        const hideIds = [
+          'navStudents',
+          'navCourses',
+          'navInstructors',
+          'navPrereqs',
+          'navRegistrations',
+          'navScheduleForm',
+          'navAttendance',
+          'navResults',
+          'navInstructors',
+          'navSupervision',
+          'navSupervisorDashboard',
+          'navPerformance',
+        ];
+        hideIds.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = 'none';
+        });
+        const examsWrapper = document.getElementById('navExamsMenuWrapper');
+        if (examsWrapper) examsWrapper.style.display = 'none';
+      }
+
+      // تفعيل الرابط الحالي (Active state) حسب المسار
+      const path = (window.location.pathname || '/').toLowerCase();
+      const map = [
+        ['/dashboard','navDashboard'],
+        ['/academic_calendar_page','navAcademicCalendar'],
+        ['/students_form','navStudents'],
+        ['/courses_form','navCourses'],
+        ['/instructors_form','navInstructors'],
+        ['/supervision_form','navSupervision'],
+        ['/prereqs_form','navPrereqs'],
+        ['/registrations_form','navRegistrations'],
+        ['/enrollment_plans','navEnrollmentPlans'],
+        ['/schedule_form','navScheduleForm'],
+        ['/attendance_export','navAttendance'],
+        ['/exams','navExamsMenuWrapper'],
+        ['/transcript_page','navTranscript'],
+        ['/performance_report','navPerformance'],
+        ['/supervisor_dashboard','navSupervisorDashboard'],
+        ['/results','navResults'],
+        ['/notifications_center','navNotifications'],
+        ['/users_admin','navUsersAdmin'],
+      ];
+      map.forEach(([prefix, id])=>{
+        if (path === prefix || (prefix !== '/' && path.startsWith(prefix))) {
+          const el = document.getElementById(id);
+          if (el) el.classList.add('active');
+        }
+      });
+
+      // تنبيه تغيير الجدول بعد الاعتماد (لكل الأدوار)
+      try {
+        const metaResp = await fetch('/schedule/meta', { credentials: 'include' });
+        const meta = await metaResp.json().catch(()=>null);
+        const banner = document.getElementById('scheduleChangeBanner');
+        const updatedEl = document.getElementById('scheduleUpdatedAt');
+        if (banner && meta && meta.published && meta.changed_since_publish) {
+          if (updatedEl) updatedEl.textContent = meta.updated_at || '—';
+          banner.classList.remove('d-none');
+        } else if (banner) {
+          banner.classList.add('d-none');
+        }
+      } catch(e) {
+        // تجاهل أي خطأ في عرض التنبيه
       }
     } catch (error) {
       console.error('Auth check error:', error);

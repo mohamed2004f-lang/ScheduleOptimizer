@@ -1,5 +1,6 @@
-from flask import Blueprint, request, jsonify, send_file
-from .utilities import get_connection, table_to_dicts, DB_FILE, df_from_query, excel_response_from_df, pdf_response_from_html
+from flask import Blueprint, request, jsonify, send_file, session
+from backend.core.auth import login_required, role_required
+from .utilities import get_connection, table_to_dicts, DB_FILE, df_from_query, excel_response_from_df, pdf_response_from_html, log_activity
 import sqlite3
 from datetime import datetime
 from collections import defaultdict
@@ -27,6 +28,7 @@ def normalize_dates(dates):
     return sorted(list(dict.fromkeys(out)))
 
 @exams_bp.route('/<exam_type>/rows')
+@login_required
 def list_exam_rows(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify([])
@@ -36,6 +38,7 @@ def list_exam_rows(exam_type):
         return jsonify([dict(r) for r in rows])
 
 @exams_bp.route('/<exam_type>/check_conflicts', methods=['POST'])
+@login_required
 def check_exam_conflicts(exam_type):
     """
     التحقق من التعارضات قبل إضافة امتحان جديد
@@ -112,6 +115,7 @@ def check_exam_conflicts(exam_type):
         }), 500
 
 @exams_bp.route('/<exam_type>/add_row', methods=['POST'])
+@role_required("admin")
 def add_exam_row(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"status":"error","message":"invalid exam type"}), 400
@@ -133,9 +137,19 @@ def add_exam_row(exam_type):
         cur.execute("INSERT INTO exams (exam_type, exam_id, course_name, exam_date, exam_time, room, instructor) VALUES (?,?,?,?,?,?,?)",
                     (exam_type, None, course_name, exam_date, exam_time, room, instructor))
         conn.commit()
+    # تحديث جدول تعارضات الامتحانات
+    try:
+        persist_exam_conflicts(exam_type)
+        log_activity(
+            action="add_exam_row",
+            details=f"exam_type={exam_type}, course_name={course_name}, exam_date={exam_date}, exam_time={exam_time}",
+        )
+    except Exception:
+        pass
     return jsonify({"status":"ok"})
 
 @exams_bp.route('/<exam_type>/delete_row', methods=['POST'])
+@role_required("admin")
 def delete_exam_row(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"status":"error"}), 400
@@ -147,9 +161,18 @@ def delete_exam_row(exam_type):
         cur = conn.cursor()
         cur.execute('DELETE FROM exams WHERE rowid = ? AND exam_type = ?', (exam_id, exam_type))
         conn.commit()
+    try:
+        persist_exam_conflicts(exam_type)
+        log_activity(
+            action="delete_exam_row",
+            details=f"exam_type={exam_type}, exam_id={exam_id}",
+        )
+    except Exception:
+        pass
     return jsonify({"status":"ok"})
 
 @exams_bp.route('/<exam_type>/distribute', methods=['POST'])
+@role_required("admin")
 def distribute_exams(exam_type):
     """
     Body: { dates: ["YYYY-MM-DD", ...], method: "round_robin" }
@@ -201,6 +224,29 @@ def distribute_exams(exam_type):
                 cur.execute('INSERT INTO exams (exam_type, exam_id, course_name, exam_date, exam_time, room, instructor) VALUES (?,?,?,?,?,?,?)',
                             (exam_type, None, c, ed, '', '', ''))
                 di += 1
+        elif method in ('balanced', 'smart'):
+            # توزيع يعتمد على عدد الطلبة المسجلين لتقليل احتمال التعارض
+            # احسب عدد الطلبة في كل مقرر
+            counts = {}
+            try:
+                q = "SELECT course_name, COUNT(DISTINCT student_id) AS cnt FROM registrations GROUP BY course_name"
+                for cname, cnt in cur.execute(q).fetchall():
+                    counts[cname] = cnt or 0
+            except Exception:
+                counts = {}
+            # رتب المقررات تنازلياً حسب عدد الطلبة
+            sorted_courses = sorted(
+                courses, key=lambda c: counts.get(c, 0), reverse=True
+            )
+            date_load = {d: 0 for d in dates}
+            for c in sorted_courses:
+                # اختر التاريخ ذو أقل حمل حالي
+                target_date = min(date_load, key=lambda d: date_load[d])
+                cur.execute(
+                    'INSERT INTO exams (exam_type, exam_id, course_name, exam_date, exam_time, room, instructor) VALUES (?,?,?,?,?,?,?)',
+                    (exam_type, None, c, target_date, '', '', ''),
+                )
+                date_load[target_date] += counts.get(c, 0)
         else:
             # default same as round_robin
             di = 0
@@ -210,10 +256,19 @@ def distribute_exams(exam_type):
                             (exam_type, None, c, ed, '', '', ''))
                 di += 1
         conn.commit()
+    try:
+        persist_exam_conflicts(exam_type)
+        log_activity(
+            action="distribute_exams",
+            details=f"exam_type={exam_type}, method={method}, dates={','.join(dates)}",
+        )
+    except Exception:
+        pass
     return jsonify({"status":"ok","scheduled": len(courses)})
 
 
 @exams_bp.route('/available_courses')
+@login_required
 def available_courses():
     """Return distinct course names from schedule (for populating selects)."""
     with get_connection() as conn:
@@ -228,6 +283,7 @@ def available_courses():
 
 
 @exams_bp.route('/<exam_type>/export')
+@login_required
 def export_exams(exam_type):
     """Export exam rows in format=txt|xlsx|pdf (query param format)."""
     fmt = (request.args.get('format') or 'txt').lower()
@@ -262,6 +318,7 @@ def export_exams(exam_type):
 
 
 @exams_bp.route('/<exam_type>/conflicts/export')
+@login_required
 def export_conflicts(exam_type):
     fmt = (request.args.get('format') or 'txt').lower()
     if exam_type not in VALID_TYPES:
@@ -298,6 +355,7 @@ def export_conflicts(exam_type):
         return jsonify({"status":"error","message":"unsupported format"}), 400
 
 @exams_bp.route('/<exam_type>/conflicts')
+@login_required
 def exam_conflicts(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"conflicts": []})
@@ -323,6 +381,7 @@ def exam_conflicts(exam_type):
         return jsonify({'conflicts': out})
 
 @exams_bp.route('/<exam_type>/results_data')
+@login_required
 def exam_results_data(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({})
@@ -345,6 +404,7 @@ def exam_results_data(exam_type):
 
 
 @exams_bp.route('/<exam_type>/update_row', methods=['POST'])
+@role_required("admin")
 def update_exam_row(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"status":"error","message":"invalid exam type"}), 400
@@ -356,6 +416,11 @@ def update_exam_row(exam_type):
     for k in ('course_name','exam_date','exam_time','room','instructor'):
         if k in data:
             fields[k] = data[k]
+    # توحيد صيغة التاريخ إذا تم تمريره
+    if 'exam_date' in fields and fields['exam_date']:
+        nd = normalize_dates([fields['exam_date']])
+        if nd:
+            fields['exam_date'] = nd[0]
     if not fields:
         return jsonify({"status":"error","message":"no fields to update"}), 400
     sets = ','.join([f"{k} = ?" for k in fields.keys()])
@@ -365,10 +430,19 @@ def update_exam_row(exam_type):
         cur = conn.cursor()
         cur.execute(q, params)
         conn.commit()
+    try:
+        persist_exam_conflicts(exam_type)
+        log_activity(
+            action="update_exam_row",
+            details=f"exam_type={exam_type}, exam_id={exam_id}",
+        )
+    except Exception:
+        pass
     return jsonify({"status":"ok"})
 
 
 @exams_bp.route('/<exam_type>/bulk_update', methods=['POST'])
+@role_required("admin")
 def bulk_update_exam_rows(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"status":"error","message":"invalid exam type"}), 400
@@ -386,6 +460,11 @@ def bulk_update_exam_rows(exam_type):
             for k in ('course_name','exam_date','exam_time','room','instructor'):
                 if k in it:
                     fields[k] = it[k]
+            # توحيد صيغة التاريخ إن وُجدت
+            if 'exam_date' in fields and fields['exam_date']:
+                nd = normalize_dates([fields['exam_date']])
+                if nd:
+                    fields['exam_date'] = nd[0]
             if not fields:
                 continue
             sets = ','.join([f"{k} = ?" for k in fields.keys()])
@@ -397,7 +476,63 @@ def bulk_update_exam_rows(exam_type):
                 # skip individual failures
                 continue
         conn.commit()
+    try:
+        persist_exam_conflicts(exam_type)
+        log_activity(
+            action="bulk_update_exam_rows",
+            details=f"exam_type={exam_type}, count={len(items)}",
+        )
+    except Exception:
+        pass
     return jsonify({"status":"ok","updated": len(items)})
+
+
+@exams_bp.route('/<exam_type>/student_rows')
+@login_required
+def student_exam_rows(exam_type):
+    """
+    إرجاع جدول امتحانات طالب معيّن:
+    - الطالب: يستخدم student_id من الجلسة ولا يسمح بتمريره.
+    - المشرف/الأدمن: يمكن تمرير ?student_id=...
+    """
+    if exam_type not in VALID_TYPES:
+        return jsonify({"rows": []})
+    user_role = session.get("user_role")
+    if user_role == "student":
+        sid = session.get("student_id") or session.get("user") or ""
+    else:
+        sid = (request.args.get("student_id") or "").strip()
+    if not sid:
+        return jsonify({"rows": []})
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        q = """
+        SELECT e.rowid AS exam_id,
+               e.course_name,
+               e.exam_date,
+               e.exam_time,
+               e.room,
+               e.instructor
+        FROM exams e
+        JOIN registrations r ON r.course_name = e.course_name
+        WHERE e.exam_type = ? AND r.student_id = ?
+        ORDER BY e.exam_date, e.exam_time, e.course_name
+        """
+        rows = cur.execute(q, (exam_type, sid)).fetchall()
+        out = []
+        for r in rows:
+            out.append(
+                {
+                    "exam_id": r[0],
+                    "course_name": r[1],
+                    "exam_date": r[2],
+                    "exam_time": r[3],
+                    "room": r[4],
+                    "instructor": r[5],
+                }
+            )
+    return jsonify({"rows": out})
 
 # helper to persist conflicts (used if we want to write to exam_conflicts)
 def persist_exam_conflicts(exam_type):

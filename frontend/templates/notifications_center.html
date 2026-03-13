@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>الإشعارات</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">الإشعارات</h1>
+        <p class="page-subtitle">متابعة اعتماد/رفض الخطط والتنبيهات الإدارية</p>
+      </div>
+      <div class="d-flex gap-2">
+        <button id="btnReload" class="btn btn-outline-primary btn-sm">تحديث</button>
+        <button id="btnMarkAllRead" class="btn btn-outline-secondary btn-sm">تعيين الكل كمقروء</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body p-0">
+        <div id="notifList" class="list-group small"></div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok,status:r.status,json:j}; }
+
+    async function loadNotifications(){
+      const container = document.getElementById('notifList');
+      container.innerHTML = '';
+      const res = await fetchJSON('/notifications/');
+      if(!res.ok){
+        container.innerHTML = '<div class="text-danger p-2">فشل جلب الإشعارات.</div>';
+        return;
+      }
+      const items = Array.isArray(res.json?.notifications) ? res.json.notifications : [];
+      if(!items.length){
+        container.innerHTML = '<div class="text-muted p-2">لا توجد إشعارات حالياً.</div>';
+        return;
+      }
+      items.forEach(n=>{
+        const a = document.createElement('div');
+        a.className = 'list-group-item d-flex justify-content-between align-items-start';
+        const left = document.createElement('div');
+        left.innerHTML = `<div><strong>${n.title}</strong></div>
+                          <div class="text-muted">${n.body || ''}</div>
+                          <div class="small text-muted mt-1">${(n.created_at||'').replace('T',' ')}</div>`;
+        const right = document.createElement('div');
+        if(!n.is_read){
+          const b = document.createElement('span');
+          b.className = 'badge bg-primary plan-status-badge';
+          b.textContent = 'غير مقروء';
+          right.appendChild(b);
+        }
+        a.appendChild(left);
+        a.appendChild(right);
+        container.appendChild(a);
+      });
+    }
+
+    async function markAllRead(){
+      const res = await fetchJSON('/notifications/', {});
+      if(!res.ok) return;
+      const ids = (res.json?.notifications || []).map(n=>n.id);
+      if(!ids.length) return;
+      await fetchJSON('/notifications/mark_read', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ids})
+      });
+      await loadNotifications();
+    }
+
+    document.addEventListener('DOMContentLoaded', ()=>{
+      document.getElementById('btnReload').addEventListener('click', loadNotifications);
+      document.getElementById('btnMarkAllRead').addEventListener('click', markAllRead);
+      loadNotifications();
+    });
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
+

@@ -1,11 +1,25 @@
 import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from models.models import ScheduleRow
-from flask import Blueprint, request, jsonify, render_template
+from flask import Blueprint, request, jsonify, render_template, session
+from backend.core.auth import login_required, role_required
 from collections import defaultdict
 import sqlite3, pandas as pd
 import logging
-from .utilities import get_connection, table_to_dicts, SEMESTER_LABEL, DB_FILE, df_from_query, excel_response_from_df, pdf_response_from_html
+from .utilities import (
+    get_connection,
+    table_to_dicts,
+    SEMESTER_LABEL,
+    DB_FILE,
+    df_from_query,
+    excel_response_from_df,
+    pdf_response_from_html,
+    log_activity,
+    get_schedule_published_at,
+    set_schedule_published_at,
+    get_schedule_updated_at,
+    touch_schedule_updated_at,
+)
 from .students import compute_per_student_conflicts
 
 logger = logging.getLogger(__name__)
@@ -17,6 +31,7 @@ schedule_bp = Blueprint("schedule", __name__)
 # -----------------------------
 
 @schedule_bp.route("/rows")
+@login_required
 def list_schedule_rows():
     with get_connection() as conn:
         cur = conn.cursor()
@@ -56,10 +71,12 @@ def list_schedule_rows():
 
 # Alias to match frontend calls that use /list_schedule_rows
 @schedule_bp.route("/list_schedule_rows")
+@login_required
 def list_schedule_rows_alias():
     return list_schedule_rows()
 
 @schedule_bp.route("/check_conflicts", methods=["POST"])
+@role_required("admin")
 def check_conflicts():
     """
     التحقق من التعارضات قبل إضافة مقرر جديد
@@ -132,6 +149,7 @@ def check_conflicts():
 
 # Original add_row (kept)
 @schedule_bp.route("/add_row", methods=["POST"])
+@role_required("admin")
 def add_schedule_row():
     data = request.get_json(force=True)
     required = ["course_name", "day", "time"]
@@ -146,7 +164,19 @@ def add_schedule_row():
         """, (data.get("course_name"), data.get("day"), data.get("time"),
               data.get("room", ""), data.get("instructor", ""), data.get("semester", SEMESTER_LABEL)))
         last = cur.lastrowid
+        try:
+            touch_schedule_updated_at(conn)
+        except Exception:
+            pass
         conn.commit()
+
+    try:
+        log_activity(
+            action="add_schedule_row",
+            details=f"section_id={last}, course_name={data.get('course_name')}, day={data.get('day')}, time={data.get('time')}",
+        )
+    except Exception:
+        pass
     # تحديث الجدول النهائي وتقرير التعارضات تلقائياً (خارج with block)
     # Disabled: optimize_with_move_suggestions() is not defined
     # try:
@@ -157,5 +187,176 @@ def add_schedule_row():
 
 # Alias to match frontend calls that use /add_schedule_row
 @schedule_bp.route("/add_schedule_row", methods=["POST"])
+@role_required("admin")
 def add_schedule_row_alias():
     return add_schedule_row()
+
+
+@schedule_bp.route("/delete_schedule_row", methods=["POST"])
+@role_required("admin")
+def delete_schedule_row():
+    """حذف صف من الجدول الدراسي (للأدمن فقط)."""
+    data = request.get_json(force=True) or {}
+    section_id = data.get("section_id")
+    try:
+        from backend.core.services import ScheduleService
+        res = ScheduleService.delete_schedule_row(int(section_id))
+        try:
+            with get_connection() as conn:
+                touch_schedule_updated_at(conn)
+        except Exception:
+            pass
+        try:
+            log_activity(action="delete_schedule_row", details=f"section_id={section_id}")
+        except Exception:
+            pass
+        return jsonify(res), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+
+@schedule_bp.route("/update_schedule_row", methods=["POST"])
+@role_required("admin")
+def update_schedule_row():
+    """تحديث صف في الجدول الدراسي (للأدمن فقط)."""
+    data = request.get_json(force=True) or {}
+    section_id = data.get("section_id")
+    if not section_id:
+        return jsonify({"status": "error", "message": "section_id مطلوب"}), 400
+    fields = {}
+    for k in ("course_name", "day", "time", "room", "instructor", "semester"):
+        if k in data:
+            fields[k] = data.get(k)
+    try:
+        from backend.core.services import ScheduleService
+        res = ScheduleService.update_schedule_row(int(section_id), **fields)
+        try:
+            with get_connection() as conn:
+                touch_schedule_updated_at(conn)
+        except Exception:
+            pass
+        try:
+            log_activity(action="update_schedule_row", details=f"section_id={section_id}")
+        except Exception:
+            pass
+        return jsonify(res), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+
+@schedule_bp.route("/publish_status")
+@login_required
+def publish_status():
+    """حالة نشر الجدول: هل اعتمد الأدمن الجدول ليظهر للطالب والمشرف."""
+    with get_connection() as conn:
+        published_at = get_schedule_published_at(conn)
+    return jsonify({
+        "published": published_at is not None,
+        "published_at": published_at,
+    })
+
+
+@schedule_bp.route("/publish", methods=["POST"])
+@login_required
+@role_required("admin")
+def publish_schedule():
+    """اعتماد/نشر الجدول من الأدمن الرئيسي. بعدها يراه الطالب والمشرف وتُستمد منه المقررات المتاحة في خطط التسجيل."""
+    try:
+        with get_connection() as conn:
+            published_at = set_schedule_published_at(conn)
+            # عند النشر، نضبط أيضاً updated_at حتى لا يظهر تحذير فوراً
+            try:
+                touch_schedule_updated_at(conn)
+            except Exception:
+                pass
+        log_activity(action="schedule_publish", details=f"published_at={published_at}")
+        return jsonify({"status": "ok", "message": "تم اعتماد ونشر الجدول الدراسي", "published_at": published_at}), 200
+    except Exception as e:
+        logger.error(f"Error publishing schedule: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@schedule_bp.route("/meta")
+@login_required
+def schedule_meta():
+    """معلومات الجدول المعتمد + آخر تعديل، لعرض تنبيه تغيّر الجدول لجميع الأدوار."""
+    with get_connection() as conn:
+        published_at = get_schedule_published_at(conn)
+        updated_at = get_schedule_updated_at(conn)
+    changed_since_publish = False
+    if published_at and updated_at:
+        # مقارنة نصية ISO بصيغة Z تعمل ترتيبياً
+        changed_since_publish = updated_at > published_at
+    return jsonify({
+        "published": published_at is not None,
+        "published_at": published_at,
+        "updated_at": updated_at,
+        "changed_since_publish": changed_since_publish,
+    })
+
+
+@schedule_bp.route("/student_timetable")
+@login_required
+def student_timetable():
+    """
+    جدول الطالب الشخصي: يعرض فقط الصفوف المرتبطة بالمقررات المسجل بها.
+    الطالب والمشرف يرون الجدول فقط عندما يكون الجدول معتمداً/منشوراً من الأدمن.
+    """
+    with get_connection() as conn:
+        published_at = get_schedule_published_at(conn)
+    if published_at is None:
+        return jsonify({"rows": [], "published": False})
+
+    user_role = session.get("user_role")
+    if user_role == "student":
+        sid = session.get("student_id") or session.get("user") or ""
+    elif user_role == "supervisor":
+        # المشرف يمكنه عرض جدول طلبته المسندين إليه فقط
+        sid = (request.args.get("student_id") or "").strip()
+        instructor_id = session.get("instructor_id")
+        if not instructor_id or not sid:
+            return jsonify({"rows": [], "published": True})
+        from backend.services.utilities import get_connection
+        with get_connection() as conn:
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT 1 FROM student_supervisor WHERE student_id = ? AND instructor_id = ? LIMIT 1",
+                (sid, instructor_id),
+            ).fetchone()
+            if not row:
+                return jsonify({"rows": [], "published": True})
+    else:
+        sid = (request.args.get("student_id") or "").strip()
+    if not sid:
+        return jsonify({"rows": [], "published": True})
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        q = """
+        SELECT s.rowid AS section_id,
+               s.course_name,
+               s.day,
+               s.time,
+               s.room,
+               s.instructor,
+               s.semester
+        FROM schedule s
+        JOIN registrations r ON r.course_name = s.course_name
+        WHERE r.student_id = ?
+        ORDER BY s.day, s.time, s.course_name
+        """
+        rows = cur.execute(q, (sid,)).fetchall()
+        out = []
+        for r in rows:
+            out.append(
+                {
+                    "section_id": r[0],
+                    "course_name": r[1],
+                    "day": r[2],
+                    "time": r[3],
+                    "room": r[4],
+                    "instructor": r[5],
+                    "semester": r[6],
+                }
+            )
+    return jsonify({"rows": out, "published": True})

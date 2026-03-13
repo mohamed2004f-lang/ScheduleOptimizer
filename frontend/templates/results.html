@@ -3,63 +3,24 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Schedule Optimizer — النتائج</title>
+  <title>Schedule Optimizer — التعارضات</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
-  <style>
-    body { padding: 20px; background: #f8f9fa; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", "Courier New", monospace; font-size: 0.95rem; }
-    table { font-size: .92rem; }
-    .small-muted { font-size: .9rem; color: #6c757d; }
-    .nowrap { white-space: nowrap; }
-    .accepted { background: #e6ffed; }
-    .rejected { background: #fff0f0; }
-    /* improved table visuals */
-    .table thead th { background: #f1f3f5; position: sticky; top: 0; z-index: 2; }
-    .table-responsive { max-height: 460px; overflow: auto; }
-    .table-striped tbody tr:nth-of-type(odd) { background-color: #fff; }
-    .course-name { font-weight: 700; }
-    .muted-small { font-size: .9rem; color: #6c757d; }
-    .badge-time { background: #f8f9fa; color: #212529; border:1px solid #dee2e6; }
-    /* Timetable styles matching schedule_form.html */
-    .timetable-wrapper { overflow-x: auto; margin: 20px 0; }
-    .timetable { border-collapse: collapse; width: 100%; min-width: 800px; background: white; }
-    .timetable th, .timetable td { border: 1px solid #dee2e6; padding: 8px; text-align: center; vertical-align: top; }
-    .timetable th { background: #f1f3f5; font-weight: 600; position: sticky; top: 0; z-index: 10; }
-    .timetable th.day-header { background: #e9ecef; width: 120px; }
-    .timetable th.time-header { background: #f1f3f5; min-width: 150px; }
-    .timetable td { min-height: 80px; height: auto; }
-    .time-slot-cell { position: relative; padding: 4px; }
-    .course-buttons-container { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; align-items: flex-start; margin-bottom: 4px; }
-    .course-btn { 
-      font-size: 0.75rem; 
-      padding: 4px 8px; 
-      border: none; 
-      border-radius: 4px; 
-      cursor: default;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 100%;
-      color: white;
-      font-weight: 500;
-    }
-  </style>
+  <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   {% include "base_nav.html" %}
   <main class="container-main">
 
-  <div class="container">
-    <header class="mb-3 d-flex justify-content-between align-items-center">
+    <div class="page-header">
       <div>
-  <h1 class="h5 mb-1">نتائج التحسين</h1>
-  <p class="small-muted mb-0">جدول نهائي، تقرير التعارضات، واقتراحات النقل — يمكنك قبول أو رفض الاقتراحات هنا.</p>
+        <h1 class="page-title">التعارضات</h1>
+        <p class="page-subtitle">عرض الجدول النهائي مع إبراز تعارضات الطلبة وإمكانية تنزيل التقارير أو حذف التعارضات</p>
       </div>
-      <div>
-        <a href="/" class="btn btn-outline-secondary btn-sm ms-2">العودة للإدخال</a>
+      <div class="d-flex gap-2">
+        <a href="/" class="btn btn-outline-secondary btn-sm">العودة للإدخال</a>
         <button id="refreshBtn" class="btn btn-primary btn-sm">تحديث</button>
       </div>
-    </header>
+    </div>
 
     <section class="mb-4">
       <div class="card shadow-sm">
@@ -67,6 +28,7 @@
           <div class="d-flex justify-content-between align-items-center mb-2">
             <h2 class="h6 mb-0">الجدول النهائي (عرض شبكي)</h2>
             <div>
+              <button class="btn btn-sm btn-outline-primary" id="btnToggleCompactOptim">عرض مضغوط</button>
               <button class="btn btn-sm btn-outline-success" id="dlOptim">تنزيل CSV</button>
             </div>
           </div>
@@ -77,45 +39,69 @@
       </div>
     </section>
 
-    <section class="mb-4">
-      <div class="card shadow-sm">
-        <div class="card-body">
-          <div class="d-flex justify-content-between align-items-center mb-2">
-            <h2 class="h6 mb-0">تقرير التعارضات conflict_report</h2>
-            <div>
-              <button class="btn btn-sm btn-outline-danger me-2" id="deleteSelectedConflicts" disabled>حذف المحدد</button>
-              <button class="btn btn-sm btn-outline-warning me-2" id="clearAllConflicts">حذف الكل</button>
-              <button class="btn btn-sm btn-outline-success" id="dlConf">تنزيل CSV</button>
+    <!-- نافذة تفاصيل التعارضات لكل خانة في الجدول -->
+    <div class="modal fade" id="conflictDetailsModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="conflictDetailsTitle">تفاصيل التعارضات</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+          </div>
+          <div class="modal-body">
+            <div class="table-responsive">
+              <table class="table table-bordered table-sm" id="conflictDetailsTable">
+                <thead class="table-light">
+                  <tr>
+                    <th>اسم الطالب</th>
+                    <th>المقررات المتعارضة</th>
+                    <th>الوقت</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
             </div>
           </div>
-          <div class="table-responsive">
-            <table id="tblConf" class="table table-bordered table-striped table-hover table-sm">
-              <thead class="table-light">
-                <tr>
-                  <th style="width: 40px;">
-                    <input type="checkbox" id="selectAllConflicts" title="تحديد الكل">
-                  </th>
-                  <th>student_id</th>
-                  <th>day</th>
-                  <th>time</th>
-                  <th>conflicting_sections</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">إغلاق</button>
           </div>
         </div>
       </div>
-    </section>
+    </div>
 
     <!-- proposed_moves section removed as requested -->
 
     <div id="msg" class="mt-3"></div>
-  </div>
 
 <script>
   // helper: escape HTML to avoid XSS and undefined errors
   function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
+  let IS_COMPACT = false;
+  let LAST_CALENDAR_ROWS = [];
+  let LATEST_CONFLICTS = [];
+  let STUDENT_MAP = {};
+
+  async function loadStudentsForNames(){
+    try{
+      const resp = await fetch('/list_students');
+      const data = await resp.json().catch(()=>null);
+      if(resp.ok && Array.isArray(data)){
+        STUDENT_MAP = {};
+        data.forEach(s=>{
+          if(s.student_id){
+            STUDENT_MAP[String(s.student_id)] = s.student_name || '';
+          }
+        });
+      }
+    }catch(e){
+      console.error('failed to load students for conflict names', e);
+    }
+  }
+
+  function getStudentNameFromMap(studentId){
+    const sid = String(studentId||'');
+    return STUDENT_MAP[sid] || '';
+  }
 
   function setMsg(html, kind="info") {
     document.getElementById("msg").innerHTML = `<div class="alert alert-${kind} p-2">${html}</div>`;
@@ -182,9 +168,16 @@
     return courseColors[courseName];
   }
 
+  function getConflictsForSlot(day, time){
+    const d = (day || '').trim();
+    const t = (time || '').trim();
+    return (LATEST_CONFLICTS || []).filter(c => (String(c.day||'').trim() === d) && (String(c.time||'').trim() === t));
+  }
+
   function renderCalendar(rows){
     const container = document.getElementById('calendarContainer');
     container.innerHTML = '';
+    LAST_CALENDAR_ROWS = Array.isArray(rows) ? rows : [];
     if(!rows || !rows.length){ 
       container.innerHTML = '<div class="alert alert-info p-2">لا يوجد صف في الجدول النهائي</div>'; 
       return; 
@@ -195,7 +188,8 @@
     const slotsMap = groupByTimeSlot(rows);
 
     // Create timetable: days as rows, times as columns (matching schedule_form.html)
-    let html = '<table class="timetable"><thead><tr><th class="day-header">اليوم / الوقت</th>';
+    const compactClass = IS_COMPACT ? ' is-compact' : '';
+    let html = `<table class="timetable${compactClass}"><thead><tr><th class="day-header">اليوم / الوقت</th>`;
     timeSlots.forEach(time => {
       html += `<th class="time-header">${escapeHtml(time)}</th>`;
     });
@@ -207,22 +201,17 @@
         const key = `${day}|${time}`;
         const courses = slotsMap[key] || [];
         html += `<td class="time-slot-cell">`;
-        html += `<div class="course-buttons-container">`;
-        courses.forEach(course => {
-          const color = getCourseColor(course.course_name);
-          const roomText = course.room ? ` (${escapeHtml(course.room)})` : '';
-          const studentCount = course.student_count || 0;
-          const studentCountText = studentCount > 0 ? ` - (عدد الطلبة ${studentCount})` : '';
-          const displayText = `${escapeHtml(course.course_name)}${roomText}${studentCountText}${course.section_id ? ` (${course.section_id})` : ''}`;
-          html += `<div class="course-btn" style="background: ${color};" 
-                   title="${escapeHtml(course.room || '')} - ${escapeHtml(course.instructor || '')}">
-                   ${displayText}
-                 </div>`;
-          if(course.instructor){
-            html += `<div class="muted-small mt-1">${escapeHtml(course.instructor)}</div>`;
-          }
-        });
-        html += `</div>`;
+        const slotConflicts = getConflictsForSlot(day, time);
+        if (slotConflicts.length > 0) {
+          html += `<button 
+                     class="btn btn-sm btn-danger conflict-slot-btn" 
+                     data-day="${escapeHtml(day)}" 
+                     data-time="${escapeHtml(time)}">
+                     يوجد تعارض (${slotConflicts.length})
+                   </button>`;
+        } else {
+          // لا نعرض شيئاً في حالة عدم وجود تعارضات في هذا التوقيت
+        }
         html += `</td>`;
       });
       html += '</tr>';
@@ -230,148 +219,67 @@
 
     html += '</tbody></table>';
     container.innerHTML = html;
-  }
 
-  function populateTable(tableId, rows, cols) {
-    const tbody = document.querySelector(`#${tableId} tbody`);
-    if(!tbody) return;
-    tbody.innerHTML = '';
-    if(!Array.isArray(rows) || rows.length===0) return;
-    
-    if(tableId === 'tblConf') {
-      // Special handling for conflicts table with checkboxes
-      rows.forEach((r, index) => {
-        const tr = document.createElement('tr');
-        tr.dataset.conflictIndex = index;
-        
-        // Checkbox column
-        const tdCheckbox = document.createElement('td');
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.className = 'conflict-checkbox';
-        // Store data using setAttribute for better compatibility
-        checkbox.setAttribute('data-student-id', String(r.student_id || ''));
-        checkbox.setAttribute('data-day', String(r.day || ''));
-        checkbox.setAttribute('data-time', String(r.time || ''));
-        checkbox.setAttribute('data-conflicting-sections', String(r.conflicting_sections || ''));
-        checkbox.addEventListener('change', updateDeleteButtonState);
-        tdCheckbox.appendChild(checkbox);
-        tr.appendChild(tdCheckbox);
-        
-        // Data columns
-        cols.forEach(c => {
-          const td = document.createElement('td');
-          const val = r[c] === null || r[c] === undefined ? '' : r[c];
-          if(c === 'conflicting_sections'){
-            td.style.whiteSpace = 'normal';
-            td.textContent = val;
-          } else {
-            td.textContent = val;
-          }
-          tr.appendChild(td);
-        });
-        tbody.appendChild(tr);
+    document.querySelectorAll('.conflict-slot-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const day = btn.getAttribute('data-day') || '';
+        const time = btn.getAttribute('data-time') || '';
+        showConflictDetails(day, time);
       });
-      updateDeleteButtonState();
-    } else {
-      // Regular table population
-      rows.forEach(r => {
-        const tr = document.createElement('tr');
-        cols.forEach(c => {
-          const td = document.createElement('td');
-          const val = r[c] === null || r[c] === undefined ? '' : r[c];
-          td.textContent = val;
-          tr.appendChild(td);
-        });
-        tbody.appendChild(tr);
-      });
-    }
-  }
-
-  function updateDeleteButtonState() {
-    const checkboxes = document.querySelectorAll('.conflict-checkbox:checked');
-    const deleteBtn = document.getElementById('deleteSelectedConflicts');
-    if(deleteBtn) {
-      deleteBtn.disabled = checkboxes.length === 0;
-    }
-  }
-
-  async function deleteSelectedConflicts() {
-    const checkboxes = document.querySelectorAll('.conflict-checkbox:checked');
-    if(checkboxes.length === 0) {
-      setMsg("الرجاء تحديد تعارضات للحذف", "warning");
-      return;
-    }
-    
-    if(!confirm(`هل أنت متأكد من حذف ${checkboxes.length} تعارض محدد؟`)) {
-      return;
-    }
-    
-    const conflictsToDelete = Array.from(checkboxes).map(cb => {
-      // Get data from both dataset and getAttribute (for compatibility)
-      const student_id = cb.dataset.studentId || cb.getAttribute('data-student-id') || '';
-      const day = cb.dataset.day || cb.getAttribute('data-day') || '';
-      const time = cb.dataset.time || cb.getAttribute('data-time') || '';
-      const conflicting_sections = cb.dataset.conflictingSections || cb.getAttribute('data-conflicting-sections') || '';
-      
-      return {
-        student_id: student_id,
-        day: day,
-        time: time,
-        conflicting_sections: conflicting_sections
-      };
     });
-    
-    console.log("Deleting conflicts:", conflictsToDelete);
-    
-    try {
-      setMsg("جاري حذف التعارضات...", "info");
-      const resp = await fetch("/schedule/delete_conflicts", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({conflicts: conflictsToDelete})
-      });
-      
-      console.log("Response status:", resp.status);
-      const data = await resp.json();
-      console.log("Response data:", data);
-      
-      if(resp.ok && data.status === "ok") {
-        setMsg(data.message || "تم حذف التعارضات بنجاح", "success");
-        // Wait a bit before refreshing to ensure the server processed the request
-        setTimeout(async () => {
-          await fetchResults();
-        }, 500);
-      } else {
-        setMsg("فشل حذف التعارضات: " + (data.message || resp.statusText), "danger");
-      }
-    } catch(err) {
-      console.error("Error deleting conflicts:", err);
-      setMsg("خطأ في الاتصال بالخادم: " + err.message, "danger");
-    }
   }
 
-  async function clearAllConflicts() {
-    if(!confirm("هل أنت متأكد من حذف جميع التعارضات؟")) {
-      return;
-    }
-    
-    try {
-      setMsg("جاري حذف جميع التعارضات...", "info");
-      const resp = await fetch("/schedule/clear_conflicts", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"}
-      });
-      const data = await resp.json();
-      if(resp.ok && data.status === "ok") {
-        setMsg(data.message || "تم حذف جميع التعارضات", "success");
-        await fetchResults();
+  // compact toggle
+  const btnCompact = document.getElementById('btnToggleCompactOptim');
+  if (btnCompact) {
+    btnCompact.addEventListener('click', () => {
+      IS_COMPACT = !IS_COMPACT;
+      btnCompact.textContent = IS_COMPACT ? 'عرض عادي' : 'عرض مضغوط';
+      renderCalendar(LAST_CALENDAR_ROWS);
+    });
+  }
+
+  let conflictDetailsModal = null;
+
+  function showConflictDetails(day, time){
+    const conflicts = getConflictsForSlot(day, time);
+    const titleEl = document.getElementById('conflictDetailsTitle');
+    const tbody = document.querySelector('#conflictDetailsTable tbody');
+    if(titleEl) titleEl.textContent = `تفاصيل التعارضات ليوم ${day} في الوقت ${time}`;
+    if(tbody){
+      tbody.innerHTML = '';
+      if(conflicts.length === 0){
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 3;
+        td.textContent = 'لا توجد تعارضات في هذا التوقيت.';
+        tr.appendChild(td);
+        tbody.appendChild(tr);
       } else {
-        setMsg("فشل حذف التعارضات: " + (data.message || resp.statusText), "danger");
+        conflicts.forEach(c => {
+          const tr = document.createElement('tr');
+          const tdSid = document.createElement('td');
+          const name = getStudentNameFromMap(c.student_id) || '';
+          tdSid.textContent = name || (c.student_id || '');
+          const tdCourses = document.createElement('td');
+          tdCourses.textContent = c.conflicting_sections || '';
+          const tdTime = document.createElement('td');
+          tdTime.textContent = c.time || '';
+          tr.appendChild(tdSid);
+          tr.appendChild(tdCourses);
+          tr.appendChild(tdTime);
+          tbody.appendChild(tr);
+        });
       }
-    } catch(err) {
-      console.error(err);
-      setMsg("خطأ في الاتصال بالخادم", "danger");
+    }
+    if(!conflictDetailsModal){
+      const modalEl = document.getElementById('conflictDetailsModal');
+      if(modalEl){
+        conflictDetailsModal = new bootstrap.Modal(modalEl);
+      }
+    }
+    if(conflictDetailsModal){
+      conflictDetailsModal.show();
     }
   }
 
@@ -382,8 +290,8 @@
       if (!resp.ok) throw new Error(resp.statusText);
       const data = await resp.json();
 
-  renderCalendar(data.optimized_schedule);
-  populateTable("tblConf", data.conflict_report, ["student_id","day","time","conflicting_sections"]);
+      LATEST_CONFLICTS = Array.isArray(data.conflict_report) ? data.conflict_report : [];
+      renderCalendar(data.optimized_schedule);
 
       setMsg("تم تحميل النتائج.", "success");
     } catch (err) {
@@ -413,25 +321,17 @@
   }
 
   document.getElementById("dlOptim").addEventListener("click", () => downloadCSV("optimized_schedule"));
-  document.getElementById("dlConf").addEventListener("click", () => downloadCSV("conflict_report"));
   document.getElementById("refreshBtn").addEventListener("click", fetchResults);
-  document.getElementById("deleteSelectedConflicts").addEventListener("click", deleteSelectedConflicts);
-  document.getElementById("clearAllConflicts").addEventListener("click", clearAllConflicts);
-  
-  // Select all checkbox
-  const selectAllCheckbox = document.getElementById("selectAllConflicts");
-  if(selectAllCheckbox) {
-    selectAllCheckbox.addEventListener("change", function() {
-      const checkboxes = document.querySelectorAll('.conflict-checkbox');
-      checkboxes.forEach(cb => cb.checked = this.checked);
-      updateDeleteButtonState();
-    });
-  }
 
   // تحديث تلقائي كل 5 ثوانٍ
-  fetchResults();
-  setInterval(fetchResults, 5000);
+  (async function initResultsPage(){
+    await loadStudentsForNames();
+    await fetchResults();
+    setInterval(fetchResults, 5000);
+  })();
 </script>
+<!-- Bootstrap JS for modal support -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
   </main>
 </body>
 </html>

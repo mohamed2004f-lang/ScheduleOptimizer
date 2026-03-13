@@ -345,6 +345,17 @@ class CourseService:
                     (new, old)
                 )
                 
+                # أي تعديل في بيانات المقرر (الاسم/الرمز/الوحدات) يمكن أن يؤثر على الجدول النهائي والتعارضات
+                # لذا نفرّغ الجداول المشتقة ليُعاد حسابها عند تشغيل التحسين.
+                try:
+                    cur.execute("DELETE FROM optimized_schedule")
+                except Exception:
+                    pass
+                try:
+                    cur.execute("DELETE FROM conflict_report")
+                except Exception:
+                    pass
+
                 conn.commit()
                 return {'status': 'ok', 'message': 'تم تحديث بيانات المقرر'}
         except NotFoundError:
@@ -378,6 +389,16 @@ class CourseService:
                 cur.execute("DELETE FROM courses WHERE course_name = ?", (name,))
                 if cur.rowcount == 0:
                     raise NotFoundError("المقرر غير موجود")
+
+                # حذف مقرر مرتبط بالجدول/التسجيلات يعني أن نتائج التحسين الحالية لم تعد صالحة.
+                try:
+                    cur.execute("DELETE FROM optimized_schedule")
+                except Exception:
+                    pass
+                try:
+                    cur.execute("DELETE FROM conflict_report")
+                except Exception:
+                    pass
                 
                 conn.commit()
                 logger.info(f"Course deleted: {name}")
@@ -461,6 +482,18 @@ class ScheduleService:
                      sanitize_input(semester, 50) or SEMESTER_LABEL)
                 )
                 rowid = cur.lastrowid
+
+                # أي تغيير في الجدول الدراسي يجعل الجدول النهائي/تقرير التعارضات قديمة،
+                # لذا نفرّغ الجداول المشتقة لتُعاد حساباتها عند الضغط على زر التحسين.
+                try:
+                    cur.execute("DELETE FROM optimized_schedule")
+                except Exception:
+                    pass
+                try:
+                    cur.execute("DELETE FROM conflict_report")
+                except Exception:
+                    pass
+
                 conn.commit()
                 logger.info(f"Schedule row added: {name} on {day_val}")
                 return {'status': 'ok', 'message': 'تم إضافة الصف للجدول الدراسي', 'rowid': rowid}
@@ -494,7 +527,17 @@ class ScheduleService:
                 
                 if cur.rowcount == 0:
                     raise NotFoundError("الصف غير موجود")
-                
+
+                # أي تعديل في الجدول الدراسي يفسد الجدول النهائي/تقرير التعارضات الحالية
+                try:
+                    cur.execute("DELETE FROM optimized_schedule")
+                except Exception:
+                    pass
+                try:
+                    cur.execute("DELETE FROM conflict_report")
+                except Exception:
+                    pass
+
                 conn.commit()
                 return {'status': 'ok', 'message': 'تم تحديث الصف'}
         except NotFoundError:
@@ -515,6 +558,17 @@ class ScheduleService:
                 cur.execute("DELETE FROM schedule WHERE rowid = ?", (section_id,))
                 if cur.rowcount == 0:
                     raise NotFoundError("الصف غير موجود")
+
+                # تفريغ الجداول المشتقة حتى لا تبقى نتائج قديمة
+                try:
+                    cur.execute("DELETE FROM optimized_schedule")
+                except Exception:
+                    pass
+                try:
+                    cur.execute("DELETE FROM conflict_report")
+                except Exception:
+                    pass
+
                 conn.commit()
                 logger.info(f"Schedule row deleted: {section_id}")
                 return {'status': 'ok', 'message': 'تم حذف الصف'}

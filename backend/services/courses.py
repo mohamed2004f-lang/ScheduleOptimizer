@@ -2,12 +2,14 @@ import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from models.models import Course
 from flask import Blueprint, request, jsonify, Response, current_app
+from backend.core.auth import login_required, role_required
 from collections import defaultdict
 from .utilities import get_connection, table_to_dicts, df_from_query, excel_response_from_df, pdf_response_from_html
 
 courses_bp = Blueprint("courses", __name__)
 
 @courses_bp.route("/list")
+@login_required
 def list_courses():
     # يرجع جدول courses، وإذا غير موجود يرجع من schedule
     with get_connection() as conn:
@@ -38,16 +40,17 @@ def list_courses():
     return jsonify([c.__dict__ for c in courses])
 
 @courses_bp.route("/add", methods=["POST"])
+@role_required("admin")
 def add_course():
     data = request.get_json(force=True)
-    cname = data.get("course_name")
-    code = data.get("course_code", "")
+    cname = (data.get("course_name") or "").strip()
+    code = (data.get("course_code") or "").strip()
     try:
         units = int(data.get("units", 0) or 0)
     except (TypeError, ValueError):
         units = 0
     if not cname:
-        return jsonify({"status": "error", "message": "course_name مطلوب"}), 400
+        return jsonify({"status": "error", "message": "اسم المقرر (course_name) مطلوب"}), 400
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute("""
@@ -57,26 +60,82 @@ def add_course():
                 units INTEGER
             )
         """)
-        cur.execute("INSERT OR REPLACE INTO courses (course_name, course_code, units) VALUES (?, ?, ?)", (cname, code, units))
+        # منع تكرار الاسم (تطبيع بسيط lower/strip)
+        row = cur.execute(
+            "SELECT course_name FROM courses WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
+            (cname,),
+        ).fetchone()
+        if row:
+            return jsonify({"status": "error", "message": "يوجد مقرر آخر بنفس الاسم. استخدم زر \"تحرير\" لتعديله."}), 400
+
+        # منع تكرار الرمز إذا تم إدخاله
+        if code:
+            row = cur.execute(
+                "SELECT course_name FROM courses WHERE COALESCE(course_code,'') <> '' AND LOWER(TRIM(course_code)) = LOWER(TRIM(?))",
+                (code,),
+            ).fetchone()
+            if row:
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": f"يوجد مقرر آخر بنفس الرمز ({row['course_name']}). الرجاء اختيار رمز مختلف.",
+                    }
+                ), 400
+
+        cur.execute(
+            "INSERT INTO courses (course_name, course_code, units) VALUES (?, ?, ?)",
+            (cname, code, units),
+        )
         conn.commit()
     return jsonify({"status": "ok", "message": "تم إضافة المقرر"}), 200
 
 @courses_bp.route("/update", methods=["POST"])
+@role_required("admin")
 def update_course():
     data = request.get_json(force=True)
-    old_name = data.get("old_course_name")
-    new_name = data.get("new_course_name")
+    old_name = (data.get("old_course_name") or "").strip()
+    new_name = (data.get("new_course_name") or "").strip()
     new_units = data.get("units")
-    new_code = data.get("course_code", "")
+    new_code = (data.get("course_code") or "").strip()
     if not old_name or not new_name:
         return jsonify({"status": "error", "message": "old_course_name و new_course_name مطلوبة"}), 400
 
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute("UPDATE courses SET course_name=?, course_code=?, units=? WHERE course_name=?",
-                    (new_name, new_code or "", (int(new_units) if new_units is not None else None), old_name))
+        # منع تكرار الاسم الجديد (باستثناء نفس المقرر)
+        row = cur.execute(
+            "SELECT course_name FROM courses WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?)) AND course_name <> ?",
+            (new_name, old_name),
+        ).fetchone()
+        if row:
+            return jsonify({"status": "error", "message": "لا يمكن تغيير الاسم لأنه مستخدم لمقرر آخر."}), 400
 
-        for tbl in ("grades", "schedule", "registrations"):
+        # منع تكرار الرمز الجديد إن وجد
+        if new_code:
+            row = cur.execute(
+                """
+                SELECT course_name FROM courses
+                WHERE COALESCE(course_code,'') <> ''
+                  AND LOWER(TRIM(course_code)) = LOWER(TRIM(?))
+                  AND course_name <> ?
+                """,
+                (new_code, old_name),
+            ).fetchone()
+            if row:
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": f"الرمز مستخدم لمقرر آخر ({row['course_name']}). اختر رمزاً مختلفاً.",
+                    }
+                ), 400
+
+        cur.execute(
+            "UPDATE courses SET course_name=?, course_code=?, units=? WHERE course_name=?",
+            (new_name, new_code or "", (int(new_units) if new_units is not None else None), old_name),
+        )
+
+        # تحديث جميع الجداول التي تعتمد على اسم المقرر
+        for tbl in ("grades", "schedule", "registrations", "enrollment_plan_items", "exams"):
             try:
                 cur.execute(f"UPDATE {tbl} SET course_name=? WHERE course_name=?", (new_name, old_name))
             except Exception:
@@ -90,14 +149,28 @@ def update_course():
                 if new_units is not None:
                     cur.execute("UPDATE grades SET units=? WHERE course_name=?", (int(new_units), new_name))
                 if new_code is not None:
-                    cur.execute("UPDATE grades SET course_code=? WHERE course_name=?", (new_code or "", new_name))
+                    cur.execute(
+                        "UPDATE grades SET course_code=? WHERE course_name=?",
+                        (new_code or "", new_name),
+                    )
             except Exception:
                 pass
+
+        # أي تعديل على المقررات (الاسم/الرمز/الوحدات) يجعل نتائج التحسين الحالية قديمة
+        try:
+            cur.execute("DELETE FROM optimized_schedule")
+        except Exception:
+            pass
+        try:
+            cur.execute("DELETE FROM conflict_report")
+        except Exception:
+            pass
 
         conn.commit()
     return jsonify({"status": "ok", "message": "تم تعديل بيانات المقرر"}), 200
 
 @courses_bp.route("/delete", methods=["POST"])
+@role_required("admin")
 def delete_course():
     data = request.get_json(force=True)
     cname = data.get("course_name")
@@ -115,11 +188,23 @@ def delete_course():
             except Exception:
                 pass
         cur.execute("DELETE FROM prereqs WHERE course_name = ? OR required_course_name = ?", (cname, cname))
+
+        # حذف مقرر يؤثر على الجدول النهائي وتقرير التعارضات
+        try:
+            cur.execute("DELETE FROM optimized_schedule")
+        except Exception:
+            pass
+        try:
+            cur.execute("DELETE FROM conflict_report")
+        except Exception:
+            pass
+
         conn.commit()
     return jsonify({"status": "ok", "message": "تم حذف المقرر وجميع صوره"}), 200
 
 # المتطلبات (Prereqs) - يدعم زوج واحد أو دفعة items[]
 @courses_bp.route("/prereqs/add", methods=["POST"])
+@role_required("admin")
 def add_prereq():
     """
     Accepts:
@@ -249,6 +334,7 @@ def add_prereq():
     }), 200
 
 @courses_bp.route("/prereqs/delete", methods=["POST"])
+@role_required("admin")
 def delete_prereq():
     data = request.get_json(force=True)
     course = data.get("course_name")
@@ -262,6 +348,7 @@ def delete_prereq():
     return jsonify({"status": "ok", "message": "تم حذف المتطلب"}), 200
 
 @courses_bp.route("/prereqs/list")
+@login_required
 def list_prereqs():
     with get_connection() as conn:
         cur = conn.cursor()
@@ -269,6 +356,7 @@ def list_prereqs():
         return jsonify([{"course_name": r[0], "required_course_name": r[1]} for r in rows])
 
 @courses_bp.route("/prereqs/status")
+@login_required
 def prereq_status():
     student_id = request.args.get("student_id")
     if not student_id:
@@ -313,6 +401,7 @@ def prereq_status():
 # -----------------------
 
 @courses_bp.route("/export/excel")
+@login_required
 def export_courses_excel():
     """
     Export full courses table as an Excel file using utilities.excel_response_from_df.
@@ -329,6 +418,7 @@ def export_courses_excel():
     return excel_response_from_df(df, filename_prefix="courses")
 
 @courses_bp.route("/export/pdf")
+@login_required
 def export_courses_pdf():
     """
     Export courses list as PDF. If pdf generation is not available, the underlying utility

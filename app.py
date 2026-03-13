@@ -7,6 +7,13 @@ from backend.services.courses import courses_bp
 from backend.services.grades import grades_bp
 from backend.services.schedule import schedule_bp
 from backend.services.exams import exams_bp
+from backend.services.admin import admin_bp
+from backend.services.enrollment import enrollment_bp
+from backend.services.notifications import notifications_bp
+from backend.services.users import users_bp
+from backend.services.academic_calendar import academic_calendar_bp
+from backend.services.instructors import instructors_bp
+from backend.services.performance import performance_bp
 
 # Core modules
 from backend.core.exceptions import register_error_handlers
@@ -59,6 +66,13 @@ app.register_blueprint(courses_bp, url_prefix="/courses")
 app.register_blueprint(grades_bp, url_prefix="/grades")
 app.register_blueprint(schedule_bp, url_prefix="/schedule")
 app.register_blueprint(exams_bp, url_prefix="/exams")
+app.register_blueprint(admin_bp, url_prefix="/admin")
+app.register_blueprint(enrollment_bp, url_prefix="/enrollment")
+app.register_blueprint(notifications_bp, url_prefix="/notifications")
+app.register_blueprint(users_bp, url_prefix="/users")
+app.register_blueprint(academic_calendar_bp, url_prefix="/academic_calendar")
+app.register_blueprint(instructors_bp, url_prefix="/instructors")
+app.register_blueprint(performance_bp, url_prefix="/performance")
 
 # طباعة خريطة المسارات المسجلة (مؤقت للتحقق)
 pprint.pprint(sorted([r.rule for r in app.url_map.iter_rules()]))
@@ -107,6 +121,24 @@ def students_form():
 def courses_form():
     return render_template("courses_form.html")
 
+
+@app.route("/instructors_form")
+def instructors_form():
+    # صفحة إدارة أعضاء هيئة التدريس
+    return render_template("instructors_form.html")
+
+
+@app.route("/supervision_form")
+def supervision_form():
+    # صفحة إسناد الطلبة للمشرفين (للإدارة)
+    return render_template("supervision_form.html")
+
+
+@app.route("/supervisor_dashboard")
+def supervisor_dashboard_page():
+    # لوحة للمشرفين لعرض طلبتهم وروابط سريعة
+    return render_template("supervisor_dashboard.html")
+
 @app.route("/schedule_form")
 def schedule_form():
     return render_template("schedule_form.html")
@@ -130,6 +162,19 @@ def exams_conflicts():
 def registrations_form():
     return render_template("registrations_form.html")
 
+
+@app.route("/enrollment_plans")
+def enrollment_plans_page():
+    return render_template("enrollment_plans.html")
+
+@app.route("/notifications_center")
+def notifications_center_page():
+    return render_template("notifications_center.html")
+
+@app.route("/users_admin")
+def users_admin_page():
+    return render_template("users_admin.html")
+
 @app.route("/results")
 def results_page():
     return render_template("results.html")
@@ -139,9 +184,18 @@ def results_page():
 def attendance_export_page():
     return render_template("attendance_export.html")
 
+@app.route("/academic_calendar_page")
+def academic_calendar_page():
+    return render_template("academic_calendar.html")
+
 @app.route("/transcript_page")
 def transcript_page():
     return render_template("transcript.html")
+
+
+@app.route("/performance_report")
+def performance_report_page():
+    return render_template("performance_report.html")
 
 # -----------------------------
 # مسارات توافقية (للحفاظ على عمل الواجهة القديمة)
@@ -259,4 +313,4 @@ def compat_add_prereq():
 # تشغيل التطبيق
 # -----------------------------
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)

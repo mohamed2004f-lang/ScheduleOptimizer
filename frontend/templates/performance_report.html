@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>تقرير أداء الطلبة</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    @media print {
+      body * {
+        visibility: hidden;
+      }
+      main.container-main, main.container-main * {
+        visibility: visible;
+      }
+      main.container-main {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+      }
+      nav.app-navbar, header.app-topbar, #msgBox, #statusFilter, #searchInput, #sortSelect, #btnPrint, #btnExport {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main">
+    <div class="page-header mb-3">
+      <div>
+        <h1 class="page-title">تقرير أداء الطلبة</h1>
+        <p class="page-subtitle">عرض معدلات الفصول الأخيرة، المعدل التراكمي، الوحدات المنجزة، وحالة الإنذار الأكاديمي</p>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body row g-2 align-items-end">
+        <div class="col-md-3">
+          <label class="form-label">تصفية حسب الحالة</label>
+          <select id="statusFilter" class="form-select form-select-sm">
+            <option value="">كل الحالات</option>
+            <option value="good">سليم أكاديمياً</option>
+            <option value="warning_1">إنذار أول</option>
+            <option value="warning_2">إنذار ثانٍ</option>
+            <option value="warning_3">أكثر من إنذارين</option>
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">بحث بالاسم أو الرقم</label>
+          <input id="searchInput" class="form-control form-control-sm" placeholder="اكتب جزءاً من الاسم أو الرقم">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">فرز حسب</label>
+          <select id="sortSelect" class="form-select form-select-sm">
+            <option value="student_id">الرقم الدراسي</option>
+            <option value="cumulative_gpa_desc">المعدل التراكمي (تنازلي)</option>
+            <option value="last_gpa_desc">آخر معدل فصلي (تنازلي)</option>
+            <option value="completed_units_desc">الوحدات المنجزة (تنازلي)</option>
+          </select>
+        </div>
+        <div class="col-md-3 text-end d-flex flex-column flex-md-row justify-content-md-end gap-2 mt-3 mt-md-0">
+          <button id="btnPrint" class="btn btn-outline-dark btn-sm">طباعة التقرير</button>
+          <button id="btnExport" class="btn btn-outline-secondary btn-sm">تصدير Excel</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <div id="msgBox" class="mb-2"></div>
+        <div class="table-responsive">
+          <table class="table table-sm table-striped align-middle" id="perfTable">
+            <thead>
+              <tr>
+                <th>الرقم الدراسي</th>
+                <th>اسم الطالب</th>
+                <th>سنة الالتحاق</th>
+                <th>الفصل الأخير (GPA)</th>
+                <th>الفصل السابق (GPA)</th>
+                <th>المعدل التراكمي</th>
+                <th>الوحدات المنجزة</th>
+                <th>حالة الطالب</th>
+                <th>فرصة استثنائية</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/js/common.js"></script>
+  <script>
+    let RAW_STUDENTS = [];
+    let CURRENT_ROLE = null;
+
+    function showMsg(text, type = 'info') {
+      const box = document.getElementById('msgBox');
+      box.innerHTML = text ? `<div class="alert alert-${type} py-1 px-2 mb-0">${text}</div>` : '';
+    }
+
+    function formatGpa(val) {
+      if (val === null || typeof val === 'undefined') return '—';
+      const num = Number(val);
+      if (!Number.isFinite(num)) return '—';
+      return num.toFixed(2);
+    }
+
+    function renderTable() {
+      const tbody = document.querySelector('#perfTable tbody');
+      const statusFilter = document.getElementById('statusFilter').value;
+      const search = (document.getElementById('searchInput').value || '').toLowerCase();
+      const sortBy = document.getElementById('sortSelect').value;
+
+      let rows = RAW_STUDENTS.slice();
+
+      if (statusFilter) {
+        rows = rows.filter(r => r.status_code === statusFilter);
+      }
+
+      if (search) {
+        rows = rows.filter(r => {
+          const txt = ((r.student_id || '') + ' ' + (r.student_name || '')).toLowerCase();
+          return txt.includes(search);
+        });
+      }
+
+      rows.sort((a, b) => {
+        if (sortBy === 'cumulative_gpa_desc') {
+          return (b.cumulative_gpa || 0) - (a.cumulative_gpa || 0);
+        }
+        if (sortBy === 'last_gpa_desc') {
+          return (b.last_semester_gpa || 0) - (a.last_semester_gpa || 0);
+        }
+        if (sortBy === 'completed_units_desc') {
+          return (b.completed_units || 0) - (a.completed_units || 0);
+        }
+        // default: student_id asc
+        return (a.student_id || '').localeCompare(b.student_id || '');
+      });
+
+      tbody.innerHTML = '';
+      if (!rows.length) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td colspan="9" class="text-center text-muted">لا توجد بيانات مطابقة.</td>`;
+        tbody.appendChild(tr);
+        return;
+      }
+
+      rows.forEach(r => {
+        const tr = document.createElement('tr');
+        let badgeClass = 'secondary';
+        if (r.status_code === 'good') badgeClass = 'success';
+        else if (r.status_code === 'warning_1') badgeClass = 'warning';
+        else if (r.status_code === 'warning_2') badgeClass = 'danger';
+        else if (r.status_code === 'warning_3') badgeClass = 'dark';
+
+        const lastLabel = r.last_semester
+          ? `${r.last_semester} (${formatGpa(r.last_semester_gpa)})`
+          : '—';
+        const prevLabel = r.prev_semester
+          ? `${r.prev_semester} (${formatGpa(r.prev_semester_gpa)})`
+          : '—';
+
+        const extraBadge = r.extra_chance
+          ? `<span class="badge bg-info text-dark" title="${r.extra_chance_note || 'فرصة استثنائية سارية'}">فرصة استثنائية</span>`
+          : '';
+
+        let extraActions = '';
+        if (CURRENT_ROLE === 'admin') {
+          if (r.extra_chance) {
+            extraActions = `
+              <button type="button" class="btn btn-sm btn-outline-danger btn-extra" data-sid="${r.student_id}" data-active="0">
+                إلغاء الفرصة
+              </button>
+            `;
+          } else {
+            extraActions = `
+              <button type="button" class="btn btn-sm btn-outline-primary btn-extra" data-sid="${r.student_id}" data-active="1">
+                منح فرصة استثنائية
+              </button>
+            `;
+          }
+        }
+
+        tr.innerHTML = `
+          <td class="mono">${r.student_id}</td>
+          <td>${r.student_name || ''}</td>
+          <td>${r.join_year || ''}</td>
+          <td>${lastLabel}</td>
+          <td>${prevLabel}</td>
+          <td>${formatGpa(r.cumulative_gpa)}</td>
+          <td>${r.completed_units || 0}</td>
+          <td><span class="badge bg-${badgeClass}">${r.status_label}</span></td>
+          <td>
+            <div class="d-flex flex-column gap-1">
+              ${extraBadge}
+              ${extraActions}
+            </div>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      if (CURRENT_ROLE === 'admin') {
+        document.querySelectorAll('.btn-extra').forEach(btn => {
+          btn.addEventListener('click', async (ev) => {
+            const sid = ev.currentTarget.dataset.sid;
+            const active = ev.currentTarget.dataset.active === '1';
+            const note = active ? prompt('أدخل ملاحظة عن الفرصة الاستثنائية (اختياري):', '') || '' : '';
+            try {
+              await apiPost('/performance/extra_chance', {
+                student_id: sid,
+                active,
+                note,
+              });
+              showMsg('تم تحديث حالة الفرصة الاستثنائية للطالب ' + sid, 'success');
+              await loadReport();
+            } catch (e) {
+              console.error(e);
+              showMsg('فشل تحديث الفرصة الاستثنائية', 'danger');
+            }
+          });
+        });
+      }
+    }
+
+    async function loadReport() {
+      showMsg('جارٍ تحميل تقرير الأداء...', 'info');
+      try {
+        const auth = await apiGet('/auth/check');
+        CURRENT_ROLE = auth.role || null;
+        const data = await apiGet('/performance/report');
+        RAW_STUDENTS = Array.isArray(data.students) ? data.students : [];
+        showMsg(`تم تحميل بيانات ${RAW_STUDENTS.length} طالب/ـة.`, 'success');
+        renderTable();
+      } catch (e) {
+        console.error(e);
+        showMsg('فشل تحميل تقرير الأداء', 'danger');
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      loadReport();
+      document.getElementById('statusFilter').addEventListener('change', renderTable);
+      document.getElementById('sortSelect').addEventListener('change', renderTable);
+      document.getElementById('searchInput').addEventListener('input', debounce(renderTable, 200));
+      const btnPrint = document.getElementById('btnPrint');
+      if (btnPrint) {
+        btnPrint.addEventListener('click', () => {
+          window.print();
+        });
+      }
+      const btnExport = document.getElementById('btnExport');
+      if (btnExport) {
+        btnExport.addEventListener('click', () => {
+          window.open('/performance/export', '_blank');
+        });
+      }
+    });
+  </script>
+</body>
+</html>
+

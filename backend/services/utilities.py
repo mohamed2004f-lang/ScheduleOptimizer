@@ -83,7 +83,11 @@ ALLOWED_TABLES = {
     'students', 'courses', 'schedule', 'registrations', 'grades',
     'optimized_schedule', 'conflict_report', 'ignored_conflicts',
     'proposed_moves', 'exams', 'exam_conflicts', 'prereqs',
-    'grade_audit', 'attendance_records'
+    'grade_audit', 'attendance_records', 'activity_log',
+    'enrollment_plans', 'enrollment_plan_items',
+    'users', 'notifications', 'system_settings',
+    'academic_calendar', 'instructors', 'student_supervisor',
+    'student_exceptions'
 }
 
 def table_to_dicts(table_name, db_file=DB_FILE):
@@ -105,7 +109,8 @@ def ensure_tables():
                         """
                         CREATE TABLE IF NOT EXISTS students (
                             student_id TEXT PRIMARY KEY,
-                            student_name TEXT
+                            student_name TEXT,
+                            join_year TEXT
                         )""",
                         """
                         CREATE TABLE IF NOT EXISTS courses (
@@ -198,6 +203,90 @@ def ensure_tables():
                             recorded_at TEXT,
                             PRIMARY KEY (student_id, course_name, week_number)
                         )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS activity_log (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            ts TEXT NOT NULL,
+                            actor TEXT,
+                            action TEXT NOT NULL,
+                            details TEXT
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS enrollment_plans (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            student_id TEXT NOT NULL,
+                            semester TEXT NOT NULL,
+                            status TEXT NOT NULL,
+                            rejection_reason TEXT,
+                            created_at TEXT,
+                            updated_at TEXT
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS enrollment_plan_items (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            plan_id INTEGER NOT NULL,
+                            course_name TEXT NOT NULL,
+                            FOREIGN KEY (plan_id) REFERENCES enrollment_plans(id) ON DELETE CASCADE
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS users (
+                            username TEXT PRIMARY KEY,
+                            password_hash TEXT NOT NULL,
+                            role TEXT NOT NULL,
+                            student_id TEXT,
+                            instructor_id INTEGER
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS notifications (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            user TEXT NOT NULL,
+                            title TEXT NOT NULL,
+                            body TEXT,
+                            is_read INTEGER NOT NULL DEFAULT 0,
+                            created_at TEXT NOT NULL
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS system_settings (
+                            key TEXT PRIMARY KEY,
+                            value TEXT
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS academic_calendar (
+                            academic_year TEXT NOT NULL,
+                            term TEXT NOT NULL,
+                            item_no INTEGER NOT NULL,
+                            title TEXT NOT NULL,
+                            event_date TEXT,
+                            is_deleted INTEGER NOT NULL DEFAULT 0,
+                            updated_at TEXT,
+                            PRIMARY KEY (academic_year, term, item_no)
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS instructors (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            name TEXT NOT NULL,
+                            type TEXT NOT NULL DEFAULT 'internal', -- internal | external
+                            email TEXT,
+                            is_active INTEGER NOT NULL DEFAULT 1
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS student_supervisor (
+                            student_id TEXT NOT NULL,
+                            instructor_id INTEGER NOT NULL,
+                            PRIMARY KEY (student_id, instructor_id),
+                            FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE,
+                            FOREIGN KEY (instructor_id) REFERENCES instructors(id) ON DELETE CASCADE
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS student_exceptions (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            student_id TEXT NOT NULL,
+                            type TEXT NOT NULL, -- extra_chance, etc.
+                            note TEXT,
+                            created_by TEXT,
+                            created_at TEXT,
+                            is_active INTEGER NOT NULL DEFAULT 1
+                        )""",
                 ]
                 for s in create_stmts:
                         cur.execute(s)
@@ -214,6 +303,13 @@ def ensure_tables():
                     "CREATE INDEX IF NOT EXISTS idx_exams_course ON exams(course_name)",
                     "CREATE INDEX IF NOT EXISTS idx_exams_date ON exams(exam_date)",
                     "CREATE INDEX IF NOT EXISTS idx_grade_audit_student ON grade_audit(student_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_enrollment_plans_student_sem ON enrollment_plans(student_id, semester)",
+                    "CREATE INDEX IF NOT EXISTS idx_enrollment_items_plan ON enrollment_plan_items(plan_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user, created_at)",
+                    "CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)",
+                    "CREATE INDEX IF NOT EXISTS idx_academic_calendar_year_term ON academic_calendar(academic_year, term)",
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_courses_code_unique ON courses(course_code) WHERE COALESCE(course_code,'') <> ''",
+                    "CREATE INDEX IF NOT EXISTS idx_student_supervisor_instructor ON student_supervisor(instructor_id)",
                 ]
                 for idx in indexes:
                     try:
@@ -221,8 +317,89 @@ def ensure_tables():
                     except Exception:
                         # تجاهل الأخطاء إذا كان الفهرس موجوداً بالفعل
                         pass
+
+                # ترقيات خفيفة للـ schema (بدون كسر قواعد بيانات قديمة)
+                try:
+                    cur.execute("ALTER TABLE academic_calendar ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0")
+                except Exception:
+                    pass
+                # إضافة أعمدة جديدة إلى الجداول القديمة إن لم تكن موجودة
+                try:
+                    cur.execute("ALTER TABLE users ADD COLUMN instructor_id INTEGER")
+                except Exception:
+                    pass
+                try:
+                    cur.execute("ALTER TABLE students ADD COLUMN join_year TEXT")
+                except Exception:
+                    pass
                 
                 conn.commit()
+
+# -----------------------------
+# حالة نشر الجدول الدراسي (اعتماد الأدمن)
+# -----------------------------
+SCHEDULE_PUBLISHED_KEY = "schedule_published_at"
+SCHEDULE_UPDATED_KEY = "schedule_updated_at"
+
+def get_schedule_published_at(conn=None, db_file=DB_FILE):
+    """يرجع وقت آخر نشر للجدول (ISO نص) أو None إذا لم يُنشر بعد."""
+    def _get(c):
+        cur = c.cursor()
+        cur.execute("SELECT value FROM system_settings WHERE key = ?", (SCHEDULE_PUBLISHED_KEY,))
+        row = cur.fetchone()
+        return row[0] if row and row[0] else None
+    if conn is not None:
+        return _get(conn)
+    with get_connection(db_file) as c:
+        return _get(c)
+
+def set_schedule_published_at(conn=None, db_file=DB_FILE):
+    """يضبط وقت نشر الجدول إلى الآن. يرجع الوقت المضبوط (ISO)."""
+    from datetime import datetime
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    def _set(c):
+        cur = c.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)",
+            (SCHEDULE_PUBLISHED_KEY, now)
+        )
+        c.commit()
+        return now
+    if conn is not None:
+        return _set(conn)
+    with get_connection(db_file) as c:
+        return _set(c)
+
+
+def get_schedule_updated_at(conn=None, db_file=DB_FILE):
+    """يرجع وقت آخر تعديل للجدول (ISO نص) أو None إذا لم يُسجل تعديل بعد."""
+    def _get(c):
+        cur = c.cursor()
+        cur.execute("SELECT value FROM system_settings WHERE key = ?", (SCHEDULE_UPDATED_KEY,))
+        row = cur.fetchone()
+        return row[0] if row and row[0] else None
+    if conn is not None:
+        return _get(conn)
+    with get_connection(db_file) as c:
+        return _get(c)
+
+
+def touch_schedule_updated_at(conn=None, db_file=DB_FILE):
+    """يضبط وقت آخر تعديل للجدول إلى الآن. يرجع الوقت المضبوط (ISO)."""
+    from datetime import datetime
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    def _set(c):
+        cur = c.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)",
+            (SCHEDULE_UPDATED_KEY, now),
+        )
+        c.commit()
+        return now
+    if conn is not None:
+        return _set(conn)
+    with get_connection(db_file) as c:
+        return _set(c)
 
 # -----------------------------
 # دوال مساعدة للاستيراد/التصدير
@@ -288,6 +465,44 @@ def excel_response_from_frames(frames, filename_prefix="export"):
         as_attachment=True,
         download_name=fname,
     )
+
+
+def log_activity(action: str, details: str = "", actor: str | None = None):
+    """
+    تسجيل حدث مبسط في جدول activity_log.
+    يستخدم أساساً لتغذية لوحة معلومات 'آخر التعديلات'.
+    """
+    try:
+        ts = datetime.utcnow().isoformat()
+        with get_connection(DB_FILE) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO activity_log (ts, actor, action, details) VALUES (?,?,?,?)",
+                (ts, actor or "", action, details or ""),
+            )
+            conn.commit()
+    except Exception:
+        # لا نسمح لسقوط التسجيل بكسر بقية العملية
+        logger.exception("failed to log activity")
+
+
+def create_notification(user: str, title: str, body: str = "", created_at: str | None = None):
+    """
+    إنشاء إشعار بسيط لمستخدم معيّن.
+    """
+    if not user or not title:
+        return
+    try:
+        ts = created_at or datetime.utcnow().isoformat()
+        with get_connection(DB_FILE) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO notifications (user, title, body, is_read, created_at) VALUES (?,?,?,?,?)",
+                (user, title, body or "", 0, ts),
+            )
+            conn.commit()
+    except Exception:
+        logger.exception("failed to create notification")
 
 # فحص قابلية إنشاء PDF (pdfkit + wkhtmltopdf)
 def _pdf_available():

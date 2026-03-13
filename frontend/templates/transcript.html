@@ -5,39 +5,47 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>سجل الطالب الأكاديمي</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
-  <style>
-    body { padding: 18px; background: #f8f9fa; }
-    .mono { font-family: ui-monospace, Menlo, Monaco, "Roboto Mono", monospace; }
-    .sem-card { margin-bottom: 12px; }
-    table th, table td { vertical-align: middle; }
-    .small-muted { color:#6c757d; }
-    .nowrap { white-space: nowrap; }
-    .pointer { cursor: pointer; }
-    .container-main { max-width: 1100px; margin: 0 auto; }
-  </style>
+  <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   {% include "base_nav.html" %}
-  <main class="container-main">
+  <main class="container-main container-1100 theme-formal">
 
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">سجل الطالب الأكاديمي</h1>
+        <p class="page-subtitle">عرض النتائج حسب الفصل، وتصدير/طباعة السجل</p>
+      </div>
+      <div class="d-flex gap-2">
+        <a href="/" class="btn btn-outline-secondary btn-sm">العودة</a>
+      </div>
+    </div>
 
-    <h3 class="mb-3">سجل الطالب الأكاديمي</h3>
-
-    <!-- المعدل التراكمي أعلى الصفحة -->
-    <div class="card mb-3">
-      <div class="card-body d-flex justify-content-between align-items-center">
-        <div>
-          <h6 class="mb-0">المعدل التراكمي</h6>
-          <div id="cumulativeGPA" class="display-6 text-primary mono">-</div>
+    <!-- المعدل التراكمي والوحدات المنجزة أعلى الصفحة -->
+    <div class="card mb-3 transcript-summary-card">
+      <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div class="d-flex flex-wrap gap-4 align-items-baseline">
+          <div class="transcript-summary-item">
+            <h6 class="mb-1 text-muted small">المعدل التراكمي</h6>
+            <div id="cumulativeGPA" class="display-6 text-primary mono fw-bold">-</div>
+          </div>
+          <div class="transcript-summary-item">
+            <h6 class="mb-1 text-muted small">الوحدات المنجزة</h6>
+            <div id="completedUnits" class="display-6 mono fw-bold transcript-completed-units">-</div>
+          </div>
         </div>
-        <div class="text-end">
-          <a href="/" class="btn btn-outline-secondary btn-sm">العودة</a>
-        </div>
+        <div class="text-end small text-muted">يتم حسابه تلقائياً من أفضل الدرجات</div>
       </div>
     </div>
 
     <div class="card mb-3">
       <div class="card-body">
+        <div class="page-header" style="margin:0 0 10px;">
+          <div>
+            <h2 class="page-title" style="font-size:16px;">تحديد الطالب والفصل</h2>
+            <p class="page-subtitle">اختر الطالب ثم اضغط تحميل السجل</p>
+          </div>
+        </div>
         <div class="row g-2 align-items-end">
           <div class="col-md-5">
             <label class="form-label">اختر الطالب</label>
@@ -63,14 +71,15 @@
           </div>
         </div>
 
-        <div class="mt-3 d-flex flex-wrap gap-2">
+        <div class="mt-3 d-flex flex-wrap gap-2" id="toolbarAdmin">
           <a href="/courses_form" class="btn btn-outline-secondary btn-sm">إضافة/تحرير المقررات</a>
           <button id="btnAddGradeRow" class="btn btn-outline-primary btn-sm">إضافة درجـة</button>
           <button id="btnMigrateRegistrations" class="btn btn-warning btn-sm">ترحيل المقررات المسجلة</button>
           <button id="btnSaveGrades" class="btn btn-success btn-sm">حفظ درجات الفصل</button>
           <button id="btnExportExcel" class="btn btn-outline-secondary btn-sm">تصدير Excel</button>
+          <button id="btnExportPdf" class="btn btn-outline-secondary btn-sm">تصدير PDF رسمي</button>
           <button id="btnExportText" class="btn btn-outline-secondary btn-sm">تصدير ملف نصي</button>
-          <button id="btnPrint" class="btn btn-outline-dark btn-sm">طباعة</button>
+          <button id="btnPrint" class="btn btn-outline-dark btn-sm">طباعة الصفحة</button>
           <div id="msg" class="ms-2"></div>
             <!-- Modal for semester/year selection before migration -->
             <div class="modal fade" id="migrateModal" tabindex="-1" aria-hidden="true">
@@ -153,7 +162,7 @@
     </div>
 
     <!-- بطاقة استيراد كشف الدرجات -->
-    <div class="card mb-3">
+    <div class="card mb-3" id="importCard">
       <div class="card-body">
         <h5 class="mb-3">استيراد كشف درجات لطالب محدد</h5>
         <p class="small-muted mb-3">
@@ -179,6 +188,7 @@
           <div class="col-12 d-flex justify-content-between align-items-center flex-wrap gap-3">
             <div class="small-muted">الطالب المحدد: <span class="fw-semibold" id="importStudentIdLabel">—</span></div>
             <div class="d-flex gap-2">
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="btnDownloadTranscriptTemplate">📥 تحميل قالب كشف طالب</button>
               <button type="reset" class="btn btn-outline-secondary btn-sm" id="btnImportReset">تفريغ الحقول</button>
               <button class="btn btn-primary" id="btnImportTranscript">⬆️ استيراد الكشف</button>
             </div>
@@ -191,10 +201,14 @@
           <div>
             <h5 class="mb-1">استيراد نتيجة فصل كاملة</h5>
             <p class="small-muted mb-0">
-              استخدم ملف Excel حيث يحتوي الصف الأول على أسماء المقررات، الصف الثاني على الوحدات، ثم صفوف الطلبة (الاسم الرباعي، الرقم الدراسي، الدرجات لكل مقرر).
+              استخدم ملف Excel حيث يحتوي الصف الأول على أسماء المقررات، الصف الثاني على الوحدات، ثم صفوف الطلبة (الاسم الرباعي، الرقم الدراسي، الدرجات لكل مقرر)، أو أدخل نتيجة فصل يدويًا لطالب محدد.
             </p>
           </div>
-          <div class="text-muted small">الصيغة المدعومة: ‎.xlsx / ‎.xls</div>
+          <div class="d-flex flex-wrap align-items-center gap-2 small">
+            <span class="text-muted">الصيغة المدعومة: ‎.xlsx / ‎.xls</span>
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="btnDownloadSemesterTemplate">📥 تحميل قالب نتيجة فصل</button>
+            <button type="button" class="btn btn-outline-primary btn-sm" id="btnOpenManualSemester">📝 إدخال نتيجة فصل يدوياً</button>
+          </div>
         </div>
 
         <form id="semesterImportForm" class="row g-3 align-items-end" onsubmit="return false;">
@@ -214,6 +228,7 @@
       <div class="mb-3">
         <h5>النتائج</h5>
         <div id="summary" class="mb-2 small mono"></div>
+        <div id="academicStatusNote" class="small text-muted"></div>
       </div>
 
       <div id="semestersList"></div>
@@ -250,13 +265,19 @@
           </table>
         </div>
 
-        <div class="d-flex justify-content-end gap-2">
-          <button id="btnCloseEditor" class="btn btn-secondary btn-sm">إغلاق</button>
+        <div class="d-flex justify-content-between gap-2 mt-2">
+          <div class="small text-muted">
+            بعد إدخال المقررات والدرجات، اضغط <strong>حفظ درجات الفصل</strong> لإضافة النتيجة إلى كشف الطالب.
+          </div>
+          <div class="d-flex gap-2">
+            <button id="btnSaveGradesInline" class="btn btn-success btn-sm">حفظ درجات الفصل</button>
+            <button id="btnCloseEditor" class="btn btn-secondary btn-sm">إغلاق</button>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- نافذة تعديل درجة موجودة -->
+    <!-- نافذة تعديل درجة/رمز مقرر موجودة -->
     <div class="modal fade" id="editGradeModal" tabindex="-1" aria-hidden="true">
       <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
@@ -267,6 +288,10 @@
           <div class="modal-body">
             <div class="mb-2"><strong>المقرر:</strong> <span id="egCourseName" class="mono"></span></div>
             <div class="mb-2"><strong>الفصل:</strong> <span id="egSemester" class="mono"></span></div>
+            <div class="mb-2">
+              <label class="form-label">رمز المقرر</label>
+              <input id="egCourseCodeInput" type="text" class="form-control" placeholder="رمز المقرر (اختياري)">
+            </div>
             <div class="mb-2">
               <label class="form-label">الدرجة الجديدة</label>
               <input id="egGradeInput" type="number" min="0" max="100" class="form-control" placeholder="أدخل رقم الدرجة أو اتركه فارغاً" />
@@ -304,9 +329,32 @@ let COURSES = [];
 let CURRENT_TRANSCRIPT = null;
 let EDIT_ROWS = []; // temp rows to save
 let selectedStudent = "";
+let CURRENT_ROLE = null;
 
 /* load lists */
 async function loadStudents(){
+  // للمشرف: حمّل فقط الطلبة المسندين إليه
+  if (CURRENT_ROLE === 'supervisor') {
+    const r = await fetchJSON('/instructors/supervised_students');
+    const sel = document.getElementById('studentSelect');
+    if(!sel) return;
+    sel.innerHTML = '<option value="">-- اختر طالب --</option>';
+    if(r.ok && r.json && Array.isArray(r.json.students)){
+      STUDENTS = r.json.students;
+      r.json.students.forEach(s=>{
+        const opt = document.createElement('option');
+        opt.value = s.student_id;
+        opt.text = (s.student_name||s.student_id)+' — '+s.student_id;
+        sel.appendChild(opt);
+      });
+    } else {
+      sel.innerHTML = '<option value="">لا توجد طلبة مسندين إليك</option>';
+      STUDENTS = [];
+    }
+    syncImportFields();
+    return;
+  }
+
   const r = await fetchJSON('/list_students');
   console.debug('loadStudents response:', r);
   const sel = document.getElementById('studentSelect');
@@ -340,6 +388,21 @@ async function loadTranscript(studentId){
   if(!r.ok){ setMsg('فشل في جلب السجل','danger'); if(summaryEl) summaryEl.textContent=''; return; }
   CURRENT_TRANSCRIPT = r.json;
   renderTranscript(CURRENT_TRANSCRIPT);
+  // تحديث ملاحظة الحالة الأكاديمية (إنذارات/فرص استثنائية)
+  try {
+    const st = await fetchJSON('/performance/status/' + encodeURIComponent(studentId));
+    const noteEl = document.getElementById('academicStatusNote');
+    if (st.ok && st.json && noteEl) {
+      const s = st.json;
+      let text = s.status_label || '';
+      if (s.extra_chance) {
+        text += (text ? ' — ' : '') + 'فرصة استثنائية سارية' + (s.extra_chance_note ? ` (${s.extra_chance_note})` : '');
+      }
+      noteEl.textContent = text ? ('ملاحظات أكاديمية: ' + text) : '';
+    }
+  } catch (e) {
+    console.error('performance status load error', e);
+  }
 }
 
 /* render */
@@ -362,18 +425,32 @@ function renderTranscript(data){
     const card = document.createElement('div'); card.className='card sem-card';
     const body = document.createElement('div'); body.className='card-body';
     const header = document.createElement('div'); header.className='d-flex justify-content-between align-items-center mb-2';
+    let actionsHtml = `
+        <div class="nowrap">معدل الفصل: <span class="badge bg-info text-dark">${semesterGPAs[sem] ?? (semUnits? (Math.round((semPoints/semUnits)*100)/100) : '—')}</span></div>
+        <div class="nowrap">مجموع الدرجات: <span class="badge bg-primary text-white">${Math.round(semPoints * 100) / 100}</span></div>
+        <div class="nowrap">مجموع الوحدات: <span class="badge bg-success text-white">${semUnits}</span></div>
+    `;
+    if (CURRENT_ROLE !== 'student') {
+      actionsHtml += `
+        <button class="btn btn-sm btn-outline-primary btn-add-course-sem" data-sem="${escape(sem)}">إضافة مقرر لهذا الفصل</button>
+        <button class="btn btn-sm btn-outline-danger btn-delete-sem" data-sem="${escape(sem)}">حذف الفصل</button>
+      `;
+    }
     header.innerHTML = `
       <div><strong>${sem}</strong></div>
-      <div class="d-flex gap-2 align-items-center">
-        <div class="nowrap">معدل الفصل: <span class="badge bg-info text-dark">${semesterGPAs[sem] ?? (semUnits? (Math.round((semPoints/semUnits)*100)/100) : '—')}</span></div>
-        <button class="btn btn-sm btn-outline-danger btn-delete-sem" data-sem="${escape(sem)}">حذف الفصل</button>
+      <div class="d-flex flex-wrap gap-2 align-items-center semester-stats">
+        ${actionsHtml}
       </div>`;
     body.appendChild(header);
 
     const tbl = document.createElement('table'); tbl.className='table table-sm table-bordered mb-0';
-    tbl.innerHTML = `<thead class="table-light"><tr><th>المقرر</th><th>الرمز</th><th class="text-center">الوحدات</th><th class="text-center">الدرجة</th><th class="text-center">تحرير</th></tr></thead><tbody></tbody>`;
+    const hasActions = (CURRENT_ROLE !== 'student');
+    const headerCols = hasActions
+      ? '<tr><th>المقرر</th><th>الرمز</th><th class="text-center">الوحدات</th><th class="text-center">الدرجة</th><th class="text-center">تحرير</th></tr>'
+      : '<tr><th>المقرر</th><th>الرمز</th><th class="text-center">الوحدات</th><th class="text-center">الدرجة</th></tr>';
+    tbl.innerHTML = `<thead class="table-light">${headerCols}</thead><tbody></tbody>`;
     const tbody = tbl.querySelector('tbody');
-    courses.forEach(c=>{ const tr=document.createElement('tr'); tr.innerHTML = `
+    courses.forEach(c=>{ const tr=document.createElement('tr'); tr.innerHTML = hasActions ? `
         <td>${escape(c.course_name)}</td>
         <td>${escape(c.course_code||'')}</td>
         <td class="text-center">${c.units||0}</td>
@@ -382,23 +459,39 @@ function renderTranscript(data){
           <button class="btn btn-sm btn-outline-primary btn-inline-edit"
                   data-sem="${escape(sem)}"
                   data-course="${escape(c.course_name)}"
+                  data-code="${escape(c.course_code||'')}"
                   data-grade="${(c.grade===null||c.grade===undefined)?'':c.grade}">
             تعديل
           </button>
           <button class="btn btn-sm btn-outline-danger btn-delete-course ms-1"
                   data-sem="${escape(sem)}"
                   data-course="${escape(c.course_name)}">حذف</button>
-        </td>`; tbody.appendChild(tr); });
+        </td>` : `
+        <td>${escape(c.course_name)}</td>
+        <td>${escape(c.course_code||'')}</td>
+        <td class="text-center">${c.units||0}</td>
+        <td class="text-center">${(c.grade===null||c.grade===undefined)?'—':c.grade}</td>
+      `; tbody.appendChild(tr); });
     body.appendChild(tbl); card.appendChild(body); semDiv.appendChild(card);
   });
 
   const summaryEl = document.getElementById('summary'); if(summaryEl) summaryEl.textContent = `فصول دراسية : ${semesterNames.length} ؛ مجاميع وحدات: ${totalUnitsAll}`;
   const cum = (typeof data.cumulative_gpa !== 'undefined') ? data.cumulative_gpa : (totalUnitsAll? Math.round((totalPointsAll/totalUnitsAll)*100)/100 : 0);
   const cumEl = document.getElementById('cumulativeGPA'); if(cumEl) cumEl.textContent = cum;
+  const completedEl = document.getElementById('completedUnits'); if(completedEl) completedEl.textContent = (data.completed_units != null && data.completed_units !== '') ? data.completed_units : '-';
 
-  // ربط أزرار التعديل والحذف بعد الرسم
-  document.querySelectorAll('.btn-inline-edit').forEach(btn=>{ btn.addEventListener('click', onInlineEditClick); });
-  document.querySelectorAll('.btn-delete-sem').forEach(btn=>{
+  // ربط أزرار التعديل والحذف بعد الرسم (لغير الطالب فقط)
+  if (CURRENT_ROLE !== 'student') {
+    document.querySelectorAll('.btn-inline-edit').forEach(btn=>{ btn.addEventListener('click', onInlineEditClick); });
+    document.querySelectorAll('.btn-add-course-sem').forEach(btn=>{
+      btn.addEventListener('click', (ev)=>{
+        const sem = ev.currentTarget.dataset.sem;
+        const semInput = document.getElementById('gradeSemesterInput');
+        if (semInput) semInput.value = sem;
+        showEditor();
+      });
+    });
+    document.querySelectorAll('.btn-delete-sem').forEach(btn=>{
     btn.addEventListener('click', async (ev)=>{
       const sem = ev.currentTarget.dataset.sem;
       if(!selectedStudent){ setMsg('اختر طالباً أولاً','warning'); return; }
@@ -408,17 +501,18 @@ function renderTranscript(data){
       if(r.ok){ setMsg((r.json && r.json.message) ? r.json.message : 'تم حذف الفصل', 'success'); loadTranscript(selectedStudent); } else { setMsg((r.json && r.json.message) ? r.json.message : 'فشل حذف الفصل', 'danger'); }
     });
   });
-  document.querySelectorAll('.btn-delete-course').forEach(btn=>{
-    btn.addEventListener('click', async (ev)=>{
-      const sem = ev.currentTarget.dataset.sem;
-      const course = ev.currentTarget.dataset.course;
-      if(!selectedStudent){ setMsg('اختر طالباً أولاً','warning'); return; }
-      if(!confirm(`هل أنت متأكد من حذف سجل المادة "${course}" في الفصل "${sem}"؟`)) return;
-      const payload = { student_id: selectedStudent, semester: sem, course_name: course, changed_by: 'ui-delete' };
-      const r = await fetchJSON('/grades/delete/course', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-      if(r.ok){ setMsg((r.json && r.json.message) ? r.json.message : 'تم حذف السجل', 'success'); loadTranscript(selectedStudent); } else { setMsg((r.json && r.json.message) ? r.json.message : 'فشل حذف السجل', 'danger'); }
+    document.querySelectorAll('.btn-delete-course').forEach(btn=>{
+      btn.addEventListener('click', async (ev)=>{
+        const sem = ev.currentTarget.dataset.sem;
+        const course = ev.currentTarget.dataset.course;
+        if(!selectedStudent){ setMsg('اختر طالباً أولاً','warning'); return; }
+        if(!confirm(`هل أنت متأكد من حذف سجل المادة "${course}" في الفصل "${sem}"؟`)) return;
+        const payload = { student_id: selectedStudent, semester: sem, course_name: course, changed_by: 'ui-delete' };
+        const r = await fetchJSON('/grades/delete/course', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+        if(r.ok){ setMsg((r.json && r.json.message) ? r.json.message : 'تم حذف السجل', 'success'); loadTranscript(selectedStudent); } else { setMsg((r.json && r.json.message) ? r.json.message : 'فشل حذف السجل', 'danger'); }
+      });
     });
-  });
+  }
 }
 
 /* grade editor */
@@ -439,8 +533,39 @@ function renderEditorRows(){
 
 /* inline edit modal logic */
 let editModal, egCourse='', egSemester='';
-function onInlineEditClick(e){ const b = e.currentTarget; egCourse = b.dataset.course; egSemester = b.dataset.sem; const currentGrade = b.dataset.grade || ''; const egCourseName = document.getElementById('egCourseName'); if(egCourseName) egCourseName.textContent = egCourse; const egSemesterEl = document.getElementById('egSemester'); if(egSemesterEl) egSemesterEl.textContent = egSemester; const egGradeInput = document.getElementById('egGradeInput'); if(egGradeInput) egGradeInput.value = currentGrade; if(!editModal){ const modalEl = document.getElementById('editGradeModal'); if(modalEl) editModal = new bootstrap.Modal(modalEl); } if(editModal) editModal.show(); }
-const egSaveBtn = document.getElementById('egSaveBtn'); if(egSaveBtn) egSaveBtn.addEventListener('click', async ()=>{ const student = selectedStudent; if(!student){ setMsg('اختر طالباً أولاً','warning'); return; } const val = (document.getElementById('egGradeInput')||{}).value || ''; const grade = val===''? null : Number(val); const payload = { student_id: student, semester: egSemester, course_name: egCourse, grade, changed_by: 'admin' }; const r = await fetchJSON('/update_grade', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) }); if(r.ok){ setMsg('✅ تم تعديل الدرجة','success'); if(editModal) editModal.hide(); loadTranscript(student); } else { setMsg('فشل تعديل الدرجة: '+(r.json && r.json.message ? r.json.message : r.status), 'danger'); } });
+function onInlineEditClick(e){
+  const b = e.currentTarget;
+  egCourse = b.dataset.course;
+  egSemester = b.dataset.sem;
+  const currentGrade = b.dataset.grade || '';
+  const currentCode = b.dataset.code || '';
+  const egCourseName = document.getElementById('egCourseName'); if(egCourseName) egCourseName.textContent = egCourse;
+  const egSemesterEl = document.getElementById('egSemester'); if(egSemesterEl) egSemesterEl.textContent = egSemester;
+  const egGradeInput = document.getElementById('egGradeInput'); if(egGradeInput) egGradeInput.value = currentGrade;
+  const egCodeInput = document.getElementById('egCourseCodeInput'); if(egCodeInput) egCodeInput.value = currentCode;
+  if(!editModal){
+    const modalEl = document.getElementById('editGradeModal');
+    if(modalEl) editModal = new bootstrap.Modal(modalEl);
+  }
+  if(editModal) editModal.show();
+}
+const egSaveBtn = document.getElementById('egSaveBtn');
+if(egSaveBtn) egSaveBtn.addEventListener('click', async ()=>{
+  const student = selectedStudent;
+  if(!student){ setMsg('اختر طالباً أولاً','warning'); return; }
+  const val = (document.getElementById('egGradeInput')||{}).value || '';
+  const grade = val===''? null : Number(val);
+  const codeVal = (document.getElementById('egCourseCodeInput')||{}).value || '';
+  const payload = { student_id: student, semester: egSemester, course_name: egCourse, grade, course_code: codeVal, changed_by: 'admin' };
+  const r = await fetchJSON('/update_grade', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  if(r.ok){
+    setMsg('✅ تم تعديل الدرجة/رمز المقرر','success');
+    if(editModal) editModal.hide();
+    loadTranscript(student);
+  } else {
+    setMsg('فشل التعديل: '+(r.json && r.json.message ? r.json.message : r.status), 'danger');
+  }
+});
 
 /* buttons and events */
 const btnAddGrade = document.getElementById('btnAddGradeRow'); if(btnAddGrade) btnAddGrade.addEventListener('click', showEditor);
@@ -451,28 +576,242 @@ const btnImportEl = document.getElementById('btnImportTranscript'); if(btnImport
 
 const btnImportResetEl = document.getElementById('btnImportReset'); if(btnImportResetEl) btnImportResetEl.addEventListener('click', ()=>{ const is = document.getElementById('importSemester'); if(is) is.value=''; const iy = document.getElementById('importYear'); if(iy) iy.value=''; const fileInput = document.getElementById('importFile'); if(fileInput){ fileInput.value = ''; } syncImportFields(); });
 
-const btnImportSemesterEl = document.getElementById('btnImportSemester'); if(btnImportSemesterEl) btnImportSemesterEl.addEventListener('click', async ()=>{ const semesterVal = (document.getElementById('importSemester')||{}).value.trim(); const yearVal = (document.getElementById('importYear')||{}).value.trim(); if(!semesterVal && !yearVal){ setMsg('أدخل الفصل الدراسي أو السنة قبل استيراد نتيجة الفصل','warning'); return; } const fileInput = document.getElementById('importSemesterFile'); const file = fileInput && fileInput.files ? fileInput.files[0] : null; if(!file){ setMsg('اختر ملف Excel يحتوي على نتيجة الفصل كاملة','warning'); return; } const fd = new FormData(); if(semesterVal) fd.append('semester', semesterVal); if(yearVal) fd.append('year', yearVal); fd.append('changed_by', 'semester-import-ui'); fd.append('file', file); btnImportSemesterEl.disabled = true; setMsg('جاري استيراد نتيجة الفصل...', 'info'); const previousStudent = (document.getElementById('studentSelect')||{}).value; try{ const resp = await fetch('/grades/import/semester', { method:'POST', body: fd }); const data = await resp.json().catch(()=>null); if(resp.ok){ setMsg((data && data.message) ? data.message : 'تم استيراد نتيجة الفصل بنجاح', 'success'); if(fileInput){ fileInput.value = ''; } if(data && data.semester){ const gsi = document.getElementById('gradeSemesterInput'); if(gsi) gsi.value = data.semester; } await loadStudents(); await loadCourses(); if(previousStudent){ const selectEl = document.getElementById('studentSelect'); if(selectEl){ selectEl.value = previousStudent; syncImportFields(); if(selectEl.value === previousStudent){ loadTranscript(previousStudent); } } else { syncImportFields(); } } else { syncImportFields(); } } else { setMsg((data && data.message) ? data.message : resp.statusText || 'فشل استيراد نتيجة الفصل', 'danger'); } } catch(err){ console.error(err); setMsg('حدث خطأ أثناء الاتصال بالخادم أثناء استيراد نتيجة الفصل','danger'); } finally { btnImportSemesterEl.disabled = false; } });
+const btnImportSemesterEl = document.getElementById('btnImportSemester');
+if (btnImportSemesterEl) {
+  btnImportSemesterEl.addEventListener('click', async ()=>{
+    const semesterVal = (document.getElementById('importSemester')||{}).value.trim();
+    const yearVal = (document.getElementById('importYear')||{}).value.trim();
+    if(!semesterVal && !yearVal){
+      setMsg('أدخل الفصل الدراسي أو السنة قبل استيراد نتيجة الفصل','warning');
+      return;
+    }
+    const fileInput = document.getElementById('importSemesterFile');
+    const file = fileInput && fileInput.files ? fileInput.files[0] : null;
+    if(!file){
+      setMsg('اختر ملف Excel يحتوي على نتيجة الفصل كاملة','warning');
+      return;
+    }
+
+    // خطوة أولى: Preview (لا يتم فيها تعديل قاعدة البيانات)
+    const fdPreview = new FormData();
+    if(semesterVal) fdPreview.append('semester', semesterVal);
+    if(yearVal) fdPreview.append('year', yearVal);
+    fdPreview.append('changed_by', 'semester-import-ui');
+    fdPreview.append('file', file);
+    fdPreview.append('preview', '1');
+
+    btnImportSemesterEl.disabled = true;
+    setMsg('جاري تحليل ملف نتيجة الفصل (Preview)...','info');
+    try {
+      const respPrev = await fetch('/grades/import/semester', { method:'POST', body: fdPreview });
+      const dataPrev = await respPrev.json().catch(()=>null);
+      if(!respPrev.ok || !dataPrev || dataPrev.status !== 'ok' || dataPrev.mode !== 'preview'){
+        setMsg((dataPrev && dataPrev.message) ? dataPrev.message : respPrev.statusText || 'فشل تحليل الملف في وضع المعاينة','danger');
+        return;
+      }
+
+      const semLabel = dataPrev.semester || (semesterVal + (yearVal ? ' ' + yearVal : ''));
+      const msg = `سيتم استيراد نتيجة الفصل "${semLabel}" لعدد ${dataPrev.students||0} طالب/ة، `
+                + `وعدد مقررات ${dataPrev.courses||0}، وعدد سجلات درجات ${dataPrev.records||0}.`
+                + (dataPrev.invalid_grades && dataPrev.invalid_grades.length
+                   ? `\\nتحذير: هناك ${dataPrev.invalid_grades.length} درجة خارج النطاق 0-100 سيتم رفضها.` : '');
+
+      if(!confirm(msg + '\\nهل تريد المتابعة بتطبيق الاستيراد فعلياً؟')){
+        setMsg('تم إلغاء استيراد نتيجة الفصل بعد المعاينة.','info');
+        return;
+      }
+
+      // خطوة ثانية: تطبيق الاستيراد الفعلي
+      const fdApply = new FormData();
+      if(semesterVal) fdApply.append('semester', semesterVal);
+      if(yearVal) fdApply.append('year', yearVal);
+      fdApply.append('changed_by', 'semester-import-ui');
+      fdApply.append('file', file);
+
+      setMsg('جاري استيراد نتيجة الفصل...','info');
+      const previousStudent = (document.getElementById('studentSelect')||{}).value;
+      const resp = await fetch('/grades/import/semester', { method:'POST', body: fdApply });
+      const data = await resp.json().catch(()=>null);
+      if(resp.ok){
+        setMsg((data && data.message) ? data.message : 'تم استيراد نتيجة الفصل بنجاح','success');
+        if(fileInput){ fileInput.value = ''; }
+        if(data && data.semester){
+          const gsi = document.getElementById('gradeSemesterInput');
+          if(gsi) gsi.value = data.semester;
+        }
+        await loadStudents();
+        await loadCourses();
+        if(previousStudent){
+          const selectEl = document.getElementById('studentSelect');
+          if(selectEl){
+            selectEl.value = previousStudent;
+            syncImportFields();
+            if(selectEl.value === previousStudent){
+              loadTranscript(previousStudent);
+            }
+          } else {
+            syncImportFields();
+          }
+        } else {
+          syncImportFields();
+        }
+      } else {
+        setMsg((data && data.message) ? data.message : resp.statusText || 'فشل استيراد نتيجة الفصل','danger');
+      }
+    } catch(err){
+      console.error(err);
+      setMsg('حدث خطأ أثناء الاتصال بالخادم أثناء استيراد نتيجة الفصل','danger');
+    } finally {
+      btnImportSemesterEl.disabled = false;
+    }
+  });
+}
+
+// فتح محرر الدرجات لإدخال نتيجة فصل يدوياً لطالب محدد
+const btnOpenManualSemester = document.getElementById('btnOpenManualSemester');
+if (btnOpenManualSemester) {
+  btnOpenManualSemester.addEventListener('click', ()=>{
+    if (CURRENT_ROLE === 'student') {
+      setMsg('لا تملك صلاحية إدخال أو تعديل الدرجات. هذه الخيارات خاصة بالإداريين.', 'warning');
+      return;
+    }
+    const student = (document.getElementById('studentSelect')||{}).value;
+    if(!student){
+      setMsg('اختر طالباً أولاً قبل إدخال نتيجة الفصل يدوياً','warning');
+      return;
+    }
+    const semInput = document.getElementById('gradeSemesterInput');
+    const semVal = (document.getElementById('importSemester')||{}).value?.trim() || '';
+    const yearVal = (document.getElementById('importYear')||{}).value?.trim() || '';
+    if (semInput) {
+      if (semVal || yearVal) {
+        semInput.value = (semVal && yearVal) ? `${semVal} ${yearVal}` : (semVal || yearVal);
+      } else if (!semInput.value) {
+        semInput.placeholder = 'مثال: خريف 25-26';
+      }
+    }
+    showEditor();
+  });
+}
 
 const btnImportSemesterResetEl = document.getElementById('btnImportSemesterReset'); if(btnImportSemesterResetEl) btnImportSemesterResetEl.addEventListener('click', ()=>{ const fileInput = document.getElementById('importSemesterFile'); if(fileInput){ fileInput.value = ''; } });
+
+// تحميل قوالب الاستيراد (كشف طالب / نتيجة فصل)
+const btnDownloadTranscriptTemplate = document.getElementById('btnDownloadTranscriptTemplate');
+if (btnDownloadTranscriptTemplate) {
+  btnDownloadTranscriptTemplate.addEventListener('click', ()=>{
+    window.open('/grades/template/transcript', '_blank');
+  });
+}
+const btnDownloadSemesterTemplate = document.getElementById('btnDownloadSemesterTemplate');
+if (btnDownloadSemesterTemplate) {
+  btnDownloadSemesterTemplate.addEventListener('click', ()=>{
+    window.open('/grades/template/semester', '_blank');
+  });
+}
 
 /* save grades (batch) */
 const btnSaveAll = document.getElementById('btnSaveGrades'); if(btnSaveAll) btnSaveAll.addEventListener('click', async ()=>{ const student = (document.getElementById('studentSelect')||{}).value; if(!student){ setMsg('اختر طالباً أولاً','warning'); return; } const sem = (document.getElementById('gradeEditorCard')||{}).style && document.getElementById('gradeEditorCard').style.display==='block' ? (document.getElementById('gradeSemesterInput')||{}).value.trim() : ''; if(!sem){ setMsg('أدخل اسم الفصل في محرر الدرجات (مثال: خريف 25-26) أو افتح المحرر ثم حاول الحفظ','warning'); showEditor(); return; } if(EDIT_ROWS.length===0){ setMsg('أضف مقرراً واحداً على الأقل قبل الحفظ','warning'); return; } const grades = EDIT_ROWS.map(r=>({course_name:r.course_name, course_code:r.course_code||'', units: Number(r.units)||0, grade: r.grade})); const btn = btnSaveAll; btn.disabled=true; setMsg('جاري حفظ الدرجات...', 'info'); const resp = await fetch('/save_grades', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({student_id:student, semester:sem, grades})}); const j = await resp.json().catch(()=>null); btn.disabled=false; if(resp.ok){ setMsg('✅ تم حفظ الدرجات', 'success'); hideEditor(); loadTranscript(student); } else { setMsg('فشل الحفظ: '+(j&&j.message?j.message:resp.statusText),'danger'); } });
 
-/* export Excel / Text */
-const btnExportExcel = document.getElementById('btnExportExcel'); if(btnExportExcel) btnExportExcel.addEventListener('click', ()=>{ if(!selectedStudent){ setMsg('اختر طالباً أولاً قبل التصدير','warning'); return; } window.open(`/grades/export/${encodeURIComponent(selectedStudent)}?format=excel`, '_blank'); });
-const btnExportText = document.getElementById('btnExportText'); if(btnExportText) btnExportText.addEventListener('click', ()=>{ if(!selectedStudent){ setMsg('اختر طالباً أولاً قبل التصدير','warning'); return; } window.open(`/grades/export/${encodeURIComponent(selectedStudent)}?format=text`, '_blank'); });
+// زر حفظ داخل نموذج إدخال الفصل اليدوي يستدعي نفس منطق btnSaveGrades العلوي
+const btnSaveInline = document.getElementById('btnSaveGradesInline');
+if (btnSaveInline && btnSaveAll) {
+  btnSaveInline.addEventListener('click', ()=> btnSaveAll.click());
+}
+
+/* export Excel / PDF / Text */
+function currentSemesterFilter(){
+  const el = document.getElementById('semesterFilter');
+  return el ? (el.value || '') : '';
+}
+const btnExportExcel = document.getElementById('btnExportExcel');
+if(btnExportExcel){
+  btnExportExcel.addEventListener('click', ()=>{
+    if(!selectedStudent){ setMsg('اختر طالباً أولاً قبل التصدير','warning'); return; }
+    const sem = currentSemesterFilter();
+    let url = `/grades/export/${encodeURIComponent(selectedStudent)}?format=excel`;
+    if(sem){ url += `&semester=${encodeURIComponent(sem)}`; }
+    window.open(url, '_blank');
+  });
+}
+const btnExportPdf = document.getElementById('btnExportPdf');
+if(btnExportPdf){
+  btnExportPdf.addEventListener('click', ()=>{
+    if(!selectedStudent){ setMsg('اختر طالباً أولاً قبل التصدير','warning'); return; }
+    const sem = currentSemesterFilter();
+    let url = `/grades/export/${encodeURIComponent(selectedStudent)}?format=pdf`;
+    if(sem){ url += `&semester=${encodeURIComponent(sem)}`; }
+    window.open(url, '_blank');
+  });
+}
+const btnExportText = document.getElementById('btnExportText');
+if(btnExportText){
+  btnExportText.addEventListener('click', ()=>{
+    if(!selectedStudent){ setMsg('اختر طالباً أولاً قبل التصدير','warning'); return; }
+    const sem = currentSemesterFilter();
+    let url = `/grades/export/${encodeURIComponent(selectedStudent)}?format=text`;
+    if(sem){ url += `&semester=${encodeURIComponent(sem)}`; }
+    window.open(url, '_blank');
+  });
+}
+
+// زر تصدير ملخّص Excel (يمكن إضافته مستقبلاً في الواجهة إذا رغبت)
+// مثال للاستخدام من الكونسول أو من زر جديد:
+// window.open(`/grades/export/<sid>?format=excel&mode=summary`, '_blank');
 
 /* print */
 const btnPrint = document.getElementById('btnPrint'); if(btnPrint) btnPrint.addEventListener('click', ()=>{ window.print(); });
 
 /* filters and startup */
 const btnReload = document.getElementById('btnReload'); if(btnReload) btnReload.addEventListener('click', ()=> loadTranscript((document.getElementById('studentSelect')||{}).value));
-function handleStudentChange(){ syncImportFields(); const sid = (document.getElementById('studentSelect')||{}).value; if(sid){ loadTranscript(sid); } else { CURRENT_TRANSCRIPT = null; const semDiv = document.getElementById('semestersList'); if(semDiv) semDiv.innerHTML=''; const summaryEl = document.getElementById('summary'); if(summaryEl) summaryEl.textContent=''; const cumEl = document.getElementById('cumulativeGPA'); if(cumEl) cumEl.textContent='-'; } }
+function handleStudentChange(){ syncImportFields(); const sid = (document.getElementById('studentSelect')||{}).value; if(sid){ loadTranscript(sid); } else { CURRENT_TRANSCRIPT = null; const semDiv = document.getElementById('semestersList'); if(semDiv) semDiv.innerHTML=''; const summaryEl = document.getElementById('summary'); if(summaryEl) summaryEl.textContent=''; const cumEl = document.getElementById('cumulativeGPA'); if(cumEl) cumEl.textContent='-'; const completedEl = document.getElementById('completedUnits'); if(completedEl) completedEl.textContent='-'; } }
 const studentSelect = document.getElementById('studentSelect'); if(studentSelect) studentSelect.addEventListener('change', handleStudentChange);
-const semesterFilter = document.getElementById('semesterFilter'); if(semesterFilter) semesterFilter.addEventListener('change', ()=>{ const f = (document.getElementById('semesterFilter')||{}).value; if(!CURRENT_TRANSCRIPT) return; if(!f) renderTranscript(CURRENT_TRANSCRIPT); else { const filtered = { transcript: {}, semester_gpas: {}, cumulative_gpa: CURRENT_TRANSCRIPT.cumulative_gpa || 0 }; if(CURRENT_TRANSCRIPT.transcript && CURRENT_TRANSCRIPT.transcript[f]) filtered.transcript[f]=CURRENT_TRANSCRIPT.transcript[f]; if(CURRENT_TRANSCRIPT.semester_gpas && CURRENT_TRANSCRIPT.semester_gpas[f]) filtered.semester_gpas[f]=CURRENT_TRANSCRIPT.semester_gpas[f]; renderTranscript(filtered); } });
+const semesterFilter = document.getElementById('semesterFilter'); if(semesterFilter) semesterFilter.addEventListener('change', ()=>{ const f = (document.getElementById('semesterFilter')||{}).value; if(!CURRENT_TRANSCRIPT) return; if(!f) renderTranscript(CURRENT_TRANSCRIPT); else { const filtered = { transcript: {}, semester_gpas: {}, cumulative_gpa: CURRENT_TRANSCRIPT.cumulative_gpa || 0, completed_units: CURRENT_TRANSCRIPT.completed_units }; if(CURRENT_TRANSCRIPT.transcript && CURRENT_TRANSCRIPT.transcript[f]) filtered.transcript[f]=CURRENT_TRANSCRIPT.transcript[f]; if(CURRENT_TRANSCRIPT.semester_gpas && CURRENT_TRANSCRIPT.semester_gpas[f]) filtered.semester_gpas[f]=CURRENT_TRANSCRIPT.semester_gpas[f]; renderTranscript(filtered); } });
 
 /* startup */
-(async function init(){ await loadStudents(); await loadCourses(); console.debug('startup lists', {STUDENTS, COURSES}); if(STUDENTS.length>0){ const firstId = STUDENTS[0].student_id; const sel = document.getElementById('studentSelect'); if(sel) sel.value = firstId; syncImportFields(); loadTranscript(firstId); } else { syncImportFields(); } })();
+(async function init(){
+  try{
+    const auth = await fetchJSON('/auth/check');
+    if (auth.ok && auth.json){
+      CURRENT_ROLE = auth.json.role || null;
+    }
+  } catch(e){
+    CURRENT_ROLE = null;
+  }
+
+  // إخفاء أدوات الإدخال/الاستيراد للطالب (عرض كشف فقط)
+  if (CURRENT_ROLE === 'student'){
+    const toolbarAdmin = document.getElementById('toolbarAdmin');
+    if (toolbarAdmin) toolbarAdmin.style.display = 'none';
+    const gradeEditorCard = document.getElementById('gradeEditorCard');
+    if (gradeEditorCard) gradeEditorCard.style.display = 'none';
+  }
+
+  await loadStudents();
+  await loadCourses();
+  console.debug('startup lists', {STUDENTS, COURSES, CURRENT_ROLE});
+  const sel = document.getElementById('studentSelect');
+  // اختيار تلقائي: query param أو localStorage أو أول طالب
+  const urlParams = new URLSearchParams(location.search);
+  const qpStudent = urlParams.get('student_id') || '';
+  let preferred = qpStudent;
+  if (!preferred) {
+    try { preferred = localStorage.getItem('transcript_selected_student') || ''; } catch(e) {}
+  }
+  const canPick = (id) => Array.isArray(STUDENTS) && STUDENTS.some(s=>s.student_id===id);
+  if (preferred && canPick(preferred) && sel) {
+    sel.value = preferred;
+    syncImportFields();
+    loadTranscript(preferred);
+  } else if (STUDENTS.length>0){
+    const firstId = STUDENTS[0].student_id;
+    if(sel) sel.value = firstId;
+    syncImportFields();
+    loadTranscript(firstId);
+  } else {
+    syncImportFields();
+  }
+})();
 </script>
 
 <!-- Bootstrap JS for modal -->

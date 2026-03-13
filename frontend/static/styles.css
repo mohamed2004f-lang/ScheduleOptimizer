@@ -1,10 +1,308 @@
-/* تحسينات واجهة المستخدم */
+/* ============================================
+   ScheduleOptimizer UI Theme (RTL)
+   ============================================ */
+:root{
+  --brand-900:#072f5f;
+  --brand-700:#0e4a8a;
+  --brand-600:#1e6fb8;
+  --accent:#d6a12a;
+
+  --bg:#f6f8fb;
+  --surface:#ffffff;
+  --text:#0f172a;
+  --muted:#64748b;
+  --border:rgba(15,23,42,0.10);
+
+  --radius-lg:14px;
+  --radius-md:12px;
+  --shadow-sm:0 1px 2px rgba(2,6,23,.06);
+  --shadow-md:0 10px 30px rgba(2,6,23,.10);
+}
+
+html, body { height:100%; }
+body{
+  font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* utility */
+.mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", "Courier New", monospace; }
+.pointer{ cursor: pointer; }
+.btn-group-gap > .btn{ margin-inline-end: 6px; margin-block: 6px; }
+
+/* container width helpers */
+.container-900{ max-width: 900px; }
+.container-1100{ max-width: 1100px; }
+.container-1400{ max-width: 1400px; }
+.container-1600{ max-width: 1600px; }
+
+.container-main{
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.small-muted{ color: var(--muted); }
 
 /* ============================================
-   تحسينات عامة
+   Top bar + Navbar (base_nav.html)
    ============================================ */
-body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+.app-topbar{
+  background: linear-gradient(90deg, var(--brand-900), var(--brand-600));
+  color:#fff;
+  padding: 12px 16px;
+  box-shadow: 0 12px 24px rgba(2,6,23,.12);
+}
+.app-brand{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  text-decoration:none;
+  color:inherit;
+}
+.app-brand:hover{ color:#fff; opacity:.98; }
+.app-brand-title{ line-height:1.1; }
+.app-brand-title .t1{ font-weight:800; font-size:16px; margin:0; letter-spacing:.2px; }
+.app-brand-title .t2{ font-size:12px; margin:0; opacity:.92; }
+.app-logo{
+  height:46px;
+  width:auto;
+  object-fit:contain;
+  border-radius:10px;
+  background:#fff;
+  padding:4px;
+  box-shadow: var(--shadow-sm);
+}
+@media (max-width:576px){ .app-logo{ height:40px; } }
+
+.app-actions{ display:flex; align-items:center; gap:10px; }
+.btn-logout{
+  background: var(--accent);
+  color: var(--brand-900);
+  border: none;
+  padding: 8px 12px;
+  font-weight:800;
+  border-radius: 10px;
+}
+.btn-logout:hover{ filter: brightness(.95); color: #fff; }
+
+.app-navbar{
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.app-navbar .nav-link{
+  color: var(--brand-900) !important;
+  font-weight: 700;
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin: 6px 4px;
+}
+.app-navbar .nav-link:hover{
+  background: rgba(30,111,184,.08);
+  color: var(--brand-600) !important;
+}
+.app-navbar .nav-link.active{
+  background: rgba(214,161,42,.18);
+  color: var(--brand-900) !important;
+}
+
+/* ============================================
+   Page header helpers
+   ============================================ */
+.page-header{
+  display:flex;
+  align-items:flex-end;
+  justify-content:space-between;
+  gap:12px;
+  margin: 14px 0 10px;
+}
+.page-title{
+  margin:0;
+  font-weight: 900;
+  font-size: 18px;
+  color: var(--brand-900);
+}
+.page-subtitle{
+  margin:0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* ============================================
+   Dashboard widgets
+   ============================================ */
+.kpi-grid{
+  display:grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 14px;
+  margin: 10px 0 16px;
+}
+.kpi-card{
+  grid-column: span 3;
+  background: var(--surface);
+  border: 1px solid rgba(15,23,42,0.06);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 16px 16px;
+}
+.kpi-title{ color: var(--muted); font-weight: 800; font-size: 12.5px; margin-bottom: 8px; }
+.kpi-value{ color: var(--brand-900); font-weight: 1000; font-size: 28px; line-height: 1; margin-bottom: 6px; }
+.kpi-desc{ color: var(--muted); font-size: 12px; margin:0; }
+.kpi-danger .kpi-value{ color: #b91c1c; }
+
+@media (max-width: 992px){ .kpi-card{ grid-column: span 6; } }
+@media (max-width: 576px){ .kpi-card{ grid-column: span 12; } }
+
+/* ============================================
+   Badges + helper blocks
+   ============================================ */
+.plan-status-badge{ font-size: .82rem; font-weight: 800; }
+.instruction-text{
+  margin: 10px 0;
+  padding: 12px 12px;
+  background: rgba(30,111,184,.08);
+  border-radius: 12px;
+  border-right: 4px solid var(--brand-600);
+  color: var(--text);
+}
+
+/* ============================================
+   Auth (login)
+   ============================================ */
+.auth-page{
+  min-height: 100vh;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding: 20px;
+  background: radial-gradient(1200px 500px at 80% -10%, rgba(214,161,42,.25), transparent 60%),
+              linear-gradient(135deg, var(--brand-900), var(--brand-600));
+}
+.auth-card{
+  width: 100%;
+  max-width: 420px;
+  background: var(--surface);
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.14);
+  box-shadow: 0 20px 60px rgba(2,6,23,.25);
+  padding: 26px 22px;
+}
+.auth-title{
+  margin: 0 0 4px;
+  font-weight: 1000;
+  font-size: 18px;
+  color: var(--brand-900);
+  text-align:center;
+}
+.auth-subtitle{
+  margin: 0 0 16px;
+  color: var(--muted);
+  text-align:center;
+  font-size: 13px;
+}
+.auth-logo{
+  display:flex;
+  justify-content:center;
+  margin-bottom: 10px;
+}
+.auth-logo img{
+  height: 56px;
+  width:auto;
+  border-radius: 12px;
+  background:#fff;
+  padding: 4px;
+  box-shadow: var(--shadow-sm);
+}
+
+/* ============================================
+   Timetable / Grid (schedule + results + exams)
+   ============================================ */
+.timetable-wrapper{ overflow-x:auto; margin: 14px 0; }
+.timetable{
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  min-width: 820px;
+  background: var(--surface);
+  border: 1px solid rgba(15,23,42,0.08);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.timetable th, .timetable td{
+  border-bottom: 1px solid rgba(15,23,42,0.06);
+  border-left: 1px solid rgba(15,23,42,0.06);
+  padding: 10px;
+  text-align: center;
+  vertical-align: top;
+}
+.timetable th{
+  background: #f8fafc;
+  font-weight: 900;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.timetable th.day-header{ background:#f1f5f9; width: 130px; }
+.timetable th.time-header{ background:#f8fafc; min-width: 160px; }
+.timetable th.date-header{ background:#f1f5f9; min-width: 170px; }
+.timetable td{ min-height: 84px; height:auto; }
+
+.time-slot-cell, .date-slot-cell{ position: relative; padding: 6px; }
+.course-buttons-container{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  justify-content:center;
+  align-items:flex-start;
+  margin-bottom: 6px;
+}
+.course-btn{
+  font-size: 12px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  color: #fff;
+  font-weight: 800;
+  box-shadow: 0 8px 18px rgba(2,6,23,.10);
+}
+.course-btn:hover{ opacity:.92; transform: translateY(-1px); }
+
+.manage-courses-btn{
+  background: rgba(30,111,184,.12);
+  color: var(--brand-900);
+  border: 1px solid rgba(30,111,184,.22);
+  padding: 6px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+  width: 100%;
+}
+.manage-courses-btn:hover{ background: rgba(30,111,184,.18); }
+
+/* Compact timetable mode (toggle) */
+.timetable.is-compact th,
+.timetable.is-compact td{
+  padding: 6px;
+  font-size: 12px;
+}
+.timetable.is-compact th.day-header{ width: 110px; }
+.timetable.is-compact th.time-header{ min-width: 130px; }
+.timetable.is-compact td{ min-height: 64px; }
+.timetable.is-compact .course-btn{
+  font-size: 11px;
+  padding: 4px 8px;
+}
+.timetable.is-compact .manage-courses-btn{
+  padding: 5px 8px;
+  font-size: 11px;
 }
 
 /* ============================================
@@ -16,9 +314,9 @@ body {
 }
 
 .table thead th {
-    background-color: #f8f9fa;
-    font-weight: 600;
-    border-bottom: 2px solid #dee2e6;
+    background-color: #f1f5f9;
+    font-weight: 800;
+    border-bottom: 1px solid var(--border);
     position: sticky;
     top: 0;
     z-index: 10;
@@ -38,7 +336,7 @@ body {
    ============================================ */
 .btn {
     transition: all 0.2s;
-    font-weight: 500;
+    font-weight: 700;
 }
 
 .btn:hover {
@@ -48,6 +346,108 @@ body {
 
 .btn:active {
     transform: translateY(0);
+}
+
+/* Modern SaaS buttons */
+.btn-primary{
+  background: linear-gradient(135deg, var(--brand-600), var(--brand-900));
+  border: none;
+  box-shadow: 0 10px 20px rgba(30,111,184,.18);
+}
+.btn-primary:hover{ filter: brightness(.98); }
+.btn-outline-primary{
+  border-color: rgba(30,111,184,.35);
+  color: var(--brand-900);
+}
+.btn-outline-primary:hover{
+  background: rgba(30,111,184,.10);
+  border-color: rgba(30,111,184,.45);
+  color: var(--brand-900);
+}
+.btn-outline-secondary{ border-color: rgba(15,23,42,.18); }
+
+/* list-group + modal soft look */
+.list-group-item{
+  border-color: rgba(15,23,42,0.06);
+}
+.modal-content{
+  border-radius: 16px;
+  border: 1px solid rgba(15,23,42,0.08);
+  box-shadow: 0 24px 70px rgba(2,6,23,.22);
+}
+
+/* Registrations page helpers */
+.student-row:hover{ background: rgba(30,111,184,.06); }
+.courses-badges .badge{ margin: 0 .25rem .25rem 0; max-width: 240px; }
+.import-input{ display:none; }
+.badge-course{ display:inline-flex; gap:6px; align-items:center; white-space:nowrap; }
+.badge-course .code{ font-weight:800; opacity:.9; }
+.completed-list .badge{ margin: 0 .25rem .25rem 0; }
+.completed-label{ font-weight:900; margin-top:.75rem; display:block; color: var(--text); }
+
+/* Results page helpers */
+.results-table-responsive{ max-height: 460px; overflow: auto; }
+.badge-time{ background: #f8f9fa; color: #212529; border:1px solid rgba(15,23,42,0.10); }
+.accepted{ background: rgba(34,197,94,.12) !important; }
+.rejected{ background: rgba(239,68,68,.10) !important; }
+.muted-small{ font-size: .9rem; color: var(--muted); }
+
+/* Attendance export */
+.attendance-courses-select{ min-height: 280px; }
+
+/* index JSON input */
+.json-textarea{ min-height: 160px; font-family: inherit; }
+
+/* misc helpers */
+.nowrap{ white-space: nowrap; }
+.sem-card{ margin-bottom: 12px; }
+
+/* ============================================
+   Formal theme variant (more conservative look)
+   ============================================ */
+.theme-formal .page-title{
+  font-weight: 800;
+  font-size: 16px;
+}
+.theme-formal .page-subtitle{
+  font-size: 12px;
+}
+.theme-formal .card{
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(15,23,42,0.06);
+}
+.theme-formal .card:hover{
+  box-shadow: 0 4px 10px rgba(15,23,42,0.08);
+}
+.theme-formal .timetable{
+  box-shadow: none;
+  border-radius: 8px;
+}
+.theme-formal .timetable th,
+.theme-formal .timetable td{
+  border-bottom: 1px solid rgba(148,163,184,0.4);
+  border-left: 1px solid rgba(148,163,184,0.4);
+}
+.theme-formal .btn-primary{
+  background: var(--brand-700);
+  box-shadow: none;
+}
+.theme-formal .btn-outline-primary{
+  border-color: rgba(30,64,175,0.55);
+}
+.theme-formal .btn{
+  font-weight: 600;
+}
+
+/* كشف الدرجات: المعدل التراكمي والوحدات المنجزة ومجاميع الفصل */
+.transcript-summary-card .transcript-summary-item {
+  min-width: 6rem;
+}
+.transcript-completed-units {
+  color: #0d6b3a;
+}
+.semester-stats .badge {
+  font-weight: 600;
 }
 
 /* ============================================
@@ -71,18 +471,20 @@ body {
    ============================================ */
 .card {
     border: none;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    border: 1px solid rgba(15,23,42,0.06);
     transition: box-shadow 0.3s;
 }
 
 .card:hover {
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: var(--shadow-md);
 }
 
 .card-header {
-    background-color: #f8f9fa;
-    border-bottom: 1px solid #dee2e6;
-    font-weight: 600;
+    background-color: transparent;
+    border-bottom: 1px solid var(--border);
+    font-weight: 900;
 }
 
 /* ============================================

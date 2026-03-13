@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>خطط تسجيل الطلبة</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">خطط تسجيل الطلبة</h1>
+        <p class="page-subtitle">إنشاء خطة تنزيل مواد، إرسالها للمراجعة، ومتابعة اعتماد المشرف/الأدمن</p>
+      </div>
+    </div>
+
+    <!-- قسم الطالب: إنشاء/تعديل خطة -->
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="page-header" style="margin:0 0 10px;">
+          <div>
+            <h2 class="page-title" style="font-size:16px;">خطة تنزيل مواد</h2>
+            <p class="page-subtitle">اختر الطالب والفصل ثم حدد المقررات المتاحة حسب الجدول المعتمد</p>
+          </div>
+        </div>
+        <div class="row g-2 align-items-end">
+          <div class="col-md-4">
+            <label class="form-label">اختر الطالب</label>
+            <select id="studentSelect" class="form-select form-select-sm">
+              <option value="">اختر...</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">الفصل الدراسي</label>
+            <input id="semesterInput" class="form-control form-control-sm" placeholder="مثال: خريف 25-26">
+          </div>
+          <div class="col-md-5">
+            <label class="form-label">المقررات في الخطة</label>
+            <select id="planCoursesSelect" class="form-select form-select-sm" multiple size="6"></select>
+            <div class="d-flex justify-content-between align-items-center mt-1">
+              <div class="form-text">يمكن اختيار عدة مقررات (Ctrl/Shift). هذه خطة فقط وليست تسجيل نهائي.</div>
+              <div class="small text-muted">
+                مجموع وحدات الخطة: <span id="planUnitsTotal" class="fw-semibold">0</span>
+                <span id="planUnitsHint" class="ms-2"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="mt-3 d-flex flex-wrap gap-2 align-items-center">
+          <button id="btnLoadPlan" class="btn btn-outline-secondary btn-sm">تحميل خطة الطالب</button>
+          <button id="btnImproveGPA" class="btn btn-outline-info btn-sm" disabled title="يتطلب اعتماد الجدول الدراسي أولاً">تحسين المعدل</button>
+          <button id="btnSaveDraft" class="btn btn-primary btn-sm">حفظ كمسودة</button>
+          <button id="btnSubmitPlan" class="btn btn-success btn-sm">إرسال للمراجعة</button>
+          <button id="btnPrintForm" class="btn btn-outline-success btn-sm">طباعة استمارة التسجيل</button>
+          <div id="planStatus" class="ms-auto small text-muted"></div>
+        </div>
+        <div id="planMsg" class="mt-2"></div>
+      </div>
+    </div>
+
+    <!-- قسم المشرف/رئيس القسم: الخطط المعلقة -->
+    <div class="card" id="reviewSection">
+      <div class="card-body">
+        <div class="page-header" style="margin:0 0 10px;">
+          <div>
+            <h2 class="page-title" style="font-size:16px;">الخطط المعلقة للمراجعة</h2>
+            <p class="page-subtitle">للمشرف/الأدمن: اعتماد/رفض الخطط بعد مناقشة الطالب</p>
+          </div>
+        </div>
+        <div class="row g-2 align-items-end mb-2">
+          <div class="col-md-4">
+            <label class="form-label">الفصل الدراسي</label>
+            <input id="reviewSemesterInput" class="form-control form-control-sm" placeholder="اتركه فارغاً لعرض جميع الفصول">
+          </div>
+          <div class="col-md-2">
+            <button id="btnLoadPending" class="btn btn-outline-primary btn-sm w-100">تحديث القائمة</button>
+          </div>
+          <div class="col-md-6 text-end small text-muted">
+            ملاحظة: عند الاعتماد، يتم ترحيل المقررات إلى جدول التسجيلات الفعلي لنفس الطالب.
+          </div>
+        </div>
+        <div id="pendingList" class="list-group small"></div>
+      </div>
+    </div>
+
+    <!-- نافذة تحسين المعدل: مقررات منجزة (في الجدول المعتمد) -->
+    <div class="modal fade" id="improveGPAModal" tabindex="-1" aria-labelledby="improveGPAModalLabel" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="improveGPAModalLabel">تحسين المعدل — مقررات أنجزتها بنجاح</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+          </div>
+          <div class="modal-body">
+            <p class="small text-muted">المقررات أدناه موجودة في الجدول الدراسي المعتمد وقد أنجزتها بنجاح. يمكنك إضافتها للخطة لإعادة دراستها وتحسين درجتك (يُحتسب الأعلى في المعدل التراكمي).</p>
+            <ul id="improveGPAList" class="list-group list-group-flush"></ul>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">إغلاق</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok,status:r.status,json:j}; }
+
+    let STUDENTS = [];
+    let COURSES = [];
+    let currentPlanId = null;
+    let currentRole = null;
+    /** مقررات أنجزها الطالب بنجاح والموجودة في الجدول المعتمد (لتحسين المعدل) */
+    let lastCompletedCourses = [];
+    let lastSchedulePublished = false;
+    /** كاش للمعدل التراكمي لتقليل الاستدعاءات */
+    let lastCumulativeGPA = null;
+    let lastGpaStudentId = null;
+
+    function setPlanMsg(kind, text){
+      document.getElementById('planMsg').innerHTML = text ? `<div class="alert alert-${kind} p-2 mb-0">${text}</div>` : '';
+    }
+
+    function _unitsForCourseName(courseName){
+      const c = COURSES.find(x => x.course_name === courseName);
+      const u = c ? Number(c.units) : 0;
+      return Number.isFinite(u) ? u : 0;
+    }
+
+    function _calcUnitsSummary(courseNames){
+      let total = 0;
+      let hasSpecial = false;
+      (courseNames || []).forEach(name=>{
+        const u = _unitsForCourseName(name);
+        total += u;
+        if (u === 1 || u === 4) hasSpecial = true;
+      });
+      const el = document.getElementById('planUnitsTotal');
+      if (el) el.textContent = total;
+      const hint = document.getElementById('planUnitsHint');
+      if (hint) {
+        if (total > 0 && total < 12) {
+          hint.innerHTML = `<span class="badge bg-warning text-dark">تنبيه: أقل من 12 وحدة</span>`;
+        } else {
+          hint.textContent = '';
+        }
+      }
+      return { totalUnits: total, hasSpecial };
+    }
+
+    function _maxUnitsAllowed(cumulativeGpa, hasSpecial){
+      const g = Number(cumulativeGpa) || 0;
+      const base = (g >= 75) ? 21 : 18;
+      return base + (hasSpecial ? 1 : 0);
+    }
+
+    async function _getCumulativeGPA(studentId){
+      if (lastGpaStudentId === studentId && lastCumulativeGPA !== null) return lastCumulativeGPA;
+      const r = await fetchJSON('/transcript/' + encodeURIComponent(studentId));
+      if (!r.ok) return null;
+      const g = (r.json && typeof r.json.cumulative_gpa !== 'undefined') ? Number(r.json.cumulative_gpa) : null;
+      if (g === null || !Number.isFinite(g)) return null;
+      lastGpaStudentId = studentId;
+      lastCumulativeGPA = g;
+      return g;
+    }
+
+    async function validateUnitsLimitOrShowMessage(){
+      const sid = document.getElementById('studentSelect').value;
+      const sem = document.getElementById('semesterInput').value.trim();
+      const sel = document.getElementById('planCoursesSelect');
+      const courses = Array.from(sel.selectedOptions).map(o=>o.value);
+      if (!sid || !sem) return true; // تتحقق الوظائف الأخرى من ذلك
+
+      const gpa = await _getCumulativeGPA(sid);
+      if (gpa === null){
+        // لا نمنع الحفظ إذا فشل جلب المعدل، لكن ننبه بخفة
+        setPlanMsg('warning','تعذر جلب المعدل التراكمي للتحقق من حد الوحدات. يمكنك المحاولة لاحقاً أو المتابعة وسيتم التحقق عند الحفظ من الخادم.');
+        return true;
+      }
+
+      const { totalUnits, hasSpecial } = _calcUnitsSummary(courses);
+      const maxAllowed = _maxUnitsAllowed(gpa, hasSpecial);
+      if (totalUnits > maxAllowed){
+        const extra = totalUnits - maxAllowed;
+        setPlanMsg('danger', `لا يمكن المتابعة لأن مجموع الوحدات (${totalUnits}) يتجاوز الحد المسموح (${maxAllowed}) حسب المعدل التراكمي (${gpa.toFixed(2)}). الرجاء إزالة ${extra} وحدة/وحدات.`);
+        return false;
+      }
+      return true;
+    }
+
+    async function loadStudentsAndCourses(){
+      // للمشرف: حمّل فقط الطلبة المسندين إليه
+      const auth = await fetchJSON('/auth/check').catch(()=>({ok:false,json:{}}));
+      currentRole = auth.ok ? auth.json?.role : null;
+
+      let s;
+      if (currentRole === 'supervisor') {
+        s = await fetchJSON('/instructors/supervised_students');
+        STUDENTS = Array.isArray(s.json?.students) ? s.json.students : [];
+      } else {
+        s = await fetchJSON('/list_students');
+        STUDENTS = Array.isArray(s.json) ? s.json : [];
+      }
+
+      const c = await fetchJSON('/list_courses');
+      COURSES = Array.isArray(c.json) ? c.json : [];
+
+      const selStudent = document.getElementById('studentSelect');
+      selStudent.innerHTML = '<option value="">اختر...</option>';
+
+      if (currentRole === 'student') {
+        // الطالب: اختره تلقائياً ولا تعرض بقية الطلبة
+        const sid = auth.ok && auth.json?.user ? auth.json.user : null;
+        if (sid) {
+          const st = STUDENTS.find(s=>s.student_id === sid);
+          const opt = document.createElement('option');
+          opt.value = sid;
+          opt.textContent = st ? `${sid} — ${st.student_name || ''}` : sid;
+          selStudent.appendChild(opt);
+          selStudent.value = sid;
+          selStudent.disabled = true;
+        }
+      } else if (currentRole === 'supervisor') {
+        // المشرف: قائمة طلبته فقط
+        STUDENTS.forEach(st=>{
+          const opt = document.createElement('option');
+          opt.value = st.student_id;
+          opt.textContent = `${st.student_id} — ${st.student_name || ''}`;
+          selStudent.appendChild(opt);
+        });
+      } else {
+        STUDENTS.forEach(st=>{
+          const opt = document.createElement('option');
+          opt.value = st.student_id;
+          opt.textContent = `${st.student_id} — ${st.student_name || ''}`;
+          selStudent.appendChild(opt);
+        });
+      }
+
+      // سيتم ملء المقررات لاحقاً بناءً على الطالب (لأخذ المتطلبات في الاعتبار)
+      await refreshEligibleCourses();
+    }
+
+    async function loadCurrentPlan(){
+      const sid = document.getElementById('studentSelect').value;
+      const sem = document.getElementById('semesterInput').value.trim();
+      currentPlanId = null;
+      document.getElementById('planStatus').textContent = '';
+      setPlanMsg('', '');
+      if(!sid || !sem){
+        setPlanMsg('warning','اختر الطالب وحدد الفصل أولاً.');
+        return;
+      }
+      const res = await fetchJSON(`/enrollment/plans?student_id=${encodeURIComponent(sid)}&semester=${encodeURIComponent(sem)}`);
+      if(!res.ok){
+        setPlanMsg('danger', res.json?.message || 'فشل جلب الخطة.');
+        return;
+      }
+      const plans = Array.isArray(res.json?.plans) ? res.json.plans : [];
+      if(!plans.length){
+        setPlanMsg('info','لا توجد خطة سابقة لهذا الفصل. يمكنك إنشاء مسودة جديدة.');
+        document.getElementById('planCoursesSelect').selectedIndex = -1;
+        return;
+      }
+      const plan = plans[0];
+      currentPlanId = plan.id;
+      const sel = document.getElementById('planCoursesSelect');
+      // إعادة التحديد
+      Array.from(sel.options).forEach(o=>{
+        o.selected = plan.courses.includes(o.value);
+      });
+      // تحديث مجموع الوحدات المعروضة
+      _calcUnitsSummary(Array.from(sel.selectedOptions).map(o=>o.value));
+      let statusText = `حالة الخطة: ${plan.status}`;
+      if (plan.status === 'Rejected' && plan.rejection_reason) {
+        statusText += ` — سبب الرفض: ${plan.rejection_reason}`;
+        setPlanMsg('danger', `تم رفض الخطة السابقة. السبب: ${plan.rejection_reason}. يمكنك تعديل المقررات وحفظها كمسودة ثم إعادة الإرسال.`);
+      } else {
+        setPlanMsg('success','تم تحميل الخطة الحالية.');
+      }
+      document.getElementById('planStatus').textContent = statusText;
+    }
+
+    async function saveDraft(){
+      const sid = document.getElementById('studentSelect').value;
+      const sem = document.getElementById('semesterInput').value.trim();
+      const sel = document.getElementById('planCoursesSelect');
+      const courses = Array.from(sel.selectedOptions).map(o=>o.value);
+      _calcUnitsSummary(courses);
+      if(!sid || !sem){
+        setPlanMsg('warning','اختر الطالب وحدد الفصل أولاً.');
+        return;
+      }
+      const okUnits = await validateUnitsLimitOrShowMessage();
+      if(!okUnits) return;
+      const res = await fetchJSON('/enrollment/plans', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({student_id:sid, semester:sem, courses})
+      });
+      if(res.ok){
+        currentPlanId = res.json?.plan_id || currentPlanId;
+        document.getElementById('planStatus').textContent = 'حالة الخطة: Draft';
+        setPlanMsg('success','تم حفظ الخطة كمسودة.');
+      } else {
+        setPlanMsg('danger', res.json?.message || `فشل الحفظ (${res.status})`);
+      }
+    }
+
+    async function submitPlan(){
+      const sid = document.getElementById('studentSelect').value;
+      const sem = document.getElementById('semesterInput').value.trim();
+      const sel = document.getElementById('planCoursesSelect');
+      const courses = Array.from(sel.selectedOptions).map(o=>o.value);
+      if(!sid || !sem){
+        setPlanMsg('warning','اختر الطالب وحدد الفصل أولاً.');
+        return;
+      }
+      _calcUnitsSummary(courses);
+      const okUnits = await validateUnitsLimitOrShowMessage();
+      if(!okUnits) return;
+      // إذا لم يكن لدينا plan_id، احفظ مسودة أولاً
+      if(!currentPlanId){
+        await saveDraft();
+        if(!currentPlanId){
+          return;
+        }
+      }
+      const res = await fetchJSON(`/enrollment/plans/${currentPlanId}/submit`, {method:'POST'});
+      if(res.ok){
+        document.getElementById('planStatus').textContent = 'حالة الخطة: Pending';
+        setPlanMsg('success','تم إرسال الخطة للمراجعة.');
+      } else {
+        setPlanMsg('danger', res.json?.message || `فشل الإرسال (${res.status})`);
+      }
+    }
+
+    async function loadPending(){
+      const sem = document.getElementById('reviewSemesterInput').value.trim();
+      const url = sem ? `/enrollment/plans?semester=${encodeURIComponent(sem)}` : '/enrollment/plans';
+      const res = await fetchJSON(url);
+      const container = document.getElementById('pendingList');
+      container.innerHTML = '';
+      if(!res.ok){
+        container.innerHTML = '<div class="text-danger p-2">فشل جلب الخطط.</div>';
+        return;
+      }
+      const plans = (Array.isArray(res.json?.plans) ? res.json.plans : []).filter(p=>p.status === 'Pending');
+      if(!plans.length){
+        container.innerHTML = '<div class="text-muted p-2">لا توجد خطط معلّقة حالياً.</div>';
+        return;
+      }
+      plans.forEach(p=>{
+        const item = document.createElement('div');
+        item.className = 'list-group-item d-flex justify-content-between align-items-start';
+        const left = document.createElement('div');
+        const st = STUDENTS.find(s=>s.student_id === p.student_id);
+        const name = st ? (st.student_name || '') : '';
+        left.innerHTML = `<div><strong>${p.student_id}</strong> — ${name}</div>
+                          <div class="small text-muted">الفصل: ${p.semester}</div>
+                          <div class="small">المقررات: ${p.courses.join(', ') || '—'}</div>`;
+        const right = document.createElement('div');
+        const approveBtn = document.createElement('button');
+        approveBtn.className = 'btn btn-sm btn-success mb-1';
+        approveBtn.textContent = 'اعتماد';
+        approveBtn.addEventListener('click', ()=> approvePlan(p.id));
+        const rejectBtn = document.createElement('button');
+        rejectBtn.className = 'btn btn-sm btn-danger';
+        rejectBtn.textContent = 'رفض';
+        rejectBtn.addEventListener('click', ()=> rejectPlan(p.id));
+        right.appendChild(approveBtn);
+        right.appendChild(document.createElement('br'));
+        right.appendChild(rejectBtn);
+        item.appendChild(left);
+        item.appendChild(right);
+        container.appendChild(item);
+      });
+    }
+
+    async function approvePlan(id){
+      if(!confirm('هل تريد اعتماد هذه الخطة وترحيلها إلى التسجيلات الفعلية؟')) return;
+      const res = await fetchJSON(`/enrollment/plans/${id}/approve`, {method:'POST'});
+      if(res.ok){
+        await loadPending();
+        alert('تم الاعتماد وترحيل التسجيلات.');
+      } else {
+        alert(res.json?.message || `فشل الاعتماد (${res.status})`);
+      }
+    }
+
+    async function rejectPlan(id){
+      const reason = prompt('سبب الرفض (اختياري):','');
+      const res = await fetchJSON(`/enrollment/plans/${id}/reject`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({reason})
+      });
+      if(res.ok){
+        await loadPending();
+        alert('تم رفض الخطة.');
+      } else {
+        alert(res.json?.message || `فشل الرفض (${res.status})`);
+      }
+    }
+
+    function addCourseToPlan(courseName, courseCode, units){
+      const sel = document.getElementById('planCoursesSelect');
+      let opt = Array.from(sel.options).find(o => o.value === courseName);
+      if (!opt) {
+        opt = document.createElement('option');
+        opt.value = courseName;
+        opt.textContent = courseName + (courseCode ? ' — ' + courseCode : '');
+        sel.appendChild(opt);
+      }
+      opt.selected = true;
+    }
+
+    async function refreshEligibleCourses(){
+      const sid = document.getElementById('studentSelect').value;
+      const selCourses = document.getElementById('planCoursesSelect');
+      selCourses.innerHTML = '';
+      if (!sid) return;
+      const resp = await fetchJSON(`/students/eligible_courses?student_id=${encodeURIComponent(sid)}`);
+      const eligible = Array.isArray(resp.json?.eligible) ? resp.json.eligible : [];
+      const completed = Array.isArray(resp.json?.completed) ? resp.json.completed : [];
+      const schedulePublished = resp.json?.schedule_published !== false;
+
+      lastCompletedCourses = completed;
+      lastSchedulePublished = schedulePublished;
+
+      const btnImprove = document.getElementById('btnImproveGPA');
+      if (btnImprove) {
+        // الزر يظهر دائماً، لكن يتعطل حتى اعتماد الجدول، أو عند عدم وجود مقررات منجزة متاحة
+        if (!schedulePublished) {
+          btnImprove.disabled = true;
+          btnImprove.title = 'الجدول الدراسي غير معتمد بعد';
+          setPlanMsg('warning', 'الجدول الدراسي غير معتمد بعد. زر \"تحسين المعدل\" سيتفعّل بعد اعتماد الأدمن الرئيسي للجدول.');
+        } else if (!completed.length) {
+          btnImprove.disabled = true;
+          btnImprove.title = 'لا توجد مقررات منجزة متاحة للتحسين';
+        } else {
+          btnImprove.disabled = false;
+          btnImprove.title = 'إضافة مقررات أنجزتها بنجاح لإعادة دراستها لتحسين المعدل';
+        }
+      }
+
+      eligible.forEach(c=>{
+        const opt = document.createElement('option');
+        opt.value = c.course_name;
+        opt.textContent = c.course_name + (c.course_code ? ' — ' + c.course_code : '');
+        selCourses.appendChild(opt);
+      });
+
+      // عرض ملاحظة عن المقررات المكتملة حتى لا يحاول الطالب تسجيلها
+      const completedNames = completed.map(c=>c.course_name).join(', ');
+      if (schedulePublished && completedNames) {
+        setPlanMsg('info', `مقررات مكتملة لن يتم اقتراحها في الخطة: ${completedNames}. لتحسين المعدل استخدم زر "تحسين المعدل".`);
+      }
+    }
+
+    function openImproveGPAModal(){
+      if (!lastSchedulePublished) {
+        setPlanMsg('warning', 'لا يمكن تحسين المعدل حالياً لأن الجدول الدراسي غير معتمد بعد.');
+        return;
+      }
+      if (!Array.isArray(lastCompletedCourses) || !lastCompletedCourses.length) {
+        setPlanMsg('info', 'لا توجد مقررات منجزة متاحة للتحسين حالياً.');
+        return;
+      }
+      const listEl = document.getElementById('improveGPAList');
+      listEl.innerHTML = '';
+      lastCompletedCourses.forEach((c, i)=>{
+        const li = document.createElement('li');
+        li.className = 'list-group-item d-flex justify-content-between align-items-center';
+        const label = document.createElement('span');
+        label.innerHTML = `${c.course_name}${c.course_code ? ' — ' + c.course_code : ''} <small class="text-muted">(وحدات: ${c.units || 0} — درجة سابقة: ${c.grade ?? '—'})</small>`;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-sm btn-outline-primary btn-add-to-plan';
+        btn.textContent = 'إضافة للخطة';
+        btn.dataset.i = String(i);
+        btn.addEventListener('click', ()=>{
+          const cc = lastCompletedCourses[Number(btn.dataset.i)];
+          if (cc) addCourseToPlan(cc.course_name, cc.course_code || '', cc.units || 0);
+          btn.textContent = 'تمت الإضافة';
+          btn.classList.remove('btn-outline-primary');
+          btn.classList.add('btn-success');
+          btn.disabled = true;
+        });
+        li.appendChild(label);
+        li.appendChild(btn);
+        listEl.appendChild(li);
+      });
+      const modal = new bootstrap.Modal(document.getElementById('improveGPAModal'));
+      modal.show();
+    }
+
+    function printRegistrationForm(){
+      const sid = document.getElementById('studentSelect').value;
+      const sem = document.getElementById('semesterInput').value.trim();
+      if (!sid){
+        setPlanMsg('warning','اختر الطالب أولاً.');
+        return;
+      }
+      const qs = sem ? `?semester=${encodeURIComponent(sem)}` : '';
+      window.open(`/enrollment/print_registration_form/${encodeURIComponent(sid)}${qs}`, '_blank');
+    }
+
+    document.addEventListener('DOMContentLoaded', async ()=>{
+      // تحديد الدور الحالي وإخفاء/إظهار أقسام حسبه
+      try {
+        const auth = await fetchJSON('/auth/check');
+        currentRole = auth.ok ? auth.json?.role : null;
+      } catch(e){
+        currentRole = null;
+      }
+      if (currentRole === 'student') {
+        // الطالب لا يرى قسم مراجعة الخطط
+        const review = document.getElementById('reviewSection');
+        if (review) review.style.display = 'none';
+      }
+
+      await loadStudentsAndCourses();
+      // اختيار تلقائي لطالب (للمشرف) من query أو localStorage
+      try {
+        const sel = document.getElementById('studentSelect');
+        const params = new URLSearchParams(location.search);
+        const qpStudent = params.get('student_id') || '';
+        let preferred = qpStudent;
+        if (!preferred) preferred = localStorage.getItem('plans_selected_student') || '';
+        const canPick = (id) => Array.isArray(STUDENTS) && STUDENTS.some(s=>s.student_id===id);
+        if (currentRole === 'supervisor' && preferred && canPick(preferred) && sel) {
+          sel.value = preferred;
+        }
+      } catch(e) {}
+      document.getElementById('studentSelect').addEventListener('change', refreshEligibleCourses);
+      const selPlanCourses = document.getElementById('planCoursesSelect');
+      if (selPlanCourses){
+        selPlanCourses.addEventListener('change', ()=>{
+          const courses = Array.from(selPlanCourses.selectedOptions).map(o=>o.value);
+          _calcUnitsSummary(courses);
+        });
+      }
+      document.getElementById('btnLoadPlan').addEventListener('click', loadCurrentPlan);
+      const btnImproveGPA = document.getElementById('btnImproveGPA');
+      if (btnImproveGPA) btnImproveGPA.addEventListener('click', openImproveGPAModal);
+      document.getElementById('btnSaveDraft').addEventListener('click', saveDraft);
+      document.getElementById('btnSubmitPlan').addEventListener('click', submitPlan);
+      const btnPrint = document.getElementById('btnPrintForm');
+      if (btnPrint) {
+        btnPrint.addEventListener('click', printRegistrationForm);
+      }
+      document.getElementById('btnLoadPending').addEventListener('click', loadPending);
+      await loadPending();
+    });
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
+

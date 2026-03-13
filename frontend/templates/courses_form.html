@@ -5,21 +5,18 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>إدخال المقررات</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
-  <style>
-    body { padding: 18px; background: #f8f9fa; }
-    .mono { font-family: ui-monospace, Menlo, Monaco, "Roboto Mono", monospace; }
-    .pointer { cursor: pointer; }
-    .muted { color:#6c757d; }
-    .container-main { max-width: 1100px; margin: 0 auto; }
-    .btn-group-gap > .btn { margin-inline-end: 6px; margin-block: 6px; }
-  </style>
+  <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   {% include "base_nav.html" %}
-  <main class="container-main">
+  <main class="container-main container-1100">
 
-    <div class="container">
-      <h3 class="mb-3">إدخال المقررات</h3>
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">إدخال المقررات</h1>
+          <p class="page-subtitle">إضافة/تعديل/حذف المقررات واستيرادها وتصديرها (حسب الصلاحيات)</p>
+        </div>
+      </div>
 
       <!-- أدوات الاستيراد والتصدير -->
       <div class="card mb-3">
@@ -82,8 +79,6 @@
           </div>
         </div>
       </div>
-    </div>
-
     <!-- نافذة تحرير مقرر -->
     <div class="modal fade" id="editCourseModal" tabindex="-1" aria-hidden="true">
       <div class="modal-dialog">
@@ -119,6 +114,7 @@
 let ALL_COURSES = [];
 let editModal;
 let editCourseName = '';
+let IS_ADMIN = false;
 
 function showAlert(elId, kind, text){
   const el = document.getElementById(elId);
@@ -193,8 +189,10 @@ function renderCourses(list){
       <td>${escapeHtml(c.course_code || '')}</td>
       <td class="text-center">${(typeof c.units === 'number' ? c.units : (c.units || 0))}</td>
       <td class="text-center">
-        <button class="btn btn-sm btn-outline-primary me-1" data-action="edit" data-name="${escapeAttr(c.course_name)}">تحرير</button>
-        <button class="btn btn-sm btn-danger" data-action="delete" data-name="${escapeAttr(c.course_name)}">حذف</button>
+        ${IS_ADMIN ? `
+          <button class="btn btn-sm btn-outline-primary me-1" data-action="edit" data-name="${escapeAttr(c.course_name)}">تحرير</button>
+          <button class="btn btn-sm btn-danger" data-action="delete" data-name="${escapeAttr(c.course_name)}">حذف</button>
+        ` : `<span class="text-muted small">عرض فقط</span>`}
       </td>
     `;
     tbody.appendChild(tr);
@@ -249,7 +247,11 @@ document.getElementById('btnAddCourse').addEventListener('click', async () => {
   }
 
   if(ALL_COURSES.some(c=> (c.course_name||'').trim().toLowerCase() === name.toLowerCase())){
-    showAlert('cr_msg', 'info', 'المقرر موجود بالفعل — استخدم زر "تحرير" لتحديث الرمز/الوحدات.');
+    showAlert('cr_msg', 'info', 'يوجد مقرر آخر بنفس الاسم. استخدم زر "تحرير" لتعديله.');
+    return;
+  }
+  if(code && ALL_COURSES.some(c=> (c.course_code||'').trim().toLowerCase() === code.toLowerCase())){
+    showAlert('cr_msg', 'info', 'يوجد مقرر آخر بنفس الرمز. الرجاء اختيار رمز مختلف.');
     return;
   }
 
@@ -379,7 +381,26 @@ async function loadCoursePrereqs(){
 }
 
 /* البداية */
-window.addEventListener('load', loadCourses);
+window.addEventListener('load', async ()=>{
+  try {
+    const auth = await fetch('/auth/check').then(r=>r.json()).catch(()=>({}));
+    IS_ADMIN = auth?.role === 'admin';
+  } catch(e){
+    IS_ADMIN = false;
+  }
+
+  if(!IS_ADMIN){
+    // إخفاء/تعطيل أدوات التعديل للمشرف والطالب (عرض فقط)
+    const btnAdd = document.getElementById('btnAddCourse');
+    if(btnAdd) btnAdd.disabled = true;
+    const formAdd = document.getElementById('courseForm');
+    if(formAdd) formAdd.querySelectorAll('input,button,select,textarea').forEach(x=> x.disabled = true);
+    const importForm = document.getElementById('courses-import-form');
+    if(importForm) importForm.style.display = 'none';
+  }
+
+  await loadCourses();
+});
 </script>
 
 <!-- Bootstrap JS for modal -->

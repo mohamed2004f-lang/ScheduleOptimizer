@@ -5,60 +5,18 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>محرر جدول المقررات</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
-  <style>
-    body { padding: 18px; background: #f8f9fa; }
-    .container-main { max-width: 1400px; margin: 0 auto; }
-    .mono { font-family: ui-monospace, Menlo, Monaco, "Roboto Mono", monospace; }
-    .btn-group-gap > .btn { margin-inline-end: 6px; margin-block: 6px; }
-    
-    /* Timetable styles */
-    .timetable-wrapper { overflow-x: auto; margin: 20px 0; }
-    .timetable { border-collapse: collapse; width: 100%; min-width: 800px; background: white; }
-    .timetable th, .timetable td { border: 1px solid #dee2e6; padding: 8px; text-align: center; vertical-align: top; }
-    .timetable th { background: #f1f3f5; font-weight: 600; position: sticky; top: 0; z-index: 10; }
-    .timetable th.day-header { background: #e9ecef; width: 120px; }
-    .timetable th.time-header { background: #f1f3f5; min-width: 150px; }
-    .timetable td { min-height: 80px; height: auto; }
-    
-    .time-slot-cell { position: relative; padding: 4px; }
-    .course-buttons-container { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; align-items: flex-start; margin-bottom: 4px; }
-    .course-btn { 
-      font-size: 0.75rem; 
-      padding: 4px 8px; 
-      border: none; 
-      border-radius: 4px; 
-      cursor: pointer;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 100%;
-      color: white;
-      font-weight: 500;
-    }
-    .course-btn:hover { opacity: 0.85; transform: scale(1.02); }
-    .manage-courses-btn {
-      background: #5dade2;
-      color: white;
-      border: none;
-      padding: 4px 10px;
-      border-radius: 4px;
-      font-size: 0.75rem;
-      cursor: pointer;
-      width: 100%;
-      margin-top: 4px;
-    }
-    .manage-courses-btn:hover { background: #3498db; }
-    
-    .small-muted { color: #6c757d; font-size: 0.85rem; }
-    .instruction-text { margin: 10px 0; padding: 10px; background: #e7f3ff; border-radius: 6px; border-right: 4px solid #1e6fb8; }
-  </style>
+  <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   {% include "base_nav.html" %}
-  <main class="container-main">
+  <main class="container-main container-1400 theme-formal">
 
-    <div class="container">
-      <h3 class="mb-3">محرر جدول المقررات</h3>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">محرر جدول المقررات</h1>
+        <p class="page-subtitle">إدارة جلسات المقررات ثم اعتماد/نشر الجدول ليظهر للطلبة والمشرفين</p>
+      </div>
+    </div>
 
       <div class="instruction-text">
         <strong>تعليمات:</strong> انقر على زر <strong>إدارة المقررات</strong> في أي خانة لتحديد محاضرات متعددة. <strong>الأيام عموديًا، التوقيت أفقيًا</strong>
@@ -71,6 +29,10 @@
               <a class="btn btn-outline-success btn-sm" href="/schedule/export/excel" target="_blank">⬇️ تصدير Excel</a>
               <a class="btn btn-outline-danger btn-sm" href="/schedule/export/pdf" target="_blank">⬇️ تصدير PDF</a>
             </div>
+            <div id="publishScheduleWrap" class="d-none align-items-center gap-2">
+              <span id="publishStatusText" class="small text-muted"></span>
+              <button type="button" class="btn btn-outline-primary btn-sm" id="btnPublishSchedule">اعتماد ونشر الجدول</button>
+            </div>
             <form id="schedule-import-form" class="d-flex align-items-center" enctype="multipart/form-data" onsubmit="return false;">
               <label class="form-label mb-0 me-2">📂 استيراد جدول (Excel):</label>
               <input class="form-control form-control-sm" style="max-width: 280px;" type="file" name="file" accept=".xlsx,.xls" aria-label="ملف استيراد جدول" />
@@ -78,6 +40,19 @@
             </form>
           </div>
           <div id="import_msg" class="mt-2"></div>
+          <hr>
+          <div class="row g-2 align-items-center">
+            <div class="col-md-3">
+              <label class="form-label mb-0">تقسيمات الوقت المخصّصة</label>
+            </div>
+            <div class="col-md-9">
+              <input id="customTimeSlotsInput" class="form-control form-control-sm"
+                     placeholder="مثال: 08:00-10:00, 10:00-12:00, 12:00-14:00">
+              <div class="form-text">
+                أدخل فترات الوقت التي تريد ظهورها في الجدول مفصولة بفواصل (، أو ,). إذا تركت هذا الحقل فارغاً، سيتم استخدام الأوقات الموجودة في الجدول أو التوقيتات الافتراضية.
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -86,6 +61,7 @@
           <div class="d-flex justify-content-between align-items-center mb-3">
             <h6 class="mb-0">الجدول الزمني</h6>
             <div>
+              <button id="btnToggleCompact" class="btn btn-outline-primary btn-sm" type="button">عرض مضغوط</button>
               <button id="btnRun" class="btn btn-success btn-sm" type="button">انتاج الجداول وعرض التعارضات</button>
               <a href="/results" class="btn btn-outline-secondary btn-sm">عرض النتائج</a>
             </div>
@@ -93,7 +69,6 @@
           <div id="scheduleList" class="timetable-wrapper"></div>
         </div>
       </div>
-    </div>
 
     <!-- Modal لعرض التعارضات -->
     <div class="modal fade" id="conflictsModal" tabindex="-1" aria-hidden="true">
@@ -146,7 +121,9 @@
               </div>
               <div class="col-md-3">
                 <label class="form-label">الأستاذ</label>
-                <input id="newInstructor" class="form-control" placeholder="د.علي">
+                <select id="newInstructor" class="form-select">
+                  <option value="">-- اختر أستاذ --</option>
+                </select>
               </div>
               <div class="col-12">
                 <button type="submit" class="btn btn-primary btn-sm">إضافة</button>
@@ -216,8 +193,10 @@ async function importSchedule(){
   }
 }
 
-/* ---------- Courses loading ---------- */
+/* ---------- Courses & Instructors loading ---------- */
 let COURSES = [];
+let INSTRUCTORS = [];
+
 async function loadCourses(){
   try {
     const r = await fetch('/list_courses');
@@ -239,11 +218,36 @@ async function loadCourses(){
   }
 }
 
+async function loadInstructors(){
+  try {
+    const r = await fetch('/instructors/list');
+    const data = r.ok ? await r.json() : {};
+    INSTRUCTORS = Array.isArray(data.instructors) ? data.instructors : [];
+    const sel = document.getElementById('newInstructor');
+    if (sel) {
+      sel.innerHTML = '<option value="">-- اختر أستاذ --</option>';
+      INSTRUCTORS.forEach(inst => {
+        if (!inst.is_active) return;
+        const o = document.createElement('option');
+        o.value = inst.name || '';
+        const typeLabel = inst.type === 'external' ? ' (متعاون)' : '';
+        o.text = (inst.name || '') + typeLabel;
+        sel.appendChild(o);
+      });
+    }
+  } catch (err) {
+    console.error('loadInstructors error', err);
+  }
+}
+
 /* ---------- Timetable building ---------- */
 const DAYS = ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'];
 let currentScheduleData = [];
 let currentModalDay = '';
 let currentModalTime = '';
+let IS_ADMIN = false;
+let IS_COMPACT = false;
+let CUSTOM_TIME_SLOTS = [];
 
 function parseTimeRange(timeStr){
   if(!timeStr) return {start: '', end: ''};
@@ -265,28 +269,42 @@ function groupByTimeSlot(scheduleRows){
 }
 
 function extractUniqueTimeSlots(scheduleRows){
+  // 1) إذا حدّد المستخدم تقسيمات وقت مخصّصة، نستخدمها أولاً
+  if (Array.isArray(CUSTOM_TIME_SLOTS) && CUSTOM_TIME_SLOTS.length > 0){
+    const sorted = [...CUSTOM_TIME_SLOTS].sort((a, b) => {
+      const getStartTime = (timeStr) => {
+        const match = String(timeStr).trim().match(/^(\d+):(\d+)/);
+        if(match) return parseInt(match[1]) * 60 + parseInt(match[2]);
+        return 0;
+      };
+      return getStartTime(a) - getStartTime(b);
+    });
+    return sorted;
+  }
+
+  // 2) خلاف ذلك، نستخرج الأوقات من الصفوف الموجودة
   const times = new Set();
   scheduleRows.forEach(row => {
     if(row.time) times.add(row.time.trim());
   });
-  // إذا لم تكن هناك توقيتات، أضف توقيتات افتراضية شائعة
+
+  // 3) إذا لم تكن هناك توقيتات، نستخدم توقيتات افتراضية شائعة
   if(times.size === 0){
-    // توقيتات افتراضية من 9 صباحاً إلى 5 مساءً
     const defaultTimes = [
       '09:00-11:00', '11:00-12:00',
       '12:00-13:00', '13:00-14:00', '14:00-15:00', '15:00-16:00', '16:00-17:00'
     ];
     defaultTimes.forEach(t => times.add(t));
   }
-  // ترتيب التوقيتات بشكل ذكي (حسب وقت البداية)
-  return Array.from(times).sort((a, b) => {
-    const getStartTime = (timeStr) => {
-      const match = timeStr.match(/^(\d+):(\d+)/);
-      if(match) return parseInt(match[1]) * 60 + parseInt(match[2]);
-      return 0;
-    };
-    return getStartTime(a) - getStartTime(b);
-  });
+
+  const getStartTime = (timeStr) => {
+    const match = String(timeStr).trim().match(/^(\d+):(\d+)/);
+    if(match) return parseInt(match[1]) * 60 + parseInt(match[2]);
+    return 0;
+  };
+
+  // 4) ترتيب التوقيتات حسب وقت البداية
+  return Array.from(times).sort((a, b) => getStartTime(a) - getStartTime(b));
 }
 
 async function loadSchedule(){
@@ -300,7 +318,8 @@ async function loadSchedule(){
     const timeSlots = extractUniqueTimeSlots(currentScheduleData);
     const slotsMap = groupByTimeSlot(currentScheduleData);
 
-    let html = '<table class="timetable"><thead><tr><th class="day-header">اليوم / الوقت</th>';
+    const compactClass = IS_COMPACT ? ' is-compact' : '';
+    let html = `<table class="timetable${compactClass}"><thead><tr><th class="day-header">اليوم / الوقت</th>`;
     timeSlots.forEach(time => {
       html += `<th class="time-header">${escapeHtml(time)}</th>`;
     });
@@ -315,18 +334,24 @@ async function loadSchedule(){
         html += `<div class="course-buttons-container">`;
         courses.forEach(course => {
           const color = getCourseColor(course.course_name);
-          const roomText = course.room ? ` (${escapeHtml(course.room)})` : '';
+          const roomText = course.room ? ` — ق ${escapeHtml(course.room)}` : '';
+          const instructorText = course.instructor ? ` — ${escapeHtml(course.instructor)}` : '';
           const studentCount = course.student_count || 0;
-          const studentCountText = studentCount > 0 ? ` - (ط ${studentCount})` : '';
-          const displayText = `${escapeHtml(course.course_name)}${roomText}${studentCountText}${course.section_id ? ` (${course.section_id})` : ''}`;
+          const studentCountText = studentCount > 0 ? ` — ط ${studentCount}` : '';
+          // عرض اسم المقرر فقط داخل الجدول، مع إبقاء التفاصيل في الـ tooltip
+          const displayText = `${escapeHtml(course.course_name)}`;
           html += `<button class="course-btn" style="background: ${color};" 
                    data-section-id="${course.section_id}" 
-                   title="${escapeHtml(course.room || '')} - ${escapeHtml(course.instructor || '')}">
+                   title="${escapeHtml(course.course_name || '')}${roomText}${instructorText}${studentCountText}">
                    ${displayText}
                  </button>`;
         });
         html += `</div>`;
-        html += `<button class="manage-courses-btn" onclick="openManageCourses('${escapeHtml(day)}', '${escapeHtml(time)}')">إدارة المقررات</button>`;
+        if (IS_ADMIN) {
+          html += `<button class="manage-courses-btn" onclick="openManageCourses('${escapeHtml(day)}', '${escapeHtml(time)}')">إدارة المقررات</button>`;
+        } else {
+          html += `<div class="small text-muted mt-1">عرض فقط</div>`;
+        }
         html += `</td>`;
       });
       html += '</tr>';
@@ -335,16 +360,18 @@ async function loadSchedule(){
     html += '</tbody></table>';
     el.innerHTML = html;
 
-    // Attach delete handlers to course buttons
-    el.querySelectorAll('.course-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const sectionId = btn.dataset.sectionId;
-        if(sectionId && confirm('هل تريد حذف هذا المقرر من الجدول؟')){
-          deleteScheduleRow(Number(sectionId));
-        }
+    // Attach delete handlers only for admin
+    if (IS_ADMIN) {
+      el.querySelectorAll('.course-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const sectionId = btn.dataset.sectionId;
+          if(sectionId && confirm('هل تريد حذف هذا المقرر من الجدول؟')){
+            deleteScheduleRow(Number(sectionId));
+          }
+        });
       });
-    });
+    }
 
     await markConflicts();
   } catch (err) {
@@ -368,24 +395,91 @@ function openManageCourses(day, time){
   if(courses.length === 0){
     existingDiv.innerHTML = '<p class="text-muted small">لا توجد مقررات في هذا الوقت</p>';
   } else {
-    existingDiv.innerHTML = '<h6 class="mb-2">المقررات الحالية:</h6><ul class="list-group">';
+    existingDiv.innerHTML = '<h6 class="mb-2">المقررات الحالية:</h6><ul class="list-group" id="existingCoursesUl"></ul>';
+    const ul = document.getElementById('existingCoursesUl');
     courses.forEach(course => {
-      existingDiv.innerHTML += `
-        <li class="list-group-item d-flex justify-content-between align-items-center">
-          <div>
-            <strong>${escapeHtml(course.course_name)}</strong>
-            ${course.room ? ` — القاعة: ${escapeHtml(course.room)}` : ''}
-            ${course.instructor ? ` — الأستاذ: ${escapeHtml(course.instructor)}` : ''}
-          </div>
-          <button class="btn btn-sm btn-danger" onclick="deleteScheduleRow(${course.section_id})">حذف</button>
-        </li>
-      `;
+      const li = document.createElement('li');
+      li.className = 'list-group-item d-flex justify-content-between align-items-center';
+
+      const infoDiv = document.createElement('div');
+      const title = document.createElement('strong');
+      title.textContent = course.course_name || '';
+      infoDiv.appendChild(title);
+      if (course.room) {
+        const spanRoom = document.createElement('span');
+        spanRoom.textContent = ` — القاعة: ${course.room}`;
+        infoDiv.appendChild(spanRoom);
+      }
+      if (course.instructor) {
+        const spanInst = document.createElement('span');
+        spanInst.textContent = ` — الأستاذ: ${course.instructor}`;
+        infoDiv.appendChild(spanInst);
+      }
+
+      const buttonsDiv = document.createElement('div');
+      buttonsDiv.className = 'd-flex gap-1';
+
+      const btnEdit = document.createElement('button');
+      btnEdit.type = 'button';
+      btnEdit.className = 'btn btn-sm btn-outline-primary';
+      btnEdit.textContent = 'تعديل';
+      btnEdit.addEventListener('click', () => {
+        startEditExistingCourse(
+          course.section_id,
+          course.course_name || '',
+          course.room || '',
+          course.instructor || ''
+        );
+      });
+
+      const btnDelete = document.createElement('button');
+      btnDelete.type = 'button';
+      btnDelete.className = 'btn btn-sm btn-danger';
+      btnDelete.textContent = 'حذف';
+      btnDelete.addEventListener('click', () => {
+        deleteScheduleRow(course.section_id);
+      });
+
+      buttonsDiv.appendChild(btnEdit);
+      buttonsDiv.appendChild(btnDelete);
+
+      li.appendChild(infoDiv);
+      li.appendChild(buttonsDiv);
+      ul.appendChild(li);
     });
-    existingDiv.innerHTML += '</ul>';
   }
   
   const modal = new bootstrap.Modal(document.getElementById('manageCoursesModal'));
   modal.show();
+}
+
+let EDITING_SECTION_ID = null;
+
+function startEditExistingCourse(sectionId, courseName, room, instructor){
+  EDITING_SECTION_ID = sectionId;
+  const sel = document.getElementById('newCourseSelect');
+  const roomInput = document.getElementById('newRoom');
+  const instInput = document.getElementById('newInstructor');
+  if(sel){
+    sel.value = courseName || '';
+  }
+  if(roomInput){
+    roomInput.value = room || '';
+  }
+  if(instInput){
+    // إذا كان الاسم موجوداً في قائمة الأساتذة، اختره؛ وإلا أضف خياراً موقتاً
+    const name = instructor || '';
+    const options = Array.from(instInput.options);
+    const exists = options.some(o => o.value === name);
+    if (name && !exists) {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.text = name;
+      instInput.appendChild(opt);
+    }
+    instInput.value = name;
+  }
+  showMsg('وضع التعديل: سيتم تحديث هذا الصف في الجدول عند الحفظ.', 'info', 4000, 'modalMsg');
 }
 
 document.getElementById('addCourseForm').addEventListener('submit', async (e) => {
@@ -399,7 +493,43 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
     return;
   }
   
-  // التحقق من التعارضات أولاً
+  // إذا كنا في وضع تعديل صف موجود
+  if (EDITING_SECTION_ID) {
+    try {
+      showMsg('جاري تعديل بيانات المقرر...', 'info', 0, 'modalMsg');
+      const resp = await fetch('/schedule/update_schedule_row', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          section_id: EDITING_SECTION_ID,
+          course_name: course,
+          day: currentModalDay,
+          time: currentModalTime,
+          room: room,
+          instructor: instructor
+        })
+      });
+      const j = await resp.json().catch(()=>null);
+      if(resp.ok && j && j.status === 'ok'){
+        showMsg('تم تعديل بيانات المقرر', 'success', 2000, 'modalMsg');
+        EDITING_SECTION_ID = null;
+        document.getElementById('addCourseForm').reset();
+        await loadSchedule();
+        setTimeout(() => {
+          const modal = bootstrap.Modal.getInstance(document.getElementById('manageCoursesModal'));
+          if(modal) modal.hide();
+        }, 800);
+      } else {
+        showMsg('خطأ في التعديل: ' + (j?.message || resp.statusText), 'danger', 3000, 'modalMsg');
+      }
+    } catch (err) {
+      console.error('editCourse error', err);
+      showMsg('خطأ في الاتصال بالخادم أثناء التعديل', 'danger', 3000, 'modalMsg');
+    }
+    return;
+  }
+
+  // وإلا نعمل منطق الإضافة مع التحقق من التعارضات
   try {
     showMsg('جاري التحقق من التعارضات...', 'info', 0, 'modalMsg');
     const checkResp = await fetch('/schedule/check_conflicts', {
@@ -417,7 +547,6 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
     const checkData = await checkResp.json().catch(()=>null);
     
     if(checkResp.ok && checkData && checkData.has_conflicts && checkData.conflicts.length > 0){
-      // عرض نافذة تنبيه بالتعارضات
       const confirmed = await showConflictsModal(checkData.conflicts, course, currentModalDay, currentModalTime);
       if(!confirmed){
         showMsg('تم إلغاء الإضافة', 'warning', 2000, 'modalMsg');
@@ -425,7 +554,6 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
       }
     }
     
-    // المتابعة مع الإضافة
     showMsg('جاري إضافة المقرر...', 'info', 0, 'modalMsg');
     const resp = await fetch('/add_schedule_row', {
       method: 'POST',
@@ -625,16 +753,96 @@ async function markConflicts(){
   if(total>0) showMsg(`تم العثور على ${total} حالة تعارض في التسجيلات`, 'warning', 6000);
 }
 
+async function refreshPublishStatus(){
+  const wrap = document.getElementById('publishScheduleWrap');
+  const statusEl = document.getElementById('publishStatusText');
+  const btn = document.getElementById('btnPublishSchedule');
+  if(!wrap || !statusEl) return;
+  try {
+    const auth = await fetch('/auth/check').then(r=>r.json()).catch(()=>({}));
+    if (auth.role !== 'admin') {
+      wrap.classList.add('d-none');
+      return;
+    }
+    const st = await fetch('/schedule/publish_status').then(r=>r.json()).catch(()=>({}));
+    wrap.classList.remove('d-none');
+    if (st.published && st.published_at) {
+      statusEl.textContent = 'الجدول معتمد ومنشور منذ ' + (st.published_at || '').slice(0, 19).replace('T', ' ');
+    } else {
+      statusEl.textContent = 'الجدول غير منشور. الطالب والمشرف لن يرَوْا الجدول حتى تعتمده.';
+    }
+  } catch (e) {
+    wrap.classList.add('d-none');
+  }
+}
+
 /* ---------- Init ---------- */
 document.addEventListener('DOMContentLoaded', () => {
   loadCourses();
+  loadInstructors();
   loadSchedule();
 
   const btnRun = document.getElementById('btnRun');
   if(btnRun) btnRun.addEventListener('click', runOptimize);
 
+  const btnCompact = document.getElementById('btnToggleCompact');
+  if (btnCompact) {
+    btnCompact.addEventListener('click', async () => {
+      IS_COMPACT = !IS_COMPACT;
+      btnCompact.textContent = IS_COMPACT ? 'عرض عادي' : 'عرض مضغوط';
+      await loadSchedule();
+    });
+  }
+
+  const btnPublish = document.getElementById('btnPublishSchedule');
+  if(btnPublish) {
+    btnPublish.addEventListener('click', async () => {
+      if(!confirm('هل تريد اعتماد ونشر الجدول الدراسي؟ بعدها سيرى الطالب والمشرف الجدول وستُستمد المقررات المتاحة في خطط التسجيل من هذا الجدول.')) return;
+      try {
+        const r = await fetch('/schedule/publish', { method: 'POST', headers: {'Content-Type':'application/json'} });
+        const j = await r.json().catch(()=>({}));
+        if(r.ok && j.status === 'ok') {
+          showMsg('تم اعتماد ونشر الجدول الدراسي', 'success');
+          refreshPublishStatus();
+        } else {
+          showMsg('فشل النشر: ' + (j.message || r.statusText), 'danger');
+        }
+      } catch (e) {
+        showMsg('خطأ في الاتصال بالخادم', 'danger');
+      }
+    });
+  }
+
+  // Determine role once and apply view-only rules
+  fetch('/auth/check').then(r=>r.json()).then(auth=>{
+    IS_ADMIN = auth?.role === 'admin';
+    if(!IS_ADMIN){
+      const importForm = document.getElementById('schedule-import-form');
+      if(importForm) importForm.style.display = 'none';
+      const btnRun = document.getElementById('btnRun');
+      if(btnRun) btnRun.style.display = 'none';
+      const btnCompact = document.getElementById('btnToggleCompact');
+      if(btnCompact) btnCompact.style.display = 'none';
+    }
+    refreshPublishStatus();
+  }).catch(()=>{
+    IS_ADMIN = false;
+    refreshPublishStatus();
+  });
+
   // Periodic conflict check
   setInterval(markConflicts, 30000);
+
+  // مراقبة حقل تقسيمات الوقت لتحديث CUSTOM_TIME_SLOTS وإعادة رسم الجدول
+  const customTimeInput = document.getElementById('customTimeSlotsInput');
+  if(customTimeInput){
+    customTimeInput.addEventListener('change', ()=>{
+      const raw = customTimeInput.value || '';
+      const parts = raw.split(/[,،]/).map(p => p.trim()).filter(Boolean);
+      CUSTOM_TIME_SLOTS = parts;
+      loadSchedule();
+    });
+  }
 });
 </script>
 

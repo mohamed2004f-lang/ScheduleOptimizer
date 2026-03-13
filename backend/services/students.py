@@ -1,7 +1,8 @@
 import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from models.models import Student
-from flask import Blueprint, request, jsonify, render_template, current_app, send_file
+from flask import Blueprint, request, jsonify, render_template, current_app, send_file, session
+from backend.core.auth import login_required, role_required
 from collections import defaultdict
 import sqlite3, pandas as pd, io
 from .utilities import (
@@ -12,6 +13,8 @@ from .utilities import (
     excel_response_from_df,
     excel_response_from_frames,
     pdf_response_from_html,
+    log_activity,
+    get_schedule_published_at,
 )
 
 students_bp = Blueprint("students", __name__)
@@ -28,6 +31,7 @@ def normalize_sid(sid):
 # CRUD أساسي للطلاب
 # -----------------------------
 @students_bp.route("/list")
+@login_required
 def list_students():
     """جلب قائمة الطلاب - يستخدم Service Layer"""
     try:
@@ -45,6 +49,7 @@ def list_students():
         raise DatabaseError(f"فشل جلب قائمة الطلاب: {str(e)}")
 
 @students_bp.route("/add", methods=["POST"])
+@login_required
 def add_student():
     """إضافة طالب جديد - يستخدم Service Layer"""
     try:
@@ -65,6 +70,7 @@ def add_student():
         raise DatabaseError(f"فشل إضافة الطالب: {str(e)}")
 
 @students_bp.route("/delete", methods=["POST"])
+@login_required
 def delete_student():
     """حذف طالب - يستخدم Service Layer"""
     try:
@@ -98,6 +104,7 @@ def delete_student():
 # التسجيلات
 # -----------------------------
 @students_bp.route("/save_registrations", methods=["POST"])
+@role_required("admin")
 def save_registrations():
     data = request.get_json(force=True) or {}
     sid = normalize_sid(data.get("student_id"))
@@ -178,6 +185,15 @@ def save_registrations():
                 except Exception as e:
                     current_app.logger.exception("recompute conflict_report failed")
 
+                # تسجيل العملية في سجل النشاط
+                try:
+                    log_activity(
+                        action="save_registrations",
+                        details=f"student_id={sid}, courses={','.join(courses)}",
+                    )
+                except Exception:
+                    pass
+
                 return jsonify({"status": "ok", "message": "تم حفظ التسجيلات"}), 200
             except Exception as e:
                 conn.rollback()
@@ -188,11 +204,27 @@ def save_registrations():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @students_bp.route("/get_registrations")
+@login_required
 def get_registrations():
     student_id = normalize_sid(request.args.get("student_id"))
     try:
         with get_connection() as conn:
             cur = conn.cursor()
+            # تقييد المشرف: لا يرى تسجيلات إلا لطلبته المسندين إليه
+            user_role = session.get("user_role")
+            if user_role == "supervisor":
+                instructor_id = session.get("instructor_id")
+                if not instructor_id:
+                    return jsonify([]), 200
+                if not student_id:
+                    # منع إرجاع جميع التسجيلات للمشرف
+                    return jsonify([]), 200
+                ok = cur.execute(
+                    "SELECT 1 FROM student_supervisor WHERE student_id = ? AND instructor_id = ? LIMIT 1",
+                    (student_id, instructor_id),
+                ).fetchone()
+                if not ok:
+                    return jsonify([]), 200
             if student_id:
                 rows = cur.execute("SELECT course_name FROM registrations WHERE student_id = ?", (student_id,)).fetchall()
                 return jsonify([r[0] for r in rows])
@@ -204,6 +236,7 @@ def get_registrations():
         return jsonify([])
 
 @students_bp.route("/delete_registrations", methods=["POST"])
+@role_required("admin")
 def delete_registrations():
     data = request.get_json(force=True) or {}
     sid = normalize_sid(data.get("student_id"))
@@ -220,6 +253,7 @@ def delete_registrations():
         return jsonify({"status":"error","message": str(e)}), 500
 
 @students_bp.route("/import_registrations", methods=["POST"])
+@login_required
 def import_registrations():
     data = request.get_json(force=True) or {}
     items = data.get("items", []) or []
@@ -263,6 +297,7 @@ def import_registrations():
 # Export registrations
 # -----------------------------
 @students_bp.route("/export/registrations")
+@login_required
 def export_registrations_excel():
     try:
         with get_connection() as conn:
@@ -315,6 +350,7 @@ def export_registrations_excel():
 
 
 @students_bp.route("/export/attendance")
+@login_required
 def export_attendance_excel():
     """
     تصدير سجلات الحضور/الغياب في ملف Excel متعدد الأوراق.
@@ -551,10 +587,15 @@ def export_attendance_excel():
 # Eligible courses for registration
 # -----------------------------
 @students_bp.route("/eligible_courses")
+@login_required
 def eligible_courses():
+    """
+    المقررات المتاحة للطالب ضمن خطته الدراسية: فقط المقررات الموجودة في الجدول الدراسي المعتمد.
+    إذا لم يُنشر الجدول بعد، تُرجع eligible فارغة و schedule_published=False.
+    """
     sid = normalize_sid(request.args.get("student_id"))
     if not sid:
-        return jsonify({"eligible": [], "completed": []})
+        return jsonify({"eligible": [], "completed": [], "schedule_published": False})
 
     PASS_TEXT = {'p','pass','نجاح','مقبول','a','b','c'}
     PASS_NUM_THRESHOLD = 50.0
@@ -562,12 +603,50 @@ def eligible_courses():
     try:
         with get_connection() as conn:
             cur = conn.cursor()
+            published_at = get_schedule_published_at(conn)
+            if published_at is None:
+                try:
+                    grade_rows = cur.execute(
+                        "SELECT course_name, grade FROM grades WHERE student_id = ?", (sid,)
+                    ).fetchall()
+                except Exception:
+                    grade_rows = []
+                grade_map = {r[0]: r[1] for r in grade_rows}
+                try:
+                    all_rows = cur.execute(
+                        "SELECT course_name, COALESCE(course_code, ''), COALESCE(units, 0) FROM courses"
+                    ).fetchall()
+                    all_courses = [{"course_name": r[0], "course_code": r[1], "units": r[2]} for r in all_rows]
+                except Exception:
+                    all_courses = []
+                completed = []
+                for c in all_courses:
+                    g = grade_map.get(c["course_name"], None)
+                    if g is None:
+                        continue
+                    passed = False
+                    try:
+                        if float(g) >= PASS_NUM_THRESHOLD:
+                            passed = True
+                    except Exception:
+                        pass
+                    if not passed and isinstance(g, str) and g.strip().lower() in PASS_TEXT:
+                        passed = True
+                    if passed:
+                        completed.append({**c, "grade": g})
+                return jsonify({"eligible": [], "completed": completed, "schedule_published": False})
+
+            schedule_course_names = set(
+                r[0] for r in cur.execute("SELECT DISTINCT course_name FROM schedule WHERE COALESCE(course_name,'') <> ''").fetchall()
+            )
             try:
                 all_rows = cur.execute("SELECT course_name, COALESCE(course_code, ''), COALESCE(units, 0) FROM courses").fetchall()
                 all_courses = [{"course_name": r[0], "course_code": r[1], "units": r[2]} for r in all_rows]
             except Exception:
-                rows = cur.execute("SELECT DISTINCT course_name FROM schedule").fetchall()
-                all_courses = [{"course_name": r[0], "course_code": "", "units": 0} for r in rows]
+                all_rows = cur.execute("SELECT DISTINCT course_name FROM schedule").fetchall()
+                all_courses = [{"course_name": r[0], "course_code": "", "units": 0} for r in all_rows]
+
+            all_courses = [c for c in all_courses if c["course_name"] in schedule_course_names]
 
             try:
                 grade_rows = cur.execute("""
@@ -605,10 +684,10 @@ def eligible_courses():
                 else:
                     eligible.append(c)
 
-        return jsonify({"eligible": eligible, "completed": completed})
+        return jsonify({"eligible": eligible, "completed": completed, "schedule_published": True})
     except Exception:
         current_app.logger.exception("eligible_courses failed")
-        return jsonify({"eligible": [], "completed": []})
+        return jsonify({"eligible": [], "completed": [], "schedule_published": False})
 
 # -----------------------------
 # Timetable conflicts (robust)
@@ -635,6 +714,7 @@ def parse_time_range(value):
     return (v, '')
 
 @students_bp.route("/timetable/conflicts")
+@login_required
 def timetable_conflicts():
     """
     Return conflicts grouped by (day, start, end, room).
@@ -757,6 +837,7 @@ def timetable_conflicts():
 # استيراد / تصدير بيانات الطلاب (موجودة سابقاً)
 # -----------------------------
 @students_bp.route("/export/excel")
+@login_required
 def students_export_excel():
     try:
         df = df_from_query("SELECT student_id, student_name FROM students", db_file=DB_FILE)
@@ -766,6 +847,7 @@ def students_export_excel():
         return jsonify({"status": "error", "message": "فشل التصدير"}), 500
 
 @students_bp.route("/export/pdf")
+@login_required
 def students_export_pdf():
     try:
         with sqlite3.connect(DB_FILE) as conn:
@@ -780,6 +862,7 @@ def students_export_pdf():
         return jsonify({"status": "error", "message": "فشل التصدير إلى PDF"}), 500
 
 @students_bp.route("/import/excel", methods=["POST"])
+@login_required
 def students_import_excel():
     f = request.files.get("file")
     if not f:
