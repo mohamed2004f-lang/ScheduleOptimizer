@@ -87,7 +87,7 @@ ALLOWED_TABLES = {
     'enrollment_plans', 'enrollment_plan_items',
     'users', 'notifications', 'system_settings',
     'academic_calendar', 'instructors', 'student_supervisor',
-    'student_exceptions'
+    'student_exceptions', 'academic_rules'
 }
 
 def table_to_dicts(table_name, db_file=DB_FILE):
@@ -287,6 +287,17 @@ def ensure_tables():
                             created_at TEXT,
                             is_active INTEGER NOT NULL DEFAULT 1
                         )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS academic_rules (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            rule_key TEXT NOT NULL UNIQUE,
+                            title TEXT NOT NULL,
+                            description TEXT,
+                            category TEXT,
+                            value_number REAL,
+                            value_text TEXT,
+                            is_active INTEGER NOT NULL DEFAULT 1
+                        )""",
                 ]
                 for s in create_stmts:
                         cur.execute(s)
@@ -332,7 +343,33 @@ def ensure_tables():
                     cur.execute("ALTER TABLE students ADD COLUMN join_year TEXT")
                 except Exception:
                     pass
-                
+                # أعمدة حالة القيد (متوافقة مع النسخة المحسّنة في backend/database/database.py)
+                try:
+                    cur.execute("ALTER TABLE students ADD COLUMN enrollment_status TEXT DEFAULT 'active'")
+                except Exception:
+                    pass
+                try:
+                    cur.execute("ALTER TABLE students ADD COLUMN status_changed_at TEXT")
+                except Exception:
+                    pass
+                try:
+                    cur.execute("ALTER TABLE students ADD COLUMN status_reason TEXT")
+                except Exception:
+                    pass
+                # عمود updated_at قد يُستخدم في بعض التحديثات (مثل تحديث حالة القيد)
+                try:
+                    cur.execute("ALTER TABLE students ADD COLUMN updated_at TEXT")
+                except Exception:
+                    pass
+                try:
+                    cur.execute("ALTER TABLE students ADD COLUMN phone TEXT")
+                except Exception:
+                    pass
+                try:
+                    cur.execute("ALTER TABLE students ADD COLUMN graduation_plan TEXT DEFAULT ''")
+                except Exception:
+                    pass
+
                 conn.commit()
 
 # -----------------------------

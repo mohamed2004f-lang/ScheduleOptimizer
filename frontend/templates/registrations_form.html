@@ -9,7 +9,7 @@
 </head>
 <body> {% include "base_nav.html" %}
 
-<main class="container-main">
+<main class="container-main container-1100">
   <div class="page-header">
     <div>
       <h1 class="page-title">إدارة التسجيل</h1>
@@ -18,7 +18,7 @@
   </div>
 
   <div id="registrationsAdmin">
-    <div class="card mb-3">
+    <div class="card mb-3 filter-section">
       <div class="card-body d-flex gap-2 align-items-center flex-wrap">
         <button id="btnExportCSV" class="btn btn-outline-secondary btn-sm">تصدير CSV</button>
         <button id="btnExportTXT" class="btn btn-outline-secondary btn-sm">تصدير TXT</button>
@@ -33,7 +33,7 @@
       </div>
     </div>
 
-    <div class="card">
+    <div class="card chart-container">
       <div class="card-body">
         <div class="mb-2 d-flex align-items-center gap-2">
           <input id="searchInput" class="form-control form-control-sm" placeholder="بحث باسم الطالب أو الرقم" style="max-width:420px">
@@ -46,7 +46,7 @@
   </div>
 
   <div id="registrationsStudent" style="display:none;">
-    <div class="card">
+    <div class="card chart-container">
       <div class="card-body">
         <p class="mb-2">التسجيلات الحالية الخاصة بك (عرض فقط):</p>
         <div id="studentSelfRegistrations" class="list-group small"></div>
@@ -97,7 +97,7 @@ function setStats(){ document.getElementById('stats').textContent = `الطلا�
 
 /* load data */
 async function loadData(){
-  const [r1, r2] = await Promise.all([fetchJSON('/list_students'), fetchJSON('/list_courses')]);
+  const [r1, r2] = await Promise.all([fetchJSON('/students/list?active_only=1'), fetchJSON('/list_courses')]);
   STUDENTS = Array.isArray(r1.json) ? r1.json.map(s=>{
     return {
       student_id: s.student_id || s.id || s.studentId || '',

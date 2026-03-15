@@ -513,11 +513,15 @@ def migrate_registrations_to_transcript():
 def _load_transcript_data(student_id: str):
     with get_connection() as conn:
         cur = conn.cursor()
-        student_row = cur.execute(
-            "SELECT COALESCE(student_name, '') AS student_name FROM students WHERE student_id = ?",
-            (student_id,),
-        ).fetchone()
+        cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
+        has_plan = "graduation_plan" in cols
+        sel = "SELECT COALESCE(student_name, '') AS student_name"
+        if has_plan:
+            sel += ", COALESCE(graduation_plan, '') AS graduation_plan"
+        sel += " FROM students WHERE student_id = ?"
+        student_row = cur.execute(sel, (student_id,)).fetchone()
         student_name = student_row["student_name"] if student_row else ""
+        graduation_plan = (student_row.get("graduation_plan") or "").strip() if student_row and has_plan else ""
 
         grade_rows = cur.execute(
             """
@@ -571,17 +575,39 @@ def _load_transcript_data(student_id: str):
             else 0.0
         )
 
+    # استكمال الوحدات من جدول المقررات إذا كانت مسجلة 0 أو فارغة في الدرجات
+    course_units_from_db = {}
+    if best_map:
+        with get_connection() as conn2:
+            cur2 = conn2.cursor()
+            for course_name in best_map.keys():
+                row = cur2.execute(
+                    "SELECT COALESCE(units, 0) AS u FROM courses WHERE course_name = ?",
+                    (course_name,),
+                ).fetchone()
+                if row and (row["u"] or 0) > 0:
+                    course_units_from_db[course_name] = int(row["u"])
+
     total_points = 0.0
     total_units = 0.0
     completed_units = 0
-    for info in best_map.values():
+    completed_units_breakdown = []  # لمراجعة الوحدات المنجزة: قائمة (مقرر، درجة، وحدات، ناجح؟)
+    for course_name, info in best_map.items():
         units = max(info["units"] or 0, 0)
+        if units <= 0 and course_name in course_units_from_db:
+            units = course_units_from_db[course_name]
         grade_best = info["best_grade"]
+        passed = grade_best is not None and grade_best >= PASSING_GRADE
         total_units += units
-        total_points += (grade_best * units)
-        # وحدات منجزة = وحدات أفضل محاولة ناجحة لكل مقرر (>= PASSING_GRADE)
-        if grade_best is not None and grade_best >= PASSING_GRADE:
+        total_points += (grade_best * units) if grade_best is not None else 0.0
+        if passed:
             completed_units += units
+        completed_units_breakdown.append({
+            "course_name": course_name,
+            "best_grade": grade_best,
+            "units_used": units,
+            "passed": passed,
+        })
     cumulative_gpa = round(total_points / total_units, 2) if total_units else 0.0
     completed_units = int(completed_units)
 
@@ -590,11 +616,13 @@ def _load_transcript_data(student_id: str):
     return {
         "student_id": student_id,
         "student_name": student_name,
+        "graduation_plan": graduation_plan,
         "transcript": transcript,
         "ordered_semesters": ordered_semesters,
         "semester_gpas": semester_gpas,
         "cumulative_gpa": cumulative_gpa,
         "completed_units": completed_units,
+        "completed_units_breakdown": completed_units_breakdown,
     }
 
 
@@ -889,7 +917,8 @@ def update_grade():
     data = request.get_json(force=True)
     sid = data.get("student_id")
     semester = data.get("semester")
-    course = data.get("course_name")  # الاسم الحالي في جدول grades (قد يكون غير دقيق)
+    course = data.get("course_name")  # الاسم الحالي في جدول grades (لتعريف السطر)
+    new_course_name = (data.get("new_course_name") or "").strip()  # الاسم الجديد عند اختيار مقرر من القائمة
     new_grade_raw = data.get("grade")
     new_course_code = (data.get("course_code") or "").strip()
     changed_by = data.get("changed_by", "admin")
@@ -935,6 +964,24 @@ def update_grade():
                     units_to_use = 0
         # اسم المقرر الذي سنحفظ به بعد التصحيح (قد يختلف عن الاسم القادم من الواجهة)
         course_name_final = course
+
+        # إذا اختار المستخدم مقرراً جديداً من قائمة المقررات، نعتمد الاسم والرمز والوحدات من جدول المقررات
+        if new_course_name:
+            course_name_final = new_course_name
+            course_row = cur.execute(
+                "SELECT course_code, units FROM courses WHERE course_name = ? LIMIT 1",
+                (new_course_name,),
+            ).fetchone()
+            if course_row:
+                try:
+                    course_code_to_use = (course_row[0] if course_row[0] is not None else "") or course_code_to_use
+                except Exception:
+                    pass
+                try:
+                    if len(course_row) > 1 and course_row[1] is not None:
+                        units_to_use = int(course_row[1])
+                except Exception:
+                    pass
 
         # في حال أدخل المستخدم رمزاً جديداً، نبحث عنه في جدول المقررات ونصحح الاسم/الوحدات
         if new_course_code:
@@ -1073,6 +1120,7 @@ def get_transcript(student_id):
     return jsonify({
         "student_id": data["student_id"],
         "student_name": data.get("student_name", ""),
+        "graduation_plan": data.get("graduation_plan", ""),
         "transcript": data["transcript"],
         "semester_gpas": data["semester_gpas"],
         "cumulative_gpa": data["cumulative_gpa"],
@@ -1084,22 +1132,31 @@ def get_transcript(student_id):
 def _compute_academic_status(student_id: str, data: dict):
     """
     حساب ملاحظة أكاديمية مختصرة (إنذارات/احتمال فصل) + فرصة استثنائية إن وُجدت.
-    منطق مشابه للدالة الموجودة في performance.py حتى يظهر في التصدير الرسمي.
+    منطق منسجم مع الدالة الموجودة في performance.py حتى يظهر في التصدير الرسمي.
     """
     ordered = data.get("ordered_semesters", []) or []
     sem_gpas = data.get("semester_gpas", {}) or {}
     cumulative_gpa = data.get("cumulative_gpa", 0.0)
 
+    from .utilities import get_connection  # استيراد محلي لتفادي الحلقات
+    from backend.services.performance import _load_rule_number  # إعادة استخدام نفس الدالة
+
     if not ordered:
         label = "لا توجد بيانات درجات"
     else:
+        # قراءة الحدود من academic_rules
+        with get_connection() as conn:
+            warning_threshold = _load_rule_number(conn, "warning_semester_threshold", 50.0)
+            dismissal_cgpa_threshold = _load_rule_number(conn, "dismissal_cgpa_threshold", 35.0)
+            dismissal_min_semesters = int(_load_rule_number(conn, "dismissal_min_semesters", 2.0))
+
         lows = []
         for idx, sem in enumerate(ordered):
             g = sem_gpas.get(sem, 0.0)
             if idx == 0:
                 lows.append(False)
             else:
-                lows.append((g or 0) < 50.0)
+                lows.append((g or 0) < warning_threshold)
 
         consecutive_lows = 0
         for idx in range(len(lows) - 1, -1, -1):
@@ -1112,7 +1169,7 @@ def _compute_academic_status(student_id: str, data: dict):
         if consecutive_lows == 0:
             label = "طالب في وضع أكاديمي سليم"
         elif consecutive_lows == 1:
-            label = "إنذار أكاديمي أول (معدل فصلي أقل من 50%)"
+            label = f"إنذار أكاديمي أول (معدل فصلي أقل من {warning_threshold:.0f}%)"
         elif consecutive_lows == 2:
             label = "إنذار أكاديمي ثانٍ (فصلان متتاليان دون إزالة الإنذار)"
         else:
@@ -1122,8 +1179,19 @@ def _compute_academic_status(student_id: str, data: dict):
             cgpa = float(cumulative_gpa or 0.0)
         except Exception:
             cgpa = 0.0
-        if len(ordered) >= 2 and cgpa < 35.0:
-            label += " — المعدل التراكمي أقل من 35% بعد فصلين على الأقل (قد يعرّض الطالب للفصل)."
+
+        semesters_count = len(ordered)
+        if semesters_count and cgpa < dismissal_cgpa_threshold:
+            if semesters_count < dismissal_min_semesters:
+                label += (
+                    f" — المعدل التراكمي أقل من {dismissal_cgpa_threshold:.0f}% في هذه المرحلة المبكرة من الدراسة؛ "
+                    f"يُنصح الطالب بتحسين أدائه لتفادي الوصول إلى حد الفصل وفق اللائحة."
+                )
+            else:
+                label += (
+                    f" — المعدل التراكمي أقل من {dismissal_cgpa_threshold:.0f}% بعد {semesters_count} فصل/فصول دراسية منذ الالتحاق؛ "
+                    f"وفق المادة 40 أو ما يعادلها قد يُعرض الطالب للفصل، مع إمكانية منحه فرصة استثنائية واحدة حسب اللوائح."
+                )
 
     extra_chance = False
     extra_note = ""

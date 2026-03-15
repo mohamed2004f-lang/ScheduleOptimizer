@@ -10,7 +10,7 @@
 <body>
   {% include "base_nav.html" %}
 
-  <main class="container-main">
+  <main class="container-main container-1100">
     <div class="page-header">
       <div>
         <h1 class="page-title">تصدير سجلات الحضور والغياب</h1>
@@ -21,8 +21,8 @@
       </div>
     </div>
 
-    <div class="card mb-4">
-      <div class="card-body">
+    <div class="card mb-4 filter-section">
+      <div class="card-body p-3">
         <form id="attendance-export-form" class="row g-4 align-items-stretch" method="GET" action="/students/export/attendance" target="_blank">
           <div class="col-md-4">
             <label for="weeks-input" class="form-label fw-semibold">عدد الأسابيع</label>

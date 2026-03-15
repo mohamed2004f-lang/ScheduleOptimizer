@@ -9,7 +9,7 @@
 </head>
 <body>
   {% include "base_nav.html" %}
-  <main class="container-main">
+  <main class="container-main container-1100">
     <div class="page-header">
       <div>
         <h1 class="page-title">خطط تسجيل الطلبة</h1>
@@ -18,7 +18,7 @@
     </div>
 
     <!-- قسم الطالب: إنشاء/تعديل خطة -->
-    <div class="card mb-3">
+    <div class="card mb-3 chart-container">
       <div class="card-body">
         <div class="page-header" style="margin:0 0 10px;">
           <div>
@@ -54,7 +54,8 @@
           <button id="btnImproveGPA" class="btn btn-outline-info btn-sm" disabled title="يتطلب اعتماد الجدول الدراسي أولاً">تحسين المعدل</button>
           <button id="btnSaveDraft" class="btn btn-primary btn-sm">حفظ كمسودة</button>
           <button id="btnSubmitPlan" class="btn btn-success btn-sm">إرسال للمراجعة</button>
-          <button id="btnPrintForm" class="btn btn-outline-success btn-sm">طباعة استمارة التسجيل</button>
+          <button id="btnPrintForm" class="btn btn-outline-success btn-sm">تحميل استمارة Word</button>
+          <button id="btnPrintFormHtml" class="btn btn-outline-secondary btn-sm" title="فتح استمارة في نافذة جديدة للطباعة من المستعرض">طباعة من المستعرض</button>
           <div id="planStatus" class="ms-auto small text-muted"></div>
         </div>
         <div id="planMsg" class="mt-2"></div>
@@ -62,7 +63,7 @@
     </div>
 
     <!-- قسم المشرف/رئيس القسم: الخطط المعلقة -->
-    <div class="card" id="reviewSection">
+    <div class="card chart-container" id="reviewSection">
       <div class="card-body">
         <div class="page-header" style="margin:0 0 10px;">
           <div>
@@ -119,6 +120,8 @@
     /** كاش للمعدل التراكمي لتقليل الاستدعاءات */
     let lastCumulativeGPA = null;
     let lastGpaStudentId = null;
+    /** آخر تنبيه مدة دراسة/حالة أكاديمية */
+    let lastStatusNote = '';
 
     function setPlanMsg(kind, text){
       document.getElementById('planMsg').innerHTML = text ? `<div class="alert alert-${kind} p-2 mb-0">${text}</div>` : '';
@@ -199,10 +202,10 @@
 
       let s;
       if (currentRole === 'supervisor') {
-        s = await fetchJSON('/instructors/supervised_students');
+        s = await fetchJSON('/instructors/supervised_students?active_only=1');
         STUDENTS = Array.isArray(s.json?.students) ? s.json.students : [];
       } else {
-        s = await fetchJSON('/list_students');
+        s = await fetchJSON('/students/list?active_only=1');
         STUDENTS = Array.isArray(s.json) ? s.json : [];
       }
 
@@ -243,6 +246,27 @@
 
       // سيتم ملء المقررات لاحقاً بناءً على الطالب (لأخذ المتطلبات في الاعتبار)
       await refreshEligibleCourses();
+      // إذا كان هناك طالب محدد مسبقاً، حمّل تنبيه الحالة الأكاديمية/مدة الدراسة
+      const sidPref = document.getElementById('studentSelect').value;
+      if (sidPref) {
+        await loadStatusNoteForStudent(sidPref);
+      }
+    }
+
+    async function loadStatusNoteForStudent(studentId){
+      if (!studentId) return;
+      try {
+        const r = await fetchJSON('/performance/status/' + encodeURIComponent(studentId));
+        if (r.ok && r.json) {
+          const s = r.json;
+          lastStatusNote = s.status_label || '';
+          if (lastStatusNote) {
+            setPlanMsg('info', 'تنبيه حالة أكاديمية/مدة دراسة: ' + lastStatusNote);
+          }
+        }
+      } catch (e) {
+        // نتجاهل الخطأ بهدوء
+      }
     }
 
     async function loadCurrentPlan(){
@@ -386,7 +410,13 @@
       const res = await fetchJSON(`/enrollment/plans/${id}/approve`, {method:'POST'});
       if(res.ok){
         await loadPending();
-        alert('تم الاعتماد وترحيل التسجيلات.');
+        const msg = res.json?.message || 'تم الاعتماد وترحيل التسجيلات.';
+        const count = res.json?.conflict_count;
+        if (count !== undefined && count > 0) {
+          alert(msg + '\n\nافتح صفحة "النتائج" أو اضغط "إعادة حساب التعارضات" فيها لرؤية التعارضات.');
+        } else {
+          alert(msg);
+        }
       } else {
         alert(res.json?.message || `فشل الاعتماد (${res.status})`);
       }
@@ -499,7 +529,7 @@
       modal.show();
     }
 
-    function printRegistrationForm(){
+    async function printRegistrationForm(){
       const sid = document.getElementById('studentSelect').value;
       const sem = document.getElementById('semesterInput').value.trim();
       if (!sid){
@@ -507,7 +537,45 @@
         return;
       }
       const qs = sem ? `?semester=${encodeURIComponent(sem)}` : '';
-      window.open(`/enrollment/print_registration_form/${encodeURIComponent(sid)}${qs}`, '_blank');
+      const url = `/enrollment/print_registration_form/${encodeURIComponent(sid)}${qs}`;
+      setPlanMsg('','');
+      try {
+        const resp = await fetch(url, { credentials: 'include', method: 'GET' });
+        const contentType = resp.headers.get('Content-Type') || '';
+        if (contentType.includes('application/json')) {
+          const j = await resp.json().catch(()=> ({}));
+          const msg = (j && j.message) ? j.message : ('خطأ من الخادم: ' + resp.status);
+          setPlanMsg('danger', msg + ' — يمكنك تجربة «طباعة من المستعرض» أدناه.');
+          return;
+        }
+        if (!resp.ok) {
+          setPlanMsg('danger', 'فشل التحميل (رمز ' + resp.status + '). جرّب «طباعة من المستعرض».');
+          return;
+        }
+        const blob = await resp.blob();
+        const name = resp.headers.get('Content-Disposition')?.split('filename=')?.[1]?.replace(/^["']|["']$/g,'') || `registration_${sid}.docx`;
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = name;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        setPlanMsg('success', 'تم تحميل استمارة التسجيل (Word).');
+      } catch (e) {
+        console.error(e);
+        setPlanMsg('danger', 'حدث خطأ في الاتصال. جرّب «طباعة من المستعرض».');
+      }
+    }
+
+    function openPrintRegistrationInBrowser(){
+      const sid = document.getElementById('studentSelect').value;
+      const sem = document.getElementById('semesterInput').value.trim();
+      if (!sid){
+        setPlanMsg('warning','اختر الطالب أولاً.');
+        return;
+      }
+      const qs = sem ? `?semester=${encodeURIComponent(sem)}` : '';
+      const url = `/enrollment/registration_form_html/${encodeURIComponent(sid)}${qs}`;
+      window.location.href = url;
     }
 
     document.addEventListener('DOMContentLoaded', async ()=>{
@@ -538,6 +606,14 @@
         }
       } catch(e) {}
       document.getElementById('studentSelect').addEventListener('change', refreshEligibleCourses);
+      document.getElementById('studentSelect').addEventListener('change', (ev)=>{
+        const sid = ev.target.value;
+        if (sid) {
+          loadStatusNoteForStudent(sid);
+        } else {
+          setPlanMsg('', '');
+        }
+      });
       const selPlanCourses = document.getElementById('planCoursesSelect');
       if (selPlanCourses){
         selPlanCourses.addEventListener('change', ()=>{
@@ -551,9 +627,9 @@
       document.getElementById('btnSaveDraft').addEventListener('click', saveDraft);
       document.getElementById('btnSubmitPlan').addEventListener('click', submitPlan);
       const btnPrint = document.getElementById('btnPrintForm');
-      if (btnPrint) {
-        btnPrint.addEventListener('click', printRegistrationForm);
-      }
+      if (btnPrint) btnPrint.addEventListener('click', printRegistrationForm);
+      const btnPrintHtml = document.getElementById('btnPrintFormHtml');
+      if (btnPrintHtml) btnPrintHtml.addEventListener('click', openPrintRegistrationInBrowser);
       document.getElementById('btnLoadPending').addEventListener('click', loadPending);
       await loadPending();
     });

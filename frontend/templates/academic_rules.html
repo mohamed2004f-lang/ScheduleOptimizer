@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>لائحة الإنذارات وقرارات الفصل</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100">
+    <div class="page-header mb-3">
+      <div>
+        <h1 class="page-title">لائحة الإنذارات وقرارات الفصل</h1>
+        <p class="page-subtitle">
+          عرض وتعديل البنود الأساسية للإنذارات الأكاديمية وقرارات الفصل، بما في ذلك حدود المعدلات (50% و 35%) وعدد الإنذارات المتتالية.
+        </p>
+      </div>
+    </div>
+
+    <div class="alert-custom">
+      <div class="alert-custom-title">تنبيه تنظيمي</div>
+      <div class="alert-custom-text small">
+        هذه الصفحة موجهة للإداريين فقط. التعديلات هنا تؤثر على صياغة الحالة الأكاديمية في التقارير، ويمكن مستقبلاً ربطها بالكامل بمنطق الحساب.
+      </div>
+    </div>
+
+    <div id="msgBox" class="mb-2"></div>
+
+    <div class="card chart-container">
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm align-middle stats-table" id="rulesTable">
+            <thead>
+              <tr>
+                <th style="width: 20%;">العنصر</th>
+                <th style="width: 35%;">الوصف المختصر</th>
+                <th style="width: 10%;">قيمة رقمية</th>
+                <th style="width: 25%;">ملاحظة/نص إضافي</th>
+                <th style="width: 10%;">مفعل؟</th>
+                <th style="width: 10%;"></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="small text-muted mt-2">
+          ملاحظة: لا ينصح بتغيير القيم إلا بعد مراجعة اللائحة الرسمية (المادة 43 و 44)، ويمكن تدوين نصوص اللائحة كاملة في خانة الملاحظات.
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/js/common.js"></script>
+  <script>
+    let RULES = [];
+
+    function showMsg(text, type='info') {
+      const box = document.getElementById('msgBox');
+      box.innerHTML = text ? `<div class="alert alert-${type} py-1 px-2 mb-0">${text}</div>` : '';
+    }
+
+    function renderRules() {
+      const tbody = document.querySelector('#rulesTable tbody');
+      tbody.innerHTML = '';
+      if (!RULES.length) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td colspan="6" class="text-center text-muted">لا توجد بنود مسجلة.</td>';
+        tbody.appendChild(tr);
+        return;
+      }
+      RULES.forEach(rule => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>
+            <div class="fw-semibold">${rule.title || ''}</div>
+            <div class="small text-muted mono">${rule.rule_key}</div>
+          </td>
+          <td>
+            <textarea class="form-control form-control-sm" rows="2" data-field="description" data-id="${rule.id}">${rule.description || ''}</textarea>
+          </td>
+          <td style="max-width:110px;">
+            <input type="number" step="0.01" class="form-control form-control-sm" data-field="value_number" data-id="${rule.id}" value="${rule.value_number != null ? rule.value_number : ''}">
+          </td>
+          <td>
+            <textarea class="form-control form-control-sm" rows="2" data-field="value_text" data-id="${rule.id}">${rule.value_text || ''}</textarea>
+          </td>
+          <td class="text-center">
+            <input type="checkbox" class="form-check-input" data-field="is_active" data-id="${rule.id}" ${rule.is_active ? 'checked' : ''}>
+          </td>
+          <td class="text-center">
+            <button type="button" class="btn btn-sm btn-primary btn-save" data-id="${rule.id}">حفظ</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      document.querySelectorAll('.btn-save').forEach(btn => {
+        btn.addEventListener('click', async (ev) => {
+          const id = ev.currentTarget.dataset.id;
+          const rule = RULES.find(r => String(r.id) === String(id));
+          if (!rule) return;
+          const descEl = document.querySelector(`[data-field="description"][data-id="${id}"]`);
+          const numEl = document.querySelector(`[data-field="value_number"][data-id="${id}"]`);
+          const txtEl = document.querySelector(`[data-field="value_text"][data-id="${id}"]`);
+          const actEl = document.querySelector(`[data-field="is_active"][data-id="${id}"]`);
+
+          const payload = {
+            id: rule.id,
+            rule_key: rule.rule_key,
+            title: rule.title,
+            description: descEl ? descEl.value : rule.description,
+            category: rule.category,
+            value_number: numEl ? numEl.value : rule.value_number,
+            value_text: txtEl ? txtEl.value : rule.value_text,
+            is_active: actEl ? actEl.checked : rule.is_active,
+          };
+
+          try {
+            await apiPost('/academic_rules/save', payload);
+            showMsg('تم حفظ التعديلات على البند: ' + (rule.title || rule.rule_key), 'success');
+            loadRules(); // إعادة التحميل لتحديث القيم من الخادم
+          } catch (e) {
+            console.error(e);
+            showMsg('فشل حفظ التعديلات', 'danger');
+          }
+        });
+      });
+    }
+
+    async function loadRules() {
+      showMsg('جارٍ تحميل بنود اللائحة...', 'info');
+      try {
+        const data = await apiGet('/academic_rules/list');
+        RULES = Array.isArray(data.rules) ? data.rules : [];
+        showMsg(`تم تحميل ${RULES.length} بند/بنداً من اللائحة.`, 'success');
+        renderRules();
+      } catch (e) {
+        console.error(e);
+        showMsg('فشل تحميل بنود اللائحة', 'danger');
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      loadRules();
+    });
+  </script>
+</body>
+</html>
+

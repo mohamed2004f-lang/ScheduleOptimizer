@@ -33,20 +33,81 @@ def normalize_sid(sid):
 @students_bp.route("/list")
 @login_required
 def list_students():
-    """جلب قائمة الطلاب - يستخدم Service Layer"""
+    """جلب قائمة الطلاب - يستخدم Service Layer. استخدم ?active_only=1 للتسجيل وخطط التسجيل (لا يُظهر سحب ملف/موقوف قيد/خريج)."""
     try:
         from backend.core.services import StudentService
         from backend.core.exceptions import AppException
         
-        students = StudentService.get_all_students()
-        # تحويل إلى كائنات Student للتوافق مع الكود القديم
-        students_objects = [Student(s["student_id"], s["student_name"]) for s in students]
+        active_only = request.args.get("active_only", "").lower() in ("1", "true", "yes")
+        students = StudentService.get_all_students(active_only=active_only)
+        # تحويل إلى كائنات Student للتوافق مع الكود القديم مع إضافة حالة القيد كحقول إضافية
+        students_objects = []
+        for s in students:
+            obj = Student(s["student_id"], s["student_name"])
+            # إرفاق حالة القيد وحقولها كخصائص إضافية
+            setattr(obj, "enrollment_status", s.get("enrollment_status", "active"))
+            setattr(obj, "status_changed_at", s.get("status_changed_at"))
+            setattr(obj, "status_reason", s.get("status_reason", ""))
+            setattr(obj, "graduation_plan", s.get("graduation_plan", ""))
+            students_objects.append(obj)
         return jsonify([s.__dict__ for s in students_objects])
     except AppException as e:
         raise
     except Exception as e:
         from backend.core.exceptions import DatabaseError
         raise DatabaseError(f"فشل جلب قائمة الطلاب: {str(e)}")
+
+
+@students_bp.route("/graduates")
+@login_required
+def list_graduates():
+    """قائمة الخريجين: الاسم، الرقم الدراسي، الهاتف، سنة التخرج، المعدل التراكمي."""
+    try:
+        from backend.services.grades import _load_transcript_data
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
+            has_status = "enrollment_status" in cols
+            has_phone = "phone" in cols
+            if not has_status:
+                return jsonify([])
+            sel = "student_id, student_name, status_changed_at"
+            if has_phone:
+                sel += ", phone"
+            rows = cur.execute(f"""
+                SELECT {sel}
+                FROM students
+                WHERE COALESCE(enrollment_status, 'active') = 'graduated'
+                ORDER BY status_changed_at DESC, student_name, student_id
+            """).fetchall()
+        result = []
+        for r in rows:
+            sid = r["student_id"]
+            try:
+                tr = _load_transcript_data(sid)
+                gpa = tr.get("cumulative_gpa")
+            except Exception:
+                gpa = None
+            year = None
+            if r.get("status_changed_at"):
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(r["status_changed_at"].replace("Z", "+00:00"))
+                    year = dt.year
+                except Exception:
+                    pass
+            result.append({
+                "student_id": sid,
+                "student_name": r["student_name"] or "",
+                "phone": (r["phone"] or "") if has_phone else "",
+                "graduation_year": year,
+                "cumulative_gpa": gpa,
+            })
+        return jsonify(result)
+    except Exception as e:
+        from backend.core.exceptions import DatabaseError
+        raise DatabaseError(f"فشل جلب قائمة الخريجين: {str(e)}")
+
 
 @students_bp.route("/add", methods=["POST"])
 @login_required
@@ -59,8 +120,9 @@ def add_student():
         data = request.get_json(force=True) or {}
         sid = data.get("student_id")
         name = data.get("student_name", "") or ""
+        graduation_plan = (data.get("graduation_plan") or "").strip()
         
-        result = StudentService.add_student(sid, name)
+        result = StudentService.add_student(sid, name, graduation_plan=graduation_plan)
         return jsonify(result), 200
     except AppException as e:
         # يتم التعامل مع AppException تلقائياً من خلال error handlers
@@ -68,6 +130,36 @@ def add_student():
     except Exception as e:
         from backend.core.exceptions import DatabaseError
         raise DatabaseError(f"فشل إضافة الطالب: {str(e)}")
+
+
+@students_bp.route("/update_status", methods=["POST"])
+@role_required("admin")
+def update_student_status():
+    """تحديث حالة قيد الطالب (مسجَّل، سحب الملف، موقوف قيده، خريج) عبر Service Layer"""
+    try:
+        from backend.core.services import StudentService
+        from backend.core.exceptions import AppException
+
+        data = request.get_json(force=True) or {}
+        sid = data.get("student_id")
+        status = data.get("enrollment_status") or data.get("status")
+        changed_at = data.get("status_changed_at") or data.get("changed_at")
+        reason = data.get("status_reason") or data.get("reason", "")
+        phone = data.get("phone") or ""
+
+        result = StudentService.update_enrollment_status(
+            student_id=sid,
+            status=status,
+            changed_at=changed_at,
+            reason=reason or "",
+            phone=phone,
+        )
+        return jsonify(result), 200
+    except AppException:
+        raise
+    except Exception as e:
+        from backend.core.exceptions import DatabaseError
+        raise DatabaseError(f"فشل تحديث حالة قيد الطالب: {str(e)}")
 
 @students_bp.route("/delete", methods=["POST"])
 @login_required
@@ -117,6 +209,24 @@ def save_registrations():
         return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
     if not isinstance(courses, list):
         return jsonify({"status": "error", "message": "courses/registrations يجب أن تكون قائمة"}), 400
+
+    # منع تسجيل طالب غير فعّال (سحب ملف، موقوف قيده، خريج)
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cols = [r[1] for r in cur.execute("PRAGMA table_info(students)").fetchall()]
+            if "enrollment_status" in cols:
+                row = cur.execute(
+                    "SELECT COALESCE(enrollment_status, 'active') FROM students WHERE student_id = ?",
+                    (sid,),
+                ).fetchone()
+                if row and (row[0] or "active") != "active":
+                    return jsonify({
+                        "status": "error",
+                        "message": "لا يمكن تعديل التسجيلات لطالب غير مسجّل (حالة القيد: سحب ملف أو موقوف قيده أو خريج).",
+                    }), 400
+    except Exception:
+        pass
 
     # Deduplicate provided courses while preserving order to avoid inserting duplicates
     seen = set()
@@ -251,6 +361,23 @@ def delete_registrations():
     except Exception as e:
         current_app.logger.exception("delete_registrations failed")
         return jsonify({"status":"error","message": str(e)}), 500
+
+
+@students_bp.route("/recompute_conflicts", methods=["POST"])
+@role_required("admin")
+def recompute_conflicts_route():
+    """
+    إعادة حساب تعارضات الجدول لجميع الطلبة وملء conflict_report.
+    يُستدعى يدوياً من صفحة النتائج أو تلقائياً بعد اعتماد الخطة/تحديث الجدول.
+    """
+    try:
+        with get_connection() as conn:
+            count = recompute_conflict_report(conn)
+        return jsonify({"status": "ok", "message": f"تم تحديث التعارضات ({count} تعارض)", "count": count}), 200
+    except Exception as e:
+        current_app.logger.exception("recompute_conflicts failed")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 
 @students_bp.route("/import_registrations", methods=["POST"])
 @login_required
@@ -993,30 +1120,37 @@ def compute_per_student_conflicts(conn):
     """
     Compute conflicts where a student has 2+ different courses at the same day/time.
     Returns list of dicts: { student_id, day, time, conflicting_sections, conflict_id }.
-    This function ONLY checks courses that are in the schedule table.
+    Uses optimized_schedule if it has rows (لمطابقة شبكة النتائج)، وإلا schedule.
     """
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    # Get all courses from schedule table with their day and time
+    # مصدر أوقات المقررات: optimized_schedule (المعروض في النتائج) إن وُجد، وإلا schedule
+    schedule_rows = []
     try:
         schedule_rows = cur.execute("""
             SELECT DISTINCT course_name, day, time 
-            FROM schedule 
-            WHERE course_name IS NOT NULL 
-            AND course_name != '' 
-            AND day IS NOT NULL 
-            AND day != '' 
-            AND time IS NOT NULL 
-            AND time != ''
+            FROM optimized_schedule 
+            WHERE course_name IS NOT NULL AND course_name != '' 
+            AND day IS NOT NULL AND day != '' 
+            AND time IS NOT NULL AND time != ''
         """).fetchall()
-    except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"Error reading schedule table: {e}")
-        return []
+    except Exception:
+        pass
+    if not schedule_rows:
+        try:
+            schedule_rows = cur.execute("""
+                SELECT DISTINCT course_name, day, time 
+                FROM schedule 
+                WHERE course_name IS NOT NULL AND course_name != '' 
+                AND day IS NOT NULL AND day != '' 
+                AND time IS NOT NULL AND time != ''
+            """).fetchall()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error("Error reading schedule table: %s", e)
+            return []
 
-    # If no courses in schedule, return empty conflicts
     if not schedule_rows:
         return []
 
@@ -1140,6 +1274,32 @@ def compute_per_student_conflicts(conn):
                         })
 
     return conflicts
+
+
+def recompute_conflict_report(conn):
+    """
+    إعادة حساب تعارضات الجدول لجميع الطلبة وملء جدول conflict_report من جديد.
+    يُستدعى بعد تغيير التسجيلات أو الجدول لضمان ظهور التعارضات (مثل طالبة حنين).
+    """
+    cur = conn.cursor()
+    conflicts = compute_per_student_conflicts(conn)
+    try:
+        cur.execute("DELETE FROM conflict_report")
+        for c in conflicts:
+            cur.execute(
+                """INSERT INTO conflict_report (student_id, day, time, conflicting_sections) VALUES (?, ?, ?, ?)""",
+                (
+                    c.get("student_id") or "",
+                    c.get("day") or "",
+                    c.get("time") or "",
+                    c.get("conflicting_sections") or "",
+                ),
+            )
+        conn.commit()
+        return len(conflicts)
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def compute_student_conflicts(conn):

@@ -8,20 +8,51 @@ from backend.services.grades import _load_transcript_data
 performance_bp = Blueprint("performance", __name__)
 
 
+def _load_rule_number(conn, rule_key: str, default: float) -> float:
+    """
+    قراءة قيمة رقمية من جدول academic_rules إن وُجدت، وإلا إرجاع القيمة الافتراضية.
+    """
+    try:
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT value_number FROM academic_rules WHERE rule_key = ? AND is_active = 1",
+            (rule_key,),
+        ).fetchone()
+        if not row:
+            return float(default)
+        val = row[0]
+        if val is None:
+            return float(default)
+        return float(val)
+    except Exception:
+        return float(default)
+
+
 def _compute_status(ordered_semesters, semester_gpas, cumulative_gpa):
     """
     حساب حالة الطالب (جيد، إنذار أول، إنذار ثانٍ، أكثر) بشكل تقريبي بناءً على المادة 43.
     - نتجاهل أول فصل قُيّد فيه الطالب (لا يصدر فيه إنذار).
-    - نعتبر الفصل "منخفضاً" إذا كان معدله الفصلي < 50.
+    - نعتبر الفصل "منخفضاً" إذا كان معدله الفصلي أقل من الحد المحدد في لائحة الإنذار (افتراضياً 50%).
     - نحسب عدد الفصول المنخفضة المتتالية في النهاية:
         0 -> good
         1 -> warning_1
         2 -> warning_2
         3+ -> warning_3
-    - إذا كان المعدل التراكمي < 35 بعد مرور فصلين أو أكثر، نضيف ملاحظة عن احتمال الفصل.
+    - إذا كان المعدل التراكمي أقل من حد الفصل (افتراضياً 35%) بعد مرور فصلين أو أكثر، نضيف ملاحظة عن احتمال الفصل.
     """
     if not ordered_semesters:
         return {"code": "no_data", "label": "لا توجد بيانات درجات"}
+
+    # قراءة الحدود الرقمية من جدول academic_rules (مع قيم افتراضية إذا لم توجد)
+    with get_connection() as conn:
+        warning_threshold = _load_rule_number(conn, "warning_semester_threshold", 50.0)
+        dismissal_cgpa_threshold = _load_rule_number(conn, "dismissal_cgpa_threshold", 35.0)
+        dismissal_min_semesters = int(_load_rule_number(conn, "dismissal_min_semesters", 2.0))
+        # حدود مدة الدراسة
+        study_normal_max = int(_load_rule_number(conn, "study_normal_max_semesters", 10.0))
+        study_abs_max = int(_load_rule_number(conn, "study_absolute_max_semesters", 14.0))
+        study_extra_semesters = int(_load_rule_number(conn, "study_extra_semesters_once", 2.0))
+        study_extra_min_units = int(_load_rule_number(conn, "study_extra_semesters_min_units", 130.0))
 
     lows = []
     for idx, sem in enumerate(ordered_semesters):
@@ -29,7 +60,7 @@ def _compute_status(ordered_semesters, semester_gpas, cumulative_gpa):
         if idx == 0:
             lows.append(False)
         else:
-            lows.append(g < 50.0)
+            lows.append(g < warning_threshold)
 
     consecutive_lows = 0
     for idx in range(len(lows) - 1, -1, -1):
@@ -44,7 +75,7 @@ def _compute_status(ordered_semesters, semester_gpas, cumulative_gpa):
         label = "طالب في وضع أكاديمي سليم"
     elif consecutive_lows == 1:
         status_code = "warning_1"
-        label = "إنذار أكاديمي أول (معدل فصلي أقل من 50%)"
+        label = f"إنذار أكاديمي أول (معدل فصلي أقل من {warning_threshold:.0f}%)"
     elif consecutive_lows == 2:
         status_code = "warning_2"
         label = "إنذار أكاديمي ثانٍ (فصلان متتاليان دون إزالة الإنذار)"
@@ -58,8 +89,40 @@ def _compute_status(ordered_semesters, semester_gpas, cumulative_gpa):
     except Exception:
         cgpa = 0.0
 
-    if len(ordered_semesters) >= 2 and cgpa < 35.0:
-        extra_notes.append("المعدل التراكمي أقل من 35% بعد فصلين على الأقل (وفق المادة 44 قد يعرّض الطالب للفصل).")
+    semesters_count = len(ordered_semesters)
+    if semesters_count and cgpa < dismissal_cgpa_threshold:
+        if semesters_count < dismissal_min_semesters:
+            # مرحلة مبكرة: تنبيه فقط دون حديث مباشر عن الفصل
+            extra_notes.append(
+                f"المعدل التراكمي أقل من {dismissal_cgpa_threshold:.0f}% في هذه المرحلة المبكرة من الدراسة؛ "
+                f"يُنصح الطالب بتحسين أدائه لتفادي الوصول إلى حد الفصل وفق اللائحة."
+            )
+        else:
+            # بعد تجاوز عدد الفصول المحدد: إشارة صريحة لاحتمال الفصل
+            extra_notes.append(
+                f"المعدل التراكمي أقل من {dismissal_cgpa_threshold:.0f}% بعد {semesters_count} فصل/فصول دراسية منذ الالتحاق؛ "
+                f"وفق المادة 40 أو ما يعادلها قد يُعرض الطالب للفصل، مع إمكانية منحه فرصة استثنائية واحدة حسب اللوائح."
+            )
+
+    # تنبيهات خاصة بمدة الدراسة (عدد الفصول منذ الالتحاق)
+    if semesters_count:
+        if semesters_count >= study_abs_max:
+            extra_notes.append(
+                f"تجاوز الطالب الحد الأقصى المطلق لمدة الدراسة ({study_abs_max} فصل دراسي اعتيادي أو أكثر)؛ "
+                f"يجب عرض حالته على مجلس الكلية لاتخاذ قرار نهائي."
+            )
+        elif semesters_count >= max(study_abs_max - 2, study_normal_max):
+            remaining = study_abs_max - semesters_count
+            if remaining > 0:
+                extra_notes.append(
+                    f"تنبيه مدة الدراسة: تبقّى تقريباً {remaining} فصل/فصول قبل بلوغ الحد الأقصى المطلق لمدة الدراسة ({study_abs_max} فصلاً)."
+                )
+        elif semesters_count >= study_normal_max:
+            extra_notes.append(
+                f"تنبيه مدة الدراسة: عدد الفصول المنجزة ({semesters_count}) تجاوز المدة النظامية ({study_normal_max} فصول)، "
+                f"لكن لم يصل بعد إلى الحد الأقصى المطلق ({study_abs_max}). يمكن النظر في منح فصول إضافية (حتى {study_extra_semesters} فصل/فصول) "
+                f"لطالب اجتاز {study_extra_min_units} وحدة دراسية على الأقل وبتوصية من القسم."
+            )
 
     if extra_notes:
         label = f"{label} — " + " ".join(extra_notes)

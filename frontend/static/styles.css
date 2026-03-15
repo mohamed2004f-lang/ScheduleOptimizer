@@ -54,6 +54,10 @@ body{
   padding: 12px 16px;
   box-shadow: 0 12px 24px rgba(2,6,23,.12);
 }
+.app-topbar-inner{
+  position: relative;
+  min-height: 52px;
+}
 .app-brand{
   display:flex;
   align-items:center;
@@ -62,9 +66,17 @@ body{
   color:inherit;
 }
 .app-brand:hover{ color:#fff; opacity:.98; }
-.app-brand-title{ line-height:1.1; }
+.app-brand-title{ line-height:1.1; text-align:right; }
 .app-brand-title .t1{ font-weight:800; font-size:16px; margin:0; letter-spacing:.2px; }
 .app-brand-title .t2{ font-size:12px; margin:0; opacity:.92; }
+.app-brand-title .t3{ font-size:11px; margin:0; opacity:.9; }
+
+/* center logo + النص في أعلى الشريط */
+.app-topbar-inner .app-brand{
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
 .app-logo{
   height:46px;
   width:auto;
@@ -538,6 +550,119 @@ body{
 }
 
 /* ============================================
+   مقاطع صفحة عامة (كما في لوحة التحليلات)
+   لاستخدامها في أغلب الصفحات
+   ============================================ */
+.filter-section {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 1rem;
+    margin-bottom: 1.25rem;
+    box-shadow: 0 4px 15px rgba(0, 51, 102, 0.06);
+}
+
+.filter-group {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    align-items: flex-end;
+}
+
+.filter-group label {
+    color: #003366;
+    font-weight: 600;
+    margin-bottom: 0.35rem;
+    display: block;
+}
+
+.filter-group select,
+.filter-group input {
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    padding: 0.5rem 0.9rem;
+    font-size: 0.9rem;
+}
+
+.chart-container {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 1.1rem;
+    box-shadow: 0 4px 15px rgba(0, 51, 102, 0.06);
+    margin-bottom: 1.25rem;
+}
+
+.chart-title {
+    color: #003366;
+    font-weight: 700;
+    margin-bottom: 1rem;
+    font-size: 1.05rem;
+    border-bottom: 2px solid #D4AF37;
+    padding-bottom: 0.6rem;
+}
+
+.stats-table {
+    background: #ffffff;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 4px 15px rgba(0, 51, 102, 0.05);
+}
+
+.stats-table thead {
+    background: linear-gradient(135deg, #003366 0%, #004d99 100%);
+    color: #ffffff;
+}
+
+.stats-table tbody tr {
+    border-bottom: 1px solid #e0e0e0;
+    transition: background-color 0.2s ease;
+}
+
+.stats-table tbody tr:hover {
+    background-color: #f8f9fa;
+}
+
+.stats-table td {
+    padding: 0.7rem;
+    vertical-align: middle;
+    font-size: 0.9rem;
+}
+
+.alert-custom {
+    background: linear-gradient(135deg, rgba(0, 51, 102, 0.06) 0%, rgba(212, 175, 55, 0.06) 100%);
+    border-left: 4px solid #003366;
+    border-radius: 6px;
+    padding: 1rem;
+    margin-bottom: 1.25rem;
+}
+
+.alert-custom-title {
+    color: #003366;
+    font-weight: 700;
+    margin-bottom: 0.35rem;
+}
+
+.alert-custom-text {
+    color: #666666;
+}
+
+.export-btn {
+    background: linear-gradient(135deg, #003366 0%, #004d99 100%);
+    color: #ffffff;
+    border: none;
+    padding: 0.5rem 1.1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.export-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 51, 102, 0.25);
+}
+
+/* ============================================
    تحسينات Responsive
    ============================================ */
 @media (max-width: 768px) {
@@ -553,6 +678,30 @@ body{
     .card {
         margin-bottom: 1rem;
     }
+}
+
+/* ============================================
+   الهوية البصرية (الشعار والرأس)
+   قيم رسمية لجامعة
+   ============================================ */
+.mech-logo {
+    height: 56px;   /* حجم كبير رسمي مناسب لرأس صفحة جامعة */
+    width: auto;
+}
+
+.top-nav {
+    padding-top: 0.4rem;
+    padding-bottom: 0.4rem;
+}
+
+.brand-title h1 {
+    font-size: 1.25rem;
+    margin-bottom: 0.1rem;
+}
+
+.brand-title p {
+    font-size: 0.95rem;
+    margin: 0;
 }
 
 /* ============================================
@@ -576,6 +725,7 @@ body{
 /* ============================================
    تحسينات Loading States
    ============================================ */
+/* مخفي افتراضياً؛ يظهر فقط عند استدعاء showLoading() (إضافة class active) */
 .loading-overlay {
     position: fixed;
     top: 0;
@@ -587,6 +737,15 @@ body{
     justify-content: center;
     align-items: center;
     z-index: 9999;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+.loading-overlay.active {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
 }
 
 .loading-spinner {

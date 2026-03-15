@@ -20,7 +20,7 @@ from .utilities import (
     get_schedule_updated_at,
     touch_schedule_updated_at,
 )
-from .students import compute_per_student_conflicts
+from .students import compute_per_student_conflicts, recompute_conflict_report
 
 logger = logging.getLogger(__name__)
 
@@ -263,12 +263,26 @@ def publish_schedule():
     """اعتماد/نشر الجدول من الأدمن الرئيسي. بعدها يراه الطالب والمشرف وتُستمد منه المقررات المتاحة في خطط التسجيل."""
     try:
         with get_connection() as conn:
+            cur = conn.cursor()
+            # نسخ الجدول الحالي (schedule) إلى الجدول النهائي (optimized_schedule) لظهوره في صفحة النتائج
+            cur.execute("DELETE FROM optimized_schedule")
+            cur.execute("""
+                INSERT INTO optimized_schedule (section_id, course_name, day, time, room, instructor, semester)
+                SELECT rowid, course_name, day, time, COALESCE(room,''), COALESCE(instructor,''), COALESCE(semester,'')
+                FROM schedule
+                WHERE course_name IS NOT NULL AND course_name != '' AND day IS NOT NULL AND day != '' AND time IS NOT NULL AND time != ''
+            """)
+            conn.commit()
             published_at = set_schedule_published_at(conn)
             # عند النشر، نضبط أيضاً updated_at حتى لا يظهر تحذير فوراً
             try:
                 touch_schedule_updated_at(conn)
             except Exception:
                 pass
+            try:
+                recompute_conflict_report(conn)
+            except Exception as e:
+                logger.exception("فشل إعادة حساب التعارضات عند نشر الجدول: %s", e)
         log_activity(action="schedule_publish", details=f"published_at={published_at}")
         return jsonify({"status": "ok", "message": "تم اعتماد ونشر الجدول الدراسي", "published_at": published_at}), 200
     except Exception as e:

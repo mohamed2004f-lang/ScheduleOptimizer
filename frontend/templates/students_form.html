@@ -20,8 +20,8 @@
       </div>
 
       <!-- أدوات الاستيراد والتصدير -->
-      <div class="card mb-3">
-        <div class="card-body">
+      <div class="card mb-3 filter-section">
+        <div class="card-body p-2">
           <div class="d-flex flex-wrap align-items-center justify-content-between">
             <div class="btn-group-gap">
               <a class="btn btn-outline-success btn-sm" href="/students/export/excel">⬇️ تصدير Excel</a>
@@ -38,17 +38,25 @@
       </div>
 
       <!-- نموذج إضافة طالب -->
-      <div class="card mb-3">
+      <div class="card mb-3 chart-container">
         <div class="card-body">
           <form id="studentForm" onsubmit="return false;">
             <div class="row g-2 align-items-end">
-              <div class="col-md-4">
+              <div class="col-md-3">
                 <label class="form-label">الرقم الدراسي</label>
                 <input id="student_id" class="form-control" required>
               </div>
-              <div class="col-md-6">
+              <div class="col-md-4">
                 <label class="form-label">اسم الطالب</label>
                 <input id="student_name" class="form-control">
+              </div>
+              <div class="col-md-3">
+                <label class="form-label">خطة التخرج</label>
+                <select id="student_graduation_plan" class="form-select">
+                  <option value="">— غير محدد —</option>
+                  <option value="150">150 وحدة (نظام قديم)</option>
+                  <option value="155">155 وحدة (نظام جديد)</option>
+                </select>
               </div>
               <div class="col-md-2">
                 <button id="btnAddStudent" class="btn btn-primary w-100" type="button">أضف</button>
@@ -60,13 +68,53 @@
       </div>
 
       <!-- قائمة الطلبة -->
-      <div class="card">
+      <div class="card chart-container">
         <div class="card-body">
           <h6>قائمة الطلبة</h6>
           <div id="studentsList" class="small mono"></div>
           <div class="mt-3">
             <a href="/" class="btn btn-outline-secondary btn-sm">العودة</a>
             <a href="/registrations_form" class="btn btn-primary btn-sm ms-2">تسجيل مواد الطلبة</a>
+          </div>
+        </div>
+      </div>
+      <!-- نافذة تغيير حالة القيد -->
+      <div class="modal fade" id="statusStudentModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h6 class="modal-title">تغيير حالة قيد الطالب</h6>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+            </div>
+            <div class="modal-body">
+              <div class="mb-2">
+                <label class="form-label">الطالب</label>
+                <input id="st_status_student_id" class="form-control mb-1" disabled>
+                <input id="st_status_student_name" class="form-control" disabled>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">حالة القيد</label>
+                <select id="st_status_select" class="form-select">
+                  <option value="active">مسجَّل</option>
+                  <option value="withdrawn">سحب الملف</option>
+                  <option value="suspended">موقوف قيده</option>
+                  <option value="graduated">خريج</option>
+                </select>
+              </div>
+              <div class="mb-2" id="st_status_phone_wrap" style="display: none;">
+                <label class="form-label">رقم الهاتف (اختياري - للخريجين)</label>
+                <input type="text" id="st_status_phone" class="form-control" placeholder="مثال: 05xxxxxxxx">
+              </div>
+              <div class="mb-2">
+                <label class="form-label">ملاحظة (اختياري)</label>
+                <textarea id="st_status_reason" class="form-control" rows="2" placeholder="مثال: سحب الملف بناءً على طلب ولي الأمر بتاريخ ..."></textarea>
+              </div>
+              <div id="st_status_msg" class="mt-2"></div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">إلغاء</button>
+              <button class="btn btn-primary btn-sm" id="stStatusSaveBtn">حفظ حالة القيد</button>
+            </div>
           </div>
         </div>
       </div>
@@ -88,6 +136,14 @@
               <label class="form-label">اسم الطالب</label>
               <input id="es_student_name" class="form-control">
             </div>
+            <div class="mb-2">
+              <label class="form-label">خطة التخرج</label>
+              <select id="es_graduation_plan" class="form-select">
+                <option value="">— غير محدد —</option>
+                <option value="150">150 وحدة (نظام قديم)</option>
+                <option value="155">155 وحدة (نظام جديد)</option>
+              </select>
+            </div>
             <div id="es_msg" class="mt-2"></div>
           </div>
           <div class="modal-footer">
@@ -104,7 +160,7 @@
   /* تحميل وعرض الطلبة */
   async function loadStudents(){
     try {
-      const r = await fetch('/list_students');
+      const r = await fetch('/students/list?active_only=1');
       const arr = r.ok ? await r.json() : [];
       const el = document.getElementById('studentsList');
       if(!arr.length){ el.textContent = 'لا يوجد طلاب مسجلين.'; return; }
@@ -116,7 +172,26 @@
         li.className = 'py-1 d-flex align-items-center';
         const span = document.createElement('span');
         span.className = 'flex-grow-1';
-        span.textContent = `${s.student_id} — ${s.student_name || ''}`;
+        const status = s.enrollment_status || 'active';
+        const statusMap = {
+          'active': { label: 'مسجَّل', cls: 'bg-success-subtle text-success' },
+          'withdrawn': { label: 'سحب الملف', cls: 'bg-secondary text-white' },
+          'suspended': { label: 'موقوف قيده', cls: 'bg-warning text-dark' },
+          'graduated': { label: 'خريج', cls: 'bg-info text-dark' },
+        };
+        const stInfo = statusMap[status] || statusMap['active'];
+        span.textContent = `${s.student_id} — ${s.student_name || ''} `;
+        const badge = document.createElement('span');
+        badge.className = `badge rounded-pill ms-1 ${stInfo.cls}`;
+        badge.textContent = stInfo.label;
+        span.appendChild(badge);
+        const plan = (s.graduation_plan || '').trim();
+        if (plan) {
+          const planBadge = document.createElement('span');
+          planBadge.className = 'badge rounded-pill ms-1 bg-secondary';
+          planBadge.textContent = plan === '150' ? '150 وحدة' : plan === '155' ? '155 وحدة' : plan;
+          span.appendChild(planBadge);
+        }
         // Buttons: Edit + Delete
         const btnGroup = document.createElement('div');
 
@@ -127,13 +202,20 @@
         editBtn.addEventListener('click', () => openEditStudent(s));
 
         const delBtn = document.createElement('button');
-        delBtn.className = 'btn btn-sm btn-danger';
+        delBtn.className = 'btn btn-sm btn-danger me-1';
         delBtn.type = 'button';
         delBtn.textContent = 'حذف';
         delBtn.addEventListener('click', () => deleteStudent(s.student_id));
 
+        const statusBtn = document.createElement('button');
+        statusBtn.className = 'btn btn-sm btn-outline-secondary';
+        statusBtn.type = 'button';
+        statusBtn.textContent = 'حالة القيد';
+        statusBtn.addEventListener('click', () => openStatusStudent(s));
+
         btnGroup.appendChild(editBtn);
         btnGroup.appendChild(delBtn);
+        btnGroup.appendChild(statusBtn);
 
         li.appendChild(span);
         li.appendChild(btnGroup);
@@ -151,10 +233,12 @@
     try{
       const sidInput = document.getElementById('es_student_id');
       const nameInput = document.getElementById('es_student_name');
+      const planSelect = document.getElementById('es_graduation_plan');
       const msgEl = document.getElementById('es_msg');
       if(msgEl) msgEl.innerHTML = '';
       if(sidInput) sidInput.value = student.student_id || '';
       if(nameInput) nameInput.value = student.student_name || '';
+      if(planSelect) planSelect.value = (student.graduation_plan || '').trim() || '';
       const modalEl = document.getElementById('editStudentModal');
       if(modalEl){
         let modal = bootstrap.Modal.getInstance(modalEl);
@@ -164,6 +248,35 @@
     } catch(e){
       console.error('openEditStudent error', e);
       alert('تعذّر فتح نافذة تعديل الطالب.');
+    }
+  }
+
+  /* فتح نافذة حالة القيد لطالب */
+  function openStatusStudent(student){
+    try{
+      const idInput = document.getElementById('st_status_student_id');
+      const nameInput = document.getElementById('st_status_student_name');
+      const statusSelect = document.getElementById('st_status_select');
+      const reasonInput = document.getElementById('st_status_reason');
+      const msgEl = document.getElementById('st_status_msg');
+      if(msgEl) msgEl.innerHTML = '';
+      if(idInput) idInput.value = student.student_id || '';
+      if(nameInput) nameInput.value = student.student_name || '';
+      if(statusSelect) statusSelect.value = student.enrollment_status || 'active';
+      if(reasonInput) reasonInput.value = student.status_reason || '';
+      const phoneWrap = document.getElementById('st_status_phone_wrap');
+      const phoneInput = document.getElementById('st_status_phone');
+      if(phoneWrap) phoneWrap.style.display = (statusSelect && statusSelect.value === 'graduated') ? 'block' : 'none';
+      if(phoneInput) phoneInput.value = '';
+      const modalEl = document.getElementById('statusStudentModal');
+      if(modalEl){
+        let modal = bootstrap.Modal.getInstance(modalEl);
+        if(!modal) modal = new bootstrap.Modal(modalEl);
+        modal.show();
+      }
+    } catch(e){
+      console.error('openStatusStudent error', e);
+      alert('تعذّر فتح نافذة حالة القيد للطالب.');
     }
   }
 
@@ -196,13 +309,15 @@
           document.getElementById('st_msg').innerHTML = '<div class="alert alert-warning p-1">أدخل الرقم الدراسي</div>';
           return;
         }
+        const plan = (document.getElementById('student_graduation_plan')||{}).value || '';
         try {
-          const resp = await fetch('/add_student',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({student_id:sid,student_name:name})});
+          const resp = await fetch('/add_student',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({student_id:sid,student_name:name,graduation_plan:plan})});
           const j = await resp.json();
           document.getElementById('st_msg').innerHTML = `<div class="alert ${resp.ok? 'alert-success':'alert-danger'} p-1">${j.message||j.status}</div>`;
           if(resp.ok){
             document.getElementById('student_id').value='';
             document.getElementById('student_name').value='';
+            const planEl = document.getElementById('student_graduation_plan'); if(planEl) planEl.value='';
             await loadStudents();
           }
         } catch (err) {
@@ -221,11 +336,12 @@
           document.getElementById('es_msg').innerHTML = '<div class="alert alert-warning p-1">الرقم الدراسي مفقود</div>';
           return;
         }
+        const plan = (document.getElementById('es_graduation_plan')||{}).value || '';
         try {
           const resp = await fetch('/add_student', {
             method: 'POST',
             headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({student_id: sid, student_name: name})
+            body: JSON.stringify({student_id: sid, student_name: name, graduation_plan: plan})
           });
           const j = await resp.json().catch(()=>null);
           if(resp.ok){
@@ -242,6 +358,52 @@
         } catch (err) {
           console.error(err);
           document.getElementById('es_msg').innerHTML = '<div class="alert alert-danger p-1">خطأ في الاتصال بالخادم.</div>';
+        }
+      });
+    }
+
+    const stStatusSelect = document.getElementById('st_status_select');
+    if (stStatusSelect) {
+      stStatusSelect.addEventListener('change', () => {
+        const phoneWrap = document.getElementById('st_status_phone_wrap');
+        if(phoneWrap) phoneWrap.style.display = stStatusSelect.value === 'graduated' ? 'block' : 'none';
+      });
+    }
+    const stStatusSaveBtn = document.getElementById('stStatusSaveBtn');
+    if (stStatusSaveBtn) {
+      stStatusSaveBtn.addEventListener('click', async () => {
+        const sid = document.getElementById('st_status_student_id').value.trim();
+        const status = document.getElementById('st_status_select').value;
+        const reason = document.getElementById('st_status_reason').value.trim();
+        const phone = (document.getElementById('st_status_phone') && document.getElementById('st_status_phone').value) ? document.getElementById('st_status_phone').value.trim() : '';
+        const msgEl = document.getElementById('st_status_msg');
+        if(!sid){
+          if(msgEl) msgEl.innerHTML = '<div class="alert alert-warning p-1">الرقم الدراسي مفقود</div>';
+          return;
+        }
+        try{
+          const payload = { student_id: sid, enrollment_status: status, status_reason: reason };
+          if (status === 'graduated') payload.phone = phone;
+          const resp = await fetch('/students/update_status', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify(payload)
+          });
+          const j = await resp.json().catch(()=>null);
+          if(resp.ok){
+            if(msgEl) msgEl.innerHTML = `<div class="alert alert-success p-1">${(j && j.message) || 'تم حفظ حالة القيد'}</div>`;
+            setTimeout(async () => {
+              const modalEl = document.getElementById('statusStudentModal');
+              const modal = bootstrap.Modal.getInstance(modalEl);
+              if(modal) modal.hide();
+              await loadStudents();
+            }, 800);
+          } else {
+            if(msgEl) msgEl.innerHTML = `<div class="alert alert-danger p-1">${(j && j.message) || 'فشل حفظ حالة القيد'}</div>`;
+          }
+        } catch(err){
+          console.error('update_status error', err);
+          if(msgEl) msgEl.innerHTML = '<div class="alert alert-danger p-1">خطأ في الاتصال بالخادم.</div>';
         }
       });
     }

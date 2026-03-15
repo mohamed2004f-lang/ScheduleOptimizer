@@ -1,17 +1,48 @@
 import datetime
 import os
+import subprocess
+import sys
 import tempfile
 
-from flask import Blueprint, request, jsonify, session, send_file, abort, current_app
+from flask import Blueprint, request, jsonify, session, send_file, abort, current_app, render_template
 
 from backend.core.auth import login_required, role_required, SUPERVISOR_USERNAME, ADMIN_USERNAME
 from .utilities import get_connection, log_activity, create_notification
 from backend.services.grades import _load_transcript_data
 
-try:
-    from docxtpl import DocxTemplate
-except ImportError:  # pragma: no cover - in حال عدم تثبيت المكتبة
-    DocxTemplate = None
+DocxTemplate = None
+
+
+def _ensure_docxtpl():
+    """استيراد docxtpl؛ إن فشل، تثبيتها تلقائياً في بيئة التشغيل الحالية ثم إعادة المحاولة."""
+    global DocxTemplate
+    if DocxTemplate is not None:
+        return True
+    try:
+        from docxtpl import DocxTemplate as _DT
+        DocxTemplate = _DT  # noqa: F811
+        return True
+    except ImportError:
+        pass
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "docxtpl"],
+            capture_output=True,
+            timeout=120,
+            check=False,
+        )
+    except Exception:
+        pass
+    try:
+        from docxtpl import DocxTemplate as _DT
+        DocxTemplate = _DT  # noqa: F811
+        return True
+    except ImportError:
+        return False
+
+
+# محاولة التحميل عند استيراد الموديول (مرة واحدة عند تشغيل التطبيق)
+_ensure_docxtpl()
 
 enrollment_bp = Blueprint("enrollment", __name__)
 
@@ -116,21 +147,33 @@ def _build_registration_form_context(student_id: str, semester_param: str):
 
     with get_connection() as conn:
         cur = conn.cursor()
+        cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
+        has_uni = "university_number" in cols
 
-        # بيانات الطالب الأساسية
-        st = cur.execute(
-            """
-            SELECT student_id,
-                   COALESCE(student_name, '') AS student_name,
-                   COALESCE(university_number, '') AS university_number
-            FROM students
-            WHERE student_id = ?
-            """,
-            (student_id,),
-        ).fetchone()
+        # بيانات الطالب الأساسية (university_number قد لا يكون موجوداً في بعض القواعد)
+        if has_uni:
+            st = cur.execute(
+                """
+                SELECT student_id,
+                       COALESCE(student_name, '') AS student_name,
+                       COALESCE(university_number, '') AS university_number
+                FROM students WHERE student_id = ?
+                """,
+                (student_id,),
+            ).fetchone()
+        else:
+            st = cur.execute(
+                """
+                SELECT student_id,
+                       COALESCE(student_name, '') AS student_name,
+                       '' AS university_number
+                FROM students WHERE student_id = ?
+                """,
+                (student_id,),
+            ).fetchone()
         if not st:
             abort(404)
-        sid, sname, uni = st
+        sid, sname, uni = st[0], st[1], st[2]
 
         # اختيار الخطة المعتمدة (للحصول على الفصل والمقررات)
         row = None
@@ -331,6 +374,25 @@ def create_or_update_plan():
             ),
             400,
         )
+
+    # منع إنشاء/تحديث خطة تسجيل لطالب غير فعّال (سحب ملف، موقوف قيده، خريج)
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cols = [r[1] for r in cur.execute("PRAGMA table_info(students)").fetchall()]
+        if "enrollment_status" in cols:
+            row = cur.execute(
+                "SELECT COALESCE(enrollment_status, 'active') FROM students WHERE student_id = ?",
+                (student_id,),
+            ).fetchone()
+            if row and (row[0] or "active") != "active":
+                return (
+                    jsonify({
+                        "status": "error",
+                        "message": "لا يمكن إنشاء أو تعديل خطة تسجيل لطالب غير مسجّل (حالة القيد: سحب ملف أو موقوف قيده أو خريج).",
+                    }),
+                    400,
+                )
+
     if not isinstance(courses, list):
         return (
             jsonify(
@@ -571,6 +633,15 @@ def approve_plan(plan_id: int):
 
         conn.commit()
 
+        # إعادة حساب تعارضات الجدول لجميع الطلبة بعد تغيير التسجيلات (ضروري لظهور تعارضات الطلبة مثل حنين)
+        conflict_count = 0
+        try:
+            from backend.services.students import recompute_conflict_report
+            conflict_count = recompute_conflict_report(conn)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception("فشل إعادة حساب التعارضات بعد اعتماد الخطة: %s", e)
+
     try:
         log_activity(
             action="plan_approved",
@@ -585,7 +656,46 @@ def approve_plan(plan_id: int):
     except Exception:
         pass
 
-    return jsonify({"status": "ok"})
+    return jsonify({
+        "status": "ok",
+        "conflict_count": conflict_count,
+        "message": "تم اعتماد الخطة." + (f" تم تحديث تقرير التعارضات ({conflict_count} تعارض)." if conflict_count else " لا توجد تعارضات في الجدول الحالي.")
+    })
+
+
+@enrollment_bp.route("/registration_form_html/<student_id>", methods=["GET"])
+@role_required("admin", "supervisor", "student")
+def registration_form_html(student_id):
+    """
+    عرض استمارة التسجيل كصفحة HTML للطباعة من المستعرض (لا يتطلب قالب Word).
+    """
+    user_role = session.get("user_role")
+    if user_role == "supervisor":
+        instructor_id = session.get("instructor_id")
+        if not instructor_id:
+            return jsonify({"status": "error", "message": "لا يوجد ربط بين هذا الحساب وعضو هيئة تدريس", "code": "FORBIDDEN"}), 403
+        with get_connection() as conn:
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT 1 FROM student_supervisor WHERE student_id = ? AND instructor_id = ? LIMIT 1",
+                (student_id, instructor_id),
+            ).fetchone()
+            if not row:
+                return jsonify({"status": "error", "message": "لا يمكنك عرض استمارة لطالب غير مُسند إليك", "code": "FORBIDDEN"}), 403
+
+    semester_param = (request.args.get("semester") or "").strip()
+    try:
+        ctx = _build_registration_form_context(student_id, semester_param)
+    except Exception as e:
+        current_app.logger.exception("registration_form_html context failed for %s", student_id)
+        return (
+            render_template(
+                "registration_form_error.html",
+                error_message=str(e) or "خطأ غير معروف",
+            ),
+            500,
+        )
+    return render_template("registration_form_print.html", **ctx)
 
 
 @enrollment_bp.route("/print_registration_form/<student_id>", methods=["GET"])
@@ -610,12 +720,12 @@ def print_registration_form(student_id):
             if not row:
                 return jsonify({"status": "error", "message": "لا يمكنك طباعة استمارة لطالب غير مُسند إليك", "code": "FORBIDDEN"}), 403
 
-    if DocxTemplate is None:
+    if not _ensure_docxtpl():
         return (
             jsonify(
                 {
                     "status": "error",
-                    "message": "مكتبة docxtpl غير مثبتة على الخادم. يرجى تثبيتها باستخدام: pip install docxtpl",
+                    "message": "مكتبة docxtpl غير متوفرة. تمت محاولة التثبيت تلقائياً ولم تنجح. نفّذ يدوياً: pip install docxtpl ثم أعد تشغيل الخادم.",
                 }
             ),
             500,

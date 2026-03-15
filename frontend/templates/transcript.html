@@ -33,8 +33,31 @@
             <h6 class="mb-1 text-muted small">الوحدات المنجزة</h6>
             <div id="completedUnits" class="display-6 mono fw-bold transcript-completed-units">-</div>
           </div>
+          <div class="transcript-summary-item" id="graduationPlanWrap" style="display: none;">
+            <h6 class="mb-1 text-muted small">خطة التخرج</h6>
+            <div id="graduationPlanLabel" class="fw-bold">-</div>
+          </div>
         </div>
-        <div class="text-end small text-muted">يتم حسابه تلقائياً من أفضل الدرجات</div>
+        <div class="text-end small text-muted">يتم حسابه تلقائياً من أفضل الدرجات؛ الوحدات تُستكمل من جدول المقررات إن لزم.</div>
+      </div>
+    </div>
+
+    <!-- مراجعة تفصيل الوحدات المنجزة (قابل للطي) -->
+    <div class="card mb-3" id="completedUnitsReviewCard" style="display:none;">
+      <div class="card-header d-flex justify-content-between align-items-center pointer" data-bs-toggle="collapse" data-bs-target="#completedUnitsBreakdownCollapse" aria-expanded="false">
+        <h6 class="mb-0">مراجعة تفصيل الوحدات المنجزة</h6>
+        <span class="badge bg-secondary" id="completedUnitsBreakdownSum">0</span>
+      </div>
+      <div class="collapse" id="completedUnitsBreakdownCollapse">
+        <div class="card-body">
+          <p class="small text-muted">المقررات التي تحسب ضمن الوحدات المنجزة هي التي حصل فيها الطالب على درجة &ge; 50. إذا كانت الوحدات غير مسجلة في الدرجة تُؤخذ من تعريف المقرر.</p>
+          <div class="table-responsive">
+            <table class="table table-sm table-striped">
+              <thead><tr><th>المقرر</th><th>أفضل درجة</th><th>الوحدات</th><th>ناجح</th></tr></thead>
+              <tbody id="completedUnitsBreakdownBody"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -80,6 +103,7 @@
           <button id="btnExportPdf" class="btn btn-outline-secondary btn-sm">تصدير PDF رسمي</button>
           <button id="btnExportText" class="btn btn-outline-secondary btn-sm">تصدير ملف نصي</button>
           <button id="btnPrint" class="btn btn-outline-dark btn-sm">طباعة الصفحة</button>
+          <button id="btnEditRulesTranscript" class="btn btn-outline-info btn-sm">تعديل لائحة الإنذارات والفصل</button>
           <div id="msg" class="ms-2"></div>
             <!-- Modal for semester/year selection before migration -->
             <div class="modal fade" id="migrateModal" tabindex="-1" aria-hidden="true">
@@ -286,7 +310,14 @@
             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
           </div>
           <div class="modal-body">
-            <div class="mb-2"><strong>المقرر:</strong> <span id="egCourseName" class="mono"></span></div>
+            <div class="mb-2"><strong>المقرر الحالي:</strong> <span id="egCurrentCourseLabel" class="text-muted"></span></div>
+            <div class="mb-2">
+              <label class="form-label">تغيير المقرر (اختياري)</label>
+              <select id="egCourseSelect" class="form-select">
+                <option value="">-- الإبقاء على المقرر الحالي أو اختر من القائمة --</option>
+              </select>
+              <div class="form-text small">لتصحيح اسم المقرر، اختر من قائمة المقررات المخزنة في النظام. الإبقاء على الخيار الأول يترك الاسم كما هو.</div>
+            </div>
             <div class="mb-2"><strong>الفصل:</strong> <span id="egSemester" class="mono"></span></div>
             <div class="mb-2">
               <label class="form-label">رمز المقرر</label>
@@ -480,6 +511,35 @@ function renderTranscript(data){
   const cumEl = document.getElementById('cumulativeGPA'); if(cumEl) cumEl.textContent = cum;
   const completedEl = document.getElementById('completedUnits'); if(completedEl) completedEl.textContent = (data.completed_units != null && data.completed_units !== '') ? data.completed_units : '-';
 
+  const plan = (data.graduation_plan || '').trim();
+  const planWrap = document.getElementById('graduationPlanWrap');
+  const planLabel = document.getElementById('graduationPlanLabel');
+  if (planWrap && planLabel) {
+    if (plan) {
+      planLabel.textContent = plan === '150' ? '150 وحدة (نظام قديم)' : plan === '155' ? '155 وحدة (نظام جديد)' : plan;
+      planWrap.style.display = '';
+    } else {
+      planWrap.style.display = 'none';
+    }
+  }
+
+  const breakdown = Array.isArray(data.completed_units_breakdown) ? data.completed_units_breakdown : [];
+  const reviewCard = document.getElementById('completedUnitsReviewCard');
+  const breakdownBody = document.getElementById('completedUnitsBreakdownBody');
+  const breakdownSum = document.getElementById('completedUnitsBreakdownSum');
+  if (reviewCard && breakdownBody) {
+    if (breakdown.length) {
+      reviewCard.style.display = 'block';
+      if (breakdownSum) breakdownSum.textContent = data.completed_units != null ? data.completed_units : '0';
+      breakdownBody.innerHTML = breakdown.map(b => {
+        const name = (b.course_name || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        return `<tr><td>${name}</td><td class="text-center">${b.best_grade != null ? b.best_grade : '—'}</td><td class="text-center">${b.units_used || 0}</td><td class="text-center">${b.passed ? 'نعم' : 'لا'}</td></tr>`;
+      }).join('');
+    } else {
+      reviewCard.style.display = 'none';
+    }
+  }
+
   // ربط أزرار التعديل والحذف بعد الرسم (لغير الطالب فقط)
   if (CURRENT_ROLE !== 'student') {
     document.querySelectorAll('.btn-inline-edit').forEach(btn=>{ btn.addEventListener('click', onInlineEditClick); });
@@ -539,10 +599,32 @@ function onInlineEditClick(e){
   egSemester = b.dataset.sem;
   const currentGrade = b.dataset.grade || '';
   const currentCode = b.dataset.code || '';
-  const egCourseName = document.getElementById('egCourseName'); if(egCourseName) egCourseName.textContent = egCourse;
+  const storedNames = [...new Set(COURSES.map(c=>c.course_name).filter(Boolean))];
+  const courseInStoredList = !!(egCourse && storedNames.includes(egCourse));
+
   const egSemesterEl = document.getElementById('egSemester'); if(egSemesterEl) egSemesterEl.textContent = egSemester;
+  const egCurrentLabel = document.getElementById('egCurrentCourseLabel');
+  if(egCurrentLabel){
+    if(courseInStoredList) egCurrentLabel.textContent = egCourse || '—';
+    else egCurrentLabel.innerHTML = '<span class="text-warning">الاسم المسجّل غير موجود في قائمة المقررات — اختر مقرراً من القائمة أدناه</span>';
+  }
   const egGradeInput = document.getElementById('egGradeInput'); if(egGradeInput) egGradeInput.value = currentGrade;
   const egCodeInput = document.getElementById('egCourseCodeInput'); if(egCodeInput) egCodeInput.value = currentCode;
+  const egCourseSelect = document.getElementById('egCourseSelect');
+  if(egCourseSelect){
+    egCourseSelect.innerHTML = courseInStoredList
+      ? '<option value="">-- الإبقاء على المقرر الحالي أو اختر من القائمة --</option>'
+      : '<option value="">-- اختر مقرراً من القائمة (مطلوب لتصحيح الاسم) --</option>';
+    const names = [...storedNames].sort((a,b)=>(a||'').localeCompare(b||''));
+    names.forEach(name=>{
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      if(name === egCourse) opt.selected = true;
+      egCourseSelect.appendChild(opt);
+    });
+    egCourseSelect.dataset.requireSelection = courseInStoredList ? '0' : '1';
+  }
   if(!editModal){
     const modalEl = document.getElementById('editGradeModal');
     if(modalEl) editModal = new bootstrap.Modal(modalEl);
@@ -553,13 +635,22 @@ const egSaveBtn = document.getElementById('egSaveBtn');
 if(egSaveBtn) egSaveBtn.addEventListener('click', async ()=>{
   const student = selectedStudent;
   if(!student){ setMsg('اختر طالباً أولاً','warning'); return; }
+  const egCourseSelectEl = document.getElementById('egCourseSelect');
+  const requireSelection = egCourseSelectEl && egCourseSelectEl.dataset.requireSelection === '1';
+  const selectedCourse = (egCourseSelectEl||{}).value || '';
+  if(requireSelection && !selectedCourse){
+    setMsg('الاسم المسجّل غير موجود في قائمة المقررات. يرجى اختيار مقرر من القائمة المخزنة.','warning');
+    return;
+  }
   const val = (document.getElementById('egGradeInput')||{}).value || '';
   const grade = val===''? null : Number(val);
   const codeVal = (document.getElementById('egCourseCodeInput')||{}).value || '';
   const payload = { student_id: student, semester: egSemester, course_name: egCourse, grade, course_code: codeVal, changed_by: 'admin' };
+  if(selectedCourse && selectedCourse !== egCourse) payload.new_course_name = selectedCourse;
   const r = await fetchJSON('/update_grade', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
   if(r.ok){
-    setMsg('✅ تم تعديل الدرجة/رمز المقرر','success');
+    const changedName = selectedCourse && selectedCourse !== egCourse;
+    setMsg(changedName ? '✅ تم تعديل الدرجة واسم المقرر (والرمز/الوحدات من القائمة).' : '✅ تم تعديل الدرجة/رمز المقرر','success');
     if(editModal) editModal.hide();
     loadTranscript(student);
   } else {
@@ -614,9 +705,9 @@ if (btnImportSemesterEl) {
       const msg = `سيتم استيراد نتيجة الفصل "${semLabel}" لعدد ${dataPrev.students||0} طالب/ة، `
                 + `وعدد مقررات ${dataPrev.courses||0}، وعدد سجلات درجات ${dataPrev.records||0}.`
                 + (dataPrev.invalid_grades && dataPrev.invalid_grades.length
-                   ? `\\nتحذير: هناك ${dataPrev.invalid_grades.length} درجة خارج النطاق 0-100 سيتم رفضها.` : '');
+                   ? `\nتحذير: هناك ${dataPrev.invalid_grades.length} درجة خارج النطاق 0-100 سيتم رفضها.` : '');
 
-      if(!confirm(msg + '\\nهل تريد المتابعة بتطبيق الاستيراد فعلياً؟')){
+      if(!confirm(msg + '\nهل تريد المتابعة بتطبيق الاستيراد فعلياً؟')){
         setMsg('تم إلغاء استيراد نتيجة الفصل بعد المعاينة.','info');
         return;
       }
@@ -762,9 +853,17 @@ if(btnExportText){
 /* print */
 const btnPrint = document.getElementById('btnPrint'); if(btnPrint) btnPrint.addEventListener('click', ()=>{ window.print(); });
 
+// زر الذهاب إلى صفحة تعديل اللائحة
+const btnEditRulesTranscript = document.getElementById('btnEditRulesTranscript');
+if (btnEditRulesTranscript) {
+  btnEditRulesTranscript.addEventListener('click', () => {
+    window.location.href = '/academic_rules_page';
+  });
+}
+
 /* filters and startup */
 const btnReload = document.getElementById('btnReload'); if(btnReload) btnReload.addEventListener('click', ()=> loadTranscript((document.getElementById('studentSelect')||{}).value));
-function handleStudentChange(){ syncImportFields(); const sid = (document.getElementById('studentSelect')||{}).value; if(sid){ loadTranscript(sid); } else { CURRENT_TRANSCRIPT = null; const semDiv = document.getElementById('semestersList'); if(semDiv) semDiv.innerHTML=''; const summaryEl = document.getElementById('summary'); if(summaryEl) summaryEl.textContent=''; const cumEl = document.getElementById('cumulativeGPA'); if(cumEl) cumEl.textContent='-'; const completedEl = document.getElementById('completedUnits'); if(completedEl) completedEl.textContent='-'; } }
+function handleStudentChange(){ syncImportFields(); const sid = (document.getElementById('studentSelect')||{}).value; if(sid){ loadTranscript(sid); } else { CURRENT_TRANSCRIPT = null; const semDiv = document.getElementById('semestersList'); if(semDiv) semDiv.innerHTML=''; const summaryEl = document.getElementById('summary'); if(summaryEl) summaryEl.textContent=''; const cumEl = document.getElementById('cumulativeGPA'); if(cumEl) cumEl.textContent='-'; const completedEl = document.getElementById('completedUnits'); if(completedEl) completedEl.textContent='-'; const planWrap = document.getElementById('graduationPlanWrap'); if(planWrap) planWrap.style.display = 'none'; } }
 const studentSelect = document.getElementById('studentSelect'); if(studentSelect) studentSelect.addEventListener('change', handleStudentChange);
 const semesterFilter = document.getElementById('semesterFilter'); if(semesterFilter) semesterFilter.addEventListener('change', ()=>{ const f = (document.getElementById('semesterFilter')||{}).value; if(!CURRENT_TRANSCRIPT) return; if(!f) renderTranscript(CURRENT_TRANSCRIPT); else { const filtered = { transcript: {}, semester_gpas: {}, cumulative_gpa: CURRENT_TRANSCRIPT.cumulative_gpa || 0, completed_units: CURRENT_TRANSCRIPT.completed_units }; if(CURRENT_TRANSCRIPT.transcript && CURRENT_TRANSCRIPT.transcript[f]) filtered.transcript[f]=CURRENT_TRANSCRIPT.transcript[f]; if(CURRENT_TRANSCRIPT.semester_gpas && CURRENT_TRANSCRIPT.semester_gpas[f]) filtered.semester_gpas[f]=CURRENT_TRANSCRIPT.semester_gpas[f]; renderTranscript(filtered); } });
 
@@ -818,3 +917,4 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
+

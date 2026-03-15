@@ -20,7 +20,7 @@
         top: 0;
         width: 100%;
       }
-      nav.app-navbar, header.app-topbar, #msgBox, #statusFilter, #searchInput, #sortSelect, #btnPrint, #btnExport {
+      nav.app-navbar, header.app-topbar, #msgBox, #statusFilter, #searchInput, #sortSelect, #btnPrint, #btnExport, #btnEditRules {
         display: none !important;
       }
     }
@@ -28,15 +28,20 @@
 </head>
 <body>
   {% include "base_nav.html" %}
-  <main class="container-main">
-    <div class="page-header mb-3">
+  <main class="container-main container-1100">
+    <div class="page-header mb-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
       <div>
         <h1 class="page-title">تقرير أداء الطلبة</h1>
         <p class="page-subtitle">عرض معدلات الفصول الأخيرة، المعدل التراكمي، الوحدات المنجزة، وحالة الإنذار الأكاديمي</p>
       </div>
+      <div class="d-flex flex-wrap gap-2">
+        <button id="btnEditRules" class="btn btn-outline-info btn-sm" style="display:none;">
+          تعديل لائحة الإنذارات والفصل
+        </button>
+      </div>
     </div>
 
-    <div class="card mb-3">
+    <div class="card mb-3 filter-section">
       <div class="card-body row g-2 align-items-end">
         <div class="col-md-3">
           <label class="form-label">تصفية حسب الحالة</label>
@@ -68,7 +73,7 @@
       </div>
     </div>
 
-    <div class="card">
+    <div class="card chart-container">
       <div class="card-body">
         <div id="msgBox" class="mb-2"></div>
         <div class="table-responsive">
@@ -234,6 +239,10 @@
       try {
         const auth = await apiGet('/auth/check');
         CURRENT_ROLE = auth.role || null;
+        if (CURRENT_ROLE === 'admin') {
+          const btnEdit = document.getElementById('btnEditRules');
+          if (btnEdit) btnEdit.style.display = 'inline-block';
+        }
         const data = await apiGet('/performance/report');
         RAW_STUDENTS = Array.isArray(data.students) ? data.students : [];
         showMsg(`تم تحميل بيانات ${RAW_STUDENTS.length} طالب/ـة.`, 'success');
@@ -259,6 +268,12 @@
       if (btnExport) {
         btnExport.addEventListener('click', () => {
           window.open('/performance/export', '_blank');
+        });
+      }
+      const btnEdit = document.getElementById('btnEditRules');
+      if (btnEdit) {
+        btnEdit.addEventListener('click', () => {
+          window.location.href = '/academic_rules_page';
         });
       }
     });

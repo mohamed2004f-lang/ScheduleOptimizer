@@ -1,0 +1,319 @@
+/* ========================================
+   Theme: Mechanical Engineering Department
+   University of Derna - College of Engineering
+   Version: 2.0.0 — مدمج مع منظومة ScheduleOptimizer
+   ======================================== */
+
+:root {
+    --primary-color: #003366;
+    --primary-dark: #002244;
+    --primary-light: #004d99;
+    --secondary-color: #D4AF37;
+    --secondary-light: #E8C547;
+    --text-primary: #1a1a1a;
+    --text-secondary: #666666;
+    --border-color: #e0e0e0;
+    --bg-light: #f8f9fa;
+    --bg-white: #ffffff;
+    --success-color: #28a745;
+    --danger-color: #dc3545;
+    --warning-color: #ffc107;
+    --info-color: #17a2b8;
+}
+
+/* توافق مع المتغيرات الحالية إن وُجدت */
+:root {
+    --brand-900: var(--primary-color);
+    --brand-700: var(--primary-light);
+    --accent: var(--secondary-color);
+}
+
+/* ========== Global ========== */
+html { scroll-behavior: smooth; }
+
+body {
+    font-family: 'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif;
+    color: var(--text-primary);
+    background-color: var(--bg-light);
+    line-height: 1.6;
+}
+
+/* ========== Typography ========== */
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'Cairo', sans-serif;
+    font-weight: 700;
+    color: var(--primary-color);
+    margin-bottom: 1rem;
+}
+h1 { font-size: 2.5rem; }
+h2 { font-size: 2rem; }
+h3 { font-size: 1.5rem; }
+h4 { font-size: 1.25rem; }
+h5 { font-size: 1.1rem; }
+h6 { font-size: 1rem; }
+
+p { margin-bottom: 1rem; color: var(--text-secondary); }
+
+a {
+    color: var(--primary-color);
+    text-decoration: none;
+    transition: all 0.3s ease;
+}
+a:hover { color: var(--secondary-color); text-decoration: underline; }
+
+/* ========== Dashboard Header (للصفحات التي تستخدم base_theme) ========== */
+.dashboard-header {
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-light) 100%);
+    color: white;
+    padding: 2rem 0;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 4px 15px rgba(0, 51, 102, 0.2);
+}
+.dashboard-header h1 { color: white; font-size: 2rem; margin-bottom: 0.5rem; }
+.dashboard-header p { color: rgba(255, 255, 255, 0.9); margin: 0; }
+
+/* ========== Breadcrumb ========== */
+.breadcrumb { background: transparent; padding: 0; }
+.breadcrumb-item.active { color: var(--primary-color); font-weight: 600; }
+.breadcrumb-item a { color: var(--primary-color); }
+.breadcrumb-item a:hover { color: var(--secondary-color); }
+
+/* ========== Footer (للصفحات التي تستخدم base_theme) ========== */
+footer {
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-light) 100%);
+    color: white;
+    padding: 2rem 0 1rem;
+    margin-top: 3rem;
+}
+footer h5 { color: var(--secondary-color); margin-bottom: 0.75rem; font-size: 1rem; }
+footer a { color: rgba(255, 255, 255, 0.85); }
+footer a:hover { color: var(--secondary-color); }
+.footer-section { margin-bottom: 1.5rem; }
+
+/* الشريط العلوي الحالي .app-topbar يُبقى بألوان الثيم */
+.app-topbar {
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-light) 100%) !important;
+    box-shadow: 0 4px 15px rgba(0, 51, 102, 0.2);
+}
+/* شريط القوائم يبقى كما هو (لا نطبّق .navbar العامة عليه) */
+.navbar.app-navbar { /* تُدار من styles.css */ }
+
+/* ========== Cards ========== */
+.card {
+    border: none;
+    border-radius: 12px;
+    box-shadow: 0 4px 15px rgba(0, 51, 102, 0.1);
+    transition: all 0.3s ease;
+    overflow: hidden;
+}
+.card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(0, 51, 102, 0.15);
+}
+.card-header {
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-light) 100%);
+    color: white;
+    border: none;
+    padding: 1rem 1.25rem;
+    font-weight: 600;
+}
+.card-body { padding: 1.25rem; }
+
+/* ========== Buttons ========== */
+.btn {
+    border-radius: 8px;
+    font-weight: 600;
+    padding: 0.5rem 1.25rem;
+    transition: all 0.3s ease;
+}
+.btn-primary {
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-light) 100%);
+    color: white;
+    border: none;
+}
+.btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 51, 102, 0.3);
+}
+.btn-secondary {
+    background-color: var(--secondary-color);
+    color: var(--primary-color);
+    border: none;
+}
+.btn-secondary:hover {
+    background-color: var(--secondary-light);
+    transform: translateY(-1px);
+}
+.btn-outline-primary {
+    color: var(--primary-color);
+    border: 2px solid var(--primary-color);
+}
+.btn-outline-primary:hover {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+/* ========== Forms ========== */
+.form-control,
+.form-select {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.6rem 1rem;
+    transition: all 0.3s ease;
+}
+.form-control:focus,
+.form-select:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.2rem rgba(0, 51, 102, 0.2);
+    outline: none;
+}
+.form-label {
+    color: var(--primary-color);
+    font-weight: 600;
+    margin-bottom: 0.4rem;
+}
+
+/* ========== Tables ========== */
+.table {
+    background-color: white;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 2px 10px rgba(0, 51, 102, 0.08);
+}
+.table thead {
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-light) 100%);
+    color: white;
+}
+.table thead th {
+    border: none;
+    padding: 0.9rem 1rem;
+    font-weight: 600;
+}
+.table tbody tr { transition: background 0.2s ease; }
+.table tbody tr:hover { background-color: var(--bg-light); }
+.table tbody td { padding: 0.75rem 1rem; vertical-align: middle; }
+
+/* ========== Badges ========== */
+.badge {
+    padding: 0.4rem 0.8rem;
+    border-radius: 20px;
+    font-weight: 600;
+    font-size: 0.8rem;
+}
+.bg-primary { background-color: var(--primary-color) !important; }
+.bg-success { background-color: var(--success-color) !important; }
+.bg-danger { background-color: var(--danger-color) !important; }
+.bg-warning { background-color: var(--warning-color) !important; }
+
+/* ========== Alerts ========== */
+.alert {
+    border: none;
+    border-radius: 8px;
+    border-inline-start: 4px solid;
+}
+.alert-primary { background-color: rgba(0, 51, 102, 0.1); border-inline-start-color: var(--primary-color); }
+.alert-success { background-color: rgba(40, 167, 69, 0.1); border-inline-start-color: var(--success-color); }
+.alert-danger { background-color: rgba(220, 53, 69, 0.1); border-inline-start-color: var(--danger-color); }
+.alert-warning { background-color: rgba(255, 193, 7, 0.15); border-inline-start-color: var(--warning-color); }
+
+/* ========== Modals ========== */
+.modal-content {
+    border: none;
+    border-radius: 12px;
+    box-shadow: 0 8px 25px rgba(0, 51, 102, 0.2);
+}
+.modal-header {
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-light) 100%);
+    color: white;
+    border: none;
+}
+.modal-header .btn-close { filter: brightness(0) invert(1); }
+
+/* ========== Progress ========== */
+.progress {
+    background-color: var(--bg-light);
+    border-radius: 10px;
+    height: 8px;
+}
+.progress-bar {
+    background: linear-gradient(90deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+    border-radius: 10px;
+}
+
+/* ========== Pagination ========== */
+.pagination .page-link {
+    color: var(--primary-color);
+    border: 1px solid var(--border-color);
+}
+.pagination .page-link:hover {
+    background-color: var(--primary-color);
+    color: white;
+    border-color: var(--primary-color);
+}
+.pagination .page-item.active .page-link {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+/* ========== Loading Overlay ========== */
+.loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.4);
+    display: none;
+    justify-content: center;
+    align-items: center;
+    z-index: 9999;
+}
+.loading-overlay.active { display: flex; }
+.loading-overlay .spinner-border { color: var(--primary-color); }
+
+/* ========== Toast ========== */
+.toast-container { z-index: 10000; }
+.toast {
+    background-color: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 15px rgba(0, 51, 102, 0.2);
+}
+.toast-header {
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-light) 100%);
+    color: white;
+    border: none;
+}
+
+/* ========== Utilities ========== */
+.text-primary { color: var(--primary-color) !important; }
+.text-secondary { color: var(--secondary-color) !important; }
+.bg-primary { background-color: var(--primary-color) !important; }
+.rounded-lg { border-radius: 12px; }
+.rounded-xl { border-radius: 16px; }
+
+/* ========== Animations ========== */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideInRight {
+    from { opacity: 0; transform: translateX(20px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+.fade-in { animation: fadeIn 0.4s ease-out; }
+.slide-in-right { animation: slideInRight 0.4s ease-out; }
+
+/* ========== Responsive ========== */
+@media (max-width: 768px) {
+    h1 { font-size: 2rem; }
+    h2 { font-size: 1.5rem; }
+    .card-body { padding: 1rem; }
+    .table thead th, .table tbody td { padding: 0.6rem 0.8rem; }
+}
+@media (max-width: 576px) {
+    h1 { font-size: 1.5rem; }
+    h2 { font-size: 1.25rem; }
+    .btn { padding: 0.45rem 1rem; font-size: 0.9rem; }
+}
+
+/* ========== End Theme ========== */

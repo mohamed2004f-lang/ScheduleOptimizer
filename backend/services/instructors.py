@@ -131,19 +131,37 @@ def supervised_students():
     if not instructor_id:
         return jsonify({"status": "error", "message": "instructor_id مطلوب"}), 400
 
+    active_only = request.args.get("active_only", "").lower() in ("1", "true", "yes")
+
     with get_connection() as conn:
         cur = conn.cursor()
-        rows = cur.execute(
-            """
-            SELECT ss.student_id,
-                   COALESCE(s.student_name, '') AS student_name
-            FROM student_supervisor ss
-            LEFT JOIN students s ON s.student_id = ss.student_id
-            WHERE ss.instructor_id = ?
-            ORDER BY ss.student_id
-            """,
-            (instructor_id,),
-        ).fetchall()
+        cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
+        has_enrollment_status = "enrollment_status" in cols
+        if has_enrollment_status and active_only:
+            rows = cur.execute(
+                """
+                SELECT ss.student_id,
+                       COALESCE(s.student_name, '') AS student_name
+                FROM student_supervisor ss
+                LEFT JOIN students s ON s.student_id = ss.student_id
+                WHERE ss.instructor_id = ?
+                  AND COALESCE(s.enrollment_status, 'active') = 'active'
+                ORDER BY ss.student_id
+                """,
+                (instructor_id,),
+            ).fetchall()
+        else:
+            rows = cur.execute(
+                """
+                SELECT ss.student_id,
+                       COALESCE(s.student_name, '') AS student_name
+                FROM student_supervisor ss
+                LEFT JOIN students s ON s.student_id = ss.student_id
+                WHERE ss.instructor_id = ?
+                ORDER BY ss.student_id
+                """,
+                (instructor_id,),
+            ).fetchall()
         students = [
             {"student_id": r[0], "student_name": r[1]} for r in rows
         ]

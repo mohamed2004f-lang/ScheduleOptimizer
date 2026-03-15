@@ -12,6 +12,7 @@ from backend.services.enrollment import enrollment_bp
 from backend.services.notifications import notifications_bp
 from backend.services.users import users_bp
 from backend.services.academic_calendar import academic_calendar_bp
+from backend.services.academic_rules import academic_rules_bp
 from backend.services.instructors import instructors_bp
 from backend.services.performance import performance_bp
 
@@ -71,6 +72,7 @@ app.register_blueprint(enrollment_bp, url_prefix="/enrollment")
 app.register_blueprint(notifications_bp, url_prefix="/notifications")
 app.register_blueprint(users_bp, url_prefix="/users")
 app.register_blueprint(academic_calendar_bp, url_prefix="/academic_calendar")
+app.register_blueprint(academic_rules_bp, url_prefix="/academic_rules")
 app.register_blueprint(instructors_bp, url_prefix="/instructors")
 app.register_blueprint(performance_bp, url_prefix="/performance")
 
@@ -101,7 +103,13 @@ def health():
 
 @app.route("/dashboard")
 def dashboard_page():
-    return render_template("dashboard.html")
+    return render_template("dashboard.html", active_page="dashboard")
+
+
+@app.route("/analytics")
+def analytics_dashboard_page():
+    # لوحة تحكم تحليلية متقدمة تعتمد على بيانات /performance/report و /admin/summary
+    return render_template("analytics_dashboard.html", active_page="analytics")
 
 @app.route("/student_view")
 @app.route("/student_view/<student_id>")
@@ -116,6 +124,12 @@ def prereqs_form():
 @app.route("/students_form")
 def students_form():
     return render_template("students_form.html")
+
+
+@app.route("/graduates_page")
+def graduates_page():
+    """صفحة قائمة الخريجين (تحت شؤون الطلبة)."""
+    return render_template("graduates.html")
 
 @app.route("/courses_form")
 def courses_form():
@@ -188,6 +202,11 @@ def attendance_export_page():
 def academic_calendar_page():
     return render_template("academic_calendar.html")
 
+
+@app.route("/academic_rules_page")
+def academic_rules_page():
+    return render_template("academic_rules.html")
+
 @app.route("/transcript_page")
 def transcript_page():
     return render_template("transcript.html")
@@ -230,11 +249,22 @@ def compat_results_data():
         out["proposed_moves"] = table_to_dicts("proposed_moves")
     except Exception:
         out["proposed_moves"] = []
-    # جدول الجدول النهائي
+    # جدول الجدول النهائي: إن كان optimized_schedule فارغاً نعرض schedule لظهور صفوف الجدول
     try:
         out["optimized_schedule"] = table_to_dicts("optimized_schedule")
     except Exception:
         out["optimized_schedule"] = []
+    if not out["optimized_schedule"]:
+        try:
+            schedule_rows = table_to_dicts("schedule")
+            out["optimized_schedule"] = [
+                {"section_id": i + 1, "course_name": r.get("course_name"), "day": r.get("day"), "time": r.get("time"),
+                 "room": r.get("room") or "", "instructor": r.get("instructor") or "", "semester": r.get("semester") or ""}
+                for i, r in enumerate(schedule_rows)
+                if (r.get("course_name") and r.get("day") and r.get("time"))
+            ]
+        except Exception:
+            pass
     return jsonify(out)
 
 @app.route("/add_student", methods=["POST"])

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>قائمة الخريجين</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100">
+    <div class="page-header mb-3">
+      <div>
+        <h1 class="page-title">قائمة الخريجين</h1>
+        <p class="page-subtitle">الخريجون حسب سنة التخرج والمعدل التراكمي</p>
+      </div>
+    </div>
+
+    <div class="card mb-3 filter-section">
+      <div class="card-body p-2">
+        <div class="d-flex flex-wrap align-items-center gap-2">
+          <label class="form-label mb-0">بحث:</label>
+          <input type="text" id="searchGraduates" class="form-control form-control-sm" style="max-width: 220px;" placeholder="الاسم أو الرقم الدراسي أو الهاتف">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <h2 class="h6 mb-3">الخريجون</h2>
+        <div class="table-responsive">
+          <table class="table table-sm table-striped align-middle" id="graduatesTable">
+            <thead>
+              <tr>
+                <th>الرقم الدراسي</th>
+                <th>اسم الطالب</th>
+                <th>رقم الهاتف</th>
+                <th>سنة التخرج</th>
+                <th>المعدل التراكمي</th>
+              </tr>
+            </thead>
+            <tbody>
+            </tbody>
+          </table>
+        </div>
+        <p class="small text-muted mb-0 mt-2" id="graduatesSummary">—</p>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/js/common.js"></script>
+  <script>
+    let ALL_GRADUATES = [];
+
+    function renderTable(data) {
+      const tbody = document.querySelector('#graduatesTable tbody');
+      tbody.innerHTML = '';
+      if (!data.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">لا يوجد خريجون مسجلون.</td></tr>';
+        document.getElementById('graduatesSummary').textContent = 'لا يوجد خريجون.';
+        return;
+      }
+      data.forEach(g => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${escapeHtml(g.student_id || '')}</td>
+          <td>${escapeHtml(g.student_name || '')}</td>
+          <td>${escapeHtml(g.phone || '—')}</td>
+          <td>${g.graduation_year != null ? g.graduation_year : '—'}</td>
+          <td>${g.cumulative_gpa != null ? g.cumulative_gpa : '—'}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+      document.getElementById('graduatesSummary').textContent = `عدد الخريجين: ${data.length}`;
+    }
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    function filterGraduates() {
+      const q = (document.getElementById('searchGraduates').value || '').trim().toLowerCase();
+      if (!q) {
+        renderTable(ALL_GRADUATES);
+        return;
+      }
+      const filtered = ALL_GRADUATES.filter(g =>
+        (g.student_id && g.student_id.toString().toLowerCase().includes(q)) ||
+        (g.student_name && g.student_name.toLowerCase().includes(q)) ||
+        (g.phone && g.phone.toString().toLowerCase().includes(q))
+      );
+      renderTable(filtered);
+    }
+
+    async function loadGraduates() {
+      try {
+        const r = await fetch('/students/graduates', { credentials: 'include' });
+        if (!r.ok) throw new Error('فشل جلب قائمة الخريجين');
+        const arr = await r.json();
+        ALL_GRADUATES = Array.isArray(arr) ? arr : [];
+        document.getElementById('searchGraduates').value = '';
+        filterGraduates();
+      } catch (e) {
+        console.error(e);
+        document.querySelector('#graduatesTable tbody').innerHTML =
+          '<tr><td colspan="5" class="text-center text-danger">حدث خطأ أثناء تحميل البيانات.</td></tr>';
+        document.getElementById('graduatesSummary').textContent = '—';
+      }
+    }
+
+    document.getElementById('searchGraduates').addEventListener('input', filterGraduates);
+    loadGraduates();
+  </script>
+</body>
+</html>

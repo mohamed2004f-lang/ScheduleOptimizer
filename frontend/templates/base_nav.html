@@ -1,6 +1,20 @@
 <!-- frontend/templates/base_nav.html -->
 <link rel="stylesheet" href="/static/styles.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/theme-mechanical-engineering.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <script src="/static/js/common.js"></script>
+
+<!-- Loading Overlay (ثيم قسم الهندسة الميكانيكية) -->
+<div class="loading-overlay" id="loadingOverlay" aria-hidden="true">
+  <div class="spinner-border" role="status" style="width: 3rem; height: 3rem;">
+    <span class="visually-hidden">جاري التحميل...</span>
+  </div>
+</div>
+<!-- Toast Container -->
+<div class="toast-container position-fixed top-0 end-0 p-3" id="toastContainer"></div>
 
 <!-- top banner with logo and small subtitle -->
 <header class="app-topbar">
@@ -14,7 +28,7 @@
         <a href="/schedule_form" class="btn btn-sm btn-outline-dark">عرض الجدول</a>
       </div>
     </div>
-    <div class="d-flex align-items-center justify-content-between">
+    <div class="app-topbar-inner d-flex align-items-center justify-content-between">
       <a class="app-brand" href="/">
         <!-- college logo (1x + 2x) -->
         <img
@@ -25,6 +39,7 @@
         <div class="app-brand-title">
           <p class="t1">جامعة درنة</p>
           <p class="t2">كلية الهندسة</p>
+          <p class="t3">قسم الهندسة الميكانيكية</p>
         </div>
       </a>
 
@@ -45,19 +60,95 @@
 
     <div class="collapse navbar-collapse" id="mainNav">
       <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-        <li class="nav-item"><a class="nav-link" id="navDashboard" href="/dashboard">لوحة القيادة</a></li>
-        <li class="nav-item"><a class="nav-link" id="navAcademicCalendar" href="/academic_calendar_page">التقويم الأكاديمي</a></li>
-        <li class="nav-item"><a class="nav-link" id="navStudents" href="/students_form">الطلبة</a></li>
-        <li class="nav-item"><a class="nav-link" id="navCourses" href="/courses_form">المقررات</a></li>
-        <li class="nav-item"><a class="nav-link" id="navInstructors" href="/instructors_form">أعضاء هيئة التدريس</a></li>
-        <li class="nav-item"><a class="nav-link" id="navSupervision" href="/supervision_form">الإشراف الأكاديمي</a></li>
-        <li class="nav-item"><a class="nav-link" id="navPrereqs" href="/prereqs_form">المتطلبات المسبقة</a></li>
-        <li class="nav-item"><a class="nav-link" id="navRegistrations" href="/registrations_form">التسجيلات</a></li>
-        <li class="nav-item"><a class="nav-link" id="navEnrollmentPlans" href="/enrollment_plans">خطط التسجيل</a></li>
-        <li class="nav-item"><a class="nav-link" id="navScheduleForm" href="/schedule_form">الجدول</a></li>
-        <li class="nav-item"><a class="nav-link" id="navAttendance" href="/attendance_export">الحضور والغياب</a></li>
+        <!-- عام -->
+        <li class="nav-item">
+          <a class="nav-link" id="navDashboard" href="/dashboard">
+            <i class="fa-solid fa-gauge-high ms-1"></i> لوحة القيادة
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" id="navAnalytics" href="/analytics">
+            <i class="fa-solid fa-chart-line ms-1"></i> التحليلات
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" id="navAcademicCalendar" href="/academic_calendar_page">
+            <i class="fa-regular fa-calendar-days ms-1"></i> التقويم الأكاديمي
+          </a>
+        </li>
+
+        <!-- شؤون الطلبة (Dropdown) -->
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="studentAffairsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="fa-solid fa-user-graduate ms-1"></i> شؤون الطلبة
+          </a>
+          <ul class="dropdown-menu" aria-labelledby="studentAffairsMenu">
+            <li>
+              <a class="dropdown-item" id="navStudents" href="/students_form">
+                بيانات الطلبة
+              </a>
+            </li>
+            <li>
+              <a class="dropdown-item" id="navGraduates" href="/graduates_page">
+                قائمة الخريجين
+              </a>
+            </li>
+            <li>
+              <a class="dropdown-item" id="navEnrollmentPlans" href="/enrollment_plans">
+                خطط التسجيل
+              </a>
+            </li>
+            <li>
+              <a class="dropdown-item" id="navRegistrations" href="/registrations_form">
+                التسجيلات الفعلية
+              </a>
+            </li>
+            <li><hr class="dropdown-divider"></li>
+            <li>
+              <a class="dropdown-item" id="navSupervision" href="/supervision_form">
+                الإشراف الأكاديمي
+              </a>
+            </li>
+            <li>
+              <a class="dropdown-item" id="navSupervisorDashboard" href="/supervisor_dashboard">
+                لوحة المشرف
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <!-- بيانات أساسية أخرى -->
+        <li class="nav-item">
+          <a class="nav-link" id="navInstructors" href="/instructors_form">
+            <i class="fa-solid fa-user-tie ms-1"></i> أعضاء هيئة التدريس
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" id="navCourses" href="/courses_form">
+            <i class="fa-solid fa-book ms-1"></i> المقررات
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" id="navPrereqs" href="/prereqs_form">
+            <i class="fa-solid fa-link ms-1"></i> المتطلبات المسبقة
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" id="navScheduleForm" href="/schedule_form">
+            <i class="fa-regular fa-calendar ms-1"></i> الجدول
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" id="navAttendance" href="/attendance_export">
+            <i class="fa-solid fa-user-check ms-1"></i> الحضور والغياب
+          </a>
+        </li>
+
+        <!-- الامتحانات -->
         <li class="nav-item dropdown" id="navExamsMenuWrapper">
-          <a class="nav-link dropdown-toggle" href="#" id="examsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">الامتحانات</a>
+          <a class="nav-link dropdown-toggle" href="#" id="examsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="fa-regular fa-file-lines ms-1"></i> الامتحانات
+          </a>
           <ul class="dropdown-menu" aria-labelledby="examsMenu">
             <li><a class="dropdown-item" href="/exams/midterms">الامتحانات الجزئية (Midterms)</a></li>
             <li><a class="dropdown-item" href="/exams/finals">الامتحانات النهائية (Finals)</a></li>
@@ -65,12 +156,39 @@
             <li><a class="dropdown-item" href="/exams/conflicts">تقرير تعارضات الامتحانات</a></li>
           </ul>
         </li>
-        <li class="nav-item"><a class="nav-link" id="navTranscript" href="/transcript_page">كشف الدرجات</a></li>
-        <li class="nav-item"><a class="nav-link" id="navPerformance" href="/performance_report">تقرير الأداء</a></li>
-        <li class="nav-item"><a class="nav-link" id="navSupervisorDashboard" href="/supervisor_dashboard">لوحة المشرف</a></li>
-        <li class="nav-item"><a class="nav-link" id="navResults" href="/results">التعارضات</a></li>
-        <li class="nav-item"><a class="nav-link" id="navNotifications" href="/notifications_center">الإشعارات</a></li>
-        <li class="nav-item"><a class="nav-link" id="navUsersAdmin" href="/users_admin">المستخدمون</a></li>
+        <!-- النتائج والتقارير -->
+        <li class="nav-item">
+          <a class="nav-link" id="navTranscript" href="/transcript_page">
+            <i class="fa-regular fa-file-lines ms-1"></i> كشف الدرجات
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" id="navPerformance" href="/performance_report">
+            <i class="fa-solid fa-chart-bar ms-1"></i> تقرير الأداء
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" id="navResults" href="/results">
+            <i class="fa-solid fa-triangle-exclamation ms-1"></i> تعارضات الجدول
+          </a>
+        </li>
+
+        <!-- أدوار خاصة وإدارة -->
+        <li class="nav-item">
+          <a class="nav-link" id="navNotifications" href="/notifications_center">
+            <i class="fa-regular fa-bell ms-1"></i> الإشعارات
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" id="navUsersAdmin" href="/users_admin">
+            <i class="fa-solid fa-users-gear ms-1"></i> المستخدمون
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" id="navAcademicRules" href="/academic_rules_page">
+            <i class="fa-solid fa-scale-balanced ms-1"></i> لائحة الإنذارات والفصل
+          </a>
+        </li>
       </ul>
 
       <!-- action area: removed duplicated/redundant buttons (those inside the red circle) -->
@@ -124,6 +242,8 @@
         if (elUsers) elUsers.style.display = 'none';
         const elSup = document.getElementById('navSupervision');
         if (elSup) elSup.style.display = 'none';
+        const elRules = document.getElementById('navAcademicRules');
+        if (elRules) elRules.style.display = 'none';
       }
       // إخفاء لوحة المشرف عن غير المشرفين
       if (role !== 'supervisor') {
@@ -134,6 +254,7 @@
         // الطالب لا يحتاج لرؤية بعض الروابط الإدارية
         const hideIds = [
           'navStudents',
+          'navGraduates',
           'navCourses',
           'navInstructors',
           'navPrereqs',
@@ -145,6 +266,8 @@
           'navSupervision',
           'navSupervisorDashboard',
           'navPerformance',
+          'navAcademicRules',
+          'navAnalytics',
         ];
         hideIds.forEach(id => {
           const el = document.getElementById(id);
@@ -158,8 +281,10 @@
       const path = (window.location.pathname || '/').toLowerCase();
       const map = [
         ['/dashboard','navDashboard'],
+        ['/analytics','navAnalytics'],
         ['/academic_calendar_page','navAcademicCalendar'],
         ['/students_form','navStudents'],
+        ['/graduates_page','navGraduates'],
         ['/courses_form','navCourses'],
         ['/instructors_form','navInstructors'],
         ['/supervision_form','navSupervision'],
@@ -175,6 +300,7 @@
         ['/results','navResults'],
         ['/notifications_center','navNotifications'],
         ['/users_admin','navUsersAdmin'],
+        ['/academic_rules_page','navAcademicRules'],
       ];
       map.forEach(([prefix, id])=>{
         if (path === prefix || (prefix !== '/' && path.startsWith(prefix))) {
@@ -198,6 +324,31 @@
       } catch(e) {
         // تجاهل أي خطأ في عرض التنبيه
       }
+      window.showLoading = function() {
+        var el = document.getElementById('loadingOverlay');
+        if (el) { el.classList.add('active'); el.setAttribute('aria-hidden', 'false'); }
+      };
+      window.hideLoading = function() {
+        var el = document.getElementById('loadingOverlay');
+        if (el) { el.classList.remove('active'); el.setAttribute('aria-hidden', 'true'); }
+      };
+      window.showToast = function(message, type) {
+        type = type || 'info';
+        var container = document.getElementById('toastContainer');
+        if (!container) return;
+        var id = 'toast-' + Date.now();
+        var icon = type === 'success' ? 'check-circle' : (type === 'danger' ? 'exclamation-circle' : 'info-circle');
+        var title = type === 'success' ? 'نجح' : (type === 'danger' ? 'خطأ' : 'معلومة');
+        var toast = document.createElement('div');
+        toast.id = id;
+        toast.className = 'toast show';
+        toast.setAttribute('role', 'alert');
+        toast.innerHTML = '<div class="toast-header"><strong class="me-auto"><i class="fa-solid fa-' + icon + ' me-2"></i>' + title + '</strong><button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Close"></button></div><div class="toast-body">' + (message || '') + '</div>';
+        container.appendChild(toast);
+        var bsToast = bootstrap.Toast.getOrCreateInstance(toast, { delay: 5000 });
+        bsToast.show();
+        toast.addEventListener('hidden.bs.toast', function() { toast.remove(); });
+      };
     } catch (error) {
       console.error('Auth check error:', error);
       // في حالة الخطأ، توجيه المستخدم لصفحة تسجيل الدخول

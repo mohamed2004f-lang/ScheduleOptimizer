@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>استمارة تسجيل — {{ student_name }}</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <style>
+    @media print {
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .no-print { display: none !important; }
+    }
+    .university-header { text-align: center; margin-bottom: 1rem; padding: 8px 0; border-bottom: 2px solid #0d6efd; }
+    .university-header h1 { font-size: 1.25rem; margin: 0; font-weight: 700; }
+    .university-header .sub { font-size: 0.95rem; color: #555; margin-top: 2px; }
+    .form-title { font-size: 1.1rem; font-weight: 700; text-align: center; margin: 12px 0; }
+    table.registration-table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+    table.registration-table th, table.registration-table td { border: 1px solid #333; padding: 6px 8px; }
+    table.registration-table th { background: #f0f0f0; font-weight: 700; }
+    .sign-row { margin-top: 24px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+    .sign-cell { min-width: 140px; text-align: center; }
+    .sign-line { border-bottom: 1px solid #333; width: 120px; height: 20px; margin: 0 auto 4px; }
+  </style>
+</head>
+<body class="p-4">
+  <div class="no-print mb-2">
+    <button type="button" class="btn btn-primary btn-sm" onclick="window.print();">🖨️ طباعة</button>
+    <a href="/enrollment_plans" class="btn btn-secondary btn-sm">العودة إلى خطط التسجيل</a>
+  </div>
+
+  <div class="university-header">
+    <h1>جامعة درنة — كلية الهندسة</h1>
+    <p class="sub">قسم {{ department }}</p>
+  </div>
+
+  <h2 class="form-title">استمارة تسجيل مقررات دراسية</h2>
+
+  <table class="table table-bordered table-sm">
+    <tr>
+      <th style="width:22%;">اسم الطالب</th>
+      <td>{{ student_name }}</td>
+      <th style="width:18%;">الرقم الجامعي</th>
+      <td>{{ university_number or '—' }}</td>
+    </tr>
+    <tr>
+      <th>الرقم الدراسي</th>
+      <td>{{ student_id }}</td>
+      <th>الفصل الدراسي</th>
+      <td>{{ semester or '—' }}</td>
+    </tr>
+    <tr>
+      <th>الوحدات المنجزة</th>
+      <td>{{ completed_units }}</td>
+      <th>المعدل التراكمي</th>
+      <td>{{ cumulative_gpa }}</td>
+    </tr>
+    <tr>
+      <th>الحالة الأكاديمية</th>
+      <td>{{ status }}</td>
+      <th>مجموع وحدات الفصل</th>
+      <td>{{ total_units }}</td>
+    </tr>
+  </table>
+
+  <table class="registration-table">
+    <thead>
+      <tr>
+        <th style="width:8%;">م</th>
+        <th style="width:40%;">اسم المقرر</th>
+        <th style="width:15%;">الرمز</th>
+        <th style="width:12%;">الوحدات</th>
+        <th>ملاحظات</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in courses %}
+      <tr>
+        <td>{{ c.index }}</td>
+        <td>{{ c.name }}</td>
+        <td>{{ c.code }}</td>
+        <td>{{ c.units }}</td>
+        <td>{{ c.notes }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="sign-row">
+    <div class="sign-cell">
+      <div class="sign-line"></div>
+      <span>توقيع الطالب</span>
+    </div>
+    <div class="sign-cell">
+      <div class="sign-line"></div>
+      <span>المرشد الأكاديمي</span>
+    </div>
+    <div class="sign-cell">
+      <div class="sign-line"></div>
+      <span>رئيس القسم / التسجيل</span>
+    </div>
+  </div>
+</body>
+</html>

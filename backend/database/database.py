@@ -278,6 +278,29 @@ def ensure_tables(db_file=None):
                 logger.debug(f"Table {table_name} ensured")
             except Exception as e:
                 logger.warning(f"Could not create table {table_name}: {e}")
+
+        # ترقية جدول الطلاب لإضافة حالة القيد إن لم تكن موجودة
+        try:
+            cols = [r[1] for r in cur.execute("PRAGMA table_info(students)").fetchall()]
+            if "enrollment_status" not in cols:
+                cur.execute(
+                    "ALTER TABLE students ADD COLUMN enrollment_status TEXT NOT NULL DEFAULT 'active'"
+                )
+            if "status_changed_at" not in cols:
+                cur.execute(
+                    "ALTER TABLE students ADD COLUMN status_changed_at TEXT"
+                )
+            if "status_reason" not in cols:
+                cur.execute(
+                    "ALTER TABLE students ADD COLUMN status_reason TEXT"
+                )
+            if "graduation_plan" not in cols:
+                cur.execute(
+                    "ALTER TABLE students ADD COLUMN graduation_plan TEXT DEFAULT ''"
+                )
+        except Exception as e:
+            # في حال فشل التعديل (مثلاً في قواعد بيانات قديمة جداً)، نكتفي بالتسجيل ولا نوقف التطبيق
+            logger.warning(f"Could not migrate students table with enrollment status columns: {e}")
         
         # إنشاء الفهارس
         for idx_stmt in INDEXES:

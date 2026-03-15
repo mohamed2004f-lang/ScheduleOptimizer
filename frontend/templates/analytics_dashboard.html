@@ -1,0 +1,628 @@
+{% extends "base.html" %}
+
+{% block title %}لوحة التحكم التحليلية{% endblock %}
+
+{% block page_title %}لوحة التحكم التحليلية{% endblock %}
+
+{% block page_subtitle %}مؤشرات الأداء الرئيسية والإحصائيات الشاملة{% endblock %}
+
+{% block extra_styles %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<style>
+    .kpi-card {
+        background: linear-gradient(135deg, #003366 0%, #004d99 100%);
+        color: white;
+        border-radius: 12px;
+        padding: 1.1rem;  /* أصغر ليتناسب مع صفحة رسمية */
+        text-align: center;
+        box-shadow: 0 4px 15px rgba(0, 51, 102, 0.2);
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .kpi-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 100px;
+        height: 100px;
+        background: rgba(212, 175, 55, 0.1);
+        border-radius: 50%;
+        transform: translate(30%, -30%);
+    }
+
+    .kpi-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 25px rgba(0, 51, 102, 0.3);
+    }
+
+    .kpi-value {
+        font-size: 1.6rem;   /* كان كبيراً جداً، هذا أنسب لتقرير رسمي */
+        font-weight: 700;
+        margin: 0.5rem 0;
+        position: relative;
+        z-index: 1;
+    }
+
+    .kpi-label {
+        font-size: 0.95rem;
+        opacity: 0.9;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        position: relative;
+        z-index: 1;
+    }
+
+    .kpi-change {
+        font-size: 0.85rem;
+        margin-top: 0.5rem;
+        padding: 0.5rem 1rem;
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 20px;
+        display: inline-block;
+        position: relative;
+        z-index: 1;
+    }
+
+    .kpi-change.positive {
+        background: rgba(40, 167, 69, 0.3);
+        color: #28a745;
+    }
+
+    .kpi-change.negative {
+        background: rgba(220, 53, 69, 0.3);
+        color: #dc3545;
+    }
+
+    .chart-container {
+        background: white;
+        border-radius: 12px;
+        padding: 1.1rem;     /* تقليل هوامش الرسوم */
+        box-shadow: 0 4px 15px rgba(0, 51, 102, 0.1);
+        margin-bottom: 1.25rem;
+    }
+
+    .chart-title {
+        color: #003366;
+        font-weight: 700;
+        margin-bottom: 1.5rem;
+        font-size: 1.2rem;
+        border-bottom: 3px solid #D4AF37;
+        padding-bottom: 1rem;
+    }
+
+    .stats-table {
+        background: white;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 4px 15px rgba(0, 51, 102, 0.1);
+    }
+
+    .stats-table thead {
+        background: linear-gradient(135deg, #003366 0%, #004d99 100%);
+        color: white;
+    }
+
+    .stats-table tbody tr {
+        border-bottom: 1px solid #e0e0e0;
+        transition: all 0.3s ease;
+    }
+
+    .stats-table tbody tr:hover {
+        background-color: #f8f9fa;
+    }
+
+    .stats-table td {
+        padding: 0.7rem;      /* تقليل المسافات داخل الجدول */
+        vertical-align: middle;
+        font-size: 0.9rem;
+    }
+
+    .badge-status {
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
+
+    .badge-active {
+        background-color: rgba(40, 167, 69, 0.2);
+        color: #28a745;
+    }
+
+    .badge-inactive {
+        background-color: rgba(220, 53, 69, 0.2);
+        color: #dc3545;
+    }
+
+    .badge-pending {
+        background-color: rgba(255, 193, 7, 0.2);
+        color: #ffc107;
+    }
+
+    .progress-bar-custom {
+        background: linear-gradient(90deg, #003366 0%, #D4AF37 100%);
+        border-radius: 10px;
+        height: 8px;
+    }
+
+    .export-btn {
+        background: linear-gradient(135deg, #003366 0%, #004d99 100%);
+        color: white;
+        border: none;
+        padding: 0.7rem 1.5rem;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        font-weight: 600;
+    }
+
+    .export-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 15px rgba(0, 51, 102, 0.3);
+    }
+
+    .filter-section {
+        background: white;
+        border-radius: 12px;
+        padding: 1rem;
+        margin-bottom: 1.25rem;
+        box-shadow: 0 4px 15px rgba(0, 51, 102, 0.1);
+    }
+
+    .filter-group {
+        display: flex;
+        gap: 1rem;
+        flex-wrap: wrap;
+        align-items: flex-end;
+    }
+
+    .filter-group label {
+        color: #003366;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+        display: block;
+    }
+
+    .filter-group select,
+    .filter-group input {
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+        padding: 0.6rem 1rem;
+        font-size: 0.95rem;
+    }
+
+    .filter-group select:focus,
+    .filter-group input:focus {
+        outline: none;
+        border-color: #003366;
+        box-shadow: 0 0 0 3px rgba(0, 51, 102, 0.1);
+    }
+
+    .alert-custom {
+        background: linear-gradient(135deg, rgba(0, 51, 102, 0.1) 0%, rgba(212, 175, 55, 0.1) 100%);
+        border-left: 4px solid #003366;
+        border-radius: 6px;
+        padding: 1rem;
+        margin-bottom: 1.25rem;
+    }
+
+    /* جعل الرسوم البيانية أقل ارتفاعاً لتبدو في صفحة رسمية مضغوطة */
+    .chart-container canvas {
+        max-height: 240px;
+    }
+
+    .alert-custom-title {
+        color: #003366;
+        font-weight: 700;
+        margin-bottom: 0.5rem;
+    }
+
+    .alert-custom-text {
+        color: #666;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Filters Section (حاليًا شكل فقط، بدون ربط خلفي مباشر) -->
+<div class="filter-section">
+    <div class="filter-group">
+        <div>
+            <label for="analyticsSemesterFilter">الفصل الدراسي:</label>
+            <select id="analyticsSemesterFilter" class="form-control" style="width: 200px;">
+                <option value="">جميع الفصول</option>
+            </select>
+        </div>
+        <div>
+            <label for="departmentFilter">القسم:</label>
+            <select id="departmentFilter" class="form-control" style="width: 200px;">
+                <option value="">جميع الأقسام</option>
+                <option value="mechanical">الهندسة الميكانيكية</option>
+            </select>
+        </div>
+        <div>
+            <button class="export-btn" onclick="exportAnalytics('pdf')">
+                <i class="fas fa-file-pdf me-2"></i>تصدير PDF
+            </button>
+            <button class="export-btn" onclick="exportAnalytics('excel')" style="margin-right: 0.5rem;">
+                <i class="fas fa-file-excel me-2"></i>تصدير Excel
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Alert Section -->
+<div class="alert-custom">
+    <div class="alert-custom-title">
+        <i class="fas fa-info-circle me-2"></i>ملاحظات مهمة
+    </div>
+    <div class="alert-custom-text">
+        تم تحديث البيانات في: <strong id="lastUpdate">—</strong>
+    </div>
+</div>
+
+<!-- KPI Cards Section -->
+<div class="row mb-4">
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="kpi-card">
+            <i class="fas fa-users" style="font-size: 2rem; opacity: 0.8;"></i>
+            <div class="kpi-value" id="totalStudents">—</div>
+            <div class="kpi-label">إجمالي الطلاب</div>
+            <div class="kpi-change positive" id="studentsChange">
+                <i class="fas fa-arrow-up me-1"></i>بدون مقارنة
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="kpi-card">
+            <i class="fas fa-book" style="font-size: 2rem; opacity: 0.8;"></i>
+            <div class="kpi-value" id="totalCourses">—</div>
+            <div class="kpi-label">إجمالي المقررات</div>
+            <div class="kpi-change positive">
+                <i class="fas fa-arrow-up me-1"></i>إحصاء مباشر من قاعدة البيانات
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="kpi-card">
+            <i class="fas fa-graduation-cap" style="font-size: 2rem; opacity: 0.8;"></i>
+            <div class="kpi-value" id="averageGPA">—</div>
+            <div class="kpi-label">متوسط المعدل (تراكمي)</div>
+            <div class="kpi-change positive" id="gpaChange">
+                <i class="fas fa-arrow-up me-1"></i>مقارنة تقريبية
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="kpi-card">
+            <i class="fas fa-chart-line" style="font-size: 2rem; opacity: 0.8;"></i>
+            <div class="kpi-value" id="successRate">—</div>
+            <div class="kpi-label">معدل النجاح (حسب التراكمي ≥ 50)</div>
+            <div class="kpi-change positive" id="successChange">
+                <i class="fas fa-arrow-up me-1"></i>يُحسب من كشف الأداء
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Charts Section -->
+<div class="row">
+    <!-- Student Distribution Chart -->
+    <div class="col-lg-6">
+        <div class="chart-container">
+            <div class="chart-title">
+                <i class="fas fa-chart-pie me-2"></i>توزيع الطلاب حسب التقدم (وحدات منجزة)
+            </div>
+            <canvas id="studentDistributionChart"></canvas>
+        </div>
+    </div>
+
+    <!-- GPA Distribution Chart -->
+    <div class="col-lg-6">
+        <div class="chart-container">
+            <div class="chart-title">
+                <i class="fas fa-chart-bar me-2"></i>توزيع المعدلات التراكمية
+            </div>
+            <canvas id="gpaDistributionChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Performance Trend Chart (حاليًا بيانات تقريبية) -->
+    <div class="col-lg-12">
+        <div class="chart-container">
+            <div class="chart-title">
+                <i class="fas fa-chart-line me-2"></i>اتجاه الأداء الأكاديمي (تقريبي)
+            </div>
+            <canvas id="performanceTrendChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- Statistics Tables Section (أمثلة قابلة للتطوير) -->
+<div class="row">
+    <!-- Top Performing Students -->
+    <div class="col-lg-6">
+        <div class="chart-container">
+            <div class="chart-title">
+                <i class="fas fa-star me-2"></i>أفضل الطلاب أداءً (حسب البيانات المتاحة)
+            </div>
+            <table class="stats-table w-100">
+                <thead>
+                    <tr>
+                        <th>الترتيب</th>
+                        <th>اسم الطالب</th>
+                        <th>المعدل التراكمي</th>
+                    </tr>
+                </thead>
+                <tbody id="topStudentsBody">
+                    <!-- يُملأ من JavaScript -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Placeholder for course statistics (يمكن ربطه لاحقاً بنتائج المقررات) -->
+    <div class="col-lg-6">
+        <div class="chart-container">
+            <div class="chart-title">
+                <i class="fas fa-book me-2"></i>إحصائيات المقررات (تقريبية حالياً)</div>
+            <table class="stats-table w-100">
+                <thead>
+                    <tr>
+                        <th>المؤشر</th>
+                        <th>القيمة</th>
+                    </tr>
+                </thead>
+                <tbody id="courseStatsBody">
+                    <tr>
+                        <td>إجمالي المقررات في النظام</td>
+                        <td id="courseCountCell">—</td>
+                    </tr>
+                    <tr>
+                        <td>متوسط عدد الطلبة لكل مقرر (تقريبي)</td>
+                        <td id="avgStudentsPerCourseCell">—</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+  const primaryColor = '#003366';
+  const goldColor = '#D4AF37';
+  const successColor = '#28a745';
+
+  function exportAnalytics(format) {
+    const label = (format === 'pdf') ? 'PDF' : 'Excel';
+    if (typeof showToast === 'function') {
+      showToast('جاري تصدير البيانات بصيغة ' + label + ' (واجهة فقط حالياً).', 'info');
+    } else {
+      alert('جاري تصدير البيانات بصيغة ' + label);
+    }
+  }
+
+  function setupChartsFromPerformance(students) {
+    const ctxDist = document.getElementById('studentDistributionChart').getContext('2d');
+    const ctxGpa = document.getElementById('gpaDistributionChart').getContext('2d');
+    const ctxTrend = document.getElementById('performanceTrendChart').getContext('2d');
+
+    const bucketsUnits = { 'أقل من 40 وحدة': 0, '40-79 وحدة': 0, '80-119 وحدة': 0, '120+ وحدة': 0 };
+    const bucketsGpa = { '85-100': 0, '75-84': 0, '65-74': 0, '50-64': 0, 'أقل من 50': 0 };
+
+    students.forEach(s => {
+      const units = Number(s.completed_units || 0);
+      const gpa = Number(s.cumulative_gpa || 0);
+
+      if (units < 40) bucketsUnits['أقل من 40 وحدة']++;
+      else if (units < 80) bucketsUnits['40-79 وحدة']++;
+      else if (units < 120) bucketsUnits['80-119 وحدة']++;
+      else bucketsUnits['120+ وحدة']++;
+
+      if (gpa >= 85) bucketsGpa['85-100']++;
+      else if (gpa >= 75) bucketsGpa['75-84']++;
+      else if (gpa >= 65) bucketsGpa['65-74']++;
+      else if (gpa >= 50) bucketsGpa['50-64']++;
+      else bucketsGpa['أقل من 50']++;
+    });
+
+    new Chart(ctxDist, {
+      type: 'doughnut',
+      data: {
+        labels: Object.keys(bucketsUnits),
+        datasets: [{
+          data: Object.values(bucketsUnits),
+          backgroundColor: [primaryColor, '#004d99', goldColor, '#E8C547'],
+          borderColor: '#fff',
+          borderWidth: 2
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: {
+            position: 'bottom',
+            labels: { font: { family: "'Cairo', sans-serif", size: 12 }, padding: 15 }
+          }
+        }
+      }
+    });
+
+    new Chart(ctxGpa, {
+      type: 'bar',
+      data: {
+        labels: Object.keys(bucketsGpa),
+        datasets: [{
+          label: 'عدد الطلاب',
+          data: Object.values(bucketsGpa),
+          backgroundColor: primaryColor,
+          borderColor: goldColor,
+          borderWidth: 2,
+          borderRadius: 6
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: {
+            labels: { font: { family: "'Cairo', sans-serif", size: 12 } }
+          }
+        },
+        scales: {
+          y: { beginAtZero: true, ticks: { font: { family: "'Cairo', sans-serif" } } },
+          x: { ticks: { font: { family: "'Cairo', sans-serif" } } }
+        }
+      }
+    });
+
+    // منحنى تقريبي باستخدام عدد الطلبة في كل فئة كمؤشر
+    new Chart(ctxTrend, {
+      type: 'line',
+      data: {
+        labels: Object.keys(bucketsGpa),
+        datasets: [{
+          label: 'اتجاه عدد الطلبة حسب الفئة',
+          data: Object.values(bucketsGpa),
+          borderColor: primaryColor,
+          backgroundColor: 'rgba(0, 51, 102, 0.1)',
+          borderWidth: 3,
+          fill: true,
+          tension: 0.4,
+          pointRadius: 5,
+          pointBackgroundColor: goldColor,
+          pointBorderColor: primaryColor,
+          pointBorderWidth: 2
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: {
+            labels: { font: { family: "'Cairo', sans-serif", size: 12 }, padding: 15 }
+          }
+        },
+        scales: {
+          y: { beginAtZero: true, ticks: { font: { family: "'Cairo', sans-serif" } } },
+          x: { ticks: { font: { family: "'Cairo', sans-serif" } } }
+        }
+      }
+    });
+  }
+
+  async function loadAnalyticsDashboard() {
+    try {
+      const perf = await apiGet('/performance/report');
+      const students = Array.isArray(perf.students) ? perf.students : [];
+
+      const totalStudents = students.length;
+      const totalCoursesEl = document.getElementById('totalCourses');
+      const avgGpaEl = document.getElementById('averageGPA');
+      const successRateEl = document.getElementById('successRate');
+
+      document.getElementById('totalStudents').textContent = totalStudents || '0';
+
+      let sumGpa = 0;
+      let successCount = 0;
+      students.forEach(s => {
+        const g = Number(s.cumulative_gpa || 0);
+        sumGpa += g;
+        if (g >= 50) successCount++;
+      });
+      const avgGpa = totalStudents ? (sumGpa / totalStudents) : 0;
+      const successRate = totalStudents ? (successCount / totalStudents) * 100 : 0;
+
+      avgGpaEl.textContent = avgGpa ? avgGpa.toFixed(2) : '—';
+      successRateEl.textContent = successRate ? successRate.toFixed(1) + '%' : '—';
+
+      // تعبئة أفضل الطلاب
+      const sorted = students
+        .slice()
+        .sort((a, b) => (Number(b.cumulative_gpa || 0) - Number(a.cumulative_gpa || 0)))
+        .slice(0, 5);
+      const topBody = document.getElementById('topStudentsBody');
+      topBody.innerHTML = '';
+      if (sorted.length === 0) {
+        topBody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">لا توجد بيانات كافية</td></tr>';
+      } else {
+        sorted.forEach((s, idx) => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${idx + 1}</td>
+            <td>${s.student_name || s.student_id}</td>
+            <td><strong>${Number(s.cumulative_gpa || 0).toFixed(2)}</strong></td>
+          `;
+          topBody.appendChild(tr);
+        });
+      }
+
+      // إحصاءات المقررات من /admin/summary (إن توفرت)
+      try {
+        const summary = await apiGet('/admin/summary');
+        if (summary && summary.data) {
+          const d = summary.data;
+          const coursesCount = d.courses || 0;
+          const regs = d.registrations || 0;
+          document.getElementById('courseCountCell').textContent = coursesCount;
+          document.getElementById('avgStudentsPerCourseCell').textContent =
+            coursesCount ? (regs / coursesCount).toFixed(1) : '—';
+          if (totalCoursesEl) totalCoursesEl.textContent = coursesCount || '0';
+        }
+      } catch (e) {
+        // تجاهل الخطأ بهدوء
+      }
+
+      // تعبئة قائمة الفصول من بيانات الأداء (آخر، سابق، ثالث)
+      const semSet = new Set();
+      students.forEach(s => {
+        if (s.last_semester) semSet.add(s.last_semester);
+        if (s.prev_semester) semSet.add(s.prev_semester);
+        if (s.third_semester) semSet.add(s.third_semester);
+      });
+      const semSelect = document.getElementById('analyticsSemesterFilter');
+      semSet.forEach(sem => {
+        const opt = document.createElement('option');
+        opt.value = sem;
+        opt.textContent = sem;
+        semSelect.appendChild(opt);
+      });
+
+      // تاريخ آخر تحديث (من الوقت الحالي تقريباً)
+      const lastUpdateEl = document.getElementById('lastUpdate');
+      const now = new Date();
+      lastUpdateEl.textContent = now.toLocaleString('ar-EG', {
+        year: 'numeric', month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+      });
+
+      setupChartsFromPerformance(students);
+    } catch (e) {
+      console.error('Analytics load error', e);
+      if (typeof showToast === 'function') {
+        showToast('فشل تحميل بيانات لوحة التحكم التحليلية', 'error');
+      }
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    // إخفاء طبقة التحميل فوراً لهذه الصفحة حتى لو حدثت مشكلة في التحميل
+    if (typeof hideLoading === 'function') {
+      hideLoading();
+    }
+    loadAnalyticsDashboard();
+  });
+</script>
+{% endblock %}
+
