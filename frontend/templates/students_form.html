@@ -62,6 +62,20 @@
                 <button id="btnAddStudent" class="btn btn-primary w-100" type="button">أضف</button>
               </div>
             </div>
+            <div class="row g-2 align-items-end mt-2">
+              <div class="col-md-3">
+                <label class="form-label">فصل الالتحاق</label>
+                <select id="student_join_term" class="form-select">
+                  <option value="">— غير محدد —</option>
+                  <option value="ربيع">ربيع</option>
+                  <option value="خريف">خريف</option>
+                </select>
+              </div>
+              <div class="col-md-3">
+                <label class="form-label">سنة الالتحاق</label>
+                <input id="student_join_year" class="form-control" type="text" placeholder="مثال: 2023" maxlength="20">
+              </div>
+            </div>
           </form>
           <div id="st_msg" class="mt-2"></div>
         </div>
@@ -71,6 +85,24 @@
       <div class="card chart-container">
         <div class="card-body">
           <h6>قائمة الطلبة</h6>
+          <div class="row g-2 align-items-end mb-2">
+            <div class="col-auto">
+              <label class="form-label small mb-0">فلترة حسب الالتحاق</label>
+            </div>
+            <div class="col-md-2">
+              <select id="filter_join_term" class="form-select form-select-sm">
+                <option value="">كل الفصول</option>
+                <option value="ربيع">ربيع</option>
+                <option value="خريف">خريف</option>
+              </select>
+            </div>
+            <div class="col-md-2">
+              <input id="filter_join_year" class="form-control form-control-sm" type="text" placeholder="سنة الالتحاق">
+            </div>
+            <div class="col-auto">
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="btnApplyFilter">تطبيق</button>
+            </div>
+          </div>
           <div id="studentsList" class="small mono"></div>
           <div class="mt-3">
             <a href="/" class="btn btn-outline-secondary btn-sm">العودة</a>
@@ -144,6 +176,18 @@
                 <option value="155">155 وحدة (نظام جديد)</option>
               </select>
             </div>
+            <div class="mb-2">
+              <label class="form-label">فصل الالتحاق</label>
+              <select id="es_join_term" class="form-select">
+                <option value="">— غير محدد —</option>
+                <option value="ربيع">ربيع</option>
+                <option value="خريف">خريف</option>
+              </select>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">سنة الالتحاق</label>
+              <input id="es_join_year" class="form-control" type="text" placeholder="مثال: 2023" maxlength="20">
+            </div>
             <div id="es_msg" class="mt-2"></div>
           </div>
           <div class="modal-footer">
@@ -160,7 +204,12 @@
   /* تحميل وعرض الطلبة */
   async function loadStudents(){
     try {
-      const r = await fetch('/students/list?active_only=1');
+      let url = '/students/list?active_only=1';
+      const joinTerm = (document.getElementById('filter_join_term')||{}).value || '';
+      const joinYear = (document.getElementById('filter_join_year')||{}).value || '';
+      if(joinTerm) url += '&join_term=' + encodeURIComponent(joinTerm);
+      if(joinYear) url += '&join_year=' + encodeURIComponent(joinYear);
+      const r = await fetch(url);
       const arr = r.ok ? await r.json() : [];
       const el = document.getElementById('studentsList');
       if(!arr.length){ el.textContent = 'لا يوجد طلاب مسجلين.'; return; }
@@ -191,6 +240,14 @@
           planBadge.className = 'badge rounded-pill ms-1 bg-secondary';
           planBadge.textContent = plan === '150' ? '150 وحدة' : plan === '155' ? '155 وحدة' : plan;
           span.appendChild(planBadge);
+        }
+        const jTerm = (s.join_term || '').trim();
+        const jYear = (s.join_year || '').trim();
+        if (jTerm || jYear) {
+          const joinBadge = document.createElement('span');
+          joinBadge.className = 'badge rounded-pill ms-1 bg-info text-dark';
+          joinBadge.textContent = [jTerm, jYear].filter(Boolean).join(' ');
+          span.appendChild(joinBadge);
         }
         // Buttons: Edit + Delete
         const btnGroup = document.createElement('div');
@@ -234,11 +291,15 @@
       const sidInput = document.getElementById('es_student_id');
       const nameInput = document.getElementById('es_student_name');
       const planSelect = document.getElementById('es_graduation_plan');
+      const joinTermSelect = document.getElementById('es_join_term');
+      const joinYearInput = document.getElementById('es_join_year');
       const msgEl = document.getElementById('es_msg');
       if(msgEl) msgEl.innerHTML = '';
       if(sidInput) sidInput.value = student.student_id || '';
       if(nameInput) nameInput.value = student.student_name || '';
       if(planSelect) planSelect.value = (student.graduation_plan || '').trim() || '';
+      if(joinTermSelect) joinTermSelect.value = (student.join_term || '').trim() || '';
+      if(joinYearInput) joinYearInput.value = (student.join_year || '').trim() || '';
       const modalEl = document.getElementById('editStudentModal');
       if(modalEl){
         let modal = bootstrap.Modal.getInstance(modalEl);
@@ -310,14 +371,18 @@
           return;
         }
         const plan = (document.getElementById('student_graduation_plan')||{}).value || '';
+        const joinTerm = (document.getElementById('student_join_term')||{}).value || '';
+        const joinYear = (document.getElementById('student_join_year')||{}).value || '';
         try {
-          const resp = await fetch('/add_student',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({student_id:sid,student_name:name,graduation_plan:plan})});
+          const resp = await fetch('/add_student',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({student_id:sid,student_name:name,graduation_plan:plan,join_term:joinTerm,join_year:joinYear})});
           const j = await resp.json();
           document.getElementById('st_msg').innerHTML = `<div class="alert ${resp.ok? 'alert-success':'alert-danger'} p-1">${j.message||j.status}</div>`;
           if(resp.ok){
             document.getElementById('student_id').value='';
             document.getElementById('student_name').value='';
             const planEl = document.getElementById('student_graduation_plan'); if(planEl) planEl.value='';
+            const jt = document.getElementById('student_join_term'); if(jt) jt.value='';
+            const jy = document.getElementById('student_join_year'); if(jy) jy.value='';
             await loadStudents();
           }
         } catch (err) {
@@ -337,11 +402,13 @@
           return;
         }
         const plan = (document.getElementById('es_graduation_plan')||{}).value || '';
+        const joinTerm = (document.getElementById('es_join_term')||{}).value || '';
+        const joinYear = (document.getElementById('es_join_year')||{}).value || '';
         try {
           const resp = await fetch('/add_student', {
             method: 'POST',
             headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({student_id: sid, student_name: name, graduation_plan: plan})
+            body: JSON.stringify({student_id: sid, student_name: name, graduation_plan: plan, join_term: joinTerm, join_year: joinYear})
           });
           const j = await resp.json().catch(()=>null);
           if(resp.ok){
@@ -361,6 +428,9 @@
         }
       });
     }
+
+    const btnApplyFilter = document.getElementById('btnApplyFilter');
+    if (btnApplyFilter) btnApplyFilter.addEventListener('click', () => loadStudents());
 
     const stStatusSelect = document.getElementById('st_status_select');
     if (stStatusSelect) {

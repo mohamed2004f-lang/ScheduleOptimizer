@@ -9,6 +9,7 @@ from backend.services.schedule import schedule_bp
 from backend.services.exams import exams_bp
 from backend.services.admin import admin_bp
 from backend.services.enrollment import enrollment_bp
+from backend.services.registration_requests import registration_requests_bp
 from backend.services.notifications import notifications_bp
 from backend.services.users import users_bp
 from backend.services.academic_calendar import academic_calendar_bp
@@ -69,6 +70,7 @@ app.register_blueprint(schedule_bp, url_prefix="/schedule")
 app.register_blueprint(exams_bp, url_prefix="/exams")
 app.register_blueprint(admin_bp, url_prefix="/admin")
 app.register_blueprint(enrollment_bp, url_prefix="/enrollment")
+app.register_blueprint(registration_requests_bp, url_prefix="/")
 app.register_blueprint(notifications_bp, url_prefix="/notifications")
 app.register_blueprint(users_bp, url_prefix="/users")
 app.register_blueprint(academic_calendar_bp, url_prefix="/academic_calendar")
@@ -216,6 +218,21 @@ def transcript_page():
 def performance_report_page():
     return render_template("performance_report.html")
 
+
+@app.route("/registration_requests_page")
+def registration_requests_page():
+    return render_template("registration_requests.html")
+
+@app.route("/electives_report_page")
+def electives_report_page():
+    return render_template("electives_report.html")
+
+
+@app.route("/registration_changes_report_page")
+def registration_changes_report_page():
+    return render_template("registration_changes_report.html")
+
+
 # -----------------------------
 # مسارات توافقية (للحفاظ على عمل الواجهة القديمة)
 # -----------------------------
@@ -296,6 +313,11 @@ def compat_save_registrations():
 @app.route("/get_registrations")
 def compat_get_registrations():
     return redirect(url_for("students.get_registrations"))
+
+@app.route("/delete_registrations", methods=["POST"])
+def compat_delete_registrations():
+    # مسار توافقي لحذف تسجيلات طالب بالكامل
+    return redirect(url_for("students.delete_registrations"), code=307)
 
 @app.route("/save_grades", methods=["POST"])
 def compat_save_grades():

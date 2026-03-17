@@ -1,8 +1,39 @@
-from flask import Blueprint, jsonify
-from backend.core.auth import login_required
-from .utilities import get_connection
+from flask import Blueprint, jsonify, request
+from backend.core.auth import login_required, role_required
+from .utilities import get_connection, get_current_term
 
 admin_bp = Blueprint("admin", __name__)
+
+
+@admin_bp.route("/settings/current_term", methods=["GET"])
+@login_required
+def get_current_term_api():
+    """قراءة الفصل الحالي (اسم + سنة) للعرض أو التعيين الافتراضي."""
+    name, year = get_current_term()
+    return jsonify({"status": "ok", "term_name": name, "term_year": year})
+
+
+@admin_bp.route("/settings/current_term", methods=["POST"])
+@role_required("admin")
+def set_current_term():
+    """حفظ اسم الفصل الحالي وسنة الفصل في system_settings."""
+    data = request.get_json(force=True) or {}
+    name = (data.get("term_name") or "").strip()
+    year = (data.get("term_year") or "").strip()
+    if not name:
+        return jsonify({"status": "error", "message": "term_name مطلوب"}), 400
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('current_term_name', ?)",
+            (name,),
+        )
+        cur.execute(
+            "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('current_term_year', ?)",
+            (year,),
+        )
+        conn.commit()
+    return jsonify({"status": "ok", "message": "تم حفظ الفصل الحالي", "term_name": name, "term_year": year})
 
 
 @admin_bp.route("/summary")

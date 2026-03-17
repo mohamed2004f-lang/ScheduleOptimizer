@@ -15,7 +15,16 @@ def list_courses():
     with get_connection() as conn:
         cur = conn.cursor()
         try:
-            rows = cur.execute("SELECT DISTINCT course_name, course_code, units FROM courses WHERE COALESCE(course_name,'') <> '' ORDER BY course_name").fetchall()
+            try:
+                cols = [r[1] for r in cur.execute("PRAGMA table_info(courses)").fetchall()]
+            except Exception:
+                cols = []
+            has_cat = "category" in cols
+            sel = "SELECT DISTINCT course_name, course_code, units"
+            if has_cat:
+                sel += ", COALESCE(category,'required') AS category"
+            sel += " FROM courses WHERE COALESCE(course_name,'') <> '' ORDER BY course_name"
+            rows = cur.execute(sel).fetchall()
             # إزالة التكرار البرمجيًا أيضًا (احتياطي)
             seen = set()
             courses = []
@@ -25,7 +34,12 @@ def list_courses():
                 if not cname or key in seen:
                     continue
                 seen.add(key)
-                courses.append(Course(r[0], r[1], r[2]))
+                c = Course(r[0], r[1], r[2])
+                try:
+                    setattr(c, "category", (r[3] if has_cat else "required") or "required")
+                except Exception:
+                    setattr(c, "category", "required")
+                courses.append(c)
         except Exception:
             rows = cur.execute("SELECT DISTINCT course_name FROM schedule WHERE COALESCE(course_name,'') <> '' ORDER BY course_name").fetchall()
             seen = set()
@@ -36,7 +50,9 @@ def list_courses():
                 if not cname or key in seen:
                     continue
                 seen.add(key)
-                courses.append(Course(r[0], "", 0))
+                c = Course(r[0], "", 0)
+                setattr(c, "category", "required")
+                courses.append(c)
     return jsonify([c.__dict__ for c in courses])
 
 @courses_bp.route("/add", methods=["POST"])
@@ -49,6 +65,9 @@ def add_course():
         units = int(data.get("units", 0) or 0)
     except (TypeError, ValueError):
         units = 0
+    category = (data.get("category") or "required").strip() or "required"
+    if category not in ("required", "elective_major", "elective_free"):
+        category = "required"
     if not cname:
         return jsonify({"status": "error", "message": "اسم المقرر (course_name) مطلوب"}), 400
     with get_connection() as conn:
@@ -82,10 +101,21 @@ def add_course():
                     }
                 ), 400
 
-        cur.execute(
-            "INSERT INTO courses (course_name, course_code, units) VALUES (?, ?, ?)",
-            (cname, code, units),
-        )
+        # تأكد من وجود عمود category (قواعد قديمة)
+        try:
+            cols = [r[1] for r in cur.execute("PRAGMA table_info(courses)").fetchall()]
+        except Exception:
+            cols = []
+        if "category" in cols:
+            cur.execute(
+                "INSERT INTO courses (course_name, course_code, units, category) VALUES (?, ?, ?, ?)",
+                (cname, code, units, category),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO courses (course_name, course_code, units) VALUES (?, ?, ?)",
+                (cname, code, units),
+            )
         conn.commit()
     return jsonify({"status": "ok", "message": "تم إضافة المقرر"}), 200
 
@@ -97,6 +127,7 @@ def update_course():
     new_name = (data.get("new_course_name") or "").strip()
     new_units = data.get("units")
     new_code = (data.get("course_code") or "").strip()
+    category = (data.get("category") or "").strip()
     if not old_name or not new_name:
         return jsonify({"status": "error", "message": "old_course_name و new_course_name مطلوبة"}), 400
 
@@ -129,10 +160,29 @@ def update_course():
                     }
                 ), 400
 
-        cur.execute(
-            "UPDATE courses SET course_name=?, course_code=?, units=? WHERE course_name=?",
-            (new_name, new_code or "", (int(new_units) if new_units is not None else None), old_name),
-        )
+        # تأكد من وجود عمود category (قواعد قديمة)
+        try:
+            cols = [r[1] for r in cur.execute("PRAGMA table_info(courses)").fetchall()]
+        except Exception:
+            cols = []
+        has_cat = "category" in cols
+        cat_value = category if category in ("required", "elective_major", "elective_free") else None
+        if has_cat:
+            if cat_value is None:
+                cur.execute(
+                    "UPDATE courses SET course_name=?, course_code=?, units=? WHERE course_name=?",
+                    (new_name, new_code or "", (int(new_units) if new_units is not None else None), old_name),
+                )
+            else:
+                cur.execute(
+                    "UPDATE courses SET course_name=?, course_code=?, units=?, category=? WHERE course_name=?",
+                    (new_name, new_code or "", (int(new_units) if new_units is not None else None), cat_value, old_name),
+                )
+        else:
+            cur.execute(
+                "UPDATE courses SET course_name=?, course_code=?, units=? WHERE course_name=?",
+                (new_name, new_code or "", (int(new_units) if new_units is not None else None), old_name),
+            )
 
         # تحديث جميع الجداول التي تعتمد على اسم المقرر
         for tbl in ("grades", "schedule", "registrations", "enrollment_plan_items", "exams"):

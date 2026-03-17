@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <title>طلبات الإضافة والإسقاط</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+{% include "base_nav.html" %}
+<main class="container-main container-1100">
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">طلبات الإضافة والإسقاط</h1>
+      <p class="page-subtitle">مراجعة واعتماد طلبات الطلبة على التسجيلات</p>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-body row g-2 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label">رقم الطالب</label>
+        <input id="fStudent" class="form-control form-control-sm">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">الفصل</label>
+        <input id="fTerm" class="form-control form-control-sm" placeholder="مثال: خريف 25-26">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">العملية</label>
+        <select id="fAction" class="form-select form-select-sm">
+          <option value="">الكل</option>
+          <option value="add">إضافة</option>
+          <option value="drop">إسقاط</option>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">الحالة</label>
+        <select id="fStatus" class="form-select form-select-sm">
+          <option value="">الكل</option>
+          <option value="pending">قيد المراجعة</option>
+          <option value="approved">معتمد (غير منفذ)</option>
+          <option value="executed">منفذ</option>
+          <option value="rejected">مرفوض</option>
+        </select>
+      </div>
+      <div class="col-md-2 d-grid">
+        <button id="btnLoad" class="btn btn-primary btn-sm">تحميل</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-body">
+      <div id="reqMsg" class="mb-2"></div>
+      <div class="table-responsive">
+        <table class="table table-sm table-bordered" id="reqTable">
+          <thead class="table-light">
+            <tr>
+              <th>#</th>
+              <th>الطالب</th>
+              <th>الفصل</th>
+              <th>المقرر</th>
+              <th>العملية</th>
+              <th>الحالة</th>
+              <th>مقدم الطلب</th>
+              <th>تاريخ الطلب</th>
+              <th>إجراءات</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+async function fetchJSON(url, opts){
+  const r = await fetch(url, opts);
+  const j = await r.json().catch(()=>null);
+  return {ok:r.ok,status:r.status,json:j};
+}
+function setReqMsg(kind, text){
+  const m=document.getElementById('reqMsg');
+  m.innerHTML = text ? `<div class="alert alert-${kind} p-2 mb-0">${text}</div>` : '';
+}
+
+async function loadRequests(){
+  const p = new URLSearchParams();
+  const sid = document.getElementById('fStudent').value.trim();
+  const term = document.getElementById('fTerm').value.trim();
+  const act = document.getElementById('fAction').value;
+  const st = document.getElementById('fStatus').value;
+  if(sid) p.append('student_id', sid);
+  if(term) p.append('term', term);
+  if(act) p.append('action', act);
+  if(st) p.append('status', st);
+  const r = await fetchJSON('/registration_requests/list?'+p.toString());
+  const tbody = document.querySelector('#reqTable tbody');
+  tbody.innerHTML = '';
+  if(!r.ok){
+    setReqMsg('danger', r.json?.message || 'فشل تحميل الطلبات');
+    return;
+  }
+  const items = r.json?.items || [];
+  if(!items.length){
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted">لا توجد طلبات</td></tr>';
+    setReqMsg('', '');
+    return;
+  }
+  items.forEach((it,idx)=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${idx+1}</td>
+      <td>${it.student_id}</td>
+      <td>${it.term||''}</td>
+      <td>${it.course_name}</td>
+      <td>${it.action==='add'?'إضافة':'إسقاط'}</td>
+      <td>${it.status}</td>
+      <td>${it.requested_by||''}</td>
+      <td>${it.created_at||''}</td>
+      <td></td>
+    `;
+    const tdAct = tr.lastElementChild;
+    if(it.status === 'pending' || it.status === 'approved'){
+      const btnOk = document.createElement('button');
+      btnOk.className='btn btn-sm btn-success me-1';
+      btnOk.textContent='اعتماد وتنفيذ';
+      btnOk.onclick = ()=> approveRequest(it.id, true);
+      const btnReject = document.createElement('button');
+      btnReject.className='btn btn-sm btn-danger';
+      btnReject.textContent='رفض';
+      btnReject.onclick = ()=> rejectRequest(it.id);
+      tdAct.appendChild(btnOk);
+      tdAct.appendChild(btnReject);
+    } else {
+      tdAct.textContent = '-';
+    }
+    tbody.appendChild(tr);
+  });
+  setReqMsg('', '');
+}
+
+async function approveRequest(id, executeNow){
+  const note = prompt('ملاحظة (اختياري):','') || '';
+  const r = await fetchJSON('/registration_requests/approve', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({id, execute_now: executeNow, note})
+  });
+  if(r.ok){
+    setReqMsg('success', r.json?.message || 'تم الاعتماد');
+    loadRequests();
+  } else {
+    setReqMsg('danger', r.json?.message || 'فشل الاعتماد');
+  }
+}
+
+async function rejectRequest(id){
+  const note = prompt('سبب الرفض (مستحسن):','') || '';
+  const r = await fetchJSON('/registration_requests/reject', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({id, note})
+  });
+  if(r.ok){
+    setReqMsg('success', r.json?.message || 'تم الرفض');
+    loadRequests();
+  } else {
+    setReqMsg('danger', r.json?.message || 'فشل الرفض');
+  }
+}
+
+document.getElementById('btnLoad').addEventListener('click', loadRequests);
+loadRequests();
+</script>
+</body>
+</html>
+

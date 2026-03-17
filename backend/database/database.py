@@ -240,6 +240,30 @@ TABLES_SCHEMA = {
             FOREIGN KEY (course_name) REFERENCES courses(course_name) 
                 ON DELETE CASCADE ON UPDATE CASCADE
         )
+    """,
+    
+    'registration_changes_log': """
+        CREATE TABLE IF NOT EXISTS registration_changes_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT NOT NULL,
+            student_name TEXT DEFAULT '',
+            term TEXT DEFAULT '',
+            course_name TEXT NOT NULL,
+            course_code TEXT DEFAULT '',
+            units INTEGER DEFAULT 0,
+            action TEXT NOT NULL CHECK (action IN ('add','drop','change')),
+            action_phase TEXT DEFAULT '',
+            action_time TEXT DEFAULT CURRENT_TIMESTAMP,
+            performed_by TEXT DEFAULT '',
+            reason TEXT,
+            notes TEXT,
+            prev_state TEXT,
+            new_state TEXT,
+            FOREIGN KEY (student_id) REFERENCES students(student_id)
+                ON DELETE CASCADE ON UPDATE CASCADE,
+            FOREIGN KEY (course_name) REFERENCES courses(course_name)
+                ON DELETE SET NULL ON UPDATE CASCADE
+        )
     """
 }
 
@@ -297,6 +321,10 @@ def ensure_tables(db_file=None):
             if "graduation_plan" not in cols:
                 cur.execute(
                     "ALTER TABLE students ADD COLUMN graduation_plan TEXT DEFAULT ''"
+                )
+            if "join_term" not in cols:
+                cur.execute(
+                    "ALTER TABLE students ADD COLUMN join_term TEXT DEFAULT ''"
                 )
         except Exception as e:
             # في حال فشل التعديل (مثلاً في قواعد بيانات قديمة جداً)، نكتفي بالتسجيل ولا نوقف التطبيق

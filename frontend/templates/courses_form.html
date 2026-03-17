@@ -54,6 +54,14 @@
                 <label class="form-label">عدد الوحدات</label>
                 <input id="course_units" type="number" class="form-control" min="0" placeholder="مثلاً: 3">
               </div>
+              <div class="col-md-2">
+                <label class="form-label">نوع المقرر</label>
+                <select id="course_category" class="form-select">
+                  <option value="required">إجباري</option>
+                  <option value="elective_major">اختياري (تخصصي)</option>
+                  <option value="elective_free">اختياري (حر)</option>
+                </select>
+              </div>
               <div class="col-md-2 d-grid">
                 <button id="btnAddCourse" class="btn btn-primary" type="button">أضف</button>
               </div>
@@ -98,6 +106,14 @@
               <input id="ecUnits" type="number" class="form-control" min="0" placeholder="مثلاً: 3">
               <div class="form-text">0 يبقي القيمة كما هي إن كانت غير معروفة سابقاً.</div>
             </div>
+      <div class="mb-2">
+        <label class="form-label">نوع المقرر</label>
+        <select id="ecCategory" class="form-select">
+          <option value="required">إجباري</option>
+          <option value="elective_major">اختياري (تخصصي)</option>
+          <option value="elective_free">اختياري (حر)</option>
+        </select>
+      </div>
             <div id="ecMsg" class="mt-2"></div>
           </div>
           <div class="modal-footer">
@@ -115,6 +131,12 @@ let ALL_COURSES = [];
 let editModal;
 let editCourseName = '';
 let IS_ADMIN = false;
+
+function categoryLabel(cat){
+  if(cat === 'elective_major') return 'اختياري (تخصصي)';
+  if(cat === 'elective_free') return 'اختياري (حر)';
+  return 'إجباري';
+}
 
 function showAlert(elId, kind, text){
   const el = document.getElementById(elId);
@@ -175,6 +197,7 @@ function renderCourses(list){
         <th>الاسم</th>
         <th>الرمز</th>
         <th class="text-center">الوحدات</th>
+        <th class="text-center">النوع</th>
         <th class="text-center">إجراءات</th>
       </tr>
     </thead>
@@ -188,6 +211,7 @@ function renderCourses(list){
       <td>${escapeHtml(c.course_name)}</td>
       <td>${escapeHtml(c.course_code || '')}</td>
       <td class="text-center">${(typeof c.units === 'number' ? c.units : (c.units || 0))}</td>
+      <td class="text-center">${escapeHtml(categoryLabel(c.category))}</td>
       <td class="text-center">
         ${IS_ADMIN ? `
           <button class="btn btn-sm btn-outline-primary me-1" data-action="edit" data-name="${escapeAttr(c.course_name)}">تحرير</button>
@@ -236,6 +260,7 @@ document.getElementById('btnAddCourse').addEventListener('click', async () => {
   const code = document.getElementById('course_code').value.trim();
   const unitsRaw = document.getElementById('course_units').value;
   const units = Number(unitsRaw || 0);
+  const category = (document.getElementById('course_category')||{}).value || 'required';
 
   if(!name){
     showAlert('cr_msg', 'warning', 'أدخل اسم المقرر');
@@ -259,7 +284,7 @@ document.getElementById('btnAddCourse').addEventListener('click', async () => {
     const resp = await fetch('/add_course',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({course_name: name, course_code: code, units})
+      body: JSON.stringify({course_name: name, course_code: code, units, category})
     });
     const j = await resp.json().catch(()=>({}));
     showAlert('cr_msg', resp.ok ? 'success' : 'danger', j.message||j.status||'');
@@ -267,6 +292,7 @@ document.getElementById('btnAddCourse').addEventListener('click', async () => {
       document.getElementById('course_name').value='';
       document.getElementById('course_code').value='';
       document.getElementById('course_units').value='';
+      const catEl = document.getElementById('course_category'); if(catEl) catEl.value = 'required';
       await loadCourses();
     }
   } catch (err) {
@@ -286,6 +312,8 @@ function openEdit(name){
   document.getElementById('ecName').textContent = name;
   document.getElementById('ecCode').value = c.course_code || '';
   document.getElementById('ecUnits').value = (typeof c.units === 'number' ? c.units : (c.units || ''));
+  const catEl = document.getElementById('ecCategory');
+  if (catEl) catEl.value = c.category || 'required';
   document.getElementById('ecMsg').innerHTML = '';
   editModal.show();
 }
@@ -294,15 +322,22 @@ document.getElementById('ecSaveBtn').addEventListener('click', async ()=>{
   const code = document.getElementById('ecCode').value.trim();
   const unitsRaw = document.getElementById('ecUnits').value;
   const units = Number(unitsRaw || 0);
+  const category = (document.getElementById('ecCategory')||{}).value || 'required';
   if(unitsRaw !== '' && (isNaN(units) || units < 0)){
     showInModal('ecMsg', 'warning', 'عدد الوحدات يجب أن يكون رقماً صحيحاً >= 0');
     return;
   }
   try {
-    const resp = await fetch('/add_course',{
+    const resp = await fetch('/courses/update',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({course_name: editCourseName, course_code: code, units})
+      body: JSON.stringify({
+        old_course_name: editCourseName,
+        new_course_name: editCourseName,
+        course_code: code,
+        units,
+        category
+      })
     });
     const j = await resp.json().catch(()=>({}));
     if(resp.ok){

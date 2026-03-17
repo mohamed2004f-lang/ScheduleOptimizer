@@ -24,18 +24,23 @@
       <tr>
         <th>الرقم الدراسي</th>
         <th>اسم الطالب</th>
+        <th>فصل الالتحاق</th>
+        <th>سنة الالتحاق</th>
+        <th>خطة التخرج</th>
       </tr>
     </thead>
     <tbody>
-      {# دعم لاسم المتغيرين المحتملين rows أو students #}
       {% set listdata = rows if (rows is defined) else (students if (students is defined) else []) %}
       {% for r in listdata %}
       <tr>
         <td>{{ r.student_id }}</td>
         <td>{{ r.student_name }}</td>
+        <td>{{ r.get('join_term', '') }}</td>
+        <td>{{ r.get('join_year', '') }}</td>
+        <td>{{ r.get('graduation_plan', '') }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="2" style="text-align:center">لا توجد بيانات</td></tr>
+      <tr><td colspan="5" style="text-align:center">لا توجد بيانات</td></tr>
       {% endfor %}
     </tbody>
   </table>

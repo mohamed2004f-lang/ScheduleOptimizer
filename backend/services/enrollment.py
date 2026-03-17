@@ -295,6 +295,7 @@ def list_plans():
     """
     student_id = (request.args.get("student_id") or "").strip()
     semester = (request.args.get("semester") or "").strip()
+    include_archived = (request.args.get("include_archived") or "").strip() == "1"
 
     # الطالب لا يمكنه رؤية إلا خططه هو
     user_role = session.get("user_role")
@@ -322,6 +323,8 @@ def list_plans():
         if semester:
             q += " AND semester = ?"
             params.append(semester)
+        if not include_archived:
+            q += " AND status != 'Archived'"
         q += " ORDER BY created_at DESC, id DESC"
         rows = cur.execute(q, params).fetchall()
 
@@ -660,6 +663,54 @@ def approve_plan(plan_id: int):
         "status": "ok",
         "conflict_count": conflict_count,
         "message": "تم اعتماد الخطة." + (f" تم تحديث تقرير التعارضات ({conflict_count} تعارض)." if conflict_count else " لا توجد تعارضات في الجدول الحالي.")
+    })
+
+
+@enrollment_bp.route("/plans/archive_after_migration", methods=["POST"])
+@role_required("admin")
+def archive_plans_after_migration():
+    """
+    أرشفة خطة التسجيل لفصل معيّن بعد ترحيل المقررات إلى كشف الدرجات.
+
+    body JSON:
+      - student_id: رقم الطالب
+      - semester: وسم الفصل كما هو مخزَّن في جدول enrollment_plans.semester
+
+    تقوم هذه العملية بتحويل حالة الخطة المعتمدة للفصل إلى Archived
+    مع عدم لمس جدول registrations أو جدول grades (يتم ذلك في مسار الترحيل نفسه).
+    """
+    data = request.get_json(force=True) or {}
+    student_id = (data.get("student_id") or "").strip()
+    semester = (data.get("semester") or "").strip()
+    if not student_id or not semester:
+        return jsonify({
+            "status": "error",
+            "message": "student_id و semester مطلوبة",
+        }), 400
+
+    now = _now_iso()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE enrollment_plans
+            SET status = 'Archived', updated_at = ?
+            WHERE student_id = ? AND semester = ? AND status = 'Approved'
+            """,
+            (now, student_id, semester),
+        )
+        try:
+            # SQLite يوفر دالة changes() للحصول على عدد الصفوف المتأثرة
+            count_row = cur.execute("SELECT changes()").fetchone()
+            archived_count = int(count_row[0]) if count_row and count_row[0] is not None else 0
+        except Exception:
+            archived_count = 0
+        conn.commit()
+
+    return jsonify({
+        "status": "ok",
+        "archived": archived_count,
+        "message": f"تم أرشفة {archived_count} خطة تسجيل للفصل {semester} للطالب {student_id}",
     })
 
 

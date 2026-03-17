@@ -85,6 +85,7 @@ ALLOWED_TABLES = {
     'proposed_moves', 'exams', 'exam_conflicts', 'prereqs',
     'grade_audit', 'attendance_records', 'activity_log',
     'enrollment_plans', 'enrollment_plan_items',
+    'registration_requests', 'registration_changes_log',
     'users', 'notifications', 'system_settings',
     'academic_calendar', 'instructors', 'student_supervisor',
     'student_exceptions', 'academic_rules'
@@ -298,6 +299,43 @@ def ensure_tables():
                             value_text TEXT,
                             is_active INTEGER NOT NULL DEFAULT 1
                         )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS registration_requests (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            student_id TEXT NOT NULL,
+                            term TEXT DEFAULT '',
+                            course_name TEXT NOT NULL,
+                            action TEXT NOT NULL CHECK (action IN ('add','drop')),
+                            status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','executed')),
+                            requested_by TEXT DEFAULT '',
+                            reviewed_by TEXT DEFAULT '',
+                            request_reason TEXT,
+                            review_note TEXT,
+                            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE,
+                            FOREIGN KEY (course_name) REFERENCES courses(course_name) ON DELETE SET NULL
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS registration_changes_log (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            student_id TEXT NOT NULL,
+                            student_name TEXT DEFAULT '',
+                            term TEXT DEFAULT '',
+                            course_name TEXT NOT NULL,
+                            course_code TEXT DEFAULT '',
+                            units INTEGER DEFAULT 0,
+                            action TEXT NOT NULL CHECK (action IN ('add','drop','change')),
+                            action_phase TEXT DEFAULT '',
+                            action_time TEXT DEFAULT CURRENT_TIMESTAMP,
+                            performed_by TEXT DEFAULT '',
+                            reason TEXT,
+                            notes TEXT,
+                            prev_state TEXT,
+                            new_state TEXT,
+                            FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE,
+                            FOREIGN KEY (course_name) REFERENCES courses(course_name) ON DELETE SET NULL
+                        )""",
                 ]
                 for s in create_stmts:
                         cur.execute(s)
@@ -321,6 +359,9 @@ def ensure_tables():
                     "CREATE INDEX IF NOT EXISTS idx_academic_calendar_year_term ON academic_calendar(academic_year, term)",
                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_courses_code_unique ON courses(course_code) WHERE COALESCE(course_code,'') <> ''",
                     "CREATE INDEX IF NOT EXISTS idx_student_supervisor_instructor ON student_supervisor(instructor_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_reg_requests_status_created ON registration_requests(status, created_at)",
+                    "CREATE INDEX IF NOT EXISTS idx_reg_requests_student ON registration_requests(student_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_reg_changes_student_time ON registration_changes_log(student_id, action_time)",
                 ]
                 for idx in indexes:
                     try:
@@ -365,8 +406,17 @@ def ensure_tables():
                     cur.execute("ALTER TABLE students ADD COLUMN phone TEXT")
                 except Exception:
                     pass
+                # نوع المقرر (إجباري/اختياري...) - عمود category في جدول courses
+                try:
+                    cur.execute("ALTER TABLE courses ADD COLUMN category TEXT NOT NULL DEFAULT 'required'")
+                except Exception:
+                    pass
                 try:
                     cur.execute("ALTER TABLE students ADD COLUMN graduation_plan TEXT DEFAULT ''")
+                except Exception:
+                    pass
+                try:
+                    cur.execute("ALTER TABLE students ADD COLUMN join_term TEXT DEFAULT ''")
                 except Exception:
                     pass
 
@@ -437,6 +487,31 @@ def touch_schedule_updated_at(conn=None, db_file=DB_FILE):
         return _set(conn)
     with get_connection(db_file) as c:
         return _set(c)
+
+
+def get_current_term(conn=None, db_file=DB_FILE):
+    """يرجع (term_name, term_year) من system_settings للفصل الحالي. للاستخدام عند الترحيل أو العرض."""
+    def _get(c):
+        cur = c.cursor()
+        name, year = "", ""
+        try:
+            row = cur.execute("SELECT value FROM system_settings WHERE key = 'current_term_name'").fetchone()
+            if row and row[0]:
+                name = (row[0] or "").strip()
+        except Exception:
+            pass
+        try:
+            row = cur.execute("SELECT value FROM system_settings WHERE key = 'current_term_year'").fetchone()
+            if row and row[0]:
+                year = (row[0] or "").strip()
+        except Exception:
+            pass
+        return name, year
+    if conn is not None:
+        return _get(conn)
+    with get_connection(db_file) as c:
+        return _get(c)
+
 
 # -----------------------------
 # دوال مساعدة للاستيراد/التصدير

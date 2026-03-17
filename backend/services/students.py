@@ -4,7 +4,7 @@ from models.models import Student
 from flask import Blueprint, request, jsonify, render_template, current_app, send_file, session
 from backend.core.auth import login_required, role_required
 from collections import defaultdict
-import sqlite3, pandas as pd, io
+import sqlite3, pandas as pd, io, datetime
 from .utilities import (
     get_connection,
     table_to_dicts,
@@ -15,9 +15,319 @@ from .utilities import (
     pdf_response_from_html,
     log_activity,
     get_schedule_published_at,
+    get_current_term,
 )
 
 students_bp = Blueprint("students", __name__)
+
+# -----------------------------
+# شرط المقررات الاختيارية بعد 100 وحدة
+# -----------------------------
+@students_bp.route("/electives_status")
+@role_required("admin", "supervisor")
+def electives_status_api():
+    sid = normalize_sid(request.args.get("student_id"))
+    if not sid:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
+    with get_connection() as conn:
+        cur = conn.cursor()
+        try:
+            from backend.services.electives import check_electives_requirement
+            data = check_electives_requirement(cur, sid, required_electives=3)
+        except Exception:
+            data = {"active": False, "ok": True, "waived": False}
+    return jsonify({"status": "ok", "data": data})
+
+
+@students_bp.route("/electives_report")
+@role_required("admin", "supervisor")
+def electives_report_api():
+    """
+    تقرير: الطلبة الذين تجاوزوا 100 وحدة ولا يزالون أقل من 3 مقررات اختيارية (بدون استثناء).
+    """
+    items = []
+    with get_connection() as conn:
+        cur = conn.cursor()
+        try:
+            from backend.services.electives import check_electives_requirement
+        except Exception:
+            check_electives_requirement = None
+        rows = cur.execute("SELECT student_id, COALESCE(student_name,'') FROM students ORDER BY student_name, student_id").fetchall()
+        for r in rows:
+            sid = r[0] if isinstance(r, (list, tuple)) else r["student_id"]
+            name = r[1] if isinstance(r, (list, tuple)) else (r["COALESCE(student_name,'')"] if "COALESCE(student_name,'')" in r.keys() else r.get("student_name",""))
+            if not check_electives_requirement:
+                continue
+            st = check_electives_requirement(cur, sid, required_electives=3)
+            if st.get("active") and (not st.get("ok")) and (not st.get("waived")):
+                items.append({
+                    "student_id": sid,
+                    "student_name": name or "",
+                    **st,
+                })
+    return jsonify({"status": "ok", "items": items})
+
+
+@students_bp.route("/electives_report/excel")
+@role_required("admin", "supervisor")
+def electives_report_excel():
+    r = electives_report_api()
+    # electives_report_api returns (json, status) sometimes; normalize
+    payload = r[0].get_json() if isinstance(r, tuple) else r.get_json()
+    items = payload.get("items", []) if payload else []
+    df = pd.DataFrame(items or [])
+    if not df.empty:
+        # ترتيب أعمدة ودية
+        cols = ["student_id", "student_name", "completed_units", "electives_completed", "required_electives"]
+        keep = [c for c in cols if c in df.columns] + [c for c in df.columns if c not in cols]
+        df = df[keep]
+    return excel_response_from_df(df, filename_prefix="electives_report")
+
+
+@students_bp.route("/electives_report/pdf")
+@role_required("admin", "supervisor")
+def electives_report_pdf():
+    r = electives_report_api()
+    payload = r[0].get_json() if isinstance(r, tuple) else r.get_json()
+    items = payload.get("items", []) if payload else []
+    rows_html = ""
+    for it in items:
+        rows_html += (
+            "<tr>"
+            f"<td>{it.get('student_id','')}</td>"
+            f"<td>{it.get('student_name','')}</td>"
+            f"<td style='text-align:center'>{it.get('completed_units','')}</td>"
+            f"<td style='text-align:center'>{it.get('electives_completed','')}</td>"
+            f"<td style='text-align:center'>{it.get('required_electives','')}</td>"
+            "</tr>"
+        )
+    html = f"""
+    <html dir="rtl" lang="ar">
+    <head>
+      <meta charset="utf-8"/>
+      <style>
+        body {{ font-family: Arial, sans-serif; }}
+        h2 {{ margin: 0 0 10px 0; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        th, td {{ border: 1px solid #999; padding: 6px; font-size: 12px; }}
+        th {{ background: #f2f2f2; }}
+      </style>
+    </head>
+    <body>
+      <h2>تقرير المقررات الاختيارية (بعد 100 وحدة)</h2>
+      <p>يعرض الطلبة الذين تجاوزوا 100 وحدة ولم يكملوا 3 مقررات اختيارية (بدون استثناء).</p>
+      <table>
+        <thead>
+          <tr>
+            <th>رقم الطالب</th>
+            <th>الاسم</th>
+            <th>الوحدات المكتملة</th>
+            <th>الاختيارية المكتملة</th>
+            <th>المطلوب</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows_html or "<tr><td colspan='5' style='text-align:center'>لا توجد بيانات</td></tr>"}
+        </tbody>
+      </table>
+    </body>
+    </html>
+    """
+    return pdf_response_from_html(html, filename_prefix="electives_report")
+
+
+# -----------------------------
+# تقرير سجل الإضافة والإسقاط (المواد المضافة والمسقطة + التواريخ)
+# -----------------------------
+def _registration_changes_report_items(conn, date_from=None, date_to=None, student_id=None, action=None, course_name_like=None):
+    """استعلام registration_changes_log مع فلترة اختيارية. يرجع قائمة قامات."""
+    cur = conn.cursor()
+    sql = """
+        SELECT id, student_id, student_name, term, course_name, course_code, units,
+               action, action_phase, action_time, performed_by, reason, notes
+        FROM registration_changes_log
+        WHERE 1=1
+    """
+    params = []
+    if date_from:
+        sql += " AND date(action_time) >= date(?)"
+        params.append(date_from)
+    if date_to:
+        sql += " AND date(action_time) <= date(?)"
+        params.append(date_to)
+    if student_id:
+        sql += " AND student_id = ?"
+        params.append(student_id.strip())
+    if action and str(action).lower() in ("add", "drop", "change"):
+        sql += " AND action = ?"
+        params.append(str(action).lower())
+    if course_name_like and course_name_like.strip():
+        sql += " AND (course_name LIKE ? OR course_code LIKE ?)"
+        q = "%" + course_name_like.strip() + "%"
+        params.extend([q, q])
+    sql += " ORDER BY action_time DESC, id DESC"
+    cur.execute(sql, params)
+    rows = cur.fetchall()
+    cols = [d[0] for d in cur.description]
+    items = []
+    for row in rows:
+        items.append(dict(zip(cols, row)))
+    return items
+
+
+@students_bp.route("/registration_changes_report")
+@role_required("admin", "supervisor")
+def registration_changes_report_api():
+    """
+    تقرير: المواد المضافة والمسقطة مع تواريخ الإضافة والإسقاط من registration_changes_log.
+    معاملات اختيارية: date_from, date_to, student_id, action (add/drop), course_name (بحث جزئي).
+    """
+    date_from = request.args.get("date_from", "").strip() or None
+    date_to = request.args.get("date_to", "").strip() or None
+    student_id = request.args.get("student_id", "").strip() or None
+    action = request.args.get("action", "").strip() or None
+    course_name = request.args.get("course_name", "").strip() or None
+    with get_connection() as conn:
+        items = _registration_changes_report_items(
+            conn, date_from=date_from, date_to=date_to,
+            student_id=student_id, action=action, course_name_like=course_name
+        )
+    return jsonify({"status": "ok", "items": items})
+
+
+@students_bp.route("/registration_changes_report/excel")
+@role_required("admin", "supervisor")
+def registration_changes_report_excel():
+    """تصدير تقرير الإضافة والإسقاط إلى Excel مع نفس الفلاتر."""
+    date_from = request.args.get("date_from", "").strip() or None
+    date_to = request.args.get("date_to", "").strip() or None
+    student_id = request.args.get("student_id", "").strip() or None
+    action = request.args.get("action", "").strip() or None
+    course_name = request.args.get("course_name", "").strip() or None
+    with get_connection() as conn:
+        items = _registration_changes_report_items(
+            conn, date_from=date_from, date_to=date_to,
+            student_id=student_id, action=action, course_name_like=course_name
+        )
+    df = pd.DataFrame(items or [])
+    if not df.empty and "action_time" in df.columns:
+        df = df.sort_values("action_time", ascending=False)
+    return excel_response_from_df(df, filename_prefix="registration_changes_report")
+
+
+@students_bp.route("/registration_changes_report/pdf")
+@role_required("admin", "supervisor")
+def registration_changes_report_pdf():
+    """تصدير تقرير الإضافة والإسقاط إلى PDF بنفس أعمدة التقرير ومع نفس الفلاتر."""
+    date_from = request.args.get("date_from", "").strip() or None
+    date_to = request.args.get("date_to", "").strip() or None
+    student_id = request.args.get("student_id", "").strip() or None
+    action = request.args.get("action", "").strip() or None
+    course_name = request.args.get("course_name", "").strip() or None
+    with get_connection() as conn:
+        items = _registration_changes_report_items(
+            conn, date_from=date_from, date_to=date_to,
+            student_id=student_id, action=action, course_name_like=course_name
+        )
+    action_labels = {"add": "إضافة", "drop": "إسقاط", "change": "تعديل"}
+    rows_html = ""
+    for it in items:
+        al = action_labels.get(it.get("action"), it.get("action") or "")
+        rows_html += (
+            "<tr>"
+            f"<td>{_h(it.get('action_time'))}</td>"
+            f"<td>{_h(it.get('student_id'))}</td>"
+            f"<td>{_h(it.get('student_name'))}</td>"
+            f"<td>{_h(it.get('term'))}</td>"
+            f"<td>{_h(it.get('course_name'))}</td>"
+            f"<td>{_h(it.get('course_code'))}</td>"
+            f"<td style='text-align:center'>{_h(it.get('units'))}</td>"
+            f"<td>{_h(al)}</td>"
+            f"<td>{_h(it.get('performed_by'))}</td>"
+            f"<td>{_h(it.get('reason') or it.get('notes'))}</td>"
+            "</tr>"
+        )
+
+    html = f"""
+    <html dir="rtl" lang="ar">
+    <head>
+      <meta charset="utf-8"/>
+      <style>
+        body {{ font-family: Arial, sans-serif; margin: 12px; }}
+        h2 {{ margin: 0 0 10px 0; }}
+        p {{ margin: 0 0 8px 0; color: #444; }}
+        table {{ width: 100%; border-collapse: collapse; font-size: 11px; }}
+        th, td {{ border: 1px solid #999; padding: 5px; }}
+        th {{ background: #f2f2f2; }}
+      </style>
+    </head>
+    <body>
+      <h2>تقرير الإضافة والإسقاط</h2>
+      <p>سجل المواد المضافة والمسقطة مع تواريخ الإضافة والإسقاط ومنفّذ العملية.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>التاريخ والوقت</th>
+            <th>رقم الطالب</th>
+            <th>اسم الطالب</th>
+            <th>الفصل</th>
+            <th>المقرر</th>
+            <th>الرمز</th>
+            <th>الوحدات</th>
+            <th>العملية</th>
+            <th>منفّذ بواسطة</th>
+            <th>سبب / ملاحظات</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows_html or "<tr><td colspan='10' style='text-align:center'>لا توجد بيانات</td></tr>"}
+        </tbody>
+      </table>
+    </body>
+    </html>
+    """
+    return pdf_response_from_html(html, filename_prefix="registration_changes_report")
+
+
+def _h(v):
+    """هروب بسيط للنص في HTML."""
+    if v is None:
+        return ""
+    s = str(v).strip()
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+@students_bp.route("/registration_changes_report/delete", methods=["POST"])
+@role_required("admin")
+def registration_changes_report_delete():
+    """
+    حذف سجلات من registration_changes_log بناءً على نفس الفلاتر المستخدمة في التقرير.
+    مخصص لحذف العمليات التجريبية (ينصح بالحذر لأنه لا يمكن التراجع).
+    يقبل في الجسم JSON نفس الحقول: date_from, date_to, student_id, action, course_name.
+    """
+    data = request.get_json(force=True) or {}
+    date_from = (data.get("date_from") or "").strip() or None
+    date_to = (data.get("date_to") or "").strip() or None
+    student_id = (data.get("student_id") or "").strip() or None
+    action = (data.get("action") or "").strip() or None
+    course_name = (data.get("course_name") or "").strip() or None
+
+    with get_connection() as conn:
+        # نجلب أولاً المعرفات المطابقة ثم نحذفها
+        items = _registration_changes_report_items(
+            conn, date_from=date_from, date_to=date_to,
+            student_id=student_id, action=action, course_name_like=course_name
+        )
+        ids = [it.get("id") for it in items if it.get("id") is not None]
+        deleted_count = 0
+        if ids:
+            cur = conn.cursor()
+            placeholders = ",".join("?" for _ in ids)
+            cur.execute(f"DELETE FROM registration_changes_log WHERE id IN ({placeholders})", ids)
+            conn.commit()
+            deleted_count = cur.rowcount if cur.rowcount is not None else len(ids)
+    return jsonify({"status": "ok", "deleted": int(deleted_count)}), 200
+
 
 # -----------------------------
 # مساعدة: تطبيع معرّف الطالب
@@ -39,7 +349,13 @@ def list_students():
         from backend.core.exceptions import AppException
         
         active_only = request.args.get("active_only", "").lower() in ("1", "true", "yes")
+        join_term = (request.args.get("join_term") or "").strip()
+        join_year = (request.args.get("join_year") or "").strip()
         students = StudentService.get_all_students(active_only=active_only)
+        if join_term:
+            students = [s for s in students if (s.get("join_term") or "").strip() == join_term]
+        if join_year:
+            students = [s for s in students if (s.get("join_year") or "").strip() == join_year]
         # تحويل إلى كائنات Student للتوافق مع الكود القديم مع إضافة حالة القيد كحقول إضافية
         students_objects = []
         for s in students:
@@ -49,6 +365,8 @@ def list_students():
             setattr(obj, "status_changed_at", s.get("status_changed_at"))
             setattr(obj, "status_reason", s.get("status_reason", ""))
             setattr(obj, "graduation_plan", s.get("graduation_plan", ""))
+            setattr(obj, "join_term", s.get("join_term", ""))
+            setattr(obj, "join_year", s.get("join_year", ""))
             students_objects.append(obj)
         return jsonify([s.__dict__ for s in students_objects])
     except AppException as e:
@@ -121,8 +439,15 @@ def add_student():
         sid = data.get("student_id")
         name = data.get("student_name", "") or ""
         graduation_plan = (data.get("graduation_plan") or "").strip()
+        join_term = (data.get("join_term") or "").strip()
+        join_year = (data.get("join_year") or "").strip()
         
-        result = StudentService.add_student(sid, name, graduation_plan=graduation_plan)
+        result = StudentService.add_student(
+            sid, name,
+            graduation_plan=graduation_plan,
+            join_term=join_term,
+            join_year=join_year,
+        )
         return jsonify(result), 200
     except AppException as e:
         # يتم التعامل مع AppException تلقائياً من خلال error handlers
@@ -200,6 +525,7 @@ def delete_student():
 def save_registrations():
     data = request.get_json(force=True) or {}
     sid = normalize_sid(data.get("student_id"))
+    override_reason = (data.get("override_reason") or "").strip()
     courses = data.get("courses")
     if courses is None:
         courses = data.get("registrations", [])
@@ -214,6 +540,12 @@ def save_registrations():
     try:
         with get_connection() as conn:
             cur = conn.cursor()
+            # قراءة التسجيلات الحالية لهذا الطالب قبل التعديل لاستخراج الإضافات/الإسقاطات
+            old_rows = cur.execute(
+                "SELECT course_name FROM registrations WHERE student_id = ?",
+                (sid,),
+            ).fetchall()
+            old_courses = {r[0] for r in old_rows}
             cols = [r[1] for r in cur.execute("PRAGMA table_info(students)").fetchall()]
             if "enrollment_status" in cols:
                 row = cur.execute(
@@ -269,6 +601,39 @@ def save_registrations():
             if blocked:
                 return jsonify({"status": "error", "message": "بعض المتطلبات غير مستوفاة", "blocked": blocked}), 400
 
+            # التحقق من حد الوحدات 12-19 (إلزامي) مع استثناء للأدمن فقط بشرط سبب
+            try:
+                total_units = 0
+                if courses:
+                    placeholders = ",".join("?" for _ in courses)
+                    rows_u = cur.execute(
+                        f"SELECT course_name, COALESCE(units,0) AS units FROM courses WHERE course_name IN ({placeholders})",
+                        courses,
+                    ).fetchall()
+                    units_map = {r[0]: int(r[1] or 0) for r in rows_u}
+                    total_units = sum(int(units_map.get(c, 0) or 0) for c in courses)
+                out_of_range = (total_units < 12) or (total_units > 19)
+                if out_of_range:
+                    role = session.get("user_role") or ""
+                    if role != "admin":
+                        return jsonify({
+                            "status": "error",
+                            "code": "UNITS_LIMIT",
+                            "message": f"لا يمكن حفظ التسجيلات لأن إجمالي الوحدات ({total_units}) خارج المدى المسموح 12-19.",
+                            "total_units": total_units,
+                        }), 400
+                    if not override_reason:
+                        return jsonify({
+                            "status": "error",
+                            "code": "UNITS_OVERRIDE_REQUIRED",
+                            "message": f"إجمالي الوحدات ({total_units}) خارج 12-19. أدخل سبب التجاوز للحفظ كأدمن.",
+                            "total_units": total_units,
+                        }), 400
+            except Exception:
+                current_app.logger.exception("units limit check failed; continuing without blocking")
+                out_of_range = False
+                total_units = 0
+
             try:
                 cur.execute("DELETE FROM registrations WHERE student_id = ?", (sid,))
                 if courses:
@@ -276,6 +641,100 @@ def save_registrations():
                         "INSERT INTO registrations (student_id, course_name) VALUES (?,?)",
                         [(sid, c) for c in courses]
                     )
+
+                # حساب الفرق بين القديم والجديد لتسجيل سجل الإضافة/الإسقاط
+                new_courses = set(courses)
+                added = [c for c in courses if c not in old_courses]
+                dropped = [c for c in old_courses if c not in new_courses]
+
+                # جلب معلومات إضافية عن الطالب والمقررات
+                try:
+                    student_row = cur.execute(
+                        "SELECT COALESCE(student_name,'') FROM students WHERE student_id = ?",
+                        (sid,),
+                    ).fetchone()
+                    student_name = student_row[0] if student_row else ""
+                except Exception:
+                    student_name = ""
+
+                def _get_course_meta(name: str):
+                    try:
+                        row = cur.execute(
+                            "SELECT COALESCE(course_code,''), COALESCE(units,0) FROM courses WHERE course_name = ?",
+                            (name,),
+                        ).fetchone()
+                        if row:
+                            return row[0], int(row[1] or 0)
+                    except Exception:
+                        pass
+                    return "", 0
+
+                performed_by = (session.get("user") or "") if "user" in session else ""
+                # نحاول حفظ اسم الفصل الحالي في السجل لسهولة التقارير
+                try:
+                    term_name, term_year = get_current_term(conn=conn)
+                    term_label = f"{term_name} {term_year}".strip()
+                except Exception:
+                    term_label = ""
+                now_iso = datetime.datetime.utcnow().isoformat()
+
+                try:
+                    for cname in added:
+                        code, units = _get_course_meta(cname)
+                        cur.execute(
+                            """
+                            INSERT INTO registration_changes_log
+                            (student_id, student_name, term, course_name, course_code, units,
+                             action, action_phase, action_time, performed_by, reason, notes,
+                             prev_state, new_state)
+                            VALUES (?, ?, ?, ?, ?, ?, 'add', ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                sid,
+                                student_name,
+                                term_label,
+                                cname,
+                                code,
+                                units,
+                                "manual",
+                                now_iso,
+                                performed_by,
+                                (override_reason if out_of_range else ""),
+                                ("units_override" if out_of_range else "bulk_save"),
+                                '{"registered": false}',
+                                '{"registered": true}',
+                            ),
+                        )
+
+                    for cname in dropped:
+                        code, units = _get_course_meta(cname)
+                        cur.execute(
+                            """
+                            INSERT INTO registration_changes_log
+                            (student_id, student_name, term, course_name, course_code, units,
+                             action, action_phase, action_time, performed_by, reason, notes,
+                             prev_state, new_state)
+                            VALUES (?, ?, ?, ?, ?, ?, 'drop', ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                sid,
+                                student_name,
+                                term_label,
+                                cname,
+                                code,
+                                units,
+                                "manual",
+                                now_iso,
+                                performed_by,
+                                (override_reason if out_of_range else ""),
+                                ("units_override" if out_of_range else "bulk_save"),
+                                '{"registered": true}',
+                                '{"registered": false}',
+                            ),
+                        )
+                except Exception:
+                    current_app.logger.exception("failed to write registration_changes_log in save_registrations")
+
                 conn.commit()
 
                 # إعادة حساب التعارضات وتحديث جدول conflict_report
@@ -355,6 +814,73 @@ def delete_registrations():
     try:
         with get_connection() as conn:
             cur = conn.cursor()
+            rows = cur.execute(
+                "SELECT course_name FROM registrations WHERE student_id = ?",
+                (sid,),
+            ).fetchall()
+            existing = [r[0] for r in rows]
+
+            # سجل إسقاط لكل مقرر قبل الحذف
+            try:
+                student_row = cur.execute(
+                    "SELECT COALESCE(student_name,'') FROM students WHERE student_id = ?",
+                    (sid,),
+                ).fetchone()
+                student_name = student_row[0] if student_row else ""
+            except Exception:
+                student_name = ""
+
+            def _get_course_meta(name: str):
+                try:
+                    row = cur.execute(
+                        "SELECT COALESCE(course_code,''), COALESCE(units,0) FROM courses WHERE course_name = ?",
+                        (name,),
+                    ).fetchone()
+                    if row:
+                        return row[0], int(row[1] or 0)
+                except Exception:
+                    pass
+                return "", 0
+
+            performed_by = (session.get("user") or "") if "user" in session else ""
+            # نحاول حفظ اسم الفصل الحالي في السجل
+            try:
+                term_name, term_year = get_current_term(conn=conn)
+                term_label = f"{term_name} {term_year}".strip()
+            except Exception:
+                term_label = ""
+            now_iso = datetime.datetime.utcnow().isoformat()
+
+            try:
+                for cname in existing:
+                    code, units = _get_course_meta(cname)
+                    cur.execute(
+                        """
+                        INSERT INTO registration_changes_log
+                        (student_id, student_name, term, course_name, course_code, units,
+                         action, action_phase, action_time, performed_by, reason, notes,
+                         prev_state, new_state)
+                        VALUES (?, ?, ?, ?, ?, ?, 'drop', ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            sid,
+                            student_name,
+                            term_label,
+                            cname,
+                            code,
+                            units,
+                            "manual",
+                            now_iso,
+                            performed_by,
+                            "",
+                            "delete_all",
+                            '{"registered": true}',
+                            '{"registered": false}',
+                        ),
+                    )
+            except Exception:
+                current_app.logger.exception("failed to write registration_changes_log in delete_registrations")
+
             cur.execute("DELETE FROM registrations WHERE student_id = ?", (sid,))
             conn.commit()
         return jsonify({"status":"ok","deleted_for": sid})
@@ -967,7 +1493,19 @@ def timetable_conflicts():
 @login_required
 def students_export_excel():
     try:
-        df = df_from_query("SELECT student_id, student_name FROM students", db_file=DB_FILE)
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
+            sel = "SELECT student_id, student_name"
+            if "join_term" in cols:
+                sel += ", COALESCE(join_term, '') AS join_term"
+            if "join_year" in cols:
+                sel += ", COALESCE(join_year, '') AS join_year"
+            if "graduation_plan" in cols:
+                sel += ", COALESCE(graduation_plan, '') AS graduation_plan"
+            sel += " FROM students ORDER BY student_name, student_id"
+            rows = cur.execute(sel).fetchall()
+            df = pd.DataFrame([dict(r) for r in rows])
         return excel_response_from_df(df, filename_prefix="students")
     except Exception:
         current_app.logger.exception("students_export_excel failed")
@@ -977,10 +1515,18 @@ def students_export_excel():
 @login_required
 def students_export_pdf():
     try:
-        with sqlite3.connect(DB_FILE) as conn:
-            conn.row_factory = sqlite3.Row
+        with get_connection() as conn:
             cur = conn.cursor()
-            rows = cur.execute("SELECT student_id, student_name FROM students ORDER BY student_id").fetchall()
+            cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
+            sel = "SELECT student_id, student_name"
+            if "join_term" in cols:
+                sel += ", COALESCE(join_term, '') AS join_term"
+            if "join_year" in cols:
+                sel += ", COALESCE(join_year, '') AS join_year"
+            if "graduation_plan" in cols:
+                sel += ", COALESCE(graduation_plan, '') AS graduation_plan"
+            sel += " FROM students ORDER BY student_id"
+            rows = cur.execute(sel).fetchall()
             students = [dict(r) for r in rows]
         html = render_template("export_students.html", students=students)
         return pdf_response_from_html(html, filename_prefix="students")

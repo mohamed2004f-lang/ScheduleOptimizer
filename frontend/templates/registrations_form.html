@@ -8,16 +8,41 @@
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body> {% include "base_nav.html" %}
+<script>
+  // سيتم تحديث هذه المتغيّرات لاحقاً من /users/auth عند توفرها
+  let CURRENT_ROLE = "{{ session.get('user_role','') }}";
+  let CURRENT_USER_ID = "{{ session.get('user') or '' }}";
+</script>
 
 <main class="container-main container-1100">
   <div class="page-header">
     <div>
       <h1 class="page-title">إدارة التسجيل</h1>
-      <p class="page-subtitle">عرض التسجيلات وتعديلها (إداري فقط)</p>
+      <p class="page-subtitle">عرض التسجيلات وتعديلها (إداري)، وإرسال طلبات إضافة/إسقاط (طالب)</p>
     </div>
   </div>
 
   <div id="registrationsAdmin">
+    <!-- الفصل الحالي (للتسجيلات والترحيل) -->
+    <div class="card mb-3">
+      <div class="card-body">
+        <h6 class="card-title mb-2">الفصل الحالي (للتسجيلات والترحيل)</h6>
+        <p class="small text-muted mb-2">يُستخدم عند ترحيل المقررات إلى كشف الدرجات إذا لم تُدخل الفصل والسنة يدوياً. للأدمن فقط.</p>
+        <div class="d-flex flex-wrap align-items-end gap-2">
+          <div>
+            <label class="form-label mb-1 small">اسم الفصل</label>
+            <input id="currentRegistrationTerm" type="text" class="form-control form-control-sm" placeholder="مثال: خريف 25-26" style="min-width:140px">
+          </div>
+          <div>
+            <label class="form-label mb-1 small">سنة الفصل</label>
+            <input id="currentRegistrationYear" type="text" class="form-control form-control-sm" placeholder="مثال: 2025" style="min-width:100px">
+          </div>
+          <button id="btnSaveRegistrationTerm" type="button" class="btn btn-primary btn-sm">حفظ</button>
+          <span id="currentTermMsg" class="small text-success ms-2"></span>
+        </div>
+      </div>
+    </div>
+
     <div class="card mb-3 filter-section">
       <div class="card-body d-flex gap-2 align-items-center flex-wrap">
         <button id="btnExportCSV" class="btn btn-outline-secondary btn-sm">تصدير CSV</button>
@@ -57,7 +82,7 @@
 
 <!-- Modal تعديل التسجيلات -->
 <div class="modal fade" id="editModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-dialog-centered">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
     <div class="modal-content" dir="rtl">
       <div class="modal-header">
         <h5 class="modal-title">تعديل تسجيلات الطالب</h5>
@@ -65,10 +90,21 @@
       </div>
       <div class="modal-body">
         <div id="editStudentInfo" class="mb-2 small text-muted"></div>
+        <div id="electivesStatusInModal" class="mb-2 small"></div>
 
-        <label class="form-label">اختر المقررات (فقط المقررات التي لم تُنجَز بعد)</label>
-        <select id="editCoursesSelect" class="form-select" multiple size="8"></select>
-        <div class="form-text mt-2">اضغط Ctrl أو Shift لاختيار متعدد. لإلغاء تسجيل طالب من جميع المقررات - أزل جميع الاختيارات ثم اضغط حفظ.</div>
+        <div class="mb-3">
+          <h6 class="mb-2">التسجيلات الحالية</h6>
+          <div id="currentRegistrationsList" class="list-group small"></div>
+          <div id="currentUnitsSummary" class="mt-2 small text-muted"></div>
+        </div>
+
+        <div class="mb-3">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="mb-0">مقررات متاحة للإضافة</h6>
+            <input id="eligibleSearch" class="form-control form-control-sm" placeholder="بحث باسم المقرر أو الرمز" style="max-width: 260px">
+          </div>
+          <div id="eligibleCoursesList" class="list-group small"></div>
+        </div>
 
         <span class="completed-label">المقررات المكتملة (للمعلومية)</span>
         <div id="completedList" class="completed-list small text-muted mb-2"></div>
@@ -76,7 +112,11 @@
         <div id="editMsg" class="mt-2"></div>
       </div>
       <div class="modal-footer">
-        <button id="btnSaveEdit" class="btn btn-primary">حفظ</button>
+        <div id="overrideReasonWrap" class="me-auto" style="display:none; width: 100%;">
+          <label class="form-label mb-1 small">سبب التجاوز (مطلوب عند تجاوز حد الوحدات)</label>
+          <textarea id="overrideReason" class="form-control form-control-sm" rows="2" placeholder="اكتب سبب التجاوز..."></textarea>
+        </div>
+        <button id="btnSaveEdit" class="btn btn-primary">حفظ التغييرات</button>
         <button class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
       </div>
     </div>
@@ -127,6 +167,17 @@ async function loadData(){
   setStats();
 }
 
+/* جلب الفصل الحالي من الإعدادات (للأدمن) */
+async function loadCurrentTerm(){
+  const r = await fetchJSON('/admin/settings/current_term');
+  if (r.ok && r.json) {
+    const elTerm = document.getElementById('currentRegistrationTerm');
+    const elYear = document.getElementById('currentRegistrationYear');
+    if (elTerm) elTerm.value = r.json.term_name || '';
+    if (elYear) elYear.value = r.json.term_year || '';
+  }
+}
+
 /* render UI */
 function renderStudents(list){
   const container = document.getElementById('studentsList');
@@ -144,9 +195,19 @@ function renderStudents(list){
     if((s.registrations||[]).length){
       s.registrations.forEach(cn=>{
         const cobj = COURSES.find(x => x.course_name === cn) || {};
-        const inner = `<span class="badge-course"><span>${escapeHtml(cn)}</span>${cobj.course_code ? '<span class="code text-muted"> — '+escapeHtml(cobj.course_code)+'</span>' : ''}</span>`;
+        let inner = `<span class="badge-course"><span>${escapeHtml(cn)}</span>${cobj.course_code ? '<span class="code text-muted"> — '+escapeHtml(cobj.course_code)+'</span>' : ''}</span>`;
+        if (CURRENT_ROLE === 'student') {
+          inner += ` <button type="button" class="btn btn-sm btn-outline-light text-danger ms-1 btn-drop-request">إسقاط</button>`;
+        }
         const b = el('span','badge bg-primary text-truncate', inner);
         b.title = `${cn}${cobj.course_code ? ' — '+cobj.course_code : ''} — وحدات: ${cobj.units || 0}`;
+        if (CURRENT_ROLE === 'student') {
+          const btn = b.querySelector('.btn-drop-request');
+          btn.addEventListener('click', (ev)=>{
+            ev.stopPropagation();
+            requestDropCourseForStudent(s, cn);
+          });
+        }
         badges.appendChild(b);
       });
     } else {
@@ -157,11 +218,23 @@ function renderStudents(list){
     const right = el('div','ms-3 text-end');
     const btnEdit = el('button','btn btn-sm btn-outline-secondary mb-1','تعديل');
     btnEdit.addEventListener('click', ()=> openEditModal(s));
-    const btnDelete = el('button','btn btn-sm btn-danger mb-1','حذف');
-    btnDelete.addEventListener('click', ()=> deleteAllRegistrations(s));
     right.appendChild(btnEdit);
     right.appendChild(el('br'));
+
+    const btnDelete = el('button','btn btn-sm btn-danger mb-1','حذف');
+    btnDelete.addEventListener('click', ()=> deleteAllRegistrations(s));
     right.appendChild(btnDelete);
+    right.appendChild(el('br'));
+
+    if (CURRENT_ROLE !== 'student') {
+      const btnMigrate = el('button','btn btn-sm btn-warning mb-1','ترحيل إلى كشف الدرجات');
+      btnMigrate.addEventListener('click', ()=> migrateStudentRegistrations(s));
+      right.appendChild(btnMigrate);
+    } else {
+      const btnReqAdd = el('button','btn btn-sm btn-outline-primary mb-1','طلب إضافة مقرر');
+      btnReqAdd.addEventListener('click', ()=> requestAddCourseForStudent(s));
+      right.appendChild(btnReqAdd);
+    }
 
     item.appendChild(left);
     item.appendChild(right);
@@ -176,9 +249,13 @@ function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll(
 async function openEditModal(student){
   editing = student;
   document.getElementById('editStudentInfo').textContent = `${student.student_name || student.name || ''} — ${student.university_number || ''}`;
-  const sel = document.getElementById('editCoursesSelect');
+  const electBox = document.getElementById('electivesStatusInModal');
+  if (electBox) { electBox.textContent = ''; electBox.className = 'mb-2 small'; }
+  const currentDiv = document.getElementById('currentRegistrationsList');
+  const eligibleDiv = document.getElementById('eligibleCoursesList');
   const completedDiv = document.getElementById('completedList');
-  sel.innerHTML = '';
+  currentDiv.innerHTML = '';
+  eligibleDiv.innerHTML = '';
   completedDiv.innerHTML = '';
 
   // fetch eligible + completed lists from backend
@@ -186,15 +263,136 @@ async function openEditModal(student){
   const eligible = Array.isArray(resp.json?.eligible) ? resp.json.eligible : [];
   const completed = Array.isArray(resp.json?.completed) ? resp.json.completed : [];
 
-  // Build options from eligible courses
-  eligible.forEach(c=>{
-    const opt = document.createElement('option');
-    opt.value = c.course_name;
-    opt.text = c.course_name + (c.course_code ? ' — ' + c.course_code : '');
-    // keep selected if student already registered (so they can remove it)
-    if( (student.registrations||[]).includes(c.course_name) ) opt.selected = true;
-    sel.appendChild(opt);
-  });
+  // تحميل حالة المقررات الاختيارية بعد 100 وحدة (عرض فقط)
+  try {
+    const st = await fetchJSON(`/students/electives_status?student_id=${encodeURIComponent(student.student_id || '')}`);
+    if (electBox && st.ok && st.json && st.json.status === 'ok') {
+      const es = st.json.data || {};
+      if (!es.active) {
+        electBox.textContent = '';
+      } else if (es.waived) {
+        electBox.textContent = 'المقررات الاختيارية: مستثنى';
+        electBox.className = 'mb-2 small text-muted';
+      } else {
+        const have = (es.electives_completed != null) ? es.electives_completed : 0;
+        const need = (es.required_electives != null) ? es.required_electives : 3;
+        electBox.textContent = `المقررات الاختيارية المكتملة: ${have} / ${need}` + (es.ok ? '' : ' — غير مستوفى بعد 100 وحدة');
+        electBox.className = es.ok ? 'mb-2 small text-success' : 'mb-2 small text-danger';
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  function renderEditLists(){
+    // إجمالي الوحدات للتسجيلات الحالية
+    let totalUnits = 0;
+    const regs = editing.registrations || [];
+    regs.forEach(cn=>{
+      const cobj = COURSES.find(x => x.course_name === cn) || {};
+      totalUnits += Number(cobj.units || 0);
+    });
+
+    // التسجيلات الحالية
+    currentDiv.innerHTML = '';
+    if(regs.length){
+      regs.forEach(cn=>{
+        const cobj = COURSES.find(x => x.course_name === cn) || {};
+        const row = document.createElement('div');
+        row.className = 'list-group-item d-flex justify-content-between align-items-center';
+        const text = `${cn}${cobj.course_code ? ' — ' + cobj.course_code : ''} (وحدات: ${cobj.units || 0})`;
+        row.innerHTML = `<span>${escapeHtml(text)}</span>`;
+        if (CURRENT_ROLE !== 'student') {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn btn-sm btn-outline-danger';
+          btn.textContent = 'إسقاط';
+          btn.addEventListener('click', ()=>{
+            editing.registrations = (editing.registrations || []).filter(x => x !== cn);
+            renderEditLists();
+          });
+          row.appendChild(btn);
+        }
+        currentDiv.appendChild(row);
+      });
+    } else {
+      currentDiv.innerHTML = '<div class="list-group-item text-muted">لا توجد تسجيلات حالية</div>';
+    }
+
+    // ملخص إجمالي الوحدات مع التحذير
+    const summaryEl = document.getElementById('currentUnitsSummary');
+    if (summaryEl){
+      let warning = '';
+      if (totalUnits && totalUnits < 12){
+        warning = 'تحذير: إجمالي الوحدات أقل من 12.';
+      } else if (totalUnits > 19){
+        warning = 'تحذير: إجمالي الوحدات أكبر من 19.';
+      }
+      summaryEl.innerHTML = `إجمالي الوحدات المسجَّلة حاليًا: <strong>${totalUnits}</strong>` +
+        (warning ? ` — <span class="text-danger">${warning}</span>` : '');
+    }
+
+    // إظهار/إخفاء سبب التجاوز للأدمن فقط عند الخروج عن 12-19
+    const wrap = document.getElementById('overrideReasonWrap');
+    const reasonEl = document.getElementById('overrideReason');
+    if (wrap && reasonEl){
+      const out = (totalUnits < 12) || (totalUnits > 19);
+      if (CURRENT_ROLE === 'admin' && out){
+        wrap.style.display = '';
+      } else {
+        wrap.style.display = 'none';
+        reasonEl.value = '';
+      }
+    }
+
+    // المقررات المتاحة للإضافة (مع بحث بالاسم أو الرمز)
+    eligibleDiv.innerHTML = '';
+    const existing = new Set(editing.registrations || []);
+    const searchEl = document.getElementById('eligibleSearch');
+    const q = (searchEl ? searchEl.value.trim().toLowerCase() : '');
+    let addable = eligible.filter(c => c.course_name && !existing.has(c.course_name));
+    if (q){
+      addable = addable.filter(c=>{
+        const name = (c.course_name || '').toLowerCase();
+        const code = (c.course_code || '').toLowerCase();
+        return name.includes(q) || code.includes(q);
+      });
+    }
+    if(addable.length){
+      addable.forEach(c=>{
+        const row = document.createElement('div');
+        row.className = 'list-group-item d-flex justify-content-between align-items-center';
+        const text = `${c.course_name}${c.course_code ? ' — ' + c.course_code : ''} (وحدات: ${c.units || 0})`;
+        row.innerHTML = `<span>${escapeHtml(text)}</span>`;
+        if (CURRENT_ROLE !== 'student') {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn btn-sm btn-outline-primary';
+          btn.textContent = 'إضافة';
+          btn.addEventListener('click', ()=>{
+            editing.registrations = editing.registrations || [];
+            if (!editing.registrations.includes(c.course_name)){
+              editing.registrations.push(c.course_name);
+            }
+            renderEditLists();
+          });
+          row.appendChild(btn);
+        }
+        eligibleDiv.appendChild(row);
+      });
+    } else {
+      eligibleDiv.innerHTML = '<div class="list-group-item text-muted">لا توجد مقررات متاحة للإضافة</div>';
+    }
+  }
+
+  renderEditLists();
+
+  // ربط حقل البحث (مرة واحدة لكل فتح نافذة) لتحديث القائمة فور الكتابة
+  const searchEl = document.getElementById('eligibleSearch');
+  if (searchEl){
+    searchEl.value = '';
+    searchEl.oninput = ()=> renderEditLists();
+  }
 
   // Render completed courses as read-only badges with grade
   if(completed.length){
@@ -214,9 +412,40 @@ async function openEditModal(student){
 /* save edit */
 document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
   if(!editing) return;
-  const sel = document.getElementById('editCoursesSelect');
-  const selected = Array.from(sel.selectedOptions).map(o=> o.value);
-  const payload = { student_id: editing.student_id || editing.id || editing.studentId, registrations: selected };
+  if (CURRENT_ROLE === 'student'){
+    alert('حفظ التغييرات من هذه النافذة متاح للإدارة فقط.');
+    return;
+  }
+  const regs = editing.registrations || [];
+
+  // التحقق من حدود الوحدات (اختياري مع تأكيد)
+  let totalUnits = 0;
+  regs.forEach(cn=>{
+    const cobj = COURSES.find(x => x.course_name === cn) || {};
+    totalUnits += Number(cobj.units || 0);
+  });
+  const out = (totalUnits < 12 || totalUnits > 19);
+  const reasonWrap = document.getElementById('overrideReasonWrap');
+  const reasonEl = document.getElementById('overrideReason');
+  const overrideReason = (reasonEl ? reasonEl.value.trim() : '');
+  if (out){
+    if (CURRENT_ROLE !== 'admin'){
+      alert(`لا يمكن الحفظ لأن إجمالي الوحدات (${totalUnits}) خارج 12-19.`);
+      return;
+    }
+    if (!overrideReason){
+      alert('أدخل سبب التجاوز للحفظ كأدمن.');
+      if (reasonWrap) reasonWrap.style.display = '';
+      if (reasonEl) reasonEl.focus();
+      return;
+    }
+  }
+
+  const payload = {
+    student_id: editing.student_id || editing.id || editing.studentId,
+    registrations: regs,
+    override_reason: out ? overrideReason : ''
+  };
   const res = await fetchJSON('/save_registrations', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
   });
@@ -243,6 +472,83 @@ async function deleteAllRegistrations(student){
     renderStudents(STUDENTS);
   } else {
     alert(res.json?.message || `فشل الحذف (${res.status})`);
+  }
+}
+
+// ترحيل تسجيلات طالب واحد إلى كشف الدرجات (grades) لفصل/سنة يحددها الإداري
+async function migrateStudentRegistrations(student){
+  const sid = student.student_id || student.id || student.studentId;
+  if(!sid){
+    alert('لا يوجد رقم طالب صالح لهذا السطر.');
+    return;
+  }
+  if(!(student.registrations||[]).length){
+    if(!confirm('لا توجد تسجيلات حالية لهذا الطالب. هل تريد المتابعة على أي حال؟')) return;
+  }
+  const defaultTerm = (document.getElementById('currentRegistrationTerm')||{}).value.trim();
+  const defaultYear = (document.getElementById('currentRegistrationYear')||{}).value.trim();
+  const semester = prompt('أدخل اسم الفصل الدراسي كما سيظهر في كشف الدرجات (مثال: خريف 25-26). اتركه فارغاً لاستخدام الفصل الحالي المحفوظ:', defaultTerm);
+  if(semester === null) return;
+  const year = prompt('أدخل السنة (مثال: 2025). اتركه فارغاً لاستخدام الفصل الحالي المحفوظ:', defaultYear);
+  if(year === null) return;
+  const label = [semester.trim(), year.trim()].filter(Boolean).join(' ') || 'الفصل الحالي من الإعدادات';
+  const btnText = `ترحيل تسجيلات ${student.student_name || student.name || ''}`;
+  const sure = confirm(`${btnText} إلى كشف الدرجات للفصل "${label}"؟ سيتم بعد ذلك حذف التسجيلات الفعلية لهذا الطالب.`);
+  if(!sure) return;
+
+  const res = await fetchJSON('/grades/migrate_registrations_to_transcript', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ student_id: sid, semester: (semester||'').trim(), year: (year||'').trim(), changed_by: 'registrations-ui' })
+  });
+  if(res.ok){
+    alert(res.json?.message || 'تم ترحيل المقررات إلى كشف الدرجات وتم حذف التسجيلات الفعلية لهذا الطالب.');
+    // بعد الترحيل، نعيد تحميل البيانات حتى تُزال التسجيلات من القائمة
+    await loadData();
+  } else {
+    alert(res.json?.message || `فشل الترحيل (${res.status})`);
+  }
+}
+
+// طلب إضافة مقرر من الطالب (لا يعدل التسجيل مباشرة)
+async function requestAddCourseForStudent(student){
+  const sid = student.student_id || student.id || student.studentId;
+  if (!sid){ alert('لا يوجد رقم طالب صالح.'); return; }
+  if (!COURSES.length){ alert('لا توجد مقررات متاحة حالياً.'); return; }
+
+  const names = COURSES.map(c=>c.course_name).filter(Boolean);
+  const courseName = prompt('أدخل اسم المقرر المطلوب إضافته تماماً كما هو في قائمة المقررات:\n' + names.join('\n'));
+  if (!courseName){ return; }
+
+  const reason = prompt('أدخل سبب طلب الإضافة (اختياري):','') || '';
+  const body = { student_id: sid, course_name: courseName, action: 'add', reason };
+
+  const r = await fetchJSON('/registration_requests/create', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+  });
+  if (r.ok){
+    alert((r.json && r.json.message) ? r.json.message : 'تم إرسال طلب الإضافة للمراجعة.');
+  } else {
+    alert((r.json && r.json.message) ? r.json.message : 'فشل إرسال طلب الإضافة.');
+  }
+}
+
+// طلب إسقاط مقرر من الطالب
+async function requestDropCourseForStudent(student, courseName){
+  const sid = student.student_id || student.id || student.studentId;
+  if (!sid){ alert('لا يوجد رقم طالب صالح.'); return; }
+  if (!confirm(`إرسال طلب إسقاط للمقرر "${courseName}"؟`)) return;
+
+  const reason = prompt('أدخل سبب طلب الإسقاط (اختياري):','') || '';
+  const body = { student_id: sid, course_name: courseName, action: 'drop', reason };
+
+  const r = await fetchJSON('/registration_requests/create', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+  });
+  if (r.ok){
+    alert((r.json && r.json.message) ? r.json.message : 'تم إرسال طلب الإسقاط للمراجعة.');
+  } else {
+    alert((r.json && r.json.message) ? r.json.message : 'فشل إرسال طلب الإسقاط.');
   }
 }
 
@@ -372,6 +678,28 @@ if (fileImport){
   }
 
   await loadData();
+  if (CURRENT_ROLE !== 'student') await loadCurrentTerm();
+
+  const btnSaveTerm = document.getElementById('btnSaveRegistrationTerm');
+  if (btnSaveTerm) {
+    btnSaveTerm.addEventListener('click', async function(){
+      const termName = (document.getElementById('currentRegistrationTerm')||{}).value.trim();
+      const termYear = (document.getElementById('currentRegistrationYear')||{}).value.trim();
+      if (!termName) { alert('اسم الفصل مطلوب'); return; }
+      const msgEl = document.getElementById('currentTermMsg');
+      const r = await fetchJSON('/admin/settings/current_term', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ term_name: termName, term_year: termYear })
+      });
+      if (r.ok) {
+        if (msgEl) { msgEl.textContent = 'تم الحفظ'; msgEl.classList.remove('text-danger'); msgEl.classList.add('text-success'); }
+        setTimeout(function(){ if (msgEl) msgEl.textContent = ''; }, 3000);
+      } else {
+        if (msgEl) { msgEl.textContent = (r.json && r.json.message) || 'فشل الحفظ'; msgEl.classList.add('text-danger'); msgEl.classList.remove('text-success'); }
+      }
+    });
+  }
 })();
 </script>
 

@@ -12,7 +12,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from flask import Blueprint, request, jsonify, Response, send_file, session
 from backend.core.auth import login_required, role_required
 from models.models import Grade
-from .utilities import get_connection, df_from_query, excel_response_from_df, pdf_response_from_html, log_activity
+from .utilities import get_connection, get_current_term, df_from_query, excel_response_from_df, pdf_response_from_html, log_activity
 
 PASSING_GRADE = 50
 
@@ -439,13 +439,22 @@ def import_semester_excel():
 def migrate_registrations_to_transcript():
     data = request.get_json(force=True)
     student_id = data.get("student_id")
-    semester = data.get("semester")
-    year = data.get("year")
+    semester = (data.get("semester") or "").strip()
+    year = (data.get("year") or "").strip()
     changed_by = data.get("changed_by", "migrate-ui")
-    if not student_id or not semester or not year:
-        return jsonify({"status": "error", "message": "student_id، الفصل، السنة مطلوبة"}), 400
-    semester_label = f"{semester} {year}".strip()
+    if not student_id:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
     with get_connection() as conn:
+        # إذا لم يُمرّر الفصل أو السنة، نستخدم الفصل الحالي من الإعدادات
+        if not semester or not year:
+            def_term_name, def_term_year = get_current_term(conn=conn)
+            if not semester:
+                semester = def_term_name
+            if not year:
+                year = def_term_year
+        semester_label = f"{semester} {year}".strip()
+        if not semester_label:
+            return jsonify({"status": "error", "message": "الفصل والسنة مطلوبان (أدخلهما أو اضبط الفصل الحالي في الصفحة)"}), 400
         cur = conn.cursor()
         # registrations table schema may vary across installs. Try to select course_code/units
         # if present; otherwise select only course_name and look up code/units from `courses`.
@@ -506,6 +515,28 @@ def migrate_registrations_to_transcript():
                 (student_id, semester_label, cname, changed_by, now_iso)
             )
             inserted += 1
+
+        # بعد الترحيل الناجح إلى جدول grades، نحذف تسجيلات الطالب الفعلية من جدول registrations
+        # حتى لا تبقى مكررة بين التسجيلات الحالية وكشف الدرجات.
+        cur.execute(
+            "DELETE FROM registrations WHERE student_id = ?",
+            (student_id,),
+        )
+
+        # اختيارياً: أرشفة خطة التسجيل المعتمدة لهذا الفصل إن وجدت (لا يؤثر إذا لم توجد).
+        try:
+            cur.execute(
+                """
+                UPDATE enrollment_plans
+                SET status = 'Archived', updated_at = ?
+                WHERE student_id = ? AND semester = ? AND status = 'Approved'
+                """,
+                (now_iso, student_id, semester_label),
+            )
+        except Exception:
+            # في حال اختلاف المخطط أو غياب الجدول، نتجاهل الخطأ بصمت حتى لا نفشل عملية الترحيل.
+            pass
+
         conn.commit()
     return jsonify({"status": "ok", "message": f"تم ترحيل {inserted} مقرر للفصل {semester_label}", "semester": semester_label, "inserted": inserted}), 200
 
@@ -515,13 +546,29 @@ def _load_transcript_data(student_id: str):
         cur = conn.cursor()
         cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
         has_plan = "graduation_plan" in cols
+        has_join = "join_term" in cols and "join_year" in cols
         sel = "SELECT COALESCE(student_name, '') AS student_name"
         if has_plan:
             sel += ", COALESCE(graduation_plan, '') AS graduation_plan"
+        if has_join:
+            sel += ", COALESCE(join_term, '') AS join_term, COALESCE(join_year, '') AS join_year"
         sel += " FROM students WHERE student_id = ?"
         student_row = cur.execute(sel, (student_id,)).fetchone()
         student_name = student_row["student_name"] if student_row else ""
-        graduation_plan = (student_row.get("graduation_plan") or "").strip() if student_row and has_plan else ""
+        graduation_plan = ""
+        join_term = ""
+        join_year = ""
+        if student_row and has_plan:
+            try:
+                graduation_plan = (student_row["graduation_plan"] or "").strip()
+            except (KeyError, IndexError, TypeError):
+                pass
+        if student_row and has_join:
+            try:
+                join_term = (student_row["join_term"] or "").strip()
+                join_year = (student_row["join_year"] or "").strip()
+            except (KeyError, IndexError, TypeError):
+                pass
 
         grade_rows = cur.execute(
             """
@@ -532,6 +579,13 @@ def _load_transcript_data(student_id: str):
             """,
             (student_id,),
         ).fetchall()
+
+        # حالة المقررات الاختيارية بعد 100 وحدة
+        try:
+            from backend.services.electives import check_electives_requirement
+            electives_status = check_electives_requirement(cur, student_id, required_electives=3)
+        except Exception:
+            electives_status = {"active": False, "ok": True, "waived": False}
 
     transcript = OrderedDict()
     gpa_by_semester = defaultdict(list)
@@ -588,6 +642,19 @@ def _load_transcript_data(student_id: str):
                 if row and (row["u"] or 0) > 0:
                     course_units_from_db[course_name] = int(row["u"])
 
+    # الوحدات المنجزة لكل فصل دراسي (مقررات ناجحة فقط، درجة >= حد النجاح)
+    semester_completed_units = {}
+    for sem, courses_list in transcript.items():
+        sem_completed = 0
+        for c in courses_list:
+            units = max(c.get("units") or 0, 0)
+            if units <= 0 and (c.get("course_name") or "") in course_units_from_db:
+                units = course_units_from_db[c["course_name"]]
+            grade = c.get("grade")
+            if grade is not None and float(grade) >= PASSING_GRADE:
+                sem_completed += max(0, units)
+        semester_completed_units[sem] = int(sem_completed)
+
     total_points = 0.0
     total_units = 0.0
     completed_units = 0
@@ -617,12 +684,16 @@ def _load_transcript_data(student_id: str):
         "student_id": student_id,
         "student_name": student_name,
         "graduation_plan": graduation_plan,
+        "join_term": join_term,
+        "join_year": join_year,
         "transcript": transcript,
         "ordered_semesters": ordered_semesters,
         "semester_gpas": semester_gpas,
+        "semester_completed_units": semester_completed_units,
         "cumulative_gpa": cumulative_gpa,
         "completed_units": completed_units,
         "completed_units_breakdown": completed_units_breakdown,
+        "electives_status": electives_status,
     }
 
 
@@ -974,14 +1045,23 @@ def update_grade():
             ).fetchone()
             if course_row:
                 try:
-                    course_code_to_use = (course_row[0] if course_row[0] is not None else "") or course_code_to_use
+                    code_val = course_row["course_code"] if "course_code" in course_row.keys() else (course_row[0] if len(course_row) > 0 else "")
+                    course_code_to_use = (code_val or "") or course_code_to_use
                 except Exception:
-                    pass
+                    try:
+                        course_code_to_use = (course_row[0] or "") or course_code_to_use
+                    except Exception:
+                        pass
                 try:
-                    if len(course_row) > 1 and course_row[1] is not None:
-                        units_to_use = int(course_row[1])
+                    u_val = course_row["units"] if "units" in course_row.keys() else (course_row[1] if len(course_row) > 1 else None)
+                    if u_val is not None:
+                        units_to_use = int(u_val)
                 except Exception:
-                    pass
+                    try:
+                        if len(course_row) > 1 and course_row[1] is not None:
+                            units_to_use = int(course_row[1])
+                    except Exception:
+                        pass
 
         # في حال أدخل المستخدم رمزاً جديداً، نبحث عنه في جدول المقررات ونصحح الاسم/الوحدات
         if new_course_code:
@@ -1081,6 +1161,47 @@ def update_grade():
     return jsonify({"status": "ok", "message": "تم تعديل الدرجة"}), 200
 
 
+@grades_bp.route("/rename_semester", methods=["POST"])
+@role_required("admin")
+def rename_semester():
+    """
+    تعديل اسم فصل (مثلاً من \"خريف 24-25\" إلى \"خريف 25-26\").
+    التعديل يؤثر على جميع الدرجات في جدول grades (و grade_audit) التي تحمل هذا الاسم.
+    مخصص للأدمن فقط.
+    """
+    data = request.get_json(force=True) or {}
+    old_sem = (data.get("old_semester") or "").strip()
+    new_sem = (data.get("new_semester") or "").strip()
+    if not old_sem or not new_sem:
+        return jsonify({"status": "error", "message": "old_semester و new_semester مطلوبة"}), 400
+    if old_sem == new_sem:
+        return jsonify({"status": "error", "message": "لا يوجد تغيير في اسم الفصل"}), 400
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cnt_row = cur.execute("SELECT COUNT(*) FROM grades WHERE semester = ?", (old_sem,)).fetchone()
+        count = cnt_row[0] if cnt_row else 0
+        if count == 0:
+            return jsonify({"status": "error", "message": "لا توجد درجات تحمل هذا الفصل"}), 404
+
+        cur.execute("UPDATE grades SET semester = ? WHERE semester = ?", (new_sem, old_sem))
+        try:
+            cur.execute("UPDATE grade_audit SET semester = ? WHERE semester = ?", (new_sem, old_sem))
+        except Exception:
+            pass
+        conn.commit()
+
+        try:
+            log_activity(
+                action="rename_semester",
+                details=f"old={old_sem}, new={new_sem}, rows={count}",
+            )
+        except Exception:
+            pass
+
+    return jsonify({"status": "ok", "message": f"تم تحديث اسم الفصل إلى '{new_sem}' لعدد {count} سجل/سجلات."}), 200
+
+
 @grades_bp.route("/transcript/<student_id>")
 @login_required
 def get_transcript(student_id):
@@ -1121,7 +1242,10 @@ def get_transcript(student_id):
         "student_id": data["student_id"],
         "student_name": data.get("student_name", ""),
         "graduation_plan": data.get("graduation_plan", ""),
+        "join_term": data.get("join_term", ""),
+        "join_year": data.get("join_year", ""),
         "transcript": data["transcript"],
+        "semester_completed_units": data.get("semester_completed_units", {}),
         "semester_gpas": data["semester_gpas"],
         "cumulative_gpa": data["cumulative_gpa"],
         "completed_units": data.get("completed_units", 0),

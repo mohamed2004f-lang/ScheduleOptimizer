@@ -24,6 +24,25 @@
         display: none !important;
       }
     }
+    /* تحسين ظهور زر الفرصة الاستثنائية داخل عمود ضيق */
+    .btn-extra{
+      white-space: normal;      /* السماح بتقسيم السطر للنص الطويل */
+      width: 100%;              /* يجعل الزر بعرض العمود لسهولة القراءة */
+      text-align: center;       /* توسيط النص داخل الزر */
+    }
+    /* تحسين ظهور حالة الطالب (النص قد يكون طويلاً جداً) */
+    #perfTable td .badge{
+      white-space: normal;      /* يسمح بالتفاف النص داخل الشارة */
+      line-height: 1.2;
+      display: inline-block;    /* يحافظ على الالتفاف داخل حدود الشارة */
+      max-width: 240px;         /* يمنع تمدد الصف أفقياً بشكل مبالغ */
+      text-align: center;
+    }
+    /* اجعل عمود "حالة الطالب" مرناً وواسعاً قدر الإمكان */
+    #perfTable th:nth-child(8),
+    #perfTable td:nth-child(8){
+      min-width: 200px;
+    }
   </style>
 </head>
 <body>

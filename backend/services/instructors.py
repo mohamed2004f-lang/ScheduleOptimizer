@@ -137,11 +137,14 @@ def supervised_students():
         cur = conn.cursor()
         cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
         has_enrollment_status = "enrollment_status" in cols
+        has_join = "join_term" in cols and "join_year" in cols
+        extra_sel = ", COALESCE(s.join_term, '') AS join_term, COALESCE(s.join_year, '') AS join_year" if has_join else ""
         if has_enrollment_status and active_only:
             rows = cur.execute(
                 """
                 SELECT ss.student_id,
                        COALESCE(s.student_name, '') AS student_name
+                """ + extra_sel + """
                 FROM student_supervisor ss
                 LEFT JOIN students s ON s.student_id = ss.student_id
                 WHERE ss.instructor_id = ?
@@ -155,6 +158,7 @@ def supervised_students():
                 """
                 SELECT ss.student_id,
                        COALESCE(s.student_name, '') AS student_name
+                """ + extra_sel + """
                 FROM student_supervisor ss
                 LEFT JOIN students s ON s.student_id = ss.student_id
                 WHERE ss.instructor_id = ?
@@ -162,9 +166,15 @@ def supervised_students():
                 """,
                 (instructor_id,),
             ).fetchall()
-        students = [
-            {"student_id": r[0], "student_name": r[1]} for r in rows
-        ]
+        if has_join:
+            students = [
+                {"student_id": r[0], "student_name": r[1], "join_term": (r[2] or "").strip(), "join_year": (r[3] or "").strip()}
+                for r in rows
+            ]
+        else:
+            students = [
+                {"student_id": r[0], "student_name": r[1], "join_term": "", "join_year": ""} for r in rows
+            ]
     return jsonify(
         {"status": "ok", "instructor_id": instructor_id, "students": students}
     )

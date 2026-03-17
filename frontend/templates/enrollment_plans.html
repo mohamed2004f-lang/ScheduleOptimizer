@@ -32,6 +32,7 @@
             <select id="studentSelect" class="form-select form-select-sm">
               <option value="">اختر...</option>
             </select>
+            <div id="studentJoinInfo" class="small text-muted mt-1" style="display:none;"></div>
           </div>
           <div class="col-md-3">
             <label class="form-label">الفصل الدراسي</label>
@@ -246,12 +247,31 @@
 
       // سيتم ملء المقررات لاحقاً بناءً على الطالب (لأخذ المتطلبات في الاعتبار)
       await refreshEligibleCourses();
+      updateStudentJoinInfo();
       // إذا كان هناك طالب محدد مسبقاً، حمّل تنبيه الحالة الأكاديمية/مدة الدراسة
       const sidPref = document.getElementById('studentSelect').value;
       if (sidPref) {
         await loadStatusNoteForStudent(sidPref);
       }
     }
+
+    function updateStudentJoinInfo(){
+      const sid = (document.getElementById('studentSelect')||{}).value;
+      const el = document.getElementById('studentJoinInfo');
+      if(!el) return;
+      if(!sid){ el.style.display = 'none'; return; }
+      const st = STUDENTS.find(s=>s.student_id === sid);
+      const jTerm = (st && st.join_term) ? String(st.join_term).trim() : '';
+      const jYear = (st && st.join_year) ? String(st.join_year).trim() : '';
+      if(jTerm || jYear){
+        el.textContent = 'التحاق: ' + [jTerm, jYear].filter(Boolean).join(' ');
+        el.style.display = '';
+      } else {
+        el.style.display = 'none';
+      }
+    }
+
+    document.getElementById('studentSelect').addEventListener('change', updateStudentJoinInfo);
 
     async function loadStatusNoteForStudent(studentId){
       if (!studentId) return;

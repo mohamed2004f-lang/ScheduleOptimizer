@@ -97,6 +97,10 @@ class StudentService:
                 cols = StudentService._students_columns(cur)
                 has_status = "enrollment_status" in cols
                 has_plan = "graduation_plan" in cols
+                has_join = "join_term" in cols and "join_year" in cols
+                extra_cols = (", COALESCE(graduation_plan, '') AS graduation_plan" if has_plan else "")
+                if has_join:
+                    extra_cols += ", COALESCE(join_term, '') AS join_term, COALESCE(join_year, '') AS join_year"
                 if has_status:
                     if active_only:
                         rows = cur.execute("""
@@ -104,7 +108,7 @@ class StudentService:
                                 student_id, student_name,
                                 COALESCE(enrollment_status, 'active') AS enrollment_status,
                                 status_changed_at, status_reason
-                            """ + (", COALESCE(graduation_plan, '') AS graduation_plan" if has_plan else "") + """
+                            """ + extra_cols + """
                             FROM students 
                             WHERE COALESCE(enrollment_status, 'active') = 'active'
                             ORDER BY student_name, student_id
@@ -117,7 +121,7 @@ class StudentService:
                                 COALESCE(enrollment_status, 'active') AS enrollment_status,
                                 status_changed_at,
                                 status_reason
-                            """ + (", COALESCE(graduation_plan, '') AS graduation_plan" if has_plan else "") + """
+                            """ + extra_cols + """
                             FROM students 
                             ORDER BY student_name, student_id
                         """).fetchall()
@@ -134,6 +138,12 @@ class StudentService:
                             row_dict["graduation_plan"] = (r["graduation_plan"] or "").strip()
                         else:
                             row_dict["graduation_plan"] = ""
+                        if has_join:
+                            row_dict["join_term"] = (r["join_term"] or "").strip()
+                            row_dict["join_year"] = (r["join_year"] or "").strip()
+                        else:
+                            row_dict["join_term"] = ""
+                            row_dict["join_year"] = ""
                         result.append(row_dict)
                     return result
                 # قواعد قديمة بدون أعمدة حالة القيد
@@ -148,6 +158,8 @@ class StudentService:
                         "status_changed_at": None,
                         "status_reason": "",
                         "graduation_plan": "",
+                        "join_term": "",
+                        "join_year": "",
                     }
                     for r in rows
                 ]
@@ -168,13 +180,17 @@ class StudentService:
                 cols = StudentService._students_columns(cur)
                 has_status = "enrollment_status" in cols
                 has_plan = "graduation_plan" in cols
+                has_join = "join_term" in cols and "join_year" in cols
+                extra_sel = (", COALESCE(graduation_plan, '') AS graduation_plan" if has_plan else "")
+                if has_join:
+                    extra_sel += ", COALESCE(join_term, '') AS join_term, COALESCE(join_year, '') AS join_year"
                 if has_status:
                     row = cur.execute(
                         """
                         SELECT student_id, student_name,
                                COALESCE(enrollment_status, 'active') AS enrollment_status,
                                status_changed_at, status_reason
-                        """ + (", COALESCE(graduation_plan, '') AS graduation_plan" if has_plan else "") + """
+                        """ + extra_sel + """
                         FROM students WHERE student_id = ?
                         """,
                         (sid,),
@@ -196,6 +212,12 @@ class StudentService:
                         out["graduation_plan"] = (row["graduation_plan"] or "").strip()
                     else:
                         out["graduation_plan"] = ""
+                    if has_join:
+                        out["join_term"] = (row["join_term"] or "").strip()
+                        out["join_year"] = (row["join_year"] or "").strip()
+                    else:
+                        out["join_term"] = ""
+                        out["join_year"] = ""
                     return out
                 return None
         except Exception as e:
@@ -203,14 +225,22 @@ class StudentService:
             raise DatabaseError(f"فشل جلب بيانات الطالب: {str(e)}")
     
     @staticmethod
-    def add_student(student_id: str, student_name: str = "", graduation_plan: str = "") -> Dict:
-        """إضافة طالب جديد أو تحديث بياناته (upsert). خطة التخرج اختيارية: 150، 155، أو فارغ."""
+    def add_student(
+        student_id: str,
+        student_name: str = "",
+        graduation_plan: str = "",
+        join_term: str = "",
+        join_year: str = "",
+    ) -> Dict:
+        """إضافة طالب جديد أو تحديث بياناته (upsert). خطة التخرج، فصل وسنة الالتحاق اختيارية."""
         sid = normalize_student_id(student_id)
         if not sid:
             raise ValidationError("معرّف الطالب مطلوب")
         
         name = sanitize_input(student_name, 200)
         plan = (graduation_plan or "").strip()[:50]
+        term = (join_term or "").strip()[:20]
+        year = (join_year or "").strip()[:20]
         
         try:
             with get_connection() as conn:
@@ -218,7 +248,23 @@ class StudentService:
                 cols = StudentService._students_columns(cur)
                 has_status = "enrollment_status" in cols
                 has_plan = "graduation_plan" in cols
-                if has_status and has_plan:
+                has_join = "join_term" in cols and "join_year" in cols
+                if has_status and has_plan and has_join:
+                    cur.execute(
+                        """
+                        INSERT OR REPLACE INTO students (
+                            student_id, student_name,
+                            enrollment_status, status_changed_at, graduation_plan, join_term, join_year
+                        ) VALUES (
+                            ?, ?,
+                            COALESCE((SELECT enrollment_status FROM students WHERE student_id = ?), 'active'),
+                            COALESCE((SELECT status_changed_at FROM students WHERE student_id = ?), CURRENT_TIMESTAMP),
+                            ?, ?, ?
+                        )
+                        """,
+                        (sid, name, sid, sid, plan, term, year),
+                    )
+                elif has_status and has_plan:
                     cur.execute(
                         """
                         INSERT OR REPLACE INTO students (
@@ -260,8 +306,14 @@ class StudentService:
             raise DatabaseError(f"فشل إضافة الطالب: {str(e)}")
     
     @staticmethod
-    def update_student(student_id: str, student_name: str, graduation_plan: Optional[str] = None) -> Dict:
-        """تحديث بيانات طالب (الاسم و/أو خطة التخرج)."""
+    def update_student(
+        student_id: str,
+        student_name: str,
+        graduation_plan: Optional[str] = None,
+        join_term: Optional[str] = None,
+        join_year: Optional[str] = None,
+    ) -> Dict:
+        """تحديث بيانات طالب (الاسم، خطة التخرج، فصل وسنة الالتحاق)."""
         sid = normalize_student_id(student_id)
         if not sid:
             raise ValidationError("معرّف الطالب مطلوب")
@@ -273,17 +325,23 @@ class StudentService:
                 cur = conn.cursor()
                 cols = StudentService._students_columns(cur)
                 has_plan = "graduation_plan" in cols
+                has_join = "join_term" in cols and "join_year" in cols
+                set_parts = ["student_name = ?", "updated_at = CURRENT_TIMESTAMP"]
+                params: List[Any] = [name]
                 if has_plan and graduation_plan is not None:
-                    plan = (graduation_plan or "").strip()[:50]
-                    cur.execute(
-                        "UPDATE students SET student_name = ?, graduation_plan = ?, updated_at = CURRENT_TIMESTAMP WHERE student_id = ?",
-                        (name, plan, sid)
-                    )
-                else:
-                    cur.execute(
-                        "UPDATE students SET student_name = ?, updated_at = CURRENT_TIMESTAMP WHERE student_id = ?",
-                        (name, sid)
-                    )
+                    set_parts.append("graduation_plan = ?")
+                    params.append((graduation_plan or "").strip()[:50])
+                if has_join and join_term is not None:
+                    set_parts.append("join_term = ?")
+                    params.append((join_term or "").strip()[:20])
+                if has_join and join_year is not None:
+                    set_parts.append("join_year = ?")
+                    params.append((join_year or "").strip()[:20])
+                params.append(sid)
+                cur.execute(
+                    "UPDATE students SET " + ", ".join(set_parts) + " WHERE student_id = ?",
+                    params,
+                )
                 if cur.rowcount == 0:
                     raise NotFoundError("الطالب غير موجود")
                 conn.commit()
