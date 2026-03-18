@@ -36,8 +36,9 @@
           <div class="col-md-4">
             <label class="form-label">الدور</label>
             <select id="roleSelect" class="form-select form-select-sm">
-              <option value="admin">مسؤول (admin)</option>
-              <option value="supervisor">مشرف (supervisor)</option>
+              <option value="admin_main">مسؤول رئيسي (admin_main)</option>
+              <option value="head_of_department">رئيس قسم (head_of_department)</option>
+              <option value="instructor">عضو هيئة تدريس (instructor)</option>
               <option value="student">طالب (student)</option>
             </select>
           </div>
@@ -48,7 +49,25 @@
             <input id="studentIdInput" class="form-control form-control-sm">
           </div>
           <div class="col-md-4">
+            <label class="form-label">رقم عضو هيئة التدريس (للأستاذ/رئيس القسم)</label>
+            <input id="instructorIdInput" class="form-control form-control-sm">
+          </div>
+          <div class="col-md-4">
             <button id="btnSaveUser" class="btn btn-primary btn-sm mt-3">حفظ المستخدم</button>
+          </div>
+        </div>
+        <div class="row g-2 align-items-end mt-2">
+          <div class="col-md-4">
+            <div class="form-check mt-2">
+              <input class="form-check-input" type="checkbox" id="isSupervisor">
+              <label class="form-check-label" for="isSupervisor">مشرف أكاديمي</label>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="form-check mt-2">
+              <input class="form-check-input" type="checkbox" id="isActive" checked>
+              <label class="form-check-label" for="isActive">الحساب نشط (is_active)</label>
+            </div>
           </div>
         </div>
         <div id="userMsg" class="mt-2"></div>
@@ -87,13 +106,31 @@
         const item = document.createElement('div');
         item.className = 'list-group-item d-flex justify-content-between align-items-center';
         const left = document.createElement('div');
-        left.innerHTML = `<div><strong>${u.username}</strong> — الدور: ${u.role}</div>
-                          <div class="text-muted small">الرقم الدراسي: ${u.student_id || '—'}</div>`;
+        const supBadge = u.is_supervisor ? ' <span class="badge bg-info text-dark">مشرف أكاديمي</span>' : '';
+        const activeBadge = (u.is_active === 0 || u.is_active === false) ? ' <span class="badge bg-secondary">معطّل</span>' : ' <span class="badge bg-success">نشط</span>';
+        left.innerHTML = `<div><strong>${u.username}</strong> — الدور: ${u.role}${supBadge}${activeBadge}</div>
+                          <div class="text-muted small">الرقم الدراسي: ${u.student_id || '—'} — رقم المدرّس: ${u.instructor_id || '—'}</div>`;
         const right = document.createElement('div');
+        right.className = 'd-flex gap-1 align-items-center';
+
+        const canManageSupervisor = (CURRENT_ROLE === 'admin_main' || CURRENT_ROLE === 'admin' || CURRENT_ROLE === 'head_of_department');
+        const isInstructorTarget = (u.role === 'instructor' || u.role === 'head_of_department');
+        if(canManageSupervisor && isInstructorTarget){
+          const supBtn = document.createElement('button');
+          supBtn.className = u.is_supervisor ? 'btn btn-sm btn-outline-secondary' : 'btn btn-sm btn-outline-info';
+          supBtn.textContent = u.is_supervisor ? 'إلغاء مشرف' : 'تعيين مشرف';
+          supBtn.title = 'تفعيل/إلغاء المشرف الأكاديمي';
+          supBtn.addEventListener('click', async (ev)=>{
+            ev.stopPropagation();
+            await toggleSupervisor(u.username, !u.is_supervisor);
+          });
+          right.appendChild(supBtn);
+        }
+
         const delBtn = document.createElement('button');
-        delBtn.className = 'btn btn-sm btn-danger';
+        delBtn.className = 'btn btn-sm btn-danger btn-delete-user';
         delBtn.textContent = 'حذف';
-        delBtn.addEventListener('click', ()=> deleteUser(u.username));
+        delBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); deleteUser(u.username); });
         right.appendChild(delBtn);
         item.appendChild(left);
         item.appendChild(right);
@@ -102,9 +139,15 @@
           document.getElementById('passwordInput').value = '';
           document.getElementById('roleSelect').value = u.role;
           document.getElementById('studentIdInput').value = u.student_id || '';
+          document.getElementById('instructorIdInput').value = u.instructor_id || '';
+          document.getElementById('isSupervisor').checked = !!u.is_supervisor;
+          document.getElementById('isActive').checked = !(u.is_active === 0 || u.is_active === false);
+          syncSupervisorAvailability();
         });
         container.appendChild(item);
       });
+
+      applyPermissions();
     }
 
     async function saveUser(){
@@ -112,6 +155,9 @@
       const password = document.getElementById('passwordInput').value;
       const role = document.getElementById('roleSelect').value;
       const studentId = document.getElementById('studentIdInput').value.trim();
+      const instructorId = document.getElementById('instructorIdInput').value.trim();
+      const isSupervisor = document.getElementById('isSupervisor').checked;
+      const isActive = document.getElementById('isActive').checked;
       if(!username){
         setUserMsg('warning','يرجى إدخال اسم المستخدم.');
         return;
@@ -119,6 +165,9 @@
       const body = {username, role};
       if(password) body.password = password;
       if(studentId) body.student_id = studentId;
+      if(instructorId) body.instructor_id = instructorId;
+      body.is_supervisor = isSupervisor;
+      body.is_active = isActive;
       const res = await fetchJSON('/users/add', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
@@ -147,16 +196,75 @@
       }
     }
 
+    async function toggleSupervisor(username, makeSupervisor){
+      const res = await fetchJSON('/users/set_supervisor', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({username, is_supervisor: !!makeSupervisor})
+      });
+      if(res.ok){
+        setUserMsg('success', makeSupervisor ? 'تم تعيين المستخدم كمشرف أكاديمي.' : 'تم إلغاء المشرف الأكاديمي.');
+        await loadUsers();
+      } else {
+        setUserMsg('danger', res.json?.message || `فشل العملية (${res.status})`);
+      }
+    }
+
+    function syncSupervisorAvailability(){
+      const role = document.getElementById('roleSelect').value;
+      const sup = document.getElementById('isSupervisor');
+      if(!sup) return;
+      const allowed = (role === 'instructor' || role === 'head_of_department' || role === 'admin_main');
+      sup.disabled = !allowed;
+      if(!allowed) sup.checked = false;
+      const label = document.querySelector('label[for=\"isSupervisor\"]');
+      if(label){
+        label.classList.toggle('text-muted', !allowed);
+        label.title = allowed ? '' : 'متاح فقط للأستاذ/رئيس القسم/المسؤول الرئيسي';
+      }
+    }
+
+    let CURRENT_ROLE = null;
+
+    function applyPermissions(){
+      const role = CURRENT_ROLE || '';
+      const isAdminMain = (role === 'admin_main' || role === 'admin');
+      const isHead = (role === 'head_of_department');
+
+      // رئيس القسم: يمنع إنشاء/حذف/تعطيل/تغيير كلمة المرور؛ يسمح فقط بتعديل الأساتذة (إشراف/رقم مدرس)
+      const passwordEl = document.getElementById('passwordInput');
+      const activeEl = document.getElementById('isActive');
+      if (isHead){
+        if(passwordEl) passwordEl.disabled = true;
+        if(activeEl) activeEl.disabled = true;
+      } else {
+        if(passwordEl) passwordEl.disabled = false;
+        if(activeEl) activeEl.disabled = false;
+      }
+
+      // اخفاء زر الحذف لرئيس القسم
+      document.querySelectorAll('.btn-delete-user').forEach(btn=>{
+        btn.style.display = (isAdminMain ? '' : 'none');
+      });
+    }
+
     document.addEventListener('DOMContentLoaded', async ()=>{
       // تحذير بسيط إن لم يكن الدور admin
       try {
         const auth = await fetchJSON('/auth/check');
-        if(auth.ok && auth.json?.role !== 'admin'){
+        if(auth.ok){
+          CURRENT_ROLE = auth.json?.role || null;
+        }
+        if(auth.ok && !['admin','admin_main','head_of_department'].includes(auth.json?.role)){
           document.getElementById('adminWarning').classList.remove('d-none');
         }
       } catch(e){}
       document.getElementById('btnSaveUser').addEventListener('click', saveUser);
+      const roleEl = document.getElementById('roleSelect');
+      if(roleEl) roleEl.addEventListener('change', syncSupervisorAvailability);
       await loadUsers();
+      syncSupervisorAvailability();
+      applyPermissions();
     });
   </script>
 

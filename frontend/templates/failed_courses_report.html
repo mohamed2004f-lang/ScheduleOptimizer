@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>تقرير شامل المقررات غير المنجزة</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">تقرير شامل المقررات غير المنجزة</h1>
+        <p class="page-subtitle">يُعدّ المقرر غير منجَز بالنسبة للطالب إذا لم تُوجد أي محاولة ناجحة (درجة &ge; 50 أو نص "ناجح"). يعتمد التقرير على أفضل محاولة لكل طالب-مقرر.</p>
+      </div>
+      <div class="d-flex gap-2 align-items-center">
+        <button class="btn btn-primary btn-sm" type="button" id="btnLoad">تحديث</button>
+        <a class="btn btn-outline-success btn-sm" id="btnExcel" href="#">تصدير Excel</a>
+        <a class="btn btn-outline-danger btn-sm" id="btnPdf" href="#" target="_blank">تصدير PDF</a>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="row g-2 align-items-end">
+          <div class="col-md-5">
+            <label class="form-label small">بحث بالمقرر/الرمز</label>
+            <input id="qCourse" class="form-control form-control-sm" placeholder="مثال: رياضيات / MATH101">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small">حد أدنى لعدد غير المنجزة</label>
+            <input id="minFailed" class="form-control form-control-sm" type="number" min="0" value="0">
+          </div>
+          <div class="col-md-4">
+            <div class="form-check mt-3">
+              <input class="form-check-input" type="checkbox" id="includeStudents" checked>
+              <label class="form-check-label" for="includeStudents">عرض أسماء الطلبة (تفصيلي)</label>
+            </div>
+          </div>
+        </div>
+        <div id="msg" class="mt-2"></div>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5 class="mb-2">ملخص حسب المقرر</h5>
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered mb-0" id="tblSummary">
+            <thead class="table-light">
+              <tr>
+                <th>المقرر</th>
+                <th>الرمز</th>
+                <th class="text-center">الوحدات</th>
+                <th class="text-center">عدد غير المنجزة</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <h5 class="mb-2">تفصيل الطلبة</h5>
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered mb-0" id="tblItems">
+            <thead class="table-light">
+              <tr>
+                <th>المقرر</th>
+                <th>الرمز</th>
+                <th>رقم الطالب</th>
+                <th>الاسم</th>
+                <th class="text-center">أفضل درجة</th>
+                <th class="text-center">محاولات</th>
+                <th>آخر فصل (مرجعي)</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="small text-muted mt-2">ملاحظة: "آخر فصل" مرجعي وقد لا يمثل ترتيباً زمنياً دقيقاً إذا كانت تسميات الفصول غير قابلة للفرز.</div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok,status:r.status,json:j}; }
+    function setMsg(html, kind){ document.getElementById('msg').innerHTML = html ? `<div class="alert alert-${kind} p-2 mb-0">${html}</div>` : ''; }
+    function esc(s){ return (s==null?'':String(s)).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'); }
+    function buildParams(){
+      const p = new URLSearchParams();
+      const q = (document.getElementById('qCourse').value||'').trim();
+      const min = (document.getElementById('minFailed').value||'').trim();
+      const inc = !!document.getElementById('includeStudents').checked;
+      if(q) p.set('course_name', q);
+      if(min) p.set('min_failed', min);
+      p.set('include_students', inc ? '1':'0');
+      return p;
+    }
+    function updateExportLinks(){
+      const p = buildParams();
+      document.getElementById('btnExcel').href = '/students/failed_courses_report/excel?' + p.toString();
+      document.getElementById('btnPdf').href = '/students/failed_courses_report/pdf?' + p.toString();
+    }
+    async function load(){
+      updateExportLinks();
+      setMsg('جاري تحميل التقرير...', 'info');
+      const p = buildParams();
+      const res = await fetchJSON('/students/failed_courses_report?' + p.toString());
+      if(!res.ok){
+        setMsg(res.json?.message || `فشل تحميل التقرير (${res.status})`, 'danger');
+        return;
+      }
+      const sum = Array.isArray(res.json?.summary) ? res.json.summary : [];
+      const items = Array.isArray(res.json?.items) ? res.json.items : [];
+
+      const sb = document.querySelector('#tblSummary tbody'); sb.innerHTML='';
+      if(!sum.length){
+        sb.innerHTML = `<tr><td colspan="4" class="text-center text-muted">لا توجد بيانات</td></tr>`;
+      } else {
+        sum.forEach(s=>{
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${esc(s.course_name)}</td><td>${esc(s.course_code||'')}</td><td class="text-center">${esc(s.units||0)}</td><td class="text-center fw-bold">${esc(s.failed_count||0)}</td>`;
+          sb.appendChild(tr);
+        });
+      }
+
+      const ib = document.querySelector('#tblItems tbody'); ib.innerHTML='';
+      const showItems = !!document.getElementById('includeStudents').checked;
+      document.getElementById('tblItems').style.display = showItems ? '' : 'none';
+      if(showItems){
+        if(!items.length){
+          ib.innerHTML = `<tr><td colspan="7" class="text-center text-muted">لا توجد بيانات تفصيلية</td></tr>`;
+        } else {
+          items.forEach(it=>{
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${esc(it.course_name)}</td><td>${esc(it.course_code||'')}</td><td>${esc(it.student_id||'')}</td><td>${esc(it.student_name||'')}</td><td class="text-center">${esc(it.best_grade_display||'—')}</td><td class="text-center">${esc(it.attempts||0)}</td><td>${esc(it.best_semester||'')}</td>`;
+            ib.appendChild(tr);
+          });
+        }
+      }
+      setMsg('', 'info');
+    }
+
+    document.getElementById('btnLoad').addEventListener('click', load);
+    document.getElementById('includeStudents').addEventListener('change', ()=>{ updateExportLinks(); load(); });
+    ['qCourse','minFailed'].forEach(id=>{
+      document.getElementById(id).addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); load(); } });
+    });
+    updateExportLinks();
+    load();
+  </script>
+</body>
+</html>
+

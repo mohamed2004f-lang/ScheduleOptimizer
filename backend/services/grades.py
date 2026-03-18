@@ -1250,6 +1250,8 @@ def get_transcript(student_id):
         "cumulative_gpa": data["cumulative_gpa"],
         "completed_units": data.get("completed_units", 0),
         "ordered_semesters": data.get("ordered_semesters", []),
+        "completed_units_breakdown": data.get("completed_units_breakdown", []),
+        "electives_status": data.get("electives_status", {}),
     })
 
 

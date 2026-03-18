@@ -6,6 +6,15 @@
   <title>سجل الطالب الأكاديمي</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .row-uncompleted {
+      background: #fff4e6;
+    }
+    .badge-uncompleted {
+      background: #fd7e14;
+      color: #fff;
+    }
+  </style>
 </head>
 <body>
   {% include "base_nav.html" %}
@@ -80,7 +89,16 @@
         <div class="row g-2 align-items-end">
           <div class="col-md-5">
             <label class="form-label">اختر الطالب</label>
-            <select id="studentSelect" class="form-select"></select>
+            <select id="studentSelect" class="form-select">
+              {% if students %}
+                <option value="">-- اختر طالب --</option>
+                {% for s in students %}
+                  <option value="{{ s.student_id }}" {% if selected_student_id and s.student_id == selected_student_id %}selected{% endif %}>
+                    {{ (s.student_name or s.student_id) }} — {{ s.student_id }}
+                  </option>
+                {% endfor %}
+              {% endif %}
+            </select>
           </div>
 
           <div class="col-md-3">
@@ -308,8 +326,24 @@ let EDIT_ROWS = []; // temp rows to save
 let selectedStudent = "";
 let CURRENT_ROLE = null;
 
+// بيانات أولية من السيرفر (لضمان ظهور السجل حتى لو تعطل fetch)
+const INITIAL_STUDENTS = {{ (students or [])|tojson }};
+const INITIAL_TRANSCRIPT = {{ (initial_transcript or None)|tojson }};
+
 /* load lists */
 async function loadStudents(){
+  // إن كانت القائمة مُحمّلة من السيرفر، لا داعي لطلب API
+  try {
+    const pre = {{ (students or [])|tojson }};
+    if(Array.isArray(pre) && pre.length){
+      STUDENTS = pre;
+      const sel = document.getElementById('studentSelect');
+      if(sel && sel.options && sel.options.length>0){
+        syncImportFields();
+        return;
+      }
+    }
+  } catch(e) {}
   // للمشرف: حمّل فقط الطلبة المسندين إليه
   if (CURRENT_ROLE === 'supervisor') {
     const r = await fetchJSON('/instructors/supervised_students');
@@ -332,7 +366,8 @@ async function loadStudents(){
     return;
   }
 
-  const r = await fetchJSON('/list_students');
+  // استخدم المسار الحقيقي مباشرة لتفادي مشاكل إعادة التوجيه 302 مع fetch
+  const r = await fetchJSON('/students/list');
   console.debug('loadStudents response:', r);
   const sel = document.getElementById('studentSelect');
   if(!sel) return;
@@ -361,7 +396,8 @@ async function loadTranscript(studentId){
   if(!studentId){ setMsg('اختر طالباً أولاً','warning'); return; }
   selectedStudent = studentId;
   const summaryEl = document.getElementById('summary'); if(summaryEl) summaryEl.textContent = 'جارٍ جلب السجل...';
-  const r = await fetchJSON('/transcript/'+encodeURIComponent(studentId));
+  // استخدم المسار الحقيقي مباشرة لتفادي مشاكل إعادة التوجيه 302 مع fetch
+  const r = await fetchJSON('/grades/transcript/'+encodeURIComponent(studentId));
   if(!r.ok){ setMsg('فشل في جلب السجل','danger'); if(summaryEl) summaryEl.textContent=''; return; }
   CURRENT_TRANSCRIPT = r.json;
   renderTranscript(CURRENT_TRANSCRIPT);
@@ -389,6 +425,12 @@ function renderTranscript(data){
   const transcript = data.transcript || {};
   const semesterGPAs = data.semester_gpas || {};
   const semesterCompletedUnits = data.semester_completed_units || {};
+  const unitsBreakdown = Array.isArray(data.completed_units_breakdown) ? data.completed_units_breakdown : [];
+  const bestByCourse = {};
+  unitsBreakdown.forEach(b=>{
+    if(!b || !b.course_name) return;
+    bestByCourse[b.course_name] = { passed: !!b.passed, best_grade: b.best_grade };
+  });
   const semesterNames = Object.keys(transcript).sort();
   const semFilterEl = document.getElementById('semesterFilter'); if(semFilterEl) semFilterEl.innerHTML = '<option value="">كل الفصول</option>';
   semesterNames.forEach(s=>{ if(semFilterEl){ const o=document.createElement('option'); o.value=s; o.text=s; semFilterEl.appendChild(o); } });
@@ -431,8 +473,14 @@ function renderTranscript(data){
       : '<tr><th>المقرر</th><th>الرمز</th><th class="text-center">الوحدات</th><th class="text-center">الدرجة</th></tr>';
     tbl.innerHTML = `<thead class="table-light">${headerCols}</thead><tbody></tbody>`;
     const tbody = tbl.querySelector('tbody');
-    courses.forEach(c=>{ const tr=document.createElement('tr'); tr.innerHTML = hasActions ? `
-        <td>${escape(c.course_name)}</td>
+    courses.forEach(c=>{ 
+      const tr=document.createElement('tr'); 
+      const st = bestByCourse[c.course_name];
+      const isUncompleted = (st && st.passed === false);
+      if(isUncompleted) tr.classList.add('row-uncompleted');
+      const courseCell = `${escape(c.course_name)}${isUncompleted ? ' <span class="badge badge-uncompleted">غير منجَز</span>' : ''}`;
+      tr.innerHTML = hasActions ? `
+        <td>${courseCell}</td>
         <td>${escape(c.course_code||'')}</td>
         <td class="text-center">${c.units||0}</td>
         <td class="text-center">${(c.grade===null||c.grade===undefined)?'—':c.grade}</td>
@@ -448,7 +496,7 @@ function renderTranscript(data){
                   data-sem="${escape(sem)}"
                   data-course="${escape(c.course_name)}">حذف</button>
         </td>` : `
-        <td>${escape(c.course_name)}</td>
+        <td>${courseCell}</td>
         <td>${escape(c.course_code||'')}</td>
         <td class="text-center">${c.units||0}</td>
         <td class="text-center">${(c.grade===null||c.grade===undefined)?'—':c.grade}</td>
@@ -888,6 +936,9 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
     const auth = await fetchJSON('/auth/check');
     if (auth.ok && auth.json){
       CURRENT_ROLE = auth.json.role || null;
+      // للطالب نستخدم student_id من الجلسة فقط (حتى لا تختلط مع username)
+      window.CURRENT_USER_ID = auth.json.student_id || null;
+      window.CURRENT_USERNAME = auth.json.user || null;
     }
   } catch(e){
     CURRENT_ROLE = null;
@@ -897,9 +948,41 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
   if (CURRENT_ROLE === 'student'){
     const toolbarAdmin = document.getElementById('toolbarAdmin');
     if (toolbarAdmin) toolbarAdmin.style.display = 'none';
+    const importCard = document.getElementById('importCard');
+    if (importCard) importCard.style.display = 'none';
     const gradeEditorCard = document.getElementById('gradeEditorCard');
     if (gradeEditorCard) gradeEditorCard.style.display = 'none';
+
+    // حجب اختيار الطلبة/الخطة للطالب (يعرض سجله فقط)
+    const sel = document.getElementById('studentSelect');
+    const planSel = document.getElementById('planSelect');
+    if (planSel && planSel.parentElement) {
+      // إخفاء عمود "خطة تسجيل الطالب" لأن الطالب لا يحتاجه
+      planSel.parentElement.style.display = 'none';
+    }
+    // إن لم يصل student_id لسبب ما، حاول استخراج أرقام من username كحل احتياطي
+    let sid = (window.CURRENT_USER_ID || '').toString().trim();
+    if (!sid) {
+      const u = (window.CURRENT_USERNAME || '').toString();
+      const m = u.match(/\d+/);
+      if (m) sid = m[0];
+    }
+    if (sel && sid) {
+      sel.innerHTML = `<option value="${sid}">${sid}</option>`;
+      sel.value = sid;
+      sel.disabled = true;
+      syncImportFields();
+      loadTranscript(sid);
+      return;
+    }
   }
+
+  // لو عندنا طلبة من السيرفر، استخدمهم أولاً
+  try {
+    if (Array.isArray(INITIAL_STUDENTS) && INITIAL_STUDENTS.length){
+      STUDENTS = INITIAL_STUDENTS;
+    }
+  } catch(e){}
 
   await loadStudents();
   await loadCourses();
@@ -913,6 +996,14 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
     try { preferred = localStorage.getItem('transcript_selected_student') || ''; } catch(e) {}
   }
   const canPick = (id) => Array.isArray(STUDENTS) && STUDENTS.some(s=>s.student_id===id);
+  // لو عندنا Transcript جاهز من السيرفر (initial_transcript) استخدمه فوراً
+  try{
+    if (INITIAL_TRANSCRIPT && INITIAL_TRANSCRIPT.transcript){
+      CURRENT_TRANSCRIPT = INITIAL_TRANSCRIPT;
+      renderTranscript(INITIAL_TRANSCRIPT);
+    }
+  }catch(e){}
+
   if (preferred && canPick(preferred) && sel) {
     sel.value = preferred;
     syncImportFields();

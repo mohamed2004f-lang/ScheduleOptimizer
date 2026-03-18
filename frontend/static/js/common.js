@@ -3,6 +3,50 @@
  */
 
 // ============================================
+// CSRF: attach token to unsafe fetch requests
+// ============================================
+(function initCsrfFetchPatch(){
+    try {
+        const SAFE_METHODS = new Set(['GET','HEAD','OPTIONS']);
+        const originalFetch = window.fetch.bind(window);
+
+        function getToken(){
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            return meta ? (meta.getAttribute('content') || '') : '';
+        }
+
+        function isSameOrigin(url){
+            try {
+                const u = new URL(url, window.location.href);
+                return u.origin === window.location.origin;
+            } catch (e) {
+                return true; // relative URLs
+            }
+        }
+
+        window.fetch = function(input, init){
+            const cfg = init ? { ...init } : {};
+            const method = (cfg.method || 'GET').toString().toUpperCase();
+
+            // Only attach to same-origin unsafe methods
+            const url = (typeof input === 'string') ? input : (input && input.url) ? input.url : '';
+            if (!SAFE_METHODS.has(method) && isSameOrigin(url)) {
+                const token = getToken();
+                const headers = new Headers(cfg.headers || (typeof input !== 'string' && input && input.headers) || {});
+                if (token && !headers.has('X-CSRFToken') && !headers.has('X-CSRF-Token')) {
+                    headers.set('X-CSRFToken', token);
+                }
+                cfg.headers = headers;
+            }
+            return originalFetch(input, cfg);
+        };
+    } catch (e) {
+        // do nothing - keep fetch behavior unchanged if patch fails
+        console.warn('CSRF fetch patch failed', e);
+    }
+})();
+
+// ============================================
 // Toast Notifications
 // ============================================
 function showToast(message, type = 'info', duration = 5000) {

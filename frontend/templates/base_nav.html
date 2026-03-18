@@ -5,6 +5,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/css/theme-mechanical-engineering.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<meta name="csrf-token" content="{{ csrf_token() }}">
 <script src="/static/js/common.js"></script>
 
 <!-- Loading Overlay (ثيم قسم الهندسة الميكانيكية) -->
@@ -118,6 +119,16 @@
                 تقرير الإضافة والإسقاط
               </a>
             </li>
+            <li>
+              <a class="dropdown-item" id="navFailedCoursesReport" href="/failed_courses_report_page">
+                تقرير شامل المقررات غير المنجزة
+              </a>
+            </li>
+            <li>
+              <a class="dropdown-item" id="navUncompletedCoursesReport" href="/uncompleted_courses_report_page">
+                تقرير المقررات غير المنجزة (حسب طالب)
+              </a>
+            </li>
             <li><hr class="dropdown-divider"></li>
             <li>
               <a class="dropdown-item" id="navSupervision" href="/supervision_form">
@@ -218,9 +229,11 @@
   // دالة تسجيل الخروج
   async function handleLogout() {
     try {
+      const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
       const response = await fetch('/auth/logout', {
         method: 'POST',
-        credentials: 'include'
+        credentials: 'include',
+        headers: csrfToken ? { 'X-CSRFToken': csrfToken } : {}
       });
       
       if (response.ok) {

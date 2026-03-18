@@ -1,4 +1,5 @@
-from flask import Flask, render_template, redirect, url_for, jsonify
+from flask import Flask, render_template, redirect, url_for, jsonify, session, request
+from flask_wtf.csrf import CSRFProtect, CSRFError
 from backend.services.utilities import ensure_tables, DB_FILE
 
 # Blueprints
@@ -16,10 +17,12 @@ from backend.services.academic_calendar import academic_calendar_bp
 from backend.services.academic_rules import academic_rules_bp
 from backend.services.instructors import instructors_bp
 from backend.services.performance import performance_bp
+from backend.api.students_api import students_api_bp
 
 # Core modules
 from backend.core.exceptions import register_error_handlers
 from backend.core.auth import init_auth
+from backend.core.auth import login_required, role_required
 from backend.core.logging_config import setup_logging
 from backend.core.monitoring import init_monitoring
 
@@ -29,6 +32,11 @@ import logging
 
 # استخدم مجلد القوالب/الستايتك كما في مشروعك
 app = Flask(__name__, template_folder="frontend/templates", static_folder="frontend/static")
+
+# CSRF protection (Web UI). API routes can be exempted.
+app.config.setdefault("WTF_CSRF_HEADERS", ["X-CSRFToken", "X-CSRF-Token"])
+csrf = CSRFProtect()
+csrf.init_app(app)
 
 # عرض مسار قاعدة البيانات في الكونسول لمراجعة أنه نفس الملف الذي يحتوي بياناتك
 print("Using DB_FILE:", os.path.abspath(DB_FILE))
@@ -77,9 +85,29 @@ app.register_blueprint(academic_calendar_bp, url_prefix="/academic_calendar")
 app.register_blueprint(academic_rules_bp, url_prefix="/academic_rules")
 app.register_blueprint(instructors_bp, url_prefix="/instructors")
 app.register_blueprint(performance_bp, url_prefix="/performance")
+app.register_blueprint(students_api_bp)
+
+# Exempt API blueprints from CSRF (as requested)
+try:
+    csrf.exempt(students_api_bp)
+except Exception:
+    pass
 
 # طباعة خريطة المسارات المسجلة (مؤقت للتحقق)
 pprint.pprint(sorted([r.rule for r in app.url_map.iter_rules()]))
+
+
+@app.errorhandler(CSRFError)
+def handle_csrf_error(e):
+    """معالج أخطاء CSRF."""
+    payload = {
+        "success": False,
+        "error": "CSRF_FAILED",
+        "message": "خطأ أمان: فشل التحقق من CSRF. يرجى إعادة محاولة الطلب.",
+    }
+    # أغلب واجهات المشروع تستخدم fetch/JSON؛ نرجّع JSON دائماً لتجنب صفحات HTML مكسورة.
+    wants_json = request.is_json or "application/json" in (request.headers.get("Accept") or "")
+    return (jsonify(payload), 400) if wants_json else (jsonify(payload), 400)
 
 # -----------------------------
 # صفحات العرض
@@ -95,7 +123,17 @@ def logout_page():
     return redirect("/login")
 
 @app.route("/")
+@login_required
 def index():
+    # صفحة البوابة تحتوي "مدخلات الجدولة (JSON)" لذلك تُحجب عن الطالب
+    role = session.get("user_role") or ""
+    if role == "student":
+        sid = session.get("student_id") or session.get("user")
+        return redirect(url_for("student_view", student_id=sid))
+    if role == "supervisor":
+        return redirect(url_for("supervisor_dashboard_page"))
+    if role != "admin":
+        return redirect(url_for("dashboard_page"))
     return render_template("index.html")
 
 @app.route("/health")
@@ -104,11 +142,13 @@ def health():
     return jsonify({"status": "healthy"}), 200
 
 @app.route("/dashboard")
+@role_required("admin", "supervisor", "admin_main", "head_of_department")
 def dashboard_page():
     return render_template("dashboard.html", active_page="dashboard")
 
 
 @app.route("/analytics")
+@role_required("admin", "supervisor", "admin_main", "head_of_department")
 def analytics_dashboard_page():
     # لوحة تحكم تحليلية متقدمة تعتمد على بيانات /performance/report و /admin/summary
     return render_template("analytics_dashboard.html", active_page="analytics")
@@ -156,6 +196,7 @@ def supervisor_dashboard_page():
     return render_template("supervisor_dashboard.html")
 
 @app.route("/schedule_form")
+@role_required("admin", "supervisor", "admin_main", "head_of_department")
 def schedule_form():
     return render_template("schedule_form.html")
 
@@ -210,8 +251,37 @@ def academic_rules_page():
     return render_template("academic_rules.html")
 
 @app.route("/transcript_page")
+@login_required
 def transcript_page():
-    return render_template("transcript.html")
+    # حل جذري: جهّز قائمة الطلبة + كشف أول طالب (أو المختار) من السيرفر
+    from backend.services.utilities import get_connection
+    from backend.services.grades import _load_transcript_data
+
+    # جلب الطلبة
+    with get_connection() as conn:
+        cur = conn.cursor()
+        students = cur.execute(
+            "SELECT student_id, COALESCE(student_name,'') AS student_name FROM students ORDER BY student_name, student_id"
+        ).fetchall()
+    students_list = [{"student_id": r[0], "student_name": r[1]} for r in (students or [])]
+
+    selected = (request.args.get("student_id") or "").strip()
+    if not selected and students_list:
+        selected = students_list[0]["student_id"]
+
+    initial_transcript = None
+    if selected:
+        try:
+            initial_transcript = _load_transcript_data(selected)
+        except Exception:
+            initial_transcript = None
+
+    return render_template(
+        "transcript.html",
+        students=students_list,
+        selected_student_id=selected,
+        initial_transcript=initial_transcript,
+    )
 
 
 @app.route("/performance_report")
@@ -231,6 +301,16 @@ def electives_report_page():
 @app.route("/registration_changes_report_page")
 def registration_changes_report_page():
     return render_template("registration_changes_report.html")
+
+
+@app.route("/failed_courses_report_page")
+def failed_courses_report_page():
+    return render_template("failed_courses_report.html")
+
+
+@app.route("/uncompleted_courses_report_page")
+def uncompleted_courses_report_page():
+    return render_template("uncompleted_courses_report.html")
 
 
 # -----------------------------

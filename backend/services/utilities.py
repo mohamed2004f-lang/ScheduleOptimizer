@@ -235,7 +235,9 @@ def ensure_tables():
                             password_hash TEXT NOT NULL,
                             role TEXT NOT NULL,
                             student_id TEXT,
-                            instructor_id INTEGER
+                            instructor_id INTEGER,
+                            is_supervisor INTEGER NOT NULL DEFAULT 0,
+                            is_active INTEGER NOT NULL DEFAULT 1
                         )""",
                         """
                         CREATE TABLE IF NOT EXISTS notifications (
@@ -378,6 +380,14 @@ def ensure_tables():
                 # إضافة أعمدة جديدة إلى الجداول القديمة إن لم تكن موجودة
                 try:
                     cur.execute("ALTER TABLE users ADD COLUMN instructor_id INTEGER")
+                except Exception:
+                    pass
+                try:
+                    cur.execute("ALTER TABLE users ADD COLUMN is_supervisor INTEGER NOT NULL DEFAULT 0")
+                except Exception:
+                    pass
+                try:
+                    cur.execute("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
                 except Exception:
                     pass
                 try:

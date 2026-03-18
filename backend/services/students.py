@@ -297,6 +297,417 @@ def _h(v):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
+# -----------------------------
+# تقارير: المقررات غير المنجزة + المقررات الراسب فيها الطلبة
+# (تعريف النجاح: >= 50 أو نص "ناجح")
+# -----------------------------
+PASSING_GRADE = 50
+
+
+def _grade_to_float_or_none(v):
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        try:
+            return float(v)
+        except Exception:
+            return None
+    if isinstance(v, str):
+        t = v.strip()
+        if not t:
+            return None
+        # normalize Arabic digits? keep simple
+        t2 = t.replace(",", ".")
+        try:
+            return float(t2)
+        except Exception:
+            return None
+    return None
+
+
+def _grade_pass_status(v):
+    """
+    يرجع:
+      - True/False إذا أمكن تحديد نجاح/رسوب
+      - None إذا لا يمكن تحديدها
+    يدعم:
+      - رقمية (>=50)
+      - نصية "ناجح" / "راسب"
+    """
+    if v is None:
+        return None
+    if isinstance(v, str):
+        t = v.strip()
+        if not t:
+            return None
+        if "ناجح" in t:
+            return True
+        if "راسب" in t:
+            return False
+        # fallback numeric parse
+        f = _grade_to_float_or_none(t)
+        return (f >= PASSING_GRADE) if f is not None else None
+    f = _grade_to_float_or_none(v)
+    return (f >= PASSING_GRADE) if f is not None else None
+
+
+def _best_grade_key(v):
+    """
+    مفتاح مقارنة لأفضل درجة:
+    - رقمية: قيمتها
+    - نصية: ناجح=100، راسب=0
+    - غير معروف: -1
+    """
+    if v is None:
+        return -1.0
+    f = _grade_to_float_or_none(v)
+    if f is not None:
+        return f
+    st = _grade_pass_status(v)
+    if st is True:
+        return 100.0
+    if st is False:
+        return 0.0
+    return -1.0
+
+
+def _best_grades_map(conn, student_id=None, course_name_like=None):
+    """
+    يجمع كل محاولات grades ويحسب أفضل درجة لكل (طالب, مقرر).
+    يرجع قاموس: (sid, course_name) -> info
+    """
+    cur = conn.cursor()
+    sql = """
+        SELECT g.student_id,
+               COALESCE(s.student_name,'') AS student_name,
+               g.course_name,
+               COALESCE(g.course_code,'') AS course_code,
+               COALESCE(g.units,0) AS units,
+               COALESCE(g.semester,'') AS semester,
+               g.grade
+        FROM grades g
+        LEFT JOIN students s ON s.student_id = g.student_id
+        WHERE 1=1
+    """
+    params = []
+    if student_id:
+        sql += " AND g.student_id = ?"
+        params.append(str(student_id).strip())
+    if course_name_like and str(course_name_like).strip():
+        q = "%" + str(course_name_like).strip() + "%"
+        sql += " AND (g.course_name LIKE ? OR g.course_code LIKE ?)"
+        params.extend([q, q])
+    sql += " ORDER BY g.student_id, g.course_name"
+    rows = cur.execute(sql, params).fetchall()
+
+    best = {}
+    for r in rows:
+        sid = str(r[0] if isinstance(r, (list, tuple)) else r["student_id"]).strip()
+        sname = r[1] if isinstance(r, (list, tuple)) else r["student_name"]
+        cname = r[2] if isinstance(r, (list, tuple)) else r["course_name"]
+        ccode = r[3] if isinstance(r, (list, tuple)) else r["course_code"]
+        units = r[4] if isinstance(r, (list, tuple)) else r["units"]
+        sem = r[5] if isinstance(r, (list, tuple)) else r["semester"]
+        grade = r[6] if isinstance(r, (list, tuple)) else r["grade"]
+        if not cname:
+            continue
+
+        k = (sid, cname)
+        entry = best.get(k)
+        if not entry:
+            entry = {
+                "student_id": sid,
+                "student_name": sname or "",
+                "course_name": cname,
+                "course_code": ccode or "",
+                "units": int(units or 0),
+                "attempts": 0,
+                "best_grade": grade,
+                "best_grade_key": _best_grade_key(grade),
+                "best_semester": sem or "",
+            }
+            best[k] = entry
+        entry["attempts"] += 1
+        # prefer non-zero units if available
+        if (entry.get("units") or 0) <= 0 and (units or 0) > 0:
+            entry["units"] = int(units or 0)
+        # best grade by key
+        gk = _best_grade_key(grade)
+        if gk > (entry.get("best_grade_key") or -1):
+            entry["best_grade"] = grade
+            entry["best_grade_key"] = gk
+            entry["best_semester"] = sem or ""
+    # determine pass/fail
+    for entry in best.values():
+        st = _grade_pass_status(entry.get("best_grade"))
+        # if unknown but numeric key exists, deduce
+        if st is None:
+            fk = entry.get("best_grade_key")
+            if fk is not None and fk >= 0:
+                st = fk >= PASSING_GRADE
+        entry["passed"] = bool(st) if st is not None else False
+        # best_grade_display
+        bg = entry.get("best_grade")
+        if bg is None:
+            entry["best_grade_display"] = "—"
+        else:
+            entry["best_grade_display"] = str(bg)
+    return best
+
+
+@students_bp.route("/uncompleted_courses_report")
+@role_required("admin", "admin_main", "head_of_department", "supervisor")
+def uncompleted_courses_report_api():
+    """تقرير: مقررات الطالب غير المنجزة (لا يوجد أي نجاح للمقرر)."""
+    sid = normalize_sid(request.args.get("student_id"))
+    if not sid:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
+    with get_connection() as conn:
+        best = _best_grades_map(conn, student_id=sid)
+        items = [v for v in best.values() if not v.get("passed")]
+        items = sorted(items, key=lambda x: (x.get("course_name") or ""))
+    return jsonify({"status": "ok", "student_id": sid, "items": items})
+
+
+@students_bp.route("/uncompleted_courses_report/excel")
+@role_required("admin", "admin_main", "head_of_department", "supervisor")
+def uncompleted_courses_report_excel():
+    sid = normalize_sid(request.args.get("student_id"))
+    r = uncompleted_courses_report_api()
+    payload = r[0].get_json() if isinstance(r, tuple) else r.get_json()
+    items = payload.get("items", []) if payload else []
+    df = pd.DataFrame(items or [])
+    # ترتيب أعمدة ودية
+    cols = ["student_id", "student_name", "course_name", "course_code", "units", "best_grade_display", "attempts", "best_semester"]
+    if not df.empty:
+        keep = [c for c in cols if c in df.columns] + [c for c in df.columns if c not in cols]
+        df = df[keep]
+    return excel_response_from_df(df, filename_prefix=f"uncompleted_courses_{sid or 'student'}")
+
+
+@students_bp.route("/uncompleted_courses_report/pdf")
+@role_required("admin", "admin_main", "head_of_department", "supervisor")
+def uncompleted_courses_report_pdf():
+    sid = normalize_sid(request.args.get("student_id"))
+    r = uncompleted_courses_report_api()
+    payload = r[0].get_json() if isinstance(r, tuple) else r.get_json()
+    items = payload.get("items", []) if payload else []
+    rows_html = ""
+    for it in items:
+        rows_html += (
+            "<tr>"
+            f"<td>{_h(it.get('course_name'))}</td>"
+            f"<td>{_h(it.get('course_code'))}</td>"
+            f"<td style='text-align:center'>{_h(it.get('units'))}</td>"
+            f"<td style='text-align:center'>{_h(it.get('best_grade_display'))}</td>"
+            f"<td style='text-align:center'>{_h(it.get('attempts'))}</td>"
+            f"<td>{_h(it.get('best_semester'))}</td>"
+            "</tr>"
+        )
+    title = f"تقرير المقررات غير المنجزة للطالب ({sid})"
+    html = f"""
+    <html dir="rtl" lang="ar">
+    <head>
+      <meta charset="utf-8"/>
+      <style>
+        body {{ font-family: Arial, sans-serif; margin: 12px; }}
+        h2 {{ margin: 0 0 10px 0; }}
+        table {{ width: 100%; border-collapse: collapse; font-size: 11px; }}
+        th, td {{ border: 1px solid #999; padding: 5px; }}
+        th {{ background: #f2f2f2; }}
+      </style>
+    </head>
+    <body>
+      <h2>{_h(title)}</h2>
+      <p>المقرر يُعتبر منجزاً إذا وُجدت أي محاولة ناجحة (درجة ≥ 50 أو "ناجح").</p>
+      <table>
+        <thead>
+          <tr>
+            <th>المقرر</th><th>الرمز</th><th>الوحدات</th><th>أفضل درجة</th><th>المحاولات</th><th>آخر فصل (مرجعي)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows_html or "<tr><td colspan='6' style='text-align:center'>لا توجد بيانات</td></tr>"}
+        </tbody>
+      </table>
+    </body>
+    </html>
+    """
+    return pdf_response_from_html(html, filename_prefix=f"uncompleted_courses_{sid or 'student'}")
+
+
+@students_bp.route("/failed_courses_report")
+@role_required("admin", "admin_main", "head_of_department", "supervisor")
+def failed_courses_report_api():
+    """
+    تقرير عام: المقررات التي رسب فيها الطلبة.
+    فلاتر:
+      - course_name: بحث جزئي بالاسم/الرمز
+      - min_failed: حد أدنى لعدد الراسبين في المقرر (ملخص)
+      - include_students=1 لإرجاع قائمة الطلبة التفصيلية
+    """
+    course_name = (request.args.get("course_name") or "").strip() or None
+    min_failed = request.args.get("min_failed")
+    try:
+        min_failed = int(min_failed) if min_failed not in (None, "") else 0
+    except Exception:
+        min_failed = 0
+    include_students = (request.args.get("include_students") or "").strip().lower() in ("1", "true", "yes")
+
+    with get_connection() as conn:
+        best = _best_grades_map(conn, student_id=None, course_name_like=course_name)
+    failed_items = [v for v in best.values() if not v.get("passed")]
+
+    # summary by course
+    by_course = {}
+    for it in failed_items:
+        ck = (it.get("course_name") or "", it.get("course_code") or "")
+        s = by_course.get(ck)
+        if not s:
+            s = {
+                "course_name": it.get("course_name") or "",
+                "course_code": it.get("course_code") or "",
+                "units": int(it.get("units") or 0),
+                "failed_count": 0,
+            }
+            by_course[ck] = s
+        s["failed_count"] += 1
+        if (s.get("units") or 0) <= 0 and (it.get("units") or 0) > 0:
+            s["units"] = int(it.get("units") or 0)
+
+    summary = list(by_course.values())
+    if min_failed and min_failed > 0:
+        summary = [s for s in summary if int(s.get("failed_count") or 0) >= min_failed]
+    summary = sorted(summary, key=lambda x: (-(int(x.get("failed_count") or 0)), x.get("course_name") or ""))
+
+    payload = {"status": "ok", "summary": summary}
+    if include_students:
+        payload["items"] = sorted(
+            failed_items,
+            key=lambda x: (x.get("course_name") or "", x.get("student_name") or "", x.get("student_id") or ""),
+        )
+    return jsonify(payload)
+
+
+@students_bp.route("/failed_courses_report/excel")
+@role_required("admin", "admin_main", "head_of_department", "supervisor")
+def failed_courses_report_excel():
+    course_name = (request.args.get("course_name") or "").strip() or None
+    min_failed = request.args.get("min_failed")
+    try:
+        min_failed = int(min_failed) if min_failed not in (None, "") else 0
+    except Exception:
+        min_failed = 0
+    with get_connection() as conn:
+        best = _best_grades_map(conn, student_id=None, course_name_like=course_name)
+    failed_items = [v for v in best.values() if not v.get("passed")]
+    # build frames
+    # summary
+    by_course = {}
+    for it in failed_items:
+        ck = (it.get("course_name") or "", it.get("course_code") or "")
+        s = by_course.get(ck)
+        if not s:
+            s = {"course_name": ck[0], "course_code": ck[1], "units": int(it.get("units") or 0), "failed_count": 0}
+            by_course[ck] = s
+        s["failed_count"] += 1
+        if (s.get("units") or 0) <= 0 and (it.get("units") or 0) > 0:
+            s["units"] = int(it.get("units") or 0)
+    summary = list(by_course.values())
+    if min_failed and min_failed > 0:
+        summary = [s for s in summary if int(s.get("failed_count") or 0) >= min_failed]
+    summary = sorted(summary, key=lambda x: (-(int(x.get("failed_count") or 0)), x.get("course_name") or ""))
+
+    df_summary = pd.DataFrame(summary or [])
+    df_items = pd.DataFrame(sorted(failed_items, key=lambda x: (x.get("course_name") or "", x.get("student_name") or "")) or [])
+    return excel_response_from_frames(
+        {"Summary": df_summary, "Students": df_items},
+        filename_prefix="failed_courses_report",
+    )
+
+
+@students_bp.route("/failed_courses_report/pdf")
+@role_required("admin", "admin_main", "head_of_department", "supervisor")
+def failed_courses_report_pdf():
+    course_name = (request.args.get("course_name") or "").strip() or None
+    min_failed = request.args.get("min_failed")
+    try:
+        min_failed = int(min_failed) if min_failed not in (None, "") else 0
+    except Exception:
+        min_failed = 0
+    include_students = (request.args.get("include_students") or "").strip().lower() in ("1", "true", "yes")
+
+    with get_connection() as conn:
+        best = _best_grades_map(conn, student_id=None, course_name_like=course_name)
+    failed_items = [v for v in best.values() if not v.get("passed")]
+    by_course = {}
+    for it in failed_items:
+        ck = (it.get("course_name") or "", it.get("course_code") or "")
+        s = by_course.get(ck)
+        if not s:
+            s = {"course_name": ck[0], "course_code": ck[1], "units": int(it.get("units") or 0), "failed_count": 0}
+            by_course[ck] = s
+        s["failed_count"] += 1
+        if (s.get("units") or 0) <= 0 and (it.get("units") or 0) > 0:
+            s["units"] = int(it.get("units") or 0)
+    summary = list(by_course.values())
+    if min_failed and min_failed > 0:
+        summary = [s for s in summary if int(s.get("failed_count") or 0) >= min_failed]
+    summary = sorted(summary, key=lambda x: (-(int(x.get("failed_count") or 0)), x.get("course_name") or ""))
+
+    sum_rows = ""
+    for s in summary:
+        sum_rows += (
+            "<tr>"
+            f"<td>{_h(s.get('course_name'))}</td>"
+            f"<td>{_h(s.get('course_code'))}</td>"
+            f"<td style='text-align:center'>{_h(s.get('units'))}</td>"
+            f"<td style='text-align:center'><strong>{_h(s.get('failed_count'))}</strong></td>"
+            "</tr>"
+        )
+
+    det_rows = ""
+    if include_students:
+        for it in sorted(failed_items, key=lambda x: (x.get("course_name") or "", x.get("student_name") or "", x.get("student_id") or "")):
+            det_rows += (
+                "<tr>"
+                f"<td>{_h(it.get('course_name'))}</td>"
+                f"<td>{_h(it.get('course_code'))}</td>"
+                f"<td>{_h(it.get('student_id'))}</td>"
+                f"<td>{_h(it.get('student_name'))}</td>"
+                f"<td style='text-align:center'>{_h(it.get('best_grade_display'))}</td>"
+                f"<td style='text-align:center'>{_h(it.get('attempts'))}</td>"
+                "</tr>"
+            )
+
+    html = f"""
+    <html dir="rtl" lang="ar">
+    <head>
+      <meta charset="utf-8"/>
+      <style>
+        body {{ font-family: Arial, sans-serif; margin: 12px; }}
+        h2 {{ margin: 0 0 10px 0; }}
+        h3 {{ margin: 16px 0 8px 0; }}
+        table {{ width: 100%; border-collapse: collapse; font-size: 11px; }}
+        th, td {{ border: 1px solid #999; padding: 5px; }}
+        th {{ background: #f2f2f2; }}
+      </style>
+    </head>
+    <body>
+      <h2>تقرير شامل المقررات غير المنجزة</h2>
+      <p>يُعتبر المقرر منجزاً إذا وُجدت أي محاولة ناجحة (درجة ≥ 50 أو نص "ناجح"). هذا التقرير يعرض المقررات غير المنجزة لدى الطلبة (لا توجد أي محاولة ناجحة).</p>
+      <h3>ملخص حسب المقرر</h3>
+      <table>
+        <thead><tr><th>المقرر</th><th>الرمز</th><th>الوحدات</th><th>عدد غير المنجزة</th></tr></thead>
+        <tbody>{sum_rows or "<tr><td colspan='4' style='text-align:center'>لا توجد بيانات</td></tr>"}</tbody>
+      </table>
+      {"<h3>تفصيل الطلبة</h3><table><thead><tr><th>المقرر</th><th>الرمز</th><th>رقم الطالب</th><th>الاسم</th><th>أفضل درجة</th><th>المحاولات</th></tr></thead><tbody>"+det_rows+"</tbody></table>" if include_students else ""}
+    </body>
+    </html>
+    """
+    return pdf_response_from_html(html, filename_prefix="failed_courses_report")
+
+
 @students_bp.route("/registration_changes_report/delete", methods=["POST"])
 @role_required("admin")
 def registration_changes_report_delete():
@@ -370,10 +781,28 @@ def list_students():
             students_objects.append(obj)
         return jsonify([s.__dict__ for s in students_objects])
     except AppException as e:
-        raise
+        # fallback مباشر من قاعدة البيانات إذا فشل Service Layer
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                rows = cur.execute(
+                    "SELECT student_id, COALESCE(student_name,'') AS student_name FROM students ORDER BY student_name, student_id"
+                ).fetchall()
+            return jsonify([{"student_id": r[0], "student_name": r[1]} for r in rows])
+        except Exception:
+            raise
     except Exception as e:
-        from backend.core.exceptions import DatabaseError
-        raise DatabaseError(f"فشل جلب قائمة الطلاب: {str(e)}")
+        # fallback مباشر من قاعدة البيانات بدلاً من كسر صفحة كشف الدرجات
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                rows = cur.execute(
+                    "SELECT student_id, COALESCE(student_name,'') AS student_name FROM students ORDER BY student_name, student_id"
+                ).fetchall()
+            return jsonify([{"student_id": r[0], "student_name": r[1]} for r in rows])
+        except Exception:
+            from backend.core.exceptions import DatabaseError
+            raise DatabaseError(f"فشل جلب قائمة الطلاب: {str(e)}")
 
 
 @students_bp.route("/graduates")

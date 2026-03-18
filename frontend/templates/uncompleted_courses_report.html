@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>تقرير المقررات غير المنجزة (حسب طالب)</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">تقرير المقررات غير المنجزة (حسب طالب)</h1>
+        <p class="page-subtitle">المقرر غير منجز إذا لم توجد أي محاولة ناجحة (درجة &ge; 50 أو "ناجح").</p>
+      </div>
+      <div class="d-flex gap-2 align-items-center">
+        <button class="btn btn-primary btn-sm" type="button" id="btnLoad">عرض</button>
+        <a class="btn btn-outline-success btn-sm" id="btnExcel" href="#">تصدير Excel</a>
+        <a class="btn btn-outline-danger btn-sm" id="btnPdf" href="#" target="_blank">تصدير PDF</a>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="row g-2 align-items-end">
+          <div class="col-md-6">
+            <label class="form-label small">اختر الطالب</label>
+            <select id="studentSelect" class="form-select form-select-sm">
+              <option value="">-- اختر طالباً --</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <div id="msg" class="mt-4"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered mb-0" id="tbl">
+            <thead class="table-light">
+              <tr>
+                <th>المقرر</th>
+                <th>الرمز</th>
+                <th class="text-center">الوحدات</th>
+                <th class="text-center">أفضل درجة</th>
+                <th class="text-center">محاولات</th>
+                <th>آخر فصل (مرجعي)</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok,status:r.status,json:j}; }
+    function setMsg(html, kind){ document.getElementById('msg').innerHTML = html ? `<div class="alert alert-${kind} p-2 mb-0">${html}</div>` : ''; }
+    function esc(s){ return (s==null?'':String(s)).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'); }
+    let STUDENTS = [];
+    let CURRENT_ROLE = null;
+    function getSid(){ 
+      const sel = document.getElementById('studentSelect');
+      return (sel && sel.value) ? String(sel.value).trim() : '';
+    }
+    function updateExportLinks(){
+      const sid = getSid();
+      const excel = document.getElementById('btnExcel');
+      const pdf = document.getElementById('btnPdf');
+      if(!sid){ excel.href = '#'; pdf.href = '#'; return; }
+      const p = new URLSearchParams(); p.set('student_id', sid);
+      excel.href = '/students/uncompleted_courses_report/excel?' + p.toString();
+      pdf.href = '/students/uncompleted_courses_report/pdf?' + p.toString();
+    }
+    async function load(){
+      const sid = getSid();
+      updateExportLinks();
+      if(!sid){ setMsg('اختر طالباً أولاً', 'warning'); return; }
+      setMsg('جاري تحميل التقرير...', 'info');
+      const p = new URLSearchParams(); p.set('student_id', sid);
+      const res = await fetchJSON('/students/uncompleted_courses_report?' + p.toString());
+      if(!res.ok){
+        setMsg(res.json?.message || `فشل تحميل التقرير (${res.status})`, 'danger');
+        return;
+      }
+      const items = Array.isArray(res.json?.items) ? res.json.items : [];
+      const tbody = document.querySelector('#tbl tbody'); tbody.innerHTML='';
+      if(!items.length){
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">لا توجد مقررات غير منجزة</td></tr>`;
+      } else {
+        items.forEach(it=>{
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${esc(it.course_name)}</td><td>${esc(it.course_code||'')}</td><td class="text-center">${esc(it.units||0)}</td><td class="text-center">${esc(it.best_grade_display||'—')}</td><td class="text-center">${esc(it.attempts||0)}</td><td>${esc(it.best_semester||'')}</td>`;
+          tbody.appendChild(tr);
+        });
+      }
+      setMsg('', 'info');
+    }
+
+    async function loadStudents(){
+      try{
+        const auth = await fetchJSON('/auth/check');
+        if(auth.ok && auth.json){
+          CURRENT_ROLE = auth.json.role || null;
+        }
+      }catch(e){}
+
+      const sel = document.getElementById('studentSelect');
+      if(!sel) return;
+      sel.innerHTML = '<option value="">-- اختر طالباً --</option>';
+      STUDENTS = [];
+
+      // للمشرف: فقط الطلبة المسندين له
+      if(CURRENT_ROLE === 'supervisor'){
+        const r = await fetchJSON('/instructors/supervised_students');
+        if(r.ok && r.json && Array.isArray(r.json.students)){
+          STUDENTS = r.json.students;
+        }
+      } else {
+        // للأدمن/رئيس القسم: كل الطلبة
+        const r = await fetchJSON('/students/list');
+        if(r.ok){
+          // /students/list في مشروعك يرجع Array مباشرة
+          if(Array.isArray(r.json)) STUDENTS = r.json;
+          // أو ممكن كـ {status, ...}
+          if(Array.isArray(r.json?.data)) STUDENTS = r.json.data;
+        }
+      }
+
+      if(!STUDENTS.length){
+        sel.innerHTML = '<option value="">لا توجد بيانات</option>';
+        updateExportLinks();
+        return;
+      }
+
+      STUDENTS.forEach(s=>{
+        const opt = document.createElement('option');
+        opt.value = s.student_id;
+        opt.text = (s.student_name || s.student_id) + ' — ' + s.student_id;
+        sel.appendChild(opt);
+      });
+
+      // اختيار أول طالب تلقائياً
+      sel.value = STUDENTS[0].student_id;
+      updateExportLinks();
+    }
+
+    document.getElementById('btnLoad').addEventListener('click', load);
+    const studentSelect = document.getElementById('studentSelect');
+    if(studentSelect){
+      studentSelect.addEventListener('change', ()=>{
+        updateExportLinks();
+        // تحميل فوري لتجربة المستخدم
+        load();
+      });
+    }
+
+    updateExportLinks();
+    loadStudents().then(load).catch(()=>{
+      updateExportLinks();
+      setMsg('تعذر تحميل قائمة الطلبة', 'danger');
+    });
+  </script>
+</body>
+</html>
+
