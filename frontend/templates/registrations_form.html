@@ -133,7 +133,19 @@ let editing = null; // current student object
 async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok,status:r.status,json:j}; }
 function el(tag, cls, html){ const e=document.createElement(tag); if(cls) e.className=cls; if(html!==undefined) e.innerHTML=html; return e; }
 function setEditMsg(kind, text){ document.getElementById('editMsg').innerHTML = `<div class="alert alert-${kind} p-2 mb-0">${text}</div>`; setTimeout(()=>document.getElementById('editMsg').innerHTML='',3000);}
-function setStats(){ document.getElementById('stats').textContent = `الطلاب: ${STUDENTS.length}`; }
+function setStats(list){
+  const arr = Array.isArray(list) ? list : STUDENTS;
+  const total = arr.length;
+  let withRegs = 0;
+  for (const s of arr){
+    if ((s.registrations || []).length) withRegs += 1;
+  }
+  const withoutRegs = Math.max(0, total - withRegs);
+  document.getElementById('stats').innerHTML =
+    `<span class="badge bg-light text-dark">الطلاب: ${total}</span>` +
+    `<span class="badge bg-success-subtle text-success-emphasis ms-2">مسجل: ${withRegs}</span>` +
+    `<span class="badge bg-secondary-subtle text-secondary-emphasis ms-2">غير مسجل: ${withoutRegs}</span>`;
+}
 
 /* load data */
 async function loadData(){
@@ -164,7 +176,7 @@ async function loadData(){
   STUDENTS.forEach(s => { s.registrations = map[s.student_id] || []; });
 
   renderStudents(STUDENTS);
-  setStats();
+  setStats(STUDENTS);
 }
 
 /* جلب الفصل الحالي من الإعدادات (للأدمن) */
@@ -189,13 +201,21 @@ function renderStudents(list){
     const left = el('div','flex-grow-1');
     const displayName = escapeHtml(s.student_name || s.name || s.full_name || '');
     const displayNum = escapeHtml(s.university_number || s.student_number || '');
-    left.innerHTML = `<div><strong>${displayName}</strong> <small class="text-muted">(${displayNum})</small></div>`;
+    let totalUnits = 0;
+    (s.registrations || []).forEach(cn=>{
+      const cobj = COURSES.find(x => x.course_name === cn) || {};
+      totalUnits += Number(cobj.units || 0);
+    });
+    const unitsBadge = (s.registrations||[]).length
+      ? ` <span class="badge bg-success-subtle text-success-emphasis ms-2">الوحدات: ${totalUnits}</span>`
+      : '';
+    left.innerHTML = `<div><strong>${displayName}</strong> <small class="text-muted">(${displayNum})</small>${unitsBadge}</div>`;
 
     const badges = el('div','courses-badges mt-2 d-flex flex-wrap');
     if((s.registrations||[]).length){
       s.registrations.forEach(cn=>{
         const cobj = COURSES.find(x => x.course_name === cn) || {};
-        let inner = `<span class="badge-course"><span>${escapeHtml(cn)}</span>${cobj.course_code ? '<span class="code text-muted"> — '+escapeHtml(cobj.course_code)+'</span>' : ''}</span>`;
+        let inner = `<span class="badge-course"><span>${escapeHtml(cn)}</span>${cobj.course_code ? '<span class="code text-white" style="opacity:.95"> — '+escapeHtml(cobj.course_code)+'</span>' : ''}</span>`;
         if (CURRENT_ROLE === 'student') {
           inner += ` <button type="button" class="btn btn-sm btn-outline-light text-danger ms-1 btn-drop-request">إسقاط</button>`;
         }
@@ -416,6 +436,9 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
     alert('حفظ التغييرات من هذه النافذة متاح للإدارة فقط.');
     return;
   }
+  const saveBtn = document.getElementById('btnSaveEdit');
+  const oldText = saveBtn ? saveBtn.textContent : '';
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'جارٍ الحفظ...'; }
   const regs = editing.registrations || [];
 
   // التحقق من حدود الوحدات (اختياري مع تأكيد)
@@ -446,17 +469,21 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
     registrations: regs,
     override_reason: out ? overrideReason : ''
   };
-  const res = await fetchJSON('/save_registrations', {
-    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
-  });
-  if(res.ok){
-    editing.registrations = selected;
-    renderStudents(STUDENTS);
-    setEditMsg('success','تم الحفظ');
-    const modal = bootstrap.Modal.getInstance(document.getElementById('editModal'));
-    modal.hide();
-  } else {
-    setEditMsg('danger', res.json?.message || `خطأ (${res.status})`);
+  try{
+    const res = await fetchJSON('/save_registrations', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+    });
+    if(res.ok){
+      // تحديث جذري للقائمة الفعلية من السيرفر حتى تظهر التغييرات مباشرة
+      try { await loadData(); } catch(e) {}
+      setEditMsg('success','تم حفظ التغييرات وتحديث القائمة');
+      const modal = bootstrap.Modal.getInstance(document.getElementById('editModal'));
+      modal.hide();
+    } else {
+      setEditMsg('danger', res.json?.message || `خطأ (${res.status})`);
+    }
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = oldText || 'حفظ التغييرات'; }
   }
 });
 
@@ -468,8 +495,8 @@ async function deleteAllRegistrations(student){
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
   });
   if(res.ok){
-    student.registrations = [];
-    renderStudents(STUDENTS);
+    try { await loadData(); } catch(e) { student.registrations = []; renderStudents(STUDENTS); }
+    alert('تم حذف التسجيلات وتحديث القائمة.');
   } else {
     alert(res.json?.message || `فشل الحذف (${res.status})`);
   }
@@ -555,11 +582,12 @@ async function requestDropCourseForStudent(student, courseName){
 /* search */
 document.getElementById('searchInput').addEventListener('input', (e)=>{
   const q = e.target.value.trim().toLowerCase();
-  if(!q) return renderStudents(STUDENTS);
+  if(!q) { renderStudents(STUDENTS); setStats(STUDENTS); return; }
   const filtered = STUDENTS.filter(s=>{
     return (s.student_name||'').toLowerCase().includes(q) || (s.university_number||'').toLowerCase().includes(q) || (s.student_id||'').toLowerCase().includes(q);
   });
   renderStudents(filtered);
+  setStats(filtered);
 });
 
 /* export CSV/TXT/Excel (one row per registration with course code and units) */

@@ -163,13 +163,81 @@
 
     async function _getCumulativeGPA(studentId){
       if (lastGpaStudentId === studentId && lastCumulativeGPA !== null) return lastCumulativeGPA;
-      const r = await fetchJSON('/transcript/' + encodeURIComponent(studentId));
+      // استخدم المسار الحقيقي لتفادي إعادة توجيه 302 مع fetch
+      const r = await fetchJSON('/grades/transcript/' + encodeURIComponent(studentId));
       if (!r.ok) return null;
       const g = (r.json && typeof r.json.cumulative_gpa !== 'undefined') ? Number(r.json.cumulative_gpa) : null;
       if (g === null || !Number.isFinite(g)) return null;
       lastGpaStudentId = studentId;
       lastCumulativeGPA = g;
       return g;
+    }
+
+    // -----------------------------
+    // ملخص أكاديمي سريع للمراجعة
+    // -----------------------------
+    const ACADEMIC_SUMMARY_CACHE = {}; // sid -> {loadedAt, transcript, status}
+
+    function _escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'); }
+
+    function _renderAcademicSummary(container, sid, stName, transcriptJson, statusJson){
+      const gpa = (transcriptJson && transcriptJson.cumulative_gpa != null) ? Number(transcriptJson.cumulative_gpa) : null;
+      const completedUnits = (transcriptJson && transcriptJson.completed_units != null) ? Number(transcriptJson.completed_units) : null;
+      const breakdown = Array.isArray(transcriptJson?.completed_units_breakdown) ? transcriptJson.completed_units_breakdown : [];
+      const uncompleted = breakdown.filter(b=>b && b.course_name && b.passed === false);
+      const uncompletedCount = uncompleted.length;
+      const uncompletedTop = uncompleted.slice(0, 6).map(b=>_escapeHtml(b.course_name)).join('، ');
+
+      const statusLabel = (statusJson && (statusJson.status_label || statusJson.status)) ? (statusJson.status_label || statusJson.status) : '';
+      const extraChance = statusJson && statusJson.extra_chance ? true : false;
+      const extraNote = statusJson && statusJson.extra_chance_note ? String(statusJson.extra_chance_note) : '';
+
+      container.innerHTML = `
+        <div class="card mt-2 border-0" style="background:#f8f9fa;">
+          <div class="card-body py-2">
+            <div class="d-flex flex-wrap gap-2 align-items-center">
+              <span class="badge bg-light text-dark">الطالب: ${_escapeHtml(stName||'')} (${_escapeHtml(sid)})</span>
+              <span class="badge bg-primary-subtle text-primary-emphasis">المعدل التراكمي: ${Number.isFinite(gpa) ? gpa.toFixed(2) : '—'}</span>
+              <span class="badge bg-success-subtle text-success-emphasis">الوحدات المنجزة: ${Number.isFinite(completedUnits) ? completedUnits : '—'}</span>
+              <span class="badge bg-warning-subtle text-warning-emphasis">غير منجزة: ${uncompletedCount}</span>
+              ${statusLabel ? `<span class="badge bg-info-subtle text-info-emphasis">الحالة: ${_escapeHtml(statusLabel)}${extraChance ? ' — فرصة استثنائية' : ''}</span>` : ''}
+            </div>
+            ${extraChance && extraNote ? `<div class="small text-muted mt-1">ملاحظة الفرصة الاستثنائية: ${_escapeHtml(extraNote)}</div>` : ''}
+            ${uncompletedCount ? `<div class="small mt-1"><strong>غير المنجزة (مختصر):</strong> ${uncompletedTop}${uncompletedCount>6 ? ' ...' : ''}</div>` : `<div class="small text-muted mt-1">لا توجد مقررات غير منجزة حسب السجل الحالي.</div>`}
+          </div>
+        </div>
+      `;
+    }
+
+    async function toggleAcademicSummary(planId, studentId){
+      const el = document.getElementById('acadSummary_'+planId);
+      if(!el) return;
+      if(el.dataset.open === '1'){
+        el.dataset.open = '0';
+        el.innerHTML = '';
+        return;
+      }
+      el.dataset.open = '1';
+      el.innerHTML = '<div class="small text-muted mt-2">جاري تحميل الملخص الأكاديمي...</div>';
+      const st = STUDENTS.find(s=>s.student_id === studentId);
+      const stName = st ? (st.student_name || '') : '';
+
+      try{
+        if (ACADEMIC_SUMMARY_CACHE[studentId]?.transcript && ACADEMIC_SUMMARY_CACHE[studentId]?.status){
+          _renderAcademicSummary(el, studentId, stName, ACADEMIC_SUMMARY_CACHE[studentId].transcript, ACADEMIC_SUMMARY_CACHE[studentId].status);
+          return;
+        }
+        const [tr, stt] = await Promise.all([
+          fetchJSON('/grades/transcript/' + encodeURIComponent(studentId)),
+          fetchJSON('/performance/status/' + encodeURIComponent(studentId)),
+        ]);
+        const trJson = tr.ok ? tr.json : null;
+        const stJson = stt.ok ? stt.json : null;
+        ACADEMIC_SUMMARY_CACHE[studentId] = { loadedAt: Date.now(), transcript: trJson, status: stJson };
+        _renderAcademicSummary(el, studentId, stName, trJson, stJson);
+      } catch(e){
+        el.innerHTML = '<div class="text-danger small mt-2">تعذر تحميل الملخص الأكاديمي.</div>';
+      }
     }
 
     async function validateUnitsLimitOrShowMessage(){
@@ -406,7 +474,11 @@
         const name = st ? (st.student_name || '') : '';
         left.innerHTML = `<div><strong>${p.student_id}</strong> — ${name}</div>
                           <div class="small text-muted">الفصل: ${p.semester}</div>
-                          <div class="small">المقررات: ${p.courses.join(', ') || '—'}</div>`;
+                          <div class="small">المقررات: ${p.courses.join(', ') || '—'}</div>
+                          <div class="mt-1">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" data-acad="${p.id}" title="عرض ملخص سريع (معدل/وحدات/غير منجزة/حالة)">ملخص أكاديمي</button>
+                          </div>
+                          <div id="acadSummary_${p.id}" data-open="0"></div>`;
         const right = document.createElement('div');
         const approveBtn = document.createElement('button');
         approveBtn.className = 'btn btn-sm btn-success mb-1';
@@ -422,6 +494,17 @@
         item.appendChild(left);
         item.appendChild(right);
         container.appendChild(item);
+
+        // ربط زر الملخص الأكاديمي
+        try{
+          const btn = left.querySelector(`button[data-acad="${p.id}"]`);
+          if(btn){
+            btn.addEventListener('click', (ev)=>{
+              ev.preventDefault();
+              toggleAcademicSummary(p.id, p.student_id);
+            });
+          }
+        }catch(e){}
       });
     }
 
