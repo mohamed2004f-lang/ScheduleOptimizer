@@ -141,9 +141,12 @@ def _enforce_units_limit(cur, student_id: str, courses: list[str]):
         )
 
 
-def _build_registration_form_context(student_id: str, semester_param: str):
+def _build_registration_form_context(student_id: str, semester_param: str, source: str = "plan"):
     student_id = (student_id or "").strip()
     semester_param = (semester_param or "").strip()
+    source = (source or "plan").strip().lower()
+    if source not in ("plan", "actual"):
+        source = "plan"
 
     with get_connection() as conn:
         cur = conn.cursor()
@@ -175,36 +178,39 @@ def _build_registration_form_context(student_id: str, semester_param: str):
             abort(404)
         sid, sname, uni = st[0], st[1], st[2]
 
-        # اختيار الخطة المعتمدة (للحصول على الفصل والمقررات)
+        # اختيار مصدر المقررات:
+        # - plan: من آخر خطة معتمدة (السلوك الحالي)
+        # - actual: من جدول registrations الفعلي مباشرة
         row = None
-        if semester_param:
-            row = cur.execute(
-                """
-                SELECT id, semester
-                FROM enrollment_plans
-                WHERE student_id = ? AND semester = ? AND status = 'Approved'
-                ORDER BY updated_at DESC
-                LIMIT 1
-                """,
-                (sid, semester_param),
-            ).fetchone()
+        if source == "plan":
+            if semester_param:
+                row = cur.execute(
+                    """
+                    SELECT id, semester
+                    FROM enrollment_plans
+                    WHERE student_id = ? AND semester = ? AND status = 'Approved'
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (sid, semester_param),
+                ).fetchone()
 
-        if not row:
-            row = cur.execute(
-                """
-                SELECT id, semester
-                FROM enrollment_plans
-                WHERE student_id = ? AND status = 'Approved'
-                ORDER BY updated_at DESC
-                LIMIT 1
-                """,
-                (sid,),
-            ).fetchone()
+            if not row:
+                row = cur.execute(
+                    """
+                    SELECT id, semester
+                    FROM enrollment_plans
+                    WHERE student_id = ? AND status = 'Approved'
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (sid,),
+                ).fetchone()
 
         courses_rows = []
         semester_label = semester_param or ""
 
-        if row:
+        if source == "plan" and row:
             plan_id, semester_label = row
             courses_rows = cur.execute(
                 """
@@ -219,7 +225,7 @@ def _build_registration_form_context(student_id: str, semester_param: str):
                 (plan_id,),
             ).fetchall()
         else:
-            # في حال عدم وجود خطة معتمدة، نستخدم جدول registrations
+            # source=actual أو لا توجد خطة معتمدة: نستخدم جدول registrations
             courses_rows = cur.execute(
                 """
                 SELECT r.course_name,
@@ -735,8 +741,9 @@ def registration_form_html(student_id):
                 return jsonify({"status": "error", "message": "لا يمكنك عرض استمارة لطالب غير مُسند إليك", "code": "FORBIDDEN"}), 403
 
     semester_param = (request.args.get("semester") or "").strip()
+    source = (request.args.get("source") or "plan").strip().lower()
     try:
-        ctx = _build_registration_form_context(student_id, semester_param)
+        ctx = _build_registration_form_context(student_id, semester_param, source=source)
     except Exception as e:
         current_app.logger.exception("registration_form_html context failed for %s", student_id)
         return (
@@ -783,7 +790,8 @@ def print_registration_form(student_id):
         )
 
     semester_param = (request.args.get("semester") or "").strip()
-    ctx = _build_registration_form_context(student_id, semester_param)
+    source = (request.args.get("source") or "plan").strip().lower()
+    ctx = _build_registration_form_context(student_id, semester_param, source=source)
 
     template_path = os.path.join(
         current_app.root_path, "frontend", "templates", "registration_form_template.docx"

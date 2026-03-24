@@ -22,24 +22,71 @@
 
     <section class="kpi-grid">
       <div class="kpi-card">
-        <div class="kpi-title">عدد الطلبة</div>
+        <div class="kpi-title">الطلبة النشطون</div>
         <div id="studentCount" class="kpi-value">—</div>
-        <p class="kpi-desc">إجمالي عدد الطلبة المسجلين</p>
+        <p class="kpi-desc">عدد الطلبة بحالة قيد فعالة</p>
       </div>
       <div class="kpi-card">
-        <div class="kpi-title">المقاعد المتاحة</div>
-        <div id="openSeats" class="kpi-value">—</div>
-        <p class="kpi-desc">تقدير المقاعد المتبقية في جميع المقررات</p>
+        <div class="kpi-title">خطط قيد المراجعة</div>
+        <div id="pendingPlansCount" class="kpi-value">—</div>
+        <p class="kpi-desc">خطط Pending تحتاج قراراً</p>
       </div>
       <div class="kpi-card">
-        <div class="kpi-title">الامتحانات القادمة</div>
-        <div id="upcomingExams" class="kpi-value">—</div>
-        <p class="kpi-desc">عدد الامتحانات المجدولة</p>
+        <div class="kpi-title">مقررات عالية المخاطرة</div>
+        <div id="highRiskCoursesCount" class="kpi-value">—</div>
+        <p class="kpi-desc">مقررات بعدد غير منجزة مرتفع</p>
       </div>
       <div class="kpi-card kpi-danger">
         <div class="kpi-title">مشاكل التعارض الحالية</div>
         <div id="conflictCount" class="kpi-value">—</div>
-        <p class="kpi-desc">إجمالي تعارضات الجدول والامتحانات</p>
+        <p class="kpi-desc">تعارضات الجدول والامتحانات</p>
+      </div>
+    </section>
+
+    <section class="card mb-3">
+      <div class="card-body">
+        <div class="page-header" style="margin:0 0 8px;">
+          <div>
+            <h2 class="page-title" style="font-size:16px;">أولوية اليوم</h2>
+            <p class="page-subtitle">خطط معلقة تحتاج اعتماد/رفض سريع</p>
+          </div>
+          <div class="d-flex gap-2">
+            <a href="/enrollment_plans" class="btn btn-sm btn-outline-primary">فتح خطط التسجيل</a>
+            <button id="btnRefreshPending" class="btn btn-sm btn-outline-secondary">تحديث</button>
+          </div>
+        </div>
+        <div id="pendingPlansList" class="list-group small"></div>
+      </div>
+    </section>
+
+    <section class="card mb-3">
+      <div class="card-body">
+        <div class="page-header" style="margin:0 0 8px;">
+          <div>
+            <h2 class="page-title" style="font-size:16px;">مقررات تحتاج فتح شعب/توفير أستاذ</h2>
+            <p class="page-subtitle">مرتبة حسب عدد الطلبة غير المنجزين</p>
+          </div>
+          <a href="/failed_courses_report_page" class="btn btn-sm btn-outline-primary">فتح التقرير الشامل</a>
+        </div>
+        <div id="riskCoursesList" class="list-group small"></div>
+      </div>
+    </section>
+
+    <section class="card mb-3">
+      <div class="card-body">
+        <div class="page-header" style="margin:0 0 8px;">
+          <div>
+            <h2 class="page-title" style="font-size:16px;">اختصارات تنفيذية</h2>
+            <p class="page-subtitle">وصول سريع للعمليات الأكثر استخداماً</p>
+          </div>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+          <a class="btn btn-outline-primary btn-sm" href="/enrollment_plans">خطط التسجيل</a>
+          <a class="btn btn-outline-primary btn-sm" href="/registrations_form">التسجيلات الفعلية</a>
+          <a class="btn btn-outline-primary btn-sm" href="/transcript_page">كشف الدرجات</a>
+          <a class="btn btn-outline-primary btn-sm" href="/failed_courses_report_page">تقرير شامل غير المنجزة</a>
+          <a class="btn btn-outline-primary btn-sm" href="/registration_changes_report_page">تقرير الإضافة والإسقاط</a>
+        </div>
       </div>
     </section>
 
@@ -88,7 +135,95 @@
   </main>
 
 <script>
-async function fetchJSON(url){ const r=await fetch(url); const j=await r.json().catch(()=>null); return {ok:r.ok,json:j}; }
+async function fetchJSON(url){ const r=await fetch(url); const j=await r.json().catch(()=>null); return {ok:r.ok,json:j,status:r.status}; }
+function esc(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
+function renderPendingPlans(plans){
+  const box = document.getElementById('pendingPlansList');
+  if(!box) return;
+  box.innerHTML = '';
+  if(!plans.length){
+    box.innerHTML = '<div class="text-muted p-2">لا توجد خطط معلقة حالياً.</div>';
+    return;
+  }
+  plans.slice(0,10).forEach(p=>{
+    const item = document.createElement('div');
+    item.className = 'list-group-item d-flex justify-content-between align-items-start';
+    item.innerHTML = `<div><div><strong>${esc(p.student_id)}</strong></div><div class="small text-muted">الفصل: ${esc(p.semester)}</div><div class="small">المقررات: ${esc((p.courses||[]).join('، ')) || '—'}</div></div>
+                      <div class="d-flex flex-column gap-1">
+                        <button class="btn btn-sm btn-success" data-approve-plan="${p.id}">اعتماد</button>
+                        <button class="btn btn-sm btn-danger" data-reject-plan="${p.id}">رفض</button>
+                        <a href="/enrollment_plans" class="btn btn-sm btn-outline-primary">مراجعة</a>
+                      </div>`;
+    const btnApprove = item.querySelector(`[data-approve-plan="${p.id}"]`);
+    if (btnApprove) btnApprove.addEventListener('click', ()=> approvePlanFromDashboard(p.id));
+    const btnReject = item.querySelector(`[data-reject-plan="${p.id}"]`);
+    if (btnReject) btnReject.addEventListener('click', ()=> rejectPlanFromDashboard(p.id));
+    box.appendChild(item);
+  });
+}
+
+async function approvePlanFromDashboard(id){
+  if(!confirm('هل تريد اعتماد هذه الخطة الآن؟')) return;
+  const r = await fetchJSON(`/enrollment/plans/${id}/approve`, { method:'POST' });
+  if(r.ok){
+    await loadPendingPlans();
+    window.showToast ? window.showToast('تم اعتماد الخطة بنجاح', 'success') : alert('تم اعتماد الخطة بنجاح');
+  } else {
+    const msg = (r.json && (r.json.message || r.json.error)) ? (r.json.message || r.json.error) : `فشل الاعتماد (${r.status})`;
+    window.showToast ? window.showToast(msg, 'danger') : alert(msg);
+  }
+}
+
+async function rejectPlanFromDashboard(id){
+  const reason = prompt('سبب الرفض (اختياري):', '') || '';
+  if(reason === null) return;
+  const r = await fetchJSON(`/enrollment/plans/${id}/reject`, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ reason })
+  });
+  if(r.ok){
+    await loadPendingPlans();
+    window.showToast ? window.showToast('تم رفض الخطة', 'success') : alert('تم رفض الخطة');
+  } else {
+    const msg = (r.json && (r.json.message || r.json.error)) ? (r.json.message || r.json.error) : `فشل الرفض (${r.status})`;
+    window.showToast ? window.showToast(msg, 'danger') : alert(msg);
+  }
+}
+
+function renderRiskCourses(summary){
+  const box = document.getElementById('riskCoursesList');
+  if(!box) return;
+  box.innerHTML = '';
+  if(!summary.length){
+    box.innerHTML = '<div class="text-muted p-2">لا توجد بيانات حالياً.</div>';
+    return;
+  }
+  summary.slice(0,8).forEach(c=>{
+    const item = document.createElement('div');
+    item.className = 'list-group-item d-flex justify-content-between align-items-center';
+    item.innerHTML = `<div><strong>${esc(c.course_name)}</strong>${c.course_code ? ` <span class="text-muted">(${esc(c.course_code)})</span>`:''}</div>
+                      <span class="badge bg-warning text-dark">غير منجزة: ${Number(c.failed_count||0)}</span>`;
+    box.appendChild(item);
+  });
+}
+
+async function loadPendingPlans(){
+  const res = await fetchJSON('/enrollment/plans');
+  const plans = (res.ok && Array.isArray(res.json?.plans)) ? res.json.plans.filter(p=>p.status==='Pending') : [];
+  document.getElementById('pendingPlansCount').textContent = plans.length;
+  renderPendingPlans(plans);
+}
+
+async function loadRiskCourses(){
+  const res = await fetchJSON('/students/failed_courses_report?min_failed=1');
+  const summary = (res.ok && Array.isArray(res.json?.summary)) ? res.json.summary : [];
+  document.getElementById('highRiskCoursesCount').textContent = summary.length;
+  renderRiskCourses(summary);
+  return summary;
+}
+
 async function loadDashboard(){
   // استخدم /admin/summary كمصدر أساسي للإحصائيات
   const summary = await fetchJSON('/admin/summary');
@@ -97,13 +232,6 @@ async function loadDashboard(){
     const d = summary.json.data;
     // عدد الطلبة
     document.getElementById('studentCount').textContent = d.students ?? '0';
-    // المقاعد المتاحة (تقدير بسيط: مجموع صفوف الجدول * 40 ناقص عدد التسجيلات)
-    const estTotalSeats = (d.schedule_rows || 0) * 40;
-    const usedSeats = d.registrations || 0;
-    const openSeats = Math.max(0, estTotalSeats - usedSeats);
-    document.getElementById('openSeats').textContent = openSeats;
-    // الامتحانات القادمة: نستخدم إجمالي الامتحانات كقيمة تقريبية
-    document.getElementById('upcomingExams').textContent = d.exams_total ?? 0;
     // عدد مشاكل التعارض الحالية
     const totalConflicts = (d.conflict_report_rows || 0) + (d.exam_conflicts_rows || 0);
     document.getElementById('conflictCount').textContent = totalConflicts;
@@ -112,8 +240,8 @@ async function loadDashboard(){
     }
   } else {
     document.getElementById('studentCount').textContent = '0';
-    document.getElementById('openSeats').textContent = '0';
-    document.getElementById('upcomingExams').textContent = '0';
+    document.getElementById('pendingPlansCount').textContent = '0';
+    document.getElementById('highRiskCoursesCount').textContent = '0';
     document.getElementById('conflictCount').textContent = '0';
   }
 
@@ -146,6 +274,10 @@ async function loadDashboard(){
   if(rec.length===0) rc.innerHTML = '<li class="text-muted">لا توجد تعديلات حديثة</li>';
   else rec.forEach(x=>{ const li=document.createElement('li'); li.textContent = x; rc.appendChild(li); });
 
+  // حمّل القوائم التنفيذية
+  await loadPendingPlans();
+  const riskSummary = await loadRiskCourses();
+
   // إنشاء الرسوم البيانية باستخدام Chart.js
   try {
     const d = summary.ok && summary.json && summary.json.data ? summary.json.data : {};
@@ -153,7 +285,7 @@ async function loadDashboard(){
     new Chart(countCtx, {
       type: 'bar',
       data: {
-        labels: ['طلبة', 'مقررات', 'صفوف الجدول', 'تسجيلات', 'درجات', 'امتحانات'],
+        labels: ['طلبة', 'مقررات', 'صفوف الجدول', 'تسجيلات', 'درجات', 'خطط معلقة'],
         datasets: [{
           label: 'إجمالي',
           data: [
@@ -162,7 +294,7 @@ async function loadDashboard(){
             d.schedule_rows || 0,
             d.registrations || 0,
             d.grades || 0,
-            d.exams_total || 0
+            Number(document.getElementById('pendingPlansCount').textContent || 0)
           ],
           backgroundColor: 'rgba(30, 111, 184, 0.5)',
           borderColor: 'rgba(7, 47, 95, 0.9)',
@@ -179,13 +311,14 @@ async function loadDashboard(){
     const conflictCtx = document.getElementById('conflictChart').getContext('2d');
     const cr = d.conflict_report_rows || 0;
     const er = d.exam_conflicts_rows || 0;
+    const hr = Array.isArray(riskSummary) ? riskSummary.slice(0,5).reduce((acc, x)=>acc + Number(x.failed_count||0), 0) : 0;
     new Chart(conflictCtx, {
       type: 'doughnut',
       data: {
-        labels: ['تعارضات الجدول', 'تعارضات الامتحانات'],
+        labels: ['تعارضات الجدول', 'تعارضات الامتحانات', 'غير منجزة (Top 5)'],
         datasets: [{
-          data: [cr, er],
-          backgroundColor: ['#d32f2f', '#f9a825']
+          data: [cr, er, hr],
+          backgroundColor: ['#d32f2f', '#f9a825', '#fb8c00']
         }]
       },
       options: {
@@ -197,6 +330,9 @@ async function loadDashboard(){
     console.error('Chart render error', e);
   }
 }
+document.getElementById('btnRefreshPending')?.addEventListener('click', async ()=>{
+  await loadPendingPlans();
+});
 loadDashboard();
 </script>
 </body>

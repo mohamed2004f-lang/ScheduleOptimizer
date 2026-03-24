@@ -392,7 +392,7 @@
         statusText += ` — سبب الرفض: ${plan.rejection_reason}`;
         setPlanMsg('danger', `تم رفض الخطة السابقة. السبب: ${plan.rejection_reason}. يمكنك تعديل المقررات وحفظها كمسودة ثم إعادة الإرسال.`);
       } else {
-        setPlanMsg('success','تم تحميل الخطة الحالية.');
+        setPlanMsg('success','تم حفظ الخطة بصفتها مبدئية، وتخضع للمراجعة الأكاديمية قبل الاعتماد النهائي.');
       }
       document.getElementById('planStatus').textContent = statusText;
     }
@@ -417,7 +417,7 @@
       if(res.ok){
         currentPlanId = res.json?.plan_id || currentPlanId;
         document.getElementById('planStatus').textContent = 'حالة الخطة: Draft';
-        setPlanMsg('success','تم حفظ الخطة كمسودة.');
+        setPlanMsg('success','تم حفظ الخطة بصفتها مبدئية، وتخضع للمراجعة الأكاديمية قبل الاعتماد النهائي.');
       } else {
         setPlanMsg('danger', res.json?.message || `فشل الحفظ (${res.status})`);
       }

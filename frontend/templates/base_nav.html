@@ -67,107 +67,72 @@
             <i class="fa-solid fa-gauge-high ms-1"></i> لوحة القيادة
           </a>
         </li>
-        <li class="nav-item">
-          <a class="nav-link" id="navAnalytics" href="/analytics">
-            <i class="fa-solid fa-chart-line ms-1"></i> التحليلات
-          </a>
-        </li>
-        <li class="nav-item">
-          <a class="nav-link" id="navAcademicCalendar" href="/academic_calendar_page">
-            <i class="fa-regular fa-calendar-days ms-1"></i> التقويم الأكاديمي
-          </a>
-        </li>
 
-        <!-- شؤون الطلبة (Dropdown) -->
+        <!-- شؤون الطلبة -->
         <li class="nav-item dropdown">
           <a class="nav-link dropdown-toggle" href="#" id="studentAffairsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-user-graduate ms-1"></i> شؤون الطلبة
           </a>
           <ul class="dropdown-menu" aria-labelledby="studentAffairsMenu">
-            <li>
-              <a class="dropdown-item" id="navStudents" href="/students_form">
-                بيانات الطلبة
-              </a>
-            </li>
-            <li>
-              <a class="dropdown-item" id="navGraduates" href="/graduates_page">
-                قائمة الخريجين
-              </a>
-            </li>
-            <li>
-              <a class="dropdown-item" id="navEnrollmentPlans" href="/enrollment_plans">
-                خطط التسجيل
-              </a>
-            </li>
-            <li>
-              <a class="dropdown-item" id="navRegistrations" href="/registrations_form">
-                التسجيلات الفعلية
-              </a>
-            </li>
-            <li>
-              <a class="dropdown-item" id="navRegistrationRequests" href="/registration_requests_page">
-                طلبات الإضافة والإسقاط
-              </a>
-            </li>
-            <li>
-              <a class="dropdown-item" id="navElectivesReport" href="/electives_report_page">
-                تقرير المقررات الاختيارية
-              </a>
-            </li>
-            <li>
-              <a class="dropdown-item" id="navRegistrationChangesReport" href="/registration_changes_report_page">
-                تقرير الإضافة والإسقاط
-              </a>
-            </li>
-            <li>
-              <a class="dropdown-item" id="navFailedCoursesReport" href="/failed_courses_report_page">
-                تقرير شامل المقررات غير المنجزة
-              </a>
-            </li>
-            <li>
-              <a class="dropdown-item" id="navUncompletedCoursesReport" href="/uncompleted_courses_report_page">
-                تقرير المقررات غير المنجزة (حسب طالب)
-              </a>
-            </li>
+            <li><a class="dropdown-item" id="navStudents" href="/students_form">بيانات الطلبة</a></li>
+            <li><a class="dropdown-item" id="navGraduates" href="/graduates_page">قائمة الخريجين</a></li>
+            <li><a class="dropdown-item" id="navEnrollmentPlans" href="/enrollment_plans">خطط التسجيل</a></li>
+            <li><a class="dropdown-item" id="navRegistrations" href="/registrations_form">التسجيلات الفعلية</a></li>
+            <li><a class="dropdown-item" id="navRegistrationRequests" href="/registration_requests_page">طلبات الإضافة والإسقاط</a></li>
+            <li><a class="dropdown-item" id="navAttendance" href="/attendance_export">الحضور والغياب</a></li>
             <li><hr class="dropdown-divider"></li>
-            <li>
-              <a class="dropdown-item" id="navSupervision" href="/supervision_form">
-                الإشراف الأكاديمي
-              </a>
-            </li>
-            <li>
-              <a class="dropdown-item" id="navSupervisorDashboard" href="/supervisor_dashboard">
-                لوحة المشرف
-              </a>
-            </li>
           </ul>
         </li>
 
-        <!-- بيانات أساسية أخرى -->
-        <li class="nav-item">
-          <a class="nav-link" id="navInstructors" href="/instructors_form">
-            <i class="fa-solid fa-user-tie ms-1"></i> أعضاء هيئة التدريس
+        <!-- السجل الأكاديمي والتقارير -->
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="academicRecordsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="fa-regular fa-file-lines ms-1"></i> السجل الأكاديمي
           </a>
+          <ul class="dropdown-menu" aria-labelledby="academicRecordsMenu">
+            <li><a class="dropdown-item" id="navTranscript" href="/transcript_page">كشف الدرجات</a></li>
+            <li><a class="dropdown-item" id="navPerformance" href="/performance_report">تقرير الأداء</a></li>
+            <li><a class="dropdown-item" id="navElectivesReport" href="/electives_report_page">تقرير المقررات الاختيارية</a></li>
+            <li><a class="dropdown-item" id="navRegistrationChangesReport" href="/registration_changes_report_page">تقرير الإضافة والإسقاط</a></li>
+            <li><a class="dropdown-item" id="navFailedCoursesReport" href="/failed_courses_report_page">تقرير شامل المقررات غير المنجزة</a></li>
+            <li><a class="dropdown-item" id="navUncompletedCoursesReport" href="/uncompleted_courses_report_page">تقرير المقررات غير المنجزة (حسب طالب)</a></li>
+          </ul>
         </li>
-        <li class="nav-item">
-          <a class="nav-link" id="navCourses" href="/courses_form">
-            <i class="fa-solid fa-book ms-1"></i> المقررات
+
+        <!-- التخطيط والجدولة -->
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="planningMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="fa-solid fa-calendar-check ms-1"></i> التخطيط والجدولة
           </a>
+          <ul class="dropdown-menu" aria-labelledby="planningMenu">
+            <li><a class="dropdown-item" id="navScheduleForm" href="/schedule_form">الجدول</a></li>
+            <li><a class="dropdown-item" id="navResults" href="/results">تعارضات الجدول</a></li>
+            <li><a class="dropdown-item" id="navAnalytics" href="/analytics">التحليلات</a></li>
+            <li><a class="dropdown-item" id="navAcademicCalendar" href="/academic_calendar_page">التقويم الأكاديمي</a></li>
+          </ul>
         </li>
-        <li class="nav-item">
-          <a class="nav-link" id="navPrereqs" href="/prereqs_form">
-            <i class="fa-solid fa-link ms-1"></i> المتطلبات المسبقة
+
+        <!-- المقررات الدراسية ومتطلباتها -->
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="catalogMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="fa-solid fa-book ms-1"></i> المقررات الدراسية ومتطلباتها
           </a>
+          <ul class="dropdown-menu" aria-labelledby="catalogMenu">
+            <li><a class="dropdown-item" id="navCourses" href="/courses_form">المقررات</a></li>
+            <li><a class="dropdown-item" id="navPrereqs" href="/prereqs_form">المتطلبات المسبقة</a></li>
+          </ul>
         </li>
-        <li class="nav-item">
-          <a class="nav-link" id="navScheduleForm" href="/schedule_form">
-            <i class="fa-regular fa-calendar ms-1"></i> الجدول
+
+        <!-- الأساتذة والإشراف -->
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="facultySupervisionMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="fa-solid fa-user-tie ms-1"></i> الأساتذة والإشراف
           </a>
-        </li>
-        <li class="nav-item">
-          <a class="nav-link" id="navAttendance" href="/attendance_export">
-            <i class="fa-solid fa-user-check ms-1"></i> الحضور والغياب
-          </a>
+          <ul class="dropdown-menu" aria-labelledby="facultySupervisionMenu">
+            <li><a class="dropdown-item" id="navInstructors" href="/instructors_form">أعضاء هيئة التدريس</a></li>
+            <li><a class="dropdown-item" id="navSupervision" href="/supervision_form">الإشراف الأكاديمي</a></li>
+            <li><a class="dropdown-item" id="navSupervisorDashboard" href="/supervisor_dashboard">لوحة المشرف</a></li>
+          </ul>
         </li>
 
         <!-- الامتحانات -->
@@ -182,22 +147,6 @@
             <li><a class="dropdown-item" href="/exams/conflicts">تقرير تعارضات الامتحانات</a></li>
           </ul>
         </li>
-        <!-- النتائج والتقارير -->
-        <li class="nav-item">
-          <a class="nav-link" id="navTranscript" href="/transcript_page">
-            <i class="fa-regular fa-file-lines ms-1"></i> كشف الدرجات
-          </a>
-        </li>
-        <li class="nav-item">
-          <a class="nav-link" id="navPerformance" href="/performance_report">
-            <i class="fa-solid fa-chart-bar ms-1"></i> تقرير الأداء
-          </a>
-        </li>
-        <li class="nav-item">
-          <a class="nav-link" id="navResults" href="/results">
-            <i class="fa-solid fa-triangle-exclamation ms-1"></i> تعارضات الجدول
-          </a>
-        </li>
 
         <!-- أدوار خاصة وإدارة -->
         <li class="nav-item">
@@ -205,15 +154,15 @@
             <i class="fa-regular fa-bell ms-1"></i> الإشعارات
           </a>
         </li>
-        <li class="nav-item">
-          <a class="nav-link" id="navUsersAdmin" href="/users_admin">
-            <i class="fa-solid fa-users-gear ms-1"></i> المستخدمون
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="adminSettingsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="fa-solid fa-gear ms-1"></i> الإدارة والإعدادات
           </a>
-        </li>
-        <li class="nav-item">
-          <a class="nav-link" id="navAcademicRules" href="/academic_rules_page">
-            <i class="fa-solid fa-scale-balanced ms-1"></i> لائحة الإنذارات والفصل
-          </a>
+          <ul class="dropdown-menu" aria-labelledby="adminSettingsMenu">
+            <li><a class="dropdown-item" id="navUsersAdmin" href="/users_admin">المستخدمون</a></li>
+            <li><a class="dropdown-item" id="navAcademicRules" href="/academic_rules_page">لائحة الإنذارات والفصل</a></li>
+            <li><a class="dropdown-item" id="navSystemDocs" href="/system_docs">توثيق النظام</a></li>
+          </ul>
         </li>
       </ul>
 
@@ -265,13 +214,17 @@
       }
       // إخفاء بعض الروابط حسب الدور
       const role = data.role;
-      if (role !== 'admin') {
+      if (role !== 'admin' && role !== 'admin_main') {
         const elUsers = document.getElementById('navUsersAdmin');
         if (elUsers) elUsers.style.display = 'none';
         const elSup = document.getElementById('navSupervision');
         if (elSup) elSup.style.display = 'none';
         const elRules = document.getElementById('navAcademicRules');
         if (elRules) elRules.style.display = 'none';
+      }
+      if (role !== 'admin' && role !== 'admin_main') {
+        const elDocs = document.getElementById('navSystemDocs');
+        if (elDocs) elDocs.style.display = 'none';
       }
       // إخفاء لوحة المشرف عن غير المشرفين
       if (role !== 'supervisor') {
@@ -329,6 +282,7 @@
         ['/notifications_center','navNotifications'],
         ['/users_admin','navUsersAdmin'],
         ['/academic_rules_page','navAcademicRules'],
+        ['/system_docs','navSystemDocs'],
       ];
       map.forEach(([prefix, id])=>{
         if (path === prefix || (prefix !== '/' && path.startsWith(prefix))) {
@@ -377,6 +331,37 @@
         bsToast.show();
         toast.addEventListener('hidden.bs.toast', function() { toast.remove(); });
       };
+
+      // Fallback: ensure dropdown menus work only when Bootstrap dropdown is unavailable
+      try {
+        // إذا Bootstrap متاح، لا نطبّق fallback حتى لا يتعارض مع سلوكه الطبيعي
+        if (window.bootstrap && typeof window.bootstrap.Dropdown !== 'undefined') {
+          return;
+        }
+        const toggles = document.querySelectorAll('.navbar .dropdown-toggle');
+        const closeAll = () => {
+          document.querySelectorAll('.navbar .dropdown-menu.show').forEach(m => m.classList.remove('show'));
+          document.querySelectorAll('.navbar .dropdown-toggle[aria-expanded="true"]').forEach(t => t.setAttribute('aria-expanded', 'false'));
+        };
+        toggles.forEach(toggle => {
+          toggle.addEventListener('click', function(ev){
+            // If Bootstrap handled it, this is harmless; otherwise we provide manual toggle.
+            ev.preventDefault();
+            ev.stopPropagation();
+            const menu = this.parentElement ? this.parentElement.querySelector('.dropdown-menu') : null;
+            if(!menu) return;
+            const isOpen = menu.classList.contains('show');
+            closeAll();
+            if(!isOpen){
+              menu.classList.add('show');
+              this.setAttribute('aria-expanded', 'true');
+            }
+          });
+        });
+        document.addEventListener('click', function(){ closeAll(); });
+      } catch(e) {
+        // ignore dropdown fallback errors
+      }
     } catch (error) {
       console.error('Auth check error:', error);
       // في حالة الخطأ، توجيه المستخدم لصفحة تسجيل الدخول

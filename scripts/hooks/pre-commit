@@ -1,0 +1,22 @@
+#!/bin/sh
+# Shared pre-commit hook for ScheduleOptimizer
+
+echo "[pre-commit] Updating system docs..."
+
+if [ -f ".venv/Scripts/python.exe" ]; then
+  ".venv/Scripts/python.exe" "scripts/update_system_docs.py"
+else
+  python "scripts/update_system_docs.py"
+fi
+
+status=$?
+if [ $status -ne 0 ]; then
+  echo "[pre-commit] Failed to update docs. Commit aborted."
+  exit $status
+fi
+
+git add "docs/PROJECT_OVERVIEW.md" "docs/RUNBOOK.md" >/dev/null 2>&1 || true
+
+echo "[pre-commit] Docs updated and staged."
+exit 0
+

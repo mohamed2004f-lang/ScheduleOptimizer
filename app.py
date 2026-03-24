@@ -29,6 +29,7 @@ from backend.core.monitoring import init_monitoring
 import os
 import pprint
 import logging
+from pathlib import Path
 
 # استخدم مجلد القوالب/الستايتك كما في مشروعك
 app = Flask(__name__, template_folder="frontend/templates", static_folder="frontend/static")
@@ -311,6 +312,24 @@ def failed_courses_report_page():
 @app.route("/uncompleted_courses_report_page")
 def uncompleted_courses_report_page():
     return render_template("uncompleted_courses_report.html")
+
+
+def _read_text_doc(path: str) -> str:
+    try:
+        p = Path(path)
+        if not p.exists():
+            return f"File not found: {path}"
+        return p.read_text(encoding="utf-8")
+    except Exception as exc:
+        return f"Failed to read file ({path}): {exc}"
+
+
+@app.route("/system_docs")
+@role_required("admin_main", "admin")
+def system_docs_page():
+    runbook = _read_text_doc("docs/RUNBOOK.md")
+    overview = _read_text_doc("docs/PROJECT_OVERVIEW.md")
+    return render_template("system_docs.html", runbook_text=runbook, overview_text=overview)
 
 
 # -----------------------------

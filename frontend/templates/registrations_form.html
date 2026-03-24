@@ -6,6 +6,38 @@
   <title>إدارة التسجيلات</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .student-actions{
+      width: 205px;
+      min-width: 205px;
+      display: grid;
+      gap: .4rem;
+      align-content: start;
+    }
+    .student-actions .btn{
+      width: 100%;
+      border-radius: .65rem;
+      font-weight: 600;
+      padding-top: .35rem;
+      padding-bottom: .35rem;
+    }
+    .student-actions .btn-print{
+      border-width: 2px;
+    }
+    .student-actions .btn-download{
+      border-width: 2px;
+    }
+    @media (max-width: 900px){
+      .student-actions{
+        width: 100%;
+        min-width: 100%;
+        margin-top: .6rem;
+      }
+      .student-row{
+        flex-wrap: wrap;
+      }
+    }
+  </style>
 </head>
 <body> {% include "base_nav.html" %}
 <script>
@@ -235,25 +267,35 @@ function renderStudents(list){
     }
     left.appendChild(badges);
 
-    const right = el('div','ms-3 text-end');
-    const btnEdit = el('button','btn btn-sm btn-outline-secondary mb-1','تعديل');
+    const right = el('div','ms-3 student-actions');
+    const btnEdit = el('button','btn btn-sm btn-outline-secondary','تعديل');
     btnEdit.addEventListener('click', ()=> openEditModal(s));
     right.appendChild(btnEdit);
-    right.appendChild(el('br'));
-
-    const btnDelete = el('button','btn btn-sm btn-danger mb-1','حذف');
-    btnDelete.addEventListener('click', ()=> deleteAllRegistrations(s));
-    right.appendChild(btnDelete);
-    right.appendChild(el('br'));
 
     if (CURRENT_ROLE !== 'student') {
-      const btnMigrate = el('button','btn btn-sm btn-warning mb-1','ترحيل إلى كشف الدرجات');
+      const btnPrintActual = el('button','btn btn-sm btn-outline-primary btn-print','طباعة التسجيل الفعلي');
+      btnPrintActual.addEventListener('click', ()=> printActualRegistrationForm(s));
+      right.appendChild(btnPrintActual);
+
+      const btnDownloadActual = el('button','btn btn-sm btn-outline-success btn-download','تحميل استمارة التسجيل');
+      btnDownloadActual.addEventListener('click', ()=> downloadActualRegistrationForm(s));
+      right.appendChild(btnDownloadActual);
+
+      const btnMigrate = el('button','btn btn-sm btn-warning','ترحيل إلى كشف الدرجات');
       btnMigrate.addEventListener('click', ()=> migrateStudentRegistrations(s));
       right.appendChild(btnMigrate);
+
+      const btnDelete = el('button','btn btn-sm btn-danger','حذف');
+      btnDelete.addEventListener('click', ()=> deleteAllRegistrations(s));
+      right.appendChild(btnDelete);
     } else {
-      const btnReqAdd = el('button','btn btn-sm btn-outline-primary mb-1','طلب إضافة مقرر');
+      const btnReqAdd = el('button','btn btn-sm btn-outline-primary','طلب إضافة مقرر');
       btnReqAdd.addEventListener('click', ()=> requestAddCourseForStudent(s));
       right.appendChild(btnReqAdd);
+
+      const btnDelete = el('button','btn btn-sm btn-danger','حذف');
+      btnDelete.addEventListener('click', ()=> deleteAllRegistrations(s));
+      right.appendChild(btnDelete);
     }
 
     item.appendChild(left);
@@ -264,6 +306,30 @@ function renderStudents(list){
 
 /* utilities */
 function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
+function _actualFormQuery(){
+  const term = (document.getElementById('currentRegistrationTerm')?.value || '').trim();
+  const year = (document.getElementById('currentRegistrationYear')?.value || '').trim();
+  const semester = [term, year].filter(Boolean).join(' ');
+  const params = new URLSearchParams();
+  params.set('source', 'actual');
+  if (semester) params.set('semester', semester);
+  return params.toString();
+}
+
+function printActualRegistrationForm(student){
+  const sid = student.student_id || student.id || student.studentId;
+  if(!sid) return;
+  const q = _actualFormQuery();
+  window.open(`/enrollment/registration_form_html/${encodeURIComponent(sid)}?${q}`, '_blank');
+}
+
+function downloadActualRegistrationForm(student){
+  const sid = student.student_id || student.id || student.studentId;
+  if(!sid) return;
+  const q = _actualFormQuery();
+  window.open(`/enrollment/print_registration_form/${encodeURIComponent(sid)}?${q}`, '_blank');
+}
 
 /* edit modal: fetch eligible courses and completed list for this student */
 async function openEditModal(student){
