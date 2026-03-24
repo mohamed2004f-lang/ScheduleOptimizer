@@ -96,6 +96,8 @@
             <li><a class="dropdown-item" id="navRegistrationChangesReport" href="/registration_changes_report_page">تقرير الإضافة والإسقاط</a></li>
             <li><a class="dropdown-item" id="navFailedCoursesReport" href="/failed_courses_report_page">تقرير شامل المقررات غير المنجزة</a></li>
             <li><a class="dropdown-item" id="navUncompletedCoursesReport" href="/uncompleted_courses_report_page">تقرير المقررات غير المنجزة (حسب طالب)</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" id="navAnalytics" href="/analytics">التحليلات الأكاديمية</a></li>
           </ul>
         </li>
 
@@ -105,10 +107,13 @@
             <i class="fa-solid fa-calendar-check ms-1"></i> التخطيط والجدولة
           </a>
           <ul class="dropdown-menu" aria-labelledby="planningMenu">
-            <li><a class="dropdown-item" id="navScheduleForm" href="/schedule_form">الجدول</a></li>
-            <li><a class="dropdown-item" id="navResults" href="/results">تعارضات الجدول</a></li>
-            <li><a class="dropdown-item" id="navAnalytics" href="/analytics">التحليلات</a></li>
             <li><a class="dropdown-item" id="navAcademicCalendar" href="/academic_calendar_page">التقويم الأكاديمي</a></li>
+            <li><a class="dropdown-item" id="navScheduleForm" href="/schedule_form">الجدول الدراسي</a></li>
+            <li><a class="dropdown-item" id="navResults" href="/results">تعارضات الجدول الدراسي</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" id="navExamsMidterms" href="/exams/midterms">الامتحانات الجزئية</a></li>
+            <li><a class="dropdown-item" id="navExamsFinals" href="/exams/finals">الامتحانات النهائية</a></li>
+            <li><a class="dropdown-item" id="navExamsConflicts" href="/exams/conflicts">تعارضات الجداول الامتحانية</a></li>
           </ul>
         </li>
 
@@ -132,19 +137,6 @@
             <li><a class="dropdown-item" id="navInstructors" href="/instructors_form">أعضاء هيئة التدريس</a></li>
             <li><a class="dropdown-item" id="navSupervision" href="/supervision_form">الإشراف الأكاديمي</a></li>
             <li><a class="dropdown-item" id="navSupervisorDashboard" href="/supervisor_dashboard">لوحة المشرف</a></li>
-          </ul>
-        </li>
-
-        <!-- الامتحانات -->
-        <li class="nav-item dropdown" id="navExamsMenuWrapper">
-          <a class="nav-link dropdown-toggle" href="#" id="examsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-            <i class="fa-regular fa-file-lines ms-1"></i> الامتحانات
-          </a>
-          <ul class="dropdown-menu" aria-labelledby="examsMenu">
-            <li><a class="dropdown-item" href="/exams/midterms">الامتحانات الجزئية (Midterms)</a></li>
-            <li><a class="dropdown-item" href="/exams/finals">الامتحانات النهائية (Finals)</a></li>
-            <li><hr class="dropdown-divider"></li>
-            <li><a class="dropdown-item" href="/exams/conflicts">تقرير تعارضات الامتحانات</a></li>
           </ul>
         </li>
 
@@ -249,13 +241,14 @@
           'navPerformance',
           'navAcademicRules',
           'navAnalytics',
+          'navExamsMidterms',
+          'navExamsFinals',
+          'navExamsConflicts',
         ];
         hideIds.forEach(id => {
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
         });
-        const examsWrapper = document.getElementById('navExamsMenuWrapper');
-        if (examsWrapper) examsWrapper.style.display = 'none';
       }
 
       // تفعيل الرابط الحالي (Active state) حسب المسار
@@ -274,7 +267,9 @@
         ['/enrollment_plans','navEnrollmentPlans'],
         ['/schedule_form','navScheduleForm'],
         ['/attendance_export','navAttendance'],
-        ['/exams','navExamsMenuWrapper'],
+        ['/exams/midterms','navExamsMidterms'],
+        ['/exams/finals','navExamsFinals'],
+        ['/exams/conflicts','navExamsConflicts'],
         ['/transcript_page','navTranscript'],
         ['/performance_report','navPerformance'],
         ['/supervisor_dashboard','navSupervisorDashboard'],

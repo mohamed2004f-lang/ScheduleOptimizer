@@ -101,6 +101,13 @@ class StudentService:
                 extra_cols = (", COALESCE(graduation_plan, '') AS graduation_plan" if has_plan else "")
                 if has_join:
                     extra_cols += ", COALESCE(join_term, '') AS join_term, COALESCE(join_year, '') AS join_year"
+                has_sterm = "status_changed_term" in cols
+                has_syear = "status_changed_year" in cols
+                status_extra_sel = ""
+                if has_sterm:
+                    status_extra_sel += ", COALESCE(status_changed_term, '') AS status_changed_term"
+                if has_syear:
+                    status_extra_sel += ", COALESCE(status_changed_year, '') AS status_changed_year"
                 if has_status:
                     if active_only:
                         rows = cur.execute("""
@@ -108,7 +115,7 @@ class StudentService:
                                 student_id, student_name,
                                 COALESCE(enrollment_status, 'active') AS enrollment_status,
                                 status_changed_at, status_reason
-                            """ + extra_cols + """
+                            """ + status_extra_sel + extra_cols + """
                             FROM students 
                             WHERE COALESCE(enrollment_status, 'active') = 'active'
                             ORDER BY student_name, student_id
@@ -121,7 +128,7 @@ class StudentService:
                                 COALESCE(enrollment_status, 'active') AS enrollment_status,
                                 status_changed_at,
                                 status_reason
-                            """ + extra_cols + """
+                            """ + status_extra_sel + extra_cols + """
                             FROM students 
                             ORDER BY student_name, student_id
                         """).fetchall()
@@ -134,6 +141,14 @@ class StudentService:
                             "status_changed_at": r["status_changed_at"],
                             "status_reason": r["status_reason"] or "",
                         }
+                        if has_sterm:
+                            row_dict["status_changed_term"] = (r["status_changed_term"] or "").strip()
+                        else:
+                            row_dict["status_changed_term"] = ""
+                        if has_syear:
+                            row_dict["status_changed_year"] = (r["status_changed_year"] or "").strip()
+                        else:
+                            row_dict["status_changed_year"] = ""
                         if has_plan:
                             row_dict["graduation_plan"] = (r["graduation_plan"] or "").strip()
                         else:
@@ -157,6 +172,8 @@ class StudentService:
                         "enrollment_status": "active",
                         "status_changed_at": None,
                         "status_reason": "",
+                        "status_changed_term": "",
+                        "status_changed_year": "",
                         "graduation_plan": "",
                         "join_term": "",
                         "join_year": "",
@@ -184,13 +201,20 @@ class StudentService:
                 extra_sel = (", COALESCE(graduation_plan, '') AS graduation_plan" if has_plan else "")
                 if has_join:
                     extra_sel += ", COALESCE(join_term, '') AS join_term, COALESCE(join_year, '') AS join_year"
+                has_sterm = "status_changed_term" in cols
+                has_syear = "status_changed_year" in cols
+                status_extra_sel = ""
+                if has_sterm:
+                    status_extra_sel += ", COALESCE(status_changed_term, '') AS status_changed_term"
+                if has_syear:
+                    status_extra_sel += ", COALESCE(status_changed_year, '') AS status_changed_year"
                 if has_status:
                     row = cur.execute(
                         """
                         SELECT student_id, student_name,
                                COALESCE(enrollment_status, 'active') AS enrollment_status,
                                status_changed_at, status_reason
-                        """ + extra_sel + """
+                        """ + status_extra_sel + extra_sel + """
                         FROM students WHERE student_id = ?
                         """,
                         (sid,),
@@ -208,6 +232,14 @@ class StudentService:
                         "status_changed_at": row["status_changed_at"] if has_status else None,
                         "status_reason": row["status_reason"] if has_status else "",
                     }
+                    if has_status and has_sterm:
+                        out["status_changed_term"] = (row["status_changed_term"] or "").strip()
+                    else:
+                        out["status_changed_term"] = ""
+                    if has_status and has_syear:
+                        out["status_changed_year"] = (row["status_changed_year"] or "").strip()
+                    else:
+                        out["status_changed_year"] = ""
                     if has_plan:
                         out["graduation_plan"] = (row["graduation_plan"] or "").strip()
                     else:
@@ -379,37 +411,60 @@ class StudentService:
         note = sanitize_input(reason, 500)
         ts = changed_at or datetime.utcnow().isoformat()
         phone = (kwargs.get("phone") or "").strip() if kwargs else ""
+        term_raw = (
+            (kwargs.get("status_changed_term") or kwargs.get("action_term") or "").strip()[:20]
+            if kwargs
+            else ""
+        )
+        year_raw = (
+            (kwargs.get("status_changed_year") or kwargs.get("action_year") or "").strip()[:20]
+            if kwargs
+            else ""
+        )
 
         try:
             with get_connection() as conn:
                 cur = conn.cursor()
                 cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
-                # تحديث الهاتف فقط عند التحويل إلى خريج (لظهوره في قائمة الخريجين)
+                has_term_col = "status_changed_term" in cols
+                has_year_col = "status_changed_year" in cols
+                if status in ("withdrawn", "suspended") and has_term_col and has_year_col:
+                    if not term_raw or not year_raw:
+                        raise ValidationError(
+                            "يجب تحديد فصل وسنة الإجراء عند اختيار سحب الملف أو إيقاف القيد."
+                        )
+
+                set_parts = [
+                    "enrollment_status = ?",
+                    "status_changed_at = ?",
+                    "status_reason = ?",
+                    "updated_at = CURRENT_TIMESTAMP",
+                ]
+                params: List[Any] = [status, ts, note]
+                store_term_year = status in ("withdrawn", "suspended") and has_term_col and has_year_col
+
                 if "phone" in cols and status == "graduated":
-                    cur.execute(
-                        """
-                        UPDATE students
-                        SET enrollment_status = ?,
-                            status_changed_at = ?,
-                            status_reason = ?,
-                            phone = ?,
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE student_id = ?
-                        """,
-                        (status, ts, note, phone, sid),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        UPDATE students
-                        SET enrollment_status = ?,
-                            status_changed_at = ?,
-                            status_reason = ?,
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE student_id = ?
-                        """,
-                        (status, ts, note, sid),
-                    )
+                    set_parts.append("phone = ?")
+                    params.append(phone)
+
+                if has_term_col:
+                    if store_term_year:
+                        set_parts.append("status_changed_term = ?")
+                        params.append(term_raw)
+                    else:
+                        set_parts.append("status_changed_term = NULL")
+                if has_year_col:
+                    if store_term_year:
+                        set_parts.append("status_changed_year = ?")
+                        params.append(year_raw)
+                    else:
+                        set_parts.append("status_changed_year = NULL")
+
+                params.append(sid)
+                cur.execute(
+                    "UPDATE students SET " + ", ".join(set_parts) + " WHERE student_id = ?",
+                    params,
+                )
                 if cur.rowcount == 0:
                     raise NotFoundError("الطالب غير موجود")
                 return {

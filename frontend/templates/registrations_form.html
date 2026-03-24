@@ -80,6 +80,10 @@
         <button id="btnExportCSV" class="btn btn-outline-secondary btn-sm">تصدير CSV</button>
         <button id="btnExportTXT" class="btn btn-outline-secondary btn-sm">تصدير TXT</button>
         <button id="btnExportExcel" class="btn btn-outline-secondary btn-sm">تصدير Excel</button>
+        <div class="form-check ms-1 mb-0 align-self-center user-select-none">
+          <input class="form-check-input" type="checkbox" id="exportFilteredOnly">
+          <label class="form-check-label small" for="exportFilteredOnly" title="ينطبق على تصدير CSV و TXT فقط">المعروض فقط (CSV/TXT)</label>
+        </div>
 
         <label class="btn btn-outline-primary btn-sm mb-0">
           استيراد ملف
@@ -92,9 +96,50 @@
 
     <div class="card chart-container">
       <div class="card-body">
-        <div class="mb-2 d-flex align-items-center gap-2">
+        <div class="mb-2 d-flex align-items-center gap-2 flex-wrap">
           <input id="searchInput" class="form-control form-control-sm" placeholder="بحث باسم الطالب أو الرقم" style="max-width:420px">
-          <div id="stats" class="small text-muted ms-auto"></div>
+          <div id="stats" class="small text-muted ms-auto d-flex flex-wrap gap-1 align-items-center justify-content-end"></div>
+        </div>
+        <div class="row g-2 mb-3 align-items-end filter-section">
+          <div class="col-6 col-md-2">
+            <label class="form-label mb-0 small">التسجيل</label>
+            <select id="filterRegStatus" class="form-select form-select-sm">
+              <option value="all">الكل</option>
+              <option value="registered">مسجّلون فقط</option>
+              <option value="not_registered">غير مسجّلين</option>
+            </select>
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label mb-0 small">حالة القيد</label>
+            <select id="filterEnrollment" class="form-select form-select-sm">
+              <option value="all">الكل</option>
+              <option value="active">مسجّل قيد</option>
+              <option value="withdrawn">سحب ملف</option>
+              <option value="suspended">إيقاف قيد</option>
+              <option value="graduated">خريج</option>
+            </select>
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label mb-0 small">مجموع الوحدات</label>
+            <select id="filterUnits" class="form-select form-select-sm">
+              <option value="all">الكل</option>
+              <option value="lt12">أقل من 12</option>
+              <option value="12_18">12 – 18</option>
+              <option value="gt18">أكثر من 18</option>
+            </select>
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label mb-0 small">عدد المقررات</label>
+            <select id="filterCourseCount" class="form-select form-select-sm">
+              <option value="all">الكل</option>
+              <option value="1_2">1 – 2</option>
+              <option value="3_5">3 – 5</option>
+              <option value="6p">6 فأكثر</option>
+            </select>
+          </div>
+          <div class="col-6 col-md-auto">
+            <button type="button" id="btnResetFilters" class="btn btn-outline-secondary btn-sm">إعادة ضبط الفلاتر</button>
+          </div>
         </div>
 
         <div id="studentsList" class="list-group"></div>
@@ -157,36 +202,172 @@
 
 <script>
 /* state */
-let STUDENTS = []; // {student_id, student_name, university_number, registrations: [course_name,...]}
+let STUDENTS = []; // {student_id, student_name, university_number, enrollment_status, registrations: [...]}
 let COURSES = [];  // cached courses metadata
 let editing = null; // current student object
+
+const REG_FILTERS_LS = 'registrations_form_filters_v2';
 
 /* helpers */
 async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok,status:r.status,json:j}; }
 function el(tag, cls, html){ const e=document.createElement(tag); if(cls) e.className=cls; if(html!==undefined) e.innerHTML=html; return e; }
 function setEditMsg(kind, text){ document.getElementById('editMsg').innerHTML = `<div class="alert alert-${kind} p-2 mb-0">${text}</div>`; setTimeout(()=>document.getElementById('editMsg').innerHTML='',3000);}
+function studentTotalUnits(s){
+  let u = 0;
+  (s.registrations || []).forEach(cn=>{
+    const cobj = COURSES.find(x => x.course_name === cn) || {};
+    u += Number(cobj.units || 0);
+  });
+  return u;
+}
+
+function enrollmentStatusNorm(s){
+  return String(s?.enrollment_status || 'active').trim().toLowerCase() || 'active';
+}
+
+function enrollmentStatusLabelAr(code){
+  const c = (code || 'active').toLowerCase();
+  if (c === 'withdrawn') return 'سحب ملف';
+  if (c === 'suspended') return 'إيقاف قيد';
+  if (c === 'graduated') return 'خريج';
+  return 'مسجّل قيد';
+}
+
+function enrollmentBadgeClass(code){
+  const c = (code || 'active').toLowerCase();
+  if (c === 'withdrawn') return 'bg-secondary-subtle text-secondary-emphasis';
+  if (c === 'suspended') return 'bg-danger-subtle text-danger-emphasis';
+  if (c === 'graduated') return 'bg-primary-subtle text-primary-emphasis';
+  return 'bg-light text-dark';
+}
+
 function setStats(list){
   const arr = Array.isArray(list) ? list : STUDENTS;
   const total = arr.length;
   let withRegs = 0;
+  let over18 = 0;
+  let under12 = 0;
+  let nActive = 0, nWithdrawn = 0, nSuspended = 0, nGrad = 0;
   for (const s of arr){
-    if ((s.registrations || []).length) withRegs += 1;
+    const n = (s.registrations || []).length;
+    if (n) withRegs += 1;
+    const units = studentTotalUnits(s);
+    if (n && units > 18) over18 += 1;
+    if (n && units < 12) under12 += 1;
+    const es = enrollmentStatusNorm(s);
+    if (es === 'withdrawn') nWithdrawn++;
+    else if (es === 'suspended') nSuspended++;
+    else if (es === 'graduated') nGrad++;
+    else nActive++;
   }
   const withoutRegs = Math.max(0, total - withRegs);
-  document.getElementById('stats').innerHTML =
-    `<span class="badge bg-light text-dark">الطلاب: ${total}</span>` +
-    `<span class="badge bg-success-subtle text-success-emphasis ms-2">مسجل: ${withRegs}</span>` +
-    `<span class="badge bg-secondary-subtle text-secondary-emphasis ms-2">غير مسجل: ${withoutRegs}</span>`;
+  const el = document.getElementById('stats');
+  if (!el) return;
+  el.innerHTML =
+    `<span class="badge bg-primary-subtle text-primary-emphasis">معروض: ${total}</span>` +
+    `<span class="badge bg-success-subtle text-success-emphasis">مسجل: ${withRegs}</span>` +
+    `<span class="badge bg-secondary-subtle text-secondary-emphasis">غير مسجل: ${withoutRegs}</span>` +
+    `<span class="badge bg-warning-subtle text-dark">وحدات &gt;18: ${over18}</span>` +
+    `<span class="badge bg-info-subtle text-dark">وحدات &lt;12: ${under12}</span>` +
+    `<span class="badge bg-light text-dark border ms-1" title="حسب القائمة المعروضة">قيد: نشط ${nActive}</span>` +
+    `<span class="badge bg-secondary-subtle text-secondary-emphasis ms-1">سحب ${nWithdrawn}</span>` +
+    `<span class="badge bg-danger-subtle text-danger-emphasis ms-1">موقوف ${nSuspended}</span>` +
+    `<span class="badge bg-primary-subtle text-primary-emphasis ms-1">خريج ${nGrad}</span>`;
+}
+
+function saveFilterPrefs(){
+  try {
+    const o = {
+      reg: document.getElementById('filterRegStatus')?.value || 'all',
+      enroll: document.getElementById('filterEnrollment')?.value || 'all',
+      units: document.getElementById('filterUnits')?.value || 'all',
+      courses: document.getElementById('filterCourseCount')?.value || 'all',
+      q: (document.getElementById('searchInput')?.value || '').trim(),
+      exportFiltered: document.getElementById('exportFilteredOnly')?.checked || false
+    };
+    localStorage.setItem(REG_FILTERS_LS, JSON.stringify(o));
+  } catch (e) { /* ignore */ }
+}
+
+function loadFilterPrefs(){
+  try {
+    const raw = localStorage.getItem(REG_FILTERS_LS);
+    if (!raw) return;
+    const o = JSON.parse(raw);
+    const fr = document.getElementById('filterRegStatus');
+    const fe = document.getElementById('filterEnrollment');
+    const fu = document.getElementById('filterUnits');
+    const fc = document.getElementById('filterCourseCount');
+    const si = document.getElementById('searchInput');
+    const ex = document.getElementById('exportFilteredOnly');
+    if (fr && o.reg) fr.value = o.reg;
+    if (fe && o.enroll) fe.value = o.enroll;
+    if (fu && o.units) fu.value = o.units;
+    if (fc && o.courses) fc.value = o.courses;
+    if (si && typeof o.q === 'string') si.value = o.q;
+    if (ex && typeof o.exportFiltered === 'boolean') ex.checked = o.exportFiltered;
+  } catch (e) { /* ignore */ }
+}
+
+function getFilteredStudents(){
+  const q = (document.getElementById('searchInput')?.value || '').trim().toLowerCase();
+  const regF = document.getElementById('filterRegStatus')?.value || 'all';
+  const enrollF = document.getElementById('filterEnrollment')?.value || 'all';
+  const unitsF = document.getElementById('filterUnits')?.value || 'all';
+  const countF = document.getElementById('filterCourseCount')?.value || 'all';
+
+  return STUDENTS.filter(s => {
+    if (q) {
+      const txt = ((s.student_id || '') + ' ' + (s.student_name || '') + ' ' + (s.university_number || '')).toLowerCase();
+      if (!txt.includes(q)) return false;
+    }
+    const es = enrollmentStatusNorm(s);
+    if (enrollF !== 'all' && es !== enrollF) return false;
+
+    const regs = s.registrations || [];
+    const n = regs.length;
+    if (regF === 'registered' && !n) return false;
+    if (regF === 'not_registered' && n) return false;
+
+    const units = studentTotalUnits(s);
+    if (unitsF === 'lt12') {
+      if (!n || units >= 12) return false;
+    } else if (unitsF === '12_18') {
+      if (!n || units < 12 || units > 18) return false;
+    } else if (unitsF === 'gt18') {
+      if (!n || units <= 18) return false;
+    }
+
+    if (countF === '1_2') {
+      if (n < 1 || n > 2) return false;
+    } else if (countF === '3_5') {
+      if (n < 3 || n > 5) return false;
+    } else if (countF === '6p') {
+      if (n < 6) return false;
+    }
+    return true;
+  });
+}
+
+function applyListFilters(){
+  const list = getFilteredStudents();
+  renderStudents(list);
+  setStats(list);
+  saveFilterPrefs();
 }
 
 /* load data */
 async function loadData(){
-  const [r1, r2] = await Promise.all([fetchJSON('/students/list?active_only=1'), fetchJSON('/list_courses')]);
+  const studentsUrl = (CURRENT_ROLE === 'student')
+    ? '/students/list?active_only=1'
+    : '/students/list';
+  const [r1, r2] = await Promise.all([fetchJSON(studentsUrl), fetchJSON('/list_courses')]);
   STUDENTS = Array.isArray(r1.json) ? r1.json.map(s=>{
     return {
       student_id: s.student_id || s.id || s.studentId || '',
       student_name: s.student_name || s.name || s.full_name || '',
-      university_number: s.university_number || s.university || s.student_number || ''
+      university_number: s.university_number || s.university || s.student_number || '',
+      enrollment_status: enrollmentStatusNorm({ enrollment_status: s.enrollment_status || 'active' })
     };
   }) : [];
   STUDENTS.forEach(s=> s.registrations = []);
@@ -207,8 +388,7 @@ async function loadData(){
   });
   STUDENTS.forEach(s => { s.registrations = map[s.student_id] || []; });
 
-  renderStudents(STUDENTS);
-  setStats(STUDENTS);
+  applyListFilters();
 }
 
 /* جلب الفصل الحالي من الإعدادات (للأدمن) */
@@ -241,7 +421,11 @@ function renderStudents(list){
     const unitsBadge = (s.registrations||[]).length
       ? ` <span class="badge bg-success-subtle text-success-emphasis ms-2">الوحدات: ${totalUnits}</span>`
       : '';
-    left.innerHTML = `<div><strong>${displayName}</strong> <small class="text-muted">(${displayNum})</small>${unitsBadge}</div>`;
+    const esCode = enrollmentStatusNorm(s);
+    const enrollLbl = escapeHtml(enrollmentStatusLabelAr(esCode));
+    const enrollCls = enrollmentBadgeClass(esCode);
+    const enrollBadge = ` <span class="badge ${enrollCls} ms-2">${enrollLbl}</span>`;
+    left.innerHTML = `<div><strong>${displayName}</strong> <small class="text-muted">(${displayNum})</small>${enrollBadge}${unitsBadge}</div>`;
 
     const badges = el('div','courses-badges mt-2 d-flex flex-wrap');
     if((s.registrations||[]).length){
@@ -645,16 +829,27 @@ async function requestDropCourseForStudent(student, courseName){
   }
 }
 
-/* search */
-document.getElementById('searchInput').addEventListener('input', (e)=>{
-  const q = e.target.value.trim().toLowerCase();
-  if(!q) { renderStudents(STUDENTS); setStats(STUDENTS); return; }
-  const filtered = STUDENTS.filter(s=>{
-    return (s.student_name||'').toLowerCase().includes(q) || (s.university_number||'').toLowerCase().includes(q) || (s.student_id||'').toLowerCase().includes(q);
-  });
-  renderStudents(filtered);
-  setStats(filtered);
+/* search + filters */
+document.getElementById('searchInput').addEventListener('input', debounce(()=> applyListFilters(), 200));
+['filterRegStatus','filterUnits','filterCourseCount'].forEach(id=>{
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('change', ()=> applyListFilters());
 });
+const btnResetFilters = document.getElementById('btnResetFilters');
+if (btnResetFilters) {
+  btnResetFilters.addEventListener('click', ()=>{
+    const fr = document.getElementById('filterRegStatus');
+    const fu = document.getElementById('filterUnits');
+    const fc = document.getElementById('filterCourseCount');
+    const si = document.getElementById('searchInput');
+    if (fr) fr.value = 'all';
+    if (fu) fu.value = 'all';
+    if (fc) fc.value = 'all';
+    if (si) si.value = '';
+    try { localStorage.removeItem(REG_FILTERS_LS); } catch (e) { /* ignore */ }
+    applyListFilters();
+  });
+}
 
 /* export CSV/TXT/Excel (one row per registration with course code and units) */
 document.getElementById('btnExportCSV').addEventListener('click', ()=>{
@@ -769,6 +964,8 @@ if (fileImport){
     const studentBox = document.getElementById('registrationsStudent');
     if (adminBox) adminBox.style.display = 'none';
     if (studentBox) studentBox.style.display = '';
+  } else {
+    loadFilterPrefs();
   }
 
   await loadData();

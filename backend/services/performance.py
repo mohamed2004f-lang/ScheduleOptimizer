@@ -1,7 +1,9 @@
-from flask import Blueprint, jsonify, request
+from datetime import datetime
+
+from flask import Blueprint, jsonify, render_template, request, send_file
 
 from backend.core.auth import role_required
-from .utilities import get_connection, excel_response_from_df
+from .utilities import get_connection, excel_response_from_df, pdf_response_from_html
 from backend.services.grades import _load_transcript_data
 
 
@@ -130,6 +132,329 @@ def _compute_status(ordered_semesters, semester_gpas, cumulative_gpa):
     return {"code": status_code, "label": label}
 
 
+def _override_status_by_enrollment(enrollment_status: str, academic_status: dict) -> dict:
+    """
+    دمج حالة القيد (سحب ملف/إيقاف قيد) مع حالة الإنذار الأكاديمي.
+    إذا كانت حالة القيد withdrawn/suspended نعرضها في تقرير الأداء بدل الأكاديمي.
+    """
+    try:
+        es = (enrollment_status or "").strip().lower()
+    except Exception:
+        es = ""
+
+    if es == "withdrawn":
+        return {"code": "withdrawn", "label": "سحب ملف"}
+    if es == "suspended":
+        return {"code": "suspended", "label": "إيقاف قيد"}
+    return academic_status
+
+
+def _parse_csv_set(value: str) -> set[str]:
+    if not value:
+        return set()
+    return {x.strip() for x in str(value).split(",") if x and x.strip()}
+
+
+def _enrollment_label_ar(enrollment_status: str) -> str:
+    es = str(enrollment_status or "active").strip().lower()
+    return {
+        "active": "مسجّل",
+        "withdrawn": "سحب ملف",
+        "suspended": "إيقاف قيد",
+        "graduated": "خريج",
+    }.get(es, enrollment_status or "—")
+
+
+def _format_status_action_period(term: str, year: str) -> str:
+    t = (term or "").strip()
+    y = (year or "").strip()
+    if t and y:
+        return f"{t} — {y}"
+    return t or y
+
+
+def _fetch_students_performance_meta(cur) -> list[dict]:
+    cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
+    has_es = "enrollment_status" in cols
+    parts = [
+        "student_id",
+        "COALESCE(student_name,'') AS student_name",
+        "COALESCE(join_year,'') AS join_year",
+    ]
+    if has_es:
+        parts.append("COALESCE(enrollment_status,'active') AS enrollment_status")
+        if "status_changed_at" in cols:
+            parts.append("status_changed_at")
+        if "status_reason" in cols:
+            parts.append("COALESCE(status_reason,'') AS status_reason")
+        if "status_changed_term" in cols:
+            parts.append("COALESCE(status_changed_term,'') AS status_changed_term")
+        if "status_changed_year" in cols:
+            parts.append("COALESCE(status_changed_year,'') AS status_changed_year")
+    sql = "SELECT " + ", ".join(parts) + " FROM students ORDER BY student_id"
+    out: list[dict] = []
+    for r in cur.execute(sql):
+        d = {
+            "student_id": r["student_id"],
+            "student_name": r["student_name"] or "",
+            "join_year": r["join_year"] or "",
+            "enrollment_status": (r["enrollment_status"] if has_es else "active"),
+        }
+        if has_es:
+            if "status_changed_at" in r.keys():
+                d["status_changed_at"] = r["status_changed_at"]
+            else:
+                d["status_changed_at"] = None
+            d["status_reason"] = (r["status_reason"] if "status_reason" in r.keys() else "") or ""
+            d["status_changed_term"] = (
+                (r["status_changed_term"] if "status_changed_term" in r.keys() else "") or ""
+            )
+            d["status_changed_year"] = (
+                (r["status_changed_year"] if "status_changed_year" in r.keys() else "") or ""
+            )
+        else:
+            d["status_changed_at"] = None
+            d["status_reason"] = ""
+            d["status_changed_term"] = ""
+            d["status_changed_year"] = ""
+        out.append(d)
+    return out
+
+
+def _build_filter_summary_ar(
+    status_codes: set[str],
+    enrollment_values: set[str],
+    exclude_enrollment: set[str],
+    student_ids: set[str],
+) -> str:
+    parts = []
+    status_labels = {
+        "good": "سليم أكاديمياً",
+        "warning_1": "إنذار أول",
+        "warning_2": "إنذار ثانٍ",
+        "warning_3": "أكثر من إنذارين",
+        "no_data": "لا توجد بيانات درجات",
+        "withdrawn": "سحب ملف (حالة قيد)",
+        "suspended": "إيقاف قيد (حالة قيد)",
+    }
+    if status_codes:
+        parts.append("الحالة الظاهرة في التقرير: " + "، ".join(sorted(status_labels.get(s, s) for s in status_codes)))
+    en_labels = {"active": "مسجّل", "withdrawn": "سحب ملف", "suspended": "إيقاف قيد", "graduated": "خريج"}
+    if enrollment_values:
+        parts.append("حالة القيد: " + "، ".join(en_labels.get(e, e) for e in sorted(enrollment_values)))
+    if exclude_enrollment:
+        parts.append("مستثنى من التصدير: " + "، ".join(en_labels.get(e, e) for e in sorted(exclude_enrollment)))
+    if student_ids:
+        parts.append(f"طلبة محددون: {len(student_ids)}")
+    return " — ".join(parts) if parts else "بدون قيود إضافية (جميع الطلبة المطابقة لباقي المعايير)"
+
+
+def _prepare_rows_for_print(rows: list[dict]) -> list[dict]:
+    out = []
+    for r in rows:
+        item = dict(r)
+        item["enrollment_label_ar"] = _enrollment_label_ar(item.get("enrollment_status"))
+        item["status_action_period_ar"] = _format_status_action_period(
+            item.get("status_changed_term"), item.get("status_changed_year")
+        )
+        out.append(item)
+    return out
+
+
+def _build_performance_export_rows(conn) -> list[dict]:
+    cur = conn.cursor()
+    meta_rows = _fetch_students_performance_meta(cur)
+
+    data_rows: list[dict] = []
+    for r in meta_rows:
+        sid = r["student_id"]
+        name = r["student_name"]
+        join_year = r["join_year"]
+        enrollment_status = r["enrollment_status"]
+        status_changed_at = r.get("status_changed_at")
+        status_reason = r.get("status_reason") or ""
+        status_changed_term = r.get("status_changed_term") or ""
+        status_changed_year = r.get("status_changed_year") or ""
+
+        tr = _load_transcript_data(sid)
+        ordered = tr.get("ordered_semesters", []) or []
+        sem_gpas = tr.get("semester_gpas", {}) or {}
+        cumulative_gpa = tr.get("cumulative_gpa", 0.0)
+        completed_units = int(tr.get("completed_units") or 0)
+
+        last_semester = ordered[-1] if len(ordered) >= 1 else ""
+        prev_semester = ordered[-2] if len(ordered) >= 2 else ""
+        third_semester = ordered[-3] if len(ordered) >= 3 else ""
+
+        last_gpa = sem_gpas.get(last_semester, None) if last_semester else None
+        prev_gpa = sem_gpas.get(prev_semester, None) if prev_semester else None
+        third_gpa = sem_gpas.get(third_semester, None) if third_semester else None
+
+        status = _compute_status(ordered, sem_gpas, cumulative_gpa)
+        status = _override_status_by_enrollment(enrollment_status, status)
+
+        exc_row = cur.execute(
+            """
+            SELECT id, type, note, is_active
+            FROM student_exceptions
+            WHERE student_id = ? AND type = 'extra_chance'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (sid,),
+        ).fetchone()
+        has_extra = bool(exc_row and exc_row[3])
+        extra_note = exc_row[2] if exc_row else ""
+
+        data_rows.append(
+            {
+                "student_id": sid,
+                "student_name": name,
+                "join_year": join_year,
+                "enrollment_status": enrollment_status,
+                "status_changed_at": status_changed_at,
+                "status_reason": status_reason,
+                "status_changed_term": status_changed_term,
+                "status_changed_year": status_changed_year,
+                "last_semester": last_semester,
+                "last_semester_gpa": last_gpa,
+                "prev_semester": prev_semester,
+                "prev_semester_gpa": prev_gpa,
+                "third_semester": third_semester,
+                "third_semester_gpa": third_gpa,
+                "cumulative_gpa": cumulative_gpa,
+                "completed_units": completed_units,
+                "status_code": status["code"],
+                "status_label": status["label"],
+                "extra_chance": has_extra,
+                "extra_chance_note": extra_note or "",
+            }
+        )
+    return data_rows
+
+
+def _performance_docx_response(rows: list[dict], filter_summary: str):
+    import tempfile
+
+    try:
+        from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+    except ImportError:
+        return (
+            jsonify({"status": "error", "message": "مكتبة python-docx غير متوفرة. ثبّت docxtpl أو python-docx."}),
+            500,
+        )
+
+    doc = Document()
+    t = doc.add_paragraph()
+    t.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r0 = t.add_run("جامعة درنة — كلية الهندسة — قسم الهندسة الميكانيكية")
+    r0.bold = True
+
+    t2 = doc.add_paragraph()
+    t2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r1 = t2.add_run("تقرير أداء الطلبة (وثيقة تقريرية)")
+    r1.bold = True
+
+    doc.add_paragraph(f"تاريخ الإصدار: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC")
+    doc.add_paragraph(f"معايير الاستخراج: {filter_summary}")
+
+    headers = [
+        "الرقم الدراسي",
+        "الاسم",
+        "سنة الالتحاق",
+        "حالة القيد",
+        "فصل وسنة الإجراء",
+        "الفصل الأخير",
+        "الفصل السابق",
+        "المعدل التراكمي",
+        "الوحدات",
+        "الحالة / الملاحظات",
+        "فرصة استثنائية",
+    ]
+    table = doc.add_table(rows=1, cols=len(headers))
+    table.style = "Table Grid"
+    for i, h in enumerate(headers):
+        table.rows[0].cells[i].text = h
+
+    def _sem_gpa(sem: str, gpa):
+        if not sem:
+            return "—"
+        if gpa is None:
+            return f"{sem} (—)"
+        try:
+            return f"{sem} ({float(gpa):.2f})"
+        except Exception:
+            return f"{sem} (—)"
+
+    for row in rows:
+        cells = table.add_row().cells
+        cells[0].text = str(row.get("student_id") or "")
+        cells[1].text = str(row.get("student_name") or "")
+        cells[2].text = str(row.get("join_year") or "")
+        cells[3].text = _enrollment_label_ar(row.get("enrollment_status"))
+        sap = _format_status_action_period(
+            row.get("status_changed_term"), row.get("status_changed_year")
+        )
+        cells[4].text = sap or "—"
+        cells[5].text = _sem_gpa(row.get("last_semester") or "", row.get("last_semester_gpa"))
+        cells[6].text = _sem_gpa(row.get("prev_semester") or "", row.get("prev_semester_gpa"))
+        try:
+            cg = row.get("cumulative_gpa")
+            cells[7].text = f"{float(cg):.2f}" if cg is not None else "—"
+        except Exception:
+            cells[7].text = "—"
+        cells[8].text = str(int(row.get("completed_units") or 0))
+        cells[9].text = str(row.get("status_label") or "")
+        ex = "لا"
+        if row.get("extra_chance"):
+            note = (row.get("extra_chance_note") or "").strip()
+            ex = "نعم" + (f" — {note}" if note else "")
+        cells[10].text = ex
+
+    foot = doc.add_paragraph()
+    foot.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _fr = foot.add_run("مُنشأ آلياً — لا يُعتمد دون توقيع الجهة المختصة عند الحاجة.")
+    _fr.italic = True
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
+    tmp_path = tmp.name
+    tmp.close()
+    doc.save(tmp_path)
+    fname = f"performance_report_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.docx"
+    return send_file(
+        tmp_path,
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        as_attachment=True,
+        download_name=fname,
+    )
+
+
+def _apply_export_filters(
+    rows: list[dict],
+    status_codes: set[str],
+    enrollment_values: set[str],
+    exclude_enrollment: set[str],
+    student_ids: set[str],
+) -> list[dict]:
+    out = []
+    for r in rows:
+        sid = str(r.get("student_id") or "").strip()
+        sc = str(r.get("status_code") or "").strip()
+        es = str(r.get("enrollment_status") or "active").strip().lower()
+
+        if status_codes and sc not in status_codes:
+            continue
+        if enrollment_values and es not in enrollment_values:
+            continue
+        if exclude_enrollment and es in exclude_enrollment:
+            continue
+        if student_ids and sid not in student_ids:
+            continue
+        out.append(r)
+    return out
+
+
 @performance_bp.route("/report")
 @role_required("admin", "supervisor")
 def performance_report():
@@ -143,15 +468,17 @@ def performance_report():
 
     with get_connection() as conn:
         cur = conn.cursor()
-        rows = cur.execute(
-            "SELECT student_id, COALESCE(student_name,'') AS student_name, COALESCE(join_year,'') AS join_year "
-            "FROM students ORDER BY student_id"
-        ).fetchall()
+        meta_rows = _fetch_students_performance_meta(cur)
 
-        for r in rows:
-            sid = r[0]
-            name = r[1]
-            join_year = r[2]
+        for r in meta_rows:
+            sid = r["student_id"]
+            name = r["student_name"]
+            join_year = r["join_year"]
+            enrollment_status = r["enrollment_status"]
+            status_changed_at = r.get("status_changed_at")
+            status_reason = r.get("status_reason") or ""
+            status_changed_term = r.get("status_changed_term") or ""
+            status_changed_year = r.get("status_changed_year") or ""
 
             data = _load_transcript_data(sid)
             ordered = data.get("ordered_semesters", []) or []
@@ -168,6 +495,7 @@ def performance_report():
             third_gpa = sem_gpas.get(third_semester, None) if third_semester else None
 
             status = _compute_status(ordered, sem_gpas, cumulative_gpa)
+            status = _override_status_by_enrollment(enrollment_status, status)
 
             exc_row = cur.execute(
                 """
@@ -187,6 +515,11 @@ def performance_report():
                     "student_id": sid,
                     "student_name": name,
                     "join_year": join_year,
+                    "enrollment_status": enrollment_status,
+                    "status_changed_at": status_changed_at,
+                    "status_reason": status_reason,
+                    "status_changed_term": status_changed_term,
+                    "status_changed_year": status_changed_year,
                     "last_semester": last_semester,
                     "last_semester_gpa": last_gpa,
                     "prev_semester": prev_semester,
@@ -221,6 +554,9 @@ def performance_status(student_id: str):
 
     with get_connection() as conn:
         cur = conn.cursor()
+        cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
+        has_enrollment_status = "enrollment_status" in cols
+
         data = _load_transcript_data(sid)
         ordered = data.get("ordered_semesters", []) or []
         sem_gpas = data.get("semester_gpas", {}) or {}
@@ -228,6 +564,15 @@ def performance_status(student_id: str):
         completed_units = int(data.get("completed_units") or 0)
 
         status = _compute_status(ordered, sem_gpas, cumulative_gpa)
+
+        enrollment_status = "active"
+        if has_enrollment_status:
+            row = cur.execute(
+                "SELECT COALESCE(enrollment_status,'active') FROM students WHERE student_id = ?",
+                (sid,),
+            ).fetchone()
+            enrollment_status = row[0] if row else "active"
+        status = _override_status_by_enrollment(enrollment_status, status)
 
         exc_row = cur.execute(
             """
@@ -297,74 +642,86 @@ def set_extra_chance():
 
 @performance_bp.route("/export")
 @role_required("admin")
-def export_performance_excel():
+def export_performance():
     """
-    تصدير تقرير الأداء (نفس بيانات /report) إلى ملف Excel.
+    تصدير تقرير الأداء مع نفس فلاتر الاستعلام:
+      - format=xlsx (افتراضي) | pdf | docx
+      - status_codes, enrollment, exclude_enrollment, student_ids
     """
     from pandas import DataFrame
 
+    fmt = (request.args.get("format") or "xlsx").lower().strip()
+    status_codes = _parse_csv_set(request.args.get("status_codes", ""))
+    enrollment_values = _parse_csv_set(request.args.get("enrollment", ""))
+    exclude_enrollment = _parse_csv_set(request.args.get("exclude_enrollment", ""))
+    student_ids = _parse_csv_set(request.args.get("student_ids", ""))
+
     with get_connection() as conn:
-        cur = conn.cursor()
-        rows = cur.execute(
-            "SELECT student_id, COALESCE(student_name,'') AS student_name, COALESCE(join_year,'') AS join_year "
-            "FROM students ORDER BY student_id"
-        ).fetchall()
+        data_rows = _build_performance_export_rows(conn)
 
-        data_rows = []
-        for r in rows:
-            sid = r[0]
-            name = r[1]
-            join_year = r[2]
+    data_rows = _apply_export_filters(
+        data_rows,
+        status_codes=status_codes,
+        enrollment_values=enrollment_values,
+        exclude_enrollment=exclude_enrollment,
+        student_ids=student_ids,
+    )
 
-            tr = _load_transcript_data(sid)
-            ordered = tr.get("ordered_semesters", []) or []
-            sem_gpas = tr.get("semester_gpas", {}) or {}
-            cumulative_gpa = tr.get("cumulative_gpa", 0.0)
-            completed_units = int(tr.get("completed_units") or 0)
+    summary = _build_filter_summary_ar(
+        status_codes, enrollment_values, exclude_enrollment, student_ids
+    )
+    generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
-            last_semester = ordered[-1] if len(ordered) >= 1 else ""
-            prev_semester = ordered[-2] if len(ordered) >= 2 else ""
-            third_semester = ordered[-3] if len(ordered) >= 3 else ""
+    if fmt in ("pdf",):
+        print_rows = _prepare_rows_for_print(data_rows)
+        html = render_template(
+            "performance_report_export_print.html",
+            rows=print_rows,
+            filter_summary=summary,
+            generated_at=generated_at,
+        )
+        return pdf_response_from_html(html, filename_prefix="performance_report")
 
-            last_gpa = sem_gpas.get(last_semester, None) if last_semester else None
-            prev_gpa = sem_gpas.get(prev_semester, None) if prev_semester else None
-            third_gpa = sem_gpas.get(third_semester, None) if third_semester else None
+    if fmt in ("docx", "word"):
+        return _performance_docx_response(data_rows, summary)
 
-            status = _compute_status(ordered, sem_gpas, cumulative_gpa)
+    # Excel (افتراضي)
+    excel_rows = []
+    for r in data_rows:
+        er = dict(r)
+        er["حالة القيد"] = _enrollment_label_ar(er.get("enrollment_status"))
+        er["فصل وسنة الإجراء"] = _format_status_action_period(
+            er.get("status_changed_term"), er.get("status_changed_year")
+        ) or "—"
+        er["ملاحظة القيد"] = (er.get("status_reason") or "").strip()
+        er.pop("enrollment_status", None)
+        er.pop("status_code", None)
+        er.pop("third_semester", None)
+        er.pop("third_semester_gpa", None)
+        er.pop("status_changed_at", None)
+        er.pop("status_reason", None)
+        er.pop("status_changed_term", None)
+        er.pop("status_changed_year", None)
+        excel_rows.append(er)
 
-            exc_row = cur.execute(
-                """
-                SELECT id, type, note, is_active
-                FROM student_exceptions
-                WHERE student_id = ? AND type = 'extra_chance'
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (sid,),
-            ).fetchone()
-            has_extra = bool(exc_row and exc_row[3])
-            extra_note = exc_row[2] if exc_row else ""
-
-            data_rows.append(
-                {
-                    "student_id": sid,
-                    "student_name": name,
-                    "join_year": join_year,
-                    "last_semester": last_semester,
-                    "last_semester_gpa": last_gpa,
-                    "prev_semester": prev_semester,
-                    "prev_semester_gpa": prev_gpa,
-                    "third_semester": third_semester,
-                    "third_semester_gpa": third_gpa,
-                    "cumulative_gpa": cumulative_gpa,
-                    "completed_units": completed_units,
-                    "status_code": status["code"],
-                    "status_label": status["label"],
-                    "extra_chance": has_extra,
-                    "extra_chance_note": extra_note or "",
-                }
-            )
-
-    df = DataFrame(data_rows)
+    preferred = [
+        "student_id",
+        "student_name",
+        "join_year",
+        "حالة القيد",
+        "فصل وسنة الإجراء",
+        "ملاحظة القيد",
+        "last_semester",
+        "last_semester_gpa",
+        "prev_semester",
+        "prev_semester_gpa",
+        "cumulative_gpa",
+        "completed_units",
+        "status_label",
+        "extra_chance",
+        "extra_chance_note",
+    ]
+    df = DataFrame(excel_rows)
+    df = df[[c for c in preferred if c in df.columns]]
     return excel_response_from_df(df, filename_prefix="performance_report")
 

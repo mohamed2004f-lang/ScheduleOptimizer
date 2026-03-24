@@ -318,6 +318,10 @@ def ensure_tables(db_file=None):
                 cur.execute(
                     "ALTER TABLE students ADD COLUMN status_reason TEXT"
                 )
+            if "status_changed_term" not in cols:
+                cur.execute("ALTER TABLE students ADD COLUMN status_changed_term TEXT")
+            if "status_changed_year" not in cols:
+                cur.execute("ALTER TABLE students ADD COLUMN status_changed_year TEXT")
             if "graduation_plan" not in cols:
                 cur.execute(
                     "ALTER TABLE students ADD COLUMN graduation_plan TEXT DEFAULT ''"

@@ -407,6 +407,14 @@ def ensure_tables():
                     cur.execute("ALTER TABLE students ADD COLUMN status_reason TEXT")
                 except Exception:
                     pass
+                try:
+                    cur.execute("ALTER TABLE students ADD COLUMN status_changed_term TEXT")
+                except Exception:
+                    pass
+                try:
+                    cur.execute("ALTER TABLE students ADD COLUMN status_changed_year TEXT")
+                except Exception:
+                    pass
                 # عمود updated_at قد يُستخدم في بعض التحديثات (مثل تحديث حالة القيد)
                 try:
                     cur.execute("ALTER TABLE students ADD COLUMN updated_at TEXT")

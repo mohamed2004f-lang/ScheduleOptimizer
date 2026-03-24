@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>تصدير تقرير الأداء</title>
+  <style>
+    @page { size: A4 landscape; margin: 12mm; }
+    body {
+      font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+      font-size: 10pt;
+      color: #111;
+      line-height: 1.35;
+    }
+    .header {
+      text-align: center;
+      border-bottom: 2px solid #0d6efd;
+      padding-bottom: 8px;
+      margin-bottom: 10px;
+    }
+    .header h1 { font-size: 14pt; margin: 0; font-weight: 700; }
+    .header .sub { font-size: 10pt; color: #444; margin: 4px 0 0; }
+    .meta {
+      font-size: 9pt;
+      color: #333;
+      margin-bottom: 10px;
+      background: #f8f9fa;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #dee2e6;
+    }
+    .title-row {
+      text-align: center;
+      font-weight: 700;
+      font-size: 12pt;
+      margin: 8px 0 12px;
+    }
+    table.report {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    table.report th, table.report td {
+      border: 1px solid #333;
+      padding: 5px 6px;
+      vertical-align: top;
+      word-wrap: break-word;
+    }
+    table.report th {
+      background: #e9ecef;
+      font-weight: 700;
+      font-size: 9pt;
+    }
+    table.report td { font-size: 9pt; }
+    .mono { font-family: Consolas, monospace; direction: ltr; text-align: right; }
+    .footer {
+      margin-top: 14px;
+      font-size: 8pt;
+      color: #666;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>جامعة درنة — كلية الهندسة — قسم الهندسة الميكانيكية</h1>
+    <p class="sub">وثيقة تقريرية — تقرير أداء الطلبة</p>
+  </div>
+
+  <div class="title-row">تقرير أداء الطلبة</div>
+
+  <div class="meta">
+    <strong>تاريخ الإصدار:</strong> {{ generated_at }}<br>
+    <strong>معايير الاستخراج:</strong> {{ filter_summary }}
+  </div>
+
+  <table class="report">
+    <thead>
+      <tr>
+        <th style="width:7%;">الرقم الدراسي</th>
+        <th style="width:12%;">اسم الطالب</th>
+        <th style="width:5%;">سنة الالتحاق</th>
+        <th style="width:8%;">حالة القيد</th>
+        <th style="width:9%;">فصل الإجراء</th>
+        <th style="width:10%;">الفصل الأخير</th>
+        <th style="width:10%;">الفصل السابق</th>
+        <th style="width:6%;">المعدل التراكمي</th>
+        <th style="width:5%;">الوحدات</th>
+        <th style="width:22%;">حالة الطالب / الملاحظات</th>
+        <th style="width:7%;">فرصة استثنائية</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="mono">{{ r.student_id }}</td>
+        <td>{{ r.student_name }}</td>
+        <td>{{ r.join_year or '—' }}</td>
+        <td>{{ r.enrollment_label_ar }}</td>
+        <td>{% if r.status_action_period_ar %}{{ r.status_action_period_ar }}{% else %}—{% endif %}</td>
+        <td>{% if r.last_semester %}{{ r.last_semester }} ({% if r.last_semester_gpa is not none %}{{ "%.2f"|format(r.last_semester_gpa|float) }}{% else %}—{% endif %}){% else %}—{% endif %}</td>
+        <td>{% if r.prev_semester %}{{ r.prev_semester }} ({% if r.prev_semester_gpa is not none %}{{ "%.2f"|format(r.prev_semester_gpa|float) }}{% else %}—{% endif %}){% else %}—{% endif %}</td>
+        <td class="mono">{% if r.cumulative_gpa is not none %}{{ "%.2f"|format(r.cumulative_gpa|float) }}{% else %}—{% endif %}</td>
+        <td>{{ r.completed_units or 0 }}</td>
+        <td>{{ r.status_label }}</td>
+        <td>{% if r.extra_chance %}نعم{% if r.extra_chance_note %} — {{ r.extra_chance_note }}{% endif %}{% else %}لا{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if not rows %}
+  <p style="text-align:center;color:#666;margin-top:16px;">لا توجد بيانات مطابقة لمعايير التصدير.</p>
+  {% endif %}
+
+  <div class="footer">مُنشأ آلياً من منظومة جدولة المقررات — لا يُعتمد دون توقيع الجهة المختصة عند الحاجة.</div>
+</body>
+</html>

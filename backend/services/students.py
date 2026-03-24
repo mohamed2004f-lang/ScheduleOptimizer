@@ -20,6 +20,73 @@ from .utilities import (
 
 students_bp = Blueprint("students", __name__)
 
+
+def _enrollment_label_ar(enrollment_status: str) -> str:
+    es = str(enrollment_status or "active").strip().lower()
+    return {
+        "active": "مسجّل",
+        "withdrawn": "سحب ملف",
+        "suspended": "إيقاف قيد",
+        "graduated": "خريج",
+    }.get(es, enrollment_status or "—")
+
+
+def _format_status_action_period(term: str, year: str) -> str:
+    t = (term or "").strip()
+    y = (year or "").strip()
+    if t and y:
+        return f"{t} — {y}"
+    return t or y
+
+
+def students_filtered_from_request(request):
+    """
+    قائمة طلاب (dicts) حسب:
+      active_only=1 → مسجّلون فقط
+      enrollment_status=active|withdrawn|suspended|graduated → يُفضّل على active_only
+      join_term / join_year
+    """
+    from backend.core.services import StudentService
+
+    active_only = request.args.get("active_only", "").lower() in ("1", "true", "yes")
+    enrollment_status = (request.args.get("enrollment_status") or "").strip().lower()
+    join_term = (request.args.get("join_term") or "").strip()
+    join_year = (request.args.get("join_year") or "").strip()
+    allowed_es = {"active", "withdrawn", "suspended", "graduated"}
+    if enrollment_status in allowed_es:
+        students = StudentService.get_all_students(active_only=False)
+        students = [s for s in students if (s.get("enrollment_status") or "active") == enrollment_status]
+    elif active_only:
+        students = StudentService.get_all_students(active_only=True)
+    else:
+        students = StudentService.get_all_students(active_only=False)
+    if join_term:
+        students = [s for s in students if (s.get("join_term") or "").strip() == join_term]
+    if join_year:
+        students = [s for s in students if (s.get("join_year") or "").strip() == join_year]
+    return students
+
+
+def students_filter_summary_ar(request) -> str:
+    active_only = request.args.get("active_only", "").lower() in ("1", "true", "yes")
+    enrollment_status = (request.args.get("enrollment_status") or "").strip().lower()
+    join_term = (request.args.get("join_term") or "").strip()
+    join_year = (request.args.get("join_year") or "").strip()
+    parts = []
+    allowed_es = {"active", "withdrawn", "suspended", "graduated"}
+    if enrollment_status in allowed_es:
+        parts.append("حالة القيد: " + _enrollment_label_ar(enrollment_status))
+    elif active_only:
+        parts.append("نطاق: مسجّلون فقط")
+    else:
+        parts.append("نطاق: جميع حالات القيد")
+    if join_term:
+        parts.append("فصل الالتحاق: " + join_term)
+    if join_year:
+        parts.append("سنة الالتحاق: " + join_year)
+    return " — ".join(parts) if parts else "بدون فلترة"
+
+
 # -----------------------------
 # شرط المقررات الاختيارية بعد 100 وحدة
 # -----------------------------
@@ -754,19 +821,11 @@ def normalize_sid(sid):
 @students_bp.route("/list")
 @login_required
 def list_students():
-    """جلب قائمة الطلاب - يستخدم Service Layer. استخدم ?active_only=1 للتسجيل وخطط التسجيل (لا يُظهر سحب ملف/موقوف قيد/خريج)."""
+    """جلب قائمة الطلاب. معاملات: active_only=1، enrollment_status=active|withdrawn|suspended|graduated، join_term، join_year."""
     try:
-        from backend.core.services import StudentService
         from backend.core.exceptions import AppException
-        
-        active_only = request.args.get("active_only", "").lower() in ("1", "true", "yes")
-        join_term = (request.args.get("join_term") or "").strip()
-        join_year = (request.args.get("join_year") or "").strip()
-        students = StudentService.get_all_students(active_only=active_only)
-        if join_term:
-            students = [s for s in students if (s.get("join_term") or "").strip() == join_term]
-        if join_year:
-            students = [s for s in students if (s.get("join_year") or "").strip() == join_year]
+
+        students = students_filtered_from_request(request)
         # تحويل إلى كائنات Student للتوافق مع الكود القديم مع إضافة حالة القيد كحقول إضافية
         students_objects = []
         for s in students:
@@ -775,6 +834,8 @@ def list_students():
             setattr(obj, "enrollment_status", s.get("enrollment_status", "active"))
             setattr(obj, "status_changed_at", s.get("status_changed_at"))
             setattr(obj, "status_reason", s.get("status_reason", ""))
+            setattr(obj, "status_changed_term", s.get("status_changed_term", ""))
+            setattr(obj, "status_changed_year", s.get("status_changed_year", ""))
             setattr(obj, "graduation_plan", s.get("graduation_plan", ""))
             setattr(obj, "join_term", s.get("join_term", ""))
             setattr(obj, "join_year", s.get("join_year", ""))
@@ -900,6 +961,8 @@ def update_student_status():
         changed_at = data.get("status_changed_at") or data.get("changed_at")
         reason = data.get("status_reason") or data.get("reason", "")
         phone = data.get("phone") or ""
+        status_changed_term = (data.get("status_changed_term") or data.get("action_term") or "").strip()
+        status_changed_year = (data.get("status_changed_year") or data.get("action_year") or "").strip()
 
         result = StudentService.update_enrollment_status(
             student_id=sid,
@@ -907,6 +970,8 @@ def update_student_status():
             changed_at=changed_at,
             reason=reason or "",
             phone=phone,
+            status_changed_term=status_changed_term,
+            status_changed_year=status_changed_year,
         )
         return jsonify(result), 200
     except AppException:
@@ -1922,19 +1987,37 @@ def timetable_conflicts():
 @login_required
 def students_export_excel():
     try:
-        with get_connection() as conn:
-            cur = conn.cursor()
-            cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
-            sel = "SELECT student_id, student_name"
-            if "join_term" in cols:
-                sel += ", COALESCE(join_term, '') AS join_term"
-            if "join_year" in cols:
-                sel += ", COALESCE(join_year, '') AS join_year"
-            if "graduation_plan" in cols:
-                sel += ", COALESCE(graduation_plan, '') AS graduation_plan"
-            sel += " FROM students ORDER BY student_name, student_id"
-            rows = cur.execute(sel).fetchall()
-            df = pd.DataFrame([dict(r) for r in rows])
+        students = students_filtered_from_request(request)
+        rows_out = []
+        for s in students:
+            rows_out.append(
+                {
+                    "الرقم الدراسي": s.get("student_id"),
+                    "اسم الطالب": s.get("student_name") or "",
+                    "فصل الالتحاق": (s.get("join_term") or "").strip(),
+                    "سنة الالتحاق": (s.get("join_year") or "").strip(),
+                    "خطة التخرج": (s.get("graduation_plan") or "").strip(),
+                    "حالة القيد": _enrollment_label_ar(s.get("enrollment_status")),
+                    "فصل وسنة الإجراء": _format_status_action_period(
+                        s.get("status_changed_term"), s.get("status_changed_year")
+                    )
+                    or "—",
+                    "ملاحظة القيد": (s.get("status_reason") or "").strip(),
+                    "تاريخ آخر تغيير للحالة": (s.get("status_changed_at") or "") or "—",
+                }
+            )
+        _cols = [
+            "الرقم الدراسي",
+            "اسم الطالب",
+            "فصل الالتحاق",
+            "سنة الالتحاق",
+            "خطة التخرج",
+            "حالة القيد",
+            "فصل وسنة الإجراء",
+            "ملاحظة القيد",
+            "تاريخ آخر تغيير للحالة",
+        ]
+        df = pd.DataFrame(rows_out, columns=_cols) if rows_out else pd.DataFrame(columns=_cols)
         return excel_response_from_df(df, filename_prefix="students")
     except Exception:
         current_app.logger.exception("students_export_excel failed")
@@ -1944,20 +2027,34 @@ def students_export_excel():
 @login_required
 def students_export_pdf():
     try:
-        with get_connection() as conn:
-            cur = conn.cursor()
-            cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
-            sel = "SELECT student_id, student_name"
-            if "join_term" in cols:
-                sel += ", COALESCE(join_term, '') AS join_term"
-            if "join_year" in cols:
-                sel += ", COALESCE(join_year, '') AS join_year"
-            if "graduation_plan" in cols:
-                sel += ", COALESCE(graduation_plan, '') AS graduation_plan"
-            sel += " FROM students ORDER BY student_id"
-            rows = cur.execute(sel).fetchall()
-            students = [dict(r) for r in rows]
-        html = render_template("export_students.html", students=students)
+        students = students_filtered_from_request(request)
+        rows = []
+        for s in students:
+            rows.append(
+                {
+                    "student_id": s.get("student_id"),
+                    "student_name": s.get("student_name") or "",
+                    "join_term": (s.get("join_term") or "").strip(),
+                    "join_year": (s.get("join_year") or "").strip(),
+                    "graduation_plan": (s.get("graduation_plan") or "").strip(),
+                    "enrollment_label_ar": _enrollment_label_ar(s.get("enrollment_status")),
+                    "status_action_period": _format_status_action_period(
+                        s.get("status_changed_term"), s.get("status_changed_year")
+                    )
+                    or "—",
+                    "status_reason": (s.get("status_reason") or "").strip(),
+                    "status_changed_at": (s.get("status_changed_at") or "") or "—",
+                }
+            )
+        generated_at = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        summary = students_filter_summary_ar(request)
+        html = render_template(
+            "export_students.html",
+            students=rows,
+            rows=rows,
+            filter_summary=summary,
+            generated_at=generated_at,
+        )
         return pdf_response_from_html(html, filename_prefix="students")
     except Exception:
         current_app.logger.exception("students_export_pdf failed")

@@ -20,7 +20,7 @@
         top: 0;
         width: 100%;
       }
-      nav.app-navbar, header.app-topbar, #msgBox, #statusFilter, #searchInput, #sortSelect, #btnPrint, #btnExport, #btnEditRules {
+      nav.app-navbar, header.app-topbar, #msgBox, #statusFilter, #enrollmentFilter, #excludeInactive, #studentPick, #searchInput, #sortSelect, #btnPrint, #btnExport, #btnExportPdf, #btnExportDocx, #btnEditRules {
         display: none !important;
       }
     }
@@ -39,8 +39,8 @@
       text-align: center;
     }
     /* اجعل عمود "حالة الطالب" مرناً وواسعاً قدر الإمكان */
-    #perfTable th:nth-child(8),
-    #perfTable td:nth-child(8){
+    #perfTable th:nth-child(10),
+    #perfTable td:nth-child(10){
       min-width: 200px;
     }
   </style>
@@ -70,6 +70,8 @@
             <option value="warning_1">إنذار أول</option>
             <option value="warning_2">إنذار ثانٍ</option>
             <option value="warning_3">أكثر من إنذارين</option>
+            <option value="withdrawn">سحب ملف</option>
+            <option value="suspended">إيقاف قيد</option>
           </select>
         </div>
         <div class="col-md-3">
@@ -85,9 +87,29 @@
             <option value="completed_units_desc">الوحدات المنجزة (تنازلي)</option>
           </select>
         </div>
-        <div class="col-md-3 text-end d-flex flex-column flex-md-row justify-content-md-end gap-2 mt-3 mt-md-0">
+        <div class="col-md-3">
+          <label class="form-label">حالة القيد</label>
+          <select id="enrollmentFilter" class="form-select form-select-sm">
+            <option value="">كل حالات القيد</option>
+            <option value="active">مسجّل</option>
+            <option value="suspended">إيقاف قيد</option>
+            <option value="withdrawn">سحب ملف</option>
+            <option value="graduated">خريج</option>
+          </select>
+          <div class="form-check mt-1">
+            <input class="form-check-input" type="checkbox" id="excludeInactive">
+            <label class="form-check-label small" for="excludeInactive">استثناء الخريجين وسحب الملف</label>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">اختيار طلبة محددين (اختياري)</label>
+          <select id="studentPick" class="form-select form-select-sm" multiple size="4" title="استخدم Ctrl لاختيار أكثر من طالب"></select>
+        </div>
+        <div class="col-md-12 text-end d-flex flex-column flex-md-row justify-content-md-end gap-2 mt-3 mt-md-0 flex-wrap">
           <button id="btnPrint" class="btn btn-outline-dark btn-sm">طباعة التقرير</button>
           <button id="btnExport" class="btn btn-outline-secondary btn-sm">تصدير Excel</button>
+          <button id="btnExportPdf" class="btn btn-outline-danger btn-sm">تصدير PDF (رسمي)</button>
+          <button id="btnExportDocx" class="btn btn-outline-primary btn-sm">تصدير Word (رسمي)</button>
         </div>
       </div>
     </div>
@@ -102,6 +124,8 @@
                 <th>الرقم الدراسي</th>
                 <th>اسم الطالب</th>
                 <th>سنة الالتحاق</th>
+                <th>حالة القيد</th>
+                <th>فصل الإجراء</th>
                 <th>الفصل الأخير (GPA)</th>
                 <th>الفصل السابق (GPA)</th>
                 <th>المعدل التراكمي</th>
@@ -134,9 +158,27 @@
       return num.toFixed(2);
     }
 
-    function renderTable() {
-      const tbody = document.querySelector('#perfTable tbody');
+    function enrollmentLabelAr(es) {
+      const m = { active: 'مسجّل', withdrawn: 'سحب ملف', suspended: 'إيقاف قيد', graduated: 'خريج' };
+      const k = (es || 'active').toString().trim().toLowerCase();
+      return m[k] || es || '—';
+    }
+
+    function statusActionPeriodDisplay(r) {
+      const t = (r.status_changed_term || '').trim();
+      const y = (r.status_changed_year || '').trim();
+      if (t && y) return `${t} — ${y}`;
+      const one = t || y;
+      return one || '—';
+    }
+
+    function getFilteredRows() {
       const statusFilter = document.getElementById('statusFilter').value;
+      const enrollmentFilter = document.getElementById('enrollmentFilter').value;
+      const excludeInactive = !!document.getElementById('excludeInactive')?.checked;
+      const selectedStudents = new Set(
+        Array.from(document.getElementById('studentPick')?.selectedOptions || []).map(o => o.value)
+      );
       const search = (document.getElementById('searchInput').value || '').toLowerCase();
       const sortBy = document.getElementById('sortSelect').value;
 
@@ -144,6 +186,15 @@
 
       if (statusFilter) {
         rows = rows.filter(r => r.status_code === statusFilter);
+      }
+      if (enrollmentFilter) {
+        rows = rows.filter(r => (r.enrollment_status || 'active') === enrollmentFilter);
+      }
+      if (excludeInactive) {
+        rows = rows.filter(r => !['graduated', 'withdrawn'].includes((r.enrollment_status || 'active')));
+      }
+      if (selectedStudents.size) {
+        rows = rows.filter(r => selectedStudents.has(r.student_id || ''));
       }
 
       if (search) {
@@ -166,11 +217,17 @@
         // default: student_id asc
         return (a.student_id || '').localeCompare(b.student_id || '');
       });
+      return rows;
+    }
+
+    function renderTable() {
+      const tbody = document.querySelector('#perfTable tbody');
+      const rows = getFilteredRows();
 
       tbody.innerHTML = '';
       if (!rows.length) {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td colspan="9" class="text-center text-muted">لا توجد بيانات مطابقة.</td>`;
+        tr.innerHTML = `<td colspan="11" class="text-center text-muted">لا توجد بيانات مطابقة.</td>`;
         tbody.appendChild(tr);
         return;
       }
@@ -182,6 +239,8 @@
         else if (r.status_code === 'warning_1') badgeClass = 'warning';
         else if (r.status_code === 'warning_2') badgeClass = 'danger';
         else if (r.status_code === 'warning_3') badgeClass = 'dark';
+        else if (r.status_code === 'suspended') badgeClass = 'danger';
+        else if (r.status_code === 'withdrawn') badgeClass = 'secondary';
 
         const lastLabel = r.last_semester
           ? `${r.last_semester} (${formatGpa(r.last_semester_gpa)})`
@@ -215,6 +274,8 @@
           <td class="mono">${r.student_id}</td>
           <td>${r.student_name || ''}</td>
           <td>${r.join_year || ''}</td>
+          <td>${enrollmentLabelAr(r.enrollment_status)}</td>
+          <td>${statusActionPeriodDisplay(r)}</td>
           <td>${lastLabel}</td>
           <td>${prevLabel}</td>
           <td>${formatGpa(r.cumulative_gpa)}</td>
@@ -253,6 +314,37 @@
       }
     }
 
+    function syncStudentPickOptions() {
+      const select = document.getElementById('studentPick');
+      if (!select) return;
+      const selectedBefore = new Set(Array.from(select.selectedOptions).map(o => o.value));
+      select.innerHTML = '';
+      RAW_STUDENTS.forEach(r => {
+        const opt = document.createElement('option');
+        opt.value = r.student_id || '';
+        opt.textContent = `${r.student_id || ''} — ${r.student_name || ''}`;
+        if (selectedBefore.has(opt.value)) opt.selected = true;
+        select.appendChild(opt);
+      });
+    }
+
+    function buildExportUrl(format) {
+      const params = new URLSearchParams();
+      const statusFilter = document.getElementById('statusFilter').value;
+      const enrollmentFilter = document.getElementById('enrollmentFilter').value;
+      const excludeInactive = !!document.getElementById('excludeInactive')?.checked;
+      const selectedStudents = Array.from(document.getElementById('studentPick')?.selectedOptions || []).map(o => o.value).filter(Boolean);
+
+      if (format && format !== 'xlsx') params.set('format', format);
+      if (statusFilter) params.set('status_codes', statusFilter);
+      if (enrollmentFilter) params.set('enrollment', enrollmentFilter);
+      if (excludeInactive) params.set('exclude_enrollment', 'graduated,withdrawn');
+      if (selectedStudents.length) params.set('student_ids', selectedStudents.join(','));
+
+      const qs = params.toString();
+      return '/performance/export' + (qs ? `?${qs}` : '');
+    }
+
     async function loadReport() {
       showMsg('جارٍ تحميل تقرير الأداء...', 'info');
       try {
@@ -264,6 +356,7 @@
         }
         const data = await apiGet('/performance/report');
         RAW_STUDENTS = Array.isArray(data.students) ? data.students : [];
+        syncStudentPickOptions();
         showMsg(`تم تحميل بيانات ${RAW_STUDENTS.length} طالب/ـة.`, 'success');
         renderTable();
       } catch (e) {
@@ -275,6 +368,9 @@
     document.addEventListener('DOMContentLoaded', () => {
       loadReport();
       document.getElementById('statusFilter').addEventListener('change', renderTable);
+      document.getElementById('enrollmentFilter').addEventListener('change', renderTable);
+      document.getElementById('excludeInactive').addEventListener('change', renderTable);
+      document.getElementById('studentPick').addEventListener('change', renderTable);
       document.getElementById('sortSelect').addEventListener('change', renderTable);
       document.getElementById('searchInput').addEventListener('input', debounce(renderTable, 200));
       const btnPrint = document.getElementById('btnPrint');
@@ -286,7 +382,19 @@
       const btnExport = document.getElementById('btnExport');
       if (btnExport) {
         btnExport.addEventListener('click', () => {
-          window.open('/performance/export', '_blank');
+          window.open(buildExportUrl('xlsx'), '_blank');
+        });
+      }
+      const btnPdf = document.getElementById('btnExportPdf');
+      if (btnPdf) {
+        btnPdf.addEventListener('click', () => {
+          window.open(buildExportUrl('pdf'), '_blank');
+        });
+      }
+      const btnDocx = document.getElementById('btnExportDocx');
+      if (btnDocx) {
+        btnDocx.addEventListener('click', () => {
+          window.open(buildExportUrl('docx'), '_blank');
         });
       }
       const btnEdit = document.getElementById('btnEditRules');

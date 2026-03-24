@@ -4,45 +4,62 @@
   <meta charset="utf-8">
   <title>قائمة الطلبة</title>
   <style>
-    body { font-family: Tahoma, Arial, sans-serif; direction: rtl; margin: 20px; color:#222 }
-    h1 { font-size:18px; margin-bottom:12px }
-    table { border-collapse: collapse; width:100%; font-size:12px }
-    th, td { border:1px solid #bbb; padding:8px; text-align:right }
-    th { background:#f0f0f0 }
-    .meta { margin-bottom:10px; font-size:12px; color:#444 }
+    body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; direction: rtl; margin: 16px; color:#222; font-size: 11pt; }
+    .header { text-align: center; border-bottom: 2px solid #0d6efd; padding-bottom: 6px; margin-bottom: 10px; }
+    .header h1 { font-size: 14pt; margin: 0; font-weight: 700; }
+    .meta { margin-bottom: 10px; font-size: 9pt; color: #333; background: #f8f9fa; padding: 8px 10px; border-radius: 6px; border: 1px solid #dee2e6; }
+    table { border-collapse: collapse; width:100%; font-size: 9pt; table-layout: fixed; }
+    th, td { border:1px solid #333; padding:5px 6px; text-align:right; vertical-align: top; word-wrap: break-word; }
+    th { background:#e9ecef; font-weight: 700; }
+    .mono { font-family: Consolas, monospace; direction: ltr; text-align: right; }
+    .footer { margin-top: 12px; font-size: 8pt; color: #666; text-align: center; }
   </style>
 </head>
 <body>
-  <div class="meta">
-    <strong>الكلية:</strong> كلية الهندسة — <strong>الفصل:</strong> {{ semester if semester is defined else '' }}
+  <div class="header">
+    <h1>جامعة درنة — كلية الهندسة — قسم الهندسة الميكانيكية</h1>
+    <p style="margin:4px 0 0; font-size:10pt; color:#444;">قائمة الطلبة (وثيقة تقريرية)</p>
   </div>
 
-  <h1>قائمة الطلبة</h1>
+  <div class="meta">
+    <strong>تاريخ الإصدار:</strong> {{ generated_at if generated_at is defined else '' }}<br>
+    <strong>معايير الاستخراج:</strong> {{ filter_summary if filter_summary is defined else '' }}
+  </div>
 
   <table>
     <thead>
       <tr>
-        <th>الرقم الدراسي</th>
-        <th>اسم الطالب</th>
-        <th>فصل الالتحاق</th>
-        <th>سنة الالتحاق</th>
-        <th>خطة التخرج</th>
+        <th style="width:9%;">الرقم الدراسي</th>
+        <th style="width:14%;">اسم الطالب</th>
+        <th style="width:7%;">فصل الالتحاق</th>
+        <th style="width:7%;">سنة الالتحاق</th>
+        <th style="width:8%;">خطة التخرج</th>
+        <th style="width:9%;">حالة القيد</th>
+        <th style="width:11%;">فصل وسنة الإجراء</th>
+        <th style="width:18%;">ملاحظة القيد</th>
+        <th style="width:11%;">تاريخ آخر تغيير للحالة</th>
       </tr>
     </thead>
     <tbody>
       {% set listdata = rows if (rows is defined) else (students if (students is defined) else []) %}
       {% for r in listdata %}
       <tr>
-        <td>{{ r.student_id }}</td>
+        <td class="mono">{{ r.student_id }}</td>
         <td>{{ r.student_name }}</td>
         <td>{{ r.get('join_term', '') }}</td>
         <td>{{ r.get('join_year', '') }}</td>
         <td>{{ r.get('graduation_plan', '') }}</td>
+        <td>{{ r.get('enrollment_label_ar', r.get('enrollment_status', '')) }}</td>
+        <td>{{ r.get('status_action_period', '—') }}</td>
+        <td>{{ r.get('status_reason', '') }}</td>
+        <td class="mono">{{ r.get('status_changed_at', '—') }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="5" style="text-align:center">لا توجد بيانات</td></tr>
+      <tr><td colspan="9" style="text-align:center">لا توجد بيانات مطابقة للفلتر</td></tr>
       {% endfor %}
     </tbody>
   </table>
+
+  <div class="footer">مُنشأ آلياً من منظومة جدولة المقررات — لا يُعتمد دون توقيع الجهة المختصة عند الحاجة.</div>
 </body>
 </html>

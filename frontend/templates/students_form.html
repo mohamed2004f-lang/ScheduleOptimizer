@@ -24,8 +24,8 @@
         <div class="card-body p-2">
           <div class="d-flex flex-wrap align-items-center justify-content-between">
             <div class="btn-group-gap">
-              <a class="btn btn-outline-success btn-sm" href="/students/export/excel">⬇️ تصدير Excel</a>
-              <a class="btn btn-outline-danger btn-sm" href="/students/export/pdf" target="_blank">⬇️ تصدير PDF</a>
+              <a class="btn btn-outline-success btn-sm" id="stExportExcel" href="/students/export/excel">⬇️ تصدير Excel</a>
+              <a class="btn btn-outline-danger btn-sm" id="stExportPdf" href="/students/export/pdf" target="_blank">⬇️ تصدير PDF (رسمي)</a>
             </div>
             <form id="students-import-form" class="d-flex align-items-center" enctype="multipart/form-data" onsubmit="return false;">
               <label class="form-label mb-0 me-2">📂 استيراد طلاب (Excel):</label>
@@ -86,6 +86,16 @@
         <div class="card-body">
           <h6>قائمة الطلبة</h6>
           <div class="row g-2 align-items-end mb-2">
+            <div class="col-md-3">
+              <label class="form-label small mb-0">من يُعرض في القائمة</label>
+              <select id="filter_list_scope" class="form-select form-select-sm" title="فلترة حسب حالة القيد؛ التصدير يطابق نفس الفلتر">
+                <option value="all" selected>الكل — كل حالات القيد</option>
+                <option value="active_only">مسجّلون فقط</option>
+                <option value="suspended">موقوفو القيد فقط</option>
+                <option value="withdrawn">سحب الملف فقط</option>
+                <option value="graduated">خريجون فقط</option>
+              </select>
+            </div>
             <div class="col-auto">
               <label class="form-label small mb-0">فلترة حسب الالتحاق</label>
             </div>
@@ -136,6 +146,23 @@
               <div class="mb-2" id="st_status_phone_wrap" style="display: none;">
                 <label class="form-label">رقم الهاتف (اختياري - للخريجين)</label>
                 <input type="text" id="st_status_phone" class="form-control" placeholder="مثال: 05xxxxxxxx">
+              </div>
+              <div class="mb-2" id="st_status_term_wrap" style="display: none;">
+                <label class="form-label">فصل وسنة الإجراء (مطلوب لسحب الملف وإيقاف القيد)</label>
+                <div class="row g-2">
+                  <div class="col-sm-6">
+                    <select id="st_status_action_term" class="form-select">
+                      <option value="">— الفصل —</option>
+                      <option value="خريف">خريف</option>
+                      <option value="ربيع">ربيع</option>
+                      <option value="صيف">صيف</option>
+                    </select>
+                  </div>
+                  <div class="col-sm-6">
+                    <input type="text" id="st_status_action_year" class="form-control" placeholder="مثال: 2025" maxlength="20">
+                  </div>
+                </div>
+                <button type="button" class="btn btn-link btn-sm px-0 mt-1" id="st_status_use_current_term">استخدام الفصل الحالي من الإعدادات</button>
               </div>
               <div class="mb-2">
                 <label class="form-label">ملاحظة (اختياري)</label>
@@ -201,18 +228,40 @@
   </main>
 
   <script>
+  function buildStudentsQueryParams() {
+    const scopeEl = document.getElementById('filter_list_scope');
+    const scope = scopeEl ? scopeEl.value : 'all';
+    const joinTerm = (document.getElementById('filter_join_term')||{}).value || '';
+    const joinYear = (document.getElementById('filter_join_year')||{}).value || '';
+    const params = new URLSearchParams();
+    if (scope === 'active_only') params.set('active_only', '1');
+    else if (['suspended', 'withdrawn', 'graduated'].includes(scope)) params.set('enrollment_status', scope);
+    if (joinTerm) params.set('join_term', joinTerm);
+    if (joinYear) params.set('join_year', joinYear);
+    return params;
+  }
+
+  function updateExportLinks() {
+    const q = buildStudentsQueryParams().toString();
+    const suf = q ? ('?' + q) : '';
+    const ex = document.getElementById('stExportExcel');
+    const pdf = document.getElementById('stExportPdf');
+    if (ex) ex.href = '/students/export/excel' + suf;
+    if (pdf) pdf.href = '/students/export/pdf' + suf;
+  }
+
   /* تحميل وعرض الطلبة */
   async function loadStudents(){
     try {
-      let url = '/students/list?active_only=1';
-      const joinTerm = (document.getElementById('filter_join_term')||{}).value || '';
-      const joinYear = (document.getElementById('filter_join_year')||{}).value || '';
-      if(joinTerm) url += '&join_term=' + encodeURIComponent(joinTerm);
-      if(joinYear) url += '&join_year=' + encodeURIComponent(joinYear);
+      updateExportLinks();
+      const params = buildStudentsQueryParams();
+      let url = '/students/list';
+      const q = params.toString();
+      if (q) url += '?' + q;
       const r = await fetch(url);
       const arr = r.ok ? await r.json() : [];
       const el = document.getElementById('studentsList');
-      if(!arr.length){ el.textContent = 'لا يوجد طلاب مسجلين.'; return; }
+      if(!arr.length){ el.textContent = 'لا يوجد طلاب مطابقون للفلتر.'; return; }
       el.innerHTML = '';
       const ul = document.createElement('ul');
       ul.className = 'mb-0 list-unstyled';
@@ -312,6 +361,14 @@
     }
   }
 
+  function syncStatusTermVisibility(){
+    const statusSelect = document.getElementById('st_status_select');
+    const wrap = document.getElementById('st_status_term_wrap');
+    if(!wrap || !statusSelect) return;
+    const v = statusSelect.value;
+    wrap.style.display = (v === 'withdrawn' || v === 'suspended') ? 'block' : 'none';
+  }
+
   /* فتح نافذة حالة القيد لطالب */
   function openStatusStudent(student){
     try{
@@ -319,16 +376,21 @@
       const nameInput = document.getElementById('st_status_student_name');
       const statusSelect = document.getElementById('st_status_select');
       const reasonInput = document.getElementById('st_status_reason');
+      const termSel = document.getElementById('st_status_action_term');
+      const yearInp = document.getElementById('st_status_action_year');
       const msgEl = document.getElementById('st_status_msg');
       if(msgEl) msgEl.innerHTML = '';
       if(idInput) idInput.value = student.student_id || '';
       if(nameInput) nameInput.value = student.student_name || '';
       if(statusSelect) statusSelect.value = student.enrollment_status || 'active';
       if(reasonInput) reasonInput.value = student.status_reason || '';
+      if(termSel) termSel.value = student.status_changed_term || '';
+      if(yearInp) yearInp.value = student.status_changed_year || '';
       const phoneWrap = document.getElementById('st_status_phone_wrap');
       const phoneInput = document.getElementById('st_status_phone');
       if(phoneWrap) phoneWrap.style.display = (statusSelect && statusSelect.value === 'graduated') ? 'block' : 'none';
       if(phoneInput) phoneInput.value = '';
+      syncStatusTermVisibility();
       const modalEl = document.getElementById('statusStudentModal');
       if(modalEl){
         let modal = bootstrap.Modal.getInstance(modalEl);
@@ -432,11 +494,35 @@
     const btnApplyFilter = document.getElementById('btnApplyFilter');
     if (btnApplyFilter) btnApplyFilter.addEventListener('click', () => loadStudents());
 
+    const filterScope = document.getElementById('filter_list_scope');
+    if (filterScope) filterScope.addEventListener('change', () => { updateExportLinks(); loadStudents(); });
+
     const stStatusSelect = document.getElementById('st_status_select');
     if (stStatusSelect) {
       stStatusSelect.addEventListener('change', () => {
         const phoneWrap = document.getElementById('st_status_phone_wrap');
         if(phoneWrap) phoneWrap.style.display = stStatusSelect.value === 'graduated' ? 'block' : 'none';
+        syncStatusTermVisibility();
+      });
+    }
+    const useCurrTermBtn = document.getElementById('st_status_use_current_term');
+    if (useCurrTermBtn) {
+      useCurrTermBtn.addEventListener('click', async () => {
+        try {
+          const r = await fetch('/admin/settings/current_term');
+          const j = await r.json().catch(() => null);
+          if (!r.ok || !j) {
+            alert('تعذّر قراءة الفصل الحالي من الإعدادات.');
+            return;
+          }
+          const ts = document.getElementById('st_status_action_term');
+          const yy = document.getElementById('st_status_action_year');
+          if (j.term_name && ts) ts.value = j.term_name;
+          if (j.term_year != null && yy) yy.value = String(j.term_year);
+        } catch (e) {
+          console.error(e);
+          alert('خطأ بالاتصال عند جلب الفصل الحالي.');
+        }
       });
     }
     const stStatusSaveBtn = document.getElementById('stStatusSaveBtn');
@@ -454,6 +540,12 @@
         try{
           const payload = { student_id: sid, enrollment_status: status, status_reason: reason };
           if (status === 'graduated') payload.phone = phone;
+          if (status === 'withdrawn' || status === 'suspended') {
+            const at = document.getElementById('st_status_action_term');
+            const ay = document.getElementById('st_status_action_year');
+            payload.status_changed_term = (at && at.value) ? at.value.trim() : '';
+            payload.status_changed_year = (ay && ay.value) ? ay.value.trim() : '';
+          }
           const resp = await fetch('/students/update_status', {
             method: 'POST',
             headers: {'Content-Type':'application/json'},
@@ -478,6 +570,7 @@
       });
     }
 
+    updateExportLinks();
     // استدعاء تحميل الطلبة عند التحميل
     loadStudents();
   });
