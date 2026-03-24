@@ -62,6 +62,8 @@ venv.bak/
 # ============================================
 .idea/
 .vscode/
+!.vscode/
+!.vscode/tasks.json
 *.swp
 *.swo
 *~
