@@ -25,7 +25,7 @@ if ([string]::IsNullOrWhiteSpace($msg)) {
 
 $confirm = Read-Host "Continue with add/commit/push? Type y to continue"
 $confirm = ($confirm | Out-String).Trim().ToLower()
-if (($confirm -ne "y") -and ($confirm -ne "yes") -and ($confirm -ne "نعم")) {
+if (($confirm -ne "y") -and ($confirm -ne "yes")) {
     Write-Host "Canceled." -ForegroundColor Yellow
     exit 0
 }
@@ -33,7 +33,7 @@ if (($confirm -ne "y") -and ($confirm -ne "yes") -and ($confirm -ne "نعم")) {
 git add -A
 git diff --cached --quiet
 if ($LASTEXITCODE -eq 0) {
-    Write-Host "No staged changes to commit." -ForegroundColor Yellow
+    Write-Host "No new changes to push right now." -ForegroundColor Yellow
     exit 0
 }
 
