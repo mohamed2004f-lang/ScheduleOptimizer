@@ -1,6 +1,10 @@
-from flask import Blueprint, jsonify, request
+import os
+from datetime import datetime, timezone
+from typing import Optional
+
+from flask import Blueprint, jsonify, render_template, request
 from backend.core.auth import login_required, role_required
-from .utilities import get_connection, get_current_term
+from .utilities import DB_FILE, get_connection, get_current_term
 
 admin_bp = Blueprint("admin", __name__)
 
@@ -146,3 +150,85 @@ def admin_summary():
             recent = []
 
     return jsonify({"status": "ok", "data": data, "recent": recent})
+
+
+# --- إصدار المشروع / آخر تعديل للبيانات (بدون Git — يتجنب مشاكل الترميز وكشف المستودع) ---
+
+PROJECT_VERSION_LABEL_KEY = "project_version_label"
+PROJECT_VERSION_NOTE_KEY = "project_version_note"
+
+
+def _read_setting(cur, key: str, default: str = "") -> str:
+    try:
+        row = cur.execute("SELECT value FROM system_settings WHERE key = ?", (key,)).fetchone()
+        return (row[0] or default) if row else default
+    except Exception:
+        return default
+
+
+def _write_setting(conn, key: str, value: str) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)",
+        (key, value),
+    )
+    conn.commit()
+
+
+def _db_file_mtime_utc_iso() -> Optional[str]:
+    """وقت آخر تعديل لملف قاعدة البيانات (مؤشر آمن لنشاط البيانات دون Git)."""
+    try:
+        path = os.path.abspath(DB_FILE)
+        if not os.path.isfile(path):
+            return None
+        ts = os.path.getmtime(path)
+        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    except Exception:
+        return None
+
+
+@admin_bp.route("/project_status")
+@role_required("admin_main")
+def admin_project_status_page():
+    """صفحة بسيطة: تاريخ آخر تعديل لقاعدة البيانات + ملاحظة إصدار يدوية."""
+    return render_template("admin_project_status.html")
+
+
+@admin_bp.route("/project_status/data", methods=["GET"])
+@role_required("admin_main")
+def project_status_data():
+    """JSON: آخر تعديل لملف DB + تسمية/ملاحظة محفوظة (لا يُعاد مسار الملف)."""
+    mtime_iso = _db_file_mtime_utc_iso()
+    label = ""
+    note = ""
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            label = _read_setting(cur, PROJECT_VERSION_LABEL_KEY, "")
+            note = _read_setting(cur, PROJECT_VERSION_NOTE_KEY, "")
+    except Exception:
+        pass
+    return jsonify(
+        {
+            "status": "ok",
+            "db_last_modified_utc": mtime_iso,
+            "version_label": label.strip(),
+            "version_note": note.strip(),
+        }
+    )
+
+
+@admin_bp.route("/project_status/note", methods=["POST"])
+@role_required("admin_main")
+def project_status_save_note():
+    """حفظ تسمية إصدار وملاحظة (نص عربي UTF-8 من المتصفح)."""
+    data = request.get_json(force=True) or {}
+    label = (data.get("version_label") or "").strip()[:200]
+    note = (data.get("version_note") or "").strip()[:4000]
+    try:
+        with get_connection() as conn:
+            _write_setting(conn, PROJECT_VERSION_LABEL_KEY, label)
+            _write_setting(conn, PROJECT_VERSION_NOTE_KEY, note)
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)[:200]}), 500
+    return jsonify({"status": "ok", "message": "تم الحفظ"})

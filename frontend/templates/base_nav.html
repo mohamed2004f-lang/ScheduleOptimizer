@@ -152,6 +152,7 @@
           </a>
           <ul class="dropdown-menu" aria-labelledby="adminSettingsMenu">
             <li><a class="dropdown-item" id="navUsersAdmin" href="/users_admin">المستخدمون</a></li>
+            <li><a class="dropdown-item" id="navProjectStatus" href="/admin/project_status">إصدار المشروع وآخر تحديث</a></li>
             <li><a class="dropdown-item" id="navAcademicRules" href="/academic_rules_page">لائحة الإنذارات والفصل</a></li>
             <li><a class="dropdown-item" id="navSystemDocs" href="/system_docs">توثيق النظام</a></li>
           </ul>
@@ -209,6 +210,8 @@
       if (role !== 'admin' && role !== 'admin_main') {
         const elUsers = document.getElementById('navUsersAdmin');
         if (elUsers) elUsers.style.display = 'none';
+        const elPs = document.getElementById('navProjectStatus');
+        if (elPs) elPs.style.display = 'none';
         const elSup = document.getElementById('navSupervision');
         if (elSup) elSup.style.display = 'none';
         const elRules = document.getElementById('navAcademicRules');
@@ -241,6 +244,7 @@
           'navPerformance',
           'navAcademicRules',
           'navAnalytics',
+          'navProjectStatus',
           'navExamsMidterms',
           'navExamsFinals',
           'navExamsConflicts',
@@ -276,6 +280,7 @@
         ['/results','navResults'],
         ['/notifications_center','navNotifications'],
         ['/users_admin','navUsersAdmin'],
+        ['/admin/project_status','navProjectStatus'],
         ['/academic_rules_page','navAcademicRules'],
         ['/system_docs','navSystemDocs'],
       ];

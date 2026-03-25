@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>إصدار المشروع وآخر تحديث</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100">
+    <div class="page-header mb-3">
+      <h1 class="page-title">إصدار المشروع وآخر تحديث</h1>
+      <p class="page-subtitle">عرض آمن: تاريخ آخر تعديل لملف قاعدة البيانات، وتسمية/ملاحظة يدوية بعد النشر — دون الاتصال بـ Git من الخادم (يتجنب تشويه النصوص العربية في رسائل الالتزامات ومخاطر كشف المستودع).</p>
+    </div>
+
+    <div class="alert alert-light border">
+      <strong>ملاحظة:</strong> ظهور النصوص العربية بشكل غير مقروء في صفحات سجل Git السابقة كان غالباً بسبب <strong>اختلاف الترميز</strong> بين مخرجات Git على ويندوز ومتصفح UTF-8. تم إلغاء عرض سجل Git من الويب؛ للرفع استخدم <code>push.bat</code> من جهازك.
+    </div>
+
+    <div id="psMsg" class="mb-3"></div>
+
+    <div class="card mb-3">
+      <div class="card-header">مؤشر آخر نشاط للبيانات</div>
+      <div class="card-body">
+        <p class="mb-1"><strong>آخر تعديل لملف قاعدة البيانات (UTC):</strong> <span id="dbMtime" class="text-primary">—</span></p>
+        <p class="small text-muted mb-0">يعكس وقت كتابة ملف قاعدة البيانات على القرص (بعد استيراد/تعديلات)، وليس بالضرورة آخر commit على GitHub.</p>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header">تسمية الإصدار وملاحظة بعد النشر</div>
+      <div class="card-body">
+        <div class="mb-2">
+          <label class="form-label">تسمية قصيرة (مثال: 2026.03 — تحديث التسجيلات)</label>
+          <input type="text" class="form-control form-control-sm" id="versionLabel" maxlength="200" placeholder="اختياري">
+        </div>
+        <div class="mb-2">
+          <label class="form-label">ملاحظة</label>
+          <textarea class="form-control form-control-sm" id="versionNote" rows="4" maxlength="4000" placeholder="ما تم نشره أو تغييره (اختياري)"></textarea>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" id="btnSaveNote">حفظ</button>
+      </div>
+    </div>
+
+    <div class="mt-3">
+      <a href="/users_admin" class="btn btn-outline-secondary btn-sm">المستخدمون</a>
+      <a href="/dashboard" class="btn btn-outline-secondary btn-sm">لوحة القيادة</a>
+    </div>
+  </main>
+
+  <script src="/static/js/common.js"></script>
+  <script>
+    function showPsMsg(text, type) {
+      const el = document.getElementById('psMsg');
+      if (!text) { el.innerHTML = ''; return; }
+      el.innerHTML = '<div class="alert alert-' + (type || 'info') + ' py-2 mb-0">' + text + '</div>';
+    }
+
+    async function loadData() {
+      showPsMsg('');
+      try {
+        const d = await apiGet('/admin/project_status/data');
+        document.getElementById('dbMtime').textContent = d.db_last_modified_utc || '—';
+        document.getElementById('versionLabel').value = d.version_label || '';
+        document.getElementById('versionNote').value = d.version_note || '';
+      } catch (e) {
+        showPsMsg((e && e.message) ? e.message : 'تعذّر التحميل', 'danger');
+      }
+    }
+
+    document.getElementById('btnSaveNote').addEventListener('click', async () => {
+      try {
+        const j = await apiPost('/admin/project_status/note', {
+          version_label: document.getElementById('versionLabel').value,
+          version_note: document.getElementById('versionNote').value,
+        });
+        showPsMsg(j.message || 'تم الحفظ', 'success');
+        await loadData();
+      } catch (e) {
+        showPsMsg((e && e.message) ? e.message : 'فشل الحفظ', 'danger');
+      }
+    });
+
+    window.addEventListener('load', () => loadData());
+  </script>
+</body>
+</html>
