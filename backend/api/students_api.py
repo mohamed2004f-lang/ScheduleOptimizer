@@ -76,7 +76,8 @@ def _can_view_student(conn, student_id: str) -> bool:
     if role == "student":
         sid_session = session.get("student_id") or session.get("user")
         return bool(sid_session and str(sid_session) == str(student_id))
-    if role == "supervisor":
+    is_supervisor = (role == "supervisor") or (role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    if is_supervisor:
         instructor_id = session.get("instructor_id")
         if not instructor_id:
             return False
@@ -99,7 +100,8 @@ def _can_view_student(conn, student_id: str) -> bool:
 def get_students():
     """Get students with pagination + search. Admin/Supervisor only."""
     role = session.get("user_role") or ""
-    if role not in ("admin", "supervisor"):
+    is_supervisor = (role == "supervisor") or (role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    if role != "admin" and not is_supervisor:
         raise APIError("ليس لديك صلاحية لعرض قائمة الطلبة", 403)
 
     page = request.args.get("page", 1, type=int)

@@ -1,12 +1,17 @@
 import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from models.models import Course
-from flask import Blueprint, request, jsonify, Response, current_app
+from flask import Blueprint, request, jsonify, Response, current_app, session
 from backend.core.auth import login_required, role_required
 from collections import defaultdict
 from .utilities import get_connection, table_to_dicts, df_from_query, excel_response_from_df, pdf_response_from_html
 
 courses_bp = Blueprint("courses", __name__)
+
+
+def _is_instructor_or_supervisor_view_only() -> bool:
+    role = (session.get("user_role") or "").strip()
+    return role == "supervisor" or (role == "instructor") or (role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
 
 @courses_bp.route("/list")
 @login_required
@@ -56,7 +61,7 @@ def list_courses():
     return jsonify([c.__dict__ for c in courses])
 
 @courses_bp.route("/add", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def add_course():
     data = request.get_json(force=True)
     cname = (data.get("course_name") or "").strip()
@@ -120,7 +125,7 @@ def add_course():
     return jsonify({"status": "ok", "message": "تم إضافة المقرر"}), 200
 
 @courses_bp.route("/update", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def update_course():
     data = request.get_json(force=True)
     old_name = (data.get("old_course_name") or "").strip()
@@ -220,7 +225,7 @@ def update_course():
     return jsonify({"status": "ok", "message": "تم تعديل بيانات المقرر"}), 200
 
 @courses_bp.route("/delete", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def delete_course():
     data = request.get_json(force=True)
     cname = data.get("course_name")
@@ -254,7 +259,7 @@ def delete_course():
 
 # المتطلبات (Prereqs) - يدعم زوج واحد أو دفعة items[]
 @courses_bp.route("/prereqs/add", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def add_prereq():
     """
     Accepts:
@@ -384,7 +389,7 @@ def add_prereq():
     }), 200
 
 @courses_bp.route("/prereqs/delete", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def delete_prereq():
     data = request.get_json(force=True)
     course = data.get("course_name")
@@ -456,6 +461,8 @@ def export_courses_excel():
     """
     Export full courses table as an Excel file using utilities.excel_response_from_df.
     """
+    if _is_instructor_or_supervisor_view_only():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     try:
         df = df_from_query("SELECT course_name, course_code, units FROM courses")
     except Exception:
@@ -474,6 +481,8 @@ def export_courses_pdf():
     Export courses list as PDF. If pdf generation is not available, the underlying utility
     will return a JSON error response explaining the issue.
     """
+    if _is_instructor_or_supervisor_view_only():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     try:
         df = df_from_query("SELECT course_name, course_code, units FROM courses")
     except Exception:

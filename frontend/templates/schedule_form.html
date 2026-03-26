@@ -17,6 +17,7 @@
         <p class="page-subtitle">إدارة جلسات المقررات ثم اعتماد/نشر الجدول ليظهر للطلبة والمشرفين</p>
       </div>
     </div>
+    <div id="sd_msg" class="mb-2" aria-live="polite"></div>
 
       <div class="instruction-text">
         <strong>تعليمات:</strong> انقر على زر <strong>إدارة المقررات</strong> في أي خانة لتحديد محاضرات متعددة. <strong>الأيام عموديًا، التوقيت أفقيًا</strong>
@@ -25,9 +26,9 @@
       <div class="card mb-3 filter-section">
         <div class="card-body">
           <div class="d-flex flex-wrap align-items-center justify-content-between">
-            <div class="btn-group-gap">
-              <a class="btn btn-outline-success btn-sm" href="/schedule/export/excel" target="_blank">⬇️ تصدير Excel</a>
-              <a class="btn btn-outline-danger btn-sm" href="/schedule/export/pdf" target="_blank">⬇️ تصدير PDF</a>
+            <div class="btn-group-gap" id="scheduleExportWrap">
+              <a class="btn btn-outline-success btn-sm" id="btnScheduleExportExcel" href="/schedule/export/excel" target="_blank">⬇️ تصدير Excel</a>
+              <a class="btn btn-outline-danger btn-sm" id="btnScheduleExportPdf" href="/schedule/export/pdf" target="_blank">⬇️ تصدير PDF</a>
             </div>
             <div id="publishScheduleWrap" class="d-none align-items-center gap-2">
               <span id="publishStatusText" class="small text-muted"></span>
@@ -246,6 +247,7 @@ let currentScheduleData = [];
 let currentModalDay = '';
 let currentModalTime = '';
 let IS_ADMIN = false;
+let IS_VIEW_ONLY_ROLE = false;
 let IS_COMPACT = false;
 let CUSTOM_TIME_SLOTS = [];
 
@@ -381,79 +383,93 @@ async function loadSchedule(){
 }
 
 /* ---------- Manage Courses Modal ---------- */
+let EDITING_SECTION_ID = null;
+
+function fillManageCoursesModal(day, time){
+  const key = `${day}|${time}`;
+  const slotsMap = groupByTimeSlot(currentScheduleData);
+  const courses = slotsMap[key] || [];
+  const existingDiv = document.getElementById('existingCoursesList');
+  if(!existingDiv) return;
+
+  if(courses.length === 0){
+    existingDiv.innerHTML = '<p class="text-muted small">لا توجد مقررات في هذا الوقت</p>';
+    return;
+  }
+
+  existingDiv.innerHTML = '<h6 class="mb-2">المقررات الحالية:</h6><ul class="list-group" id="existingCoursesUl"></ul>';
+  const ul = document.getElementById('existingCoursesUl');
+  courses.forEach(course => {
+    const li = document.createElement('li');
+    li.className = 'list-group-item d-flex justify-content-between align-items-center';
+
+    const infoDiv = document.createElement('div');
+    const title = document.createElement('strong');
+    title.textContent = course.course_name || '';
+    infoDiv.appendChild(title);
+    if (course.room) {
+      const spanRoom = document.createElement('span');
+      spanRoom.textContent = ` — القاعة: ${course.room}`;
+      infoDiv.appendChild(spanRoom);
+    }
+    if (course.instructor) {
+      const spanInst = document.createElement('span');
+      spanInst.textContent = ` — الأستاذ: ${course.instructor}`;
+      infoDiv.appendChild(spanInst);
+    }
+
+    const buttonsDiv = document.createElement('div');
+    buttonsDiv.className = 'd-flex gap-1';
+
+    const btnEdit = document.createElement('button');
+    btnEdit.type = 'button';
+    btnEdit.className = 'btn btn-sm btn-outline-primary';
+    btnEdit.textContent = 'تعديل';
+    btnEdit.addEventListener('click', () => {
+      startEditExistingCourse(
+        course.section_id,
+        course.course_name || '',
+        course.room || '',
+        course.instructor || ''
+      );
+    });
+
+    const btnDelete = document.createElement('button');
+    btnDelete.type = 'button';
+    btnDelete.className = 'btn btn-sm btn-danger';
+    btnDelete.textContent = 'حذف';
+    btnDelete.addEventListener('click', () => {
+      deleteScheduleRow(course.section_id);
+    });
+
+    buttonsDiv.appendChild(btnEdit);
+    buttonsDiv.appendChild(btnDelete);
+
+    li.appendChild(infoDiv);
+    li.appendChild(buttonsDiv);
+    ul.appendChild(li);
+  });
+}
+
+/** بعد الحذف أو لإلغاء وضع التعديل: تفريغ نموذج «إضافة مقرر» وإعادة بناء قائمة الأساتذة (إزالة الخيارات المؤقتة). */
+async function resetManageCoursesAddForm(){
+  EDITING_SECTION_ID = null;
+  const form = document.getElementById('addCourseForm');
+  if (form) form.reset();
+  const modalMsg = document.getElementById('modalMsg');
+  if (modalMsg) modalMsg.innerHTML = '';
+  await loadInstructors();
+}
+
 function openManageCourses(day, time){
   currentModalDay = day;
   currentModalTime = time;
   document.getElementById('modalDay').textContent = day;
   document.getElementById('modalTime').textContent = time;
-  
-  const key = `${day}|${time}`;
-  const slotsMap = groupByTimeSlot(currentScheduleData);
-  const courses = slotsMap[key] || [];
-  
-  const existingDiv = document.getElementById('existingCoursesList');
-  if(courses.length === 0){
-    existingDiv.innerHTML = '<p class="text-muted small">لا توجد مقررات في هذا الوقت</p>';
-  } else {
-    existingDiv.innerHTML = '<h6 class="mb-2">المقررات الحالية:</h6><ul class="list-group" id="existingCoursesUl"></ul>';
-    const ul = document.getElementById('existingCoursesUl');
-    courses.forEach(course => {
-      const li = document.createElement('li');
-      li.className = 'list-group-item d-flex justify-content-between align-items-center';
-
-      const infoDiv = document.createElement('div');
-      const title = document.createElement('strong');
-      title.textContent = course.course_name || '';
-      infoDiv.appendChild(title);
-      if (course.room) {
-        const spanRoom = document.createElement('span');
-        spanRoom.textContent = ` — القاعة: ${course.room}`;
-        infoDiv.appendChild(spanRoom);
-      }
-      if (course.instructor) {
-        const spanInst = document.createElement('span');
-        spanInst.textContent = ` — الأستاذ: ${course.instructor}`;
-        infoDiv.appendChild(spanInst);
-      }
-
-      const buttonsDiv = document.createElement('div');
-      buttonsDiv.className = 'd-flex gap-1';
-
-      const btnEdit = document.createElement('button');
-      btnEdit.type = 'button';
-      btnEdit.className = 'btn btn-sm btn-outline-primary';
-      btnEdit.textContent = 'تعديل';
-      btnEdit.addEventListener('click', () => {
-        startEditExistingCourse(
-          course.section_id,
-          course.course_name || '',
-          course.room || '',
-          course.instructor || ''
-        );
-      });
-
-      const btnDelete = document.createElement('button');
-      btnDelete.type = 'button';
-      btnDelete.className = 'btn btn-sm btn-danger';
-      btnDelete.textContent = 'حذف';
-      btnDelete.addEventListener('click', () => {
-        deleteScheduleRow(course.section_id);
-      });
-
-      buttonsDiv.appendChild(btnEdit);
-      buttonsDiv.appendChild(btnDelete);
-
-      li.appendChild(infoDiv);
-      li.appendChild(buttonsDiv);
-      ul.appendChild(li);
-    });
-  }
-  
-  const modal = new bootstrap.Modal(document.getElementById('manageCoursesModal'));
-  modal.show();
+  fillManageCoursesModal(day, time);
+  const modalEl = document.getElementById('manageCoursesModal');
+  bootstrap.Modal.getOrCreateInstance(modalEl).show();
 }
-
-let EDITING_SECTION_ID = null;
 
 function startEditExistingCourse(sectionId, courseName, room, instructor){
   EDITING_SECTION_ID = sectionId;
@@ -516,8 +532,8 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
         document.getElementById('addCourseForm').reset();
         await loadSchedule();
         setTimeout(() => {
-          const modal = bootstrap.Modal.getInstance(document.getElementById('manageCoursesModal'));
-          if(modal) modal.hide();
+          const mEl = document.getElementById('manageCoursesModal');
+          bootstrap.Modal.getInstance(mEl)?.hide();
         }, 800);
       } else {
         showMsg('خطأ في التعديل: ' + (j?.message || resp.statusText), 'danger', 3000, 'modalMsg');
@@ -573,8 +589,8 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
       document.getElementById('addCourseForm').reset();
       await loadSchedule();
       setTimeout(() => {
-        const modal = bootstrap.Modal.getInstance(document.getElementById('manageCoursesModal'));
-        if(modal) modal.hide();
+        const mEl = document.getElementById('manageCoursesModal');
+        bootstrap.Modal.getInstance(mEl)?.hide();
       }, 1000);
     } else {
       showMsg('خطأ: ' + (j?.message || resp.statusText), 'danger', 3000, 'modalMsg');
@@ -588,7 +604,8 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
 /* ---------- Conflicts Modal ---------- */
 function showConflictsModal(conflicts, courseName, day, time) {
   return new Promise((resolve) => {
-    const modal = new bootstrap.Modal(document.getElementById('conflictsModal'));
+    const modalEl = document.getElementById('conflictsModal');
+    const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
     const detailsDiv = document.getElementById('conflictDetails');
     
     // عرض تفاصيل التعارضات
@@ -649,7 +666,7 @@ function showConflictsModal(conflicts, courseName, day, time) {
 async function deleteScheduleRow(section_id){
   if(!confirm('هل تريد حذف هذا المقرر من الجدول؟')) return;
   try {
-    const resp = await fetch('/delete_schedule_row', {
+    const resp = await fetch('/schedule/delete_schedule_row', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({section_id})
@@ -658,9 +675,10 @@ async function deleteScheduleRow(section_id){
     if (resp.ok && j && j.status === 'ok') {
       showMsg('تم حذف المقرر', 'success');
       await loadSchedule();
-      // Refresh modal if open
-      if(currentModalDay && currentModalTime){
-        openManageCourses(currentModalDay, currentModalTime);
+      await resetManageCoursesAddForm();
+      const modalEl = document.getElementById('manageCoursesModal');
+      if (modalEl && modalEl.classList.contains('show') && currentModalDay && currentModalTime) {
+        fillManageCoursesModal(currentModalDay, currentModalTime);
       }
     } else {
       showMsg('خطأ: ' + (j?.message || resp.statusText), 'danger');
@@ -760,7 +778,7 @@ async function refreshPublishStatus(){
   if(!wrap || !statusEl) return;
   try {
     const auth = await fetch('/auth/check').then(r=>r.json()).catch(()=>({}));
-    if (auth.role !== 'admin') {
+    if (!['admin', 'admin_main', 'head_of_department'].includes(auth.role || '')) {
       wrap.classList.add('d-none');
       return;
     }
@@ -815,7 +833,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Determine role once and apply view-only rules
   fetch('/auth/check').then(r=>r.json()).then(auth=>{
-    IS_ADMIN = auth?.role === 'admin';
+    const role = auth?.role || '';
+    const isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(auth?.is_supervisor || 0) === 1);
+    IS_VIEW_ONLY_ROLE = (role === 'instructor') || isSupervisor;
+    IS_ADMIN = ['admin', 'admin_main', 'head_of_department'].includes(role);
     if(!IS_ADMIN){
       const importForm = document.getElementById('schedule-import-form');
       if(importForm) importForm.style.display = 'none';
@@ -824,10 +845,20 @@ document.addEventListener('DOMContentLoaded', () => {
       const btnCompact = document.getElementById('btnToggleCompact');
       if(btnCompact) btnCompact.style.display = 'none';
     }
+    if (IS_VIEW_ONLY_ROLE) {
+      const exportWrap = document.getElementById('scheduleExportWrap');
+      if (exportWrap) exportWrap.style.display = 'none';
+      const importForm = document.getElementById('schedule-import-form');
+      if (importForm) importForm.style.display = 'none';
+      const btnRun = document.getElementById('btnRun');
+      if (btnRun) btnRun.style.display = 'none';
+    }
     refreshPublishStatus();
+    loadSchedule();
   }).catch(()=>{
     IS_ADMIN = false;
     refreshPublishStatus();
+    loadSchedule();
   });
 
   // Periodic conflict check

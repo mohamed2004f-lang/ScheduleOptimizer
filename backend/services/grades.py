@@ -19,6 +19,435 @@ PASSING_GRADE = 50
 grades_bp = Blueprint("grades", __name__)
 
 
+def _now_iso_z() -> str:
+    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _current_user_name() -> str:
+    return (session.get("user") or session.get("username") or "").strip()
+
+
+def _is_supervisor_role() -> bool:
+    r = (session.get("user_role") or "").strip()
+    return (r == "supervisor") or (r == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+
+
+def _current_semester_label(conn) -> str:
+    term_name, term_year = get_current_term(conn=conn)
+    return f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
+
+
+def _instructor_name_for_session(conn) -> str:
+    instructor_id = session.get("instructor_id")
+    if not instructor_id:
+        return ""
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT name FROM instructors WHERE id = ? LIMIT 1",
+        (int(instructor_id),),
+    ).fetchone()
+    return (row[0] if row else "") or ""
+
+
+def _allowed_courses_for_instructor_current_term(conn) -> list:
+    """
+    يرجع قائمة أسماء المقررات المسندة للأستاذ في الفصل الحالي من جدول schedule.
+    """
+    instructor_name = _instructor_name_for_session(conn)
+    if not instructor_name:
+        return []
+    semester_label = _current_semester_label(conn)
+    if not semester_label:
+        return []
+    cur = conn.cursor()
+    rows = cur.execute(
+        """
+        SELECT DISTINCT course_name
+        FROM schedule
+        WHERE semester = ?
+          AND instructor = ?
+          AND COALESCE(course_name,'') <> ''
+        ORDER BY course_name
+        """,
+        (semester_label, instructor_name),
+    ).fetchall()
+    return [r[0] for r in rows if r and r[0]]
+
+
+def _course_grading_mode(conn, course_name: str) -> str:
+    cur = conn.cursor()
+    cols = [r[1] for r in cur.execute("PRAGMA table_info(courses)").fetchall()]
+    if "grading_mode" not in cols:
+        return "partial_final"
+    row = cur.execute(
+        "SELECT COALESCE(grading_mode,'partial_final') FROM courses WHERE course_name = ? LIMIT 1",
+        (course_name,),
+    ).fetchone()
+    m = (row[0] if row else "partial_final") or "partial_final"
+    m = str(m).strip().lower()
+    return m if m in ("partial_final", "final_total_only") else "partial_final"
+
+
+def _compute_total_for_mode(mode: str, partial, final, total):
+    """
+    - partial_final: instructor can send partial+final OR total; we compute best available.
+    - final_total_only: use total only (100-only course).
+    """
+    if mode == "final_total_only":
+        return total
+    # partial_final
+    if total is not None:
+        return total
+    if partial is None and final is None:
+        return None
+    try:
+        p = float(partial or 0)
+        f = float(final or 0)
+        return p + f
+    except Exception:
+        return None
+
+
+@grades_bp.route("/drafts/courses", methods=["GET"])
+@role_required("instructor")
+def draft_courses_current_term():
+    """
+    قائمة مقررات الأستاذ في الفصل الحالي (لإنشاء مسودة).
+    """
+    with get_connection() as conn:
+        courses = _allowed_courses_for_instructor_current_term(conn)
+    return jsonify({"status": "ok", "courses": courses}), 200
+
+
+@grades_bp.route("/drafts/mine", methods=["GET"])
+@role_required("instructor")
+def list_my_grade_drafts():
+    """مسودات الأستاذ للفصل الحالي (سجل واحد لكل مقرر حسب القيد الفريد)."""
+    if _is_supervisor_role():
+        return jsonify({"status": "ok", "drafts": [], "semester": ""}), 200
+    instructor_id = session.get("instructor_id")
+    if not instructor_id:
+        return jsonify({"status": "error", "message": "لا يوجد ربط بين حسابك وعضو هيئة تدريس"}), 403
+    with get_connection() as conn:
+        semester_label = _current_semester_label(conn)
+        if not semester_label:
+            return jsonify({"status": "ok", "drafts": [], "semester": ""}), 200
+        cur = conn.cursor()
+        rows = cur.execute(
+            """
+            SELECT id, semester, course_name, grading_mode, status,
+                   created_at, updated_at, submitted_at, approved_at, approved_by
+            FROM grade_drafts
+            WHERE instructor_id = ? AND semester = ?
+            ORDER BY course_name
+            """,
+            (int(instructor_id), semester_label),
+        ).fetchall()
+    drafts = [dict(r) for r in rows] if rows else []
+    return jsonify({"status": "ok", "drafts": drafts, "semester": semester_label}), 200
+
+
+@grades_bp.route("/drafts/roster", methods=["GET"])
+@role_required("instructor")
+def draft_roster_for_course():
+    """الطلاب المسجلون في المقرر (من جدول registrations) بعد التحقق من إسناد المقرر للأستاذ."""
+    if _is_supervisor_role():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+    course_name = (request.args.get("course_name") or "").strip()
+    if not course_name:
+        return jsonify({"status": "error", "message": "course_name مطلوب"}), 400
+    with get_connection() as conn:
+        allowed = _allowed_courses_for_instructor_current_term(conn)
+        if course_name not in allowed:
+            return jsonify({"status": "error", "message": "المقرر غير مسند لك في الفصل الحالي"}), 403
+        cur = conn.cursor()
+        rows = cur.execute(
+            """
+            SELECT DISTINCT r.student_id, COALESCE(s.student_name, '') AS student_name
+            FROM registrations r
+            LEFT JOIN students s ON s.student_id = r.student_id
+            WHERE r.course_name = ?
+            ORDER BY student_name, r.student_id
+            """,
+            (course_name,),
+        ).fetchall()
+    roster = [{"student_id": r[0], "student_name": r[1] or ""} for r in rows] if rows else []
+    return jsonify({"status": "ok", "roster": roster}), 200
+
+
+@grades_bp.route("/drafts/pending", methods=["GET"])
+@role_required("admin_main", "head_of_department")
+def list_pending_grade_drafts():
+    """مسودات بانتظار الاعتماد للفصل الحالي."""
+    with get_connection() as conn:
+        semester_label = _current_semester_label(conn)
+        cur = conn.cursor()
+        if not semester_label:
+            return jsonify({"status": "ok", "pending": [], "semester": ""}), 200
+        rows = cur.execute(
+            """
+            SELECT d.id, d.semester, d.course_name, d.grading_mode, d.status,
+                   d.created_at, d.updated_at, d.submitted_at,
+                   d.instructor_id, COALESCE(i.name, '') AS instructor_name
+            FROM grade_drafts d
+            LEFT JOIN instructors i ON i.id = d.instructor_id
+            WHERE d.semester = ? AND d.status = 'Submitted'
+            ORDER BY d.submitted_at DESC, d.course_name
+            """,
+            (semester_label,),
+        ).fetchall()
+    pending = [dict(r) for r in rows] if rows else []
+    return jsonify({"status": "ok", "pending": pending, "semester": semester_label}), 200
+
+
+@grades_bp.route("/drafts", methods=["POST"])
+@role_required("instructor")
+def create_grade_draft():
+    """
+    إنشاء مسودة درجات لمقرر واحد في الفصل الحالي.
+    body:
+      - course_name
+    """
+    if _is_supervisor_role():
+        # المشرف لا يستخدم مسار مسودات الأستاذ (لتفادي الالتباس)
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+    data = request.get_json(force=True) or {}
+    course_name = (data.get("course_name") or "").strip()
+    if not course_name:
+        return jsonify({"status": "error", "message": "course_name مطلوب"}), 400
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        allowed = _allowed_courses_for_instructor_current_term(conn)
+        if course_name not in allowed:
+            return jsonify({"status": "error", "message": "المقرر غير مسند لك في الفصل الحالي"}), 403
+
+        semester_label = _current_semester_label(conn)
+        if not semester_label:
+            return jsonify({"status": "error", "message": "لا يمكن تحديد الفصل الحالي"}), 400
+
+        instructor_id = session.get("instructor_id")
+        if not instructor_id:
+            return jsonify({"status": "error", "message": "لا يوجد ربط بين حسابك وعضو هيئة تدريس"}), 403
+
+        # منع أكثر من مسودة مفتوحة في نفس الوقت للأستاذ (مقرر واحد فقط في كل مرة)
+        row_open = cur.execute(
+            """
+            SELECT id FROM grade_drafts
+            WHERE instructor_id = ?
+              AND semester = ?
+              AND status IN ('Draft','Submitted')
+            LIMIT 1
+            """,
+            (int(instructor_id), semester_label),
+        ).fetchone()
+        if row_open:
+            return jsonify({"status": "error", "message": "لديك مسودة مفتوحة بالفعل لهذا الفصل"}), 400
+
+        grading_mode = _course_grading_mode(conn, course_name)
+        now = _now_iso_z()
+        cur.execute(
+            """
+            INSERT INTO grade_drafts
+            (semester, course_name, instructor_id, grading_mode, status, created_at, updated_at)
+            VALUES (?,?,?,?, 'Draft', ?, ?)
+            """,
+            (semester_label, course_name, int(instructor_id), grading_mode, now, now),
+        )
+        draft_id = cur.lastrowid
+        conn.commit()
+
+    return jsonify({"status": "ok", "draft_id": int(draft_id), "grading_mode": grading_mode}), 200
+
+
+@grades_bp.route("/drafts/<int:draft_id>", methods=["GET"])
+@role_required("instructor", "head_of_department", "admin_main")
+def get_grade_draft(draft_id: int):
+    with get_connection() as conn:
+        cur = conn.cursor()
+        d = cur.execute(
+            "SELECT * FROM grade_drafts WHERE id = ?",
+            (int(draft_id),),
+        ).fetchone()
+        if not d:
+            return jsonify({"status": "error", "message": "draft not found"}), 404
+
+        # Scope: instructor يرى مسودته فقط
+        role = (session.get("user_role") or "").strip()
+        if role == "instructor" and not _is_supervisor_role():
+            if int(d["instructor_id"] or 0) != int(session.get("instructor_id") or 0):
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+        items = cur.execute(
+            """
+            SELECT student_id, partial, final, total, computed_total, updated_at
+            FROM grade_draft_items
+            WHERE draft_id = ?
+            ORDER BY student_id
+            """,
+            (int(draft_id),),
+        ).fetchall()
+        out_items = [dict(r) for r in items] if items else []
+
+    return jsonify({"status": "ok", "draft": dict(d), "items": out_items}), 200
+
+
+@grades_bp.route("/drafts/<int:draft_id>/items", methods=["POST"])
+@role_required("instructor")
+def save_grade_draft_items(draft_id: int):
+    if _is_supervisor_role():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+    data = request.get_json(force=True) or {}
+    items = data.get("items") or []
+    if not isinstance(items, list):
+        return jsonify({"status": "error", "message": "items must be list"}), 400
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        d = cur.execute(
+            "SELECT * FROM grade_drafts WHERE id = ?",
+            (int(draft_id),),
+        ).fetchone()
+        if not d:
+            return jsonify({"status": "error", "message": "draft not found"}), 404
+        if int(d["instructor_id"] or 0) != int(session.get("instructor_id") or 0):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        if (d["status"] or "") not in ("Draft",):
+            return jsonify({"status": "error", "message": "لا يمكن تعديل مسودة ليست Draft"}), 400
+
+        mode = (d["grading_mode"] or "partial_final").strip().lower()
+        now = _now_iso_z()
+
+        saved = 0
+        for it in items:
+            sid = str((it or {}).get("student_id") or "").strip()
+            if not sid:
+                continue
+            partial = it.get("partial", None)
+            final = it.get("final", None)
+            total = it.get("total", None)
+
+            # validate
+            ok, pv = validate_grade_value(partial)
+            if not ok:
+                return jsonify({"status": "error", "message": f"partial invalid for {sid}: {pv}"}), 400
+            ok, fv = validate_grade_value(final)
+            if not ok:
+                return jsonify({"status": "error", "message": f"final invalid for {sid}: {fv}"}), 400
+            ok, tv = validate_grade_value(total)
+            if not ok:
+                return jsonify({"status": "error", "message": f"total invalid for {sid}: {tv}"}), 400
+
+            computed = _compute_total_for_mode(mode, pv, fv, tv)
+            # upsert
+            cur.execute(
+                """
+                INSERT INTO grade_draft_items (draft_id, student_id, partial, final, total, computed_total, updated_at)
+                VALUES (?,?,?,?,?,?,?)
+                ON CONFLICT(draft_id, student_id) DO UPDATE SET
+                  partial=excluded.partial,
+                  final=excluded.final,
+                  total=excluded.total,
+                  computed_total=excluded.computed_total,
+                  updated_at=excluded.updated_at
+                """,
+                (int(draft_id), sid, pv, fv, tv, computed, now),
+            )
+            saved += 1
+
+        cur.execute("UPDATE grade_drafts SET updated_at = ? WHERE id = ?", (now, int(draft_id)))
+        conn.commit()
+
+    return jsonify({"status": "ok", "saved": int(saved)}), 200
+
+
+@grades_bp.route("/drafts/<int:draft_id>/submit", methods=["POST"])
+@role_required("instructor")
+def submit_grade_draft(draft_id: int):
+    if _is_supervisor_role():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+    with get_connection() as conn:
+        cur = conn.cursor()
+        d = cur.execute("SELECT * FROM grade_drafts WHERE id = ?", (int(draft_id),)).fetchone()
+        if not d:
+            return jsonify({"status": "error", "message": "draft not found"}), 404
+        if int(d["instructor_id"] or 0) != int(session.get("instructor_id") or 0):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        if (d["status"] or "") != "Draft":
+            return jsonify({"status": "error", "message": "لا يمكن الإرسال إلا من Draft"}), 400
+        now = _now_iso_z()
+        cur.execute(
+            "UPDATE grade_drafts SET status='Submitted', submitted_at=?, updated_at=? WHERE id=?",
+            (now, now, int(draft_id)),
+        )
+        conn.commit()
+    return jsonify({"status": "ok"}), 200
+
+
+@grades_bp.route("/drafts/<int:draft_id>/approve", methods=["POST"])
+@role_required("admin_main", "head_of_department")
+def approve_grade_draft(draft_id: int):
+    """
+    اعتماد المسودة ونشرها في جدول grades.
+    """
+    actor = _current_user_name() or "system"
+    now = _now_iso_z()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        d = cur.execute("SELECT * FROM grade_drafts WHERE id = ?", (int(draft_id),)).fetchone()
+        if not d:
+            return jsonify({"status": "error", "message": "draft not found"}), 404
+        if (d["status"] or "") not in ("Submitted",):
+            return jsonify({"status": "error", "message": "لا يمكن الاعتماد إلا لمسودة Submitted"}), 400
+
+        semester = d["semester"]
+        course_name = d["course_name"]
+        # نشر الدرجات
+        items = cur.execute(
+            "SELECT student_id, computed_total FROM grade_draft_items WHERE draft_id = ?",
+            (int(draft_id),),
+        ).fetchall()
+        published = 0
+        for it in items or []:
+            sid = (it["student_id"] if hasattr(it, "keys") else it[0]) or ""
+            grade_val = (it["computed_total"] if hasattr(it, "keys") else it[1])
+            # نسمح بـ NULL (لم يُدخل)
+            old = cur.execute(
+                "SELECT grade FROM grades WHERE student_id=? AND semester=? AND course_name=?",
+                (sid, semester, course_name),
+            ).fetchone()
+            old_grade = old[0] if old else None
+
+            cur.execute(
+                """
+                INSERT INTO grades (student_id, semester, course_name, grade, updated_at)
+                VALUES (?,?,?,?,?)
+                ON CONFLICT(student_id, semester, course_name) DO UPDATE SET
+                  grade=excluded.grade,
+                  updated_at=excluded.updated_at
+                """,
+                (sid, semester, course_name, grade_val, now),
+            )
+            try:
+                cur.execute(
+                    "INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (sid, semester, course_name, old_grade, grade_val, actor, now),
+                )
+            except Exception:
+                pass
+            published += 1
+
+        cur.execute(
+            "UPDATE grade_drafts SET status='Approved', approved_at=?, approved_by=?, updated_at=? WHERE id=?",
+            (now, actor, now, int(draft_id)),
+        )
+        conn.commit()
+
+    return jsonify({"status": "ok", "published": int(published)}), 200
+
+
 def validate_grade_value(g):
     if g is None:
         return True, None
@@ -32,7 +461,7 @@ def validate_grade_value(g):
 
 
 @grades_bp.route("/save", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def save_grades():
     data = request.get_json(force=True)
     sid = data.get("student_id")
@@ -172,7 +601,7 @@ def download_semester_template():
 
 
 @grades_bp.route("/import/semester", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def import_semester_excel():
     """
     استيراد نتيجة فصل كاملة من ملف Excel.
@@ -435,7 +864,7 @@ def import_semester_excel():
 
 
 @grades_bp.route("/migrate_registrations_to_transcript", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def migrate_registrations_to_transcript():
     data = request.get_json(force=True)
     student_id = data.get("student_id")
@@ -807,7 +1236,7 @@ def _parse_export_style_single_student(df):
 
 
 @grades_bp.route("/import/single", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def import_single_student():
     # expects form with file (excel) and optional student_id/semester/year/changed_by
     file = request.files.get("file")
@@ -835,7 +1264,7 @@ def import_single_student():
 
 
 @grades_bp.route("/import/transcript", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def import_transcript():
     """
     Alias لمسار استيراد كشف درجات طالب واحد باستخدام نفس منطق /import/single
@@ -983,7 +1412,7 @@ def _import_export_style_single_student(parsed, student_id_override, student_nam
 
 
 @grades_bp.route("/update", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def update_grade():
     data = request.get_json(force=True)
     sid = data.get("student_id")
@@ -1162,7 +1591,7 @@ def update_grade():
 
 
 @grades_bp.route("/rename_semester", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def rename_semester():
     """
     تعديل اسم فصل (مثلاً من \"خريف 24-25\" إلى \"خريف 25-26\").
@@ -1216,7 +1645,8 @@ def get_transcript(student_id):
                 "code": "FORBIDDEN"
             }), 403
     # المشرف يمكنه عرض سجلات الطلبة المسندين إليه فقط
-    if user_role == "supervisor":
+    is_supervisor = (user_role == "supervisor") or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    if is_supervisor:
         from backend.services.utilities import get_connection
         instructor_id = session.get("instructor_id")
         if not instructor_id:
@@ -1235,6 +1665,56 @@ def get_transcript(student_id):
                 return jsonify({
                     "status": "error",
                     "message": "لا يمكنك عرض سجل طالب غير مُسند إليك",
+                    "code": "FORBIDDEN"
+                }), 403
+    # الأستاذ (غير المشرف) يمكنه عرض سجلات الطلاب المرتبطين بمقرراته في الفصل الحالي فقط
+    if user_role == "instructor" and not is_supervisor:
+        instructor_id = session.get("instructor_id")
+        if not instructor_id:
+            return jsonify({
+                "status": "error",
+                "message": "لا يوجد ربط بين حسابك وعضو هيئة تدريس",
+                "code": "FORBIDDEN"
+            }), 403
+        with get_connection() as conn:
+            cur = conn.cursor()
+            instr_row = cur.execute(
+                "SELECT name FROM instructors WHERE id = ? LIMIT 1",
+                (instructor_id,),
+            ).fetchone()
+            if not instr_row:
+                return jsonify({
+                    "status": "error",
+                    "message": "لا يمكن تحديد المدرّس المرتبط بحسابك",
+                    "code": "FORBIDDEN"
+                }), 403
+            instructor_name = instr_row[0]
+
+            term_name, term_year = get_current_term(conn=conn)
+            semester_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
+            if not semester_label:
+                return jsonify({
+                    "status": "error",
+                    "message": "لا يمكن تحديد الفصل الحالي",
+                    "code": "FORBIDDEN"
+                }), 403
+
+            allowed = cur.execute(
+                """
+                SELECT 1
+                FROM registrations r
+                JOIN schedule s ON r.course_name = s.course_name
+                WHERE r.student_id = ?
+                  AND s.semester = ?
+                  AND s.instructor = ?
+                LIMIT 1
+                """,
+                (student_id, semester_label, instructor_name),
+            ).fetchone()
+            if not allowed:
+                return jsonify({
+                    "status": "error",
+                    "message": "لا يمكنك عرض سجل طالب غير مسند إلى مقرراتك في الفصل الحالي",
                     "code": "FORBIDDEN"
                 }), 403
     data = _load_transcript_data(student_id)
@@ -1454,6 +1934,89 @@ def export_transcript(student_id):
     mode = (request.args.get("mode") or "detailed").lower()
     semester_filter = (request.args.get("semester") or "").strip()
 
+    # تقييد التصدير حسب الدور (منع التلاعب عبر استدعاء endpoint مباشرة)
+    user_role = session.get("user_role")
+    if user_role == "student":
+        sid_session = session.get("student_id") or session.get("user")
+        if sid_session != student_id:
+            return jsonify({
+                "status": "error",
+                "message": "لا يمكنك تصدير سجل طالب آخر",
+                "code": "FORBIDDEN"
+            }), 403
+
+    is_supervisor = (user_role == "supervisor") or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    if is_supervisor:
+        instructor_id = session.get("instructor_id")
+        if not instructor_id:
+            return jsonify({
+                "status": "error",
+                "message": "لا يوجد ربط بين حسابك وعضو هيئة تدريس",
+                "code": "FORBIDDEN"
+            }), 403
+        with get_connection() as conn:
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT 1 FROM student_supervisor WHERE student_id = ? AND instructor_id = ? LIMIT 1",
+                (student_id, instructor_id),
+            ).fetchone()
+            if not row:
+                return jsonify({
+                    "status": "error",
+                    "message": "لا يمكنك تصدير سجل طالب غير مُسند إليك",
+                    "code": "FORBIDDEN"
+                }), 403
+
+    if user_role == "instructor" and not is_supervisor:
+        instructor_id = session.get("instructor_id")
+        if not instructor_id:
+            return jsonify({
+                "status": "error",
+                "message": "لا يوجد ربط بين حسابك وعضو هيئة تدريس",
+                "code": "FORBIDDEN"
+            }), 403
+        with get_connection() as conn:
+            cur = conn.cursor()
+            instr_row = cur.execute(
+                "SELECT name FROM instructors WHERE id = ? LIMIT 1",
+                (instructor_id,),
+            ).fetchone()
+            if not instr_row:
+                return jsonify({
+                    "status": "error",
+                    "message": "لا يمكن تحديد المدرّس المرتبط بحسابك",
+                    "code": "FORBIDDEN"
+                }), 403
+            instructor_name = instr_row[0]
+
+            term_name, term_year = get_current_term(conn=conn)
+            semester_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
+            if not semester_label:
+                return jsonify({
+                    "status": "error",
+                    "message": "لا يمكن تحديد الفصل الحالي",
+                    "code": "FORBIDDEN"
+                }), 403
+
+            allowed = cur.execute(
+                """
+                SELECT 1
+                FROM registrations r
+                JOIN schedule s ON r.course_name = s.course_name
+                WHERE r.student_id = ?
+                  AND s.semester = ?
+                  AND s.instructor = ?
+                LIMIT 1
+                """,
+                (student_id, semester_label, instructor_name),
+            ).fetchone()
+            if not allowed:
+                return jsonify({
+                    "status": "error",
+                    "message": "لا يمكنك تصدير سجل طالب غير مسند إلى مقرراتك في الفصل الحالي",
+                    "code": "FORBIDDEN"
+                }), 403
+
     data = _load_transcript_data(student_id)
 
     # في حال تم تحديد فصل لفلترة التصدير، نقتصر على هذا الفصل فقط
@@ -1522,7 +2085,7 @@ def export_transcript(student_id):
 
 
 @grades_bp.route("/delete/semester", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def delete_semester():
     """Delete all grades for a student in a semester. Records audit rows for each deleted course."""
     data = request.get_json(force=True)
@@ -1570,7 +2133,7 @@ def delete_semester():
 
 
 @grades_bp.route("/delete/course", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def delete_course():
     """Delete a single course result for a student in a semester. Records an audit row."""
     data = request.get_json(force=True)

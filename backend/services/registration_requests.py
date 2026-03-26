@@ -27,12 +27,14 @@ def create_request():
     if not student_id or not course_name:
         return jsonify({"status": "error", "message": "student_id و course_name مطلوبة"}), 400
 
-    # الطالب لا يمكنه إنشاء طلب إلا لنفسه
+    # الطالب فقط يمكنه إنشاء طلب، ولـنفسه فقط
     user_role = session.get("user_role")
-    if user_role == "student":
-        sid_session = session.get("student_id") or session.get("user")
-        if sid_session != student_id:
-            return jsonify({"status": "error", "message": "لا يمكنك إنشاء طلب لطالب آخر"}), 403
+    if user_role != "student":
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+    sid_session = session.get("student_id") or session.get("user")
+    if sid_session != student_id:
+        return jsonify({"status": "error", "message": "لا يمكنك إنشاء طلب لطالب آخر"}), 403
 
     requested_by = _current_user()
 
@@ -55,6 +57,12 @@ def create_request():
 @registration_requests_bp.route("/registration_requests/list", methods=["GET"])
 @role_required("admin", "supervisor")
 def list_requests():
+    raw_role = session.get("user_role") or ""
+    is_supervisor = (raw_role == "supervisor") or (raw_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    # منع الأستاذ غير المشرف من هذا المسار
+    if raw_role == "instructor" and not is_supervisor:
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
     student_id = (request.args.get("student_id") or "").strip()
     term = (request.args.get("term") or "").strip()
     action = (request.args.get("action") or "").strip()
@@ -68,6 +76,20 @@ def list_requests():
         WHERE 1=1
     """
     params = []
+
+    # Scope للـ supervisor: فقط طلبات طلابه
+    if is_supervisor:
+        instructor_id = session.get("instructor_id")
+        if not instructor_id:
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        q += """
+            AND student_id IN (
+                SELECT student_id
+                FROM student_supervisor
+                WHERE instructor_id = ?
+            )
+        """
+        params.append(instructor_id)
     if student_id:
         q += " AND student_id = ?"
         params.append(student_id)
@@ -236,6 +258,11 @@ def _execute_registration_change(conn, student_id: str, course_name: str, action
 @registration_requests_bp.route("/registration_requests/approve", methods=["POST"])
 @role_required("admin", "supervisor")
 def approve_request():
+    raw_role = session.get("user_role") or ""
+    is_supervisor = (raw_role == "supervisor") or (raw_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    if raw_role == "instructor" and not is_supervisor:
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
     data = request.get_json(force=True) or {}
     req_id = data.get("id")
     execute_now = bool(data.get("execute_now", True))
@@ -254,6 +281,23 @@ def approve_request():
         ).fetchone()
         if not row:
             return jsonify({"status": "error", "message": "الطلب غير موجود"}), 404
+
+        # Scope للـ supervisor: فقط اعتماد طلبات طلابه
+        if is_supervisor:
+            instructor_id = session.get("instructor_id")
+            if not instructor_id:
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+            allowed = cur.execute(
+                """
+                SELECT 1
+                FROM student_supervisor
+                WHERE student_id = ? AND instructor_id = ?
+                LIMIT 1
+                """,
+                (row["student_id"], instructor_id),
+            ).fetchone()
+            if not allowed:
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         if row["status"] not in ("pending", "approved"):
             return (
                 jsonify(
@@ -307,6 +351,11 @@ def approve_request():
 @registration_requests_bp.route("/registration_requests/reject", methods=["POST"])
 @role_required("admin", "supervisor")
 def reject_request():
+    raw_role = session.get("user_role") or ""
+    is_supervisor = (raw_role == "supervisor") or (raw_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    if raw_role == "instructor" and not is_supervisor:
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
     data = request.get_json(force=True) or {}
     req_id = data.get("id")
     note = (data.get("note") or "").strip()
@@ -319,11 +368,28 @@ def reject_request():
     with get_connection() as conn:
         cur = conn.cursor()
         row = cur.execute(
-            "SELECT id, status FROM registration_requests WHERE id = ?",
+            "SELECT id, student_id, status FROM registration_requests WHERE id = ?",
             (req_id,),
         ).fetchone()
         if not row:
             return jsonify({"status": "error", "message": "الطلب غير موجود"}), 404
+
+        # Scope للـ supervisor: فقط رفض طلبات طلابه
+        if is_supervisor:
+            instructor_id = session.get("instructor_id")
+            if not instructor_id:
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+            allowed = cur.execute(
+                """
+                SELECT 1
+                FROM student_supervisor
+                WHERE student_id = ? AND instructor_id = ?
+                LIMIT 1
+                """,
+                (row["student_id"], instructor_id),
+            ).fetchone()
+            if not allowed:
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         if row["status"] not in ("pending",):
             return (
                 jsonify(

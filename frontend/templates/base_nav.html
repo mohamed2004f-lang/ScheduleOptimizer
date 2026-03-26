@@ -91,11 +91,13 @@
           </a>
           <ul class="dropdown-menu" aria-labelledby="academicRecordsMenu">
             <li><a class="dropdown-item" id="navTranscript" href="/transcript_page">كشف الدرجات</a></li>
+            <li><a class="dropdown-item" id="navGradeDrafts" href="/grade_drafts" style="display:none;">مسودات الدرجات</a></li>
             <li><a class="dropdown-item" id="navPerformance" href="/performance_report">تقرير الأداء</a></li>
             <li><a class="dropdown-item" id="navElectivesReport" href="/electives_report_page">تقرير المقررات الاختيارية</a></li>
             <li><a class="dropdown-item" id="navRegistrationChangesReport" href="/registration_changes_report_page">تقرير الإضافة والإسقاط</a></li>
             <li><a class="dropdown-item" id="navFailedCoursesReport" href="/failed_courses_report_page">تقرير شامل المقررات غير المنجزة</a></li>
             <li><a class="dropdown-item" id="navUncompletedCoursesReport" href="/uncompleted_courses_report_page">تقرير المقررات غير المنجزة (حسب طالب)</a></li>
+            <li><a class="dropdown-item" id="navCourseRegistrationReport" href="/course_registration_report_page" style="display:none;">أعداد التسجيل الفعلي بالمقررات</a></li>
             <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item" id="navAnalytics" href="/analytics">التحليلات الأكاديمية</a></li>
           </ul>
@@ -221,10 +223,44 @@
         const elDocs = document.getElementById('navSystemDocs');
         if (elDocs) elDocs.style.display = 'none';
       }
-      // إخفاء لوحة المشرف عن غير المشرفين
-      if (role !== 'supervisor') {
+      // إخفاء لوحة المشرف عن غير المشرفين (supervisor أو instructor مع is_supervisor=1)
+      const isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(data.is_supervisor || 0) === 1);
+      const elCourseRegReport = document.getElementById('navCourseRegistrationReport');
+      if (elCourseRegReport) {
+        const showCourseReg = ['admin', 'admin_main', 'head_of_department'].includes(role || '');
+        elCourseRegReport.style.display = showCourseReg ? '' : 'none';
+      }
+      const elGradeDrafts = document.getElementById('navGradeDrafts');
+      if (elGradeDrafts) {
+        const showGradeDrafts = (role === 'admin_main' || role === 'head_of_department' || (role === 'instructor' && !isSupervisor));
+        elGradeDrafts.style.display = showGradeDrafts ? '' : 'none';
+      }
+      if (!isSupervisor) {
         const elSD = document.getElementById('navSupervisorDashboard');
         if (elSD) elSD.style.display = 'none';
+      }
+      const isInstructorOrSupervisor = (role === 'instructor') || (role === 'supervisor') || isSupervisor;
+      if (isInstructorOrSupervisor) {
+        // phase-2 RBAC UI: إخفاء الصفحات غير المسموحة وإبقاء العرض فقط
+        const hideIds = [
+          'navDashboard',
+          'navAnalytics',
+          'navInstructors',
+          'navSupervision',
+          'navElectivesReport',
+          'navRegistrationChangesReport',
+          'navFailedCoursesReport',
+          'navUncompletedCoursesReport',
+          'navCourseRegistrationReport',
+          'navUsersAdmin',
+          'navProjectStatus',
+          'navAcademicRules',
+          'navSystemDocs',
+        ];
+        hideIds.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = 'none';
+        });
       }
       if (role === 'student') {
         // الطالب لا يحتاج لرؤية بعض الروابط الإدارية
@@ -242,6 +278,8 @@
           'navSupervision',
           'navSupervisorDashboard',
           'navPerformance',
+          'navGradeDrafts',
+          'navCourseRegistrationReport',
           'navAcademicRules',
           'navAnalytics',
           'navProjectStatus',
@@ -254,6 +292,14 @@
           if (el) el.style.display = 'none';
         });
       }
+
+      // إخفاء قائمة Dropdown بالكامل إذا صارت كل عناصرها مخفية
+      document.querySelectorAll('.nav-item.dropdown').forEach(dd => {
+        const items = dd.querySelectorAll('.dropdown-item');
+        if (!items.length) return;
+        const hasVisible = Array.from(items).some(it => it.style.display !== 'none');
+        if (!hasVisible) dd.style.display = 'none';
+      });
 
       // تفعيل الرابط الحالي (Active state) حسب المسار
       const path = (window.location.pathname || '/').toLowerCase();
@@ -275,6 +321,8 @@
         ['/exams/finals','navExamsFinals'],
         ['/exams/conflicts','navExamsConflicts'],
         ['/transcript_page','navTranscript'],
+        ['/grade_drafts','navGradeDrafts'],
+        ['/course_registration_report_page','navCourseRegistrationReport'],
         ['/performance_report','navPerformance'],
         ['/supervisor_dashboard','navSupervisorDashboard'],
         ['/results','navResults'],

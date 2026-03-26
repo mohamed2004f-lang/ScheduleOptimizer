@@ -240,6 +240,16 @@ def ensure_tables():
                             is_active INTEGER NOT NULL DEFAULT 1
                         )""",
                         """
+                        CREATE TABLE IF NOT EXISTS user_invites (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            username TEXT NOT NULL,
+                            email TEXT NOT NULL,
+                            token_hash TEXT NOT NULL UNIQUE,
+                            created_at TEXT NOT NULL,
+                            expires_at TEXT NOT NULL,
+                            used_at TEXT
+                        )""",
+                        """
                         CREATE TABLE IF NOT EXISTS notifications (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             user TEXT NOT NULL,
@@ -338,6 +348,35 @@ def ensure_tables():
                             FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE,
                             FOREIGN KEY (course_name) REFERENCES courses(course_name) ON DELETE SET NULL
                         )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS grade_drafts (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            semester TEXT NOT NULL,
+                            course_name TEXT NOT NULL,
+                            instructor_id INTEGER NOT NULL,
+                            grading_mode TEXT NOT NULL DEFAULT 'partial_final' CHECK (grading_mode IN ('partial_final','final_total_only')),
+                            status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft','Submitted','Approved','Rejected')),
+                            created_at TEXT,
+                            updated_at TEXT,
+                            submitted_at TEXT,
+                            approved_at TEXT,
+                            approved_by TEXT,
+                            note TEXT,
+                            UNIQUE (semester, course_name, instructor_id)
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS grade_draft_items (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            draft_id INTEGER NOT NULL,
+                            student_id TEXT NOT NULL,
+                            partial REAL CHECK (partial IS NULL OR (partial >= 0 AND partial <= 100)),
+                            final REAL CHECK (final IS NULL OR (final >= 0 AND final <= 100)),
+                            total REAL CHECK (total IS NULL OR (total >= 0 AND total <= 100)),
+                            computed_total REAL CHECK (computed_total IS NULL OR (computed_total >= 0 AND computed_total <= 100)),
+                            updated_at TEXT,
+                            UNIQUE (draft_id, student_id),
+                            FOREIGN KEY (draft_id) REFERENCES grade_drafts(id) ON DELETE CASCADE
+                        )""",
                 ]
                 for s in create_stmts:
                         cur.execute(s)
@@ -424,9 +463,21 @@ def ensure_tables():
                     cur.execute("ALTER TABLE students ADD COLUMN phone TEXT")
                 except Exception:
                     pass
+                try:
+                    cur.execute("ALTER TABLE students ADD COLUMN email TEXT")
+                except Exception:
+                    pass
+                try:
+                    cur.execute("ALTER TABLE students ADD COLUMN university_number TEXT")
+                except Exception:
+                    pass
                 # نوع المقرر (إجباري/اختياري...) - عمود category في جدول courses
                 try:
                     cur.execute("ALTER TABLE courses ADD COLUMN category TEXT NOT NULL DEFAULT 'required'")
+                except Exception:
+                    pass
+                try:
+                    cur.execute("ALTER TABLE courses ADD COLUMN grading_mode TEXT NOT NULL DEFAULT 'partial_final'")
                 except Exception:
                     pass
                 try:

@@ -24,6 +24,9 @@
     <div class="card mb-3">
       <div class="card-body">
         <h5 class="card-title mb-3">إضافة / تعديل مستخدم</h5>
+        <div class="alert alert-info p-2 small">
+          <strong>مستحسن:</strong> لإنشاء حساب لطالب/أستاذ استخدم <strong>الدعوة عبر البريد</strong> (توليد اسم مستخدم + إرسال رابط تعيين كلمة المرور).
+        </div>
         <div class="row g-2 align-items-end">
           <div class="col-md-4">
             <label class="form-label">اسم المستخدم</label>
@@ -74,9 +77,54 @@
       </div>
     </div>
 
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5 class="card-title mb-3">إنشاء حساب مرتبط (دعوة عبر البريد)</h5>
+        <div class="row g-2 align-items-end">
+          <div class="col-md-3">
+            <label class="form-label">نوع</label>
+            <select id="linkType" class="form-select form-select-sm">
+              <option value="student">طالب</option>
+              <option value="instructor">عضو هيئة تدريس</option>
+            </select>
+          </div>
+          <div class="col-md-5">
+            <label class="form-label">الاسم من القائمة</label>
+            <select id="linkEntity" class="form-select form-select-sm"></select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">الدور للحساب</label>
+            <select id="linkRole" class="form-select form-select-sm">
+              <option value="student">طالب</option>
+              <option value="instructor">عضو هيئة تدريس</option>
+              <option value="head_of_department">رئيس قسم</option>
+            </select>
+          </div>
+        </div>
+        <div class="row g-2 align-items-end mt-2">
+          <div class="col-md-4">
+            <label class="form-label">username المقترح</label>
+            <input id="linkUsername" class="form-control form-control-sm">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">البريد</label>
+            <input id="linkEmail" class="form-control form-control-sm" disabled>
+          </div>
+          <div class="col-md-4 d-grid">
+            <button id="btnSendInvite" class="btn btn-success btn-sm">إنشاء وإرسال الدعوة</button>
+          </div>
+        </div>
+        <div id="inviteMsg" class="mt-2"></div>
+      </div>
+    </div>
+
     <div class="card">
       <div class="card-body">
         <h5 class="card-title mb-3">قائمة المستخدمين</h5>
+        <div class="d-flex flex-wrap gap-2 mb-2">
+          <button id="btnInviteCleanup" class="btn btn-sm btn-outline-secondary">تنظيف الدعوات القديمة</button>
+          <div class="text-muted small align-self-center">يحذف الدعوات المستخدمة/المنتهية الأقدم من 30 يوم.</div>
+        </div>
         <div id="usersList" class="list-group small"></div>
       </div>
     </div>
@@ -87,6 +135,9 @@
 
     function setUserMsg(kind, text){
       document.getElementById('userMsg').innerHTML = text ? `<div class="alert alert-${kind} p-2 mb-0">${text}</div>` : '';
+    }
+    function setInviteMsg(kind, text){
+      document.getElementById('inviteMsg').innerHTML = text ? `<div class="alert alert-${kind} p-2 mb-0">${text}</div>` : '';
     }
 
     async function loadUsers(){
@@ -112,6 +163,38 @@
                           <div class="text-muted small">الرقم الدراسي: ${u.student_id || '—'} — رقم المدرّس: ${u.instructor_id || '—'}</div>`;
         const right = document.createElement('div');
         right.className = 'd-flex gap-1 align-items-center';
+
+        if(CURRENT_ROLE === 'admin_main' || CURRENT_ROLE === 'admin'){
+          const statusBtn = document.createElement('button');
+          statusBtn.className = 'btn btn-sm btn-outline-primary';
+          statusBtn.textContent = 'حالة الدعوات';
+          statusBtn.title = 'عرض آخر روابط التفعيل';
+          statusBtn.addEventListener('click', async (ev)=>{
+            ev.stopPropagation();
+            await showInviteStatus(u.username);
+          });
+          right.appendChild(statusBtn);
+
+          const resendBtn = document.createElement('button');
+          resendBtn.className = 'btn btn-sm btn-outline-success';
+          resendBtn.textContent = 'إعادة إرسال الدعوة';
+          resendBtn.title = 'إرسال رابط تعيين كلمة المرور بالبريد';
+          resendBtn.addEventListener('click', async (ev)=>{
+            ev.stopPropagation();
+            await resendInvite(u.username);
+          });
+          right.appendChild(resendBtn);
+
+          const revokeBtn = document.createElement('button');
+          revokeBtn.className = 'btn btn-sm btn-outline-danger';
+          revokeBtn.textContent = 'إلغاء الدعوات';
+          revokeBtn.title = 'إلغاء كل الدعوات غير المستخدمة لهذا المستخدم';
+          revokeBtn.addEventListener('click', async (ev)=>{
+            ev.stopPropagation();
+            await revokeInvites(u.username);
+          });
+          right.appendChild(revokeBtn);
+        }
 
         const canManageSupervisor = (CURRENT_ROLE === 'admin_main' || CURRENT_ROLE === 'admin' || CURRENT_ROLE === 'head_of_department');
         const isInstructorTarget = (u.role === 'instructor' || u.role === 'head_of_department');
@@ -210,6 +293,71 @@
       }
     }
 
+    async function resendInvite(username){
+      if(!confirm(`إعادة إرسال دعوة تعيين كلمة المرور للمستخدم ${username} ؟`)) return;
+      setUserMsg('info','جاري الإرسال...');
+      const res = await fetchJSON('/users/invite/resend', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({username})
+      });
+      if(res.ok){
+        setUserMsg('success', `تم إرسال الدعوة إلى: ${res.json?.email || '—'}`);
+      } else {
+        setUserMsg('danger', res.json?.message || `فشل الإرسال (${res.status})`);
+      }
+    }
+
+    async function showInviteStatus(username){
+      setUserMsg('info','جاري تحميل حالة الدعوات...');
+      const res = await fetchJSON(`/users/invite/status?username=${encodeURIComponent(username)}`);
+      if(!res.ok){
+        setUserMsg('danger', res.json?.message || `فشل التحميل (${res.status})`);
+        return;
+      }
+      const inv = Array.isArray(res.json?.invites) ? res.json.invites : [];
+      if(!inv.length){
+        setUserMsg('warning', `لا توجد دعوات مسجلة للمستخدم ${username}.`);
+        return;
+      }
+      const rows = inv.slice(0,5).map(x=>{
+        const used = x.used_at ? `مستخدمة/ملغاة: ${x.used_at}` : 'غير مستخدمة';
+        return `<tr>
+          <td>${x.id}</td>
+          <td>${x.email||'—'}</td>
+          <td>${x.created_at||'—'}</td>
+          <td>${x.expires_at||'—'}</td>
+          <td>${used}</td>
+        </tr>`;
+      }).join('');
+      setUserMsg('info', `
+        <div class="mb-1"><strong>حالة الدعوات للمستخدم:</strong> ${username}</div>
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered mb-0">
+            <thead class="table-light">
+              <tr><th>#</th><th>البريد</th><th>إنشاء</th><th>انتهاء</th><th>الحالة</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `);
+    }
+
+    async function revokeInvites(username){
+      if(!confirm(`إلغاء جميع الدعوات غير المستخدمة للمستخدم ${username} ؟`)) return;
+      setUserMsg('info','جاري الإلغاء...');
+      const res = await fetchJSON('/users/invite/revoke', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({username})
+      });
+      if(res.ok){
+        setUserMsg('success', `تم إلغاء ${res.json?.revoked ?? 0} دعوة غير مستخدمة.`);
+      } else {
+        setUserMsg('danger', res.json?.message || `فشل الإلغاء (${res.status})`);
+      }
+    }
+
     function syncSupervisorAvailability(){
       const role = document.getElementById('roleSelect').value;
       const sup = document.getElementById('isSupervisor');
@@ -260,12 +408,112 @@
         }
       } catch(e){}
       document.getElementById('btnSaveUser').addEventListener('click', saveUser);
+      document.getElementById('btnSendInvite').addEventListener('click', sendInvite);
+      document.getElementById('btnInviteCleanup').addEventListener('click', cleanupInvites);
+      document.getElementById('linkType').addEventListener('change', async ()=>{ await loadLinkedEntities(); await suggestLinked(); });
+      document.getElementById('linkEntity').addEventListener('change', suggestLinked);
+      document.getElementById('linkRole').addEventListener('change', ()=>{
+        const t = document.getElementById('linkType').value;
+        const r = document.getElementById('linkRole').value;
+        if(t === 'student' && r !== 'student'){
+          document.getElementById('linkRole').value = 'student';
+        }
+        if(t === 'instructor' && r === 'student'){
+          document.getElementById('linkRole').value = 'instructor';
+        }
+      });
       const roleEl = document.getElementById('roleSelect');
       if(roleEl) roleEl.addEventListener('change', syncSupervisorAvailability);
       await loadUsers();
+      await loadLinkedEntities();
+      await suggestLinked();
       syncSupervisorAvailability();
       applyPermissions();
     });
+
+    async function cleanupInvites(){
+      if(!(CURRENT_ROLE === 'admin_main' || CURRENT_ROLE === 'admin')){
+        setUserMsg('danger','غير مسموح.');
+        return;
+      }
+      const daysRaw = prompt('احذف الدعوات القديمة الأقدم من كم يوم؟ (افتراضي 30)', '30');
+      const cutoff_days = parseInt((daysRaw||'30').trim(), 10);
+      if(!confirm(`تأكيد تنظيف الدعوات القديمة (أقدم من ${isNaN(cutoff_days)?30:cutoff_days} يوم)؟`)) return;
+      setUserMsg('info','جاري التنظيف...');
+      const res = await fetchJSON('/users/invite/cleanup', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({cutoff_days: isNaN(cutoff_days)?30:cutoff_days})
+      });
+      if(res.ok){
+        setUserMsg('success', `تم حذف ${res.json?.deleted ?? 0} دعوة قديمة.`);
+      } else {
+        setUserMsg('danger', res.json?.message || `فشل التنظيف (${res.status})`);
+      }
+    }
+
+    async function loadLinkedEntities(){
+      const type = document.getElementById('linkType').value;
+      const sel = document.getElementById('linkEntity');
+      sel.innerHTML = '';
+      if(type === 'student'){
+        const r = await fetchJSON('/students/list');
+        const arr = Array.isArray(r.json) ? r.json : [];
+        arr.forEach(s=>{
+          const opt = document.createElement('option');
+          opt.value = s.student_id;
+          opt.textContent = `${s.student_name} — ${s.student_id}`;
+          sel.appendChild(opt);
+        });
+      } else {
+        const r = await fetchJSON('/instructors/list');
+        const arr = Array.isArray(r.json?.instructors) ? r.json.instructors : [];
+        arr.forEach(i=>{
+          const opt = document.createElement('option');
+          opt.value = i.id;
+          opt.textContent = `${i.name} — #${i.id} (${i.type||''})`;
+          sel.appendChild(opt);
+        });
+      }
+    }
+
+    async function suggestLinked(){
+      const type = document.getElementById('linkType').value;
+      const id = document.getElementById('linkEntity').value;
+      if(!id){
+        document.getElementById('linkUsername').value = '';
+        document.getElementById('linkEmail').value = '';
+        return;
+      }
+      const r = await fetchJSON(`/users/suggest_linked?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}`);
+      if(r.ok){
+        document.getElementById('linkUsername').value = r.json?.username || '';
+        document.getElementById('linkEmail').value = r.json?.email || '';
+      }
+    }
+
+    async function sendInvite(){
+      const type = document.getElementById('linkType').value;
+      const id = document.getElementById('linkEntity').value;
+      const role = document.getElementById('linkRole').value;
+      const username = document.getElementById('linkUsername').value.trim();
+      if(!id){
+        setInviteMsg('warning','اختر اسماً من القائمة.');
+        return;
+      }
+      setInviteMsg('info','جاري الإرسال...');
+      const r = await fetchJSON('/users/invite', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({type, id, role, username})
+      });
+      if(r.ok){
+        setInviteMsg('success', `تم إنشاء الحساب وإرسال الدعوة إلى: ${r.json?.email || '—'} (username: ${r.json?.username || username})`);
+        await loadUsers();
+      } else {
+        setInviteMsg('danger', r.json?.message || `فشل الإرسال (${r.status})`);
+      }
+    }
   </script>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>

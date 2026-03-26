@@ -47,6 +47,11 @@ _ensure_docxtpl()
 enrollment_bp = Blueprint("enrollment", __name__)
 
 
+def _is_instructor_or_supervisor_view_only() -> bool:
+    role = (session.get("user_role") or "").strip()
+    return role in ("instructor", "supervisor")
+
+
 def _now_iso() -> str:
     return datetime.datetime.utcnow().isoformat()
 
@@ -309,7 +314,8 @@ def list_plans():
         sid_session = session.get("student_id") or session.get("user")
         student_id = sid_session
     # المشرف لا يمكنه رؤية إلا خطط الطلبة المسندين إليه
-    if user_role == "supervisor":
+    is_supervisor = (user_role == "supervisor") or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    if is_supervisor:
         instructor_id = session.get("instructor_id")
         if not instructor_id:
             return jsonify({"status": "error", "message": "لا يوجد ربط بين هذا الحساب وعضو هيئة تدريس", "code": "FORBIDDEN"}), 403
@@ -322,7 +328,7 @@ def list_plans():
         if student_id:
             q += " AND student_id = ?"
             params.append(student_id)
-        elif user_role == "supervisor":
+        elif is_supervisor:
             # تقييد الخطط على الطلبة المسندين لهذا المشرف
             q += " AND student_id IN (SELECT student_id FROM student_supervisor WHERE instructor_id = ?)"
             params.append(instructor_id)
@@ -368,6 +374,8 @@ def create_or_update_plan():
       - courses: قائمة أسماء مقررات
     إذا وُجدت خطة Draft/Rejected لنفس الطالب والفصل، يتم الكتابة فوقها.
     """
+    if _is_instructor_or_supervisor_view_only():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     data = request.get_json(force=True) or {}
     student_id = (data.get("student_id") or "").strip()
     semester = (data.get("semester") or "").strip()
@@ -499,6 +507,8 @@ def submit_plan(plan_id: int):
     تحويل الخطة من Draft إلى Pending.
     لا يتم المساس بجدول registrations هنا.
     """
+    if _is_instructor_or_supervisor_view_only():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     now = _now_iso()
     with get_connection() as conn:
         cur = conn.cursor()
@@ -575,13 +585,15 @@ def submit_plan(plan_id: int):
 
 
 @enrollment_bp.route("/plans/<int:plan_id>/approve", methods=["POST"])
-@role_required("admin", "supervisor")
+@role_required("admin", "admin_main", "head_of_department", "supervisor")
 def approve_plan(plan_id: int):
     """
     اعتماد الخطة وتحويلها إلى Approved
     + ترحيل المقررات إلى جدول registrations (يُستبدل تسجيل الطالب بالكامل).
     في هذه المرحلة نعامل المعتمد كـ "مشرف/رئيس قسم" واحد (لاحقاً يمكن فصل الأدوار).
     """
+    if _is_instructor_or_supervisor_view_only():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     now = _now_iso()
     with get_connection() as conn:
         cur = conn.cursor()
@@ -673,7 +685,7 @@ def approve_plan(plan_id: int):
 
 
 @enrollment_bp.route("/plans/archive_after_migration", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def archive_plans_after_migration():
     """
     أرشفة خطة التسجيل لفصل معيّن بعد ترحيل المقررات إلى كشف الدرجات.
@@ -685,6 +697,8 @@ def archive_plans_after_migration():
     تقوم هذه العملية بتحويل حالة الخطة المعتمدة للفصل إلى Archived
     مع عدم لمس جدول registrations أو جدول grades (يتم ذلك في مسار الترحيل نفسه).
     """
+    if _is_instructor_or_supervisor_view_only():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     data = request.get_json(force=True) or {}
     student_id = (data.get("student_id") or "").strip()
     semester = (data.get("semester") or "").strip()
@@ -721,13 +735,14 @@ def archive_plans_after_migration():
 
 
 @enrollment_bp.route("/registration_form_html/<student_id>", methods=["GET"])
-@role_required("admin", "supervisor", "student")
+@role_required("admin", "admin_main", "head_of_department", "supervisor", "student")
 def registration_form_html(student_id):
     """
     عرض استمارة التسجيل كصفحة HTML للطباعة من المستعرض (لا يتطلب قالب Word).
     """
     user_role = session.get("user_role")
-    if user_role == "supervisor":
+    is_supervisor = (user_role == "supervisor") or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    if is_supervisor:
         instructor_id = session.get("instructor_id")
         if not instructor_id:
             return jsonify({"status": "error", "message": "لا يوجد ربط بين هذا الحساب وعضو هيئة تدريس", "code": "FORBIDDEN"}), 403
@@ -757,15 +772,18 @@ def registration_form_html(student_id):
 
 
 @enrollment_bp.route("/print_registration_form/<student_id>", methods=["GET"])
-@role_required("admin", "supervisor", "student")
+@role_required("admin", "admin_main", "head_of_department", "supervisor", "student")
 def print_registration_form(student_id):
+    if _is_instructor_or_supervisor_view_only():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     """
     توليد ملف Word لاستمارة تسجيل مقررات دراسية لطالب محدد.
     يقبل اختيارياً ?semester= لتحديد فصل معيّن.
     """
     # تقييد المشرف: لا يطبع إلا لطلبته المسندين إليه
     user_role = session.get("user_role")
-    if user_role == "supervisor":
+    is_supervisor = (user_role == "supervisor") or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    if is_supervisor:
         instructor_id = session.get("instructor_id")
         if not instructor_id:
             return jsonify({"status": "error", "message": "لا يوجد ربط بين هذا الحساب وعضو هيئة تدريس", "code": "FORBIDDEN"}), 403
@@ -827,8 +845,10 @@ def print_registration_form(student_id):
 
 
 @enrollment_bp.route("/plans/<int:plan_id>/reject", methods=["POST"])
-@role_required("admin", "supervisor")
+@role_required("admin", "admin_main", "head_of_department", "supervisor")
 def reject_plan(plan_id: int):
+    if _is_instructor_or_supervisor_view_only():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     """
     رفض الخطة مع حفظ سبب الرفض.
     body:

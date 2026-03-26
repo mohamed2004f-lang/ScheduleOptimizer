@@ -22,7 +22,7 @@
       <div class="card mb-3 filter-section">
         <div class="card-body p-2">
           <div class="d-flex flex-wrap align-items-center justify-content-between">
-            <div class="btn-group-gap">
+            <div class="btn-group-gap" id="coursesExportWrap">
               <a class="btn btn-outline-success btn-sm" href="/courses/export/excel">⬇️ تصدير Excel</a>
               <a class="btn btn-outline-danger btn-sm" href="/courses/export/pdf" target="_blank">⬇️ تصدير PDF</a>
               <button id="btnExportCSV" class="btn btn-outline-secondary btn-sm">تصدير CSV</button>
@@ -131,6 +131,7 @@ let ALL_COURSES = [];
 let editModal;
 let editCourseName = '';
 let IS_ADMIN = false;
+let IS_VIEW_ONLY_ROLE = false;
 
 function categoryLabel(cat){
   if(cat === 'elective_major') return 'اختياري (تخصصي)';
@@ -419,9 +420,13 @@ async function loadCoursePrereqs(){
 window.addEventListener('load', async ()=>{
   try {
     const auth = await fetch('/auth/check').then(r=>r.json()).catch(()=>({}));
-    IS_ADMIN = auth?.role === 'admin';
+    const role = auth?.role || '';
+    const isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(auth?.is_supervisor || 0) === 1);
+    IS_VIEW_ONLY_ROLE = (role === 'instructor') || isSupervisor;
+    IS_ADMIN = role === 'admin';
   } catch(e){
     IS_ADMIN = false;
+    IS_VIEW_ONLY_ROLE = false;
   }
 
   if(!IS_ADMIN){
@@ -432,6 +437,12 @@ window.addEventListener('load', async ()=>{
     if(formAdd) formAdd.querySelectorAll('input,button,select,textarea').forEach(x=> x.disabled = true);
     const importForm = document.getElementById('courses-import-form');
     if(importForm) importForm.style.display = 'none';
+  }
+  if (IS_VIEW_ONLY_ROLE) {
+    const exportWrap = document.getElementById('coursesExportWrap');
+    if (exportWrap) exportWrap.style.display = 'none';
+    const btnExportCsv = document.getElementById('btnExportCSV');
+    if (btnExportCsv) btnExportCsv.style.display = 'none';
   }
 
   await loadCourses();

@@ -76,7 +76,7 @@ def list_schedule_rows_alias():
     return list_schedule_rows()
 
 @schedule_bp.route("/check_conflicts", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def check_conflicts():
     """
     التحقق من التعارضات قبل إضافة مقرر جديد
@@ -149,7 +149,7 @@ def check_conflicts():
 
 # Original add_row (kept)
 @schedule_bp.route("/add_row", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def add_schedule_row():
     data = request.get_json(force=True)
     required = ["course_name", "day", "time"]
@@ -187,13 +187,13 @@ def add_schedule_row():
 
 # Alias to match frontend calls that use /add_schedule_row
 @schedule_bp.route("/add_schedule_row", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def add_schedule_row_alias():
     return add_schedule_row()
 
 
 @schedule_bp.route("/delete_schedule_row", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def delete_schedule_row():
     """حذف صف من الجدول الدراسي (للأدمن فقط)."""
     data = request.get_json(force=True) or {}
@@ -216,7 +216,7 @@ def delete_schedule_row():
 
 
 @schedule_bp.route("/update_schedule_row", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def update_schedule_row():
     """تحديث صف في الجدول الدراسي (للأدمن فقط)."""
     data = request.get_json(force=True) or {}
@@ -258,7 +258,7 @@ def publish_status():
 
 @schedule_bp.route("/publish", methods=["POST"])
 @login_required
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def publish_schedule():
     """اعتماد/نشر الجدول من الأدمن الرئيسي. بعدها يراه الطالب والمشرف وتُستمد منه المقررات المتاحة في خطط التسجيل."""
     try:
@@ -324,7 +324,7 @@ def student_timetable():
     user_role = session.get("user_role")
     if user_role == "student":
         sid = session.get("student_id") or session.get("user") or ""
-    elif user_role == "supervisor":
+    elif user_role == "supervisor" or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1):
         # المشرف يمكنه عرض جدول طلبته المسندين إليه فقط
         sid = (request.args.get("student_id") or "").strip()
         instructor_id = session.get("instructor_id")

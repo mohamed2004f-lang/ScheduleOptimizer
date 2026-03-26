@@ -123,7 +123,7 @@ def supervised_students():
     user_role = session.get("user_role")
     instructor_id = None
 
-    if user_role == "supervisor":
+    if user_role == "supervisor" or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1):
         instructor_id = session.get("instructor_id")
     else:
         instructor_id = request.args.get("instructor_id", type=int)

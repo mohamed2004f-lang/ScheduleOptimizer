@@ -64,9 +64,26 @@ def _normalize_role(role: str) -> str:
     r = (role or "").strip()
     if r == "admin":
         return "admin_main"
-    if r == "supervisor":
-        return "instructor"
     return r
+
+
+def _effective_roles(user_role: str) -> set:
+    """
+    إرجاع مجموعة الأدوار الفعلية للمستخدم (بدون خلط غير آمن).
+    - instructor + is_supervisor=1 => يضاف supervisor كدور إضافي
+    - supervisor (إن وُجدت في DB من إصدارات قديمة) تعتبر أيضاً instructor
+    """
+    r = _normalize_role(user_role)
+    roles = {r} if r else set()
+    try:
+        is_sup = int(session.get("is_supervisor") or 0)
+    except Exception:
+        is_sup = 0
+    if r == "instructor" and is_sup == 1:
+        roles.add("supervisor")
+    if r == "supervisor":
+        roles.add("instructor")
+    return roles
 
 # إعداد Flask-Login (username هو المعرّف لأن جدول users يستخدمه كمفتاح أساسي)
 login_manager = LoginManager() if LoginManager is not None else None
@@ -251,9 +268,9 @@ def role_required(*roles):
                     user_role = None
             if not user_role:
                 user_role = session.get('user_role')
-            user_role = _normalize_role(user_role)
             normalized_allowed = {_normalize_role(r) for r in roles}
-            if user_role not in normalized_allowed:
+            effective = _effective_roles(user_role)
+            if not (effective & normalized_allowed):
                 accept = (request.headers.get("Accept") or "").lower()
                 is_api_request = (
                     request.is_json
@@ -318,6 +335,7 @@ def init_auth(app):
         # التحقق من بيانات الدخول وتحديد الدور
         role = None
         student_id = None
+        is_supervisor_flag = 0
 
         # 1) حاول التحقق من جدول users إن توفر
         users_count = None
@@ -333,12 +351,29 @@ def init_auth(app):
                     except Exception:
                         users_count = 0
 
+                    # دعم تسجيل الدخول بـ username أو student_id أو instructor_id
                     row = cur.execute(
-                        "SELECT username, password_hash, role, student_id, instructor_id FROM users WHERE username = ?",
+                        "SELECT username, password_hash, role, student_id, instructor_id, "
+                        "COALESCE(is_active,1), COALESCE(is_supervisor,0) "
+                        "FROM users WHERE username = ?",
                         (username,),
                     ).fetchone()
+                    if not row:
+                        # fallback: student_id or instructor_id
+                        row = cur.execute(
+                            "SELECT username, password_hash, role, student_id, instructor_id, "
+                            "COALESCE(is_active,1), COALESCE(is_supervisor,0) "
+                            "FROM users WHERE student_id = ? OR CAST(instructor_id AS TEXT) = ?",
+                            (username, username),
+                        ).fetchone()
                     if row:
-                        _, pw_hash, db_role, db_student_id, db_instructor_id = row
+                        _, pw_hash, db_role, db_student_id, db_instructor_id, db_is_active, db_is_supervisor = row
+                        if int(db_is_active or 1) == 0:
+                            return jsonify({
+                                'status': 'error',
+                                'message': 'تم تعطيل هذا الحساب',
+                                'code': 'ACCOUNT_DISABLED'
+                            }), 403
                         ok = verify_password(password, pw_hash)
                         if ok:
                             # ترقية تلقائية للهاش القديم إلى Werkzeug
@@ -355,6 +390,10 @@ def init_auth(app):
                             role = db_role
                             student_id = db_student_id
                             instructor_id = db_instructor_id
+                            try:
+                                is_supervisor_flag = int(db_is_supervisor or 0)
+                            except Exception:
+                                is_supervisor_flag = 0
             except Exception:
                 logger.exception("login: failed to query users table")
 
@@ -388,11 +427,12 @@ def init_auth(app):
         session[SESSION_KEY] = True
         session[SESSION_USER] = username
         session['user_role'] = role
+        session['is_supervisor'] = 1 if int(is_supervisor_flag or 0) == 1 else 0
         session[SESSION_LOGIN_TIME] = str(os.times())
         if student_id:
             session['student_id'] = student_id
-        # ربط حساب المشرف بسجل عضو هيئة تدريس (إن وُجد)
-        if role == "supervisor":
+        # ربط حساب المشرف/المدرّس بسجل عضو هيئة تدريس (إن وُجد)
+        if role in ("supervisor", "instructor"):
             try:
                 # إذا جلبنا instructor_id من جدول users نستخدمه مباشرة
                 if 'instructor_id' in locals() and instructor_id:
@@ -424,6 +464,63 @@ def init_auth(app):
             'user': username,
             'role': role
         }), 200
+
+    @auth_bp.route('/invite/<token>', methods=['GET'])
+    def invite_page(token):
+        # صفحة بسيطة لتعيين كلمة المرور لأول مرة
+        from flask import render_template
+        return render_template("set_password.html", token=token)
+
+    @auth_bp.route('/invite/<token>', methods=['POST'])
+    def invite_set_password(token):
+        data = request.get_json(force=True) or {}
+        password_new = data.get("password") or ""
+        if not password_new or len(password_new) < 8:
+            return jsonify({"status": "error", "message": "كلمة المرور يجب ألا تقل عن 8 أحرف"}), 400
+
+        import hashlib
+        token_hash = hashlib.sha256(str(token).encode("utf-8")).hexdigest()
+        from datetime import datetime
+        now = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+        if get_connection is None:
+            return jsonify({"status": "error", "message": "DB غير متاح"}), 500
+        with get_connection() as conn:
+            cur = conn.cursor()
+            inv = cur.execute(
+                """
+                SELECT id, username, email, expires_at, used_at
+                FROM user_invites
+                WHERE token_hash = ?
+                LIMIT 1
+                """,
+                (token_hash,),
+            ).fetchone()
+            if not inv:
+                return jsonify({"status": "error", "message": "الرابط غير صالح"}), 404
+            if inv["used_at"]:
+                return jsonify({"status": "error", "message": "تم استخدام هذا الرابط مسبقاً"}), 400
+            try:
+                exp = inv["expires_at"] or ""
+                exp_dt = datetime.fromisoformat(exp.replace("Z", "+00:00"))
+                if datetime.utcnow().replace(tzinfo=exp_dt.tzinfo) > exp_dt:
+                    return jsonify({"status": "error", "message": "انتهت صلاحية الرابط"}), 400
+            except Exception:
+                pass
+
+            username_db = inv["username"]
+            pw_hash = hash_password(password_new)
+            cur.execute(
+                "UPDATE users SET password_hash = ?, is_active = 1 WHERE username = ?",
+                (pw_hash, username_db),
+            )
+            cur.execute(
+                "UPDATE user_invites SET used_at = ? WHERE id = ?",
+                (now, inv["id"]),
+            )
+            conn.commit()
+
+        return jsonify({"status": "ok", "message": "تم تعيين كلمة المرور بنجاح. يمكنك تسجيل الدخول الآن."}), 200
     
     @auth_bp.route('/logout', methods=['POST'])
     def logout():
@@ -441,6 +538,7 @@ def init_auth(app):
             SESSION_USER,
             SESSION_LOGIN_TIME,
             "user_role",
+            "is_supervisor",
             "student_id",
             "instructor_id",
         ):
@@ -462,6 +560,7 @@ def init_auth(app):
         role = session.get('user_role', None) if is_authenticated else None
         student_id_val = session.get('student_id', None) if is_authenticated else None
         instructor_id_val = session.get('instructor_id', None) if is_authenticated else None
+        is_supervisor_val = session.get('is_supervisor', 0) if is_authenticated else 0
         if current_user is not None:
             try:
                 if current_user.is_authenticated:
@@ -477,6 +576,7 @@ def init_auth(app):
             'authenticated': is_authenticated,
             'user': user if is_authenticated else None,
             'role': role if is_authenticated else None,
+            'is_supervisor': int(is_supervisor_val or 0) if is_authenticated else 0,
             'student_id': student_id_val if is_authenticated else None,
             'instructor_id': instructor_id_val if is_authenticated else None,
         }), 200

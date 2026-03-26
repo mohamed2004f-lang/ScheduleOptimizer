@@ -117,7 +117,8 @@
       STUDENTS = [];
 
       // للمشرف: فقط الطلبة المسندين له
-      if(CURRENT_ROLE === 'supervisor'){
+      const isSupervisor = (CURRENT_ROLE === 'supervisor') || (CURRENT_ROLE === 'instructor' && Number(auth.json?.is_supervisor || 0) === 1);
+      if(isSupervisor){
         const r = await fetchJSON('/instructors/supervised_students');
         if(r.ok && r.json && Array.isArray(r.json.students)){
           STUDENTS = r.json.students;

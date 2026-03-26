@@ -1,9 +1,9 @@
 from datetime import datetime
 
-from flask import Blueprint, jsonify, render_template, request, send_file
+from flask import Blueprint, jsonify, render_template, request, send_file, session
 
 from backend.core.auth import role_required
-from .utilities import get_connection, excel_response_from_df, pdf_response_from_html
+from .utilities import get_connection, excel_response_from_df, pdf_response_from_html, get_current_term
 from backend.services.grades import _load_transcript_data
 
 
@@ -470,6 +470,58 @@ def performance_report():
         cur = conn.cursor()
         meta_rows = _fetch_students_performance_meta(cur)
 
+        # Scope enforcement:
+        # supervisor يرى فقط طلابه المسندين، بينما admin يرى الجميع
+        user_role = session.get("user_role")
+        is_supervisor = (user_role == "supervisor") or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+        if is_supervisor or user_role == "instructor":
+            instructor_id = session.get("instructor_id")
+            if not instructor_id:
+                return jsonify({"students": []})
+
+            allowed_student_ids = set()
+            if is_supervisor:
+                allowed_student_ids = {
+                    r[0]
+                    for r in cur.execute(
+                        "SELECT student_id FROM student_supervisor WHERE instructor_id = ?",
+                        (instructor_id,),
+                    ).fetchall()
+                }
+            else:
+                instr_row = cur.execute(
+                    "SELECT name FROM instructors WHERE id = ? LIMIT 1",
+                    (instructor_id,),
+                ).fetchone()
+                instructor_name = instr_row[0] if instr_row else ""
+                if not instructor_name:
+                    return jsonify({"students": []})
+
+                term_name, term_year = get_current_term(conn=conn)
+                semester_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
+                if not semester_label:
+                    return jsonify({"students": []})
+
+                allowed_student_ids = {
+                    r[0]
+                    for r in cur.execute(
+                        """
+                        SELECT DISTINCT r.student_id
+                        FROM schedule s
+                        JOIN registrations r ON r.course_name = s.course_name
+                        WHERE s.semester = ?
+                          AND s.instructor = ?
+                          AND COALESCE(s.course_name,'') <> ''
+                        """,
+                        (semester_label, instructor_name),
+                    ).fetchall()
+                }
+
+            if allowed_student_ids:
+                meta_rows = [r for r in meta_rows if r.get("student_id") in allowed_student_ids]
+            else:
+                meta_rows = []
+
         for r in meta_rows:
             sid = r["student_id"]
             name = r["student_name"]
@@ -554,6 +606,63 @@ def performance_status(student_id: str):
 
     with get_connection() as conn:
         cur = conn.cursor()
+
+        # Scope enforcement:
+        # student يرى فقط سجله، supervisor يرى فقط طلابه
+        user_role = session.get("user_role")
+        if user_role == "student":
+            sid_session = session.get("student_id") or session.get("user")
+            if (sid_session or "").strip() != sid:
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+        is_supervisor = (user_role == "supervisor") or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+        if is_supervisor:
+            instructor_id = session.get("instructor_id")
+            if not instructor_id:
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+            allowed = cur.execute(
+                """
+                SELECT 1
+                FROM student_supervisor
+                WHERE student_id = ? AND instructor_id = ?
+                LIMIT 1
+                """,
+                (sid, instructor_id),
+            ).fetchone()
+            if not allowed:
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        if user_role == "instructor":
+            instructor_id = session.get("instructor_id")
+            if not instructor_id:
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+            instr_row = cur.execute(
+                "SELECT name FROM instructors WHERE id = ? LIMIT 1",
+                (instructor_id,),
+            ).fetchone()
+            instructor_name = instr_row[0] if instr_row else ""
+            if not instructor_name:
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+            term_name, term_year = get_current_term(conn=conn)
+            semester_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
+            if not semester_label:
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+            allowed = cur.execute(
+                """
+                SELECT 1
+                FROM schedule s
+                JOIN registrations r ON r.course_name = s.course_name
+                WHERE s.semester = ?
+                  AND s.instructor = ?
+                  AND r.student_id = ?
+                LIMIT 1
+                """,
+                (semester_label, instructor_name, sid),
+            ).fetchone()
+            if not allowed:
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
         cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
         has_enrollment_status = "enrollment_status" in cols
 

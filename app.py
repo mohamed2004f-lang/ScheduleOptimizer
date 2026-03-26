@@ -98,6 +98,15 @@ except Exception:
 pprint.pprint(sorted([r.rule for r in app.url_map.iter_rules()]))
 
 
+def _is_instructor_or_supervisor_role() -> bool:
+    role = (session.get("user_role") or "").strip()
+    if role == "supervisor":
+        return True
+    if role == "instructor":
+        return True
+    return False
+
+
 @app.errorhandler(CSRFError)
 def handle_csrf_error(e):
     """معالج أخطاء CSRF."""
@@ -128,13 +137,17 @@ def logout_page():
 def index():
     # صفحة البوابة تحتوي "مدخلات الجدولة (JSON)" لذلك تُحجب عن الطالب
     role = session.get("user_role") or ""
+    is_supervisor = (role == "supervisor") or (role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
     if role == "student":
         sid = session.get("student_id") or session.get("user")
         return redirect(url_for("student_view", student_id=sid))
-    if role == "supervisor":
+    if is_supervisor:
         return redirect(url_for("supervisor_dashboard_page"))
-    if role != "admin":
+    if role in ("admin", "admin_main", "head_of_department"):
         return redirect(url_for("dashboard_page"))
+    if role == "instructor":
+        # الأستاذ غير المشرف لا يملك صلاحية dashboard؛ نوجّهه لصفحة السجل الأكاديمي
+        return redirect(url_for("transcript_page"))
     return render_template("index.html")
 
 @app.route("/health")
@@ -143,13 +156,13 @@ def health():
     return jsonify({"status": "healthy"}), 200
 
 @app.route("/dashboard")
-@role_required("admin", "supervisor", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department")
 def dashboard_page():
     return render_template("dashboard.html", active_page="dashboard")
 
 
 @app.route("/analytics")
-@role_required("admin", "supervisor", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department")
 def analytics_dashboard_page():
     # لوحة تحكم تحليلية متقدمة تعتمد على بيانات /performance/report و /admin/summary
     return render_template("analytics_dashboard.html", active_page="analytics")
@@ -160,11 +173,14 @@ def student_view(student_id=None):
     return render_template("student_view.html", student_id=student_id)
 
 @app.route("/prereqs_form")
+@login_required
+@role_required("admin", "admin_main", "head_of_department", "supervisor", "instructor")
 def prereqs_form():
     return render_template("prereqs_form.html")
 
 # ملاحظة: قالب صفحة الطلبة في مشروعك محفوظ باسم students_form.html
 @app.route("/students_form")
+@login_required
 def students_form():
     return render_template("students_form.html")
 
@@ -175,29 +191,38 @@ def graduates_page():
     return render_template("graduates.html")
 
 @app.route("/courses_form")
+@login_required
+@role_required("admin", "admin_main", "head_of_department", "supervisor", "instructor")
 def courses_form():
     return render_template("courses_form.html")
 
 
 @app.route("/instructors_form")
+@login_required
 def instructors_form():
     # صفحة إدارة أعضاء هيئة التدريس
+    if _is_instructor_or_supervisor_role():
+        return redirect(url_for("transcript_page"))
     return render_template("instructors_form.html")
 
 
 @app.route("/supervision_form")
+@login_required
 def supervision_form():
     # صفحة إسناد الطلبة للمشرفين (للإدارة)
+    if _is_instructor_or_supervisor_role():
+        return redirect(url_for("transcript_page"))
     return render_template("supervision_form.html")
 
 
 @app.route("/supervisor_dashboard")
+@login_required
 def supervisor_dashboard_page():
     # لوحة للمشرفين لعرض طلبتهم وروابط سريعة
     return render_template("supervisor_dashboard.html")
 
 @app.route("/schedule_form")
-@role_required("admin", "supervisor", "admin_main", "head_of_department")
+@role_required("admin", "supervisor", "admin_main", "head_of_department", "instructor")
 def schedule_form():
     return render_template("schedule_form.html")
 
@@ -222,6 +247,7 @@ def registrations_form():
 
 
 @app.route("/enrollment_plans")
+@login_required
 def enrollment_plans_page():
     return render_template("enrollment_plans.html")
 
@@ -234,15 +260,19 @@ def users_admin_page():
     return render_template("users_admin.html")
 
 @app.route("/results")
+@login_required
 def results_page():
     return render_template("results.html")
 
 
 @app.route("/attendance_export")
+@login_required
+@role_required("admin", "admin_main", "head_of_department", "supervisor", "instructor")
 def attendance_export_page():
     return render_template("attendance_export.html")
 
 @app.route("/academic_calendar_page")
+@login_required
 def academic_calendar_page():
     return render_template("academic_calendar.html")
 
@@ -285,7 +315,21 @@ def transcript_page():
     )
 
 
+@app.route("/grade_drafts")
+@login_required
+def grade_drafts_page():
+    """واجهة مسودات الدرجات: أستاذ (غير مشرف) أو اعتماد من رئيس القسم / الإدارة الرئيسية."""
+    role = (session.get("user_role") or "").strip()
+    is_sup = (role == "supervisor") or (role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    if role == "instructor" and not is_sup:
+        return render_template("grade_drafts.html", page_mode="instructor", active_page="grade_drafts")
+    if role in ("admin_main", "head_of_department"):
+        return render_template("grade_drafts.html", page_mode="approver", active_page="grade_drafts")
+    return redirect(url_for("transcript_page"))
+
+
 @app.route("/performance_report")
+@login_required
 def performance_report_page():
     return render_template("performance_report.html")
 
@@ -295,23 +339,43 @@ def registration_requests_page():
     return render_template("registration_requests.html")
 
 @app.route("/electives_report_page")
+@login_required
 def electives_report_page():
+    if _is_instructor_or_supervisor_role():
+        return redirect(url_for("performance_report_page"))
     return render_template("electives_report.html")
 
 
 @app.route("/registration_changes_report_page")
+@login_required
 def registration_changes_report_page():
+    if _is_instructor_or_supervisor_role():
+        return redirect(url_for("performance_report_page"))
     return render_template("registration_changes_report.html")
 
 
 @app.route("/failed_courses_report_page")
+@login_required
 def failed_courses_report_page():
+    if _is_instructor_or_supervisor_role():
+        return redirect(url_for("performance_report_page"))
     return render_template("failed_courses_report.html")
 
 
 @app.route("/uncompleted_courses_report_page")
+@login_required
 def uncompleted_courses_report_page():
+    if _is_instructor_or_supervisor_role():
+        return redirect(url_for("performance_report_page"))
     return render_template("uncompleted_courses_report.html")
+
+
+@app.route("/course_registration_report_page")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def course_registration_report_page():
+    """أعداد الطلبة لكل مقرر من التسجيلات الفعلية — للإدارة ورئيس القسم."""
+    return render_template("course_registration_report.html")
 
 
 def _read_text_doc(path: str) -> str:
@@ -419,14 +483,17 @@ def compat_delete_registrations():
     return redirect(url_for("students.delete_registrations"), code=307)
 
 @app.route("/save_grades", methods=["POST"])
+@role_required("admin", "admin_main", "head_of_department")
 def compat_save_grades():
     return redirect(url_for("grades.save_grades"), code=307)
 
 @app.route("/transcript/<student_id>")
+@login_required
 def compat_transcript(student_id):
     return redirect(url_for("grades.get_transcript", student_id=student_id))
 
 @app.route("/update_grade", methods=["POST"])
+@role_required("admin", "admin_main", "head_of_department")
 def compat_update_grade():
     return redirect(url_for("grades.update_grade"), code=307)
 

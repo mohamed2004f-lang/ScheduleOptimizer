@@ -57,6 +57,7 @@
 /* state */
 let COURSES = [];
 let PREREQS = []; // {course_name, required_course_name}
+let IS_VIEW_ONLY_ROLE = false;
 
 /* helpers */
 function setMsg(kind, html){
@@ -219,6 +220,28 @@ document.getElementById('btnExportCSV').addEventListener('click', ()=>{
 
 /* startup */
 (async function init(){ await loadCourses(); await loadPrereqs(); })();
+
+window.addEventListener('load', async ()=>{
+  try {
+    const auth = await fetchJSON('/auth/check');
+    const role = auth.ok ? (auth.json?.role || '') : '';
+    const isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(auth.json?.is_supervisor || 0) === 1);
+    IS_VIEW_ONLY_ROLE = (role === 'instructor') || isSupervisor;
+  } catch(e) {
+    IS_VIEW_ONLY_ROLE = false;
+  }
+
+  if (IS_VIEW_ONLY_ROLE) {
+    const btnAdd = document.getElementById('btnAddPrereq');
+    if (btnAdd) btnAdd.style.display = 'none';
+    const courseSelect = document.getElementById('courseSelect');
+    const reqSelect = document.getElementById('reqSelect');
+    if (courseSelect) courseSelect.disabled = true;
+    if (reqSelect) reqSelect.disabled = true;
+    const btnExportCsv = document.getElementById('btnExportCSV');
+    if (btnExportCsv) btnExportCsv.style.display = 'none';
+  }
+});
 </script>
 </body>
 </html>

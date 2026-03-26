@@ -65,6 +65,7 @@ TABLES_SCHEMA = {
             course_name TEXT PRIMARY KEY,
             course_code TEXT,
             units INTEGER DEFAULT 0 CHECK (units >= 0),
+            grading_mode TEXT NOT NULL DEFAULT 'partial_final' CHECK (grading_mode IN ('partial_final','final_total_only')),
             description TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )

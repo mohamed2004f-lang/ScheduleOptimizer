@@ -325,6 +325,7 @@ let CURRENT_TRANSCRIPT = null;
 let EDIT_ROWS = []; // temp rows to save
 let selectedStudent = "";
 let CURRENT_ROLE = null;
+let CAN_MANAGE_TRANSCRIPT = false;
 
 // بيانات أولية من السيرفر (لضمان ظهور السجل حتى لو تعطل fetch)
 const INITIAL_STUDENTS = {{ (students or [])|tojson }};
@@ -345,7 +346,8 @@ async function loadStudents(){
     }
   } catch(e) {}
   // للمشرف: حمّل فقط الطلبة المسندين إليه
-  if (CURRENT_ROLE === 'supervisor') {
+  const IS_SUPERVISOR = (CURRENT_ROLE === 'supervisor') || (CURRENT_ROLE === 'instructor' && Number(window.CURRENT_IS_SUPERVISOR || 0) === 1);
+  if (IS_SUPERVISOR) {
     const r = await fetchJSON('/instructors/supervised_students');
     const sel = document.getElementById('studentSelect');
     if(!sel) return;
@@ -452,7 +454,7 @@ function renderTranscript(data){
         <div class="nowrap">مجموع الوحدات: <span class="badge bg-success text-white">${semUnits}</span></div>
         <div class="nowrap">الوحدات المنجزة: <span class="badge bg-secondary text-white">${semCompleted}</span></div>
     `;
-    if (CURRENT_ROLE !== 'student') {
+    if (CAN_MANAGE_TRANSCRIPT) {
       actionsHtml += `
         <button class="btn btn-sm btn-outline-secondary btn-rename-sem" data-sem="${escape(sem)}">تعديل اسم الفصل</button>
         <button class="btn btn-sm btn-outline-primary btn-add-course-sem" data-sem="${escape(sem)}">إضافة مقرر لهذا الفصل</button>
@@ -467,7 +469,7 @@ function renderTranscript(data){
     body.appendChild(header);
 
     const tbl = document.createElement('table'); tbl.className='table table-sm table-bordered mb-0';
-    const hasActions = (CURRENT_ROLE !== 'student');
+    const hasActions = CAN_MANAGE_TRANSCRIPT;
     const headerCols = hasActions
       ? '<tr><th>المقرر</th><th>الرمز</th><th class="text-center">الوحدات</th><th class="text-center">الدرجة</th><th class="text-center">تحرير</th></tr>'
       : '<tr><th>المقرر</th><th>الرمز</th><th class="text-center">الوحدات</th><th class="text-center">الدرجة</th></tr>';
@@ -569,8 +571,8 @@ function renderTranscript(data){
     }
   }
 
-  // ربط أزرار التعديل والحذف بعد الرسم (لغير الطالب فقط)
-  if (CURRENT_ROLE !== 'student') {
+  // ربط أزرار التعديل والحذف بعد الرسم (للأدوار الإدارية فقط)
+  if (CAN_MANAGE_TRANSCRIPT) {
     document.querySelectorAll('.btn-inline-edit').forEach(btn=>{ btn.addEventListener('click', onInlineEditClick); });
     document.querySelectorAll('.btn-rename-sem').forEach(btn=>{
       btn.addEventListener('click', async (ev)=>{
@@ -936,6 +938,7 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
     const auth = await fetchJSON('/auth/check');
     if (auth.ok && auth.json){
       CURRENT_ROLE = auth.json.role || null;
+      window.CURRENT_IS_SUPERVISOR = Number(auth.json.is_supervisor || 0);
       // للطالب نستخدم student_id من الجلسة فقط (حتى لا تختلط مع username)
       window.CURRENT_USER_ID = auth.json.student_id || null;
       window.CURRENT_USERNAME = auth.json.user || null;
@@ -944,15 +947,20 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
     CURRENT_ROLE = null;
   }
 
-  // إخفاء أدوات الإدخال/الاستيراد للطالب (عرض كشف فقط)
-  if (CURRENT_ROLE === 'student'){
+  CAN_MANAGE_TRANSCRIPT = ['admin', 'admin_main', 'head_of_department'].includes(CURRENT_ROLE || '');
+
+  // إخفاء أدوات الإدخال/الاستيراد لغير الإداريين (عرض كشف فقط)
+  if (!CAN_MANAGE_TRANSCRIPT){
     const toolbarAdmin = document.getElementById('toolbarAdmin');
     if (toolbarAdmin) toolbarAdmin.style.display = 'none';
     const importCard = document.getElementById('importCard');
     if (importCard) importCard.style.display = 'none';
     const gradeEditorCard = document.getElementById('gradeEditorCard');
     if (gradeEditorCard) gradeEditorCard.style.display = 'none';
+  }
 
+  // الطالب فقط: حجب اختيار الطلبة/الخطة وإجباره على سجله
+  if (CURRENT_ROLE === 'student'){
     // حجب اختيار الطلبة/الخطة للطالب (يعرض سجله فقط)
     const sel = document.getElementById('studentSelect');
     const planSel = document.getElementById('planSelect');

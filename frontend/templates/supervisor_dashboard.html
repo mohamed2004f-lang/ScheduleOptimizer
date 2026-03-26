@@ -113,7 +113,8 @@
       try {
         const auth = await apiGet('/auth/check');
         const role = auth.role || null;
-        if (role !== 'supervisor') {
+        const isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(auth.is_supervisor || 0) === 1);
+        if (!isSupervisor) {
           const warn = document.getElementById('roleWarning');
           if (warn) warn.classList.remove('d-none');
           showMsg('هذه الصفحة مخصصة للمشرفين الأكاديميين فقط.', 'danger');

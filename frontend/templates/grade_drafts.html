@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>مسودات الدرجات</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">مسودات الدرجات</h1>
+        <p class="page-subtitle" id="pageSubtitle">إدخال الدرجات عبر مسودة ثم إرسالها للاعتماد</p>
+      </div>
+      <div>
+        <a href="/transcript_page" class="btn btn-outline-secondary btn-sm">كشف الدرجات</a>
+      </div>
+    </div>
+
+    <!-- وضع الأستاذ -->
+    <div id="panelInstructor" class="d-none">
+      <div class="alert alert-info small">
+        تُعرض مقرراتك المسندة في الجدول للفصل الحالي. تُحفظ المسودة محلياً في النظام ثم تُرسل للاعتماد؛ بعد الاعتماد تُنشر في السجل الرسمي.
+        <span class="d-block mt-1 text-muted">لا يمكن فتح أكثر من مسودة نشطة (مسودة أو مرسلة) في نفس الفصل دفعة واحدة.</span>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-header fw-semibold">المقررات والمسودات</div>
+        <div class="card-body">
+          <div id="instructorCoursesWrap" class="text-muted small">جاري التحميل…</div>
+        </div>
+      </div>
+
+      <div id="editorCard" class="card d-none">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <span class="fw-semibold" id="editorTitle">تعديل المسودة</span>
+          <div class="d-flex gap-2 flex-wrap">
+            <span class="badge bg-secondary" id="editorStatus"></span>
+            <button type="button" class="btn btn-sm btn-outline-primary" id="btnSaveDraft">حفظ</button>
+            <button type="button" class="btn btn-sm btn-primary" id="btnSubmitDraft">إرسال للاعتماد</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <p class="small text-muted" id="editorModeHint"></p>
+          <div class="table-responsive">
+            <table class="table table-sm table-striped align-middle">
+              <thead>
+                <tr>
+                  <th>الرقم</th>
+                  <th>الاسم</th>
+                  <th id="thPartial" class="col-grade">جزئي</th>
+                  <th id="thFinal" class="col-grade">نهائي</th>
+                  <th id="thTotal" class="col-grade">المجموع / 100</th>
+                  <th>المحسوب</th>
+                </tr>
+              </thead>
+              <tbody id="editorBody"></tbody>
+            </table>
+          </div>
+          <div id="editorFeedback" class="small text-danger mt-2"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- وضع الاعتماد -->
+    <div id="panelApprover" class="d-none">
+      <div class="alert alert-warning small">
+        المسودات المرسلة من الأساتذة تظهر هنا. الاعتماد ينشر الدرجات في السجل الرسمي لهذا الفصل.
+      </div>
+      <div class="card">
+        <div class="card-header fw-semibold">بانتظار الاعتماد</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead>
+                <tr>
+                  <th>المقرر</th>
+                  <th>الأستاذ</th>
+                  <th>تاريخ الإرسال</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="pendingBody"></tbody>
+            </table>
+          </div>
+          <div id="pendingEmpty" class="p-3 text-muted small d-none">لا توجد مسودات بانتظار الاعتماد للفصل الحالي.</div>
+        </div>
+      </div>
+
+      <!-- معاينة قبل الاعتماد -->
+      <div class="modal fade" id="previewModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title">معاينة المسودة</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+              <div id="previewMeta" class="small text-muted mb-2"></div>
+              <div class="table-responsive">
+                <table class="table table-sm">
+                  <thead><tr><th>طالب</th><th>المحسوب</th></tr></thead>
+                  <tbody id="previewBody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
+              <button type="button" class="btn btn-success" id="btnApproveFromModal">اعتماد ونشر</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    window.PAGE_MODE = {{ page_mode | tojson }};
+
+    function computeTotal(mode, partial, final_, total) {
+      if (mode === 'final_total_only') {
+        return total === '' || total === null || total === undefined ? null : Number(total);
+      }
+      if (total !== '' && total !== null && total !== undefined && !Number.isNaN(Number(total))) return Number(total);
+      const p = partial === '' || partial === null || partial === undefined ? 0 : Number(partial);
+      const f = final_ === '' || final_ === null || final_ === undefined ? 0 : Number(final_);
+      if ((partial === '' || partial === null) && (final_ === '' || final_ === null)) return null;
+      return p + f;
+    }
+
+    function fmtNum(v) {
+      if (v === null || v === undefined || Number.isNaN(v)) return '—';
+      return (Math.round(v * 100) / 100).toString();
+    }
+
+    (function init() {
+      const mode = window.PAGE_MODE;
+      if (mode === 'instructor') {
+        document.getElementById('panelInstructor').classList.remove('d-none');
+        initInstructor();
+      } else if (mode === 'approver') {
+        document.getElementById('pageSubtitle').textContent = 'اعتماد مسودات الأساتذة ونشرها في السجل';
+        document.getElementById('panelApprover').classList.remove('d-none');
+        initApprover();
+      }
+    })();
+
+    let state = { draft: null, items: [], roster: [], draftId: null, gradingMode: 'partial_final' };
+
+    async function initInstructor() {
+      const wrap = document.getElementById('instructorCoursesWrap');
+      try {
+        const [cRes, mRes] = await Promise.all([
+          fetch('/grades/drafts/courses', { credentials: 'include' }),
+          fetch('/grades/drafts/mine', { credentials: 'include' })
+        ]);
+        const cj = cRes.ok ? await cRes.json() : {};
+        const mj = mRes.ok ? await mRes.json() : {};
+        const courses = Array.isArray(cj.courses) ? cj.courses : [];
+        const drafts = Array.isArray(mj.drafts) ? mj.drafts : [];
+        const sem = mj.semester || '';
+
+        if (!courses.length) {
+          wrap.innerHTML = '<p class="mb-0">لا توجد مقررات مسندة لك في الجدول للفصل الحالي، أو لم يُضبط الفصل الحالي في الإعدادات.</p>';
+          return;
+        }
+
+        const byCourse = {};
+        drafts.forEach(d => { byCourse[d.course_name] = d; });
+
+        const blocking = drafts.find(d => d.status === 'Draft' || d.status === 'Submitted');
+        let html = '<p class="small text-muted mb-2">الفصل: <strong>' + (sem || '—') + '</strong></p>';
+        if (blocking) {
+          html += '<div class="alert alert-warning py-2 small">مسودة نشطة: <strong>' + blocking.course_name + '</strong> (' + blocking.status + '). أكملها أو سلّمها قبل بدء مقرر آخر.</div>';
+        }
+        html += '<div class="list-group">';
+        courses.forEach(cn => {
+          const d = byCourse[cn];
+          if (d) {
+            html += '<div class="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2">';
+            html += '<span>' + cn + '</span><span>';
+            html += '<span class="badge bg-secondary me-1">' + d.status + '</span>';
+            html += '<button type="button" class="btn btn-sm btn-primary" data-open-draft="' + d.id + '">متابعة</button>';
+            html += '</span></div>';
+          } else {
+            const disabled = blocking ? ' disabled' : '';
+            html += '<div class="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2">';
+            html += '<span>' + cn + '</span>';
+            html += '<button type="button" class="btn btn-sm btn-outline-primary js-new-draft"' + disabled + ' data-new-course="' + encodeURIComponent(cn) + '">بدء مسودة</button>';
+            html += '</div>';
+          }
+        });
+        html += '</div>';
+        wrap.innerHTML = html;
+
+        wrap.querySelectorAll('.js-new-draft').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const course = decodeURIComponent(btn.getAttribute('data-new-course') || '');
+            const r = await fetch('/grades/drafts', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+              body: JSON.stringify({ course_name: course })
+            });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok) {
+              window.showToast && window.showToast(j.message || 'تعذر إنشاء المسودة', 'danger');
+              return;
+            }
+            location.reload();
+          });
+        });
+        wrap.querySelectorAll('[data-open-draft]').forEach(btn => {
+          btn.addEventListener('click', () => openDraft(Number(btn.getAttribute('data-open-draft'))));
+        });
+      } catch (e) {
+        console.error(e);
+        wrap.textContent = 'فشل تحميل البيانات.';
+      }
+    }
+
+    async function openDraft(draftId) {
+      state.draftId = draftId;
+      document.getElementById('editorFeedback').textContent = '';
+      const card = document.getElementById('editorCard');
+      card.classList.remove('d-none');
+      try {
+        const dRes = await fetch('/grades/drafts/' + draftId, { credentials: 'include' });
+        const dj = await dRes.json();
+        if (!dRes.ok || dj.status !== 'ok') {
+          window.showToast && window.showToast(dj.message || 'تعذر فتح المسودة', 'danger');
+          return;
+        }
+        state.draft = dj.draft;
+        state.gradingMode = (dj.draft.grading_mode || 'partial_final').toLowerCase();
+        const items = Array.isArray(dj.items) ? dj.items : [];
+        const itemMap = {};
+        items.forEach(it => { itemMap[it.student_id] = it; });
+
+        const courseName = dj.draft.course_name;
+        const rRes = await fetch('/grades/drafts/roster?course_name=' + encodeURIComponent(courseName), { credentials: 'include' });
+        const rj = await rRes.json();
+        const roster = (rRes.ok && rj.roster) ? rj.roster : [];
+
+        state.roster = roster;
+        state.items = roster.map(r => {
+          const ex = itemMap[r.student_id] || {};
+          return {
+            student_id: r.student_id,
+            student_name: r.student_name || '',
+            partial: ex.partial,
+            final: ex.final,
+            total: ex.total,
+            computed_total: ex.computed_total
+          };
+        });
+
+        document.getElementById('editorTitle').textContent = 'مسودة: ' + courseName;
+        document.getElementById('editorStatus').textContent = dj.draft.status || '';
+        const isReadOnly = (dj.draft.status || '') !== 'Draft';
+        document.getElementById('btnSaveDraft').disabled = isReadOnly;
+        document.getElementById('btnSubmitDraft').disabled = isReadOnly;
+
+        const partialFinal = state.gradingMode === 'partial_final';
+        document.getElementById('thPartial').style.display = partialFinal ? '' : 'none';
+        document.getElementById('thFinal').style.display = partialFinal ? '' : 'none';
+        document.getElementById('thTotal').style.display = '';
+        document.getElementById('editorModeHint').textContent = partialFinal
+          ? 'وضع التقييم: جزئي + نهائي (أو إدخال المجموع مباشرة إن وُجد).'
+          : 'وضع التقييم: المجموع النهائي / 100 فقط.';
+
+        const tbody = document.getElementById('editorBody');
+        tbody.innerHTML = '';
+        state.items.forEach((row, idx) => {
+          const tr = document.createElement('tr');
+          const comp = computeTotal(state.gradingMode, row.partial, row.final, row.total);
+          tr.innerHTML = [
+            '<td class="mono">' + row.student_id + '</td>',
+            '<td>' + (row.student_name || '') + '</td>',
+            '<td class="col-grade"><input type="number" min="0" max="100" step="0.01" class="form-control form-control-sm inp-partial" data-idx="' + idx + '"' + (isReadOnly ? ' disabled' : '') + ' value="' + (row.partial != null ? row.partial : '') + '"></td>',
+            '<td class="col-grade"><input type="number" min="0" max="100" step="0.01" class="form-control form-control-sm inp-final" data-idx="' + idx + '"' + (isReadOnly ? ' disabled' : '') + ' value="' + (row.final != null ? row.final : '') + '"></td>',
+            '<td class="col-grade"><input type="number" min="0" max="100" step="0.01" class="form-control form-control-sm inp-total" data-idx="' + idx + '"' + (isReadOnly ? ' disabled' : '') + ' value="' + (row.total != null ? row.total : '') + '"></td>',
+            '<td class="mono comp-cell">' + fmtNum(comp) + '</td>'
+          ].join('');
+          tbody.appendChild(tr);
+        });
+
+        if (!partialFinal) {
+          tbody.querySelectorAll('.inp-partial, .inp-final').forEach(el => { el.closest('td').style.display = 'none'; });
+        }
+
+        tbody.querySelectorAll('input').forEach(inp => {
+          inp.addEventListener('input', () => {
+            const i = Number(inp.getAttribute('data-idx'));
+            const row = state.items[i];
+            const pr = tbody.querySelector('.inp-partial[data-idx="' + i + '"]');
+            const fr = tbody.querySelector('.inp-final[data-idx="' + i + '"]');
+            const tr = tbody.querySelector('.inp-total[data-idx="' + i + '"]');
+            row.partial = pr && pr.value !== '' ? pr.value : null;
+            row.final = fr && fr.value !== '' ? fr.value : null;
+            row.total = tr && tr.value !== '' ? tr.value : null;
+            const c = computeTotal(state.gradingMode, row.partial, row.final, row.total);
+            const cell = tbody.querySelectorAll('tr')[i].querySelector('.comp-cell');
+            if (cell) cell.textContent = fmtNum(c);
+          });
+        });
+
+        document.getElementById('editorCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch (e) {
+        console.error(e);
+        document.getElementById('editorFeedback').textContent = 'خطأ أثناء التحميل.';
+      }
+    }
+
+    document.getElementById('btnSaveDraft')?.addEventListener('click', async () => {
+      if (!state.draftId || (state.draft && state.draft.status !== 'Draft')) return;
+      const payload = {
+        items: state.items.map(r => ({
+          student_id: r.student_id,
+          partial: r.partial === '' || r.partial === null ? null : Number(r.partial),
+          final: r.final === '' || r.final === null ? null : Number(r.final),
+          total: r.total === '' || r.total === null ? null : Number(r.total)
+        }))
+      };
+      const r = await fetch('/grades/drafts/' + state.draftId + '/items', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        window.showToast && window.showToast('تم الحفظ', 'success');
+      } else {
+        window.showToast && window.showToast(j.message || 'فشل الحفظ', 'danger');
+      }
+    });
+
+    document.getElementById('btnSubmitDraft')?.addEventListener('click', async () => {
+      if (!state.draftId) return;
+      if (!confirm('إرسال المسودة للاعتماد؟ لن يمكن تعديلها بعد الإرسال.')) return;
+      const payload = {
+        items: state.items.map(r => ({
+          student_id: r.student_id,
+          partial: r.partial === '' || r.partial === null ? null : Number(r.partial),
+          final: r.final === '' || r.final === null ? null : Number(r.final),
+          total: r.total === '' || r.total === null ? null : Number(r.total)
+        }))
+      };
+      const saveR = await fetch('/grades/drafts/' + state.draftId + '/items', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!saveR.ok) {
+        const sj = await saveR.json().catch(() => ({}));
+        window.showToast && window.showToast(sj.message || 'فشل الحفظ قبل الإرسال', 'danger');
+        return;
+      }
+      const r = await fetch('/grades/drafts/' + state.draftId + '/submit', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Accept': 'application/json' }
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        window.showToast && window.showToast('تم الإرسال', 'success');
+        location.reload();
+      } else {
+        window.showToast && window.showToast(j.message || 'فشل الإرسال', 'danger');
+      }
+    });
+
+    let previewDraftId = null;
+
+    async function initApprover() {
+      const tbody = document.getElementById('pendingBody');
+      const empty = document.getElementById('pendingEmpty');
+      try {
+        const r = await fetch('/grades/drafts/pending', { credentials: 'include' });
+        const j = await r.json();
+        const list = (j && j.pending) ? j.pending : [];
+        if (!list.length) {
+          tbody.innerHTML = '';
+          empty.classList.remove('d-none');
+          return;
+        }
+        empty.classList.add('d-none');
+        tbody.innerHTML = '';
+        list.forEach(p => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = '<td>' + p.course_name + '</td><td>' + (p.instructor_name || '') + '</td><td>' + (p.submitted_at || '—') + '</td><td>' +
+            '<button type="button" class="btn btn-sm btn-outline-secondary me-1" data-preview="' + p.id + '">معاينة</button>' +
+            '<button type="button" class="btn btn-sm btn-success" data-approve="' + p.id + '">اعتماد</button></td>';
+          tbody.appendChild(tr);
+        });
+        tbody.querySelectorAll('[data-preview]').forEach(btn => {
+          btn.addEventListener('click', () => previewDraft(Number(btn.getAttribute('data-preview'))));
+        });
+        tbody.querySelectorAll('[data-approve]').forEach(btn => {
+          btn.addEventListener('click', () => approveDraft(Number(btn.getAttribute('data-approve'))));
+        });
+      } catch (e) {
+        console.error(e);
+        tbody.innerHTML = '<tr><td colspan="4">تعذر تحميل القائمة</td></tr>';
+      }
+    }
+
+    async function previewDraft(id) {
+      previewDraftId = id;
+      const r = await fetch('/grades/drafts/' + id, { credentials: 'include' });
+      const j = await r.json();
+      if (!r.ok || j.status !== 'ok') {
+        window.showToast && window.showToast('تعذر تحميل المسودة', 'danger');
+        return;
+      }
+      const d = j.draft;
+      document.getElementById('previewMeta').textContent = d.course_name + ' — ' + (d.semester || '') + ' — ' + (d.status || '');
+      const pb = document.getElementById('previewBody');
+      pb.innerHTML = '';
+      (j.items || []).forEach(it => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td>' + it.student_id + '</td><td class="mono">' + fmtNum(it.computed_total) + '</td>';
+        pb.appendChild(tr);
+      });
+      const modal = new bootstrap.Modal(document.getElementById('previewModal'));
+      modal.show();
+    }
+
+    document.getElementById('btnApproveFromModal')?.addEventListener('click', async () => {
+      if (previewDraftId) await approveDraft(previewDraftId);
+      const el = document.getElementById('previewModal');
+      bootstrap.Modal.getInstance(el)?.hide();
+    });
+
+    async function approveDraft(id) {
+      if (!confirm('اعتماد هذه المسودة ونشر الدرجات في السجل؟')) return;
+      const r = await fetch('/grades/drafts/' + id + '/approve', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Accept': 'application/json' }
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        window.showToast && window.showToast('تم الاعتماد ونشر ' + (j.published || 0) + ' سجل', 'success');
+        location.reload();
+      } else {
+        window.showToast && window.showToast(j.message || 'فشل الاعتماد', 'danger');
+      }
+    }
+  </script>
+</body>
+</html>

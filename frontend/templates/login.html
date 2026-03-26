@@ -18,8 +18,9 @@
 
     <form id="loginForm">
       <div class="mb-3">
-        <label for="username" class="form-label">اسم المستخدم</label>
-        <input type="text" class="form-control" id="username" name="username" required autocomplete="username" placeholder="أدخل اسم المستخدم">
+        <label for="username" class="form-label">اسم المستخدم أو الرقم</label>
+        <input type="text" class="form-control" id="username" name="username" required autocomplete="username" placeholder="مثال: ahmed أو 20201234 أو رقم الأستاذ">
+        <div class="form-text">يمكنك إدخال اسم المستخدم أو الرقم الدراسي للطالب أو الرقم الأكاديمي للأستاذ.</div>
       </div>
 
       <div class="mb-3">
@@ -42,7 +43,7 @@
 
     <div class="mt-4 text-center">
       <small class="text-muted">
-        لتغيير كلمة المرور، راجع ملف config.py أو متغيرات البيئة
+        إذا كان حسابك جديداً: ستصلك رسالة تفعيل على البريد لتعيين كلمة المرور.
       </small>
     </div>
   </div>

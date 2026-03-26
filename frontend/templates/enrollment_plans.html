@@ -115,6 +115,8 @@
     let COURSES = [];
     let currentPlanId = null;
     let currentRole = null;
+    let isSupervisor = false;
+    let IS_VIEW_ONLY_ROLE = false;
     /** مقررات أنجزها الطالب بنجاح والموجودة في الجدول المعتمد (لتحسين المعدل) */
     let lastCompletedCourses = [];
     let lastSchedulePublished = false;
@@ -268,9 +270,11 @@
       // للمشرف: حمّل فقط الطلبة المسندين إليه
       const auth = await fetchJSON('/auth/check').catch(()=>({ok:false,json:{}}));
       currentRole = auth.ok ? auth.json?.role : null;
+      isSupervisor = (currentRole === 'supervisor') || (currentRole === 'instructor' && Number(auth.json?.is_supervisor || 0) === 1);
+      IS_VIEW_ONLY_ROLE = (currentRole === 'instructor') || isSupervisor;
 
       let s;
-      if (currentRole === 'supervisor') {
+      if (isSupervisor) {
         s = await fetchJSON('/instructors/supervised_students?active_only=1');
         STUDENTS = Array.isArray(s.json?.students) ? s.json.students : [];
       } else {
@@ -296,7 +300,7 @@
           selStudent.value = sid;
           selStudent.disabled = true;
         }
-      } else if (currentRole === 'supervisor') {
+      } else if (isSupervisor) {
         // المشرف: قائمة طلبته فقط
         STUDENTS.forEach(st=>{
           const opt = document.createElement('option');
@@ -480,17 +484,21 @@
                           </div>
                           <div id="acadSummary_${p.id}" data-open="0"></div>`;
         const right = document.createElement('div');
-        const approveBtn = document.createElement('button');
-        approveBtn.className = 'btn btn-sm btn-success mb-1';
-        approveBtn.textContent = 'اعتماد';
-        approveBtn.addEventListener('click', ()=> approvePlan(p.id));
-        const rejectBtn = document.createElement('button');
-        rejectBtn.className = 'btn btn-sm btn-danger';
-        rejectBtn.textContent = 'رفض';
-        rejectBtn.addEventListener('click', ()=> rejectPlan(p.id));
-        right.appendChild(approveBtn);
-        right.appendChild(document.createElement('br'));
-        right.appendChild(rejectBtn);
+        if (IS_VIEW_ONLY_ROLE) {
+          right.innerHTML = '<span class="badge bg-light text-dark">عرض فقط</span>';
+        } else {
+          const approveBtn = document.createElement('button');
+          approveBtn.className = 'btn btn-sm btn-success mb-1';
+          approveBtn.textContent = 'اعتماد';
+          approveBtn.addEventListener('click', ()=> approvePlan(p.id));
+          const rejectBtn = document.createElement('button');
+          rejectBtn.className = 'btn btn-sm btn-danger';
+          rejectBtn.textContent = 'رفض';
+          rejectBtn.addEventListener('click', ()=> rejectPlan(p.id));
+          right.appendChild(approveBtn);
+          right.appendChild(document.createElement('br'));
+          right.appendChild(rejectBtn);
+        }
         item.appendChild(left);
         item.appendChild(right);
         container.appendChild(item);
@@ -696,6 +704,21 @@
       }
 
       await loadStudentsAndCourses();
+      if (IS_VIEW_ONLY_ROLE) {
+        const hideIds = [
+          'btnSaveDraft',
+          'btnSubmitPlan',
+          'btnPrintForm',
+          'btnImproveGPA',
+          'btnLoadPending',
+        ];
+        hideIds.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = 'none';
+        });
+        const selCourses = document.getElementById('planCoursesSelect');
+        if (selCourses) selCourses.disabled = true;
+      }
       // اختيار تلقائي لطالب (للمشرف) من query أو localStorage
       try {
         const sel = document.getElementById('studentSelect');
@@ -704,7 +727,7 @@
         let preferred = qpStudent;
         if (!preferred) preferred = localStorage.getItem('plans_selected_student') || '';
         const canPick = (id) => Array.isArray(STUDENTS) && STUDENTS.some(s=>s.student_id===id);
-        if (currentRole === 'supervisor' && preferred && canPick(preferred) && sel) {
+        if (isSupervisor && preferred && canPick(preferred) && sel) {
           sel.value = preferred;
         }
       } catch(e) {}

@@ -21,6 +21,11 @@ from .utilities import (
 students_bp = Blueprint("students", __name__)
 
 
+def _is_instructor_or_supervisor_view_only() -> bool:
+    role = (session.get("user_role") or "").strip()
+    return role in ("instructor", "supervisor")
+
+
 def _enrollment_label_ar(enrollment_status: str) -> str:
     es = str(enrollment_status or "active").strip().lower()
     return {
@@ -98,6 +103,10 @@ def electives_status_api():
         return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
     with get_connection() as conn:
         cur = conn.cursor()
+        # Scope: تقييد الوصول حسب الدور (منع تسريب عند وصول instructor عبر normalize)
+        allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        if allowed_student_ids is not None and sid not in allowed_student_ids:
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         try:
             from backend.services.electives import check_electives_requirement
             data = check_electives_requirement(cur, sid, required_electives=3)
@@ -115,11 +124,25 @@ def electives_report_api():
     items = []
     with get_connection() as conn:
         cur = conn.cursor()
+        # Scope: تقييد قائمة الطلاب حسب الدور
+        allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        if allowed_student_ids is not None and not allowed_student_ids:
+            return jsonify({"status": "ok", "items": []})
         try:
             from backend.services.electives import check_electives_requirement
         except Exception:
             check_electives_requirement = None
-        rows = cur.execute("SELECT student_id, COALESCE(student_name,'') FROM students ORDER BY student_name, student_id").fetchall()
+        if allowed_student_ids is None:
+            rows = cur.execute(
+                "SELECT student_id, COALESCE(student_name,'') FROM students ORDER BY student_name, student_id"
+            ).fetchall()
+        else:
+            placeholders = ",".join("?" for _ in allowed_student_ids)
+            rows = cur.execute(
+                f"SELECT student_id, COALESCE(student_name,'') FROM students WHERE student_id IN ({placeholders}) "
+                "ORDER BY student_name, student_id",
+                list(allowed_student_ids),
+            ).fetchall()
         for r in rows:
             sid = r[0] if isinstance(r, (list, tuple)) else r["student_id"]
             name = r[1] if isinstance(r, (list, tuple)) else (r["COALESCE(student_name,'')"] if "COALESCE(student_name,'')" in r.keys() else r.get("student_name",""))
@@ -204,9 +227,167 @@ def electives_report_pdf():
 
 
 # -----------------------------
+# تقرير: أعداد الطلبة حسب المقرر (التسجيلات الفعلية في registrations)
+# -----------------------------
+def _course_registration_count_rows(conn):
+    """صف واحد لكل مقرر: عدد الطلبة المسجّلين فعلياً في جدول التسجيلات."""
+    cur = conn.cursor()
+    cols_stu = [r[1] for r in cur.execute("PRAGMA table_info(students)").fetchall()]
+    active_only = "enrollment_status" in cols_stu
+    if active_only:
+        q = """
+        SELECT r.course_name,
+               COALESCE(c.course_code, '') AS course_code,
+               COALESCE(c.units, '') AS units,
+               COUNT(DISTINCT r.student_id) AS student_count
+        FROM registrations r
+        LEFT JOIN courses c ON c.course_name = r.course_name
+        LEFT JOIN students s ON s.student_id = r.student_id
+        WHERE COALESCE(s.enrollment_status, 'active') = 'active'
+        GROUP BY r.course_name, c.course_code, c.units
+        ORDER BY r.course_name
+        """
+    else:
+        q = """
+        SELECT r.course_name,
+               COALESCE(c.course_code, '') AS course_code,
+               COALESCE(c.units, '') AS units,
+               COUNT(DISTINCT r.student_id) AS student_count
+        FROM registrations r
+        LEFT JOIN courses c ON c.course_name = r.course_name
+        GROUP BY r.course_name, c.course_code, c.units
+        ORDER BY r.course_name
+        """
+    rows = cur.execute(q).fetchall()
+    items = []
+    for row in rows or []:
+        d = dict(row)
+        items.append({
+            "course_name": (d.get("course_name") or "").strip(),
+            "course_code": (d.get("course_code") or "").strip(),
+            "units": d.get("units"),
+            "student_count": int(d.get("student_count") or 0),
+        })
+    return items
+
+
+@students_bp.route("/course_registration_counts")
+@role_required("admin", "admin_main", "head_of_department")
+def course_registration_counts_api():
+    """تقرير مجمّع: عدد الطلبة لكل مقرر من التسجيلات الفعلية."""
+    with get_connection() as conn:
+        items = _course_registration_count_rows(conn)
+    total_registrations = sum(i["student_count"] for i in items)
+    # طلبة مميّزون وقعوا في تسجيل واحد على الأقل (ضمن نفس نطاق التقرير)
+    distinct_students = 0
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cols_stu = [r[1] for r in cur.execute("PRAGMA table_info(students)").fetchall()]
+        active_only = "enrollment_status" in cols_stu
+        if active_only:
+            row = cur.execute(
+                """
+                SELECT COUNT(DISTINCT r.student_id)
+                FROM registrations r
+                LEFT JOIN students s ON s.student_id = r.student_id
+                WHERE COALESCE(s.enrollment_status, 'active') = 'active'
+                """
+            ).fetchone()
+        else:
+            row = cur.execute("SELECT COUNT(DISTINCT student_id) FROM registrations").fetchone()
+        if row:
+            distinct_students = int(row[0] or 0)
+    return jsonify({
+        "status": "ok",
+        "items": items,
+        "summary": {
+            "courses_with_registrations": len(items),
+            "total_registration_slots": total_registrations,
+            "distinct_students_with_registration": distinct_students,
+        },
+    })
+
+
+@students_bp.route("/course_registration_counts/excel")
+@role_required("admin", "admin_main", "head_of_department")
+def course_registration_counts_excel():
+    with get_connection() as conn:
+        items = _course_registration_count_rows(conn)
+    df = pd.DataFrame(items or [])
+    if not df.empty:
+        df = df.rename(columns={
+            "course_name": "اسم المقرر",
+            "course_code": "رمز المقرر",
+            "units": "الوحدات",
+            "student_count": "عدد الطلبة المسجلين",
+        })
+    return excel_response_from_df(df, filename_prefix="course_registration_counts")
+
+
+@students_bp.route("/course_registration_counts/pdf")
+@role_required("admin", "admin_main", "head_of_department")
+def course_registration_counts_pdf():
+    with get_connection() as conn:
+        items = _course_registration_count_rows(conn)
+    rows_html = ""
+    for it in items:
+        rows_html += (
+            "<tr>"
+            f"<td>{it.get('course_name','')}</td>"
+            f"<td style='text-align:center'>{it.get('course_code','')}</td>"
+            f"<td style='text-align:center'>{it.get('units') if it.get('units') is not None else ''}</td>"
+            f"<td style='text-align:center'>{it.get('student_count','')}</td>"
+            "</tr>"
+        )
+    n = len(items)
+    tot = sum(it.get("student_count") or 0 for it in items)
+    html = f"""
+    <html dir="rtl" lang="ar">
+    <head>
+      <meta charset="utf-8"/>
+      <style>
+        body {{ font-family: Arial, sans-serif; }}
+        h2 {{ margin: 0 0 10px 0; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        th, td {{ border: 1px solid #999; padding: 6px; font-size: 12px; }}
+        th {{ background: #f2f2f2; }}
+      </style>
+    </head>
+    <body>
+      <h2>تقرير أعداد التسجيل الفعلي بالمقررات</h2>
+      <p>يُحتسب من جدول التسجيلات الفعلية؛ يُفضّل احتساب الطلبة ذوي القيد النشط عند توفر حالة القيد.</p>
+      <p><strong>عدد المقررات:</strong> {n} — <strong>مجموع التسجيلات (مقعد-طالب):</strong> {tot}</p>
+      <table>
+        <thead>
+          <tr>
+            <th>المقرر</th>
+            <th>رمز المقرر</th>
+            <th>الوحدات</th>
+            <th>عدد الطلبة</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows_html or "<tr><td colspan='4' style='text-align:center'>لا توجد تسجيلات</td></tr>"}
+        </tbody>
+      </table>
+    </body>
+    </html>
+    """
+    return pdf_response_from_html(html, filename_prefix="course_registration_counts")
+
+
+# -----------------------------
 # تقرير سجل الإضافة والإسقاط (المواد المضافة والمسقطة + التواريخ)
 # -----------------------------
-def _registration_changes_report_items(conn, date_from=None, date_to=None, student_id=None, action=None, course_name_like=None):
+def _registration_changes_report_items(
+    conn,
+    date_from=None,
+    date_to=None,
+    student_id=None,
+    student_ids=None,
+    action=None,
+    course_name_like=None,
+):
     """استعلام registration_changes_log مع فلترة اختيارية. يرجع قائمة قامات."""
     cur = conn.cursor()
     sql = """
@@ -225,6 +406,13 @@ def _registration_changes_report_items(conn, date_from=None, date_to=None, stude
     if student_id:
         sql += " AND student_id = ?"
         params.append(student_id.strip())
+    elif student_ids:
+        # فلترة حسب مجموعة طلاب (يُستخدم لتقييد الوصول حسب الدور)
+        ids = [normalize_sid(sid) for sid in (student_ids or []) if normalize_sid(sid)]
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            sql += f" AND student_id IN ({placeholders})"
+            params.extend(ids)
     if action and str(action).lower() in ("add", "drop", "change"):
         sql += " AND action = ?"
         params.append(str(action).lower())
@@ -255,9 +443,28 @@ def registration_changes_report_api():
     action = request.args.get("action", "").strip() or None
     course_name = request.args.get("course_name", "").strip() or None
     with get_connection() as conn:
+        # Scope: تقييد الوصول حسب الدور
+        allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        if allowed_student_ids is not None:
+            if not allowed_student_ids:
+                return jsonify({"status": "ok", "items": []})
+
+            student_id_norm = normalize_sid(student_id) if student_id else ""
+            if student_id_norm:
+                if student_id_norm not in allowed_student_ids:
+                    return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+                # نستخدم student_id كما هو
+                student_ids = None
+            else:
+                student_ids = allowed_student_ids
+            student_id = student_id_norm if student_id_norm else None
+        else:
+            student_ids = None
+
         items = _registration_changes_report_items(
             conn, date_from=date_from, date_to=date_to,
-            student_id=student_id, action=action, course_name_like=course_name
+            student_id=student_id, student_ids=student_ids,
+            action=action, course_name_like=course_name
         )
     return jsonify({"status": "ok", "items": items})
 
@@ -272,9 +479,28 @@ def registration_changes_report_excel():
     action = request.args.get("action", "").strip() or None
     course_name = request.args.get("course_name", "").strip() or None
     with get_connection() as conn:
+        # Scope: تقييد الوصول حسب الدور
+        allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        if allowed_student_ids is not None:
+            if not allowed_student_ids:
+                df = pd.DataFrame(columns=[])
+                return excel_response_from_df(df, filename_prefix="registration_changes_report")
+
+            student_id_norm = normalize_sid(student_id) if student_id else ""
+            if student_id_norm:
+                if student_id_norm not in allowed_student_ids:
+                    return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+                student_ids = None
+            else:
+                student_ids = allowed_student_ids
+            student_id = student_id_norm if student_id_norm else None
+        else:
+            student_ids = None
+
         items = _registration_changes_report_items(
             conn, date_from=date_from, date_to=date_to,
-            student_id=student_id, action=action, course_name_like=course_name
+            student_id=student_id, student_ids=student_ids,
+            action=action, course_name_like=course_name
         )
     df = pd.DataFrame(items or [])
     if not df.empty and "action_time" in df.columns:
@@ -292,9 +518,32 @@ def registration_changes_report_pdf():
     action = request.args.get("action", "").strip() or None
     course_name = request.args.get("course_name", "").strip() or None
     with get_connection() as conn:
+        # Scope: تقييد الوصول حسب الدور
+        allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        if allowed_student_ids is not None:
+            if not allowed_student_ids:
+                return pdf_response_from_html(
+                    """
+                    <html dir="rtl" lang="ar"><body><p style="font-family:Arial,sans-serif;">لا توجد بيانات</p></body></html>
+                    """,
+                    filename_prefix="registration_changes_report",
+                )
+
+            student_id_norm = normalize_sid(student_id) if student_id else ""
+            if student_id_norm:
+                if student_id_norm not in allowed_student_ids:
+                    return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+                student_ids = None
+            else:
+                student_ids = allowed_student_ids
+            student_id = student_id_norm if student_id_norm else None
+        else:
+            student_ids = None
+
         items = _registration_changes_report_items(
             conn, date_from=date_from, date_to=date_to,
-            student_id=student_id, action=action, course_name_like=course_name
+            student_id=student_id, student_ids=student_ids,
+            action=action, course_name_like=course_name
         )
     action_labels = {"add": "إضافة", "drop": "إسقاط", "change": "تعديل"}
     rows_html = ""
@@ -438,7 +687,7 @@ def _best_grade_key(v):
     return -1.0
 
 
-def _best_grades_map(conn, student_id=None, course_name_like=None):
+def _best_grades_map(conn, student_id=None, student_ids=None, course_name_like=None):
     """
     يجمع كل محاولات grades ويحسب أفضل درجة لكل (طالب, مقرر).
     يرجع قاموس: (sid, course_name) -> info
@@ -460,6 +709,14 @@ def _best_grades_map(conn, student_id=None, course_name_like=None):
     if student_id:
         sql += " AND g.student_id = ?"
         params.append(str(student_id).strip())
+    elif student_ids:
+        ids = [normalize_sid(sid) for sid in (student_ids or []) if normalize_sid(sid)]
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            sql += f" AND g.student_id IN ({placeholders})"
+            params.extend(ids)
+        else:
+            return {}
     if course_name_like and str(course_name_like).strip():
         q = "%" + str(course_name_like).strip() + "%"
         sql += " AND (g.course_name LIKE ? OR g.course_code LIKE ?)"
@@ -530,6 +787,9 @@ def uncompleted_courses_report_api():
     if not sid:
         return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
     with get_connection() as conn:
+        allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        if allowed_student_ids is not None and sid not in allowed_student_ids:
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         best = _best_grades_map(conn, student_id=sid)
         items = [v for v in best.values() if not v.get("passed")]
         items = sorted(items, key=lambda x: (x.get("course_name") or ""))
@@ -541,6 +801,9 @@ def uncompleted_courses_report_api():
 def uncompleted_courses_report_excel():
     sid = normalize_sid(request.args.get("student_id"))
     r = uncompleted_courses_report_api()
+    if isinstance(r, tuple):
+        # propagate error status codes (e.g. 403)
+        return r[0], r[1]
     payload = r[0].get_json() if isinstance(r, tuple) else r.get_json()
     items = payload.get("items", []) if payload else []
     df = pd.DataFrame(items or [])
@@ -557,6 +820,9 @@ def uncompleted_courses_report_excel():
 def uncompleted_courses_report_pdf():
     sid = normalize_sid(request.args.get("student_id"))
     r = uncompleted_courses_report_api()
+    if isinstance(r, tuple):
+        # propagate error status codes (e.g. 403)
+        return r[0], r[1]
     payload = r[0].get_json() if isinstance(r, tuple) else r.get_json()
     items = payload.get("items", []) if payload else []
     rows_html = ""
@@ -622,7 +888,18 @@ def failed_courses_report_api():
     include_students = (request.args.get("include_students") or "").strip().lower() in ("1", "true", "yes")
 
     with get_connection() as conn:
-        best = _best_grades_map(conn, student_id=None, course_name_like=course_name)
+        allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        if allowed_student_ids is not None and not allowed_student_ids:
+            if include_students:
+                return jsonify({"status": "ok", "summary": [], "items": []})
+            return jsonify({"status": "ok", "summary": []})
+
+        best = _best_grades_map(
+            conn,
+            student_id=None,
+            student_ids=allowed_student_ids,
+            course_name_like=course_name,
+        )
     failed_items = [v for v in best.values() if not v.get("passed")]
 
     # summary by course
@@ -666,7 +943,20 @@ def failed_courses_report_excel():
     except Exception:
         min_failed = 0
     with get_connection() as conn:
-        best = _best_grades_map(conn, student_id=None, course_name_like=course_name)
+        allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        if allowed_student_ids is not None and not allowed_student_ids:
+            df_summary = pd.DataFrame([])
+            df_items = pd.DataFrame([])
+            return excel_response_from_frames(
+                {"Summary": df_summary, "Students": df_items},
+                filename_prefix="failed_courses_report",
+            )
+        best = _best_grades_map(
+            conn,
+            student_id=None,
+            student_ids=allowed_student_ids,
+            course_name_like=course_name,
+        )
     failed_items = [v for v in best.values() if not v.get("passed")]
     # build frames
     # summary
@@ -705,7 +995,23 @@ def failed_courses_report_pdf():
     include_students = (request.args.get("include_students") or "").strip().lower() in ("1", "true", "yes")
 
     with get_connection() as conn:
-        best = _best_grades_map(conn, student_id=None, course_name_like=course_name)
+        allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        if allowed_student_ids is not None and not allowed_student_ids:
+            # بدون بيانات: صفحة PDF فارغة تجنب أي تسريب
+            html = f"""
+            <html dir="rtl" lang="ar"><body style="font-family:Arial,sans-serif;">
+              <h2>تقرير شامل المقررات غير المنجزة</h2>
+              <p>لا توجد بيانات ضمن نطاق صلاحياتك.</p>
+            </body></html>
+            """
+            return pdf_response_from_html(html, filename_prefix="failed_courses_report")
+
+        best = _best_grades_map(
+            conn,
+            student_id=None,
+            student_ids=allowed_student_ids,
+            course_name_like=course_name,
+        )
     failed_items = [v for v in best.values() if not v.get("passed")]
     by_course = {}
     for it in failed_items:
@@ -815,6 +1121,69 @@ def normalize_sid(sid):
         return ""
     return str(sid).strip()
 
+
+def _get_allowed_student_ids_for_role(conn, user_role: str) -> set:
+    """
+    تُرجع set بأرقام الطلاب المسموح عرضهم/تصديرهم حسب role الحالي.
+    - admin_main / admin: None يعني unrestricted
+    - student: set يحتوي على سجله فقط
+    - supervisor: طلابه فقط عبر student_supervisor
+    - instructor: طلاب مقررات الفصل الحالي عبر schedule + registrations
+    """
+    role = (user_role or "").strip()
+    if role in ("admin_main", "admin"):
+        return None
+
+    cur = conn.cursor()
+
+    if role == "student":
+        sid_session = normalize_sid(session.get("student_id") or session.get("user"))
+        return {sid_session} if sid_session else set()
+
+    is_supervisor = (role == "supervisor") or (role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    if is_supervisor:
+        instructor_id = session.get("instructor_id")
+        if not instructor_id:
+            return set()
+        rows = cur.execute(
+            "SELECT student_id FROM student_supervisor WHERE instructor_id = ?",
+            (instructor_id,),
+        ).fetchall()
+        return {normalize_sid(r[0]) for r in rows if r and r[0]}
+
+    if role == "instructor":
+        instructor_id = session.get("instructor_id")
+        if not instructor_id:
+            return set()
+        instr_row = cur.execute(
+            "SELECT name FROM instructors WHERE id = ? LIMIT 1",
+            (instructor_id,),
+        ).fetchone()
+        instructor_name = instr_row[0] if instr_row else ""
+        if not instructor_name:
+            return set()
+
+        term_name, term_year = get_current_term(conn=conn)
+        semester_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
+        if not semester_label:
+            return set()
+
+        rows = cur.execute(
+            """
+            SELECT DISTINCT r.student_id
+            FROM schedule s
+            JOIN registrations r ON r.course_name = s.course_name
+            WHERE s.semester = ?
+              AND s.instructor = ?
+              AND COALESCE(s.course_name,'') <> ''
+            """,
+            (semester_label, instructor_name),
+        ).fetchall()
+        return {normalize_sid(r[0]) for r in rows if r and r[0]}
+
+    # أي role غير معروف: نمنع (بدون تسريب)
+    return set()
+
 # -----------------------------
 # CRUD أساسي للطلاب
 # -----------------------------
@@ -825,7 +1194,16 @@ def list_students():
     try:
         from backend.core.exceptions import AppException
 
+        user_role = session.get("user_role")
+        with get_connection() as conn:
+            allowed_student_ids = _get_allowed_student_ids_for_role(conn, user_role)
+
+        if allowed_student_ids is not None and not allowed_student_ids:
+            return jsonify([])
+
         students = students_filtered_from_request(request)
+        if allowed_student_ids is not None:
+            students = [s for s in students if normalize_sid(s.get("student_id")) in allowed_student_ids]
         # تحويل إلى كائنات Student للتوافق مع الكود القديم مع إضافة حالة القيد كحقول إضافية
         students_objects = []
         for s in students:
@@ -849,7 +1227,14 @@ def list_students():
                 rows = cur.execute(
                     "SELECT student_id, COALESCE(student_name,'') AS student_name FROM students ORDER BY student_name, student_id"
                 ).fetchall()
-            return jsonify([{"student_id": r[0], "student_name": r[1]} for r in rows])
+            user_role = session.get("user_role")
+            with get_connection() as conn:
+                allowed_student_ids = _get_allowed_student_ids_for_role(conn, user_role)
+            if allowed_student_ids is None:
+                return jsonify([{"student_id": r[0], "student_name": r[1]} for r in rows])
+            return jsonify(
+                [{"student_id": r[0], "student_name": r[1]} for r in rows if normalize_sid(r[0]) in allowed_student_ids]
+            )
         except Exception:
             raise
     except Exception as e:
@@ -860,7 +1245,14 @@ def list_students():
                 rows = cur.execute(
                     "SELECT student_id, COALESCE(student_name,'') AS student_name FROM students ORDER BY student_name, student_id"
                 ).fetchall()
-            return jsonify([{"student_id": r[0], "student_name": r[1]} for r in rows])
+            user_role = session.get("user_role")
+            with get_connection() as conn:
+                allowed_student_ids = _get_allowed_student_ids_for_role(conn, user_role)
+            if allowed_student_ids is None:
+                return jsonify([{"student_id": r[0], "student_name": r[1]} for r in rows])
+            return jsonify(
+                [{"student_id": r[0], "student_name": r[1]} for r in rows if normalize_sid(r[0]) in allowed_student_ids]
+            )
         except Exception:
             from backend.core.exceptions import DatabaseError
             raise DatabaseError(f"فشل جلب قائمة الطلاب: {str(e)}")
@@ -1273,27 +1665,46 @@ def get_registrations():
     try:
         with get_connection() as conn:
             cur = conn.cursor()
-            # تقييد المشرف: لا يرى تسجيلات إلا لطلبته المسندين إليه
+
+            # Scope: تقييد الوصول حسب الدور
             user_role = session.get("user_role")
-            if user_role == "supervisor":
-                instructor_id = session.get("instructor_id")
-                if not instructor_id:
-                    return jsonify([]), 200
+            allowed_student_ids = _get_allowed_student_ids_for_role(conn, user_role)
+
+            # أدوار يجب تقييدها (None يعني unrestricted)
+            if allowed_student_ids is not None:
+                if user_role == "student":
+                    sid_session = normalize_sid(session.get("student_id") or session.get("user"))
+                    if not sid_session:
+                        return jsonify([]), 200
+                    if student_id and student_id != sid_session:
+                        return jsonify([]), 403
+                    student_id = sid_session
+
+                # منع إرجاع جميع التسجيلات لهذه الأدوار
                 if not student_id:
-                    # منع إرجاع جميع التسجيلات للمشرف
                     return jsonify([]), 200
-                ok = cur.execute(
-                    "SELECT 1 FROM student_supervisor WHERE student_id = ? AND instructor_id = ? LIMIT 1",
-                    (student_id, instructor_id),
-                ).fetchone()
-                if not ok:
+
+                if not allowed_student_ids or student_id not in allowed_student_ids:
                     return jsonify([]), 200
-            if student_id:
-                rows = cur.execute("SELECT course_name FROM registrations WHERE student_id = ?", (student_id,)).fetchall()
+
+                rows = cur.execute(
+                    "SELECT course_name FROM registrations WHERE student_id = ?",
+                    (student_id,),
+                ).fetchall()
                 return jsonify([r[0] for r in rows])
-            else:
-                rows = cur.execute("SELECT student_id, course_name FROM registrations").fetchall()
-                return jsonify([{"student_id": r[0], "course_name": r[1]} for r in rows])
+
+            # unrestricted (admin/admin_main)
+            if student_id:
+                rows = cur.execute(
+                    "SELECT course_name FROM registrations WHERE student_id = ?",
+                    (student_id,),
+                ).fetchall()
+                return jsonify([r[0] for r in rows])
+
+            rows = cur.execute(
+                "SELECT student_id, course_name FROM registrations",
+            ).fetchall()
+            return jsonify([{"student_id": r[0], "course_name": r[1]} for r in rows])
     except Exception:
         current_app.logger.exception("get_registrations failed")
         return jsonify([])
@@ -1402,6 +1813,8 @@ def recompute_conflicts_route():
 @students_bp.route("/import_registrations", methods=["POST"])
 @login_required
 def import_registrations():
+    if _is_instructor_or_supervisor_view_only():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     data = request.get_json(force=True) or {}
     items = data.get("items", []) or []
     added = 0
@@ -1446,14 +1859,28 @@ def import_registrations():
 @students_bp.route("/export/registrations")
 @login_required
 def export_registrations_excel():
+    if _is_instructor_or_supervisor_view_only():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     try:
         with get_connection() as conn:
             cur = conn.cursor()
             cols = [r[1] for r in cur.execute("PRAGMA table_info(students)").fetchall()]
             has_uni = 'university_number' in cols
 
+            # Scope: تقييد تصدير التسجيلات حسب الدور
+            allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+            student_filter_sql = ""
+            student_filter_params = []
+            if allowed_student_ids is not None:
+                if not allowed_student_ids:
+                    df = pd.DataFrame(columns=["student_id", "student_name", "university_number", "course_name", "course_code", "units"])
+                    return excel_response_from_df(df, filename_prefix="registrations")
+                placeholders = ",".join("?" for _ in allowed_student_ids)
+                student_filter_sql = f"WHERE r.student_id IN ({placeholders})"
+                student_filter_params = list(allowed_student_ids)
+
             if has_uni:
-                rows = cur.execute("""
+                rows = cur.execute(f"""
                     SELECT r.student_id,
                            COALESCE(s.student_name, '') AS student_name,
                            COALESCE(s.university_number, '') AS university_number,
@@ -1463,10 +1890,11 @@ def export_registrations_excel():
                     FROM registrations r
                     LEFT JOIN students s ON r.student_id = s.student_id
                     LEFT JOIN courses c ON r.course_name = c.course_name
+                    {student_filter_sql}
                     ORDER BY r.student_id, r.course_name
-                """).fetchall()
+                """, student_filter_params).fetchall()
             else:
-                rows = cur.execute("""
+                rows = cur.execute(f"""
                     SELECT r.student_id,
                            COALESCE(s.student_name, '') AS student_name,
                            '' AS university_number,
@@ -1476,8 +1904,9 @@ def export_registrations_excel():
                     FROM registrations r
                     LEFT JOIN students s ON r.student_id = s.student_id
                     LEFT JOIN courses c ON r.course_name = c.course_name
+                    {student_filter_sql}
                     ORDER BY r.student_id, r.course_name
-                """).fetchall()
+                """, student_filter_params).fetchall()
 
         data = []
         for r in rows:
@@ -1548,6 +1977,112 @@ def export_attendance_excel():
         with get_connection() as conn:
             cur = conn.cursor()
 
+            # -----------------------------
+            # Scope enforcement للتصدير
+            # -----------------------------
+            user_role = session.get("user_role")
+            semester_label = None
+            allowed_course_set = None  # None = unrestricted
+            allowed_student_filter_sql = None
+            allowed_student_filter_params = []
+
+            if user_role in ("student", "supervisor", "instructor"):
+                term_name, term_year = get_current_term(conn=conn)
+                semester_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
+                if not semester_label:
+                    return jsonify({
+                        "status": "error",
+                        "message": "لا يمكن تحديد الفصل الحالي",
+                        "code": "FORBIDDEN"
+                    }), 403
+
+            if user_role == "student":
+                sid_session = normalize_sid(session.get("student_id") or session.get("user"))
+                if not sid_session:
+                    return jsonify({
+                        "status": "error",
+                        "message": "لا يوجد ربط بين حسابك والطالب",
+                        "code": "FORBIDDEN"
+                    }), 403
+
+                allowed_student_filter_sql = "r.student_id = ?"
+                allowed_student_filter_params = [sid_session]
+                allowed_course_set = set(
+                    c[0] for c in cur.execute(
+                        """
+                        SELECT DISTINCT s.course_name
+                        FROM schedule s
+                        JOIN registrations r ON r.course_name = s.course_name
+                        WHERE s.semester = ?
+                          AND r.student_id = ?
+                          AND COALESCE(s.course_name,'') <> ''
+                        """,
+                        (semester_label, sid_session),
+                    ).fetchall()
+                )
+
+            elif user_role == "supervisor" or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1):
+                instructor_id = session.get("instructor_id")
+                if not instructor_id:
+                    return jsonify({
+                        "status": "error",
+                        "message": "لا يوجد ربط بين حسابك وعضو هيئة تدريس",
+                        "code": "FORBIDDEN"
+                    }), 403
+
+                allowed_student_filter_sql = "r.student_id IN (SELECT student_id FROM student_supervisor WHERE instructor_id = ?)"
+                allowed_student_filter_params = [instructor_id]
+                allowed_course_set = set(
+                    c[0] for c in cur.execute(
+                        """
+                        SELECT DISTINCT s.course_name
+                        FROM schedule s
+                        JOIN registrations r ON r.course_name = s.course_name
+                        WHERE s.semester = ?
+                          AND r.student_id IN (
+                              SELECT student_id FROM student_supervisor WHERE instructor_id = ?
+                          )
+                          AND COALESCE(s.course_name,'') <> ''
+                        """,
+                        (semester_label, instructor_id),
+                    ).fetchall()
+                )
+
+            elif user_role == "instructor":
+                instructor_id = session.get("instructor_id")
+                if not instructor_id:
+                    return jsonify({
+                        "status": "error",
+                        "message": "لا يوجد ربط بين حسابك وعضو هيئة تدريس",
+                        "code": "FORBIDDEN"
+                    }), 403
+
+                instr_row = cur.execute(
+                    "SELECT name FROM instructors WHERE id = ? LIMIT 1",
+                    (instructor_id,),
+                ).fetchone()
+                if not instr_row:
+                    return jsonify({
+                        "status": "error",
+                        "message": "لا يمكن تحديد المدرّس المرتبط بحسابك",
+                        "code": "FORBIDDEN"
+                    }), 403
+                instructor_name = instr_row[0]
+
+                # المسموح للأستاذ: فقط مقررات الفصل الحالي التي يُسندها schedule له
+                allowed_course_set = set(
+                    c[0] for c in cur.execute(
+                        """
+                        SELECT DISTINCT course_name
+                        FROM schedule
+                        WHERE semester = ?
+                          AND instructor = ?
+                          AND COALESCE(course_name,'') <> ''
+                        """,
+                        (semester_label, instructor_name),
+                    ).fetchall()
+                )
+
             # احصل على جميع المقررات المعروفة
             def _fetch_all_courses():
                 names = []
@@ -1606,6 +2141,15 @@ def export_attendance_excel():
                     filtered.append(c)
                 selected_courses = filtered
 
+            # تطبيق قيود الدور على المقررات المسموح تصدير حضورها
+            if allowed_course_set is not None:
+                allowed_by_lower = {c.lower(): c for c in allowed_course_set if c}
+                selected_courses = [
+                    allowed_by_lower.get(c.lower())
+                    for c in selected_courses
+                    if c and c.lower() in allowed_by_lower
+                ]
+
             # إذا ما زالت القائمة فارغة فليس هناك بيانات
             if not selected_courses:
                 summaries.append({
@@ -1621,16 +2165,25 @@ def export_attendance_excel():
             course_students = {c: [] for c in selected_courses}
             course_seen = {c: set() for c in selected_courses}
 
-            placeholders = ",".join("?" for _ in selected_courses)
+            where_clauses = []
+            params = []
+            if selected_courses:
+                placeholders = ",".join("?" for _ in selected_courses)
+                where_clauses.append(f"r.course_name IN ({placeholders})")
+                params.extend(selected_courses)
+            if allowed_student_filter_sql:
+                where_clauses.append(allowed_student_filter_sql)
+                params.extend(allowed_student_filter_params)
+
+            where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
             reg_query = f"""
                 SELECT r.course_name, r.student_id, COALESCE(s.student_name, '') AS student_name
                 FROM registrations r
                 LEFT JOIN students s ON s.student_id = r.student_id
-                {'WHERE r.course_name IN (' + placeholders + ')' if selected_courses else ''}
+                {where_clause}
                 ORDER BY r.course_name, COALESCE(s.student_name,''), r.student_id
             """
-            reg_params = selected_courses if selected_courses else []
-            reg_rows = cur.execute(reg_query, reg_params).fetchall()
+            reg_rows = cur.execute(reg_query, params).fetchall()
             for row in reg_rows:
                 cname = row[0]
                 sid = normalize_sid(row[1])
@@ -1730,6 +2283,113 @@ def export_attendance_excel():
     except Exception:
         current_app.logger.exception("export_attendance_excel failed")
         return jsonify({"status": "error", "message": "فشل تصدير الحضور"}), 500
+
+
+@students_bp.route("/attendance_allowed_courses")
+@login_required
+def attendance_allowed_courses():
+    """
+    تُرجع قائمة المقررات المسموح للأستاذ/المشرف بتصدير حضورها في الفصل الحالي فقط.
+    تُستخدم لملء قائمة المقررات في صفحة تصدير الحضور.
+    """
+    user_role = session.get("user_role") or ""
+    if not user_role:
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+    # Admin: unrestricted
+    if user_role in ("admin", "admin_main", "head_of_department"):
+        with get_connection() as conn:
+            cur = conn.cursor()
+            rows = cur.execute(
+                """
+                SELECT DISTINCT course_name,
+                       COALESCE(course_code,'') AS course_code,
+                       COALESCE(units,0) AS units
+                FROM courses
+                WHERE COALESCE(course_name,'') <> ''
+                ORDER BY course_name
+                """
+            ).fetchall()
+        courses = [
+            {"course_name": r[0], "course_code": r[1], "units": int(r[2] or 0)}
+            for r in rows
+            if r and r[0]
+        ]
+        return jsonify({"status": "ok", "courses": courses})
+
+    effective_supervisor = user_role == "supervisor" or (
+        user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1
+    )
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        term_name, term_year = get_current_term(conn=conn)
+        semester_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
+        if not semester_label:
+            return jsonify({"status": "error", "message": "لا يمكن تحديد الفصل الحالي", "code": "FORBIDDEN"}), 403
+
+        if effective_supervisor:
+            instructor_id = session.get("instructor_id")
+            if not instructor_id:
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+            rows = cur.execute(
+                """
+                SELECT DISTINCT s.course_name,
+                                COALESCE(c.course_code,'') AS course_code,
+                                COALESCE(c.units,0) AS units
+                FROM schedule s
+                JOIN registrations r ON r.course_name = s.course_name
+                LEFT JOIN courses c ON c.course_name = s.course_name
+                WHERE s.semester = ?
+                  AND r.student_id IN (
+                      SELECT student_id FROM student_supervisor WHERE instructor_id = ?
+                  )
+                  AND COALESCE(s.course_name,'') <> ''
+                ORDER BY s.course_name
+                """,
+                (semester_label, instructor_id),
+            ).fetchall()
+
+        elif user_role == "instructor":
+            instructor_id = session.get("instructor_id")
+            if not instructor_id:
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+            instr_row = cur.execute(
+                "SELECT name FROM instructors WHERE id = ? LIMIT 1",
+                (instructor_id,),
+            ).fetchone()
+            if not instr_row:
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+            instructor_name = instr_row[0]
+            rows = cur.execute(
+                """
+                SELECT DISTINCT s.course_name,
+                                COALESCE(c.course_code,'') AS course_code,
+                                COALESCE(c.units,0) AS units
+                FROM schedule s
+                LEFT JOIN courses c ON c.course_name = s.course_name
+                WHERE s.semester = ?
+                  AND s.instructor = ?
+                  AND COALESCE(s.course_name,'') <> ''
+                ORDER BY s.course_name
+                """,
+                (semester_label, instructor_name),
+            ).fetchall()
+
+        else:
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+    courses = [
+        {"course_name": r[0], "course_code": r[1], "units": int(r[2] or 0)}
+        for r in rows
+        if r and r[0]
+    ]
+    return jsonify({"status": "ok", "courses": courses})
+
+
 # -----------------------------
 # Eligible courses for registration
 # -----------------------------
@@ -1987,7 +2647,29 @@ def timetable_conflicts():
 @login_required
 def students_export_excel():
     try:
+        user_role = session.get("user_role")
+        with get_connection() as conn:
+            allowed_student_ids = _get_allowed_student_ids_for_role(conn, user_role)
+
+        if allowed_student_ids is not None and not allowed_student_ids:
+            return excel_response_from_df(
+                pd.DataFrame(columns=[
+                    "الرقم الدراسي",
+                    "اسم الطالب",
+                    "فصل الالتحاق",
+                    "سنة الالتحاق",
+                    "خطة التخرج",
+                    "حالة القيد",
+                    "فصل وسنة الإجراء",
+                    "ملاحظة القيد",
+                    "تاريخ آخر تغيير للحالة",
+                ]),
+                filename_prefix="students",
+            )
+
         students = students_filtered_from_request(request)
+        if allowed_student_ids is not None:
+            students = [s for s in students if normalize_sid(s.get("student_id")) in allowed_student_ids]
         rows_out = []
         for s in students:
             rows_out.append(
@@ -2027,7 +2709,25 @@ def students_export_excel():
 @login_required
 def students_export_pdf():
     try:
+        user_role = session.get("user_role")
+        with get_connection() as conn:
+            allowed_student_ids = _get_allowed_student_ids_for_role(conn, user_role)
+
+        if allowed_student_ids is not None and not allowed_student_ids:
+            generated_at = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+            summary = students_filter_summary_ar(request)
+            html = render_template(
+                "export_students.html",
+                students=[],
+                rows=[],
+                filter_summary=summary,
+                generated_at=generated_at,
+            )
+            return pdf_response_from_html(html, filename_prefix="students")
+
         students = students_filtered_from_request(request)
+        if allowed_student_ids is not None:
+            students = [s for s in students if normalize_sid(s.get("student_id")) in allowed_student_ids]
         rows = []
         for s in students:
             rows.append(
