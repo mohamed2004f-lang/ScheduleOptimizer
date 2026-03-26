@@ -30,6 +30,17 @@
     </div>
 
     <div class="card mb-3">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <span>النسخ الاحتياطي</span>
+        <button type="button" class="btn btn-sm btn-success" id="btnBackupNow">Backup Now</button>
+      </div>
+      <div class="card-body">
+        <p class="mb-1"><strong>آخر نسخة احتياطية تلقائية/يدوية:</strong> <span id="lastBackup" class="text-primary">—</span></p>
+        <p class="small text-muted mb-0">يوصى بألا يتجاوز عمر آخر نسخة 48 ساعة.</p>
+      </div>
+    </div>
+
+    <div class="card mb-3">
       <div class="card-header">تسمية الإصدار وملاحظة بعد النشر</div>
       <div class="card-body">
         <div class="mb-2">
@@ -58,13 +69,19 @@
       el.innerHTML = '<div class="alert alert-' + (type || 'info') + ' py-2 mb-0">' + text + '</div>';
     }
 
-    async function loadData() {
-      showPsMsg('');
+    async function loadData(clearMsg = true) {
+      if (clearMsg) showPsMsg('');
       try {
-        const d = await apiGet('/admin/project_status/data');
+        const d = await apiGet('/admin/project_status/data?t=' + Date.now());
         document.getElementById('dbMtime').textContent = d.db_last_modified_utc || '—';
         document.getElementById('versionLabel').value = d.version_label || '';
         document.getElementById('versionNote').value = d.version_note || '';
+        const b = d.latest_backup || {};
+        const lbl = b.exists ? ((b.name || 'backup.db') + ' — ' + (b.mtime_utc || '—')) : 'لا توجد نسخة بعد';
+        document.getElementById('lastBackup').textContent = lbl;
+        if (b.exists && typeof b.age_hours === 'number' && b.age_hours > 48) {
+          showPsMsg('تنبيه: آخر نسخة احتياطية أقدم من 48 ساعة. يُفضل تنفيذ Backup Now.', 'warning');
+        }
       } catch (e) {
         showPsMsg((e && e.message) ? e.message : 'تعذّر التحميل', 'danger');
       }
@@ -80,6 +97,17 @@
         await loadData();
       } catch (e) {
         showPsMsg((e && e.message) ? e.message : 'فشل الحفظ', 'danger');
+      }
+    });
+
+    document.getElementById('btnBackupNow').addEventListener('click', async () => {
+      try {
+        const j = await apiPost('/admin/backup_now', {});
+        const b = (j && j.backup) || {};
+        showPsMsg((j.message || 'تم إنشاء النسخة الاحتياطية') + (b.name ? (' — ' + b.name) : ''), 'success');
+        await loadData(false);
+      } catch (e) {
+        showPsMsg((e && e.message) ? e.message : 'فشل إنشاء النسخة', 'danger');
       }
     });
 

@@ -1349,7 +1349,7 @@ def failed_courses_report_pdf():
             # بدون بيانات: صفحة PDF فارغة تجنب أي تسريب
             html = f"""
             <html dir="rtl" lang="ar"><body style="font-family:Arial,sans-serif;">
-              <h2>تقرير المقررات الراسبة</h2>
+              <h2>تقرير مقررات الرسوب</h2>
               <p>لا توجد بيانات ضمن نطاق صلاحياتك.</p>
             </body></html>
             """
@@ -1416,7 +1416,7 @@ def failed_courses_report_pdf():
       </style>
     </head>
     <body>
-      <h2>تقرير المقررات الراسبة</h2>
+      <h2>تقرير مقررات الرسوب</h2>
       <p>يعرض المقررات التي توجد لها محاولات في كشف الدرجات لكن أفضل نتيجة فيها أقل من 50.</p>
       <h3>ملخص حسب المقرر</h3>
       <table>
@@ -2881,6 +2881,80 @@ def timetable_conflicts():
         with get_connection() as conn:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
+
+            # --- First choice: use conflict_report (source of truth) ---
+            # This prevents false positives caused by timetable/schedule tables
+            # having different time formats or missing student identifiers.
+            try:
+                has_cr = cur.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='conflict_report'",
+                ).fetchone()
+                if has_cr:
+                    rows = cur.execute(
+                        """
+                        SELECT
+                            COALESCE(student_id,'') AS student_id,
+                            COALESCE(day,'') AS day,
+                            COALESCE(time,'') AS time,
+                            COALESCE(conflicting_sections,'') AS conflicting_sections
+                        FROM conflict_report
+                        """
+                    ).fetchall()
+                    if not rows:
+                        return jsonify({"conflicts": []})
+
+                    # parse names for student_ids present
+                    student_ids = sorted({(r["student_id"] or "").strip() for r in rows if (r["student_id"] or "").strip()})
+                    name_map = {}
+                    if student_ids:
+                        try:
+                            q2 = "SELECT student_id, COALESCE(student_name,'') as student_name FROM students WHERE student_id IN ({})".format(
+                                ",".join("?" for _ in student_ids)
+                            )
+                            rows2 = cur.execute(q2, student_ids).fetchall()
+                            name_map = {r["student_id"]: r["student_name"] for r in rows2}
+                        except Exception:
+                            name_map = {}
+
+                    slots = {}
+                    for r in rows:
+                        sid = (r["student_id"] or "").strip()
+                        day = (r["day"] or "").strip()
+                        ts = (r["time"] or "").strip()
+                        start, end = parse_time_range(ts)
+                        # If parse failed, avoid returning empty start/end (frontend should not match '' reliably)
+                        start = start or ""
+                        end = end or ""
+                        room = ""
+                        key = f"{day}|{start}|{end}|{room}"
+                        if key not in slots:
+                            slots[key] = {
+                                "day": day,
+                                "start_time": start,
+                                "end_time": end,
+                                "room": room,
+                                "entries": [],
+                            }
+                        slots[key]["entries"].append({
+                            "student_id": sid,
+                            "student_name": name_map.get(sid, ""),
+                            "course_name": r["conflicting_sections"] or "",
+                            "section": "",
+                            "note": "",
+                        })
+
+                    conflicts = []
+                    for s in slots.values():
+                        if s["entries"]:
+                            conflicts.append(s)
+                    return jsonify({"conflicts": conflicts})
+            except Exception:
+                # fallback to legacy logic below
+                current_app.logger.exception("timetable/conflicts: conflict_report path failed")
+
+            # --- Fallback: legacy robust parsing (may produce false positives) ---
+            # detect table
+            # (kept to avoid breaking older installations)
 
             # detect table
             tables = [r[0] for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]

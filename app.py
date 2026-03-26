@@ -1,4 +1,4 @@
-from flask import Flask, render_template, redirect, url_for, jsonify, session, request
+from flask import Flask, render_template, redirect, url_for, jsonify, session, request, abort
 from flask_wtf.csrf import CSRFProtect, CSRFError
 from backend.services.utilities import ensure_tables, DB_FILE
 
@@ -403,9 +403,20 @@ def _read_text_doc(path: str) -> str:
         return f"Failed to read file ({path}): {exc}"
 
 
+def _is_system_docs_enabled() -> bool:
+    """
+    تعطيل صفحة توثيق النظام افتراضياً لأسباب أمنية.
+    للتفعيل المؤقت: ENABLE_SYSTEM_DOCS_PAGE=1
+    """
+    v = (os.environ.get("ENABLE_SYSTEM_DOCS_PAGE", "0") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 @app.route("/system_docs")
 @role_required("admin_main", "admin")
 def system_docs_page():
+    if not _is_system_docs_enabled():
+        abort(404)
     runbook = _read_text_doc("docs/RUNBOOK.md")
     overview = _read_text_doc("docs/PROJECT_OVERVIEW.md")
     return render_template("system_docs.html", runbook_text=runbook, overview_text=overview)

@@ -1,10 +1,11 @@
 import os
+import shutil
 from datetime import datetime, timezone
 from typing import Optional
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, jsonify, render_template, request, session, current_app, abort
 from backend.core.auth import login_required, role_required
-from .utilities import DB_FILE, get_connection, get_current_term
+from .utilities import DB_FILE, get_connection, get_current_term, log_activity
 
 admin_bp = Blueprint("admin", __name__)
 
@@ -156,6 +157,8 @@ def admin_summary():
 
 PROJECT_VERSION_LABEL_KEY = "project_version_label"
 PROJECT_VERSION_NOTE_KEY = "project_version_note"
+AUTO_BACKUP_DIR = os.path.abspath(os.path.join(os.path.dirname(DB_FILE), "..", "..", "backups", "auto"))
+BACKUP_MIN_INTERVAL_SECONDS = 30
 
 
 def _read_setting(cur, key: str, default: str = "") -> str:
@@ -182,15 +185,72 @@ def _db_file_mtime_utc_iso() -> Optional[str]:
         if not os.path.isfile(path):
             return None
         ts = os.path.getmtime(path)
-        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     except Exception:
         return None
+
+
+def _now_stamp() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def _ensure_auto_backup_dir() -> None:
+    os.makedirs(AUTO_BACKUP_DIR, exist_ok=True)
+
+
+def _latest_auto_backup_info() -> dict:
+    try:
+        _ensure_auto_backup_dir()
+        files = [
+            os.path.join(AUTO_BACKUP_DIR, f)
+            for f in os.listdir(AUTO_BACKUP_DIR)
+            if f.lower().endswith(".db")
+        ]
+        if not files:
+            return {"exists": False, "name": "", "mtime_utc": None, "age_hours": None}
+        latest = max(files, key=lambda p: os.path.getmtime(p))
+        ts = os.path.getmtime(latest)
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        age_hours = int((datetime.now(timezone.utc) - dt).total_seconds() // 3600)
+        return {
+            "exists": True,
+            "name": os.path.basename(latest),
+            "mtime_utc": dt.strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "age_hours": age_hours,
+        }
+    except Exception:
+        return {"exists": False, "name": "", "mtime_utc": None, "age_hours": None}
+
+
+def _run_db_backup(kind: str = "manual") -> dict:
+    _ensure_auto_backup_dir()
+    src = os.path.abspath(DB_FILE)
+    if not os.path.isfile(src):
+        raise FileNotFoundError("ملف قاعدة البيانات غير موجود")
+    safe_kind = (kind or "manual").strip().lower()
+    if safe_kind not in ("manual", "daily", "weekly"):
+        safe_kind = "manual"
+    fname = f"{_now_stamp()}_{safe_kind}_mechanical.db"
+    dst = os.path.join(AUTO_BACKUP_DIR, fname)
+    shutil.copy2(src, dst)
+    return {"path": dst, "name": fname}
+
+
+def _is_project_status_enabled() -> bool:
+    """
+    تفعيل صفحة حالة/النسخ الاحتياطي افتراضياً.
+    يمكن تعطيلها صراحة عبر: ENABLE_ADMIN_STATUS_PAGE=0
+    """
+    v = (os.environ.get("ENABLE_ADMIN_STATUS_PAGE", "1") or "").strip().lower()
+    return v not in ("0", "false", "no", "off")
 
 
 @admin_bp.route("/project_status")
 @role_required("admin_main")
 def admin_project_status_page():
     """صفحة بسيطة: تاريخ آخر تعديل لقاعدة البيانات + ملاحظة إصدار يدوية."""
+    if not _is_project_status_enabled():
+        abort(404)
     return render_template("admin_project_status.html")
 
 
@@ -198,6 +258,8 @@ def admin_project_status_page():
 @role_required("admin_main")
 def project_status_data():
     """JSON: آخر تعديل لملف DB + تسمية/ملاحظة محفوظة (لا يُعاد مسار الملف)."""
+    if not _is_project_status_enabled():
+        abort(404)
     mtime_iso = _db_file_mtime_utc_iso()
     label = ""
     note = ""
@@ -208,12 +270,14 @@ def project_status_data():
             note = _read_setting(cur, PROJECT_VERSION_NOTE_KEY, "")
     except Exception:
         pass
+    backup = _latest_auto_backup_info()
     return jsonify(
         {
             "status": "ok",
             "db_last_modified_utc": mtime_iso,
             "version_label": label.strip(),
             "version_note": note.strip(),
+            "latest_backup": backup,
         }
     )
 
@@ -222,6 +286,8 @@ def project_status_data():
 @role_required("admin_main")
 def project_status_save_note():
     """حفظ تسمية إصدار وملاحظة (نص عربي UTF-8 من المتصفح)."""
+    if not _is_project_status_enabled():
+        abort(404)
     data = request.get_json(force=True) or {}
     label = (data.get("version_label") or "").strip()[:200]
     note = (data.get("version_note") or "").strip()[:4000]
@@ -229,6 +295,32 @@ def project_status_save_note():
         with get_connection() as conn:
             _write_setting(conn, PROJECT_VERSION_LABEL_KEY, label)
             _write_setting(conn, PROJECT_VERSION_NOTE_KEY, note)
+        log_activity(action="admin_project_status_note_save", details=f"label_len={len(label)}, note_len={len(note)}")
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)[:200]}), 500
+        current_app.logger.exception("Failed saving project status note")
+        return jsonify({"status": "error", "message": "تعذّر حفظ الملاحظة حالياً"}), 500
     return jsonify({"status": "ok", "message": "تم الحفظ"})
+
+
+@admin_bp.route("/backup_now", methods=["POST"])
+@role_required("admin_main")
+def backup_now():
+    """إنشاء نسخة احتياطية فورية من DB عبر الواجهة."""
+    if not _is_project_status_enabled():
+        abort(404)
+    try:
+        now_ts = datetime.now(timezone.utc).timestamp()
+        last_ts = float(session.get("last_backup_now_ts") or 0)
+        if now_ts - last_ts < BACKUP_MIN_INTERVAL_SECONDS:
+            wait_s = int(BACKUP_MIN_INTERVAL_SECONDS - (now_ts - last_ts)) + 1
+            return jsonify({
+                "status": "error",
+                "message": f"تم تنفيذ نسخة احتياطية مؤخرًا. الرجاء الانتظار {wait_s} ثانية.",
+            }), 429
+        result = _run_db_backup("manual")
+        session["last_backup_now_ts"] = now_ts
+        log_activity(action="admin_backup_now", details=f"backup={result.get('name','')}")
+        return jsonify({"status": "ok", "message": "تم إنشاء نسخة احتياطية بنجاح", "backup": {"name": result.get("name", "")}})
+    except Exception as e:
+        current_app.logger.exception("Backup now failed")
+        return jsonify({"status": "error", "message": "فشل إنشاء النسخة الاحتياطية. حاول لاحقًا."}), 500

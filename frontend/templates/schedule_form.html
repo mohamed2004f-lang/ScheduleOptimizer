@@ -930,9 +930,12 @@ async function markConflicts(){
       if(!timeHeader) return;
       const cellTime = timeHeader.textContent.trim();
       
-      const timeMatch = cellTime.includes(start) || cellTime.includes(end) || 
-                       (start && cellTime.startsWith(start)) || 
-                       (end && cellTime.includes(end));
+      // Avoid false positives when start/end are empty strings.
+      const timeMatch =
+        (start && cellTime.includes(start)) ||
+        (end && cellTime.includes(end)) ||
+        (start && cellTime.startsWith(start)) ||
+        (end && cellTime.includes(end));
       
       if(timeMatch){
         cell.classList.add('conflict');
@@ -941,7 +944,7 @@ async function markConflicts(){
     });
   });
 
-  const total = conflicts.reduce((s, c)=> s + (Array.isArray(c.entries)?c.entries.length:1), 0);
+  const total = conflicts.reduce((s, c)=> s + (Array.isArray(c.entries)?c.entries.length:0), 0);
   if(total>0) showMsg(`تم العثور على ${total} حالة تعارض في التسجيلات`, 'warning', 6000);
 }
 

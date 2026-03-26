@@ -94,7 +94,7 @@
             <li><a class="dropdown-item" id="navPerformance" href="/performance_report">تقرير الأداء</a></li>
             <li><a class="dropdown-item" id="navElectivesReport" href="/electives_report_page">تقرير المقررات الاختيارية</a></li>
             <li><a class="dropdown-item" id="navRegistrationChangesReport" href="/registration_changes_report_page">تقرير الإضافة والإسقاط</a></li>
-            <li><a class="dropdown-item" id="navFailedCoursesReport" href="/failed_courses_report_page">تقرير المقررات الراسبة</a></li>
+            <li><a class="dropdown-item" id="navFailedCoursesReport" href="/failed_courses_report_page">تقرير مقررات الرسوب</a></li>
             <li><a class="dropdown-item" id="navNotRegisteredCoursesReport" href="/not_registered_courses_report_page">تقرير المقررات غير المسجل بها</a></li>
             <li><a class="dropdown-item" id="navUncompletedCoursesReport" href="/uncompleted_courses_report_page">تقرير المقررات غير المنجزة (حسب طالب)</a></li>
             <li><a class="dropdown-item" id="navGradeCourseAudit" href="/grade_course_mapping_audit_page">تدقيق ترميز المقررات</a></li>
@@ -157,7 +157,7 @@
             <li><a class="dropdown-item" id="navUsersAdmin" href="/users_admin">المستخدمون</a></li>
             <li><a class="dropdown-item" id="navProjectStatus" href="/admin/project_status">إصدار المشروع وآخر تحديث</a></li>
             <li><a class="dropdown-item" id="navAcademicRules" href="/academic_rules_page">لائحة الإنذارات والفصل</a></li>
-            <li><a class="dropdown-item" id="navSystemDocs" href="/system_docs">توثيق النظام</a></li>
+            <!-- توثيق النظام معطّل افتراضياً عبر ENABLE_SYSTEM_DOCS_PAGE -->
           </ul>
         </li>
       </ul>
@@ -213,16 +213,10 @@
       if (role !== 'admin' && role !== 'admin_main') {
         const elUsers = document.getElementById('navUsersAdmin');
         if (elUsers) elUsers.style.display = 'none';
-        const elPs = document.getElementById('navProjectStatus');
-        if (elPs) elPs.style.display = 'none';
         const elSup = document.getElementById('navSupervision');
         if (elSup) elSup.style.display = 'none';
         const elRules = document.getElementById('navAcademicRules');
         if (elRules) elRules.style.display = 'none';
-      }
-      if (role !== 'admin' && role !== 'admin_main') {
-        const elDocs = document.getElementById('navSystemDocs');
-        if (elDocs) elDocs.style.display = 'none';
       }
       // إخفاء لوحة المشرف عن غير المشرفين (supervisor أو instructor مع is_supervisor=1)
       const isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(data.is_supervisor || 0) === 1);
@@ -256,9 +250,7 @@
           'navGradeCourseAudit',
           'navCourseRegistrationReport',
           'navUsersAdmin',
-          'navProjectStatus',
           'navAcademicRules',
-          'navSystemDocs',
         ];
         hideIds.forEach(id => {
           const el = document.getElementById(id);
@@ -287,7 +279,6 @@
           'navCourseRegistrationReport',
           'navAcademicRules',
           'navAnalytics',
-          'navProjectStatus',
           'navExamsMidterms',
           'navExamsFinals',
           'navExamsConflicts',
@@ -337,7 +328,6 @@
         ['/users_admin','navUsersAdmin'],
         ['/admin/project_status','navProjectStatus'],
         ['/academic_rules_page','navAcademicRules'],
-        ['/system_docs','navSystemDocs'],
       ];
       map.forEach(([prefix, id])=>{
         if (path === prefix || (prefix !== '/' && path.startsWith(prefix))) {
