@@ -288,13 +288,35 @@ def check_conflicts():
             for conflict in conflicts:
                 # التحقق إذا كان التعارض يتضمن المقرر الجديد
                 conflicting_sections = conflict.get('conflicting_sections', '')
-                if course_name in conflicting_sections and day == conflict.get('day') and time == conflict.get('time'):
+                # لا نعتمد على تطابق نصي للوقت لأن الوقت يُخزّن بأكثر من صيغة (مثلاً 09:00-13:00 مقابل 09:00-11:00).
+                # يكفينا تحقق: اليوم + مشاركة المقرر الجديد ضمن المقررات المتعارضة.
+                if course_name in conflicting_sections and day == conflict.get('day'):
                     relevant_conflicts.append({
                         'student_id': conflict.get('student_id', ''),
                         'day': conflict.get('day', ''),
-                        'time': conflict.get('time', ''),
+                        'time': time,
                         'conflicting_sections': conflicting_sections
                     })
+
+            # إحضار أسماء الطلبة لتظهر في نافذة التعارضات
+            try:
+                student_ids = sorted({(c.get("student_id") or "").strip() for c in relevant_conflicts if (c.get("student_id") or "").strip()})
+                name_map = {}
+                if student_ids:
+                    rows2 = cur.execute(
+                        "SELECT student_id, COALESCE(student_name,'') as student_name FROM students WHERE student_id IN ({})".format(
+                            ",".join("?" for _ in student_ids)
+                        ),
+                        student_ids,
+                    ).fetchall()
+                    name_map = {r[0]: (r[1] or "") for r in rows2}
+
+                for c in relevant_conflicts:
+                    sid = (c.get("student_id") or "").strip()
+                    c["student_name"] = name_map.get(sid, "")
+            except Exception:
+                # في حال فشل الاستعلام، نترك student_name فارغاً بدون كسر الواجهة
+                pass
             
             return jsonify({
                 "status": "ok",

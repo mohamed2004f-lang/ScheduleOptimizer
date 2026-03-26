@@ -654,11 +654,12 @@ function showConflictsModal(conflicts, courseName, day, time) {
     html += `<p><strong>اليوم:</strong> ${escapeHtml(day)} | <strong>الوقت:</strong> ${escapeHtml(time)}</p>`;
     html += `<p><strong>عدد التعارضات:</strong> ${conflicts.length}</p>`;
     html += `<div class="table-responsive mt-3"><table class="table table-sm table-bordered">`;
-    html += `<thead><tr><th>رقم الطالب</th><th>اليوم</th><th>الوقت</th><th>المقررات المتعارضة</th></tr></thead><tbody>`;
+    html += `<thead><tr><th>رقم الطالب</th><th>اسم الطالب</th><th>اليوم</th><th>الوقت</th><th>المقررات المتعارضة</th></tr></thead><tbody>`;
     
     conflicts.forEach(conflict => {
       html += `<tr>`;
       html += `<td>${escapeHtml(conflict.student_id || '')}</td>`;
+      html += `<td>${escapeHtml(conflict.student_name || '')}</td>`;
       html += `<td>${escapeHtml(conflict.day || '')}</td>`;
       html += `<td>${escapeHtml(conflict.time || '')}</td>`;
       html += `<td>${escapeHtml(conflict.conflicting_sections || '')}</td>`;
