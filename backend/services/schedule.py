@@ -6,6 +6,8 @@ from backend.core.auth import login_required, role_required
 from collections import defaultdict
 import sqlite3, pandas as pd
 import logging
+import json
+import datetime
 from .utilities import (
     get_connection,
     table_to_dicts,
@@ -19,12 +21,173 @@ from .utilities import (
     set_schedule_published_at,
     get_schedule_updated_at,
     touch_schedule_updated_at,
+    get_current_term,
 )
 from .students import compute_per_student_conflicts, recompute_conflict_report
 
 logger = logging.getLogger(__name__)
 
 schedule_bp = Blueprint("schedule", __name__)
+
+
+def _current_term_key_suffix(conn) -> str:
+    name, year = get_current_term(conn=conn)
+    label = f"{(name or '').strip()} {(year or '').strip()}".strip()
+    return label or "UNKNOWN_TERM"
+
+
+def _now_iso_z() -> str:
+    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _setting_key_time_slots(conn) -> str:
+    return "time_slots::" + _current_term_key_suffix(conn)
+
+
+def _default_time_slots() -> list:
+    return [
+        "09:00-11:00",
+        "11:00-12:00",
+        "12:00-13:00",
+        "13:00-14:00",
+        "14:00-15:00",
+        "15:00-16:00",
+        "16:00-17:00",
+    ]
+
+
+def _normalize_time_slot_str(s: str) -> str:
+    return (s or "").strip()
+
+
+def _validate_time_slot_format(s: str) -> bool:
+    # صيغة بسيطة: HH:MM-HH:MM
+    try:
+        s = _normalize_time_slot_str(s)
+        if not s or "-" not in s:
+            return False
+        a, b = [p.strip() for p in s.split("-", 1)]
+        def ok(p):
+            if len(p) != 5 or p[2] != ":":
+                return False
+            hh = int(p[0:2]); mm = int(p[3:5])
+            return 0 <= hh <= 23 and 0 <= mm <= 59
+        return ok(a) and ok(b)
+    except Exception:
+        return False
+
+
+def _get_time_slots_setting(conn) -> dict:
+    """يرجع {slots, source, key, term_label}"""
+    key = _setting_key_time_slots(conn)
+    term_label = _current_term_key_suffix(conn)
+    cur = conn.cursor()
+    row = cur.execute("SELECT value_json FROM app_settings WHERE key = ? LIMIT 1", (key,)).fetchone()
+    if row and (row[0] if isinstance(row, (list, tuple)) else row["value_json"]):
+        raw = (row[0] if isinstance(row, (list, tuple)) else row["value_json"]) or ""
+        try:
+            data = json.loads(raw)
+            slots = data.get("slots") if isinstance(data, dict) else data
+            if isinstance(slots, list):
+                slots = [_normalize_time_slot_str(x) for x in slots]
+                slots = [x for x in slots if x]
+                return {"slots": slots, "source": "saved", "key": key, "term_label": term_label}
+        except Exception:
+            pass
+    return {"slots": _default_time_slots(), "source": "default", "key": key, "term_label": term_label}
+
+
+def _days_ar() -> list:
+    return ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس']
+
+
+def _build_schedule_matrix(rows: list, time_slots: list, include_empty: bool) -> dict:
+    """
+    يبني مصفوفة {day -> {time -> [rows]}} مع تقرير ملحق عن الأوقات الفارغة/غير المطابقة.
+    rows: dicts من schedule (day,time,course_name,...)
+    """
+    # Normalize
+    slots_saved = [str(t or "").strip() for t in (time_slots or []) if str(t or "").strip()]
+    times_in_data = sorted({str(r.get("time") or "").strip() for r in (rows or []) if str(r.get("time") or "").strip()})
+
+    # أعمدة العرض
+    if include_empty:
+        columns = list(dict.fromkeys(slots_saved + times_in_data))  # keep order, add nonmatching after
+    else:
+        # فقط أوقات لديها صفوف + أوقات غير مطابقة لديها صفوف (مضمونة ضمن times_in_data)
+        columns = list(times_in_data)
+        # نحافظ على ترتيب مقروء: وفق saved slots أولاً ثم باقي الأوقات
+        ordered = []
+        in_set = set(columns)
+        for s in slots_saved:
+            if s in in_set and s not in ordered:
+                ordered.append(s)
+        for t in columns:
+            if t not in ordered:
+                ordered.append(t)
+        columns = ordered
+
+    slot_set = set(slots_saved)
+    nonmatching_with_rows = [t for t in times_in_data if t not in slot_set]
+
+    # أوقات محفوظة لكنها فارغة (لا يوجد أي صف بها)
+    empty_saved = []
+    if slots_saved:
+        data_set = set(times_in_data)
+        empty_saved = [s for s in slots_saved if s not in data_set]
+
+    # Map day/time -> list of display strings
+    matrix = {d: {t: [] for t in columns} for d in _days_ar()}
+    for r in rows or []:
+        day = str(r.get("day") or "").strip()
+        time = str(r.get("time") or "").strip()
+        if not day or not time:
+            continue
+        if day not in matrix:
+            # أحياناً قد توجد تسميات مختلفة؛ أنشئها
+            if day not in matrix:
+                matrix[day] = {t: [] for t in columns}
+        if time not in columns:
+            # إذا تغيّرت الأعمدة بعد بناء المصفوفة، تجاهل
+            continue
+        name = (r.get("course_name") or "").strip()
+        room = (r.get("room") or "").strip()
+        inst = (r.get("instructor") or "").strip()
+        extras = []
+        if room:
+            extras.append(f"ق {room}")
+        if inst:
+            extras.append(inst)
+        suffix = (" — " + " — ".join(extras)) if extras else ""
+        matrix[day][time].append(f"{name}{suffix}" if name else suffix.strip(" —"))
+
+    return {
+        "columns": columns,
+        "matrix": matrix,
+        "empty_saved_slots": empty_saved,
+        "nonmatching_times": nonmatching_with_rows,
+        "times_in_data": times_in_data,
+        "saved_slots": slots_saved,
+    }
+
+
+def _load_schedule_rows_for_export(conn) -> list:
+    cur = conn.cursor()
+    rows = cur.execute(
+        """
+        SELECT COALESCE(course_name,'') AS course_name,
+               COALESCE(day,'') AS day,
+               COALESCE(time,'') AS time,
+               COALESCE(room,'') AS room,
+               COALESCE(instructor,'') AS instructor,
+               COALESCE(semester,'') AS semester
+        FROM schedule
+        WHERE COALESCE(course_name,'') <> ''
+          AND COALESCE(day,'') <> ''
+          AND COALESCE(time,'') <> ''
+        """
+    ).fetchall()
+    return [dict(r) for r in rows] if rows else []
 
 # -----------------------------
 # عرض/إضافة صفوف الجدول
@@ -242,6 +405,322 @@ def update_schedule_row():
         return jsonify(res), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
+
+
+# -----------------------------
+# أدوات إدارية للأوقات/تفريغ الجدول
+# -----------------------------
+@schedule_bp.route("/distinct_times")
+@role_required("admin", "admin_main", "head_of_department")
+def distinct_schedule_times():
+    """قائمة الأوقات المخزّنة فعلياً في schedule.time (لأغراض التوحيد/التنظيف)."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        rows = cur.execute(
+            "SELECT DISTINCT COALESCE(time,'') AS time FROM schedule WHERE COALESCE(time,'') <> '' ORDER BY time"
+        ).fetchall()
+    times = []
+    for r in rows or []:
+        try:
+            times.append((r["time"] if hasattr(r, "keys") else r[0]) or "")
+        except Exception:
+            pass
+    times = [t.strip() for t in times if t and str(t).strip()]
+    return jsonify({"status": "ok", "times": times}), 200
+
+
+@schedule_bp.route("/normalize_times", methods=["POST"])
+@role_required("admin", "admin_main", "head_of_department")
+def normalize_schedule_times():
+    """
+    توحيد/تحويل قيم الوقت المخزّنة في schedule.time.
+    body:
+      mappings: [{from: "09:00-11:00", to: "09:00-12:00"}, ...]
+    """
+    data = request.get_json(force=True) or {}
+    mappings = data.get("mappings") or []
+    if not isinstance(mappings, list) or not mappings:
+        return jsonify({"status": "error", "message": "mappings مطلوب (قائمة غير فارغة)"}), 400
+
+    normalized = []
+    for m in mappings:
+        if not isinstance(m, dict):
+            continue
+        frm = (m.get("from") or "").strip()
+        to = (m.get("to") or "").strip()
+        if not frm or not to or frm == to:
+            continue
+        normalized.append((frm, to))
+    if not normalized:
+        return jsonify({"status": "error", "message": "لا توجد تحويلات صالحة"}), 400
+
+    updated = 0
+    with get_connection() as conn:
+        cur = conn.cursor()
+        for frm, to in normalized:
+            cur.execute("UPDATE schedule SET time = ? WHERE time = ?", (to, frm))
+            updated += int(cur.rowcount or 0)
+        # تفريغ الجداول المشتقة حتى لا تبقى نتائج قديمة
+        try:
+            cur.execute("DELETE FROM optimized_schedule")
+        except Exception:
+            pass
+        try:
+            cur.execute("DELETE FROM conflict_report")
+        except Exception:
+            pass
+        conn.commit()
+        try:
+            touch_schedule_updated_at(conn)
+        except Exception:
+            pass
+
+    try:
+        log_activity(action="normalize_schedule_times", details=f"mappings={len(normalized)}, updated_rows={updated}")
+    except Exception:
+        pass
+
+    return jsonify({"status": "ok", "updated_rows": int(updated), "mappings": [{"from": f, "to": t} for f, t in normalized]}), 200
+
+
+@schedule_bp.route("/clear_all", methods=["POST"])
+@role_required("admin", "admin_main", "head_of_department")
+def clear_schedule_all():
+    """مسح كل صفوف الجدول الدراسي (schedule) مع تفريغ الجداول المشتقة."""
+    deleted = 0
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM schedule")
+        deleted = int(cur.rowcount or 0)
+        try:
+            cur.execute("DELETE FROM optimized_schedule")
+        except Exception:
+            pass
+        try:
+            cur.execute("DELETE FROM conflict_report")
+        except Exception:
+            pass
+        conn.commit()
+        try:
+            touch_schedule_updated_at(conn)
+        except Exception:
+            pass
+
+    try:
+        log_activity(action="clear_schedule_all", details=f"deleted_rows={deleted}")
+    except Exception:
+        pass
+
+    return jsonify({"status": "ok", "deleted_rows": int(deleted)}), 200
+
+
+@schedule_bp.route("/time_slots")
+@login_required
+def get_time_slots():
+    """جلب تقسيمات الوقت المعتمدة للترم الحالي (إعداد محفوظ أو افتراضي)."""
+    with get_connection() as conn:
+        out = _get_time_slots_setting(conn)
+    return jsonify({"status": "ok", **out}), 200
+
+
+@schedule_bp.route("/time_slots", methods=["POST"])
+@role_required("admin", "admin_main", "head_of_department")
+def save_time_slots():
+    """
+    حفظ تقسيمات الوقت للترم الحالي في app_settings.
+    body:
+      - slots: ["09:00-11:00", ...]
+    """
+    data = request.get_json(force=True) or {}
+    slots = data.get("slots") or []
+    if not isinstance(slots, list):
+        return jsonify({"status": "error", "message": "slots يجب أن تكون قائمة"}), 400
+    cleaned = []
+    seen = set()
+    for s in slots:
+        s = _normalize_time_slot_str(str(s or ""))
+        if not s:
+            continue
+        if not _validate_time_slot_format(s):
+            return jsonify({"status": "error", "message": f"صيغة وقت غير صحيحة: {s}"}), 400
+        if s in seen:
+            continue
+        seen.add(s)
+        cleaned.append(s)
+    if not cleaned:
+        return jsonify({"status": "error", "message": "أدخل تقسيمات صالحة (غير فارغة)"}), 400
+
+    actor = (session.get("user") or session.get("username") or "").strip() or "system"
+    now = _now_iso_z()
+    with get_connection() as conn:
+        key = _setting_key_time_slots(conn)
+        payload = json.dumps({"slots": cleaned}, ensure_ascii=False)
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value_json, updated_at, updated_by) VALUES (?,?,?,?)",
+            (key, payload, now, actor),
+        )
+        conn.commit()
+        try:
+            log_activity(action="save_time_slots", details=f"key={key}, slots={len(cleaned)}")
+        except Exception:
+            pass
+        out = _get_time_slots_setting(conn)
+
+    return jsonify({"status": "ok", **out}), 200
+
+
+@schedule_bp.route("/export/pdf")
+@role_required("admin", "admin_main", "head_of_department")
+def export_schedule_pdf():
+    include_empty = str(request.args.get("include_empty") or "").lower() in ("1", "true", "yes")
+    official = str(request.args.get("official") or "").lower() in ("1", "true", "yes")
+    include_notes = str(request.args.get("include_notes") or "").lower() in ("1", "true", "yes")
+    # الافتراضي: التصدير المختصر يكون "رسمي" بدون ملحق/ملاحظات
+    if not include_empty and not (official or include_notes):
+        official = True
+    with get_connection() as conn:
+        slots_info = _get_time_slots_setting(conn)
+        rows = _load_schedule_rows_for_export(conn)
+        built = _build_schedule_matrix(rows, slots_info.get("slots") or [], include_empty=include_empty)
+
+    cols = built["columns"]
+    matrix = built["matrix"]
+
+    # HTML table
+    ths = "<th>اليوم / الوقت</th>" + "".join(f"<th>{c}</th>" for c in cols)
+    body_rows = ""
+    for day in matrix.keys():
+        tds = f"<th>{day}</th>"
+        for c in cols:
+            items = matrix[day].get(c) or []
+            if not items:
+                tds += "<td></td>"
+            else:
+                tds += "<td>" + "<br/>".join([str(x) for x in items]) + "</td>"
+        body_rows += "<tr>" + tds + "</tr>"
+
+    term_label = slots_info.get("term_label") or ""
+    mode = "قالب" if include_empty else "رسمي"
+
+    appendix_html = ""
+    if include_notes and (not official):
+        empty_saved = built.get("empty_saved_slots") or []
+        nonmatching = built.get("nonmatching_times") or []
+        appendix = ""
+        if empty_saved:
+            appendix += "<p><strong>تقسيمات بدون مقررات:</strong> " + "، ".join(empty_saved) + "</p>"
+        if nonmatching:
+            appendix += "<p><strong>أوقات موجودة في البيانات لكنها غير ضمن التقسيمات:</strong> " + "، ".join(nonmatching) + "</p>"
+        if appendix:
+            appendix_html = "<hr/><h3 style='margin:10px 0 6px 0;'>ملحق</h3>" + appendix
+
+    # قالب رسمي: ترويسة + توقيع بدون ملاحظات
+    # (نضع الاسم كحقل فارغ للتعبئة أو الختم)
+    now_print = datetime.datetime.now().strftime("%Y-%m-%d")
+    signature_block = ""
+    if official and not include_empty:
+        signature_block = f"""
+        <div class="sign-wrap">
+          <div class="sign">
+            <div class="lbl">رئيس القسم</div>
+            <div class="line"></div>
+            <div class="lbl small">التوقيع والختم</div>
+          </div>
+          <div class="sign">
+            <div class="lbl">إعداد</div>
+            <div class="line"></div>
+            <div class="lbl small">التوقيع</div>
+          </div>
+        </div>
+        """
+
+    header_html = f"""
+      <div class="hdr">
+        <div class="hdr-title">جامعة درنة — كلية الهندسة</div>
+        <div class="hdr-sub">قسم الهندسة الميكانيكية</div>
+        <div class="doc-title">الجدول الدراسي</div>
+        <div class="meta">الترم: {term_label or '—'} <span class="sep">|</span> التاريخ: {now_print} <span class="sep">|</span> الإصدار: {mode}</div>
+      </div>
+    """
+
+    html = f"""
+    <html dir="rtl" lang="ar">
+    <head>
+      <meta charset="utf-8"/>
+      <style>
+        @page {{ size: A4 landscape; margin: 14mm; }}
+        body {{ font-family: Arial, sans-serif; }}
+        .hdr {{ text-align: center; margin-bottom: 10px; }}
+        .hdr-title {{ font-size: 14px; font-weight: 700; }}
+        .hdr-sub {{ font-size: 12px; color: #333; margin-top: 2px; }}
+        .doc-title {{ font-size: 16px; font-weight: 800; margin-top: 6px; }}
+        .meta {{ color: #555; font-size: 11px; margin-top: 4px; }}
+        .sep {{ padding: 0 6px; color: #aaa; }}
+        table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
+        th, td {{ border: 1px solid #444; padding: 6px; font-size: 11px; vertical-align: top; word-wrap: break-word; }}
+        th {{ background: #f3f3f3; }}
+        td {{ min-height: 24px; }}
+        .sign-wrap {{ display: flex; justify-content: space-between; gap: 18px; margin-top: 12px; }}
+        .sign {{ width: 48%; }}
+        .sign .lbl {{ font-weight: 700; margin-bottom: 6px; }}
+        .sign .lbl.small {{ font-weight: 400; font-size: 11px; color: #555; margin-top: 6px; }}
+        .sign .line {{ border-bottom: 1px solid #000; height: 22px; }}
+      </style>
+    </head>
+    <body>
+      {header_html}
+      <table>
+        <thead><tr>{ths}</tr></thead>
+        <tbody>{body_rows or ''}</tbody>
+      </table>
+      {signature_block}
+      {appendix_html}
+    </body>
+    </html>
+    """
+    return pdf_response_from_html(html, filename_prefix="schedule")
+
+
+@schedule_bp.route("/export/excel")
+@role_required("admin", "admin_main", "head_of_department")
+def export_schedule_excel():
+    include_empty = str(request.args.get("include_empty") or "").lower() in ("1", "true", "yes")
+    with get_connection() as conn:
+        slots_info = _get_time_slots_setting(conn)
+        rows = _load_schedule_rows_for_export(conn)
+        built = _build_schedule_matrix(rows, slots_info.get("slots") or [], include_empty=include_empty)
+
+    cols = built["columns"]
+    matrix = built["matrix"]
+
+    out_rows = []
+    for day, by_time in matrix.items():
+        row = {"اليوم": day}
+        for c in cols:
+            items = by_time.get(c) or []
+            row[c] = "\n".join(items)
+        out_rows.append(row)
+
+    # Append notes row
+    notes = []
+    if built.get("empty_saved_slots"):
+        notes.append("تقسيمات بدون مقررات: " + "، ".join(built["empty_saved_slots"]))
+    if built.get("nonmatching_times"):
+        notes.append("أوقات غير ضمن التقسيمات (موجودة في البيانات): " + "، ".join(built["nonmatching_times"]))
+    if notes:
+        note_row = {"اليوم": "ملاحظات"}
+        for c in cols:
+            note_row[c] = ""
+        # ضع النص في أول عمود وقت إن وجد وإلا في اليوم
+        if cols:
+            note_row[cols[0]] = " | ".join(notes)
+        else:
+            note_row["اليوم"] = "ملاحظات: " + " | ".join(notes)
+        out_rows.append(note_row)
+
+    df = pd.DataFrame(out_rows)
+    return excel_response_from_df(df, filename_prefix="schedule")
 
 
 @schedule_bp.route("/publish_status")

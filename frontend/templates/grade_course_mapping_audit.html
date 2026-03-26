@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>تدقيق ترميز المقررات</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .issue-missing_code { background: #fff3cd; }
+    .issue-invalid_code { background: #f8d7da; }
+    .issue-name_code_mismatch { background: #ffe5b4; }
+  </style>
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1400">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">تدقيق ترميز المقررات في كشف الدرجات</h1>
+        <p class="page-subtitle">تظليل السجلات غير المطابقة مع دليل المقررات مع إمكانية التصحيح اليدوي.</p>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="row g-2 align-items-end">
+          <div class="col-md-3">
+            <label class="form-label small">الفصل (اختياري)</label>
+            <input id="qSemester" class="form-control form-control-sm" placeholder="مثال: خريف 2025">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small">رقم الطالب (اختياري)</label>
+            <input id="qStudentId" class="form-control form-control-sm" placeholder="24379">
+          </div>
+          <div class="col-md-6 d-flex gap-2">
+            <button id="btnLoad" class="btn btn-primary btn-sm">تحديث</button>
+          </div>
+        </div>
+        <div id="msg" class="mt-2"></div>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body small">
+        <span class="badge text-bg-danger me-2">أحمر: رمز غير موجود</span>
+        <span class="badge text-bg-warning me-2">أصفر: رمز مفقود</span>
+        <span class="badge text-bg-secondary">برتقالي: عدم تطابق اسم/رمز</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered mb-0" id="tbl">
+            <thead class="table-light">
+              <tr>
+                <th>الطالب</th>
+                <th>الفصل</th>
+                <th>الاسم الحالي</th>
+                <th>الرمز الحالي</th>
+                <th>الحالة</th>
+                <th>اقتراح النظام</th>
+                <th>تصحيح يدوي</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok,status:r.status,json:j}; }
+    function esc(s){ return (s==null?'':String(s)).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'); }
+    function setMsg(html, kind='info'){ document.getElementById('msg').innerHTML = html ? `<div class="alert alert-${kind} p-2 mb-0">${html}</div>` : ''; }
+    function issueLabel(t){
+      if(t==='missing_code') return 'رمز مفقود';
+      if(t==='invalid_code') return 'رمز غير موجود';
+      if(t==='name_code_mismatch') return 'عدم تطابق اسم/رمز';
+      return t || '';
+    }
+    let COURSES = [];
+
+    async function loadCourses(){
+      const r = await fetchJSON('/courses/list');
+      if(!r.ok || !Array.isArray(r.json)) return;
+      COURSES = r.json.filter(c => c && c.course_name).sort((a,b)=>String(a.course_name).localeCompare(String(b.course_name),'ar'));
+    }
+
+    function courseOptions(selectedName){
+      const opts = ['<option value="">-- اختر مقرر --</option>'];
+      COURSES.forEach(c=>{
+        const n = c.course_name || '';
+        const code = c.course_code || '';
+        const sel = (selectedName && selectedName===n) ? ' selected' : '';
+        opts.push(`<option value="${esc(n)}"${sel}>${esc(n)} — ${esc(code)}</option>`);
+      });
+      return opts.join('');
+    }
+
+    function buildParams(){
+      const p = new URLSearchParams();
+      const sem = (document.getElementById('qSemester').value||'').trim();
+      const sid = (document.getElementById('qStudentId').value||'').trim();
+      if(sem) p.set('semester', sem);
+      if(sid) p.set('student_id', sid);
+      return p;
+    }
+
+    async function loadIssues(){
+      setMsg('جاري تحميل السجلات غير المطابقة...', 'info');
+      const p = buildParams();
+      const r = await fetchJSON('/grades/course_mapping_issues?' + p.toString());
+      const tb = document.querySelector('#tbl tbody');
+      tb.innerHTML = '';
+      if(!r.ok){
+        setMsg(r.json?.message || `فشل التحميل (${r.status})`, 'danger');
+        return;
+      }
+      const items = Array.isArray(r.json?.items) ? r.json.items : [];
+      const stats = r.json?.stats || {};
+      if(!items.length){
+        tb.innerHTML = '<tr><td colspan="8" class="text-center text-muted">لا توجد سجلات غير مطابقة</td></tr>';
+        setMsg('لا توجد سجلات غير مطابقة', 'success');
+        return;
+      }
+      items.forEach((it, idx)=>{
+        const tr = document.createElement('tr');
+        tr.className = 'issue-' + (it.issue_type || '');
+        tr.innerHTML = `
+          <td>${esc(it.student_name||'')}<div class="small text-muted">${esc(it.student_id||'')}</div></td>
+          <td>${esc(it.semester||'')}</td>
+          <td>${esc(it.course_name||'')}</td>
+          <td>${esc(it.course_code||'')}</td>
+          <td>${esc(issueLabel(it.issue_type))}</td>
+          <td>${esc(it.suggested_course_name||'')} ${it.suggested_course_code ? '— ' + esc(it.suggested_course_code): ''}</td>
+          <td>
+            <select class="form-select form-select-sm js-target" data-i="${idx}">
+              ${courseOptions(it.suggested_course_name || '')}
+            </select>
+          </td>
+          <td><button class="btn btn-sm btn-success js-fix" data-i="${idx}">تصحيح</button></td>
+        `;
+        tb.appendChild(tr);
+      });
+      setMsg(`إجمالي المشاكل: ${stats.total_issues||items.length} | مفقود: ${stats.missing_code||0} | غير موجود: ${stats.invalid_code||0} | عدم تطابق: ${stats.name_code_mismatch||0}`, 'warning');
+
+      tb.querySelectorAll('.js-fix').forEach(btn=>{
+        btn.addEventListener('click', async ()=>{
+          const i = Number(btn.getAttribute('data-i'));
+          const it = items[i];
+          const sel = tb.querySelector(`.js-target[data-i="${i}"]`);
+          const target = (sel?.value || '').trim();
+          if(!target){ alert('اختر مقرراً هدفاً من القائمة'); return; }
+          const payload = {
+            student_id: it.student_id,
+            semester: it.semester,
+            current_course_name: it.course_name,
+            target_course_name: target
+          };
+          btn.disabled = true;
+          const fx = await fetchJSON('/grades/course_mapping_fix', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json','Accept':'application/json'},
+            body: JSON.stringify(payload)
+          });
+          btn.disabled = false;
+          if(fx.ok){
+            await loadIssues();
+          } else {
+            alert(fx.json?.message || `فشل التصحيح (${fx.status})`);
+          }
+        });
+      });
+    }
+
+    document.getElementById('btnLoad').addEventListener('click', loadIssues);
+    loadCourses().then(loadIssues);
+  </script>
+</body>
+</html>

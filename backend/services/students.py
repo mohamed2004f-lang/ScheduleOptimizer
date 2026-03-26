@@ -779,21 +779,198 @@ def _best_grades_map(conn, student_id=None, student_ids=None, course_name_like=N
     return best
 
 
+def _students_scope_rows(conn, student_id=None, student_ids=None):
+    """يرجع قائمة طلاب ضمن النطاق المطلوب."""
+    cur = conn.cursor()
+    if student_id:
+        sid = normalize_sid(student_id)
+        rows = cur.execute(
+            "SELECT student_id, COALESCE(student_name,'') AS student_name FROM students WHERE student_id = ?",
+            (sid,),
+        ).fetchall()
+    elif student_ids is not None:
+        ids = [normalize_sid(s) for s in (student_ids or []) if normalize_sid(s)]
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        rows = cur.execute(
+            f"SELECT student_id, COALESCE(student_name,'') AS student_name FROM students WHERE student_id IN ({placeholders})",
+            ids,
+        ).fetchall()
+    else:
+        rows = cur.execute(
+            "SELECT student_id, COALESCE(student_name,'') AS student_name FROM students"
+        ).fetchall()
+    return [{"student_id": normalize_sid(r[0]), "student_name": (r[1] or "")} for r in (rows or [])]
+
+
+def _courses_catalog_rows(conn, course_name_like=None):
+    cur = conn.cursor()
+    sql = """
+        SELECT COALESCE(course_name,'') AS course_name,
+               COALESCE(course_code,'') AS course_code,
+               COALESCE(units,0) AS units
+        FROM courses
+        WHERE COALESCE(course_name,'') <> ''
+    """
+    params = []
+    if course_name_like and str(course_name_like).strip():
+        q = "%" + str(course_name_like).strip() + "%"
+        sql += " AND (course_name LIKE ? OR course_code LIKE ?)"
+        params.extend([q, q])
+    sql += " ORDER BY course_name"
+    rows = cur.execute(sql, params).fetchall()
+    out = []
+    seen = set()
+    for r in rows or []:
+        cname = (r[0] or "").strip()
+        ccode = (r[1] or "").strip()
+        units = int(r[2] or 0)
+        if not cname:
+            continue
+        # dedupe: prefer course_code when exists, otherwise normalized name
+        key = ("code", ccode.lower()) if ccode else ("name", _normalize_course_name_key(cname))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "course_name": cname,
+            "course_code": ccode,
+            "units": units,
+        })
+    return out
+
+
+def _normalize_course_name_key(name: str) -> str:
+    """تطبيع بسيط لاسم المقرر لتقليل مشاكل المطابقة النصية."""
+    s = str(name or "").strip().lower()
+    # توحيد مسافات/شرطات شائعة
+    s = s.replace("ـ", "")
+    for ch in ("-", "_", "/", "\\"):
+        s = s.replace(ch, " ")
+    s = " ".join(s.split())
+    return s
+
+
+def _classified_uncompleted_items(conn, student_id=None, student_ids=None, course_name_like=None, reason_filter=None):
+    """
+    التصنيف الموحّد:
+      - not_registered: المقرر موجود بالخطة (courses) ولا توجد له أي محاولة في grades
+      - failed: توجد محاولة/محاولات لكن أفضل نتيجة < 50 أو "راسب"
+    """
+    students = _students_scope_rows(conn, student_id=student_id, student_ids=student_ids)
+    if not students:
+        return []
+    catalog = _courses_catalog_rows(conn, course_name_like=course_name_like)
+    if not catalog:
+        return []
+
+    scope_ids = [s["student_id"] for s in students]
+    best = _best_grades_map(conn, student_ids=scope_ids, course_name_like=course_name_like)
+    sname_map = {s["student_id"]: s.get("student_name") or "" for s in students}
+    # فهارس مطابقة لكل طالب:
+    # 1) by code (أدق)
+    # 2) by normalized course name (fallback)
+    by_student_code = {}
+    by_student_name_norm = {}
+    for (_sid, _cname), entry in (best or {}).items():
+        sid = normalize_sid(_sid)
+        code = str(entry.get("course_code") or "").strip().lower()
+        cname_norm = _normalize_course_name_key(entry.get("course_name") or "")
+        if sid not in by_student_code:
+            by_student_code[sid] = {}
+        if sid not in by_student_name_norm:
+            by_student_name_norm[sid] = {}
+        # إذا تكرر نفس الكود/الاسم نحتفظ بالأفضل
+        if code:
+            old = by_student_code[sid].get(code)
+            if (not old) or ((entry.get("best_grade_key") or -1) > (old.get("best_grade_key") or -1)):
+                by_student_code[sid][code] = entry
+        if cname_norm:
+            old = by_student_name_norm[sid].get(cname_norm)
+            if (not old) or ((entry.get("best_grade_key") or -1) > (old.get("best_grade_key") or -1)):
+                by_student_name_norm[sid][cname_norm] = entry
+
+    out = []
+    out_seen = set()
+    for sid in scope_ids:
+        for c in catalog:
+            cname = c["course_name"]
+            ccode_norm = str(c.get("course_code") or "").strip().lower()
+            cname_norm = _normalize_course_name_key(cname)
+            # المطابقة: code أولاً ثم اسم مُطبع
+            b = None
+            if ccode_norm:
+                b = (by_student_code.get(sid) or {}).get(ccode_norm)
+            if not b and cname_norm:
+                b = (by_student_name_norm.get(sid) or {}).get(cname_norm)
+            if b and b.get("passed"):
+                continue
+
+            if b:
+                reason = "failed"
+                reason_label = "راسب"
+                attempts = int(b.get("attempts") or 0)
+                best_grade_display = b.get("best_grade_display") or "—"
+                best_semester = b.get("best_semester") or ""
+                units = int(b.get("units") or c.get("units") or 0)
+                course_code = (b.get("course_code") or c.get("course_code") or "").strip()
+            else:
+                reason = "not_registered"
+                reason_label = "غير مسجل"
+                attempts = 0
+                best_grade_display = "—"
+                best_semester = ""
+                units = int(c.get("units") or 0)
+                course_code = (c.get("course_code") or "").strip()
+
+            if reason_filter and reason != reason_filter:
+                continue
+
+            # dedupe final rows per student+course
+            dedupe_key = (sid, ("code", course_code.lower()) if course_code else ("name", _normalize_course_name_key(cname)))
+            if dedupe_key in out_seen:
+                continue
+            out_seen.add(dedupe_key)
+
+            out.append({
+                "student_id": sid,
+                "student_name": sname_map.get(sid, ""),
+                "course_name": cname,
+                "course_code": course_code,
+                "units": units,
+                "attempts": attempts,
+                "best_grade_display": best_grade_display,
+                "best_semester": best_semester,
+                "reason": reason,
+                "reason_label": reason_label,
+            })
+    return out
+
+
 @students_bp.route("/uncompleted_courses_report")
 @role_required("admin", "admin_main", "head_of_department", "supervisor")
 def uncompleted_courses_report_api():
-    """تقرير: مقررات الطالب غير المنجزة (لا يوجد أي نجاح للمقرر)."""
+    """تقرير: المقررات غير المنجزة لطالب واحد مع تصنيف السبب (غير مسجل/راسب)."""
     sid = normalize_sid(request.args.get("student_id"))
+    reason = (request.args.get("reason") or "").strip().lower() or None
+    q = (request.args.get("q") or "").strip() or None
+    if reason and reason not in ("failed", "not_registered"):
+        return jsonify({"status": "error", "message": "reason يجب أن تكون failed أو not_registered"}), 400
     if not sid:
         return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
     with get_connection() as conn:
         allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
         if allowed_student_ids is not None and sid not in allowed_student_ids:
             return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
-        best = _best_grades_map(conn, student_id=sid)
-        items = [v for v in best.values() if not v.get("passed")]
+        items = _classified_uncompleted_items(conn, student_id=sid, course_name_like=q, reason_filter=reason)
         items = sorted(items, key=lambda x: (x.get("course_name") or ""))
-    return jsonify({"status": "ok", "student_id": sid, "items": items})
+    summary = {
+        "total_uncompleted": len(items),
+        "failed_count": sum(1 for i in items if i.get("reason") == "failed"),
+        "not_registered_count": sum(1 for i in items if i.get("reason") == "not_registered"),
+    }
+    return jsonify({"status": "ok", "student_id": sid, "summary": summary, "items": items})
 
 
 @students_bp.route("/uncompleted_courses_report/excel")
@@ -808,7 +985,7 @@ def uncompleted_courses_report_excel():
     items = payload.get("items", []) if payload else []
     df = pd.DataFrame(items or [])
     # ترتيب أعمدة ودية
-    cols = ["student_id", "student_name", "course_name", "course_code", "units", "best_grade_display", "attempts", "best_semester"]
+    cols = ["student_id", "student_name", "course_name", "course_code", "units", "reason_label", "best_grade_display", "attempts", "best_semester"]
     if not df.empty:
         keep = [c for c in cols if c in df.columns] + [c for c in df.columns if c not in cols]
         df = df[keep]
@@ -832,6 +1009,7 @@ def uncompleted_courses_report_pdf():
             f"<td>{_h(it.get('course_name'))}</td>"
             f"<td>{_h(it.get('course_code'))}</td>"
             f"<td style='text-align:center'>{_h(it.get('units'))}</td>"
+            f"<td style='text-align:center'>{_h(it.get('reason_label'))}</td>"
             f"<td style='text-align:center'>{_h(it.get('best_grade_display'))}</td>"
             f"<td style='text-align:center'>{_h(it.get('attempts'))}</td>"
             f"<td>{_h(it.get('best_semester'))}</td>"
@@ -852,21 +1030,192 @@ def uncompleted_courses_report_pdf():
     </head>
     <body>
       <h2>{_h(title)}</h2>
-      <p>المقرر يُعتبر منجزاً إذا وُجدت أي محاولة ناجحة (درجة ≥ 50 أو "ناجح").</p>
+      <p>المقرر غير المنجز يشمل: غير مسجل، أو مسجل مع أفضل نتيجة أقل من 50.</p>
       <table>
         <thead>
           <tr>
-            <th>المقرر</th><th>الرمز</th><th>الوحدات</th><th>أفضل درجة</th><th>المحاولات</th><th>آخر فصل (مرجعي)</th>
+            <th>المقرر</th><th>الرمز</th><th>الوحدات</th><th>التصنيف</th><th>أفضل درجة</th><th>المحاولات</th><th>آخر فصل (مرجعي)</th>
           </tr>
         </thead>
         <tbody>
-          {rows_html or "<tr><td colspan='6' style='text-align:center'>لا توجد بيانات</td></tr>"}
+          {rows_html or "<tr><td colspan='7' style='text-align:center'>لا توجد بيانات</td></tr>"}
         </tbody>
       </table>
     </body>
     </html>
     """
     return pdf_response_from_html(html, filename_prefix=f"uncompleted_courses_{sid or 'student'}")
+
+
+@students_bp.route("/not_registered_courses_report")
+@role_required("admin", "admin_main", "head_of_department", "supervisor")
+def not_registered_courses_report_api():
+    """
+    تقرير عام: المقررات غير المسجل بها (من الخطة/قائمة المقررات) حسب أفضلية التصنيف.
+    """
+    course_name = (request.args.get("course_name") or "").strip() or None
+    min_count = request.args.get("min_count")
+    try:
+        min_count = int(min_count) if min_count not in (None, "") else 0
+    except Exception:
+        min_count = 0
+    include_students = (request.args.get("include_students") or "").strip().lower() in ("1", "true", "yes")
+
+    with get_connection() as conn:
+        allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        if allowed_student_ids is not None and not allowed_student_ids:
+            return jsonify({"status": "ok", "summary": [], "items": [] if include_students else []})
+        items = _classified_uncompleted_items(
+            conn,
+            student_ids=None if allowed_student_ids is None else list(allowed_student_ids),
+            course_name_like=course_name,
+            reason_filter="not_registered",
+        )
+
+    by_course = {}
+    for it in items:
+        ck = (it.get("course_name") or "", it.get("course_code") or "")
+        s = by_course.get(ck)
+        if not s:
+            s = {
+                "course_name": ck[0],
+                "course_code": ck[1],
+                "units": int(it.get("units") or 0),
+                "not_registered_count": 0,
+            }
+            by_course[ck] = s
+        s["not_registered_count"] += 1
+
+    summary = list(by_course.values())
+    if min_count and min_count > 0:
+        summary = [s for s in summary if int(s.get("not_registered_count") or 0) >= min_count]
+    summary = sorted(summary, key=lambda x: (-(int(x.get("not_registered_count") or 0)), x.get("course_name") or ""))
+
+    payload = {"status": "ok", "summary": summary}
+    if include_students:
+        payload["items"] = sorted(
+            items,
+            key=lambda x: (x.get("course_name") or "", x.get("student_name") or "", x.get("student_id") or ""),
+        )
+    return jsonify(payload)
+
+
+@students_bp.route("/not_registered_courses_report/excel")
+@role_required("admin", "admin_main", "head_of_department", "supervisor")
+def not_registered_courses_report_excel():
+    course_name = (request.args.get("course_name") or "").strip() or None
+    min_count = request.args.get("min_count")
+    try:
+        min_count = int(min_count) if min_count not in (None, "") else 0
+    except Exception:
+        min_count = 0
+    with get_connection() as conn:
+        allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        if allowed_student_ids is not None and not allowed_student_ids:
+            return excel_response_from_frames({"Summary": pd.DataFrame([]), "Students": pd.DataFrame([])}, filename_prefix="not_registered_courses_report")
+        items = _classified_uncompleted_items(
+            conn,
+            student_ids=None if allowed_student_ids is None else list(allowed_student_ids),
+            course_name_like=course_name,
+            reason_filter="not_registered",
+        )
+    by_course = {}
+    for it in items:
+        ck = (it.get("course_name") or "", it.get("course_code") or "")
+        s = by_course.get(ck)
+        if not s:
+            s = {"course_name": ck[0], "course_code": ck[1], "units": int(it.get("units") or 0), "not_registered_count": 0}
+            by_course[ck] = s
+        s["not_registered_count"] += 1
+    summary = list(by_course.values())
+    if min_count and min_count > 0:
+        summary = [s for s in summary if int(s.get("not_registered_count") or 0) >= min_count]
+    summary = sorted(summary, key=lambda x: (-(int(x.get("not_registered_count") or 0)), x.get("course_name") or ""))
+    df_summary = pd.DataFrame(summary or [])
+    df_items = pd.DataFrame(sorted(items, key=lambda x: (x.get("course_name") or "", x.get("student_name") or "")) or [])
+    return excel_response_from_frames({"Summary": df_summary, "Students": df_items}, filename_prefix="not_registered_courses_report")
+
+
+@students_bp.route("/not_registered_courses_report/pdf")
+@role_required("admin", "admin_main", "head_of_department", "supervisor")
+def not_registered_courses_report_pdf():
+    course_name = (request.args.get("course_name") or "").strip() or None
+    min_count = request.args.get("min_count")
+    try:
+        min_count = int(min_count) if min_count not in (None, "") else 0
+    except Exception:
+        min_count = 0
+    include_students = (request.args.get("include_students") or "").strip().lower() in ("1", "true", "yes")
+    with get_connection() as conn:
+        allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        if allowed_student_ids is not None and not allowed_student_ids:
+            html = "<html dir='rtl' lang='ar'><body style='font-family:Arial,sans-serif;'><h2>تقرير المقررات غير المسجل بها</h2><p>لا توجد بيانات ضمن نطاق صلاحياتك.</p></body></html>"
+            return pdf_response_from_html(html, filename_prefix="not_registered_courses_report")
+        items = _classified_uncompleted_items(
+            conn,
+            student_ids=None if allowed_student_ids is None else list(allowed_student_ids),
+            course_name_like=course_name,
+            reason_filter="not_registered",
+        )
+    by_course = {}
+    for it in items:
+        ck = (it.get("course_name") or "", it.get("course_code") or "")
+        s = by_course.get(ck)
+        if not s:
+            s = {"course_name": ck[0], "course_code": ck[1], "units": int(it.get("units") or 0), "not_registered_count": 0}
+            by_course[ck] = s
+        s["not_registered_count"] += 1
+    summary = list(by_course.values())
+    if min_count and min_count > 0:
+        summary = [s for s in summary if int(s.get("not_registered_count") or 0) >= min_count]
+    summary = sorted(summary, key=lambda x: (-(int(x.get("not_registered_count") or 0)), x.get("course_name") or ""))
+
+    sum_rows = "".join(
+        "<tr>"
+        f"<td>{_h(s.get('course_name'))}</td>"
+        f"<td>{_h(s.get('course_code'))}</td>"
+        f"<td style='text-align:center'>{_h(s.get('units'))}</td>"
+        f"<td style='text-align:center'><strong>{_h(s.get('not_registered_count'))}</strong></td>"
+        "</tr>"
+        for s in summary
+    )
+    det_rows = ""
+    if include_students:
+        for it in sorted(items, key=lambda x: (x.get("course_name") or "", x.get("student_name") or "", x.get("student_id") or "")):
+            det_rows += (
+                "<tr>"
+                f"<td>{_h(it.get('course_name'))}</td>"
+                f"<td>{_h(it.get('course_code'))}</td>"
+                f"<td>{_h(it.get('student_id'))}</td>"
+                f"<td>{_h(it.get('student_name'))}</td>"
+                "</tr>"
+            )
+    html = f"""
+    <html dir="rtl" lang="ar">
+    <head>
+      <meta charset="utf-8"/>
+      <style>
+        body {{ font-family: Arial, sans-serif; margin: 12px; }}
+        h2 {{ margin: 0 0 10px 0; }}
+        h3 {{ margin: 16px 0 8px 0; }}
+        table {{ width: 100%; border-collapse: collapse; font-size: 11px; }}
+        th, td {{ border: 1px solid #999; padding: 5px; }}
+        th {{ background: #f2f2f2; }}
+      </style>
+    </head>
+    <body>
+      <h2>تقرير المقررات غير المسجل بها</h2>
+      <p>يعرض المقررات الموجودة بالخطة/قائمة المقررات والتي لا توجد لها أي محاولة في السجل الأكاديمي للطالب.</p>
+      <h3>ملخص حسب المقرر</h3>
+      <table>
+        <thead><tr><th>المقرر</th><th>الرمز</th><th>الوحدات</th><th>عدد غير المسجلين</th></tr></thead>
+        <tbody>{sum_rows or "<tr><td colspan='4' style='text-align:center'>لا توجد بيانات</td></tr>"}</tbody>
+      </table>
+      {"<h3>تفصيل الطلبة</h3><table><thead><tr><th>المقرر</th><th>الرمز</th><th>رقم الطالب</th><th>الاسم</th></tr></thead><tbody>"+det_rows+"</tbody></table>" if include_students else ""}
+    </body>
+    </html>
+    """
+    return pdf_response_from_html(html, filename_prefix="not_registered_courses_report")
 
 
 @students_bp.route("/failed_courses_report")
@@ -1000,7 +1349,7 @@ def failed_courses_report_pdf():
             # بدون بيانات: صفحة PDF فارغة تجنب أي تسريب
             html = f"""
             <html dir="rtl" lang="ar"><body style="font-family:Arial,sans-serif;">
-              <h2>تقرير شامل المقررات غير المنجزة</h2>
+              <h2>تقرير المقررات الراسبة</h2>
               <p>لا توجد بيانات ضمن نطاق صلاحياتك.</p>
             </body></html>
             """
@@ -1067,8 +1416,8 @@ def failed_courses_report_pdf():
       </style>
     </head>
     <body>
-      <h2>تقرير شامل المقررات غير المنجزة</h2>
-      <p>يُعتبر المقرر منجزاً إذا وُجدت أي محاولة ناجحة (درجة ≥ 50 أو نص "ناجح"). هذا التقرير يعرض المقررات غير المنجزة لدى الطلبة (لا توجد أي محاولة ناجحة).</p>
+      <h2>تقرير المقررات الراسبة</h2>
+      <p>يعرض المقررات التي توجد لها محاولات في كشف الدرجات لكن أفضل نتيجة فيها أقل من 50.</p>
       <h3>ملخص حسب المقرر</h3>
       <table>
         <thead><tr><th>المقرر</th><th>الرمز</th><th>الوحدات</th><th>عدد غير المنجزة</th></tr></thead>

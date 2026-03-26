@@ -9,7 +9,7 @@ import pandas as pd
 # ensure parent package is importable when running modules directly in some environments
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from flask import Blueprint, request, jsonify, Response, send_file, session
+from flask import Blueprint, request, jsonify, Response, send_file, session, current_app
 from backend.core.auth import login_required, role_required
 from models.models import Grade
 from .utilities import get_connection, get_current_term, df_from_query, excel_response_from_df, pdf_response_from_html, log_activity
@@ -100,6 +100,71 @@ def _compute_total_for_mode(mode: str, partial, final, total):
         return total
     if partial is None and final is None:
         return None
+
+
+def _resolve_catalog_course(cur, course_name: str = "", course_code: str = ""):
+    """
+    Resolve course by code/name from catalog with strict consistency.
+    Returns dict {course_name, course_code, units} or raises ValueError.
+    """
+    cname = (course_name or "").strip()
+    ccode = (course_code or "").strip()
+
+    row_by_code = None
+    row_by_name = None
+    if ccode:
+        row_by_code = cur.execute(
+            "SELECT course_name, COALESCE(course_code,'') AS course_code, COALESCE(units,0) AS units FROM courses WHERE course_code = ? LIMIT 1",
+            (ccode,),
+        ).fetchone()
+        if not row_by_code:
+            raise ValueError(f"رمز المقرر غير موجود في دليل المقررات: {ccode}")
+    def _norm_name(s: str) -> str:
+        s = str(s or "").strip().lower()
+        # normalize common Arabic variants and separators
+        s = s.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+        s = s.replace("ى", "ي").replace("ؤ", "و").replace("ئ", "ي")
+        s = s.replace("ـ", "")
+        for ch in ("-", "_", "/", "\\", "(", ")", "[", "]", "{", "}", "،", ",", ".", ":", ";"):
+            s = s.replace(ch, " ")
+        s = " ".join(s.split())
+        return s
+
+    if cname:
+        row_by_name = cur.execute(
+            "SELECT course_name, COALESCE(course_code,'') AS course_code, COALESCE(units,0) AS units FROM courses WHERE course_name = ? LIMIT 1",
+            (cname,),
+        ).fetchone()
+        # fallback: normalized-name match to handle minor writing variants
+        if not row_by_name:
+            target_norm = _norm_name(cname)
+            all_rows = cur.execute(
+                "SELECT course_name, COALESCE(course_code,'') AS course_code, COALESCE(units,0) AS units FROM courses"
+            ).fetchall()
+            for rr in all_rows or []:
+                rr_name = (rr[0] if isinstance(rr, (list, tuple)) else rr["course_name"]) or ""
+                if _norm_name(rr_name) == target_norm and target_norm:
+                    row_by_name = rr
+                    break
+        if not row_by_name and not row_by_code:
+            raise ValueError(f"اسم المقرر غير موجود في دليل المقررات: {cname}")
+
+    # if both provided, ensure they point to same catalog row
+    if row_by_code and row_by_name:
+        name_code = row_by_code[0] if isinstance(row_by_code, (list, tuple)) else row_by_code["course_name"]
+        name_name = row_by_name[0] if isinstance(row_by_name, (list, tuple)) else row_by_name["course_name"]
+        if str(name_code).strip() != str(name_name).strip():
+            raise ValueError(f"عدم تطابق بين اسم المقرر ({cname}) ورمزه ({ccode})")
+
+    row = row_by_code or row_by_name
+    if not row:
+        raise ValueError("يجب توفير اسم مقرر أو رمز مقرر صحيح")
+    out_name = (row[0] if isinstance(row, (list, tuple)) else row["course_name"]) or ""
+    out_code = (row[1] if isinstance(row, (list, tuple)) else row["course_code"]) or ""
+    out_units = (row[2] if isinstance(row, (list, tuple)) else row["units"]) or 0
+    if not str(out_code).strip():
+        raise ValueError(f"المقرر '{out_name}' لا يملك رمزاً معتمداً في دليل المقررات")
+    return {"course_name": str(out_name).strip(), "course_code": str(out_code).strip(), "units": int(out_units or 0)}
     try:
         p = float(partial or 0)
         f = float(final or 0)
@@ -475,7 +540,10 @@ def save_grades():
         cur = conn.cursor()
         try:
             for g in grades:
-                course = g.get("course_name")
+                course = (g.get("course_name") or "").strip()
+                course_code_in = (g.get("course_code") or "").strip()
+                resolved = _resolve_catalog_course(cur, course_name=course, course_code=course_code_in)
+                course = resolved["course_name"]
                 new_grade_raw = g.get("grade", None)
                 ok, val_or_msg = validate_grade_value(new_grade_raw)
                 if not ok:
@@ -496,7 +564,7 @@ def save_grades():
 
                 cur.execute(
                     "INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES (?, ?, ?, ?, ?, ?)",
-                    (sid, semester, course, g.get("course_code", ""), int(g.get("units", 0) or 0),
+                    (sid, semester, course, resolved["course_code"], int(resolved["units"] or 0),
                      (float(new_grade) if new_grade is not None else None))
                 )
             conn.commit()
@@ -756,23 +824,9 @@ def import_semester_excel():
             (row["student_id"], row["course_name"]): row["grade"] for row in existing_rows
         }
 
-        # التأكد من وجود المقررات في جدول courses وتحديث الوحدات
-        for _, cname, units in course_columns:
-            try:
-                cur.execute(
-                    """
-                    INSERT INTO courses (course_name, course_code, units)
-                    VALUES (?, '', ?)
-                    ON CONFLICT(course_name) DO UPDATE SET
-                        units = CASE
-                            WHEN excluded.units IS NOT NULL AND excluded.units > 0 THEN excluded.units
-                            ELSE units
-                        END
-                    """,
-                    (cname, units),
-                )
-            except Exception:
-                pass
+        # تشديد الربط: المقرر يجب أن يكون موجوداً في الدليل وبرمز معتمد
+        for _, cname, _units in course_columns:
+            _resolve_catalog_course(cur, course_name=cname, course_code="")
 
         inserted_records = 0
         affected_students = set()
@@ -811,7 +865,12 @@ def import_semester_excel():
                         400,
                     )
 
-                key = (student_id, cname)
+                resolved = _resolve_catalog_course(cur, course_name=cname, course_code="")
+                cname_final = resolved["course_name"]
+                ccode_final = resolved["course_code"]
+                units_final = int(resolved["units"] or units or 0)
+
+                key = (student_id, cname_final)
                 old_grade = existing_map.get(key)
 
                 cur.execute(
@@ -822,7 +881,7 @@ def import_semester_excel():
                     (
                         student_id,
                         semester,
-                        cname,
+                        cname_final,
                         float(old_grade) if old_grade is not None else None,
                         float(grade_val) if grade_val is not None else None,
                         changed_by,
@@ -838,9 +897,9 @@ def import_semester_excel():
                     (
                         student_id,
                         semester,
-                        cname,
-                        "",
-                        units,
+                        cname_final,
+                        ccode_final,
+                        units_final,
                         float(grade_val) if grade_val is not None else None,
                     ),
                 )
@@ -1340,8 +1399,11 @@ def _import_export_style_single_student(parsed, student_id_override, student_nam
                 cname = course.get("course_name") or ""
                 if not cname:
                     continue
-                ccode = course.get("course_code") or ""
-                units = int(course.get("units") or 0)
+                ccode_in = (course.get("course_code") or "").strip()
+                resolved = _resolve_catalog_course(cur, course_name=cname, course_code=ccode_in)
+                cname = resolved["course_name"]
+                ccode = resolved["course_code"]
+                units = int(resolved["units"] or 0)
                 grade_val = course.get("grade")
 
                 if grade_val is not None and (grade_val < 0 or grade_val > 100):
@@ -1356,22 +1418,6 @@ def _import_export_style_single_student(parsed, student_id_override, student_nam
                         continue
                 elif old_grade is None and new_grade_float is None:
                     continue
-
-                # إذا لم يُرسل رمز للمقرر، نحاول جلبه من جدول courses بالاعتماد على اسم المقرر
-                if not ccode:
-                    course_row = cur.execute(
-                        "SELECT course_code FROM courses WHERE course_name = ? LIMIT 1",
-                        (cname,),
-                    ).fetchone()
-                    if course_row:
-                        try:
-                            ccode = (
-                                course_row[0]
-                                if len(course_row) > 0
-                                else (course_row["course_code"] if "course_code" in course_row.keys() else "")
-                            )
-                        except Exception:
-                            ccode = course_row["course_code"] if "course_code" in course_row.keys() else ""
 
                 cur.execute(
                     """
@@ -1514,8 +1560,8 @@ def update_grade():
                 except Exception:
                     units_to_use = units_to_use
             else:
-                # لم نجد الرمز في جدول المقررات، نستخدمه كما هو فقط
-                course_code_to_use = new_course_code
+                # تشديد الربط: لا نقبل رمزاً غير موجود في الدليل
+                return jsonify({"status": "error", "message": f"رمز المقرر غير موجود في دليل المقررات: {new_course_code}"}), 400
 
         # إذا لم يوجد لدينا رمز حتى الآن، نحاول جلبه بالاعتماد على اسم المقرر (كما في السابق)
         if not course_code_to_use:
@@ -1588,6 +1634,187 @@ def update_grade():
         conn.commit()
 
     return jsonify({"status": "ok", "message": "تم تعديل الدرجة"}), 200
+
+
+@grades_bp.route("/course_mapping_issues", methods=["GET"])
+@role_required("admin", "admin_main", "head_of_department")
+def course_mapping_issues():
+    """
+    يعرض سجلات grades غير المطابقة مع دليل المقررات.
+    الحالات:
+      - missing_code: لا يوجد رمز مقرر في السجل
+      - invalid_code: الرمز غير موجود في دليل المقررات
+      - name_code_mismatch: الرمز صحيح لكن الاسم لا يطابق اسم المقرر في الدليل
+    """
+    semester = (request.args.get("semester") or "").strip()
+    sid = (request.args.get("student_id") or "").strip()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        sql = """
+        SELECT g.student_id,
+               COALESCE(s.student_name,'') AS student_name,
+               g.semester,
+               g.course_name,
+               COALESCE(g.course_code,'') AS course_code,
+               COALESCE(g.units,0) AS units,
+               g.grade,
+               cc.course_name AS code_course_name,
+               COALESCE(cc.course_code,'') AS code_course_code,
+               COALESCE(cc.units,0) AS code_units,
+               cn.course_name AS name_course_name,
+               COALESCE(cn.course_code,'') AS name_course_code,
+               COALESCE(cn.units,0) AS name_units
+        FROM grades g
+        LEFT JOIN students s ON s.student_id = g.student_id
+        LEFT JOIN courses cc
+          ON LOWER(TRIM(COALESCE(g.course_code,''))) <> ''
+         AND LOWER(TRIM(cc.course_code)) = LOWER(TRIM(g.course_code))
+        LEFT JOIN courses cn
+          ON LOWER(TRIM(cn.course_name)) = LOWER(TRIM(g.course_name))
+        WHERE 1=1
+        """
+        params = []
+        if semester:
+            sql += " AND g.semester = ?"
+            params.append(semester)
+        if sid:
+            sql += " AND g.student_id = ?"
+            params.append(sid)
+        sql += " ORDER BY g.semester DESC, g.student_id, g.course_name"
+        rows = cur.execute(sql, params).fetchall()
+
+    items = []
+    stats = {"missing_code": 0, "invalid_code": 0, "name_code_mismatch": 0, "total_issues": 0}
+    for r in rows or []:
+        d = dict(r)
+        code = (d.get("course_code") or "").strip()
+        g_name = (d.get("course_name") or "").strip()
+        code_name = (d.get("code_course_name") or "").strip()
+        issue = None
+        if not code:
+            issue = "missing_code"
+        elif not code_name:
+            issue = "invalid_code"
+        elif code_name != g_name:
+            issue = "name_code_mismatch"
+        if not issue:
+            continue
+
+        suggested_name = ""
+        suggested_code = ""
+        suggested_units = 0
+        if issue == "missing_code":
+            # إن وجد المقرر بالاسم في الدليل، اقترحه
+            suggested_name = (d.get("name_course_name") or "").strip()
+            suggested_code = (d.get("name_course_code") or "").strip()
+            suggested_units = int(d.get("name_units") or 0)
+        else:
+            suggested_name = code_name
+            suggested_code = (d.get("code_course_code") or "").strip()
+            suggested_units = int(d.get("code_units") or 0)
+
+        stats[issue] += 1
+        stats["total_issues"] += 1
+        items.append({
+            "student_id": d.get("student_id"),
+            "student_name": d.get("student_name") or "",
+            "semester": d.get("semester") or "",
+            "course_name": g_name,
+            "course_code": code,
+            "units": int(d.get("units") or 0),
+            "grade": d.get("grade"),
+            "issue_type": issue,
+            "suggested_course_name": suggested_name,
+            "suggested_course_code": suggested_code,
+            "suggested_units": suggested_units,
+        })
+
+    return jsonify({"status": "ok", "items": items, "stats": stats}), 200
+
+
+@grades_bp.route("/course_mapping_fix", methods=["POST"])
+@role_required("admin", "admin_main", "head_of_department")
+def course_mapping_fix():
+    """
+    تصحيح ربط مقرر في grades عبر اختيار مقرر معتمد من دليل المقررات.
+    body:
+      - student_id, semester, current_course_name
+      - target_course_name (مطلوب)
+      - changed_by (اختياري)
+    """
+    try:
+        data = request.get_json(force=True) or {}
+        sid = (data.get("student_id") or "").strip()
+        semester = (data.get("semester") or "").strip()
+        current_name = (data.get("current_course_name") or "").strip()
+        target_name = (data.get("target_course_name") or "").strip()
+        changed_by = (data.get("changed_by") or session.get("user") or "mapping-fix").strip()
+        if not sid or not semester or not current_name or not target_name:
+            return jsonify({"status": "error", "message": "student_id و semester و current_course_name و target_course_name مطلوبة"}), 400
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT grade FROM grades WHERE student_id=? AND semester=? AND course_name=? LIMIT 1",
+                (sid, semester, current_name),
+            ).fetchone()
+            if not row:
+                return jsonify({"status": "error", "message": "سجل الدرجة الحالي غير موجود"}), 404
+            grade_val = row[0] if isinstance(row, (list, tuple)) else row["grade"]
+
+            resolved = _resolve_catalog_course(cur, course_name=target_name, course_code="")
+            target_name_final = resolved["course_name"]
+            target_code = resolved["course_code"]
+            target_units = int(resolved["units"] or 0)
+
+            if target_name_final != current_name:
+                conflict = cur.execute(
+                    "SELECT 1 FROM grades WHERE student_id=? AND semester=? AND course_name=? LIMIT 1",
+                    (sid, semester, target_name_final),
+                ).fetchone()
+                if conflict:
+                    return jsonify({"status": "error", "message": "يوجد سجل آخر بنفس المقرر الهدف لهذا الطالب/الفصل. يرجى دمجه يدوياً أولاً."}), 409
+
+            cur.execute(
+                """
+                UPDATE grades
+                   SET course_name = ?, course_code = ?, units = ?
+                 WHERE student_id = ? AND semester = ? AND course_name = ?
+                """,
+                (target_name_final, target_code, target_units, sid, semester, current_name),
+            )
+
+            def _to_float_or_none(v):
+                if v is None:
+                    return None
+                try:
+                    return float(v)
+                except Exception:
+                    return None
+
+            cur.execute(
+                "INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    sid,
+                    semester,
+                    target_name_final,
+                    _to_float_or_none(grade_val),
+                    _to_float_or_none(grade_val),
+                    changed_by,
+                    datetime.datetime.utcnow().isoformat(),
+                ),
+            )
+            conn.commit()
+
+        return jsonify({"status": "ok", "message": "تم تصحيح ربط المقرر بنجاح"}), 200
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    except Exception as exc:
+        try:
+            current_app.logger.exception("course_mapping_fix failed")
+        except Exception:
+            pass
+        return jsonify({"status": "error", "message": f"فشل التصحيح: {exc}"}), 500
 
 
 @grades_bp.route("/rename_semester", methods=["POST"])

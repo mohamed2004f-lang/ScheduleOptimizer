@@ -80,7 +80,6 @@
             <li><a class="dropdown-item" id="navRegistrations" href="/registrations_form">التسجيلات الفعلية</a></li>
             <li><a class="dropdown-item" id="navRegistrationRequests" href="/registration_requests_page">طلبات الإضافة والإسقاط</a></li>
             <li><a class="dropdown-item" id="navAttendance" href="/attendance_export">الحضور والغياب</a></li>
-            <li><hr class="dropdown-divider"></li>
           </ul>
         </li>
 
@@ -95,8 +94,10 @@
             <li><a class="dropdown-item" id="navPerformance" href="/performance_report">تقرير الأداء</a></li>
             <li><a class="dropdown-item" id="navElectivesReport" href="/electives_report_page">تقرير المقررات الاختيارية</a></li>
             <li><a class="dropdown-item" id="navRegistrationChangesReport" href="/registration_changes_report_page">تقرير الإضافة والإسقاط</a></li>
-            <li><a class="dropdown-item" id="navFailedCoursesReport" href="/failed_courses_report_page">تقرير شامل المقررات غير المنجزة</a></li>
+            <li><a class="dropdown-item" id="navFailedCoursesReport" href="/failed_courses_report_page">تقرير المقررات الراسبة</a></li>
+            <li><a class="dropdown-item" id="navNotRegisteredCoursesReport" href="/not_registered_courses_report_page">تقرير المقررات غير المسجل بها</a></li>
             <li><a class="dropdown-item" id="navUncompletedCoursesReport" href="/uncompleted_courses_report_page">تقرير المقررات غير المنجزة (حسب طالب)</a></li>
+            <li><a class="dropdown-item" id="navGradeCourseAudit" href="/grade_course_mapping_audit_page">تدقيق ترميز المقررات</a></li>
             <li><a class="dropdown-item" id="navCourseRegistrationReport" href="/course_registration_report_page" style="display:none;">أعداد التسجيل الفعلي بالمقررات</a></li>
             <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item" id="navAnalytics" href="/analytics">التحليلات الأكاديمية</a></li>
@@ -250,7 +251,9 @@
           'navElectivesReport',
           'navRegistrationChangesReport',
           'navFailedCoursesReport',
+          'navNotRegisteredCoursesReport',
           'navUncompletedCoursesReport',
+          'navGradeCourseAudit',
           'navCourseRegistrationReport',
           'navUsersAdmin',
           'navProjectStatus',
@@ -279,6 +282,8 @@
           'navSupervisorDashboard',
           'navPerformance',
           'navGradeDrafts',
+          'navNotRegisteredCoursesReport',
+          'navGradeCourseAudit',
           'navCourseRegistrationReport',
           'navAcademicRules',
           'navAnalytics',
@@ -322,6 +327,8 @@
         ['/exams/conflicts','navExamsConflicts'],
         ['/transcript_page','navTranscript'],
         ['/grade_drafts','navGradeDrafts'],
+        ['/not_registered_courses_report_page','navNotRegisteredCoursesReport'],
+        ['/grade_course_mapping_audit_page','navGradeCourseAudit'],
         ['/course_registration_report_page','navCourseRegistrationReport'],
         ['/performance_report','navPerformance'],
         ['/supervisor_dashboard','navSupervisorDashboard'],

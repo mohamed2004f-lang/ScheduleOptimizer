@@ -88,7 +88,8 @@ ALLOWED_TABLES = {
     'registration_requests', 'registration_changes_log',
     'users', 'notifications', 'system_settings',
     'academic_calendar', 'instructors', 'student_supervisor',
-    'student_exceptions', 'academic_rules'
+    'student_exceptions', 'academic_rules',
+    'app_settings'
 }
 
 def table_to_dicts(table_name, db_file=DB_FILE):
@@ -349,6 +350,13 @@ def ensure_tables():
                             FOREIGN KEY (course_name) REFERENCES courses(course_name) ON DELETE SET NULL
                         )""",
                         """
+                        CREATE TABLE IF NOT EXISTS app_settings (
+                            key TEXT PRIMARY KEY,
+                            value_json TEXT,
+                            updated_at TEXT,
+                            updated_by TEXT
+                        )""",
+                        """
                         CREATE TABLE IF NOT EXISTS grade_drafts (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             semester TEXT NOT NULL,
@@ -380,6 +388,17 @@ def ensure_tables():
                 ]
                 for s in create_stmts:
                         cur.execute(s)
+
+                # ترقيات آمنة للمخطط
+                try:
+                    cols = [r[1] for r in cur.execute("PRAGMA table_info(courses)").fetchall()]
+                except Exception:
+                    cols = []
+                if "is_archived" not in cols:
+                    try:
+                        cur.execute("ALTER TABLE courses ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")
+                    except Exception:
+                        pass
                 
                 # إضافة فهارس لتحسين الأداء
                 indexes = [

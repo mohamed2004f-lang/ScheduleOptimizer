@@ -370,6 +370,21 @@ def uncompleted_courses_report_page():
     return render_template("uncompleted_courses_report.html")
 
 
+@app.route("/not_registered_courses_report_page")
+@login_required
+def not_registered_courses_report_page():
+    if _is_instructor_or_supervisor_role():
+        return redirect(url_for("performance_report_page"))
+    return render_template("not_registered_courses_report.html")
+
+
+@app.route("/grade_course_mapping_audit_page")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def grade_course_mapping_audit_page():
+    return render_template("grade_course_mapping_audit.html")
+
+
 @app.route("/course_registration_report_page")
 @login_required
 @role_required("admin", "admin_main", "head_of_department")

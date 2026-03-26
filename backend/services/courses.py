@@ -25,9 +25,12 @@ def list_courses():
             except Exception:
                 cols = []
             has_cat = "category" in cols
+            has_archived = "is_archived" in cols
             sel = "SELECT DISTINCT course_name, course_code, units"
             if has_cat:
                 sel += ", COALESCE(category,'required') AS category"
+            if has_archived:
+                sel += ", COALESCE(is_archived,0) AS is_archived"
             sel += " FROM courses WHERE COALESCE(course_name,'') <> '' ORDER BY course_name"
             rows = cur.execute(sel).fetchall()
             # إزالة التكرار البرمجيًا أيضًا (احتياطي)
@@ -44,6 +47,11 @@ def list_courses():
                     setattr(c, "category", (r[3] if has_cat else "required") or "required")
                 except Exception:
                     setattr(c, "category", "required")
+                try:
+                    archived_idx = 4 if has_cat else 3
+                    setattr(c, "is_archived", int(r[archived_idx] or 0) if has_archived else 0)
+                except Exception:
+                    setattr(c, "is_archived", 0)
                 courses.append(c)
         except Exception:
             rows = cur.execute("SELECT DISTINCT course_name FROM schedule WHERE COALESCE(course_name,'') <> '' ORDER BY course_name").fetchall()
@@ -233,18 +241,49 @@ def delete_course():
         return jsonify({"status": "error", "message": "course_name مطلوب"}), 400
     with get_connection() as conn:
         cur = conn.cursor()
-        try:
-            cur.execute("DELETE FROM courses WHERE course_name = ?", (cname,))
-        except Exception:
-            pass
-        for tbl in ("schedule", "registrations", "grades"):
+        # تحقق ارتباطات أكاديمية - لا نحذف صلباً عند وجود آثار
+        links = {}
+        for tbl in ("grades", "registrations", "schedule", "enrollment_plan_items", "exams", "prereqs"):
             try:
-                cur.execute(f"DELETE FROM {tbl} WHERE course_name = ?", (cname,))
+                if tbl == "prereqs":
+                    row = cur.execute(
+                        "SELECT COUNT(*) FROM prereqs WHERE course_name = ? OR required_course_name = ?",
+                        (cname, cname),
+                    ).fetchone()
+                else:
+                    row = cur.execute(
+                        f"SELECT COUNT(*) FROM {tbl} WHERE course_name = ?",
+                        (cname,),
+                    ).fetchone()
+                links[tbl] = int(row[0] or 0) if row else 0
+            except Exception:
+                links[tbl] = 0
+
+        has_links = any(v > 0 for v in links.values())
+        # ensure archive column exists
+        try:
+            cols = [r[1] for r in cur.execute("PRAGMA table_info(courses)").fetchall()]
+        except Exception:
+            cols = []
+        if "is_archived" not in cols:
+            try:
+                cur.execute("ALTER TABLE courses ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")
             except Exception:
                 pass
-        cur.execute("DELETE FROM prereqs WHERE course_name = ? OR required_course_name = ?", (cname, cname))
 
-        # حذف مقرر يؤثر على الجدول النهائي وتقرير التعارضات
+        if has_links:
+            cur.execute("UPDATE courses SET is_archived = 1 WHERE course_name = ?", (cname,))
+            conn.commit()
+            return jsonify({
+                "status": "ok",
+                "archived": True,
+                "message": "تمت أرشفة المقرر بدلاً من الحذف لأنه مرتبط ببيانات أكاديمية تاريخية.",
+                "links": links,
+            }), 200
+
+        # حذف صلب فقط إذا لا يوجد أي ارتباط
+        cur.execute("DELETE FROM courses WHERE course_name = ?", (cname,))
+        cur.execute("DELETE FROM prereqs WHERE course_name = ? OR required_course_name = ?", (cname, cname))
         try:
             cur.execute("DELETE FROM optimized_schedule")
         except Exception:
@@ -253,9 +292,8 @@ def delete_course():
             cur.execute("DELETE FROM conflict_report")
         except Exception:
             pass
-
         conn.commit()
-    return jsonify({"status": "ok", "message": "تم حذف المقرر وجميع صوره"}), 200
+    return jsonify({"status": "ok", "archived": False, "message": "تم حذف المقرر (لا توجد له ارتباطات)."}), 200
 
 # المتطلبات (Prereqs) - يدعم زوج واحد أو دفعة items[]
 @courses_bp.route("/prereqs/add", methods=["POST"])

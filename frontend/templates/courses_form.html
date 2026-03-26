@@ -206,7 +206,7 @@ function renderCourses(list){
   `;
   const tbody = table.querySelector('tbody');
 
-  list.forEach(c=>{
+  list.filter(c => Number(c.is_archived || 0) !== 1).forEach(c=>{
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${escapeHtml(c.course_name)}</td>
@@ -239,7 +239,7 @@ function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll(
 function escapeAttr(s){ return String(s||'').replaceAll('"','&quot;'); }
 
 async function deleteCourse(course_name){
-  if(!confirm('هل تريد حذف المقرر "' + course_name + '"؟')) return;
+  if(!confirm('هل تريد حذف/أرشفة المقرر "' + course_name + '"؟')) return;
   try {
     const resp = await fetch('/delete_course', {
       method:'POST',
@@ -247,7 +247,11 @@ async function deleteCourse(course_name){
       body: JSON.stringify({course_name})
     });
     const j = await resp.json().catch(()=>null);
-    alert(j?.message || (resp.ok ? 'تم' : 'خطأ'));
+    if (resp.ok && j?.archived) {
+      alert((j?.message || 'تمت الأرشفة') + '\n\nتنبيه: لم يتم حذف السجل الأكاديمي، وتمت حماية البيانات التاريخية.');
+    } else {
+      alert(j?.message || (resp.ok ? 'تم' : 'خطأ'));
+    }
     await loadCourses();
   } catch (err) {
     console.error(err);

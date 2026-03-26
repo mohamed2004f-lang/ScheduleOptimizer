@@ -29,6 +29,8 @@
             <div class="btn-group-gap" id="scheduleExportWrap">
               <a class="btn btn-outline-success btn-sm" id="btnScheduleExportExcel" href="/schedule/export/excel" target="_blank">⬇️ تصدير Excel</a>
               <a class="btn btn-outline-danger btn-sm" id="btnScheduleExportPdf" href="/schedule/export/pdf" target="_blank">⬇️ تصدير PDF</a>
+              <a class="btn btn-outline-success btn-sm" id="btnScheduleExportExcelTpl" href="/schedule/export/excel?include_empty=1" target="_blank">قالب Excel</a>
+              <a class="btn btn-outline-danger btn-sm" id="btnScheduleExportPdfTpl" href="/schedule/export/pdf?include_empty=1" target="_blank">قالب PDF</a>
             </div>
             <div id="publishScheduleWrap" class="d-none align-items-center gap-2">
               <span id="publishStatusText" class="small text-muted"></span>
@@ -51,6 +53,17 @@
                      placeholder="مثال: 08:00-10:00, 10:00-12:00, 12:00-14:00">
               <div class="form-text">
                 أدخل فترات الوقت التي تريد ظهورها في الجدول مفصولة بفواصل (، أو ,). إذا تركت هذا الحقل فارغاً، سيتم استخدام الأوقات الموجودة في الجدول أو التوقيتات الافتراضية.
+              </div>
+              <div class="d-flex flex-wrap gap-2 mt-2">
+                <button type="button" class="btn btn-outline-primary btn-sm" id="btnSaveTimeSlots" disabled>
+                  حفظ التقسيمات للترم الحالي
+                </button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="btnNormalizeTimes" disabled>
+                  توحيد/تحويل الأوقات غير المطابقة
+                </button>
+                <button type="button" class="btn btn-outline-danger btn-sm" id="btnClearSchedule" disabled>
+                  مسح الجدول بالكامل
+                </button>
               </div>
             </div>
           </div>
@@ -134,6 +147,29 @@
           </div>
           <div class="modal-footer">
             <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">إغلاق</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal لتوحيد/تحويل الأوقات غير المطابقة -->
+    <div class="modal fade" id="normalizeTimesModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h6 class="modal-title">توحيد/تحويل الأوقات</h6>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+          </div>
+          <div class="modal-body">
+            <div class="alert alert-info small mb-2">
+              الهدف: منع اختفاء المقررات عند تغيير تقسيمات العرض. اختر لكل وقت “قديم” وقتاً جديداً من التقسيمات الحالية.
+            </div>
+            <div id="normalizeTimesBody" class="small"></div>
+            <div id="normalizeTimesMsg" class="mt-2"></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-light btn-sm" data-bs-dismiss="modal">إغلاق</button>
+            <button type="button" class="btn btn-primary btn-sm" id="btnNormalizeTimesSubmit">تنفيذ التحويل</button>
           </div>
         </div>
       </div>
@@ -273,15 +309,16 @@ function groupByTimeSlot(scheduleRows){
 function extractUniqueTimeSlots(scheduleRows){
   // 1) إذا حدّد المستخدم تقسيمات وقت مخصّصة، نستخدمها أولاً
   if (Array.isArray(CUSTOM_TIME_SLOTS) && CUSTOM_TIME_SLOTS.length > 0){
-    const sorted = [...CUSTOM_TIME_SLOTS].sort((a, b) => {
-      const getStartTime = (timeStr) => {
-        const match = String(timeStr).trim().match(/^(\d+):(\d+)/);
-        if(match) return parseInt(match[1]) * 60 + parseInt(match[2]);
-        return 0;
-      };
-      return getStartTime(a) - getStartTime(b);
-    });
-    return sorted;
+    // مهم: لا تُخفي أوقاتاً موجودة فعلياً في البيانات حتى لا تختفي المقررات بعد تغيير التقسيمات.
+    const set = new Set();
+    CUSTOM_TIME_SLOTS.forEach(t => { if(t) set.add(String(t).trim()); });
+    scheduleRows.forEach(r => { if(r && r.time) set.add(String(r.time).trim()); });
+    const getStartTime = (timeStr) => {
+      const match = String(timeStr).trim().match(/^(\d+):(\d+)/);
+      if(match) return parseInt(match[1]) * 60 + parseInt(match[2]);
+      return 0;
+    };
+    return Array.from(set).filter(Boolean).sort((a, b) => getStartTime(a) - getStartTime(b));
   }
 
   // 2) خلاف ذلك، نستخرج الأوقات من الصفوف الموجودة
@@ -323,7 +360,11 @@ async function loadSchedule(){
     const compactClass = IS_COMPACT ? ' is-compact' : '';
     let html = `<table class="timetable${compactClass}"><thead><tr><th class="day-header">اليوم / الوقت</th>`;
     timeSlots.forEach(time => {
-      html += `<th class="time-header">${escapeHtml(time)}</th>`;
+      const isCustom = Array.isArray(CUSTOM_TIME_SLOTS) && CUSTOM_TIME_SLOTS.length > 0
+        ? CUSTOM_TIME_SLOTS.map(t => String(t||'').trim()).includes(String(time||'').trim())
+        : true;
+      const extra = (!isCustom) ? ` <span class="badge bg-warning text-dark">وقت غير مطابق</span>` : '';
+      html += `<th class="time-header">${escapeHtml(time)}${extra}</th>`;
     });
     html += '</tr></thead><tbody>';
 
@@ -689,6 +730,139 @@ async function deleteScheduleRow(section_id){
   }
 }
 
+function parseCustomSlotsRaw(){
+  const raw = (document.getElementById('customTimeSlotsInput')?.value || '').trim();
+  const parts = raw.split(/[,،]/).map(p => p.trim()).filter(Boolean);
+  return parts;
+}
+
+function slotsToInputValue(slots){
+  return (slots || []).join(', ');
+}
+
+async function loadTimeSlotsSetting(){
+  try {
+    const r = await fetch('/schedule/time_slots', { credentials: 'include' });
+    const j = await r.json().catch(()=>null);
+    if(!r.ok || !j || j.status !== 'ok') return;
+    const slots = Array.isArray(j.slots) ? j.slots : [];
+    const input = document.getElementById('customTimeSlotsInput');
+    if (input && slots.length){
+      input.value = slotsToInputValue(slots);
+    }
+    CUSTOM_TIME_SLOTS = slots;
+  } catch (e) {
+    // ignore
+  }
+}
+
+async function saveTimeSlotsSetting(){
+  const slots = parseCustomSlotsRaw();
+  if(!slots.length){
+    showMsg('أدخل تقسيمات وقت صالحة أولاً', 'warning');
+    return;
+  }
+  const resp = await fetch('/schedule/time_slots', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify({ slots })
+  });
+  const j = await resp.json().catch(()=>null);
+  if(resp.ok && j && j.status === 'ok'){
+    showMsg('تم حفظ التقسيمات للترم الحالي', 'success');
+    const slotsSaved = Array.isArray(j.slots) ? j.slots : slots;
+    CUSTOM_TIME_SLOTS = slotsSaved;
+    const input = document.getElementById('customTimeSlotsInput');
+    if (input) input.value = slotsToInputValue(slotsSaved);
+    await loadSchedule();
+  } else {
+    showMsg('فشل حفظ التقسيمات: ' + ((j && j.message) ? j.message : resp.statusText), 'danger');
+  }
+}
+
+function getNonMatchingTimes(){
+  const custom = new Set((CUSTOM_TIME_SLOTS || []).map(t => String(t||'').trim()).filter(Boolean));
+  if (!custom.size) return [];
+  const times = new Set((currentScheduleData || []).map(r => String(r?.time||'').trim()).filter(Boolean));
+  return Array.from(times).filter(t => !custom.has(t)).sort();
+}
+
+function buildNormalizeTimesUI(){
+  const body = document.getElementById('normalizeTimesBody');
+  const msg = document.getElementById('normalizeTimesMsg');
+  if (msg) msg.innerHTML = '';
+  if (!body) return;
+  const non = getNonMatchingTimes();
+  const custom = (CUSTOM_TIME_SLOTS || []).map(t => String(t||'').trim()).filter(Boolean);
+  if (!custom.length){
+    body.innerHTML = '<div class="text-muted">أدخل تقسيمات وقت مخصّصة أولاً.</div>';
+    return;
+  }
+  if (!non.length){
+    body.innerHTML = '<div class="text-success">لا توجد أوقات غير مطابقة ضمن بيانات الجدول الحالية.</div>';
+    return;
+  }
+  let html = '<div class="table-responsive"><table class="table table-sm table-bordered mb-0">';
+  html += '<thead class="table-light"><tr><th>الوقت الحالي في البيانات</th><th>حوّله إلى</th></tr></thead><tbody>';
+  non.forEach(t => {
+    html += '<tr>';
+    html += `<td class="mono">${escapeHtml(t)}</td>`;
+    html += `<td><select class="form-select form-select-sm norm-to" data-from="${escapeHtml(t)}">`;
+    html += `<option value="">-- اختر وقتاً --</option>`;
+    custom.forEach(c => {
+      html += `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`;
+    });
+    html += '</select></td>';
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+  body.innerHTML = html;
+}
+
+async function submitNormalizeTimes(){
+  const msg = document.getElementById('normalizeTimesMsg');
+  const selects = Array.from(document.querySelectorAll('#normalizeTimesBody .norm-to'));
+  const mappings = [];
+  selects.forEach(sel => {
+    const from = (sel.getAttribute('data-from') || '').trim();
+    const to = (sel.value || '').trim();
+    if (from && to && from !== to) mappings.push({ from, to });
+  });
+  if (!mappings.length){
+    if (msg) msg.innerHTML = '<div class="alert alert-warning p-2 mb-0">اختر تحويلًا واحدًا على الأقل.</div>';
+    return;
+  }
+  if (msg) msg.innerHTML = '<div class="alert alert-info p-2 mb-0">جارٍ التنفيذ…</div>';
+  const resp = await fetch('/schedule/normalize_times', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify({ mappings })
+  });
+  const j = await resp.json().catch(()=>null);
+  if (resp.ok && j && j.status === 'ok'){
+    if (msg) msg.innerHTML = `<div class="alert alert-success p-2 mb-0">تم تحويل ${j.updated_rows || 0} صف.</div>`;
+    await loadSchedule();
+    buildNormalizeTimesUI();
+  } else {
+    if (msg) msg.innerHTML = `<div class="alert alert-danger p-2 mb-0">فشل التنفيذ: ${(j && j.message) ? j.message : resp.statusText}</div>`;
+  }
+}
+
+async function clearScheduleAll(){
+  if(!confirm('سيتم مسح جميع صفوف الجدول الدراسي بشكل نهائي. هل أنت متأكد؟')) return;
+  if(!confirm('تأكيد أخير: هل تريد مسح الجدول بالكامل؟')) return;
+  const resp = await fetch('/schedule/clear_all', { method:'POST', credentials:'include', headers:{'Accept':'application/json'} });
+  const j = await resp.json().catch(()=>null);
+  if(resp.ok && j && j.status === 'ok'){
+    showMsg(`تم مسح الجدول (${j.deleted_rows || 0} صف)`, 'success');
+    await loadSchedule();
+  } else {
+    showMsg('فشل مسح الجدول: ' + ((j && j.message) ? j.message : resp.statusText), 'danger');
+  }
+}
+
 async function runOptimize(){
   try {
     showMsg('جاري إنتاج الجداول وحساب التعارضات...', 'info');
@@ -837,6 +1011,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(auth?.is_supervisor || 0) === 1);
     IS_VIEW_ONLY_ROLE = (role === 'instructor') || isSupervisor;
     IS_ADMIN = ['admin', 'admin_main', 'head_of_department'].includes(role);
+    const btnSaveSlots = document.getElementById('btnSaveTimeSlots');
+    const btnNormalize = document.getElementById('btnNormalizeTimes');
+    const btnClear = document.getElementById('btnClearSchedule');
+    if (btnSaveSlots) btnSaveSlots.disabled = !IS_ADMIN;
+    if (btnNormalize) btnNormalize.disabled = !IS_ADMIN;
+    if (btnClear) btnClear.disabled = !IS_ADMIN;
     if(!IS_ADMIN){
       const importForm = document.getElementById('schedule-import-form');
       if(importForm) importForm.style.display = 'none';
@@ -857,6 +1037,12 @@ document.addEventListener('DOMContentLoaded', () => {
     loadSchedule();
   }).catch(()=>{
     IS_ADMIN = false;
+    const btnSaveSlots = document.getElementById('btnSaveTimeSlots');
+    const btnNormalize = document.getElementById('btnNormalizeTimes');
+    const btnClear = document.getElementById('btnClearSchedule');
+    if (btnSaveSlots) btnSaveSlots.disabled = true;
+    if (btnNormalize) btnNormalize.disabled = true;
+    if (btnClear) btnClear.disabled = true;
     refreshPublishStatus();
     loadSchedule();
   });
@@ -874,6 +1060,31 @@ document.addEventListener('DOMContentLoaded', () => {
       loadSchedule();
     });
   }
+
+  const btnSaveSlots = document.getElementById('btnSaveTimeSlots');
+  if (btnSaveSlots){
+    btnSaveSlots.addEventListener('click', saveTimeSlotsSetting);
+  }
+
+  const btnNormalize = document.getElementById('btnNormalizeTimes');
+  if (btnNormalize){
+    btnNormalize.addEventListener('click', ()=>{
+      buildNormalizeTimesUI();
+      const modalEl = document.getElementById('normalizeTimesModal');
+      bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    });
+  }
+  const btnNormalizeSubmit = document.getElementById('btnNormalizeTimesSubmit');
+  if (btnNormalizeSubmit){
+    btnNormalizeSubmit.addEventListener('click', submitNormalizeTimes);
+  }
+  const btnClear = document.getElementById('btnClearSchedule');
+  if (btnClear){
+    btnClear.addEventListener('click', clearScheduleAll);
+  }
+
+  // حمّل التقسيمات المحفوظة للترم الحالي أولاً ثم ارسم الجدول بها
+  loadTimeSlotsSetting().then(()=>loadSchedule());
 });
 </script>
 

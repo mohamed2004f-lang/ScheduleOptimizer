@@ -13,7 +13,7 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">تقرير المقررات غير المنجزة (حسب طالب)</h1>
-        <p class="page-subtitle">المقرر غير منجز إذا لم توجد أي محاولة ناجحة (درجة &ge; 50 أو "ناجح").</p>
+        <p class="page-subtitle">المقرر غير منجز إذا كان غير مسجل أو كانت أفضل نتيجة فيه أقل من 50.</p>
       </div>
       <div class="d-flex gap-2 align-items-center">
         <button class="btn btn-primary btn-sm" type="button" id="btnLoad">عرض</button>
@@ -25,14 +25,45 @@
     <div class="card mb-3">
       <div class="card-body">
         <div class="row g-2 align-items-end">
-          <div class="col-md-6">
+          <div class="col-md-4">
             <label class="form-label small">اختر الطالب</label>
             <select id="studentSelect" class="form-select form-select-sm">
               <option value="">-- اختر طالباً --</option>
             </select>
           </div>
-          <div class="col-md-6">
+          <div class="col-md-3">
+            <label class="form-label small">التصنيف</label>
+            <select id="reasonFilter" class="form-select form-select-sm">
+              <option value="">الكل</option>
+              <option value="failed">راسب</option>
+              <option value="not_registered">غير مسجل</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small">بحث بالمقرر/الرمز</label>
+            <input id="qCourse" class="form-control form-control-sm" placeholder="مثال: احصاء / GS204">
+          </div>
+          <div class="col-md-2">
             <div id="msg" class="mt-4"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="row g-2 small text-center">
+          <div class="col-md-4">
+            <div class="text-muted">إجمالي غير المنجزة</div>
+            <div id="kpiTotal" class="fw-bold fs-5">0</div>
+          </div>
+          <div class="col-md-4">
+            <div class="text-muted">راسب</div>
+            <div id="kpiFailed" class="fw-bold fs-5 text-danger">0</div>
+          </div>
+          <div class="col-md-4">
+            <div class="text-muted">غير مسجل</div>
+            <div id="kpiNotReg" class="fw-bold fs-5 text-secondary">0</div>
           </div>
         </div>
       </div>
@@ -47,6 +78,7 @@
                 <th>المقرر</th>
                 <th>الرمز</th>
                 <th class="text-center">الوحدات</th>
+                <th class="text-center">التصنيف</th>
                 <th class="text-center">أفضل درجة</th>
                 <th class="text-center">محاولات</th>
                 <th>آخر فصل (مرجعي)</th>
@@ -71,32 +103,44 @@
     }
     function updateExportLinks(){
       const sid = getSid();
+      const reason = (document.getElementById('reasonFilter')?.value || '').trim();
+      const q = (document.getElementById('qCourse')?.value || '').trim();
       const excel = document.getElementById('btnExcel');
       const pdf = document.getElementById('btnPdf');
       if(!sid){ excel.href = '#'; pdf.href = '#'; return; }
       const p = new URLSearchParams(); p.set('student_id', sid);
+      if(reason) p.set('reason', reason);
+      if(q) p.set('q', q);
       excel.href = '/students/uncompleted_courses_report/excel?' + p.toString();
       pdf.href = '/students/uncompleted_courses_report/pdf?' + p.toString();
     }
     async function load(){
       const sid = getSid();
+      const reason = (document.getElementById('reasonFilter')?.value || '').trim();
+      const q = (document.getElementById('qCourse')?.value || '').trim();
       updateExportLinks();
       if(!sid){ setMsg('اختر طالباً أولاً', 'warning'); return; }
       setMsg('جاري تحميل التقرير...', 'info');
       const p = new URLSearchParams(); p.set('student_id', sid);
+      if(reason) p.set('reason', reason);
+      if(q) p.set('q', q);
       const res = await fetchJSON('/students/uncompleted_courses_report?' + p.toString());
       if(!res.ok){
         setMsg(res.json?.message || `فشل تحميل التقرير (${res.status})`, 'danger');
         return;
       }
       const items = Array.isArray(res.json?.items) ? res.json.items : [];
+      const summary = res.json?.summary || {};
+      document.getElementById('kpiTotal').textContent = summary.total_uncompleted ?? items.length;
+      document.getElementById('kpiFailed').textContent = summary.failed_count ?? items.filter(i=>i.reason==='failed').length;
+      document.getElementById('kpiNotReg').textContent = summary.not_registered_count ?? items.filter(i=>i.reason==='not_registered').length;
       const tbody = document.querySelector('#tbl tbody'); tbody.innerHTML='';
       if(!items.length){
-        tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">لا توجد مقررات غير منجزة</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="text-center text-muted">لا توجد مقررات غير منجزة</td></tr>`;
       } else {
         items.forEach(it=>{
           const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${esc(it.course_name)}</td><td>${esc(it.course_code||'')}</td><td class="text-center">${esc(it.units||0)}</td><td class="text-center">${esc(it.best_grade_display||'—')}</td><td class="text-center">${esc(it.attempts||0)}</td><td>${esc(it.best_semester||'')}</td>`;
+          tr.innerHTML = `<td>${esc(it.course_name)}</td><td>${esc(it.course_code||'')}</td><td class="text-center">${esc(it.units||0)}</td><td class="text-center"><span class="badge ${it.reason==='failed'?'bg-danger':'bg-secondary'}">${esc(it.reason_label||'')}</span></td><td class="text-center">${esc(it.best_grade_display||'—')}</td><td class="text-center">${esc(it.attempts||0)}</td><td>${esc(it.best_semester||'')}</td>`;
           tbody.appendChild(tr);
         });
       }
@@ -160,6 +204,15 @@
         // تحميل فوري لتجربة المستخدم
         load();
       });
+    }
+    const reasonFilter = document.getElementById('reasonFilter');
+    if(reasonFilter){
+      reasonFilter.addEventListener('change', ()=>{ updateExportLinks(); load(); });
+    }
+    const qCourse = document.getElementById('qCourse');
+    if(qCourse){
+      qCourse.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); load(); } });
+      qCourse.addEventListener('change', ()=>{ updateExportLinks(); });
     }
 
     updateExportLinks();
