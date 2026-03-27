@@ -43,6 +43,13 @@ body{
   padding: 16px;
 }
 
+/* schedule page: wider + more horizontal workspace */
+.schedule-wide{
+  max-width: none;
+  width: 100%;
+  padding: 12px 12px;
+}
+
 .small-muted{ color: var(--muted); }
 
 /* ============================================
@@ -256,10 +263,38 @@ body{
   top: 0;
   z-index: 10;
 }
-.timetable th.day-header{ background:#f1f5f9; width: 130px; }
+.timetable th.day-header{
+  background:#f1f5f9;
+  width: 130px;
+  position: sticky;
+  right: 0; /* RTL: تثبيت عمود اليوم */
+  z-index: 11;
+}
 .timetable th.time-header{ background:#f8fafc; min-width: 160px; }
 .timetable th.date-header{ background:#f1f5f9; min-width: 170px; }
 .timetable td{ min-height: 84px; height:auto; }
+
+/* subtle zebra + hover guidance */
+.timetable tbody tr:nth-child(odd) td{
+  background: rgba(15,23,42,0.015);
+}
+.timetable tbody tr:hover td{
+  background: rgba(30,111,184,0.06);
+  transition: background-color .15s ease;
+}
+
+.published-course-line{
+  margin: 4px 0;
+  padding: 2px 0;
+  line-height: 1.35;
+  text-align: right;
+}
+.published-course-line:first-child{ margin-top: 0; }
+.published-course-line:last-child{ margin-bottom: 0; }
+
+.timetable td:hover{
+  box-shadow: inset 0 0 0 1px rgba(214,161,42,.28);
+}
 
 .time-slot-cell, .date-slot-cell{ position: relative; padding: 6px; }
 .course-buttons-container{

@@ -9,7 +9,7 @@
 </head>
 <body>
   {% include "base_nav.html" %}
-  <main class="container-main container-1400 theme-formal">
+  <main class="container-main theme-formal schedule-wide">
 
     <div class="page-header">
       <div>
@@ -102,6 +102,27 @@
           <div class="modal-footer">
             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" id="conflictsCancelBtn">إلغاء</button>
             <button type="button" class="btn btn-warning" id="conflictsConfirmBtn">متابعة رغم التعارضات</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal لعرض تعارضات الأساتذة (Double booking) -->
+    <div class="modal fade" id="instructorConflictsModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header bg-warning">
+            <h5 class="modal-title">⚠️ تعارض الأستاذ (Double booking)</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div class="alert alert-warning mb-2">
+              <strong>تم اكتشاف تعارض لنفس الأستاذ في نفس اليوم/وقت متداخل.</strong>
+            </div>
+            <div id="instructorConflictDetails"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
           </div>
         </div>
       </div>
@@ -381,7 +402,7 @@ async function loadSchedule(){
           const instructorText = course.instructor ? ` — ${escapeHtml(course.instructor)}` : '';
           const studentCount = course.student_count || 0;
           const studentCountText = studentCount > 0 ? ` — ط ${studentCount}` : '';
-          // عرض اسم المقرر فقط داخل الجدول، مع إبقاء التفاصيل في الـ tooltip
+          // في صفحة التعديل: نعرض اسم المقرر فقط (القاعة/الأستاذ في الـ tooltip)
           const displayText = `${escapeHtml(course.course_name)}`;
           html += `<button class="course-btn" style="background: ${color};" 
                    data-section-id="${course.section_id}" 
@@ -417,6 +438,25 @@ async function loadSchedule(){
     }
 
     await markConflicts();
+    await markInstructorConflicts();
+
+    // Click on instructor-conflict cell -> show details
+    el.querySelectorAll('.time-slot-cell').forEach(cell => {
+      cell.addEventListener('click', (ev) => {
+        const target = ev.target;
+        if (target && target.closest && (target.closest('button.course-btn') || target.closest('button.manage-courses-btn'))) {
+          return;
+        }
+        if (!cell.classList.contains('conflict-instructor')) return;
+        const row = cell.closest('tr');
+        const dayHeader = row?.querySelector('th.day-header');
+        const day = dayHeader ? dayHeader.textContent.trim() : '';
+        const colIndex = Array.from(cell.parentElement.children).indexOf(cell);
+        const timeHeader = document.querySelectorAll('.time-header')[colIndex - 1];
+        const time = timeHeader ? timeHeader.textContent.trim() : '';
+        showInstructorConflictsModal(day, time);
+      });
+    });
   } catch (err) {
     console.error('loadSchedule error', err);
     document.getElementById('scheduleList').innerHTML = '<p class="text-danger">خطأ في تحميل صفوف الجدول</p>';
@@ -588,10 +628,14 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
 
   // وإلا نعمل منطق الإضافة مع التحقق من التعارضات
   try {
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
     showMsg('جاري التحقق من التعارضات...', 'info', 0, 'modalMsg');
     const checkResp = await fetch('/schedule/check_conflicts', {
       method: 'POST',
-      headers: {'Content-Type':'application/json'},
+      headers: {
+        'Content-Type':'application/json',
+        ...(csrfToken ? {'X-CSRFToken': csrfToken} : {})
+      },
       body: JSON.stringify({
         course_name: course,
         day: currentModalDay,
@@ -603,8 +647,15 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
     });
     const checkData = await checkResp.json().catch(()=>null);
     
-    if(checkResp.ok && checkData && checkData.has_conflicts && checkData.conflicts.length > 0){
-      const confirmed = await showConflictsModal(checkData.conflicts, course, currentModalDay, currentModalTime);
+    // تحقق تعارض الأستاذ للصف المقترح قبل الحفظ (Double booking)
+    const instConflicts = computeInstructorConflictsForProposed(instructor, currentModalDay, currentModalTime, course);
+
+    const studentConflicts = (checkData && Array.isArray(checkData.conflicts)) ? checkData.conflicts : [];
+    const hasStudent = !!(checkResp.ok && checkData && checkData.has_conflicts && studentConflicts.length > 0);
+    const hasInst = Array.isArray(instConflicts) && instConflicts.length > 0;
+
+    if(checkResp.ok && (hasStudent || hasInst)){
+      const confirmed = await showConflictsModal(studentConflicts, course, currentModalDay, currentModalTime, instConflicts, instructor);
       if(!confirmed){
         showMsg('تم إلغاء الإضافة', 'warning', 2000, 'modalMsg');
         return;
@@ -614,7 +665,10 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
     showMsg('جاري إضافة المقرر...', 'info', 0, 'modalMsg');
     const resp = await fetch('/add_schedule_row', {
       method: 'POST',
-      headers: {'Content-Type':'application/json'},
+      headers: {
+        'Content-Type':'application/json',
+        ...(csrfToken ? {'X-CSRFToken': csrfToken} : {})
+      },
       body: JSON.stringify({
         course_name: course,
         day: currentModalDay,
@@ -643,7 +697,7 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
 });
 
 /* ---------- Conflicts Modal ---------- */
-function showConflictsModal(conflicts, courseName, day, time) {
+function showConflictsModal(conflicts, courseName, day, time, instructorConflicts = [], instructorName = '') {
   return new Promise((resolve) => {
     const modalEl = document.getElementById('conflictsModal');
     const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
@@ -652,21 +706,41 @@ function showConflictsModal(conflicts, courseName, day, time) {
     // عرض تفاصيل التعارضات
     let html = `<p><strong>المقرر:</strong> ${escapeHtml(courseName)}</p>`;
     html += `<p><strong>اليوم:</strong> ${escapeHtml(day)} | <strong>الوقت:</strong> ${escapeHtml(time)}</p>`;
-    html += `<p><strong>عدد التعارضات:</strong> ${conflicts.length}</p>`;
-    html += `<div class="table-responsive mt-3"><table class="table table-sm table-bordered">`;
-    html += `<thead><tr><th>رقم الطالب</th><th>اسم الطالب</th><th>اليوم</th><th>الوقت</th><th>المقررات المتعارضة</th></tr></thead><tbody>`;
+    const studentCount = Array.isArray(conflicts) ? conflicts.length : 0;
+    const instCount = Array.isArray(instructorConflicts) ? instructorConflicts.length : 0;
+    html += `<p><strong>عدد التعارضات:</strong> ${studentCount + instCount}</p>`;
     
-    conflicts.forEach(conflict => {
-      html += `<tr>`;
-      html += `<td>${escapeHtml(conflict.student_id || '')}</td>`;
-      html += `<td>${escapeHtml(conflict.student_name || '')}</td>`;
-      html += `<td>${escapeHtml(conflict.day || '')}</td>`;
-      html += `<td>${escapeHtml(conflict.time || '')}</td>`;
-      html += `<td>${escapeHtml(conflict.conflicting_sections || '')}</td>`;
-      html += `</tr>`;
-    });
+    if (studentCount > 0) {
+      html += `<div class="table-responsive mt-3"><table class="table table-sm table-bordered">`;
+      html += `<thead><tr><th>رقم الطالب</th><th>اسم الطالب</th><th>اليوم</th><th>الوقت</th><th>المقررات المتعارضة</th></tr></thead><tbody>`;
     
-    html += `</tbody></table></div>`;
+      conflicts.forEach(conflict => {
+        html += `<tr>`;
+        html += `<td>${escapeHtml(conflict.student_id || '')}</td>`;
+        html += `<td>${escapeHtml(conflict.student_name || '')}</td>`;
+        html += `<td>${escapeHtml(conflict.day || '')}</td>`;
+        html += `<td>${escapeHtml(conflict.time || '')}</td>`;
+        html += `<td>${escapeHtml(conflict.conflicting_sections || '')}</td>`;
+        html += `</tr>`;
+      });
+    
+      html += `</tbody></table></div>`;
+    }
+
+    if (instCount > 0) {
+      html += `<div class="mt-3">`;
+      html += `<h6 class="mb-2">تعارض الأستاذ (Double booking)</h6>`;
+      if (instructorName) {
+        html += `<p class="mb-2"><strong>الأستاذ:</strong> ${escapeHtml(instructorName)}</p>`;
+      }
+      html += `<div class="table-responsive"><table class="table table-sm table-bordered mb-0">`;
+      html += `<thead class="table-light"><tr><th>المقرر</th><th class="text-center">الوقت</th></tr></thead><tbody>`;
+      instructorConflicts.forEach(e => {
+        html += `<tr><td>${escapeHtml(e.course_name || '')}</td><td class="text-center">${escapeHtml(e.time || '')}</td></tr>`;
+      });
+      html += `</tbody></table></div></div>`;
+    }
+
     detailsDiv.innerHTML = html;
     
     // إعداد الأزرار
@@ -947,6 +1021,176 @@ async function markConflicts(){
 
   const total = conflicts.reduce((s, c)=> s + (Array.isArray(c.entries)?c.entries.length:0), 0);
   if(total>0) showMsg(`تم العثور على ${total} حالة تعارض في التسجيلات`, 'warning', 6000);
+}
+
+/* ---------- Instructor Conflicts (Double booking) ---------- */
+let lastInstructorConflicts = [];
+function _parseRangeToMinutes(v){
+  v = String(v||'').trim();
+  if(!v) return null;
+  const parts = v.split('-').map(s=>s.trim());
+  const toMin = (t)=>{
+    const m = String(t||'').match(/^(\d{1,2}):(\d{2})/);
+    if(!m) return null;
+    return (Number(m[1]) * 60) + Number(m[2]);
+  };
+  if(parts.length >= 2){
+    let a = toMin(parts[0]), b = toMin(parts[1]);
+    if(a==null || b==null) return null;
+    if(b < a){ const tmp=a; a=b; b=tmp; }
+    return {start:a, end:b};
+  }
+  const a = toMin(v);
+  return (a==null) ? null : {start:a, end:a};
+}
+
+function _overlap(a,b){
+  if(!a || !b) return false;
+  return Math.max(a.start,b.start) < Math.min(a.end,b.end);
+}
+
+async function fetchInstructorConflicts(){
+  try {
+    const r = await fetch('/schedule/instructor_conflicts', { credentials:'include' });
+    if(!r.ok) return [];
+    const j = await r.json().catch(()=>null);
+    return Array.isArray(j?.conflicts) ? j.conflicts : [];
+  } catch(e){
+    console.error('fetchInstructorConflicts failed', e);
+    return [];
+  }
+}
+
+function computeInstructorConflictsForProposed(instructor, day, time, courseName){
+  try {
+    const inst = String(instructor||'').trim();
+    const d = String(day||'').trim();
+    const t = String(time||'').trim();
+    if(!inst || !d || !t) return [];
+    const proposedRange = _parseRangeToMinutes(t);
+    if(!proposedRange) return [];
+
+    const rows = Array.isArray(currentScheduleData) ? currentScheduleData : [];
+    const overlaps = rows.filter(r => {
+      if(!r) return false;
+      const rDay = String(r.day||'').trim();
+      const rInst = String(r.instructor||'').trim();
+      if(rDay !== d) return false;
+      if(rInst !== inst) return false;
+      const rTime = String(r.time||'').trim();
+      const rRange = _parseRangeToMinutes(rTime);
+      if(!rRange) return false;
+      return _overlap(proposedRange, rRange);
+    }).map(r => ({
+      course_name: r.course_name || '',
+      time: r.time || '',
+      section_id: r.section_id
+    }));
+
+    if(!overlaps.length) return [];
+
+    // include the proposed course itself for clarity
+    return [
+      ...overlaps,
+      { course_name: courseName || '(المقرر الجديد)', time: t, section_id: null }
+    ];
+  } catch(e){
+    console.error('computeInstructorConflictsForProposed failed', e);
+    return [];
+  }
+}
+
+async function markInstructorConflicts(){
+  const conflicts = await fetchInstructorConflicts();
+  lastInstructorConflicts = conflicts || [];
+
+  // clear previous
+  document.querySelectorAll('.time-slot-cell').forEach(cell => {
+    cell.classList.remove('conflict-instructor');
+    if (cell.dataset) delete cell.dataset.instConflict;
+    // لا نمس تلوين تعارض الطلبة (conflict) لأنه طبقة أخرى
+    if (cell.classList.contains('conflict-instructor')) {
+      cell.style.background = '';
+    }
+  });
+
+  if(!conflicts || !conflicts.length) return;
+
+  const timeHeaders = Array.from(document.querySelectorAll('.time-header'));
+
+  conflicts.forEach(c => {
+    const day = String(c.day||'').trim();
+    const range = _parseRangeToMinutes((c.start_time||'') + '-' + (c.end_time||''));
+    if(!day || !range) return;
+
+    document.querySelectorAll('.time-slot-cell').forEach(cell => {
+      const row = cell.closest('tr');
+      const dayHeader = row?.querySelector('th.day-header');
+      if(!dayHeader) return;
+      if(dayHeader.textContent.trim() !== day) return;
+
+      const colIndex = Array.from(cell.parentElement.children).indexOf(cell);
+      const th = timeHeaders[colIndex - 1];
+      const cellRange = _parseRangeToMinutes(th?.textContent || '');
+      if(!_overlap(range, cellRange)) return;
+
+      cell.classList.add('conflict-instructor');
+      // إذا كانت الخلية أيضاً conflict (طلاب)، نترك لون الأحمر لأنه أقوى
+      if (!cell.classList.contains('conflict')) {
+        cell.style.background = 'rgba(255,193,7,0.14)';
+      }
+      const inst = String(c.instructor||'').trim();
+      cell.dataset.instConflict = inst ? `تعارض الأستاذ: ${inst}` : 'تعارض الأستاذ';
+      cell.title = cell.dataset.instConflict;
+    });
+  });
+
+  const totalGroups = conflicts.length;
+  if(totalGroups > 0){
+    showMsg(`تنبيه: تم العثور على ${totalGroups} تعارض (Double booking) للأساتذة في الجدول`, 'warning', 6000);
+  }
+}
+
+function showInstructorConflictsModal(day, cellTime){
+  try {
+    const d = String(day||'').trim();
+    const t = String(cellTime||'').trim();
+    const cellRange = _parseRangeToMinutes(t);
+    const modalEl = document.getElementById('instructorConflictsModal');
+    const detailsEl = document.getElementById('instructorConflictDetails');
+    if(!modalEl || !detailsEl || !cellRange) return;
+
+    const matches = (lastInstructorConflicts || []).filter(c => {
+      const cd = String(c.day||'').trim();
+      if(cd !== d) return false;
+      const cr = _parseRangeToMinutes(String(c.start_time||'') + '-' + String(c.end_time||''));
+      return _overlap(cr, cellRange);
+    });
+
+    if(!matches.length){
+      detailsEl.innerHTML = `<div class="text-muted">لا توجد تفاصيل.</div>`;
+      bootstrap.Modal.getOrCreateInstance(modalEl).show();
+      return;
+    }
+
+    let html = `<p class="mb-1"><strong>اليوم:</strong> ${escapeHtml(d)} | <strong>الوقت:</strong> ${escapeHtml(t)}</p>`;
+    matches.forEach((c) => {
+      const inst = String(c.instructor||'').trim();
+      html += `<hr class="my-2">`;
+      html += `<p class="mb-2"><strong>الأستاذ:</strong> ${escapeHtml(inst || '—')} <span class="text-muted small">(${escapeHtml((c.start_time||'')+'-'+(c.end_time||''))})</span></p>`;
+      html += `<div class="table-responsive"><table class="table table-sm table-bordered mb-0">`;
+      html += `<thead class="table-light"><tr><th>المقرر</th><th class="text-center">الوقت</th></tr></thead><tbody>`;
+      (c.entries || []).forEach(e => {
+        html += `<tr><td>${escapeHtml(e.course_name || '')}</td><td class="text-center">${escapeHtml(e.time || '')}</td></tr>`;
+      });
+      html += `</tbody></table></div>`;
+    });
+
+    detailsEl.innerHTML = html;
+    bootstrap.Modal.getOrCreateInstance(modalEl).show();
+  } catch (e) {
+    console.error('showInstructorConflictsModal failed', e);
+  }
 }
 
 async function refreshPublishStatus(){

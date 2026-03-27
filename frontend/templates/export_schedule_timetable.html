@@ -50,11 +50,8 @@
           {% if courses %}
             {% for course in courses %}
             <div class="course-item">
-              <strong>{{ course.course_name }}</strong>
-              {% if course.room %}({{ course.room }}){% endif %}
-              {% if course.student_count and course.student_count > 0 %} - (عدد طلبة {{ course.student_count }}){% endif %}
-              {% if course.section_id %} ({{ course.section_id }}){% endif %}
-              {% if course.instructor %} — {{ course.instructor }}{% endif %}
+              <strong>{{ course.course_name }}</strong>{% if course.room %} (ق {{ course.room }}){% endif %}{% if course.instructor %} — {{ course.instructor }}{% endif %}
+              {% if course.student_count and course.student_count > 0 %}<span class="meta"> · طلبة: {{ course.student_count }}</span>{% endif %}
             </div>
             {% endfor %}
           {% else %}

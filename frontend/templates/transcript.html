@@ -18,7 +18,7 @@
 </head>
 <body>
   {% include "base_nav.html" %}
-  <main class="container-main container-1100 theme-formal">
+  <main class="container-main container-1100 theme-formal schedule-wide">
 
     <div class="page-header">
       <div>
@@ -56,6 +56,19 @@
           </div>
         </div>
         <div class="text-end small text-muted">يتم حسابه تلقائياً من أفضل الدرجات؛ الوحدات تُستكمل من جدول المقررات إن لزم.</div>
+      </div>
+    </div>
+
+    <!-- الجدول الأسبوعي المعتمد (عرض موحّد: مقرر — قاعة — أستاذ) -->
+    <div class="card mb-3" id="weeklyScheduleCard">
+      <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span class="fw-semibold mb-0">الجدول الأسبوعي (المعتمد)</span>
+        <span class="small text-muted" id="weeklyScheduleStatus"></span>
+      </div>
+      <div class="card-body">
+        <div id="weeklyScheduleWrap" class="timetable-wrapper">
+          <p class="text-muted small mb-0">اختر طالباً لعرض جدوله الأسبوعي.</p>
+        </div>
       </div>
     </div>
 
@@ -417,6 +430,40 @@ async function loadTranscript(studentId){
     }
   } catch (e) {
     console.error('performance status load error', e);
+  }
+  loadWeeklySchedule(studentId);
+}
+
+async function loadWeeklySchedule(studentId){
+  const wrap = document.getElementById('weeklyScheduleWrap');
+  const stEl = document.getElementById('weeklyScheduleStatus');
+  const card = document.getElementById('weeklyScheduleCard');
+  if(!wrap || !card) return;
+  if(!studentId){
+    wrap.innerHTML = '<p class="text-muted small mb-0">اختر طالباً لعرض جدوله الأسبوعي.</p>';
+    if(stEl) stEl.textContent = '';
+    return;
+  }
+  let url = '/schedule/student_timetable';
+  if (CURRENT_ROLE !== 'student') {
+    url += '?student_id=' + encodeURIComponent(studentId);
+  }
+  const r = await fetchJSON(url);
+  if(!r.ok || !r.json){
+    wrap.innerHTML = '<p class="text-danger small mb-0">تعذر تحميل الجدول.</p>';
+    return;
+  }
+  if(!r.json.published){
+    wrap.innerHTML = '<p class="text-muted small mb-0">الجدول الدراسي غير معتمد بعد؛ يظهر الجدول الأسبوعي بعد اعتماد المسؤول.</p>';
+    if(stEl) stEl.textContent = '';
+    return;
+  }
+  const rows = Array.isArray(r.json.rows) ? r.json.rows : [];
+  if(stEl) stEl.textContent = rows.length ? ('حصص: ' + rows.length) : 'لا حصص مسجّلة';
+  if (typeof buildPublishedTimetableHtml === 'function') {
+    wrap.innerHTML = buildPublishedTimetableHtml(rows, {});
+  } else {
+    wrap.innerHTML = '<p class="text-muted small mb-0">تعذر عرض الجدول.</p>';
   }
 }
 
@@ -928,7 +975,7 @@ if (btnEditRulesTranscript) {
 
 /* filters and startup */
 const btnReload = document.getElementById('btnReload'); if(btnReload) btnReload.addEventListener('click', ()=> loadTranscript((document.getElementById('studentSelect')||{}).value));
-function handleStudentChange(){ syncImportFields(); const sid = (document.getElementById('studentSelect')||{}).value; if(sid){ loadTranscript(sid); } else { CURRENT_TRANSCRIPT = null; const semDiv = document.getElementById('semestersList'); if(semDiv) semDiv.innerHTML=''; const summaryEl = document.getElementById('summary'); if(summaryEl) summaryEl.textContent=''; const cumEl = document.getElementById('cumulativeGPA'); if(cumEl) cumEl.textContent='-'; const completedEl = document.getElementById('completedUnits'); if(completedEl) completedEl.textContent='-'; const planWrap = document.getElementById('graduationPlanWrap'); if(planWrap) planWrap.style.display = 'none'; const joinWrap = document.getElementById('joinSemesterWrap'); if(joinWrap) joinWrap.style.display = 'none'; } }
+function handleStudentChange(){ syncImportFields(); const sid = (document.getElementById('studentSelect')||{}).value; if(sid){ loadTranscript(sid); } else { CURRENT_TRANSCRIPT = null; const semDiv = document.getElementById('semestersList'); if(semDiv) semDiv.innerHTML=''; const summaryEl = document.getElementById('summary'); if(summaryEl) summaryEl.textContent=''; const cumEl = document.getElementById('cumulativeGPA'); if(cumEl) cumEl.textContent='-'; const completedEl = document.getElementById('completedUnits'); if(completedEl) completedEl.textContent='-'; const planWrap = document.getElementById('graduationPlanWrap'); if(planWrap) planWrap.style.display = 'none'; const joinWrap = document.getElementById('joinSemesterWrap'); if(joinWrap) joinWrap.style.display = 'none'; loadWeeklySchedule(''); } }
 const studentSelect = document.getElementById('studentSelect'); if(studentSelect) studentSelect.addEventListener('change', handleStudentChange);
 const semesterFilter = document.getElementById('semesterFilter'); if(semesterFilter) semesterFilter.addEventListener('change', ()=>{ const f = (document.getElementById('semesterFilter')||{}).value; if(!CURRENT_TRANSCRIPT) return; if(!f) renderTranscript(CURRENT_TRANSCRIPT); else { const filtered = { transcript: {}, semester_gpas: {}, cumulative_gpa: CURRENT_TRANSCRIPT.cumulative_gpa || 0, completed_units: CURRENT_TRANSCRIPT.completed_units }; if(CURRENT_TRANSCRIPT.transcript && CURRENT_TRANSCRIPT.transcript[f]) filtered.transcript[f]=CURRENT_TRANSCRIPT.transcript[f]; if(CURRENT_TRANSCRIPT.semester_gpas && CURRENT_TRANSCRIPT.semester_gpas[f]) filtered.semester_gpas[f]=CURRENT_TRANSCRIPT.semester_gpas[f]; renderTranscript(filtered); } });
 
@@ -1009,6 +1056,8 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
     if (INITIAL_TRANSCRIPT && INITIAL_TRANSCRIPT.transcript){
       CURRENT_TRANSCRIPT = INITIAL_TRANSCRIPT;
       renderTranscript(INITIAL_TRANSCRIPT);
+      const sel0 = document.getElementById('studentSelect');
+      if (sel0 && sel0.value) loadWeeklySchedule(sel0.value);
     }
   }catch(e){}
 

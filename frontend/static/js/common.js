@@ -381,6 +381,83 @@ function formatDate(date, format = 'ar-SA') {
 }
 
 // ============================================
+// Published schedule display (non-editor UIs)
+// تنسيق موحّد: اسم المقرر (ق الغرفة) — الأستاذ
+// ============================================
+window.SCHEDULE_DAYS = ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'];
+
+function escapeHtmlSchedule(s) {
+    return String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+/**
+ * @param {{ course_name?: string, room?: string, instructor?: string }} row
+ * @returns {string}
+ */
+function formatPublishedScheduleCell(row) {
+    const name = row && row.course_name != null ? String(row.course_name).trim() : '';
+    const room = row && row.room != null ? String(row.room).trim() : '';
+    const instructor = row && row.instructor != null ? String(row.instructor).trim() : '';
+    let s = name;
+    if (room) s += ` (ق ${room})`;
+    if (instructor) s += (s ? ' — ' : '') + instructor;
+    return s;
+}
+
+/**
+ * @param {Array<Record<string, unknown>>} scheduleRows
+ * @param {{ compact?: boolean }} opts
+ * @returns {string}
+ */
+function buildPublishedTimetableHtml(scheduleRows, opts) {
+    opts = opts || {};
+    const compactClass = opts.compact ? ' is-compact' : '';
+    const DAYS = window.SCHEDULE_DAYS || [];
+    const rows = Array.isArray(scheduleRows) ? scheduleRows.filter(r => r && String(r.day || '').trim() && String(r.time || '').trim()) : [];
+    if (!rows.length) {
+        return '<div class="alert alert-info p-2 mb-0">لا توجد حصص في الجدول لهذا العرض.</div>';
+    }
+    const timeSet = new Set();
+    rows.forEach(r => {
+        timeSet.add(String(r.time).trim());
+    });
+    const timeSlots = Array.from(timeSet).sort((a, b) => a.localeCompare(b, 'ar'));
+    const slotsMap = {};
+    rows.forEach(row => {
+        const d = String(row.day || '').trim();
+        const t = String(row.time || '').trim();
+        const key = `${d}|${t}`;
+        if (!slotsMap[key]) slotsMap[key] = [];
+        slotsMap[key].push(row);
+    });
+    let html = `<table class="timetable${compactClass}"><thead><tr><th class="day-header">اليوم / الوقت</th>`;
+    timeSlots.forEach(time => {
+        html += `<th class="time-header">${escapeHtmlSchedule(time)}</th>`;
+    });
+    html += '</tr></thead><tbody>';
+    DAYS.forEach(day => {
+        html += `<tr><th class="day-header">${escapeHtmlSchedule(day)}</th>`;
+        timeSlots.forEach(time => {
+            const key = `${day}|${time}`;
+            const courses = slotsMap[key] || [];
+            html += '<td class="time-slot-cell">';
+            courses.forEach(c => {
+                const line = formatPublishedScheduleCell(c);
+                html += `<div class="published-course-line">${escapeHtmlSchedule(line)}</div>`;
+            });
+            html += '</td>';
+        });
+        html += '</tr>';
+    });
+    html += '</tbody></table>';
+    return html;
+}
+
+// ============================================
 // CSS Animation
 // ============================================
 const style = document.createElement('style');

@@ -9,7 +9,7 @@
 </head>
 <body>
   {% include "base_nav.html" %}
-  <main class="container-main container-1100">
+  <main class="container-main container-1100 theme-formal schedule-wide">
     <div class="page-header">
       <div>
         <h1 class="page-title">مسودات الدرجات</h1>
@@ -25,6 +25,13 @@
       <div class="alert alert-info small">
         تُعرض مقرراتك المسندة في الجدول للفصل الحالي. تُحفظ المسودة محلياً في النظام ثم تُرسل للاعتماد؛ بعد الاعتماد تُنشر في السجل الرسمي.
         <span class="d-block mt-1 text-muted">لا يمكن فتح أكثر من مسودة نشطة (مسودة أو مرسلة) في نفس الفصل دفعة واحدة.</span>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-header fw-semibold">جدولي الأسبوعي (المعتمد)</div>
+        <div class="card-body">
+          <div id="instructorWeeklyWrap" class="timetable-wrapper text-muted small">جاري التحميل…</div>
+        </div>
       </div>
 
       <div class="card mb-3">
@@ -151,7 +158,34 @@
 
     let state = { draft: null, items: [], roster: [], draftId: null, gradingMode: 'partial_final' };
 
+    async function loadInstructorWeeklyTimetable() {
+      const el = document.getElementById('instructorWeeklyWrap');
+      if (!el) return;
+      try {
+        const r = await fetch('/schedule/instructor_timetable', { credentials: 'include' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j) {
+          el.innerHTML = '<p class="text-danger small mb-0">تعذر تحميل الجدول.</p>';
+          return;
+        }
+        if (!j.published) {
+          el.innerHTML = '<p class="text-muted small mb-0">الجدول الدراسي غير معتمد بعد.</p>';
+          return;
+        }
+        const rows = Array.isArray(j.rows) ? j.rows : [];
+        if (typeof buildPublishedTimetableHtml === 'function') {
+          el.innerHTML = buildPublishedTimetableHtml(rows, {});
+        } else {
+          el.innerHTML = '<p class="text-muted small mb-0">تعذر عرض الجدول.</p>';
+        }
+      } catch (e) {
+        console.error(e);
+        el.innerHTML = '<p class="text-danger small mb-0">تعذر تحميل الجدول.</p>';
+      }
+    }
+
     async function initInstructor() {
+      loadInstructorWeeklyTimetable();
       const wrap = document.getElementById('instructorCoursesWrap');
       try {
         const [cRes, mRes] = await Promise.all([

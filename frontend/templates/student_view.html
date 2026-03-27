@@ -6,11 +6,14 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>عرض طالب — Schedule Optimizer</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
   <style>body{padding:18px;background:#f8f9fa}</style>
 </head>
-<body> {% include "base_nav.html" %} <main class="container-main"> ...
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main theme-formal schedule-wide">
     <div class="d-flex justify-content-between align-items-center mb-3">
-      <h4>صفحة الطالب</h4>
+      <h4 class="page-title mb-0">صفحة الطالب</h4>
       <div id="alertsArea"></div>
     </div>
 
@@ -44,23 +47,63 @@
         </div>
       </div>
     </div>
-  </div>
+
+    <div class="card shadow-sm mt-3">
+      <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span class="fw-semibold mb-0">الجدول الأسبوعي (المعتمد)</span>
+        <span class="small text-muted" id="weeklyScheduleStatusSv"></span>
+      </div>
+      <div class="card-body">
+        <div id="weeklyScheduleWrapSv" class="timetable-wrapper">
+          <p class="text-muted small mb-0">جاري التحميل…</p>
+        </div>
+      </div>
+    </div>
+  </main>
 
 <script>
-async function fetchJSON(url){ const r=await fetch(url); const j=await r.json().catch(()=>null); return {ok:r.ok,json:j}; }
+async function fetchJSON(url){ const r=await fetch(url, { credentials: 'include' }); const j=await r.json().catch(()=>null); return {ok:r.ok,json:j}; }
+
+async function loadWeeklyScheduleStudentView(studentId){
+  const wrap = document.getElementById('weeklyScheduleWrapSv');
+  const stEl = document.getElementById('weeklyScheduleStatusSv');
+  if(!wrap) return;
+  if(!studentId){
+    wrap.innerHTML = '<p class="text-muted small mb-0">لا يوجد طالب محدد.</p>';
+    if(stEl) stEl.textContent = '';
+    return;
+  }
+  const url = '/schedule/student_timetable?student_id=' + encodeURIComponent(studentId);
+  const r = await fetchJSON(url);
+  if(!r.ok || !r.json){
+    wrap.innerHTML = '<p class="text-danger small mb-0">تعذر تحميل الجدول.</p>';
+    return;
+  }
+  if(!r.json.published){
+    wrap.innerHTML = '<p class="text-muted small mb-0">الجدول الدراسي غير معتمد بعد.</p>';
+    if(stEl) stEl.textContent = '';
+    return;
+  }
+  const rows = Array.isArray(r.json.rows) ? r.json.rows : [];
+  if(stEl) stEl.textContent = rows.length ? ('حصص: ' + rows.length) : 'لا حصص مسجّلة';
+  if (typeof buildPublishedTimetableHtml === 'function') {
+    wrap.innerHTML = buildPublishedTimetableHtml(rows, {});
+  } else {
+    wrap.innerHTML = '<p class="text-muted small mb-0">تعذر عرض الجدول.</p>';
+  }
+}
+
 async function loadStudentPage(studentId){
   const s = await fetchJSON('/list_students');
   const student = (s.ok && Array.isArray(s.json)) ? s.json.find(x=>x.student_id===studentId) : null;
   if(student){ document.getElementById('stuName').textContent = student.student_name || student.student_id; document.getElementById('stuId').textContent = student.student_id; }
 
-  // registrations
   const regs = await fetchJSON('/get_registrations?student_id=' + encodeURIComponent(studentId));
   const rl = document.getElementById('regList'); rl.innerHTML = '';
   if(regs.ok && Array.isArray(regs.json)){
     regs.json.forEach(c=>{ const li=document.createElement('li'); li.className='list-group-item'; li.textContent = c; rl.appendChild(li); });
   } else rl.innerHTML = '<li class="list-group-item text-muted">لا توجد تسجيلات</li>';
 
-  // conflicts relevant to this student
   const res = await fetchJSON('/results_data');
   let userConflicts = [];
   if(res.ok && res.json && res.json.conflict_report){
@@ -74,16 +117,16 @@ async function loadStudentPage(studentId){
   }
 
   document.getElementById('viewTranscriptLink').href = '/transcript_page?student_id=' + encodeURIComponent(studentId);
+  await loadWeeklyScheduleStudentView(studentId);
 }
 
-// auto detect student_id from query or pick first
 const params = new URLSearchParams(location.search);
 const sid = params.get('student_id') || '';
 if(sid) loadStudentPage(sid);
 else {
-  // choose first student from list
-  (async ()=>{ const s = await fetchJSON('/list_students'); if(s.ok && Array.isArray(s.json) && s.json.length){ loadStudentPage(s.json[0].student_id); } })();
+  (async ()=>{ const s = await fetchJSON('/list_students'); if(s.ok && Array.isArray(s.json) && s.json.length){ loadStudentPage(s.json[0].student_id); } else { const w=document.getElementById('weeklyScheduleWrapSv'); if(w) w.innerHTML='<p class="text-muted small mb-0">لا يمكن عرض الجدول.</p>'; } })();
 }
 </script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

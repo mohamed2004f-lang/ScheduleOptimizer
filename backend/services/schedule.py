@@ -8,6 +8,7 @@ import sqlite3, pandas as pd
 import logging
 import json
 import datetime
+import base64
 from .utilities import (
     get_connection,
     table_to_dicts,
@@ -28,6 +29,48 @@ from .students import compute_per_student_conflicts, recompute_conflict_report
 logger = logging.getLogger(__name__)
 
 schedule_bp = Blueprint("schedule", __name__)
+
+def _time_to_minutes_hhmm(s: str):
+    try:
+        s = (s or "").strip()
+        if len(s) != 5 or s[2] != ":":
+            return None
+        hh = int(s[0:2]); mm = int(s[3:5])
+        if 0 <= hh <= 23 and 0 <= mm <= 59:
+            return hh * 60 + mm
+    except Exception:
+        return None
+    return None
+
+
+def _parse_time_range_to_minutes(time_str: str):
+    """
+    يدعم: 09:00-13:00 ، 13:00-09:00 ، 09:00 - 11:00 ، 09:00/11:00 ...
+    يرجع (start_min, end_min) أو (None, None)
+    """
+    if not time_str:
+        return (None, None)
+    v = str(time_str).strip()
+    for sep in ["-", "–", "—", "/", "\\", " to "]:
+        if sep in v:
+            parts = [p.strip() for p in v.split(sep, 1)]
+            if len(parts) == 2:
+                a = _time_to_minutes_hhmm(parts[0])
+                b = _time_to_minutes_hhmm(parts[1])
+                if a is None or b is None:
+                    return (None, None)
+                if b < a:
+                    a, b = b, a
+                return (a, b)
+    # single
+    a = _time_to_minutes_hhmm(v)
+    return (a, a) if a is not None else (None, None)
+
+
+def _ranges_overlap(a1, a2, b1, b2) -> bool:
+    if a1 is None or a2 is None or b1 is None or b2 is None:
+        return False
+    return max(a1, b1) < min(a2, b2)
 
 
 def _current_term_key_suffix(conn) -> str:
@@ -237,6 +280,108 @@ def list_schedule_rows():
 @login_required
 def list_schedule_rows_alias():
     return list_schedule_rows()
+
+
+@schedule_bp.route("/instructor_conflicts")
+@login_required
+def instructor_conflicts():
+    """
+    تعارضات الأساتذة (Double booking):
+    نفس الأستاذ لديه مقرران أو أكثر بنفس اليوم مع تداخل زمني.
+    Returns:
+      { status:'ok', conflicts:[{instructor, day, start_time, end_time, entries:[{section_id, course_name, time}]}] }
+    """
+    try:
+        with get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            rows = cur.execute(
+                """
+                SELECT
+                  s.rowid AS section_id,
+                  COALESCE(s.course_name,'') AS course_name,
+                  COALESCE(s.day,'') AS day,
+                  COALESCE(s.time,'') AS time,
+                  COALESCE(s.instructor,'') AS instructor
+                FROM schedule s
+                WHERE COALESCE(s.instructor,'') <> ''
+                  AND COALESCE(s.day,'') <> ''
+                  AND COALESCE(s.time,'') <> ''
+                """
+            ).fetchall()
+
+        items = []
+        for r in rows or []:
+            d = dict(r)
+            start_min, end_min = _parse_time_range_to_minutes(d.get("time") or "")
+            if start_min is None or end_min is None:
+                continue
+            items.append({
+                "section_id": d.get("section_id"),
+                "course_name": (d.get("course_name") or "").strip(),
+                "day": (d.get("day") or "").strip(),
+                "time": (d.get("time") or "").strip(),
+                "instructor": (d.get("instructor") or "").strip(),
+                "start_min": start_min,
+                "end_min": end_min,
+            })
+
+        # group by (instructor, day)
+        by_key = defaultdict(list)
+        for it in items:
+            by_key[(it["instructor"], it["day"])].append(it)
+
+        out = []
+        for (inst, day), lst in by_key.items():
+            # detect overlap groups
+            lst = sorted(lst, key=lambda x: (x["start_min"], x["end_min"], x["course_name"]))
+            n = len(lst)
+            if n < 2:
+                continue
+
+            # build graph edges on overlap
+            adj = [[] for _ in range(n)]
+            for i in range(n):
+                for j in range(i + 1, n):
+                    if _ranges_overlap(lst[i]["start_min"], lst[i]["end_min"], lst[j]["start_min"], lst[j]["end_min"]):
+                        adj[i].append(j)
+                        adj[j].append(i)
+
+            seen = set()
+            for i in range(n):
+                if i in seen or not adj[i]:
+                    continue
+                # BFS component
+                stack = [i]
+                comp = []
+                seen.add(i)
+                while stack:
+                    u = stack.pop()
+                    comp.append(u)
+                    for v in adj[u]:
+                        if v not in seen:
+                            seen.add(v)
+                            stack.append(v)
+                if len(comp) < 2:
+                    continue
+                comp_items = [lst[idx] for idx in comp]
+                start_min = min(x["start_min"] for x in comp_items)
+                end_min = max(x["end_min"] for x in comp_items)
+                out.append({
+                    "instructor": inst,
+                    "day": day,
+                    "start_time": f"{start_min//60:02d}:{start_min%60:02d}",
+                    "end_time": f"{end_min//60:02d}:{end_min%60:02d}",
+                    "entries": [
+                        {"section_id": x["section_id"], "course_name": x["course_name"], "time": x["time"]}
+                        for x in sorted(comp_items, key=lambda x: (x["start_min"], x["end_min"], x["course_name"]))
+                    ],
+                })
+
+        return jsonify({"status": "ok", "conflicts": out}), 200
+    except Exception as e:
+        logger.error(f"instructor_conflicts failed: {e}", exc_info=True)
+        return jsonify({"status": "ok", "conflicts": []}), 200
 
 @schedule_bp.route("/check_conflicts", methods=["POST"])
 @role_required("admin", "admin_main", "head_of_department")
@@ -623,7 +768,6 @@ def export_schedule_pdf():
         body_rows += "<tr>" + tds + "</tr>"
 
     term_label = slots_info.get("term_label") or ""
-    mode = "قالب" if include_empty else "رسمي"
 
     appendix_html = ""
     if include_notes and (not official):
@@ -637,33 +781,57 @@ def export_schedule_pdf():
         if appendix:
             appendix_html = "<hr/><h3 style='margin:10px 0 6px 0;'>ملحق</h3>" + appendix
 
-    # قالب رسمي: ترويسة + توقيع بدون ملاحظات
-    # (نضع الاسم كحقل فارغ للتعبئة أو الختم)
+    # قالب رسمي أفقي: يملأ الصفحة مع هوامش ضيقة
     now_print = datetime.datetime.now().strftime("%Y-%m-%d")
     signature_block = ""
     if official and not include_empty:
         signature_block = f"""
         <div class="sign-wrap">
-          <div class="sign">
-            <div class="lbl">رئيس القسم</div>
-            <div class="line"></div>
-            <div class="lbl small">التوقيع والختم</div>
-          </div>
-          <div class="sign">
-            <div class="lbl">إعداد</div>
-            <div class="line"></div>
-            <div class="lbl small">التوقيع</div>
-          </div>
+          <div class="sign-name">محمد فرج الحاسي</div>
+          <div class="sign-title">رئيس قسم الهندسة الميكانيكية</div>
         </div>
         """
 
+    meta_bits = f"الترم: {term_label or '—'} <span class=\"sep\">|</span> التاريخ: {now_print}"
+    if include_empty:
+        meta_bits += " <span class=\"sep\">|</span> النوع: قالب"
+
+    logo_src = "/static/images/mech_logo_small.png"
+    try:
+        logo_file = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..",
+            "frontend",
+            "static",
+            "images",
+            "mech_logo_small.png",
+        )
+        with open(os.path.abspath(logo_file), "rb") as lf:
+            logo_b64 = base64.b64encode(lf.read()).decode("ascii")
+            logo_src = f"data:image/png;base64,{logo_b64}"
+    except Exception:
+        # fallback to relative static URL if file read fails
+        pass
+
     header_html = f"""
-      <div class="hdr">
-        <div class="hdr-title">جامعة درنة — كلية الهندسة</div>
-        <div class="hdr-sub">قسم الهندسة الميكانيكية</div>
-        <div class="doc-title">الجدول الدراسي</div>
-        <div class="meta">الترم: {term_label or '—'} <span class="sep">|</span> التاريخ: {now_print} <span class="sep">|</span> الإصدار: {mode}</div>
+      <div class="hdr official">
+        <div class="hdr-col hdr-inst">
+          <div class="line">جامعة درنة</div>
+          <div class="line">كلية الهندسة</div>
+          <div class="line">قسم الهندسة الميكانيكية</div>
+        </div>
+        <div class="hdr-col hdr-logo">
+          <img src="{logo_src}" alt="شعار كلية الهندسة" />
+        </div>
+        <div class="hdr-col hdr-schedule">
+          <div class="line strong">جدول المحاضرات</div>
+          <div class="line">فصل {term_label or '—'}</div>
+          <div class="line">العام الجامعي 2025 / 2026 م</div>
+        </div>
       </div>
+      <div class="meta under">{meta_bits}</div>
+      <div class="top-rule"></div>
     """
 
     html = f"""
@@ -671,23 +839,41 @@ def export_schedule_pdf():
     <head>
       <meta charset="utf-8"/>
       <style>
-        @page {{ size: A4 landscape; margin: 14mm; }}
-        body {{ font-family: Arial, sans-serif; }}
-        .hdr {{ text-align: center; margin-bottom: 10px; }}
-        .hdr-title {{ font-size: 14px; font-weight: 700; }}
-        .hdr-sub {{ font-size: 12px; color: #333; margin-top: 2px; }}
-        .doc-title {{ font-size: 16px; font-weight: 800; margin-top: 6px; }}
-        .meta {{ color: #555; font-size: 11px; margin-top: 4px; }}
+        /* هوامش ضيقة جداً ومساحة سفلية بسيطة للتوقيع */
+        @page {{ size: A4 landscape; margin: 6mm 6mm 12mm 6mm; }}
+        body {{ font-family: Arial, sans-serif; padding-bottom: 10mm; color: #111; }}
+        /* RTL: العمود الأول يمين الصفحة (الجهة)، الوسط شعار، الأخير يسار (جدول المحاضرات) */
+        .hdr.official {{
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+          align-items: start;
+          gap: 10px;
+          margin-bottom: 1px;
+          width: 100%;
+          min-height: 95px;
+        }}
+        .hdr-col {{ line-height: 1.35; font-size: 15px; font-weight: 700; margin-top: 0; padding-top: 0; }}
+        .hdr-inst {{ text-align: right; }}
+        .hdr-schedule {{ text-align: left; margin-top: 0; padding-top: 0; }}
+        .hdr-schedule .line.strong {{ font-size: 17px; }}
+        .hdr-logo {{ text-align: center; justify-self: center; margin-top: -2px; }}
+        .hdr-logo img {{ width: 82px; height: 82px; object-fit: contain; display: inline-block; vertical-align: top; }}
+        .meta {{ color: #444; font-size: 10px; margin-top: 2px; text-align: center; }}
+        .meta.under {{ margin-bottom: 1px; }}
         .sep {{ padding: 0 6px; color: #aaa; }}
-        table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
-        th, td {{ border: 1px solid #444; padding: 6px; font-size: 11px; vertical-align: top; word-wrap: break-word; }}
-        th {{ background: #f3f3f3; }}
-        td {{ min-height: 24px; }}
-        .sign-wrap {{ display: flex; justify-content: space-between; gap: 18px; margin-top: 12px; }}
-        .sign {{ width: 48%; }}
-        .sign .lbl {{ font-weight: 700; margin-bottom: 6px; }}
-        .sign .lbl.small {{ font-weight: 400; font-size: 11px; color: #555; margin-top: 6px; }}
-        .sign .line {{ border-bottom: 1px solid #000; height: 22px; }}
+        .top-rule {{ border-top: 2px solid #000; margin: 1px 0 2px 0; }}
+        table {{ width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 0; }}
+        th, td {{ border: 1px solid #444; padding: 4px; font-size: 9.8px; vertical-align: top; word-wrap: break-word; }}
+        th {{ background: #f3f3f3; font-weight: 700; }}
+        td {{ min-height: 18px; line-height: 1.25; }}
+        /* التوقيع أسفل الجدول مباشرة */
+        .sign-wrap {{
+          margin-top: 6px;
+          text-align: center;
+          line-height: 1.35;
+        }}
+        .sign-name {{ font-size: 14px; font-weight: 700; }}
+        .sign-title {{ font-size: 16px; font-weight: 800; }}
       </style>
     </head>
     <body>
@@ -861,6 +1047,67 @@ def student_timetable():
         ORDER BY s.day, s.time, s.course_name
         """
         rows = cur.execute(q, (sid,)).fetchall()
+        out = []
+        for r in rows:
+            out.append(
+                {
+                    "section_id": r[0],
+                    "course_name": r[1],
+                    "day": r[2],
+                    "time": r[3],
+                    "room": r[4],
+                    "instructor": r[5],
+                    "semester": r[6],
+                }
+            )
+    return jsonify({"rows": out, "published": True})
+
+
+@schedule_bp.route("/instructor_timetable")
+@login_required
+def instructor_timetable():
+    """
+    جدول الأستاذ الأسبوعي من schedule (قراءة فقط عند نشر الجدول).
+    يطابق اسم الأستاذ في الجدول مع اسم السجل في جدول instructors.
+    """
+    with get_connection() as conn:
+        published_at = get_schedule_published_at(conn)
+    if published_at is None:
+        return jsonify({"rows": [], "published": False})
+
+    user_role = session.get("user_role")
+    if user_role != "instructor":
+        return jsonify({"rows": [], "published": True})
+
+    instructor_id = session.get("instructor_id")
+    if not instructor_id:
+        return jsonify({"rows": [], "published": True})
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT COALESCE(TRIM(name), '') FROM instructors WHERE id = ? LIMIT 1",
+            (instructor_id,),
+        ).fetchone()
+    inst_name = (row[0] if row else "") or ""
+    if not inst_name.strip():
+        return jsonify({"rows": [], "published": True})
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        q = """
+        SELECT s.rowid AS section_id,
+               s.course_name,
+               s.day,
+               s.time,
+               s.room,
+               s.instructor,
+               s.semester
+        FROM schedule s
+        WHERE TRIM(COALESCE(s.instructor, '')) = ?
+        ORDER BY s.day, s.time, s.course_name
+        """
+        rows = cur.execute(q, (inst_name.strip(),)).fetchall()
         out = []
         for r in rows:
             out.append(
