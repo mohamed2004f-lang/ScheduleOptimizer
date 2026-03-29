@@ -684,7 +684,7 @@ def clear_schedule_all():
 @schedule_bp.route("/time_slots")
 @login_required
 def get_time_slots():
-    """جلب تقسيمات الوقت المعتمدة للترم الحالي (إعداد محفوظ أو افتراضي)."""
+    """جلب تقسيمات الوقت المعتمدة للفصل الحالي (إعداد محفوظ أو افتراضي)."""
     with get_connection() as conn:
         out = _get_time_slots_setting(conn)
     return jsonify({"status": "ok", **out}), 200
@@ -694,7 +694,7 @@ def get_time_slots():
 @role_required("admin", "admin_main", "head_of_department")
 def save_time_slots():
     """
-    حفظ تقسيمات الوقت للترم الحالي في app_settings.
+    حفظ تقسيمات الوقت للفصل الحالي في app_settings.
     body:
       - slots: ["09:00-11:00", ...]
     """
@@ -792,7 +792,7 @@ def export_schedule_pdf():
         </div>
         """
 
-    meta_bits = f"الترم: {term_label or '—'} <span class=\"sep\">|</span> التاريخ: {now_print}"
+    meta_bits = f"الفصل: {term_label or '—'} <span class=\"sep\">|</span> التاريخ: {now_print}"
     if include_empty:
         meta_bits += " <span class=\"sep\">|</span> النوع: قالب"
 
@@ -1017,7 +1017,6 @@ def student_timetable():
         instructor_id = session.get("instructor_id")
         if not instructor_id or not sid:
             return jsonify({"rows": [], "published": True})
-        from backend.services.utilities import get_connection
         with get_connection() as conn:
             cur = conn.cursor()
             row = cur.execute(

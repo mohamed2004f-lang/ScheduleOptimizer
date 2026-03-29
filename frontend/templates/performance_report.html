@@ -20,7 +20,7 @@
         top: 0;
         width: 100%;
       }
-      nav.app-navbar, header.app-topbar, #msgBox, #statusFilter, #enrollmentFilter, #excludeInactive, #studentPick, #searchInput, #sortSelect, #btnPrint, #btnExport, #btnExportPdf, #btnExportDocx, #btnEditRules {
+      nav.app-navbar, header.app-topbar, #msgBox, #statusFilter, #enrollmentFilter, #excludeInactive, #excludeNoGrades, #studentPick, #searchInput, #sortSelect, #btnPrint, #btnExport, #btnExportPdf, #btnExportDocx, #btnEditRules {
         display: none !important;
       }
     }
@@ -70,6 +70,7 @@
             <option value="warning_1">إنذار أول</option>
             <option value="warning_2">إنذار ثانٍ</option>
             <option value="warning_3">أكثر من إنذارين</option>
+            <option value="no_data">لا توجد بيانات درجات</option>
             <option value="withdrawn">سحب ملف</option>
             <option value="suspended">إيقاف قيد</option>
           </select>
@@ -99,6 +100,10 @@
           <div class="form-check mt-1">
             <input class="form-check-input" type="checkbox" id="excludeInactive">
             <label class="form-check-label small" for="excludeInactive">استثناء الخريجين وسحب الملف</label>
+          </div>
+          <div class="form-check mt-1">
+            <input class="form-check-input" type="checkbox" id="excludeNoGrades">
+            <label class="form-check-label small" for="excludeNoGrades">استثناء من لم يُدخل كشف درجاته (لا فصول في السجل)</label>
           </div>
         </div>
         <div class="col-md-3">
@@ -176,6 +181,7 @@
       const statusFilter = document.getElementById('statusFilter').value;
       const enrollmentFilter = document.getElementById('enrollmentFilter').value;
       const excludeInactive = !!document.getElementById('excludeInactive')?.checked;
+      const excludeNoGrades = !!document.getElementById('excludeNoGrades')?.checked;
       const selectedStudents = new Set(
         Array.from(document.getElementById('studentPick')?.selectedOptions || []).map(o => o.value)
       );
@@ -192,6 +198,9 @@
       }
       if (excludeInactive) {
         rows = rows.filter(r => !['graduated', 'withdrawn'].includes((r.enrollment_status || 'active')));
+      }
+      if (excludeNoGrades) {
+        rows = rows.filter(r => r.status_code !== 'no_data');
       }
       if (selectedStudents.size) {
         rows = rows.filter(r => selectedStudents.has(r.student_id || ''));
@@ -241,6 +250,7 @@
         else if (r.status_code === 'warning_3') badgeClass = 'dark';
         else if (r.status_code === 'suspended') badgeClass = 'danger';
         else if (r.status_code === 'withdrawn') badgeClass = 'secondary';
+        else if (r.status_code === 'no_data') badgeClass = 'light text-dark';
 
         const lastLabel = r.last_semester
           ? `${r.last_semester} (${formatGpa(r.last_semester_gpa)})`
@@ -333,12 +343,14 @@
       const statusFilter = document.getElementById('statusFilter').value;
       const enrollmentFilter = document.getElementById('enrollmentFilter').value;
       const excludeInactive = !!document.getElementById('excludeInactive')?.checked;
+      const excludeNoGrades = !!document.getElementById('excludeNoGrades')?.checked;
       const selectedStudents = Array.from(document.getElementById('studentPick')?.selectedOptions || []).map(o => o.value).filter(Boolean);
 
       if (format && format !== 'xlsx') params.set('format', format);
       if (statusFilter) params.set('status_codes', statusFilter);
       if (enrollmentFilter) params.set('enrollment', enrollmentFilter);
       if (excludeInactive) params.set('exclude_enrollment', 'graduated,withdrawn');
+      if (excludeNoGrades) params.set('exclude_status_codes', 'no_data');
       if (selectedStudents.length) params.set('student_ids', selectedStudents.join(','));
 
       const qs = params.toString();
@@ -370,6 +382,7 @@
       document.getElementById('statusFilter').addEventListener('change', renderTable);
       document.getElementById('enrollmentFilter').addEventListener('change', renderTable);
       document.getElementById('excludeInactive').addEventListener('change', renderTable);
+      document.getElementById('excludeNoGrades').addEventListener('change', renderTable);
       document.getElementById('studentPick').addEventListener('change', renderTable);
       document.getElementById('sortSelect').addEventListener('change', renderTable);
       document.getElementById('searchInput').addEventListener('input', debounce(renderTable, 200));

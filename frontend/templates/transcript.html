@@ -318,7 +318,12 @@
 
 <script>
 /* helpers */
-async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok, status:r.status, json:j}; }
+async function fetchJSON(url, opts){
+  const cfg = { credentials: 'include', ...(opts || {}) };
+  const r = await fetch(url, cfg);
+  const j = await r.json().catch(()=>null);
+  return { ok: r.ok, status: r.status, json: j };
+}
 function setMsg(html, kind="info"){ const el = document.getElementById('msg'); if(!el) return; el.innerHTML = `<div class="alert alert-${kind} p-2 mb-0">${html}</div>`; setTimeout(()=>{ if(el) el.innerHTML=''; }, 4000); }
 function escape(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
 
@@ -449,8 +454,12 @@ async function loadWeeklySchedule(studentId){
     url += '?student_id=' + encodeURIComponent(studentId);
   }
   const r = await fetchJSON(url);
-  if(!r.ok || !r.json){
-    wrap.innerHTML = '<p class="text-danger small mb-0">تعذر تحميل الجدول.</p>';
+  if (!r.ok) {
+    wrap.innerHTML = '<p class="text-danger small mb-0">تعذر تحميل الجدول (خطأ ' + (r.status || '؟') + '). إن انتهت الجلسة أعد تسجيل الدخول.</p>';
+    return;
+  }
+  if (!r.json) {
+    wrap.innerHTML = '<p class="text-danger small mb-0">تعذر تحميل الجدول: استجابة غير متوقعة (غالباً صفحة HTML بدل JSON). جرّب تحديث الصفحة أو إعادة تسجيل الدخول.</p>';
     return;
   }
   if(!r.json.published){

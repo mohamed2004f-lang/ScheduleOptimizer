@@ -56,7 +56,7 @@
               </div>
               <div class="d-flex flex-wrap gap-2 mt-2">
                 <button type="button" class="btn btn-outline-primary btn-sm" id="btnSaveTimeSlots" disabled>
-                  حفظ التقسيمات للترم الحالي
+                  حفظ التقسيمات للفصل الحالي
                 </button>
                 <button type="button" class="btn btn-outline-secondary btn-sm" id="btnNormalizeTimes" disabled>
                   توحيد/تحويل الأوقات غير المطابقة
@@ -845,7 +845,7 @@ async function saveTimeSlotsSetting(){
   });
   const j = await resp.json().catch(()=>null);
   if(resp.ok && j && j.status === 'ok'){
-    showMsg('تم حفظ التقسيمات للترم الحالي', 'success');
+    showMsg('تم حفظ التقسيمات للفصل الحالي', 'success');
     const slotsSaved = Array.isArray(j.slots) ? j.slots : slots;
     CUSTOM_TIME_SLOTS = slotsSaved;
     const input = document.getElementById('customTimeSlotsInput');
@@ -1331,7 +1331,7 @@ document.addEventListener('DOMContentLoaded', () => {
     btnClear.addEventListener('click', clearScheduleAll);
   }
 
-  // حمّل التقسيمات المحفوظة للترم الحالي أولاً ثم ارسم الجدول بها
+  // حمّل التقسيمات المحفوظة للفصل الحالي أولاً ثم ارسم الجدول بها
   loadTimeSlotsSetting().then(()=>loadSchedule());
 });
 </script>

@@ -226,6 +226,7 @@ def _build_filter_summary_ar(
     enrollment_values: set[str],
     exclude_enrollment: set[str],
     student_ids: set[str],
+    exclude_status_codes: set[str] | None = None,
 ) -> str:
     parts = []
     status_labels = {
@@ -246,6 +247,12 @@ def _build_filter_summary_ar(
         parts.append("مستثنى من التصدير: " + "، ".join(en_labels.get(e, e) for e in sorted(exclude_enrollment)))
     if student_ids:
         parts.append(f"طلبة محددون: {len(student_ids)}")
+    ex_st = exclude_status_codes or set()
+    if ex_st:
+        parts.append(
+            "مستثنى من التصدير (حالة ظاهرة): "
+            + "، ".join(sorted(status_labels.get(s, s) for s in ex_st))
+        )
     return " — ".join(parts) if parts else "بدون قيود إضافية (جميع الطلبة المطابقة لباقي المعايير)"
 
 
@@ -436,13 +443,17 @@ def _apply_export_filters(
     enrollment_values: set[str],
     exclude_enrollment: set[str],
     student_ids: set[str],
+    exclude_status_codes: set[str] | None = None,
 ) -> list[dict]:
     out = []
+    ex_sc = exclude_status_codes or set()
     for r in rows:
         sid = str(r.get("student_id") or "").strip()
         sc = str(r.get("status_code") or "").strip()
         es = str(r.get("enrollment_status") or "active").strip().lower()
 
+        if ex_sc and sc in ex_sc:
+            continue
         if status_codes and sc not in status_codes:
             continue
         if enrollment_values and es not in enrollment_values:
@@ -756,6 +767,7 @@ def export_performance():
     تصدير تقرير الأداء مع نفس فلاتر الاستعلام:
       - format=xlsx (افتراضي) | pdf | docx
       - status_codes, enrollment, exclude_enrollment, student_ids
+      - exclude_status_codes: حالات تُستبعد (مثلاً no_data لمن لا كشف درجات)
     """
     from pandas import DataFrame
 
@@ -763,6 +775,7 @@ def export_performance():
     status_codes = _parse_csv_set(request.args.get("status_codes", ""))
     enrollment_values = _parse_csv_set(request.args.get("enrollment", ""))
     exclude_enrollment = _parse_csv_set(request.args.get("exclude_enrollment", ""))
+    exclude_status_codes = _parse_csv_set(request.args.get("exclude_status_codes", ""))
     student_ids = _parse_csv_set(request.args.get("student_ids", ""))
 
     with get_connection() as conn:
@@ -774,10 +787,15 @@ def export_performance():
         enrollment_values=enrollment_values,
         exclude_enrollment=exclude_enrollment,
         student_ids=student_ids,
+        exclude_status_codes=exclude_status_codes,
     )
 
     summary = _build_filter_summary_ar(
-        status_codes, enrollment_values, exclude_enrollment, student_ids
+        status_codes,
+        enrollment_values,
+        exclude_enrollment,
+        student_ids,
+        exclude_status_codes=exclude_status_codes,
     )
     generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
