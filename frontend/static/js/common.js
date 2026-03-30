@@ -394,6 +394,12 @@ function escapeHtmlSchedule(s) {
         .replace(/"/g, '&quot;');
 }
 
+function escapeAttrSchedule(s) {
+    return String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;');
+}
+
 /**
  * @param {{ course_name?: string, room?: string, instructor?: string }} row
  * @returns {string}
@@ -434,22 +440,43 @@ function buildPublishedTimetableHtml(scheduleRows, opts) {
         if (!slotsMap[key]) slotsMap[key] = [];
         slotsMap[key].push(row);
     });
-    let html = `<table class="timetable${compactClass}"><thead><tr><th class="day-header">اليوم / الوقت</th>`;
+    let html = `<table class="timetable timetable--cols3${compactClass}"><thead><tr><th rowspan="2" class="day-header">اليوم</th>`;
     timeSlots.forEach(time => {
-        html += `<th class="time-header">${escapeHtmlSchedule(time)}</th>`;
+        html += `<th colspan="3" class="time-header" data-time-slot="${escapeAttrSchedule(time)}">`;
+        html += `<div class="th-time-label">${escapeHtmlSchedule(time)}</div>`;
+        html += '</th>';
     });
+    html += '</tr><tr>';
+    for (let i = 0; i < timeSlots.length; i++) {
+        html += '<th class="sub-time-header">المقرر</th><th class="sub-time-header">الأستاذ</th><th class="sub-time-header">القاعة</th>';
+    }
     html += '</tr></thead><tbody>';
     DAYS.forEach(day => {
+        const dAttr = escapeAttrSchedule(day);
         html += `<tr><th class="day-header">${escapeHtmlSchedule(day)}</th>`;
         timeSlots.forEach(time => {
             const key = `${day}|${time}`;
             const courses = slotsMap[key] || [];
-            html += '<td class="time-slot-cell">';
-            courses.forEach(c => {
-                const line = formatPublishedScheduleCell(c);
-                html += `<div class="published-course-line">${escapeHtmlSchedule(line)}</div>`;
-            });
-            html += '</td>';
+            const tAttr = escapeAttrSchedule(time);
+            html += `<td colspan="3" class="time-slot-cell slot-slot-block" data-slot-day="${dAttr}" data-slot-time="${tAttr}">`;
+            html += '<div class="slot-aligned-rows">';
+            if (!courses.length) {
+                html += '<div class="slot-course-record slot-course-record--empty">';
+                html += '<div class="slot-cell slot-cell--course"><span class="slot-placeholder">—</span></div>';
+                html += '<div class="slot-cell slot-cell--inst"><span class="slot-placeholder">—</span></div>';
+                html += '<div class="slot-cell slot-cell--room"><span class="slot-placeholder">—</span></div>';
+                html += '</div>';
+            } else {
+                courses.forEach((c, idx) => {
+                    if (idx > 0) html += '<div class="slot-record-fullsep"></div>';
+                    html += '<div class="slot-course-record">';
+                    html += `<div class="slot-cell slot-cell--course"><span class="course-pub-label">${escapeHtmlSchedule(c.course_name)}</span></div>`;
+                    html += `<div class="slot-cell slot-cell--inst"><span class="slot-text">${escapeHtmlSchedule(c.instructor)}</span></div>`;
+                    html += `<div class="slot-cell slot-cell--room"><span class="slot-text">${escapeHtmlSchedule(c.room)}</span></div>`;
+                    html += '</div>';
+                });
+            }
+            html += '</div></td>';
         });
         html += '</tr>';
     });

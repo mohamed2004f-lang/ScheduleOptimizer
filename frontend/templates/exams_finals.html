@@ -22,6 +22,9 @@
         <strong>تعليمات:</strong> حدد تاريخ البداية والنهاية للجدول. الوقت ثابت: <strong>09:00-12:00</strong>. انقر على زر <strong>إدارة المقررات</strong> في أي تاريخ لإضافة أو حذف امتحانات.
       </div>
 
+      {% set exam_publish_kind = 'final' %}
+      {% include 'exam_publish_controls.html' %}
+
       <div class="card mb-3">
         <div class="card-body">
           <div class="row g-3 align-items-end">
@@ -301,6 +304,10 @@ async function loadExamSchedule() {
         }
       });
     });
+
+    if (window.refreshExamPublishStatus && typeof window.refreshExamPublishStatus[examType] === 'function') {
+      window.refreshExamPublishStatus[examType]();
+    }
     
   } catch (err) {
     console.error('loadExamSchedule error', err);

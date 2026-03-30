@@ -113,6 +113,8 @@
             <li><a class="dropdown-item" id="navAcademicCalendar" href="/academic_calendar_page">التقويم الأكاديمي</a></li>
             <li><a class="dropdown-item" id="navScheduleForm" href="/schedule_form">الجدول الدراسي</a></li>
             <li><a class="dropdown-item" id="navResults" href="/results">تعارضات الجدول الدراسي</a></li>
+            <li><a class="dropdown-item" id="navScheduleVersions" href="/schedule_versions_page" style="display:none;">أرشيف نسخ الجدول الدراسي</a></li>
+            <li><a class="dropdown-item" id="navExamScheduleVersions" href="/exam_schedule_versions_page" style="display:none;">أرشيف جداول الامتحانات</a></li>
             <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item" id="navExamsMidterms" href="/exams/midterms">الامتحانات الجزئية</a></li>
             <li><a class="dropdown-item" id="navExamsFinals" href="/exams/finals">الامتحانات النهائية</a></li>
@@ -225,6 +227,16 @@
         const showCourseReg = ['admin', 'admin_main', 'head_of_department'].includes(role || '');
         elCourseRegReport.style.display = showCourseReg ? '' : 'none';
       }
+      const elScheduleVersions = document.getElementById('navScheduleVersions');
+      if (elScheduleVersions) {
+        const showScheduleVersions = ['admin', 'admin_main', 'head_of_department'].includes(role || '');
+        elScheduleVersions.style.display = showScheduleVersions ? '' : 'none';
+      }
+      const elExamScheduleVersions = document.getElementById('navExamScheduleVersions');
+      if (elExamScheduleVersions) {
+        const showExamArch = ['admin', 'admin_main', 'head_of_department'].includes(role || '');
+        elExamScheduleVersions.style.display = showExamArch ? '' : 'none';
+      }
       const elGradeDrafts = document.getElementById('navGradeDrafts');
       if (elGradeDrafts) {
         const showGradeDrafts = (role === 'admin_main' || role === 'head_of_department' || (role === 'instructor' && !isSupervisor));
@@ -249,6 +261,8 @@
           'navUncompletedCoursesReport',
           'navGradeCourseAudit',
           'navCourseRegistrationReport',
+          'navScheduleVersions',
+          'navExamScheduleVersions',
           'navUsersAdmin',
           'navAcademicRules',
         ];
@@ -277,6 +291,8 @@
           'navNotRegisteredCoursesReport',
           'navGradeCourseAudit',
           'navCourseRegistrationReport',
+          'navScheduleVersions',
+          'navExamScheduleVersions',
           'navAcademicRules',
           'navAnalytics',
           'navExamsMidterms',
@@ -321,6 +337,8 @@
         ['/not_registered_courses_report_page','navNotRegisteredCoursesReport'],
         ['/grade_course_mapping_audit_page','navGradeCourseAudit'],
         ['/course_registration_report_page','navCourseRegistrationReport'],
+        ['/schedule_versions_page','navScheduleVersions'],
+        ['/exam_schedule_versions_page','navExamScheduleVersions'],
         ['/performance_report','navPerformance'],
         ['/supervisor_dashboard','navSupervisorDashboard'],
         ['/results','navResults'],

@@ -80,6 +80,7 @@
         <button id="btnExportCSV" class="btn btn-outline-secondary btn-sm">تصدير CSV</button>
         <button id="btnExportTXT" class="btn btn-outline-secondary btn-sm">تصدير TXT</button>
         <button id="btnExportExcel" class="btn btn-outline-secondary btn-sm">تصدير Excel</button>
+        <button id="btnExportSignedExcel" class="btn btn-outline-success btn-sm">تصدير الموقّعين (Excel)</button>
         <div class="form-check ms-1 mb-0 align-self-center user-select-none">
           <input class="form-check-input" type="checkbox" id="exportFilteredOnly">
           <label class="form-check-label small" for="exportFilteredOnly" title="ينطبق على تصدير CSV و TXT فقط">المعروض فقط (CSV/TXT)</label>
@@ -137,6 +138,14 @@
               <option value="6p">6 فأكثر</option>
             </select>
           </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label mb-0 small">التوقيع</label>
+            <select id="filterSigned" class="form-select form-select-sm">
+              <option value="all">الكل</option>
+              <option value="signed">الموقّعون فقط</option>
+              <option value="not_signed">غير الموقّعين</option>
+            </select>
+          </div>
           <div class="col-6 col-md-auto">
             <button type="button" id="btnResetFilters" class="btn btn-outline-secondary btn-sm">إعادة ضبط الفلاتر</button>
           </div>
@@ -168,6 +177,46 @@
       <div class="modal-body">
         <div id="editStudentInfo" class="mb-2 small text-muted"></div>
         <div id="electivesStatusInModal" class="mb-2 small"></div>
+
+        <div class="card mb-3">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+              <h6 class="mb-0">توثيق توقيع استمارة التسجيل</h6>
+              <div class="small text-muted">يرتبط بالفصل الحالي</div>
+            </div>
+            <div class="row g-2 mt-1 align-items-end">
+              <div class="col-12 col-md-4">
+                <div class="form-check user-select-none">
+                  <input class="form-check-input" type="checkbox" id="regStudentSigned">
+                  <label class="form-check-label" for="regStudentSigned">الطالب وقّع نموذج التسجيل</label>
+                </div>
+              </div>
+              <div class="col-12 col-md-4">
+                <label class="form-label mb-1 small">تاريخ/وقت التوقيع</label>
+                <input class="form-control form-control-sm" type="datetime-local" id="regSignedAt">
+              </div>
+              <div class="col-12 col-md-4">
+                <label class="form-label mb-1 small">نسخة الاستمارة</label>
+                <select class="form-select form-select-sm" id="regFormVersionSelect">
+                  <option value="">أحدث نسخة</option>
+                </select>
+              </div>
+              <div class="col-12 col-md-4">
+                <label class="form-label mb-1 small">إرفاق النموذج (PDF/صورة)</label>
+                <input class="form-control form-control-sm" type="file" id="regSignedFile" accept=".pdf,.png,.jpg,.jpeg,.webp">
+                <div class="small mt-1">
+                  <a id="regSignedFileLink" href="#" target="_blank" style="display:none;">تحميل المرفق الحالي</a>
+                  <span id="regSignedFileMsg" class="text-muted"></span>
+                </div>
+              </div>
+              <div class="col-12">
+                <label class="form-label mb-1 small">ملاحظة (اختياري)</label>
+                <textarea class="form-control form-control-sm" rows="2" id="regSignatureNote" placeholder="مثال: وقّع أمام الموظف فلان..."></textarea>
+              </div>
+            </div>
+            <input type="hidden" id="regSignedFileId" value="">
+          </div>
+        </div>
 
         <div class="mb-3">
           <h6 class="mb-2">التسجيلات الحالية</h6>
@@ -208,6 +257,47 @@ let editing = null; // current student object
 
 const REG_FILTERS_LS = 'registrations_form_filters_v2';
 
+// رفع ملف استمارة التسجيل الموقعة (للأدمن فقط) وربطه بالتوقيع
+(function initSignedFormUpload(){
+  const fileEl = document.getElementById('regSignedFile');
+  if (!fileEl) return;
+  fileEl.addEventListener('change', async (ev) => {
+    try {
+      const f = ev.target.files && ev.target.files[0];
+      if (!f || !editing) return;
+      const sid = (editing.student_id || editing.id || editing.studentId || '').toString();
+      const termName = (document.getElementById('currentRegistrationTerm')?.value || '').trim();
+      const termYear = (document.getElementById('currentRegistrationYear')?.value || '').trim();
+      const term = [termName, termYear].filter(Boolean).join(' ').trim();
+
+      const msg = document.getElementById('regSignedFileMsg');
+      if (msg) msg.textContent = 'جارٍ رفع الملف...';
+
+      const fd = new FormData();
+      fd.append('student_id', sid);
+      if (term) fd.append('term', term);
+      fd.append('file', f);
+      const res = await fetch('/students/registration_signature/upload', { method: 'POST', body: fd, credentials: 'include' });
+      const j = await res.json().catch(()=>null);
+      if (!res.ok || !j || j.status !== 'ok') {
+        if (msg) msg.textContent = (j && j.message) ? j.message : ('فشل رفع الملف (' + res.status + ')');
+        return;
+      }
+      const fileId = document.getElementById('regSignedFileId');
+      const link = document.getElementById('regSignedFileLink');
+      if (fileId) fileId.value = j.file_id || '';
+      if (link) {
+        link.href = j.download_url || ('/students/registration_signature/file/' + (j.file_id || ''));
+        link.style.display = '';
+      }
+      if (msg) msg.textContent = 'تم رفع الملف بنجاح.';
+    } catch (e) {
+      const msg = document.getElementById('regSignedFileMsg');
+      if (msg) msg.textContent = 'خطأ أثناء رفع الملف.';
+    }
+  });
+})();
+
 /* helpers */
 async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok,status:r.status,json:j}; }
 function el(tag, cls, html){ const e=document.createElement(tag); if(cls) e.className=cls; if(html!==undefined) e.innerHTML=html; return e; }
@@ -247,6 +337,7 @@ function setStats(list){
   let withRegs = 0;
   let over18 = 0;
   let under12 = 0;
+  let signedCount = 0;
   let nActive = 0, nWithdrawn = 0, nSuspended = 0, nGrad = 0;
   for (const s of arr){
     const n = (s.registrations || []).length;
@@ -254,6 +345,7 @@ function setStats(list){
     const units = studentTotalUnits(s);
     if (n && units > 18) over18 += 1;
     if (n && units < 12) under12 += 1;
+    if (s.student_signed) signedCount += 1;
     const es = enrollmentStatusNorm(s);
     if (es === 'withdrawn') nWithdrawn++;
     else if (es === 'suspended') nSuspended++;
@@ -261,6 +353,7 @@ function setStats(list){
     else nActive++;
   }
   const withoutRegs = Math.max(0, total - withRegs);
+  const notSignedCount = Math.max(0, total - signedCount);
   const el = document.getElementById('stats');
   if (!el) return;
   el.innerHTML =
@@ -269,6 +362,8 @@ function setStats(list){
     `<span class="badge bg-secondary-subtle text-secondary-emphasis">غير مسجل: ${withoutRegs}</span>` +
     `<span class="badge bg-warning-subtle text-dark">وحدات &gt;18: ${over18}</span>` +
     `<span class="badge bg-info-subtle text-dark">وحدات &lt;12: ${under12}</span>` +
+    `<span class="badge bg-success-subtle text-success-emphasis ms-1">موقّعون ${signedCount}</span>` +
+    `<span class="badge bg-danger-subtle text-danger-emphasis ms-1">غير موقّعين ${notSignedCount}</span>` +
     `<span class="badge bg-light text-dark border ms-1" title="حسب القائمة المعروضة">قيد: نشط ${nActive}</span>` +
     `<span class="badge bg-secondary-subtle text-secondary-emphasis ms-1">سحب ${nWithdrawn}</span>` +
     `<span class="badge bg-danger-subtle text-danger-emphasis ms-1">موقوف ${nSuspended}</span>` +
@@ -282,6 +377,7 @@ function saveFilterPrefs(){
       enroll: document.getElementById('filterEnrollment')?.value || 'all',
       units: document.getElementById('filterUnits')?.value || 'all',
       courses: document.getElementById('filterCourseCount')?.value || 'all',
+      signed: document.getElementById('filterSigned')?.value || 'all',
       q: (document.getElementById('searchInput')?.value || '').trim(),
       exportFiltered: document.getElementById('exportFilteredOnly')?.checked || false
     };
@@ -298,12 +394,14 @@ function loadFilterPrefs(){
     const fe = document.getElementById('filterEnrollment');
     const fu = document.getElementById('filterUnits');
     const fc = document.getElementById('filterCourseCount');
+    const fs = document.getElementById('filterSigned');
     const si = document.getElementById('searchInput');
     const ex = document.getElementById('exportFilteredOnly');
     if (fr && o.reg) fr.value = o.reg;
     if (fe && o.enroll) fe.value = o.enroll;
     if (fu && o.units) fu.value = o.units;
     if (fc && o.courses) fc.value = o.courses;
+    if (fs && o.signed) fs.value = o.signed;
     if (si && typeof o.q === 'string') si.value = o.q;
     if (ex && typeof o.exportFiltered === 'boolean') ex.checked = o.exportFiltered;
   } catch (e) { /* ignore */ }
@@ -315,6 +413,7 @@ function getFilteredStudents(){
   const enrollF = document.getElementById('filterEnrollment')?.value || 'all';
   const unitsF = document.getElementById('filterUnits')?.value || 'all';
   const countF = document.getElementById('filterCourseCount')?.value || 'all';
+  const signedF = document.getElementById('filterSigned')?.value || 'all';
 
   return STUDENTS.filter(s => {
     if (q) {
@@ -345,6 +444,8 @@ function getFilteredStudents(){
     } else if (countF === '6p') {
       if (n < 6) return false;
     }
+    if (signedF === 'signed' && !s.student_signed) return false;
+    if (signedF === 'not_signed' && !!s.student_signed) return false;
     return true;
   });
 }
@@ -367,7 +468,12 @@ async function loadData(){
       student_id: s.student_id || s.id || s.studentId || '',
       student_name: s.student_name || s.name || s.full_name || '',
       university_number: s.university_number || s.university || s.student_number || '',
-      enrollment_status: enrollmentStatusNorm({ enrollment_status: s.enrollment_status || 'active' })
+      enrollment_status: enrollmentStatusNorm({ enrollment_status: s.enrollment_status || 'active' }),
+      student_signed: false,
+      signed_at: '',
+      signature_note: '',
+      form_file_id: null,
+      form_version_no: 0
     };
   }) : [];
   STUDENTS.forEach(s=> s.registrations = []);
@@ -387,6 +493,27 @@ async function loadData(){
     map[sid].push(cn);
   });
   STUDENTS.forEach(s => { s.registrations = map[s.student_id] || []; });
+
+  // تحميل توثيق التوقيع للفصل الحالي ودمجه في القائمة
+  try {
+    const sigRes = await fetchJSON('/students/registration_signatures/list');
+    const sigItems = Array.isArray(sigRes.json?.items) ? sigRes.json.items : [];
+    if (sigItems.length) {
+      const smap = {};
+      sigItems.forEach(it => {
+        smap[String(it.student_id || '').trim()] = it;
+      });
+      STUDENTS.forEach(s => {
+        const it = smap[String(s.student_id || '').trim()];
+        if (!it) return;
+        s.student_signed = !!it.student_signed;
+        s.signed_at = it.signed_at || '';
+        s.signature_note = it.signature_note || '';
+        s.form_file_id = it.form_file_id || null;
+        s.form_version_no = Number(it.form_version_no || 0);
+      });
+    }
+  } catch(e) {}
 
   applyListFilters();
 }
@@ -425,7 +552,19 @@ function renderStudents(list){
     const enrollLbl = escapeHtml(enrollmentStatusLabelAr(esCode));
     const enrollCls = enrollmentBadgeClass(esCode);
     const enrollBadge = ` <span class="badge ${enrollCls} ms-2">${enrollLbl}</span>`;
-    left.innerHTML = `<div><strong>${displayName}</strong> <small class="text-muted">(${displayNum})</small>${enrollBadge}${unitsBadge}</div>`;
+    const signBadge = s.student_signed
+      ? ` <span class="badge bg-success-subtle text-success-emphasis ms-2">موقّع</span>`
+      : ` <span class="badge bg-danger-subtle text-danger-emphasis ms-2">غير موقّع</span>`;
+    left.innerHTML = `<div><strong>${displayName}</strong> <small class="text-muted">(${displayNum})</small>${enrollBadge}${unitsBadge}${signBadge}</div>`;
+    if (s.student_signed) {
+      const when = (s.signed_at || '').toString().replace('T', ' ').slice(0, 16);
+      const note = (s.signature_note || '').toString().trim();
+      const fileTxt = s.form_file_id ? ' — مرفق مرفوع' : '';
+      const verTxt = s.form_version_no ? (` — نسخة #${Number(s.form_version_no)}`) : '';
+      const msg = `تم توقيع الاستمارة${when ? ' بتاريخ: ' + when : ''}${verTxt}${note ? ' — ' + escapeHtml(note) : ''}${fileTxt}`;
+      const sigHint = el('div', 'alert alert-success py-1 px-2 mt-2 mb-0 small', msg);
+      left.appendChild(sigHint);
+    }
 
     const badges = el('div','courses-badges mt-2 d-flex flex-wrap');
     if((s.registrations||[]).length){
@@ -524,9 +663,68 @@ async function openEditModal(student){
   const currentDiv = document.getElementById('currentRegistrationsList');
   const eligibleDiv = document.getElementById('eligibleCoursesList');
   const completedDiv = document.getElementById('completedList');
+  const verSel = document.getElementById('regFormVersionSelect');
   currentDiv.innerHTML = '';
   eligibleDiv.innerHTML = '';
   completedDiv.innerHTML = '';
+
+  // تحميل نسخ الاستمارة التاريخية لهذا الطالب/الفصل
+  try {
+    if (verSel) {
+      verSel.innerHTML = '<option value="">أحدث نسخة</option>';
+      const term = [(document.getElementById('currentRegistrationTerm')?.value || '').trim(), (document.getElementById('currentRegistrationYear')?.value || '').trim()].filter(Boolean).join(' ').trim();
+      const sid0 = (student.student_id || student.id || student.studentId || '').toString();
+      const urlV = '/enrollment/registration_form_versions?student_id=' + encodeURIComponent(sid0) + (term ? ('&semester=' + encodeURIComponent(term)) : '');
+      const rv = await fetchJSON(urlV);
+      const items = Array.isArray(rv.json?.items) ? rv.json.items : [];
+      items.forEach(it => {
+        const o = document.createElement('option');
+        o.value = it.id;
+        o.textContent = `نسخة #${it.version_no || 0} — ${(it.generated_at || '').replace('T',' ').slice(0,16) || '—'}`;
+        verSel.appendChild(o);
+      });
+    }
+  } catch(e) {}
+
+  // تحميل توثيق التوقيع الحالي (إن وجد)
+  try {
+    const sid = (student.student_id || student.id || student.studentId || '').toString();
+    const sig = await fetchJSON('/students/registration_signature?student_id=' + encodeURIComponent(sid));
+    const chk = document.getElementById('regStudentSigned');
+    const dt = document.getElementById('regSignedAt');
+    const note = document.getElementById('regSignatureNote');
+      const fileId = document.getElementById('regSignedFileId');
+      const verSel = document.getElementById('regFormVersionSelect');
+    const link = document.getElementById('regSignedFileLink');
+    const msg = document.getElementById('regSignedFileMsg');
+      if (verSel) {
+        const verId = (verSel.value || '').trim();
+        if (verId) fd.append('form_version_id', verId);
+      }
+    if (sig.ok && sig.json) {
+      if (chk) chk.checked = !!sig.json.student_signed;
+      if (note) note.value = sig.json.signature_note || '';
+      if (fileId) fileId.value = sig.json.form_file_id || '';
+      if (verSel) {
+        const vId = sig.json.form_version_id || '';
+        if (vId) verSel.value = String(vId);
+      }
+      if (dt) {
+        const v = (sig.json.signed_at || '').toString().replace('Z', '');
+        dt.value = v ? v.slice(0, 16) : '';
+      }
+      if (link) {
+        if (sig.json.form_file_id) {
+          link.href = '/students/registration_signature/file/' + sig.json.form_file_id;
+          link.style.display = '';
+        } else {
+          link.style.display = 'none';
+        }
+      }
+      if (msg) msg.textContent = sig.json.term ? ('الفصل: ' + sig.json.term) : '';
+      if (msg && sig.json.form_version_no) msg.textContent += ` — نسخة #${sig.json.form_version_no}`;
+    }
+  } catch (e) {}
 
   // fetch eligible + completed lists from backend
   const resp = await fetchJSON(`/students/eligible_courses?student_id=${encodeURIComponent(student.student_id || '')}`);
@@ -717,7 +915,14 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
   const payload = {
     student_id: editing.student_id || editing.id || editing.studentId,
     registrations: regs,
-    override_reason: out ? overrideReason : ''
+    override_reason: out ? overrideReason : '',
+    signature: {
+      student_signed: !!document.getElementById('regStudentSigned')?.checked,
+      signed_at: (document.getElementById('regSignedAt')?.value || '').trim(),
+      signature_note: (document.getElementById('regSignatureNote')?.value || '').trim(),
+      form_file_id: (document.getElementById('regSignedFileId')?.value || '').trim(),
+      form_version_id: (document.getElementById('regFormVersionSelect')?.value || '').trim()
+    }
   };
   try{
     const res = await fetchJSON('/save_registrations', {
@@ -831,7 +1036,7 @@ async function requestDropCourseForStudent(student, courseName){
 
 /* search + filters */
 document.getElementById('searchInput').addEventListener('input', debounce(()=> applyListFilters(), 200));
-['filterRegStatus','filterUnits','filterCourseCount'].forEach(id=>{
+['filterRegStatus','filterEnrollment','filterUnits','filterCourseCount','filterSigned'].forEach(id=>{
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', ()=> applyListFilters());
 });
@@ -839,12 +1044,16 @@ const btnResetFilters = document.getElementById('btnResetFilters');
 if (btnResetFilters) {
   btnResetFilters.addEventListener('click', ()=>{
     const fr = document.getElementById('filterRegStatus');
+    const fe = document.getElementById('filterEnrollment');
     const fu = document.getElementById('filterUnits');
     const fc = document.getElementById('filterCourseCount');
+    const fs = document.getElementById('filterSigned');
     const si = document.getElementById('searchInput');
     if (fr) fr.value = 'all';
+    if (fe) fe.value = 'all';
     if (fu) fu.value = 'all';
     if (fc) fc.value = 'all';
+    if (fs) fs.value = 'all';
     if (si) si.value = '';
     try { localStorage.removeItem(REG_FILTERS_LS); } catch (e) { /* ignore */ }
     applyListFilters();
@@ -909,6 +1118,27 @@ document.getElementById('btnExportExcel').addEventListener('click', async ()=>{
     alert('فشل الاتصال بالخادم أثناء التصدير');
   }
 });
+
+const btnExportSignedExcel = document.getElementById('btnExportSignedExcel');
+if (btnExportSignedExcel){
+  btnExportSignedExcel.addEventListener('click', async ()=>{
+    const url = '/students/export/registration_signatures?signed_only=1';
+    try {
+      const res = await fetch(url, { method: 'GET', credentials: 'include' });
+      if (!res.ok) {
+        let j = null;
+        try { j = await res.json(); } catch(e){/* ignore */ }
+        alert(j?.message || `فشل التصدير (HTTP ${res.status})`);
+        return;
+      }
+      const blob = await res.blob();
+      downloadBlob(blob, 'registration_signatures_signed.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    } catch (err) {
+      console.error('export signed excel failed', err);
+      alert('فشل الاتصال بالخادم أثناء تصدير الموقّعين');
+    }
+  });
+}
 
 function downloadBlob(content, filename, type){
   const blob = (content instanceof Blob) ? content : new Blob([content], {type});

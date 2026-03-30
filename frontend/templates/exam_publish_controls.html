@@ -1,0 +1,98 @@
+{# يتطلب المتغير: exam_publish_kind = 'midterm' | 'final' #}
+<div class="container-fluid px-0">
+  <div class="alert alert-warning py-2 px-3 mb-2 d-none" id="examChangeBanner_{{ exam_publish_kind }}" style="border-radius:10px;">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <div>
+        <strong>تنبيه</strong>: تم تعديل جدول الامتحانات بعد اعتماده ونشره.
+        <span class="small text-muted">آخر تعديل: <span id="examUpdatedAt_{{ exam_publish_kind }}">—</span></span>
+      </div>
+      <span class="small text-muted">راجع الجدول ثم أعد النشر إن لزم.</span>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-3 border-primary-subtle" id="examPublishCard_{{ exam_publish_kind }}">
+  <div class="card-body py-2">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+      <div id="examPublishStatus_{{ exam_publish_kind }}" class="small text-muted flex-grow-1">—</div>
+      <button type="button" class="btn btn-outline-primary btn-sm d-none" id="btnExamPublish_{{ exam_publish_kind }}">
+        اعتماد ونشر جدول الامتحانات
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const examType = "{{ exam_publish_kind }}";
+  const banner = document.getElementById("examChangeBanner_" + examType);
+  const updatedEl = document.getElementById("examUpdatedAt_" + examType);
+  const statusEl = document.getElementById("examPublishStatus_" + examType);
+  const btn = document.getElementById("btnExamPublish_" + examType);
+  const card = document.getElementById("examPublishCard_" + examType);
+
+  async function refreshExamPublishStatus() {
+    if (!statusEl || !btn || !card) return;
+    try {
+      const auth = await fetch("/auth/check", { credentials: "include" }).then(function (r) { return r.json(); }).catch(function () { return {}; });
+      const role = auth.role || "";
+      const mayPublish = ["admin", "admin_main", "head_of_department"].includes(role);
+      if (!mayPublish) {
+        card.classList.add("d-none");
+        if (banner) banner.classList.add("d-none");
+        return;
+      }
+      card.classList.remove("d-none");
+      const st = await fetch("/exams/" + encodeURIComponent(examType) + "/publish_status", { credentials: "include" })
+        .then(function (r) { return r.json(); })
+        .catch(function () { return {}; });
+      if (st.published && st.published_at) {
+        statusEl.textContent = "الجدول معتمد ومنشور للطلبة والمشرفين منذ " + String(st.published_at || "").slice(0, 19).replace("T", " ");
+      } else {
+        statusEl.textContent = "الجدول غير منشور بعد؛ الطلبة والمشرفون لن يرَوا التفاصيل حتى تعتمده.";
+      }
+      btn.classList.remove("d-none");
+      if (banner && updatedEl && st.published && st.changed_since_publish) {
+        updatedEl.textContent = st.updated_at || "—";
+        banner.classList.remove("d-none");
+      } else if (banner) {
+        banner.classList.add("d-none");
+      }
+    } catch (e) {
+      card.classList.add("d-none");
+    }
+  }
+
+  if (btn) {
+    btn.addEventListener("click", async function () {
+      if (!confirm("اعتماد ونشر جدول الامتحانات الحالي؟\\nسيتم حفظ نسخة أرشيفية للنشر (منشور) ويصبح الجدول ظاهراً للطلبة والمشرفين.")) return;
+      var csrf = document.querySelector('meta[name="csrf-token"]') && document.querySelector('meta[name="csrf-token"]').getAttribute("content");
+      var headers = { "Content-Type": "application/json" };
+      if (csrf) headers["X-CSRFToken"] = csrf;
+      try {
+        var r = await fetch("/exams/" + encodeURIComponent(examType) + "/publish", { method: "POST", credentials: "include", headers: headers, body: "{}" });
+        var j = await r.json().catch(function () { return null; });
+        if (r.ok && j && j.status === "ok") {
+          if (window.showToast) window.showToast(j.message || "تم النشر", "success");
+          else alert(j.message || "تم النشر");
+          refreshExamPublishStatus();
+          if (typeof loadExamSchedule === "function") loadExamSchedule();
+        } else {
+          var msg = (j && j.message) ? j.message : r.statusText;
+          if (window.showToast) window.showToast("فشل النشر: " + msg, "danger");
+          else alert("فشل النشر: " + msg);
+        }
+      } catch (e) {
+        if (window.showToast) window.showToast("خطأ في الاتصال", "danger");
+        else alert("خطأ في الاتصال");
+      }
+    });
+  }
+
+  window.addEventListener("load", function () {
+    refreshExamPublishStatus();
+  });
+  window.refreshExamPublishStatus = window.refreshExamPublishStatus || {};
+  window.refreshExamPublishStatus[examType] = refreshExamPublishStatus;
+})();
+</script>

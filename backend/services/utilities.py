@@ -135,8 +135,103 @@ def ensure_tables():
                             course_name TEXT
                         )""",
                         """
+                        CREATE TABLE IF NOT EXISTS registration_signatures (
+                            student_id TEXT NOT NULL,
+                            term TEXT NOT NULL,
+                            student_signed INTEGER NOT NULL DEFAULT 0,
+                            signed_at TEXT,
+                            signature_note TEXT,
+                            form_file_id INTEGER,
+                            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                            updated_by TEXT DEFAULT '',
+                            PRIMARY KEY (student_id, term)
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS registration_form_files (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            student_id TEXT NOT NULL,
+                            term TEXT NOT NULL,
+                            original_name TEXT DEFAULT '',
+                            stored_path TEXT NOT NULL,
+                            mime_type TEXT DEFAULT '',
+                            file_size INTEGER DEFAULT 0,
+                            sha256 TEXT DEFAULT '',
+                            uploaded_by TEXT DEFAULT '',
+                            uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS registration_signature_events (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            student_id TEXT NOT NULL,
+                            term TEXT NOT NULL,
+                            form_version_id INTEGER,
+                            form_version_no INTEGER DEFAULT 0,
+                            student_signed INTEGER NOT NULL DEFAULT 0,
+                            signed_at TEXT,
+                            signature_note TEXT,
+                            form_file_id INTEGER,
+                            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                            updated_by TEXT DEFAULT '',
+                            UNIQUE(student_id, term, form_version_id)
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS registration_form_versions (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            student_id TEXT NOT NULL,
+                            semester TEXT NOT NULL,
+                            source TEXT NOT NULL DEFAULT 'actual',
+                            version_no INTEGER NOT NULL DEFAULT 1,
+                            snapshot_json TEXT DEFAULT '',
+                            generated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                            generated_by TEXT DEFAULT '',
+                            UNIQUE(student_id, semester, source, version_no)
+                        )""",
+                        """
                         CREATE TABLE IF NOT EXISTS optimized_schedule (
                             section_id INTEGER, course_name TEXT, day TEXT, time TEXT, room TEXT, instructor TEXT, semester TEXT
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS schedule_versions (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            semester TEXT NOT NULL,
+                            version_no INTEGER NOT NULL DEFAULT 1,
+                            snapshot_json TEXT DEFAULT '',
+                            generated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                            generated_by TEXT DEFAULT '',
+                            note TEXT DEFAULT '',
+                            is_published INTEGER NOT NULL DEFAULT 0,
+                            UNIQUE (semester, version_no)
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS schedule_version_events (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            schedule_version_id INTEGER NOT NULL,
+                            event_type TEXT NOT NULL,
+                            event_time TEXT DEFAULT CURRENT_TIMESTAMP,
+                            actor TEXT DEFAULT '',
+                            details TEXT DEFAULT ''
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS exam_schedule_versions (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            exam_type TEXT NOT NULL CHECK (exam_type IN ('midterm', 'final')),
+                            semester TEXT NOT NULL,
+                            version_no INTEGER NOT NULL DEFAULT 1,
+                            snapshot_json TEXT DEFAULT '',
+                            generated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                            generated_by TEXT DEFAULT '',
+                            note TEXT DEFAULT '',
+                            is_published INTEGER NOT NULL DEFAULT 0,
+                            UNIQUE (exam_type, semester, version_no)
+                        )""",
+                        """
+                        CREATE TABLE IF NOT EXISTS exam_schedule_version_events (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            exam_schedule_version_id INTEGER NOT NULL,
+                            event_type TEXT NOT NULL,
+                            event_time TEXT DEFAULT CURRENT_TIMESTAMP,
+                            actor TEXT DEFAULT '',
+                            details TEXT DEFAULT ''
                         )""",
                         """
                         CREATE TABLE IF NOT EXISTS conflict_report (
@@ -571,6 +666,97 @@ def touch_schedule_updated_at(conn=None, db_file=DB_FILE):
         )
         c.commit()
         return now
+    if conn is not None:
+        return _set(conn)
+    with get_connection(db_file) as c:
+        return _set(c)
+
+
+def _exam_schedule_published_key(exam_type: str) -> str:
+    return f"exam_{exam_type}_schedule_published_at"
+
+
+def _exam_schedule_updated_key(exam_type: str) -> str:
+    return f"exam_{exam_type}_schedule_updated_at"
+
+
+def get_exam_schedule_published_at(exam_type: str, conn=None, db_file=DB_FILE):
+    """وقت آخر اعتماد/نشر لجدول الامتحانات (جزئي أو نهائي)، أو None."""
+    if exam_type not in ("midterm", "final"):
+        return None
+    key = _exam_schedule_published_key(exam_type)
+
+    def _get(c):
+        cur = c.cursor()
+        cur.execute("SELECT value FROM system_settings WHERE key = ?", (key,))
+        row = cur.fetchone()
+        return row[0] if row and row[0] else None
+
+    if conn is not None:
+        return _get(conn)
+    with get_connection(db_file) as c:
+        return _get(c)
+
+
+def set_exam_schedule_published_at(exam_type: str, conn=None, db_file=DB_FILE):
+    """يضبط وقت نشر جدول الامتحانات إلى الآن ويعيد القيمة النصية."""
+    from datetime import datetime
+
+    if exam_type not in ("midterm", "final"):
+        return None
+    key = _exam_schedule_published_key(exam_type)
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _set(c):
+        cur = c.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)",
+            (key, now),
+        )
+        c.commit()
+        return now
+
+    if conn is not None:
+        return _set(conn)
+    with get_connection(db_file) as c:
+        return _set(c)
+
+
+def get_exam_schedule_updated_at(exam_type: str, conn=None, db_file=DB_FILE):
+    if exam_type not in ("midterm", "final"):
+        return None
+    key = _exam_schedule_updated_key(exam_type)
+
+    def _get(c):
+        cur = c.cursor()
+        cur.execute("SELECT value FROM system_settings WHERE key = ?", (key,))
+        row = cur.fetchone()
+        return row[0] if row and row[0] else None
+
+    if conn is not None:
+        return _get(conn)
+    with get_connection(db_file) as c:
+        return _get(c)
+
+
+def touch_exam_schedule_updated_at(exam_type: str, conn=None, db_file=DB_FILE):
+    """وقت آخر تعديل على جدول الامتحانات (بعد النشر يُستخدم للتنبيه)."""
+    from datetime import datetime
+
+    if exam_type not in ("midterm", "final"):
+        return None
+    key = _exam_schedule_updated_key(exam_type)
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _set(c):
+        cur = c.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)",
+            (key, now),
+        )
+        c.commit()
+        return now
+
     if conn is not None:
         return _set(conn)
     with get_connection(db_file) as c:

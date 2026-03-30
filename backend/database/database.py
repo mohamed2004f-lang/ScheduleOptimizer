@@ -199,6 +199,61 @@ TABLES_SCHEMA = {
         )
     """,
     
+    'schedule_versions': """
+        CREATE TABLE IF NOT EXISTS schedule_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            semester TEXT NOT NULL,
+            version_no INTEGER NOT NULL DEFAULT 1,
+            snapshot_json TEXT DEFAULT '',
+            generated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            generated_by TEXT DEFAULT '',
+            note TEXT DEFAULT '',
+            is_published INTEGER NOT NULL DEFAULT 0,
+            UNIQUE (semester, version_no)
+        )
+    """,
+
+    'schedule_version_events': """
+        CREATE TABLE IF NOT EXISTS schedule_version_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            schedule_version_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            event_time TEXT DEFAULT CURRENT_TIMESTAMP,
+            actor TEXT DEFAULT '',
+            details TEXT DEFAULT '',
+            FOREIGN KEY (schedule_version_id) REFERENCES schedule_versions(id)
+                ON DELETE CASCADE ON UPDATE CASCADE
+        )
+    """,
+
+    'exam_schedule_versions': """
+        CREATE TABLE IF NOT EXISTS exam_schedule_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            exam_type TEXT NOT NULL CHECK (exam_type IN ('midterm', 'final')),
+            semester TEXT NOT NULL,
+            version_no INTEGER NOT NULL DEFAULT 1,
+            snapshot_json TEXT DEFAULT '',
+            generated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            generated_by TEXT DEFAULT '',
+            note TEXT DEFAULT '',
+            is_published INTEGER NOT NULL DEFAULT 0,
+            UNIQUE (exam_type, semester, version_no)
+        )
+    """,
+
+    'exam_schedule_version_events': """
+        CREATE TABLE IF NOT EXISTS exam_schedule_version_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            exam_schedule_version_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            event_time TEXT DEFAULT CURRENT_TIMESTAMP,
+            actor TEXT DEFAULT '',
+            details TEXT DEFAULT '',
+            FOREIGN KEY (exam_schedule_version_id) REFERENCES exam_schedule_versions(id)
+                ON DELETE CASCADE ON UPDATE CASCADE
+        )
+    """,
+    
     'proposed_moves': """
         CREATE TABLE IF NOT EXISTS proposed_moves (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -264,6 +319,74 @@ TABLES_SCHEMA = {
                 ON DELETE CASCADE ON UPDATE CASCADE,
             FOREIGN KEY (course_name) REFERENCES courses(course_name)
                 ON DELETE SET NULL ON UPDATE CASCADE
+        )
+    """
+    ,
+    'registration_signatures': """
+        CREATE TABLE IF NOT EXISTS registration_signatures (
+            student_id TEXT NOT NULL,
+            term TEXT NOT NULL,
+            student_signed INTEGER NOT NULL DEFAULT 0,
+            signed_at TEXT,
+            signature_note TEXT,
+            form_file_id INTEGER,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_by TEXT DEFAULT '',
+            PRIMARY KEY (student_id, term),
+            FOREIGN KEY (student_id) REFERENCES students(student_id)
+                ON DELETE CASCADE ON UPDATE CASCADE
+        )
+    """,
+
+    'registration_form_files': """
+        CREATE TABLE IF NOT EXISTS registration_form_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT NOT NULL,
+            term TEXT NOT NULL,
+            original_name TEXT DEFAULT '',
+            stored_path TEXT NOT NULL,
+            mime_type TEXT DEFAULT '',
+            file_size INTEGER DEFAULT 0,
+            sha256 TEXT DEFAULT '',
+            uploaded_by TEXT DEFAULT '',
+            uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (student_id) REFERENCES students(student_id)
+                ON DELETE CASCADE ON UPDATE CASCADE
+        )
+    """,
+
+    'registration_signature_events': """
+        CREATE TABLE IF NOT EXISTS registration_signature_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT NOT NULL,
+            term TEXT NOT NULL,
+            form_version_id INTEGER,
+            form_version_no INTEGER DEFAULT 0,
+            student_signed INTEGER NOT NULL DEFAULT 0,
+            signed_at TEXT,
+            signature_note TEXT,
+            form_file_id INTEGER,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_by TEXT DEFAULT '',
+            UNIQUE(student_id, term, form_version_id),
+            FOREIGN KEY (student_id) REFERENCES students(student_id)
+                ON DELETE CASCADE ON UPDATE CASCADE
+        )
+    """,
+
+    'registration_form_versions': """
+        CREATE TABLE IF NOT EXISTS registration_form_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT NOT NULL,
+            semester TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'actual',
+            version_no INTEGER NOT NULL DEFAULT 1,
+            snapshot_json TEXT DEFAULT '',
+            generated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            generated_by TEXT DEFAULT '',
+            UNIQUE(student_id, semester, source, version_no),
+            FOREIGN KEY (student_id) REFERENCES students(student_id)
+                ON DELETE CASCADE ON UPDATE CASCADE
         )
     """
 }

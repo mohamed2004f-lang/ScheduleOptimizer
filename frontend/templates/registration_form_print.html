@@ -34,6 +34,13 @@
   </div>
 
   <h2 class="form-title">استمارة تسجيل مقررات دراسية</h2>
+  {% if form_version_no %}
+  <div class="alert alert-info py-1 px-2 small">
+    نسخة الاستمارة: <strong>#{{ form_version_no }}</strong>
+    {% if form_version_id %} — معرف النسخة: {{ form_version_id }}{% endif %}
+    {% if form_version_generated_at %} — تاريخ الإنشاء: {{ form_version_generated_at }}{% endif %}
+  </div>
+  {% endif %}
 
   <table class="table table-bordered table-sm">
     <tr>

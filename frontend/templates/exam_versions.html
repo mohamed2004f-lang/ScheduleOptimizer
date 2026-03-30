@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>أرشيف جداول الامتحانات</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+{% include "base_nav.html" %}
+
+<main class="container-main container-1100">
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">أرشيف جداول الامتحانات</h1>
+      <p class="page-subtitle">نسخ تاريخية عند التوزيع أو التصدير (جزئي / نهائي) مع إمكانية الاستعادة كمسودة</p>
+    </div>
+  </div>
+
+  <div class="card mb-3 filter-section">
+    <div class="card-body row g-2 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label mb-1 small">الفصل</label>
+        <input id="semesterInput" class="form-control form-control-sm" placeholder="مثال: خريف 25-26">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label mb-1 small">نوع الامتحان</label>
+        <select id="examType" class="form-select form-select-sm">
+          <option value="">الكل</option>
+          <option value="midterm">جزئي</option>
+          <option value="final">نهائي</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label mb-1 small">نوع الحدث</label>
+        <select id="eventType" class="form-select form-select-sm">
+          <option value="">الكل</option>
+          <option value="distribute">توزيع</option>
+          <option value="publish">اعتماد ونشر</option>
+          <option value="export_txt">تصدير نص</option>
+          <option value="export_xlsx">تصدير Excel</option>
+          <option value="export_pdf">تصدير PDF</option>
+          <option value="restore_draft">استعادة مسودة</option>
+        </select>
+      </div>
+      <div class="col-md-4 d-flex gap-2 justify-content-md-end">
+        <button id="btnSearch" class="btn btn-primary btn-sm">بحث</button>
+        <button id="btnReset" class="btn btn-outline-secondary btn-sm">إعادة ضبط</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-body">
+      <div id="msg" class="mb-2"></div>
+      <div class="table-responsive">
+        <table class="table table-sm table-bordered align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>#</th>
+              <th>نوع الامتحان</th>
+              <th>الفصل</th>
+              <th>النسخة</th>
+              <th>نوع الحدث</th>
+              <th>وقت الإنشاء</th>
+              <th>المنشئ</th>
+              <th>ملاحظة</th>
+              <th>حالة النشر</th>
+              <th>إجراءات</th>
+            </tr>
+          </thead>
+          <tbody id="versionsBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+async function fetchJSON(url, opts){
+  const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+  const method = (opts && opts.method) ? String(opts.method).toUpperCase() : 'GET';
+  const headers = { ...(opts && opts.headers ? opts.headers : {}) };
+  if (csrfToken && method !== 'GET' && method !== 'HEAD') {
+    headers['X-CSRFToken'] = csrfToken;
+  }
+  const r = await fetch(url, { credentials: 'include', ...(opts || {}), headers });
+  const j = await r.json().catch(()=>null);
+  return { ok: r.ok, status: r.status, json: j };
+}
+function setMsg(kind, text){
+  const box = document.getElementById('msg');
+  if (!box) return;
+  box.innerHTML = text ? `<div class="alert alert-${kind} py-1 px-2 mb-0">${text}</div>` : '';
+}
+function examLabel(t){
+  if (t === 'midterm') return 'جزئي';
+  if (t === 'final') return 'نهائي';
+  return t || '—';
+}
+function eventLabel(v){
+  const m = {
+    distribute: 'توزيع',
+    publish: 'اعتماد ونشر',
+    export_txt: 'تصدير نص',
+    export_xlsx: 'تصدير Excel',
+    export_pdf: 'تصدير PDF',
+    restore_draft: 'استعادة مسودة',
+  };
+  return m[v] || v || '—';
+}
+async function loadVersions(){
+  const sem = (document.getElementById('semesterInput')?.value || '').trim();
+  const et = (document.getElementById('examType')?.value || '').trim();
+  const ev = (document.getElementById('eventType')?.value || '').trim();
+  const p = new URLSearchParams();
+  if (sem) p.set('semester', sem);
+  if (et) p.set('exam_type', et);
+  if (ev) p.set('event_type', ev);
+  const url = '/exams/versions' + (p.toString() ? ('?' + p.toString()) : '');
+
+  const tb = document.getElementById('versionsBody');
+  tb.innerHTML = '<tr><td colspan="10" class="text-center text-muted">جارٍ التحميل...</td></tr>';
+  const r = await fetchJSON(url);
+  if (!r.ok || !r.json){
+    tb.innerHTML = '<tr><td colspan="10" class="text-center text-danger">فشل تحميل الأرشيف.</td></tr>';
+    setMsg('danger', r.json?.message || `خطأ في تحميل الأرشيف (${r.status})`);
+    return;
+  }
+  const items = Array.isArray(r.json.items) ? r.json.items : [];
+  if (!items.length){
+    tb.innerHTML = '<tr><td colspan="10" class="text-center text-muted">لا توجد نسخ مطابقة.</td></tr>';
+    setMsg('info', 'لا توجد نتائج ضمن المعايير المحددة.');
+    return;
+  }
+  setMsg('success', `تم تحميل ${items.length} نسخة.`);
+  tb.innerHTML = '';
+  items.forEach((it, idx) => {
+    const tr = document.createElement('tr');
+    const viewUrl = '/exams/versions/' + encodeURIComponent(it.id);
+    const downloadUrl = viewUrl + '?download=1';
+    const pub = it.is_published ? '<span class="badge bg-success">منشور</span>' : '<span class="badge bg-secondary">غير منشور</span>';
+    tr.innerHTML = `
+      <td>${idx + 1}</td>
+      <td>${examLabel(it.exam_type)}</td>
+      <td>${it.semester || '—'}</td>
+      <td>#${it.version_no || 0}</td>
+      <td>${eventLabel(it.event_type)}</td>
+      <td>${(it.generated_at || '').replace('T',' ').slice(0,19) || '—'}</td>
+      <td>${it.generated_by || '—'}</td>
+      <td>${it.note || '—'}</td>
+      <td>${pub}</td>
+      <td>
+        <a class="btn btn-outline-primary btn-sm" target="_blank" href="${viewUrl}">عرض</a>
+        <a class="btn btn-outline-success btn-sm" target="_blank" href="${downloadUrl}">تنزيل JSON</a>
+        <button type="button" class="btn btn-outline-warning btn-sm btn-restore" data-id="${it.id}" data-ver="${it.version_no || 0}" data-exam="${it.exam_type || ''}">
+          استعادة كمسودة
+        </button>
+      </td>
+    `;
+    tb.appendChild(tr);
+  });
+
+  document.querySelectorAll('.btn-restore').forEach(btn => {
+    btn.addEventListener('click', async (ev) => {
+      const id = ev.currentTarget.getAttribute('data-id');
+      const ver = ev.currentTarget.getAttribute('data-ver') || '0';
+      const ex = ev.currentTarget.getAttribute('data-exam') || '';
+      if (!id) return;
+      if (!confirm(`تأكيد استعادة النسخة #${ver} (${examLabel(ex)}) كمسودة؟\\nسيتم استبدال صفوف هذا النوع فقط في جدول الامتحانات الحالي.`)) return;
+      ev.currentTarget.disabled = true;
+      try {
+        const r = await fetchJSON('/exams/versions/' + encodeURIComponent(id) + '/restore_draft', { method: 'POST' });
+        if (!r.ok) {
+          alert(r.json?.message || `فشل الاستعادة (${r.status})`);
+          return;
+        }
+        alert(r.json?.message || 'تمت الاستعادة كمسودة.');
+        await loadVersions();
+      } finally {
+        ev.currentTarget.disabled = false;
+      }
+    });
+  });
+}
+
+document.getElementById('btnSearch').addEventListener('click', loadVersions);
+document.getElementById('btnReset').addEventListener('click', () => {
+  const sem = document.getElementById('semesterInput');
+  const et = document.getElementById('examType');
+  const ev = document.getElementById('eventType');
+  if (sem) sem.value = '';
+  if (et) et.value = '';
+  if (ev) ev.value = '';
+  loadVersions();
+});
+loadVersions();
+</script>
+</body>
+</html>

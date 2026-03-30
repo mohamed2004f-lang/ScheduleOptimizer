@@ -4,7 +4,7 @@ from models.models import Student
 from flask import Blueprint, request, jsonify, render_template, current_app, send_file, session
 from backend.core.auth import login_required, role_required
 from collections import defaultdict
-import sqlite3, pandas as pd, io, datetime
+import sqlite3, pandas as pd, io, datetime, hashlib
 from .utilities import (
     get_connection,
     table_to_dicts,
@@ -19,6 +19,58 @@ from .utilities import (
 )
 
 students_bp = Blueprint("students", __name__)
+
+
+def _ensure_registration_signature_tables(cur):
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS registration_signatures (
+            student_id TEXT NOT NULL,
+            term TEXT NOT NULL,
+            student_signed INTEGER NOT NULL DEFAULT 0,
+            signed_at TEXT,
+            signature_note TEXT,
+            form_file_id INTEGER,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_by TEXT DEFAULT '',
+            PRIMARY KEY (student_id, term)
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS registration_form_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT NOT NULL,
+            term TEXT NOT NULL,
+            original_name TEXT DEFAULT '',
+            stored_path TEXT NOT NULL,
+            mime_type TEXT DEFAULT '',
+            file_size INTEGER DEFAULT 0,
+            sha256 TEXT DEFAULT '',
+            uploaded_by TEXT DEFAULT '',
+            uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS registration_signature_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT NOT NULL,
+            term TEXT NOT NULL,
+            form_version_id INTEGER,
+            form_version_no INTEGER DEFAULT 0,
+            student_signed INTEGER NOT NULL DEFAULT 0,
+            signed_at TEXT,
+            signature_note TEXT,
+            form_file_id INTEGER,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_by TEXT DEFAULT '',
+            UNIQUE(student_id, term, form_version_id)
+        )
+        """
+    )
 
 
 def _is_instructor_or_supervisor_view_only() -> bool:
@@ -1761,6 +1813,18 @@ def save_registrations():
     data = request.get_json(force=True) or {}
     sid = normalize_sid(data.get("student_id"))
     override_reason = (data.get("override_reason") or "").strip()
+    sig = data.get("signature") or {}
+    student_signed = bool(sig.get("student_signed")) if isinstance(sig, dict) else bool(data.get("student_signed"))
+    signed_at = (sig.get("signed_at") if isinstance(sig, dict) else data.get("signed_at")) or ""
+    signature_note = (sig.get("signature_note") if isinstance(sig, dict) else data.get("signature_note")) or ""
+    try:
+        form_file_id = int((sig.get("form_file_id") if isinstance(sig, dict) else data.get("form_file_id")) or 0) or None
+    except Exception:
+        form_file_id = None
+    try:
+        form_version_id = int((sig.get("form_version_id") if isinstance(sig, dict) else data.get("form_version_id")) or 0) or None
+    except Exception:
+        form_version_id = None
     courses = data.get("courses")
     if courses is None:
         courses = data.get("registrations", [])
@@ -1912,6 +1976,76 @@ def save_registrations():
                 except Exception:
                     term_label = ""
                 now_iso = datetime.datetime.utcnow().isoformat()
+
+                # حفظ/تحديث توثيق التوقيع (للـ "التسجيل الفعلي" للفصل الحالي)
+                try:
+                    _ensure_registration_signature_tables(cur)
+                    form_version_no = 0
+                    if form_version_id:
+                        try:
+                            row_v = cur.execute(
+                                "SELECT COALESCE(version_no,0) FROM registration_form_versions WHERE id = ? LIMIT 1",
+                                (form_version_id,),
+                            ).fetchone()
+                            form_version_no = int(row_v[0] or 0) if row_v else 0
+                        except Exception:
+                            form_version_no = 0
+                    if term_label:
+                        cur.execute(
+                            """
+                            INSERT INTO registration_signatures
+                            (student_id, term, student_signed, signed_at, signature_note, form_file_id, updated_at, updated_by)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(student_id, term) DO UPDATE SET
+                              student_signed=excluded.student_signed,
+                              signed_at=excluded.signed_at,
+                              signature_note=excluded.signature_note,
+                              form_file_id=excluded.form_file_id,
+                              updated_at=excluded.updated_at,
+                              updated_by=excluded.updated_by
+                            """,
+                            (
+                                sid,
+                                term_label,
+                                1 if student_signed else 0,
+                                (str(signed_at).strip() or None),
+                                (str(signature_note).strip() or None),
+                                form_file_id,
+                                now_iso,
+                                performed_by,
+                            ),
+                        )
+                        # حفظ سجل تاريخي حسب نسخة الاستمارة (إن وُجدت)، لإتاحة تتبع توقيع مختلف لكل نسخة/فصل.
+                        if form_version_id:
+                            cur.execute(
+                                """
+                                INSERT INTO registration_signature_events
+                                (student_id, term, form_version_id, form_version_no, student_signed, signed_at, signature_note, form_file_id, updated_at, updated_by)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                ON CONFLICT(student_id, term, form_version_id) DO UPDATE SET
+                                  form_version_no=excluded.form_version_no,
+                                  student_signed=excluded.student_signed,
+                                  signed_at=excluded.signed_at,
+                                  signature_note=excluded.signature_note,
+                                  form_file_id=excluded.form_file_id,
+                                  updated_at=excluded.updated_at,
+                                  updated_by=excluded.updated_by
+                                """,
+                                (
+                                    sid,
+                                    term_label,
+                                    form_version_id,
+                                    form_version_no,
+                                    1 if student_signed else 0,
+                                    (str(signed_at).strip() or None),
+                                    (str(signature_note).strip() or None),
+                                    form_file_id,
+                                    now_iso,
+                                    performed_by,
+                                ),
+                            )
+                except Exception:
+                    current_app.logger.exception("failed to upsert registration_signatures in save_registrations")
 
                 try:
                     for cname in added:
@@ -2228,34 +2362,69 @@ def export_registrations_excel():
                 student_filter_sql = f"WHERE r.student_id IN ({placeholders})"
                 student_filter_params = list(allowed_student_ids)
 
+            # الفصل الحالي لتوثيق التوقيع (يرتبط بالتسجيل الفعلي)
+            try:
+                term_name, term_year = get_current_term(conn=conn)
+                term_label = f"{term_name} {term_year}".strip()
+            except Exception:
+                term_label = ""
+
+            # تأكد من وجود جدول التوقيعات حتى لا يفشل التصدير على قواعد قديمة
+            try:
+                _ensure_registration_signature_tables(cur)
+            except Exception:
+                pass
+
+            sig_join = ""
+            sig_params = []
+            if term_label:
+                sig_join = "LEFT JOIN registration_signatures rs ON rs.student_id = r.student_id AND rs.term = ?"
+                sig_params = [term_label]
+
             if has_uni:
-                rows = cur.execute(f"""
+                rows = cur.execute(
+                    f"""
                     SELECT r.student_id,
                            COALESCE(s.student_name, '') AS student_name,
                            COALESCE(s.university_number, '') AS university_number,
                            r.course_name,
                            COALESCE(c.course_code, '') AS course_code,
-                           COALESCE(c.units, 0) AS units
+                           COALESCE(c.units, 0) AS units,
+                           COALESCE(rs.student_signed, 0) AS student_signed,
+                           COALESCE(rs.signed_at, '') AS signed_at,
+                           COALESCE(rs.signature_note, '') AS signature_note,
+                           COALESCE(rs.form_file_id, 0) AS form_file_id
                     FROM registrations r
                     LEFT JOIN students s ON r.student_id = s.student_id
                     LEFT JOIN courses c ON r.course_name = c.course_name
+                    {sig_join}
                     {student_filter_sql}
                     ORDER BY r.student_id, r.course_name
-                """, student_filter_params).fetchall()
+                    """,
+                    sig_params + student_filter_params,
+                ).fetchall()
             else:
-                rows = cur.execute(f"""
+                rows = cur.execute(
+                    f"""
                     SELECT r.student_id,
                            COALESCE(s.student_name, '') AS student_name,
                            '' AS university_number,
                            r.course_name,
                            COALESCE(c.course_code, '') AS course_code,
-                           COALESCE(c.units, 0) AS units
+                           COALESCE(c.units, 0) AS units,
+                           COALESCE(rs.student_signed, 0) AS student_signed,
+                           COALESCE(rs.signed_at, '') AS signed_at,
+                           COALESCE(rs.signature_note, '') AS signature_note,
+                           COALESCE(rs.form_file_id, 0) AS form_file_id
                     FROM registrations r
                     LEFT JOIN students s ON r.student_id = s.student_id
                     LEFT JOIN courses c ON r.course_name = c.course_name
+                    {sig_join}
                     {student_filter_sql}
                     ORDER BY r.student_id, r.course_name
-                """, student_filter_params).fetchall()
+                    """,
+                    sig_params + student_filter_params,
+                ).fetchall()
 
         data = []
         for r in rows:
@@ -2265,13 +2434,362 @@ def export_registrations_excel():
                 "university_number": r[2] or "",
                 "course_name": r[3] or "",
                 "course_code": r[4] or "",
-                "units": int(r[5]) if r[5] is not None else 0
+                "units": int(r[5]) if r[5] is not None else 0,
+                "student_signed": "نعم" if int(r[6] or 0) else "لا",
+                "signed_at": r[7] or "",
+                "signature_note": r[8] or "",
+                "has_signed_form_file": "نعم" if int(r[9] or 0) else "لا",
             })
-        df = pd.DataFrame(data, columns=["student_id","student_name","university_number","course_name","course_code","units"])
+        df = pd.DataFrame(
+            data,
+            columns=[
+                "student_id",
+                "student_name",
+                "university_number",
+                "course_name",
+                "course_code",
+                "units",
+                "student_signed",
+                "signed_at",
+                "signature_note",
+                "has_signed_form_file",
+            ],
+        )
         return excel_response_from_df(df, filename_prefix="registrations")
     except Exception:
         current_app.logger.exception("export_registrations_excel failed")
         return jsonify({"status":"error","message":"فشل التصدير"}), 500
+
+
+@students_bp.route("/registration_signature", methods=["GET"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def get_registration_signature():
+    sid = normalize_sid(request.args.get("student_id"))
+    if not sid:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
+    term = (request.args.get("term") or "").strip()
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            _ensure_registration_signature_tables(cur)
+            if not term:
+                try:
+                    tname, tyear = get_current_term(conn=conn)
+                    term = f"{tname} {tyear}".strip()
+                except Exception:
+                    term = ""
+            if not term:
+                return jsonify({"student_id": sid, "term": "", "student_signed": False, "signed_at": "", "signature_note": "", "form_file_id": None})
+            row = cur.execute(
+                """
+                SELECT student_signed, COALESCE(signed_at,''), COALESCE(signature_note,''), form_file_id
+                FROM registration_signatures
+                WHERE student_id = ? AND term = ?
+                """,
+                (sid, term),
+            ).fetchone()
+            ev = cur.execute(
+                """
+                SELECT form_version_id, COALESCE(form_version_no,0)
+                FROM registration_signature_events
+                WHERE student_id = ? AND term = ?
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (sid, term),
+            ).fetchone()
+            if not row:
+                return jsonify({"student_id": sid, "term": term, "student_signed": False, "signed_at": "", "signature_note": "", "form_file_id": None, "form_version_id": (int(ev[0]) if ev and ev[0] else None), "form_version_no": (int(ev[1]) if ev and ev[1] else 0)})
+            return jsonify(
+                {
+                    "student_id": sid,
+                    "term": term,
+                    "student_signed": bool(int(row[0] or 0)),
+                    "signed_at": row[1] or "",
+                    "signature_note": row[2] or "",
+                    "form_file_id": (int(row[3]) if row[3] else None),
+                    "form_version_id": (int(ev[0]) if ev and ev[0] else None),
+                    "form_version_no": (int(ev[1]) if ev and ev[1] else 0),
+                }
+            )
+    except Exception:
+        current_app.logger.exception("get_registration_signature failed")
+        return jsonify({"status": "error", "message": "فشل جلب التوقيع"}), 500
+
+
+@students_bp.route("/registration_signature/upload", methods=["POST"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def upload_registration_signature_file():
+    sid = normalize_sid(request.form.get("student_id"))
+    if not sid:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
+    term = (request.form.get("term") or "").strip()
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"status": "error", "message": "file مطلوب"}), 400
+
+    if not term:
+        try:
+            with get_connection() as conn:
+                tname, tyear = get_current_term(conn=conn)
+                term = f"{tname} {tyear}".strip()
+        except Exception:
+            term = ""
+    if not term:
+        return jsonify({"status": "error", "message": "تعذر تحديد الفصل الحالي"}), 400
+
+    filename = (f.filename or "").strip()
+    ext = os.path.splitext(filename)[1].lower()
+    allowed = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
+    if ext not in allowed:
+        return jsonify({"status": "error", "message": "صيغة غير مسموحة. المسموح: PDF/PNG/JPG/WEBP"}), 400
+
+    raw = f.read()
+    if not raw:
+        return jsonify({"status": "error", "message": "ملف فارغ"}), 400
+    if len(raw) > 10 * 1024 * 1024:
+        return jsonify({"status": "error", "message": "حجم الملف كبير (الحد 10MB)"}), 400
+
+    sha = hashlib.sha256(raw).hexdigest()
+    safe_term = "".join([c for c in term if c.isalnum() or c in (" ", "-", "_")]).strip().replace(" ", "_") or "term"
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads", "registration_forms"))
+    os.makedirs(base_dir, exist_ok=True)
+    stored_name = f"{sid}__{safe_term}__{sha[:12]}{ext}"
+    stored_path = os.path.join(base_dir, stored_name)
+    try:
+        with open(stored_path, "wb") as out:
+            out.write(raw)
+    except Exception:
+        current_app.logger.exception("failed to write signature file")
+        return jsonify({"status": "error", "message": "فشل حفظ الملف"}), 500
+
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            _ensure_registration_signature_tables(cur)
+            uploaded_by = (session.get("user") or "") if "user" in session else ""
+            mime = (f.mimetype or "").strip()
+            cur.execute(
+                """
+                INSERT INTO registration_form_files
+                (student_id, term, original_name, stored_path, mime_type, file_size, sha256, uploaded_by, uploaded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    sid,
+                    term,
+                    filename,
+                    stored_path,
+                    mime,
+                    len(raw),
+                    sha,
+                    uploaded_by,
+                    datetime.datetime.utcnow().isoformat(),
+                ),
+            )
+            file_id = cur.lastrowid
+            conn.commit()
+        return jsonify({"status": "ok", "file_id": file_id, "download_url": f"/students/registration_signature/file/{file_id}"})
+    except Exception:
+        current_app.logger.exception("upload_registration_signature_file failed")
+        return jsonify({"status": "error", "message": "فشل تسجيل الملف في قاعدة البيانات"}), 500
+
+
+@students_bp.route("/registration_signature/file/<int:file_id>", methods=["GET"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def download_registration_signature_file(file_id: int):
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            _ensure_registration_signature_tables(cur)
+            row = cur.execute(
+                "SELECT original_name, stored_path, mime_type FROM registration_form_files WHERE id = ?",
+                (int(file_id),),
+            ).fetchone()
+            if not row:
+                return jsonify({"status": "error", "message": "الملف غير موجود"}), 404
+            original_name, stored_path, mime_type = row[0] or "signed_form", row[1] or "", row[2] or ""
+        if not stored_path or not os.path.isfile(stored_path):
+            return jsonify({"status": "error", "message": "مسار الملف غير موجود على القرص"}), 404
+        return send_file(
+            stored_path,
+            mimetype=(mime_type or "application/octet-stream"),
+            as_attachment=True,
+            download_name=original_name,
+        )
+    except Exception:
+        current_app.logger.exception("download_registration_signature_file failed")
+        return jsonify({"status": "error", "message": "فشل تحميل الملف"}), 500
+
+
+@students_bp.route("/registration_signatures/list", methods=["GET"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def registration_signatures_list():
+    """
+    إرجاع توثيقات التوقيع للفصل الحالي (أو فصل محدد):
+    - term (اختياري)
+    - signed_only=1 (اختياري)
+    """
+    term = (request.args.get("term") or "").strip()
+    signed_only = str(request.args.get("signed_only") or "").lower() in ("1", "true", "yes")
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            _ensure_registration_signature_tables(cur)
+
+            if not term:
+                try:
+                    tname, tyear = get_current_term(conn=conn)
+                    term = f"{tname} {tyear}".strip()
+                except Exception:
+                    term = ""
+
+            if not term:
+                return jsonify({"term": "", "items": []})
+
+            allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+            where = ["rs.term = ?"]
+            params = [term]
+            if signed_only:
+                where.append("COALESCE(rs.student_signed,0) = 1")
+            if allowed_student_ids is not None:
+                if not allowed_student_ids:
+                    return jsonify({"term": term, "items": []})
+                placeholders = ",".join("?" for _ in allowed_student_ids)
+                where.append(f"rs.student_id IN ({placeholders})")
+                params.extend(list(allowed_student_ids))
+
+            q = f"""
+            SELECT rs.student_id,
+                   COALESCE(s.student_name,'') AS student_name,
+                   COALESCE(s.university_number,'') AS university_number,
+                   COALESCE(rs.student_signed,0) AS student_signed,
+                   COALESCE(rs.signed_at,'') AS signed_at,
+                   COALESCE(rs.signature_note,'') AS signature_note,
+                   COALESCE(rs.form_file_id,0) AS form_file_id,
+                   (
+                     SELECT COALESCE(e.form_version_no,0)
+                     FROM registration_signature_events e
+                     WHERE e.student_id = rs.student_id AND e.term = rs.term
+                     ORDER BY e.updated_at DESC, e.id DESC
+                     LIMIT 1
+                   ) AS form_version_no
+            FROM registration_signatures rs
+            LEFT JOIN students s ON s.student_id = rs.student_id
+            WHERE {' AND '.join(where)}
+            ORDER BY rs.student_id
+            """
+            rows = cur.execute(q, params).fetchall()
+            items = []
+            for r in rows:
+                items.append(
+                    {
+                        "student_id": r[0] or "",
+                        "student_name": r[1] or "",
+                        "university_number": r[2] or "",
+                        "student_signed": bool(int(r[3] or 0)),
+                        "signed_at": r[4] or "",
+                        "signature_note": r[5] or "",
+                        "form_file_id": (int(r[6]) if r[6] else None),
+                        "form_version_no": int(r[7] or 0),
+                    }
+                )
+            return jsonify({"term": term, "items": items})
+    except Exception:
+        current_app.logger.exception("registration_signatures_list failed")
+        return jsonify({"status": "error", "message": "فشل تحميل قائمة التوقيعات"}), 500
+
+
+@students_bp.route("/export/registration_signatures", methods=["GET"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def export_registration_signatures():
+    """
+    تصدير قائمة الطلبة الموقعين (أو الجميع) للفصل الحالي إلى Excel.
+    query:
+      - term (اختياري)
+      - signed_only=1 (افتراضي: 1)
+    """
+    term = (request.args.get("term") or "").strip()
+    signed_only = str(request.args.get("signed_only") or "1").lower() in ("1", "true", "yes")
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            _ensure_registration_signature_tables(cur)
+            if not term:
+                try:
+                    tname, tyear = get_current_term(conn=conn)
+                    term = f"{tname} {tyear}".strip()
+                except Exception:
+                    term = ""
+
+            if not term:
+                df = pd.DataFrame(columns=["term", "student_id", "student_name", "university_number", "student_signed", "signed_at", "signature_note", "has_form_file"])
+                return excel_response_from_df(df, filename_prefix="registration_signatures")
+
+            allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+            where = ["rs.term = ?"]
+            params = [term]
+            if signed_only:
+                where.append("COALESCE(rs.student_signed,0) = 1")
+            if allowed_student_ids is not None:
+                if not allowed_student_ids:
+                    df = pd.DataFrame(columns=["term", "student_id", "student_name", "university_number", "student_signed", "signed_at", "signature_note", "has_form_file"])
+                    return excel_response_from_df(df, filename_prefix="registration_signatures")
+                placeholders = ",".join("?" for _ in allowed_student_ids)
+                where.append(f"rs.student_id IN ({placeholders})")
+                params.extend(list(allowed_student_ids))
+
+            q = f"""
+            SELECT rs.term,
+                   rs.student_id,
+                   COALESCE(s.student_name,'') AS student_name,
+                   COALESCE(s.university_number,'') AS university_number,
+                   COALESCE(rs.student_signed,0) AS student_signed,
+                   COALESCE(rs.signed_at,'') AS signed_at,
+                   COALESCE(rs.signature_note,'') AS signature_note,
+                   COALESCE(rs.form_file_id,0) AS form_file_id,
+                   (
+                     SELECT COALESCE(e.form_version_no,0)
+                     FROM registration_signature_events e
+                     WHERE e.student_id = rs.student_id AND e.term = rs.term
+                     ORDER BY e.updated_at DESC, e.id DESC
+                     LIMIT 1
+                   ) AS form_version_no
+            FROM registration_signatures rs
+            LEFT JOIN students s ON s.student_id = rs.student_id
+            WHERE {' AND '.join(where)}
+            ORDER BY rs.student_id
+            """
+            rows = cur.execute(q, params).fetchall()
+
+        data = []
+        for r in rows:
+            data.append(
+                {
+                    "term": r[0] or "",
+                    "student_id": r[1] or "",
+                    "student_name": r[2] or "",
+                    "university_number": r[3] or "",
+                    "student_signed": "نعم" if int(r[4] or 0) else "لا",
+                    "signed_at": r[5] or "",
+                    "signature_note": r[6] or "",
+                    "has_form_file": "نعم" if int(r[7] or 0) else "لا",
+                    "form_version_no": int(r[8] or 0),
+                }
+            )
+        df = pd.DataFrame(
+            data,
+            columns=["term", "student_id", "student_name", "university_number", "student_signed", "signed_at", "signature_note", "has_form_file", "form_version_no"],
+        )
+        return excel_response_from_df(df, filename_prefix="registration_signatures")
+    except Exception:
+        current_app.logger.exception("export_registration_signatures failed")
+        return jsonify({"status": "error", "message": "فشل تصدير قائمة التوقيعات"}), 500
 
 
 @students_bp.route("/export/attendance")

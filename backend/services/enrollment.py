@@ -1,4 +1,5 @@
 import datetime
+import json
 import os
 import subprocess
 import sys
@@ -45,6 +46,61 @@ def _ensure_docxtpl():
 _ensure_docxtpl()
 
 enrollment_bp = Blueprint("enrollment", __name__)
+
+
+def _ensure_registration_form_versions_table(cur):
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS registration_form_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT NOT NULL,
+            semester TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'actual',
+            version_no INTEGER NOT NULL DEFAULT 1,
+            snapshot_json TEXT DEFAULT '',
+            generated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            generated_by TEXT DEFAULT '',
+            UNIQUE(student_id, semester, source, version_no)
+        )
+        """
+    )
+
+
+def _create_registration_form_version(conn, student_id: str, semester: str, source: str, ctx: dict) -> dict:
+    cur = conn.cursor()
+    _ensure_registration_form_versions_table(cur)
+    sid = (student_id or "").strip()
+    sem = (semester or "").strip() or "بدون فصل"
+    src = (source or "actual").strip().lower() or "actual"
+    row = cur.execute(
+        """
+        SELECT COALESCE(MAX(version_no), 0)
+        FROM registration_form_versions
+        WHERE student_id = ? AND semester = ? AND source = ?
+        """,
+        (sid, sem, src),
+    ).fetchone()
+    next_ver = int((row[0] if row and row[0] is not None else 0) or 0) + 1
+    snap = {
+        "student_id": ctx.get("student_id"),
+        "student_name": ctx.get("student_name"),
+        "university_number": ctx.get("university_number"),
+        "semester": ctx.get("semester"),
+        "total_units": ctx.get("total_units"),
+        "courses": ctx.get("courses") or [],
+    }
+    generated_by = (session.get("user") or "") if "user" in session else ""
+    now = datetime.datetime.utcnow().isoformat()
+    cur.execute(
+        """
+        INSERT INTO registration_form_versions
+        (student_id, semester, source, version_no, snapshot_json, generated_at, generated_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (sid, sem, src, next_ver, json.dumps(snap, ensure_ascii=False), now, generated_by),
+    )
+    conn.commit()
+    return {"id": int(cur.lastrowid), "version_no": int(next_ver), "generated_at": now, "semester": sem, "source": src}
 
 
 def _is_instructor_or_supervisor_view_only() -> bool:
@@ -757,8 +813,23 @@ def registration_form_html(student_id):
 
     semester_param = (request.args.get("semester") or "").strip()
     source = (request.args.get("source") or "plan").strip().lower()
+    create_version = str(request.args.get("create_version") or "").lower() in ("1", "true", "yes")
     try:
         ctx = _build_registration_form_context(student_id, semester_param, source=source)
+        # لا ننشئ نسخة تلقائياً عند العرض العادي لتجنب تضخم السجل.
+        # تُنشأ النسخة عند الطباعة، أو عند طلب صريح create_version=1.
+        if create_version:
+            with get_connection() as conn:
+                v = _create_registration_form_version(
+                    conn,
+                    student_id=ctx.get("student_id") or student_id,
+                    semester=ctx.get("semester") or semester_param,
+                    source=source,
+                    ctx=ctx,
+                )
+            ctx["form_version_id"] = v.get("id")
+            ctx["form_version_no"] = v.get("version_no")
+            ctx["form_version_generated_at"] = v.get("generated_at")
     except Exception as e:
         current_app.logger.exception("registration_form_html context failed for %s", student_id)
         return (
@@ -810,6 +881,21 @@ def print_registration_form(student_id):
     semester_param = (request.args.get("semester") or "").strip()
     source = (request.args.get("source") or "plan").strip().lower()
     ctx = _build_registration_form_context(student_id, semester_param, source=source)
+    # عند طباعة الاستمارة ننشئ نسخة موثقة يمكن ربط توقيع الطالب بها لاحقاً.
+    try:
+        with get_connection() as conn:
+            v = _create_registration_form_version(
+                conn,
+                student_id=ctx.get("student_id") or student_id,
+                semester=ctx.get("semester") or semester_param,
+                source=source,
+                ctx=ctx,
+            )
+        ctx["form_version_id"] = v.get("id")
+        ctx["form_version_no"] = v.get("version_no")
+        ctx["form_version_generated_at"] = v.get("generated_at")
+    except Exception:
+        current_app.logger.exception("failed to create registration form version for %s", student_id)
 
     template_path = os.path.join(
         current_app.root_path, "frontend", "templates", "registration_form_template.docx"
@@ -842,6 +928,46 @@ def print_registration_form(student_id):
     finally:
         # يمكن لاحقاً إضافة آلية لتنظيف الملفات المؤقتة القديمة
         pass
+
+
+@enrollment_bp.route("/registration_form_versions", methods=["GET"])
+@role_required("admin", "admin_main", "head_of_department", "supervisor")
+def registration_form_versions():
+    sid = (request.args.get("student_id") or "").strip()
+    semester = (request.args.get("semester") or "").strip()
+    if not sid:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            _ensure_registration_form_versions_table(cur)
+            q = """
+            SELECT id, student_id, semester, source, version_no, generated_at, generated_by
+            FROM registration_form_versions
+            WHERE student_id = ?
+            """
+            params = [sid]
+            if semester:
+                q += " AND semester = ?"
+                params.append(semester)
+            q += " ORDER BY generated_at DESC, id DESC"
+            rows = cur.execute(q, params).fetchall()
+            items = [
+                {
+                    "id": int(r[0]),
+                    "student_id": r[1] or "",
+                    "semester": r[2] or "",
+                    "source": r[3] or "",
+                    "version_no": int(r[4] or 0),
+                    "generated_at": r[5] or "",
+                    "generated_by": r[6] or "",
+                }
+                for r in rows
+            ]
+            return jsonify({"status": "ok", "items": items})
+    except Exception:
+        current_app.logger.exception("registration_form_versions failed")
+        return jsonify({"status": "error", "message": "فشل تحميل نسخ الاستمارة"}), 500
 
 
 @enrollment_bp.route("/plans/<int:plan_id>/reject", methods=["POST"])

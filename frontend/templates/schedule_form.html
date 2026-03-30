@@ -31,6 +31,19 @@
               <a class="btn btn-outline-danger btn-sm" id="btnScheduleExportPdf" href="/schedule/export/pdf" target="_blank">⬇️ تصدير PDF</a>
               <a class="btn btn-outline-success btn-sm" id="btnScheduleExportExcelTpl" href="/schedule/export/excel?include_empty=1" target="_blank">قالب Excel</a>
               <a class="btn btn-outline-danger btn-sm" id="btnScheduleExportPdfTpl" href="/schedule/export/pdf?include_empty=1" target="_blank">قالب PDF</a>
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="btnSchedulePreview">👁️ عرض</button>
+              <button type="button" class="btn btn-outline-dark btn-sm" id="btnSchedulePrintStudentStyle">🖨️ طباعة</button>
+            </div>
+            <div id="schedulePreviewArea" class="d-none mt-2">
+              <div class="card">
+                <div class="card-body p-2">
+                  <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div class="small text-muted fw-semibold">معاينة طباعة الجدول</div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="btnSchedulePreviewClose">إخفاء</button>
+                  </div>
+                  <div id="schedulePreviewContainer"></div>
+                </div>
+              </div>
             </div>
             <div id="publishScheduleWrap" class="d-none align-items-center gap-2">
               <span id="publishStatusText" class="small text-muted"></span>
@@ -201,6 +214,7 @@
 <script>
 /* ---------- Helpers ---------- */
 function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+function escapeAttr(s){ return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;'); }
 function showMsg(text, type='info', timeout=4000, targetId='sd_msg'){
   const box = document.getElementById(targetId);
   if(!box) return;
@@ -379,40 +393,66 @@ async function loadSchedule(){
     const slotsMap = groupByTimeSlot(currentScheduleData);
 
     const compactClass = IS_COMPACT ? ' is-compact' : '';
-    let html = `<table class="timetable${compactClass}"><thead><tr><th class="day-header">اليوم / الوقت</th>`;
+    /* رأسان: صف التوقيتات (كل توقيت colspan=3) ثم صف عناوين الأعمدة الفرعية: مقرر | أستاذ | قاعة */
+    let html = `<table class="timetable timetable--cols3${compactClass}"><thead><tr><th rowspan="2" class="day-header">اليوم</th>`;
     timeSlots.forEach(time => {
       const isCustom = Array.isArray(CUSTOM_TIME_SLOTS) && CUSTOM_TIME_SLOTS.length > 0
         ? CUSTOM_TIME_SLOTS.map(t => String(t||'').trim()).includes(String(time||'').trim())
         : true;
       const extra = (!isCustom) ? ` <span class="badge bg-warning text-dark">وقت غير مطابق</span>` : '';
-      html += `<th class="time-header">${escapeHtml(time)}${extra}</th>`;
+      const tAttr = escapeAttr(time);
+      html += `<th colspan="3" class="time-header" data-time-slot="${tAttr}">`;
+      html += `<div class="th-time-label">${escapeHtml(time)}${extra}</div>`;
+      html += `</th>`;
     });
+    html += '</tr><tr>';
+    for (let i = 0; i < timeSlots.length; i++) {
+      html += '<th class="sub-time-header">المقرر</th><th class="sub-time-header">الأستاذ</th><th class="sub-time-header">القاعة</th>';
+    }
     html += '</tr></thead><tbody>';
 
     DAYS.forEach(day => {
+      const dAttr = escapeAttr(day);
       html += `<tr><th class="day-header">${day}</th>`;
       timeSlots.forEach(time => {
         const key = `${day}|${time}`;
         const courses = slotsMap[key] || [];
-        html += `<td class="time-slot-cell">`;
-        html += `<div class="course-buttons-container">`;
-        courses.forEach(course => {
-          const color = getCourseColor(course.course_name);
-          const roomText = course.room ? ` — ق ${escapeHtml(course.room)}` : '';
-          const instructorText = course.instructor ? ` — ${escapeHtml(course.instructor)}` : '';
-          const studentCount = course.student_count || 0;
-          const studentCountText = studentCount > 0 ? ` — ط ${studentCount}` : '';
-          // في صفحة التعديل: نعرض اسم المقرر فقط (القاعة/الأستاذ في الـ tooltip)
-          const displayText = `${escapeHtml(course.course_name)}`;
-          html += `<button class="course-btn" style="background: ${color};" 
-                   data-section-id="${course.section_id}" 
-                   title="${escapeHtml(course.course_name || '')}${roomText}${instructorText}${studentCountText}">
-                   ${displayText}
-                 </button>`;
-        });
+        const tAttr = escapeAttr(time);
+        /* خلية واحدة لكل توقيت: صف شبكة لكل مقرر (مقرر|أستاذ|قاعة) + فاصل بين السجلات */
+        html += `<td colspan="3" class="time-slot-cell slot-slot-block" data-slot-day="${dAttr}" data-slot-time="${tAttr}">`;
+        html += `<div class="slot-aligned-rows">`;
+        if (!courses.length) {
+          html += `<div class="slot-course-record slot-course-record--empty">`;
+          html += `<div class="slot-cell slot-cell--course"><span class="slot-placeholder">—</span></div>`;
+          html += `<div class="slot-cell slot-cell--inst"><span class="slot-placeholder">—</span></div>`;
+          html += `<div class="slot-cell slot-cell--room"><span class="slot-placeholder">—</span></div>`;
+          html += `</div>`;
+        } else {
+          courses.forEach((course, cidx) => {
+            if (cidx > 0) {
+              html += `<div class="slot-record-fullsep"></div>`;
+            }
+            const color = getCourseColor(course.course_name);
+            const studentCount = course.student_count || 0;
+            const tipParts = [course.course_name || '', course.room && ('قاعة: ' + course.room), course.instructor && ('أستاذ: ' + course.instructor), studentCount > 0 && ('طلبة: ' + studentCount)].filter(Boolean);
+            const titleTip = escapeAttr(tipParts.join(' — '));
+            const cName = escapeHtml(course.course_name || '');
+            html += `<div class="slot-course-record">`;
+            html += `<div class="slot-cell slot-cell--course">`;
+            if (IS_ADMIN) {
+              html += `<button type="button" class="course-btn course-btn--col" style="background: ${color};" data-section-id="${course.section_id}" title="${titleTip}">${cName}</button>`;
+            } else {
+              html += `<span class="course-label-readonly" style="background: ${color};" title="${titleTip}">${cName}</span>`;
+            }
+            html += `</div>`;
+            html += `<div class="slot-cell slot-cell--inst"><span class="slot-text">${escapeHtml(course.instructor || '')}</span></div>`;
+            html += `<div class="slot-cell slot-cell--room"><span class="slot-text">${escapeHtml(course.room || '')}</span></div>`;
+            html += `</div>`;
+          });
+        }
         html += `</div>`;
         if (IS_ADMIN) {
-          html += `<button class="manage-courses-btn" onclick="openManageCourses('${escapeHtml(day)}', '${escapeHtml(time)}')">إدارة المقررات</button>`;
+          html += `<button type="button" class="manage-courses-btn" onclick="openManageCourses('${escapeHtml(day)}', '${escapeHtml(time)}')">إدارة المقررات</button>`;
         } else {
           html += `<div class="small text-muted mt-1">عرض فقط</div>`;
         }
@@ -453,7 +493,9 @@ async function loadSchedule(){
         const day = dayHeader ? dayHeader.textContent.trim() : '';
         const colIndex = Array.from(cell.parentElement.children).indexOf(cell);
         const timeHeader = document.querySelectorAll('.time-header')[colIndex - 1];
-        const time = timeHeader ? timeHeader.textContent.trim() : '';
+        const time = timeHeader
+          ? ((timeHeader.dataset && timeHeader.dataset.timeSlot) ? String(timeHeader.dataset.timeSlot).trim() : timeHeader.textContent.trim())
+          : '';
         showInstructorConflictsModal(day, time);
       });
     });
@@ -981,9 +1023,10 @@ async function markConflicts(){
   const conflicts = await fetchConflicts();
   lastConflicts = conflicts || [];
 
-  // Mark conflicts in timetable cells
+  // Mark conflicts in timetable cells (ثلاثة أعمدة لكل توقيت: نفس مؤشر رأس الوقت)
   document.querySelectorAll('.time-slot-cell').forEach(cell => {
     cell.classList.remove('conflict');
+    cell.style.background = '';
   });
 
   if(!conflicts || !conflicts.length) return;
@@ -1003,7 +1046,7 @@ async function markConflicts(){
       const colIndex = Array.from(cell.parentElement.children).indexOf(cell);
       const timeHeader = document.querySelectorAll('.time-header')[colIndex - 1];
       if(!timeHeader) return;
-      const cellTime = timeHeader.textContent.trim();
+      const cellTime = (timeHeader.dataset && timeHeader.dataset.timeSlot) ? String(timeHeader.dataset.timeSlot).trim() : timeHeader.textContent.trim();
       
       // Avoid false positives when start/end are empty strings.
       const timeMatch =
@@ -1104,13 +1147,17 @@ async function markInstructorConflicts(){
   const conflicts = await fetchInstructorConflicts();
   lastInstructorConflicts = conflicts || [];
 
-  // clear previous
+  // clear previous (لا نمسح تلوين تعارض الطلبة الأحمر)
   document.querySelectorAll('.time-slot-cell').forEach(cell => {
+    const hadInst = cell.classList.contains('conflict-instructor');
     cell.classList.remove('conflict-instructor');
     if (cell.dataset) delete cell.dataset.instConflict;
-    // لا نمس تلوين تعارض الطلبة (conflict) لأنه طبقة أخرى
-    if (cell.classList.contains('conflict-instructor')) {
-      cell.style.background = '';
+    if (hadInst) {
+      if (cell.classList.contains('conflict')) {
+        cell.style.background = 'rgba(220,53,69,0.12)';
+      } else {
+        cell.style.background = '';
+      }
     }
   });
 
@@ -1131,7 +1178,8 @@ async function markInstructorConflicts(){
 
       const colIndex = Array.from(cell.parentElement.children).indexOf(cell);
       const th = timeHeaders[colIndex - 1];
-      const cellRange = _parseRangeToMinutes(th?.textContent || '');
+      const thTime = (th && th.dataset && th.dataset.timeSlot) ? String(th.dataset.timeSlot) : (th?.textContent || '');
+      const cellRange = _parseRangeToMinutes(thTime);
       if(!_overlap(range, cellRange)) return;
 
       cell.classList.add('conflict-instructor');
@@ -1216,6 +1264,127 @@ async function refreshPublishStatus(){
   }
 }
 
+async function openSchedulePrintPreview(autoPrint = false){
+  try {
+    const r = await fetch('/list_schedule_rows', { credentials: 'include' });
+    const list = r.ok ? await r.json() : [];
+    const rows = Array.isArray(list) ? list : [];
+    if (!rows.length) {
+      showMsg('لا توجد بيانات جدول للطباعة.', 'warning');
+      return;
+    }
+    if (typeof buildPublishedTimetableHtml !== 'function') {
+      showMsg('تعذر تحميل قالب الطباعة الموحد.', 'danger');
+      return;
+    }
+
+    const tableHtml = buildPublishedTimetableHtml(rows, {});
+    const now = new Date();
+    const printedAt = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+
+    const w = window.open('', '_blank', 'width=1300,height=900');
+    if (!w) {
+      showMsg('المتصفح منع نافذة الطباعة. اسمح بالنوافذ المنبثقة.', 'warning');
+      return;
+    }
+
+    const html = `
+      <!doctype html>
+      <html lang="ar" dir="rtl">
+      <head>
+        <meta charset="utf-8"/>
+        <meta name="viewport" content="width=device-width,initial-scale=1"/>
+        <title>طباعة الجدول الدراسي</title>
+        <link rel="stylesheet" href="/static/styles.css">
+        <link rel="stylesheet" href="/static/css/theme-mechanical-engineering.css">
+        <style>
+          body { margin: 14px; background: #fff; color: #111; font-family: Arial, sans-serif; }
+          .print-head { margin-bottom: 10px; }
+          .print-title { font-size: 20px; font-weight: 800; margin: 0 0 4px; }
+          .print-meta { font-size: 12px; color: #475569; }
+          .print-actions { display: flex; gap: 8px; margin: 0 0 10px; }
+          .print-actions button { border: 1px solid #64748b; background: #fff; color: #0f172a; border-radius: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer; }
+          .print-actions button:hover { background: #f8fafc; }
+          .print-scale-wrap { transform-origin: top right; }
+          /* ضبط احتواء الجدول في صفحة واحدة قدر الإمكان */
+          .print-scale-wrap.fit-one-page .timetable { transform: scale(0.92); transform-origin: top right; }
+          @page { size: A4 landscape; margin: 8mm; }
+          @media print {
+            body { margin: 0; }
+            .no-print { display: none !important; }
+            .timetable-wrapper { overflow: visible !important; }
+            .print-scale-wrap.fit-one-page .timetable { transform: scale(0.92); }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="print-actions no-print">
+          <button type="button" id="btnPrintNow">طباعة الآن</button>
+          <button type="button" id="btnClosePreview">إغلاق</button>
+        </div>
+        <div class="print-head">
+          <p class="print-title">الجدول الدراسي - طباعة</p>
+          <p class="print-meta">تاريخ الطباعة: ${printedAt}</p>
+        </div>
+        <div class="print-scale-wrap fit-one-page">
+          <div class="timetable-wrapper">${tableHtml}</div>
+        </div>
+        <script>
+          window.addEventListener('load', function() {
+            var btnPrint = document.getElementById('btnPrintNow');
+            var btnClose = document.getElementById('btnClosePreview');
+            if (btnPrint) btnPrint.addEventListener('click', function(){ window.print(); });
+            if (btnClose) btnClose.addEventListener('click', function(){ window.close(); });
+            var shouldAutoPrint = ${"__AUTO_PRINT__"};
+            if (shouldAutoPrint) {
+              setTimeout(function(){ window.print(); }, 250);
+            }
+          });
+        <\/script>
+      </body>
+      </html>
+    `.replace('__AUTO_PRINT__', autoPrint ? 'true' : 'false');
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  } catch (e) {
+    console.error('openSchedulePrintPreview failed', e);
+    showMsg('تعذر إنشاء معاينة الطباعة.', 'danger');
+  }
+}
+
+async function previewSchedulePrint(){
+  try {
+    const area = document.getElementById('schedulePreviewArea');
+    const cont = document.getElementById('schedulePreviewContainer');
+    if (!area || !cont) return;
+    cont.innerHTML = '<div class="text-muted small">جارٍ تجهيز المعاينة...</div>';
+    const r = await fetch('/list_schedule_rows', { credentials: 'include' });
+    const list = r.ok ? await r.json() : [];
+    const rows = Array.isArray(list) ? list : [];
+    if (!rows.length) {
+      cont.innerHTML = '<div class="alert alert-warning py-1 mb-0">لا توجد بيانات جدول للطباعة.</div>';
+      return;
+    }
+    if (typeof buildPublishedTimetableHtml !== 'function') {
+      cont.innerHTML = '<div class="alert alert-danger py-1 mb-0">تعذر تحميل قالب الطباعة.</div>';
+      return;
+    }
+    cont.innerHTML = buildPublishedTimetableHtml(rows, {});
+    area.classList.remove('d-none');
+    if (typeof area.scrollIntoView === 'function') {
+      area.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  } catch (e) {
+    console.error('previewSchedulePrint failed', e);
+    showMsg('تعذر تجهيز معاينة الجدول.', 'danger');
+  }
+}
+
+async function printScheduleAsStudentStyle(){
+  return openSchedulePrintPreview(true);
+}
+
 /* ---------- Init ---------- */
 document.addEventListener('DOMContentLoaded', () => {
   loadCourses();
@@ -1224,6 +1393,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const btnRun = document.getElementById('btnRun');
   if(btnRun) btnRun.addEventListener('click', runOptimize);
+  const btnPreview = document.getElementById('btnSchedulePreview');
+  if (btnPreview) btnPreview.addEventListener('click', previewSchedulePrint);
+  const btnPrintStudentStyle = document.getElementById('btnSchedulePrintStudentStyle');
+  if (btnPrintStudentStyle) btnPrintStudentStyle.addEventListener('click', printScheduleAsStudentStyle);
+
+  const btnPreviewClose = document.getElementById('btnSchedulePreviewClose');
+  if (btnPreviewClose) {
+    btnPreviewClose.addEventListener('click', () => {
+      const area = document.getElementById('schedulePreviewArea');
+      const cont = document.getElementById('schedulePreviewContainer');
+      if (cont) cont.innerHTML = '';
+      if (area) area.classList.add('d-none');
+    });
+  }
 
   const btnCompact = document.getElementById('btnToggleCompact');
   if (btnCompact) {

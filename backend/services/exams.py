@@ -1,13 +1,447 @@
-from flask import Blueprint, request, jsonify, send_file, session
+from flask import Blueprint, request, jsonify, send_file, session, render_template
 from backend.core.auth import login_required, role_required
-from .utilities import get_connection, table_to_dicts, DB_FILE, df_from_query, excel_response_from_df, pdf_response_from_html, log_activity
+from .utilities import (
+    get_connection,
+    table_to_dicts,
+    DB_FILE,
+    df_from_query,
+    excel_response_from_df,
+    pdf_response_from_html,
+    log_activity,
+    SEMESTER_LABEL,
+    get_current_term,
+    get_exam_schedule_published_at,
+    set_exam_schedule_published_at,
+    get_exam_schedule_updated_at,
+    touch_exam_schedule_updated_at,
+)
 import sqlite3
+import json
+import logging
 from datetime import datetime
 from collections import defaultdict
 
 exams_bp = Blueprint("exams", __name__)
+logger = logging.getLogger(__name__)
 
 VALID_TYPES = {"midterm", "final"}
+
+
+def _should_snapshot_exam_export():
+    role = (session.get("user_role") or "").strip()
+    return role in ("admin", "admin_main", "head_of_department")
+
+
+def _ensure_exam_schedule_version_tables(cur):
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS exam_schedule_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            exam_type TEXT NOT NULL CHECK (exam_type IN ('midterm', 'final')),
+            semester TEXT NOT NULL,
+            version_no INTEGER NOT NULL DEFAULT 1,
+            snapshot_json TEXT DEFAULT '',
+            generated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            generated_by TEXT DEFAULT '',
+            note TEXT DEFAULT '',
+            is_published INTEGER NOT NULL DEFAULT 0,
+            UNIQUE (exam_type, semester, version_no)
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS exam_schedule_version_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            exam_schedule_version_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            event_time TEXT DEFAULT CURRENT_TIMESTAMP,
+            actor TEXT DEFAULT '',
+            details TEXT DEFAULT ''
+        )
+        """
+    )
+    try:
+        cur.execute(
+            "ALTER TABLE exam_schedule_versions ADD COLUMN is_published INTEGER NOT NULL DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass
+
+
+def _role_may_edit_exam_schedule():
+    return (session.get("user_role") or "").strip() in ("admin", "admin_main", "head_of_department")
+
+
+def _user_can_view_exam_rows(exam_type: str) -> bool:
+    """الإدارة ترى المسودة؛ غير الإدارة يرى الجدول فقط بعد الاعتماد والنشر."""
+    if _role_may_edit_exam_schedule():
+        return True
+    with get_connection() as conn:
+        return get_exam_schedule_published_at(exam_type, conn=conn) is not None
+
+
+def _create_exam_schedule_version(
+    conn, exam_type: str, event_type: str, note: str = "", is_published: bool = False
+):
+    if exam_type not in VALID_TYPES:
+        return None
+    cur = conn.cursor()
+    _ensure_exam_schedule_version_tables(cur)
+    try:
+        tname, tyear = get_current_term(conn=conn)
+        semester = f"{(tname or '').strip()} {(tyear or '').strip()}".strip() or SEMESTER_LABEL
+    except Exception:
+        semester = SEMESTER_LABEL
+
+    rows = cur.execute(
+        """
+        SELECT rowid, COALESCE(course_name,''), COALESCE(exam_date,''), COALESCE(exam_time,''),
+               COALESCE(room,''), COALESCE(instructor,''), exam_id
+        FROM exams
+        WHERE exam_type = ?
+        ORDER BY exam_date, exam_time, course_name, rowid
+        """,
+        (exam_type,),
+    ).fetchall()
+    items = []
+    for r in rows:
+        items.append(
+            {
+                "exam_id": int(r[0]),
+                "course_name": r[1],
+                "exam_date": r[2],
+                "exam_time": r[3],
+                "room": r[4],
+                "instructor": r[5],
+                "legacy_exam_id": r[6],
+            }
+        )
+
+    actor = (session.get("user") or session.get("username") or "").strip() or "system"
+    now = datetime.utcnow().isoformat()
+    max_row = cur.execute(
+        "SELECT COALESCE(MAX(version_no),0) FROM exam_schedule_versions WHERE exam_type = ? AND semester = ?",
+        (exam_type, semester),
+    ).fetchone()
+    version_no = int((max_row[0] if max_row and max_row[0] is not None else 0) or 0) + 1
+    snapshot = {
+        "exam_type": exam_type,
+        "semester": semester,
+        "captured_at": now,
+        "captured_by": actor,
+        "row_count": len(items),
+        "rows": items,
+    }
+    cur.execute(
+        """
+        INSERT INTO exam_schedule_versions
+        (exam_type, semester, version_no, snapshot_json, generated_at, generated_by, note, is_published)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            exam_type,
+            semester,
+            version_no,
+            json.dumps(snapshot, ensure_ascii=False),
+            now,
+            actor,
+            (note or ""),
+            1 if is_published else 0,
+        ),
+    )
+    ver_id = int(cur.lastrowid)
+    cur.execute(
+        """
+        INSERT INTO exam_schedule_version_events
+        (exam_schedule_version_id, event_type, event_time, actor, details)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (ver_id, (event_type or "manual"), now, actor, (note or "")),
+    )
+    conn.commit()
+    return {
+        "id": ver_id,
+        "exam_type": exam_type,
+        "semester": semester,
+        "version_no": version_no,
+        "generated_at": now,
+        "is_published": bool(is_published),
+    }
+
+
+@exams_bp.route("/versions")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def exam_schedule_versions_list():
+    semester = (request.args.get("semester") or "").strip()
+    exam_type = (request.args.get("exam_type") or "").strip()
+    event_type = (request.args.get("event_type") or "").strip()
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            _ensure_exam_schedule_version_tables(cur)
+            where = []
+            params = []
+            if semester:
+                where.append("v.semester = ?")
+                params.append(semester)
+            if exam_type in VALID_TYPES:
+                where.append("v.exam_type = ?")
+                params.append(exam_type)
+            if event_type:
+                where.append("e.event_type = ?")
+                params.append(event_type)
+            wsql = ("WHERE " + " AND ".join(where)) if where else ""
+            rows = cur.execute(
+                f"""
+                SELECT v.id, v.exam_type, v.semester, v.version_no, v.generated_at, v.generated_by, v.note,
+                       v.is_published, e.event_type, e.event_time
+                FROM exam_schedule_versions v
+                LEFT JOIN exam_schedule_version_events e ON e.exam_schedule_version_id = v.id
+                {wsql}
+                ORDER BY v.generated_at DESC, v.id DESC
+                """,
+                params,
+            ).fetchall()
+            items = []
+            for r in rows:
+                items.append(
+                    {
+                        "id": int(r[0]),
+                        "exam_type": r[1] or "",
+                        "semester": r[2] or "",
+                        "version_no": int(r[3] or 0),
+                        "generated_at": r[4] or "",
+                        "generated_by": r[5] or "",
+                        "note": r[6] or "",
+                        "is_published": bool(int(r[7] or 0)),
+                        "event_type": r[8] or "",
+                        "event_time": r[9] or "",
+                    }
+                )
+            return jsonify({"status": "ok", "items": items})
+    except Exception:
+        logger.exception("exam_schedule_versions list failed")
+        return jsonify({"status": "error", "message": "فشل تحميل أرشيف جداول الامتحانات"}), 500
+
+
+@exams_bp.route("/versions/<int:version_id>")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def exam_schedule_version_detail(version_id: int):
+    download = str(request.args.get("download") or "").lower() in ("1", "true", "yes")
+    format_json = str(request.args.get("format") or "").lower() == "json"
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            _ensure_exam_schedule_version_tables(cur)
+            row = cur.execute(
+                """
+                SELECT id, exam_type, semester, version_no, snapshot_json, generated_at, generated_by, note, is_published
+                FROM exam_schedule_versions
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (int(version_id),),
+            ).fetchone()
+            if not row:
+                return jsonify({"status": "error", "message": "النسخة غير موجودة"}), 404
+            payload = {
+                "id": int(row[0]),
+                "exam_type": row[1] or "",
+                "semester": row[2] or "",
+                "version_no": int(row[3] or 0),
+                "generated_at": row[5] or "",
+                "generated_by": row[6] or "",
+                "note": row[7] or "",
+                "is_published": bool(int(row[8] or 0)),
+                "snapshot": json.loads(row[4] or "{}"),
+            }
+            if download or format_json:
+                return jsonify(payload)
+            snap = payload["snapshot"] if isinstance(payload["snapshot"], dict) else {}
+            rows = snap.get("rows") if isinstance(snap.get("rows"), list) else []
+            payload["row_count"] = int(snap.get("row_count") or len(rows))
+            return render_template(
+                "exam_version_preview.html",
+                item=payload,
+                exam_rows=rows,
+            )
+    except Exception:
+        logger.exception("exam_schedule_version_detail failed")
+        return jsonify({"status": "error", "message": "فشل قراءة نسخة جدول الامتحانات"}), 500
+
+
+@exams_bp.route("/versions/<int:version_id>/restore_draft", methods=["POST"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def exam_schedule_version_restore_draft(version_id: int):
+    exam_type = ""
+    semester = ""
+    version_no = 0
+    restored = 0
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            _ensure_exam_schedule_version_tables(cur)
+            row = cur.execute(
+                "SELECT exam_type, semester, version_no, snapshot_json FROM exam_schedule_versions WHERE id = ? LIMIT 1",
+                (int(version_id),),
+            ).fetchone()
+            if not row:
+                return jsonify({"status": "error", "message": "النسخة غير موجودة"}), 404
+
+            exam_type = row[0] or ""
+            semester = row[1] or ""
+            version_no = int(row[2] or 0)
+            if exam_type not in VALID_TYPES:
+                return jsonify({"status": "error", "message": "نوع امتحان غير صالح"}), 400
+            try:
+                snap = json.loads(row[3] or "{}")
+            except Exception:
+                snap = {}
+            rows = snap.get("rows") if isinstance(snap, dict) else []
+            if not isinstance(rows, list):
+                rows = []
+
+            cur.execute("DELETE FROM exams WHERE exam_type = ?", (exam_type,))
+            restored = 0
+            for it in rows:
+                if not isinstance(it, dict):
+                    continue
+                course_name = (it.get("course_name") or "").strip()
+                if not course_name:
+                    continue
+                exam_date = (it.get("exam_date") or "").strip()
+                exam_time = (it.get("exam_time") or "").strip()
+                room = (it.get("room") or "").strip()
+                instructor = (it.get("instructor") or "").strip()
+                leg_id = it.get("legacy_exam_id")
+                cur.execute(
+                    """
+                    INSERT INTO exams (exam_type, exam_id, course_name, exam_date, exam_time, room, instructor)
+                    VALUES (?,?,?,?,?,?,?)
+                    """,
+                    (exam_type, leg_id, course_name, exam_date, exam_time, room, instructor),
+                )
+                restored += 1
+
+            conn.commit()
+
+        try:
+            touch_exam_schedule_updated_at(exam_type)
+        except Exception:
+            pass
+
+        try:
+            persist_exam_conflicts(exam_type)
+        except Exception:
+            logger.exception("persist_exam_conflicts after exam restore")
+
+        try:
+            with get_connection() as conn2:
+                _create_exam_schedule_version(
+                    conn2,
+                    exam_type,
+                    "restore_draft",
+                    note=f"restored from version_id={int(version_id)} (v{version_no})",
+                )
+        except Exception:
+            logger.exception("failed to log exam restore_draft version event")
+
+        try:
+            log_activity(
+                action="exam_schedule_restore_draft",
+                details=f"version_id={int(version_id)}, exam_type={exam_type}, version_no={version_no}, restored_rows={restored}",
+            )
+        except Exception:
+            pass
+
+        return jsonify(
+            {
+                "status": "ok",
+                "message": f"تمت استعادة نسخة #{version_no} ({exam_type}) كمسودة حالية ({restored} صف).",
+                "restored_rows": restored,
+                "version_no": version_no,
+                "semester": semester,
+                "exam_type": exam_type,
+            }
+        )
+    except Exception:
+        logger.exception("exam_schedule_version_restore_draft failed")
+        return jsonify({"status": "error", "message": "فشل استعادة نسخة جدول الامتحانات"}), 500
+
+
+@exams_bp.route("/<exam_type>/publish_status")
+@login_required
+def exam_schedule_publish_status(exam_type):
+    if exam_type not in VALID_TYPES:
+        return jsonify({"status": "error", "message": "invalid exam type"}), 400
+    with get_connection() as conn:
+        published_at = get_exam_schedule_published_at(exam_type, conn=conn)
+        updated_at = get_exam_schedule_updated_at(exam_type, conn=conn)
+    changed_since_publish = False
+    if published_at and updated_at:
+        changed_since_publish = updated_at > published_at
+    return jsonify(
+        {
+            "status": "ok",
+            "published": published_at is not None,
+            "published_at": published_at,
+            "updated_at": updated_at,
+            "changed_since_publish": changed_since_publish,
+        }
+    )
+
+
+@exams_bp.route("/<exam_type>/publish", methods=["POST"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def exam_schedule_publish(exam_type):
+    if exam_type not in VALID_TYPES:
+        return jsonify({"status": "error", "message": "invalid exam type"}), 400
+    ver = None
+    try:
+        with get_connection() as conn:
+            published_at = set_exam_schedule_published_at(exam_type, conn=conn)
+            try:
+                touch_exam_schedule_updated_at(exam_type, conn=conn)
+            except Exception:
+                logger.exception("touch exam updated at on publish")
+            try:
+                ver = _create_exam_schedule_version(
+                    conn,
+                    exam_type,
+                    "publish",
+                    note="exam schedule published",
+                    is_published=True,
+                )
+            except Exception:
+                logger.exception("failed to create exam schedule version on publish")
+        try:
+            log_activity(
+                action="exam_schedule_publish",
+                details=f"exam_type={exam_type}, published_at={published_at}",
+            )
+        except Exception:
+            pass
+        out = {
+            "status": "ok",
+            "message": "تم اعتماد ونشر جدول الامتحانات",
+            "published_at": published_at,
+        }
+        if ver:
+            out["version"] = {
+                "id": ver.get("id"),
+                "version_no": ver.get("version_no"),
+                "semester": ver.get("semester"),
+            }
+        return jsonify(out), 200
+    except Exception as e:
+        logger.exception("exam_schedule_publish failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 
 def normalize_dates(dates):
     # expect list of date strings, normalize to ISO YYYY-MM-DD
@@ -31,6 +465,8 @@ def normalize_dates(dates):
 @login_required
 def list_exam_rows(exam_type):
     if exam_type not in VALID_TYPES:
+        return jsonify([])
+    if not _user_can_view_exam_rows(exam_type):
         return jsonify([])
     with get_connection() as conn:
         cur = conn.cursor()
@@ -115,7 +551,7 @@ def check_exam_conflicts(exam_type):
         }), 500
 
 @exams_bp.route('/<exam_type>/add_row', methods=['POST'])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def add_exam_row(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"status":"error","message":"invalid exam type"}), 400
@@ -137,6 +573,10 @@ def add_exam_row(exam_type):
         cur.execute("INSERT INTO exams (exam_type, exam_id, course_name, exam_date, exam_time, room, instructor) VALUES (?,?,?,?,?,?,?)",
                     (exam_type, None, course_name, exam_date, exam_time, room, instructor))
         conn.commit()
+    try:
+        touch_exam_schedule_updated_at(exam_type)
+    except Exception:
+        pass
     # تحديث جدول تعارضات الامتحانات
     try:
         persist_exam_conflicts(exam_type)
@@ -149,7 +589,7 @@ def add_exam_row(exam_type):
     return jsonify({"status":"ok"})
 
 @exams_bp.route('/<exam_type>/delete_row', methods=['POST'])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def delete_exam_row(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"status":"error"}), 400
@@ -162,6 +602,10 @@ def delete_exam_row(exam_type):
         cur.execute('DELETE FROM exams WHERE rowid = ? AND exam_type = ?', (exam_id, exam_type))
         conn.commit()
     try:
+        touch_exam_schedule_updated_at(exam_type)
+    except Exception:
+        pass
+    try:
         persist_exam_conflicts(exam_type)
         log_activity(
             action="delete_exam_row",
@@ -172,7 +616,7 @@ def delete_exam_row(exam_type):
     return jsonify({"status":"ok"})
 
 @exams_bp.route('/<exam_type>/distribute', methods=['POST'])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def distribute_exams(exam_type):
     """
     Body: { dates: ["YYYY-MM-DD", ...], method: "round_robin" }
@@ -256,6 +700,19 @@ def distribute_exams(exam_type):
                             (exam_type, None, c, ed, '', '', ''))
                 di += 1
         conn.commit()
+        try:
+            touch_exam_schedule_updated_at(exam_type, conn=conn)
+        except Exception:
+            pass
+        try:
+            _create_exam_schedule_version(
+                conn,
+                exam_type,
+                "distribute",
+                note=f"method={method}, dates={','.join(dates)}",
+            )
+        except Exception:
+            logger.exception("failed to create exam schedule version on distribute")
     try:
         persist_exam_conflicts(exam_type)
         log_activity(
@@ -289,6 +746,19 @@ def export_exams(exam_type):
     fmt = (request.args.get('format') or 'txt').lower()
     if exam_type not in VALID_TYPES:
         return jsonify({"status": "error", "message": "invalid exam type"}), 400
+    if not _user_can_view_exam_rows(exam_type):
+        return jsonify({"status": "error", "message": "جدول الامتحانات غير معتمد/منشور بعد"}), 403
+    ver_info = None
+    if _should_snapshot_exam_export():
+        ev_map = {"txt": "export_txt", "xlsx": "export_xlsx", "xls": "export_xlsx", "pdf": "export_pdf"}
+        ev = ev_map.get(fmt, f"export_{fmt}")
+        try:
+            with get_connection() as conn:
+                ver_info = _create_exam_schedule_version(
+                    conn, exam_type, ev, note=f"exam export format={fmt}"
+                )
+        except Exception:
+            logger.exception("failed to create exam schedule version on export")
     # load exams
     exams = table_to_dicts('exams')
     exams = [e for e in exams if e.get('exam_type') == exam_type]
@@ -308,9 +778,12 @@ def export_exams(exam_type):
     elif fmt == 'pdf':
         # build simple html
         rows_html = ''.join([f"<tr><td>{e.get('course_name','')}</td><td>{e.get('exam_date','')}</td><td>{e.get('exam_time','')}</td><td>{e.get('room','')}</td></tr>" for e in exams])
+        meta_bits = ""
+        if ver_info:
+            meta_bits = f"<p style='font-size:11px;color:#444'>الفصل: {ver_info.get('semester') or '—'} | النسخة الأرشيفية: #{int(ver_info.get('version_no') or 0)}</p>"
         html = f"""
         <html><head><meta charset='utf-8'><style>table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #ccc;padding:6px}}</style></head>
-        <body><h2>Exams - {exam_type}</h2><table><thead><tr><th>Course</th><th>Date</th><th>Time</th><th>Room</th></tr></thead><tbody>{rows_html}</tbody></table></body></html>
+        <body><h2>Exams - {exam_type}</h2>{meta_bits}<table><thead><tr><th>Course</th><th>Date</th><th>Time</th><th>Room</th></tr></thead><tbody>{rows_html}</tbody></table></body></html>
         """
         return pdf_response_from_html(html, filename_prefix=f"exams_{exam_type}")
     else:
@@ -323,6 +796,8 @@ def export_conflicts(exam_type):
     fmt = (request.args.get('format') or 'txt').lower()
     if exam_type not in VALID_TYPES:
         return jsonify({"status": "error", "message": "invalid exam type"}), 400
+    if not _user_can_view_exam_rows(exam_type):
+        return jsonify({"status": "error", "message": "جدول الامتحانات غير معتمد/منشور بعد"}), 403
     # reuse the conflict SQL used above
     q = '''
     SELECT r.student_id as student_id, e.exam_date as exam_date, GROUP_CONCAT(e.course_name) as conflicting_courses, COUNT(e.course_name) as ccount
@@ -359,6 +834,8 @@ def export_conflicts(exam_type):
 def exam_conflicts(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"conflicts": []})
+    if not _user_can_view_exam_rows(exam_type):
+        return jsonify({"conflicts": []})
     with get_connection() as conn:
         cur = conn.cursor()
         # Join exams with registrations to produce for each student the list of courses on each date
@@ -385,6 +862,8 @@ def exam_conflicts(exam_type):
 def exam_results_data(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({})
+    if not _user_can_view_exam_rows(exam_type):
+        return jsonify({"exams": [], "conflicts": []})
     exams = table_to_dicts('exams')
     exams = [e for e in exams if e.get('exam_type') == exam_type]
     with get_connection() as conn:
@@ -404,7 +883,7 @@ def exam_results_data(exam_type):
 
 
 @exams_bp.route('/<exam_type>/update_row', methods=['POST'])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def update_exam_row(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"status":"error","message":"invalid exam type"}), 400
@@ -431,6 +910,10 @@ def update_exam_row(exam_type):
         cur.execute(q, params)
         conn.commit()
     try:
+        touch_exam_schedule_updated_at(exam_type)
+    except Exception:
+        pass
+    try:
         persist_exam_conflicts(exam_type)
         log_activity(
             action="update_exam_row",
@@ -442,7 +925,7 @@ def update_exam_row(exam_type):
 
 
 @exams_bp.route('/<exam_type>/bulk_update', methods=['POST'])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def bulk_update_exam_rows(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"status":"error","message":"invalid exam type"}), 400
@@ -477,6 +960,10 @@ def bulk_update_exam_rows(exam_type):
                 continue
         conn.commit()
     try:
+        touch_exam_schedule_updated_at(exam_type)
+    except Exception:
+        pass
+    try:
         persist_exam_conflicts(exam_type)
         log_activity(
             action="bulk_update_exam_rows",
@@ -496,6 +983,8 @@ def student_exam_rows(exam_type):
     - المشرف/الأدمن: يمكن تمرير ?student_id=...
     """
     if exam_type not in VALID_TYPES:
+        return jsonify({"rows": []})
+    if not _user_can_view_exam_rows(exam_type):
         return jsonify({"rows": []})
     user_role = session.get("user_role")
     if user_role == "student":

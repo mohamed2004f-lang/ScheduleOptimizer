@@ -393,6 +393,22 @@ def course_registration_report_page():
     return render_template("course_registration_report.html")
 
 
+@app.route("/schedule_versions_page")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def schedule_versions_page():
+    """أرشيف نسخ الجدول الدراسي."""
+    return render_template("schedule_versions.html")
+
+
+@app.route("/exam_schedule_versions_page")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def exam_schedule_versions_page():
+    """أرشيف نسخ جداول الامتحانات (جزئي / نهائي)."""
+    return render_template("exam_versions.html")
+
+
 def _read_text_doc(path: str) -> str:
     try:
         p = Path(path)

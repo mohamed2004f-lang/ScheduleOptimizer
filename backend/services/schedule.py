@@ -30,6 +30,110 @@ logger = logging.getLogger(__name__)
 
 schedule_bp = Blueprint("schedule", __name__)
 
+
+def _ensure_schedule_version_tables(cur):
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schedule_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            semester TEXT NOT NULL,
+            version_no INTEGER NOT NULL DEFAULT 1,
+            snapshot_json TEXT DEFAULT '',
+            generated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            generated_by TEXT DEFAULT '',
+            note TEXT DEFAULT '',
+            is_published INTEGER NOT NULL DEFAULT 0,
+            UNIQUE (semester, version_no)
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schedule_version_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            schedule_version_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            event_time TEXT DEFAULT CURRENT_TIMESTAMP,
+            actor TEXT DEFAULT '',
+            details TEXT DEFAULT ''
+        )
+        """
+    )
+
+
+def _create_schedule_version(conn, event_type: str, note: str = "", is_published: bool = False):
+    cur = conn.cursor()
+    _ensure_schedule_version_tables(cur)
+    try:
+        tname, tyear = get_current_term(conn=conn)
+        semester = f"{(tname or '').strip()} {(tyear or '').strip()}".strip() or SEMESTER_LABEL
+    except Exception:
+        semester = SEMESTER_LABEL
+
+    rows = cur.execute(
+        """
+        SELECT rowid, COALESCE(course_name,''), COALESCE(day,''), COALESCE(time,''),
+               COALESCE(room,''), COALESCE(instructor,''), COALESCE(semester,'')
+        FROM schedule
+        ORDER BY day, time, course_name, rowid
+        """
+    ).fetchall()
+    items = []
+    for r in rows:
+        items.append(
+            {
+                "rowid": int(r[0]),
+                "course_name": r[1],
+                "day": r[2],
+                "time": r[3],
+                "room": r[4],
+                "instructor": r[5],
+                "semester": r[6],
+            }
+        )
+
+    actor = (session.get("user") or session.get("username") or "").strip() or "system"
+    now = datetime.datetime.utcnow().isoformat()
+    max_row = cur.execute(
+        "SELECT COALESCE(MAX(version_no),0) FROM schedule_versions WHERE semester = ?",
+        (semester,),
+    ).fetchone()
+    version_no = int((max_row[0] if max_row and max_row[0] is not None else 0) or 0) + 1
+    snapshot = {
+        "semester": semester,
+        "captured_at": now,
+        "captured_by": actor,
+        "row_count": len(items),
+        "rows": items,
+    }
+    cur.execute(
+        """
+        INSERT INTO schedule_versions
+        (semester, version_no, snapshot_json, generated_at, generated_by, note, is_published)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            semester,
+            version_no,
+            json.dumps(snapshot, ensure_ascii=False),
+            now,
+            actor,
+            (note or ""),
+            1 if is_published else 0,
+        ),
+    )
+    ver_id = int(cur.lastrowid)
+    cur.execute(
+        """
+        INSERT INTO schedule_version_events
+        (schedule_version_id, event_type, event_time, actor, details)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (ver_id, (event_type or "manual"), now, actor, (note or "")),
+    )
+    conn.commit()
+    return {"id": ver_id, "semester": semester, "version_no": version_no, "generated_at": now}
+
 def _time_to_minutes_hhmm(s: str):
     try:
         s = (s or "").strip()
@@ -231,6 +335,75 @@ def _load_schedule_rows_for_export(conn) -> list:
         """
     ).fetchall()
     return [dict(r) for r in rows] if rows else []
+
+
+def _build_schedule_triple_export_matrix(rows: list, time_slots: list, include_empty: bool) -> dict:
+    """
+    مصفوفة خاصة بالتصدير:
+    { day -> { time -> [ {course_name, instructor, room} ] } }
+    ليتم عرض التصدير بنفس تنسيق واجهة الجدول (مقرر|أستاذ|قاعة لكل توقيت).
+    """
+    slots_saved = [str(t or "").strip() for t in (time_slots or []) if str(t or "").strip()]
+    times_in_data = sorted({str(r.get("time") or "").strip() for r in (rows or []) if str(r.get("time") or "").strip()})
+
+    if include_empty:
+        columns = list(dict.fromkeys(slots_saved + times_in_data))
+    else:
+        columns = list(times_in_data)
+        ordered = []
+        in_set = set(columns)
+        for s in slots_saved:
+            if s in in_set and s not in ordered:
+                ordered.append(s)
+        for t in columns:
+            if t not in ordered:
+                ordered.append(t)
+        columns = ordered
+
+    slot_set = set(slots_saved)
+    nonmatching_with_rows = [t for t in times_in_data if t not in slot_set]
+
+    empty_saved = []
+    if slots_saved:
+        data_set = set(times_in_data)
+        empty_saved = [s for s in slots_saved if s not in data_set]
+
+    matrix = {d: {t: [] for t in columns} for d in _days_ar()}
+
+    ordered_rows = sorted(
+        rows or [],
+        key=lambda r: (
+            str(r.get("day") or "").strip(),
+            str(r.get("time") or "").strip(),
+            str(r.get("course_name") or "").strip(),
+            str(r.get("instructor") or "").strip(),
+            str(r.get("room") or "").strip(),
+        ),
+    )
+
+    for r in ordered_rows:
+        day = str(r.get("day") or "").strip()
+        time = str(r.get("time") or "").strip()
+        if not day or not time:
+            continue
+        if day not in matrix or time not in columns:
+            continue
+        matrix[day][time].append(
+            {
+                "course_name": str(r.get("course_name") or "").strip(),
+                "instructor": str(r.get("instructor") or "").strip(),
+                "room": str(r.get("room") or "").strip(),
+            }
+        )
+
+    return {
+        "columns": columns,
+        "matrix": matrix,
+        "empty_saved_slots": empty_saved,
+        "nonmatching_times": nonmatching_with_rows,
+        "times_in_data": times_in_data,
+        "saved_slots": slots_saved,
+    }
 
 # -----------------------------
 # عرض/إضافة صفوف الجدول
@@ -749,22 +922,70 @@ def export_schedule_pdf():
     with get_connection() as conn:
         slots_info = _get_time_slots_setting(conn)
         rows = _load_schedule_rows_for_export(conn)
-        built = _build_schedule_matrix(rows, slots_info.get("slots") or [], include_empty=include_empty)
+        built = _build_schedule_triple_export_matrix(rows, slots_info.get("slots") or [], include_empty=include_empty)
+        version_info = None
+        # إنشاء نسخة تاريخية عند التصدير الرسمي (غير القالب)
+        if not include_empty:
+            try:
+                ev = "export_pdf_official" if official else "export_pdf"
+                version_info = _create_schedule_version(conn, event_type=ev, note="schedule pdf export", is_published=False)
+            except Exception:
+                logger.exception("failed to create schedule version on pdf export")
 
     cols = built["columns"]
     matrix = built["matrix"]
 
-    # HTML table
-    ths = "<th>اليوم / الوقت</th>" + "".join(f"<th>{c}</th>" for c in cols)
+    def _escape_html(s: str) -> str:
+        return (
+            str(s or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+        )
+
+    # HTML table (نسخة مطابقة للشكل: لكل توقيت colspan=3)
+    thead_html = (
+        "<thead>"
+        "<tr>"
+        "<th rowspan='2'>اليوم / الوقت</th>"
+        + "".join(f"<th colspan='3'>{_escape_html(c)}</th>" for c in cols)
+        + "</tr>"
+        "<tr>"
+        + "".join("<th>المقرر</th><th>الأستاذ</th><th>القاعة</th>" for _ in cols)
+        + "</tr>"
+        "</thead>"
+    )
+
     body_rows = ""
     for day in matrix.keys():
-        tds = f"<th>{day}</th>"
+        tds = f"<th>{_escape_html(day)}</th>"
         for c in cols:
             items = matrix[day].get(c) or []
             if not items:
-                tds += "<td></td>"
-            else:
-                tds += "<td>" + "<br/>".join([str(x) for x in items]) + "</td>"
+                tds += "<td colspan='3'></td>"
+                continue
+
+            inner_rows = ""
+            for idx, it in enumerate(items):
+                if idx > 0:
+                    # صف فاصل أفقي بين المقررات لكن مع خلايا فارغة للتمكّن من امتداد الخط العمودي
+                    inner_rows += "<tr class='rec-sep'><td class='rec-course'></td><td class='rec-inst'></td><td class='rec-room'></td></tr>"
+                inner_rows += (
+                    "<tr>"
+                    f"<td class='rec-course'>{_escape_html(it.get('course_name') or '')}</td>"
+                    f"<td class='rec-inst'>{_escape_html(it.get('instructor') or '')}</td>"
+                    f"<td class='rec-room'>{_escape_html(it.get('room') or '')}</td>"
+                    "</tr>"
+                )
+
+            tds += (
+                "<td colspan='3'>"
+                "<div class='rec-wrap'><table class='rec-table'><tbody>"
+                + inner_rows
+                + "</tbody></table></div>"
+                "</td>"
+            )
         body_rows += "<tr>" + tds + "</tr>"
 
     term_label = slots_info.get("term_label") or ""
@@ -793,6 +1014,8 @@ def export_schedule_pdf():
         """
 
     meta_bits = f"الفصل: {term_label or '—'} <span class=\"sep\">|</span> التاريخ: {now_print}"
+    if version_info:
+        meta_bits += f" <span class=\"sep\">|</span> النسخة: #{int(version_info.get('version_no') or 0)}"
     if include_empty:
         meta_bits += " <span class=\"sep\">|</span> النوع: قالب"
 
@@ -866,6 +1089,17 @@ def export_schedule_pdf():
         th, td {{ border: 1px solid #444; padding: 4px; font-size: 9.8px; vertical-align: top; word-wrap: break-word; }}
         th {{ background: #f3f3f3; font-weight: 700; }}
         td {{ min-height: 18px; line-height: 1.25; }}
+        .rec-table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
+        .rec-table td {{ border: 0 !important; padding: 2px 3px; font-size: 9.5px; vertical-align: top; }}
+        .rec-sep td {{ border-top: 1px dashed #444 !important; padding: 0; height: 3px; }}
+        .rec-course {{ width: 52%; word-wrap: break-word; }}
+        .rec-inst {{ width: 26%; word-wrap: break-word; }}
+        /* الفاصل المطلوب في التصدير: بين (عمود الأستاذ) و(عمود القاعة) */
+        .rec-room {{
+          width: 22%;
+          word-wrap: break-word;
+          border-left: 2px solid rgba(15,23,42,0.65) !important;
+        }}
         /* التوقيع أسفل الجدول مباشرة */
         .sign-wrap {{
           margin-top: 6px;
@@ -879,7 +1113,7 @@ def export_schedule_pdf():
     <body>
       {header_html}
       <table>
-        <thead><tr>{ths}</tr></thead>
+        {thead_html}
         <tbody>{body_rows or ''}</tbody>
       </table>
       {signature_block}
@@ -897,18 +1131,43 @@ def export_schedule_excel():
     with get_connection() as conn:
         slots_info = _get_time_slots_setting(conn)
         rows = _load_schedule_rows_for_export(conn)
-        built = _build_schedule_matrix(rows, slots_info.get("slots") or [], include_empty=include_empty)
+        built = _build_schedule_triple_export_matrix(rows, slots_info.get("slots") or [], include_empty=include_empty)
+        if not include_empty:
+            try:
+                _create_schedule_version(conn, event_type="export_excel", note="schedule excel export", is_published=False)
+            except Exception:
+                logger.exception("failed to create schedule version on excel export")
 
     cols = built["columns"]
     matrix = built["matrix"]
 
+    def _join_records(values: list) -> str:
+        sep_line = "-----"
+        vals = [str(v or "").strip() for v in (values or []) if str(v or "").strip()]
+        if not vals:
+            return "—"
+        return f"\n{sep_line}\n".join(vals)
+
+    # MultiIndex أعمدة: (وقت, مقرر/أستاذ/قاعة)
+    multi_cols = [("اليوم", "")]
+    for t in cols:
+        multi_cols.append((t, "المقرر"))
+        multi_cols.append((t, "الأستاذ"))
+        multi_cols.append((t, "القاعة"))
+    multi_cols = pd.MultiIndex.from_tuples(multi_cols)
+
     out_rows = []
-    for day, by_time in matrix.items():
-        row = {"اليوم": day}
-        for c in cols:
-            items = by_time.get(c) or []
-            row[c] = "\n".join(items)
-        out_rows.append(row)
+    for day in matrix.keys():
+        row_vals = [day]
+        for t in cols:
+            items = matrix[day].get(t) or []
+            courses = [it.get("course_name") or "" for it in items]
+            insts = [it.get("instructor") or "" for it in items]
+            rooms = [it.get("room") or "" for it in items]
+            row_vals.append(_join_records(courses))
+            row_vals.append(_join_records(insts))
+            row_vals.append(_join_records(rooms))
+        out_rows.append(row_vals)
 
     # Append notes row
     notes = []
@@ -917,17 +1176,14 @@ def export_schedule_excel():
     if built.get("nonmatching_times"):
         notes.append("أوقات غير ضمن التقسيمات (موجودة في البيانات): " + "، ".join(built["nonmatching_times"]))
     if notes:
-        note_row = {"اليوم": "ملاحظات"}
-        for c in cols:
-            note_row[c] = ""
-        # ضع النص في أول عمود وقت إن وجد وإلا في اليوم
+        row_vals = ["ملاحظات"]
+        for _ in cols:
+            row_vals.extend(["", "", ""])
         if cols:
-            note_row[cols[0]] = " | ".join(notes)
-        else:
-            note_row["اليوم"] = "ملاحظات: " + " | ".join(notes)
-        out_rows.append(note_row)
+            row_vals[1] = " | ".join(notes)  # أول (وقت, مقرر)
+        out_rows.append(row_vals)
 
-    df = pd.DataFrame(out_rows)
+    df = pd.DataFrame(out_rows, columns=multi_cols)
     return excel_response_from_df(df, filename_prefix="schedule")
 
 
@@ -970,8 +1226,16 @@ def publish_schedule():
                 recompute_conflict_report(conn)
             except Exception as e:
                 logger.exception("فشل إعادة حساب التعارضات عند نشر الجدول: %s", e)
+            try:
+                ver = _create_schedule_version(conn, event_type="publish", note="schedule published", is_published=True)
+            except Exception:
+                ver = None
+                logger.exception("failed to create schedule version on publish")
         log_activity(action="schedule_publish", details=f"published_at={published_at}")
-        return jsonify({"status": "ok", "message": "تم اعتماد ونشر الجدول الدراسي", "published_at": published_at}), 200
+        out = {"status": "ok", "message": "تم اعتماد ونشر الجدول الدراسي", "published_at": published_at}
+        if ver:
+            out["version"] = {"id": ver.get("id"), "version_no": ver.get("version_no"), "semester": ver.get("semester")}
+        return jsonify(out), 200
     except Exception as e:
         logger.error(f"Error publishing schedule: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -994,6 +1258,197 @@ def schedule_meta():
         "updated_at": updated_at,
         "changed_since_publish": changed_since_publish,
     })
+
+
+@schedule_bp.route("/versions")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def schedule_versions():
+    semester = (request.args.get("semester") or "").strip()
+    event_type = (request.args.get("event_type") or "").strip()
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            _ensure_schedule_version_tables(cur)
+            where = []
+            params = []
+            if semester:
+                where.append("v.semester = ?")
+                params.append(semester)
+            if event_type:
+                where.append("e.event_type = ?")
+                params.append(event_type)
+            wsql = ("WHERE " + " AND ".join(where)) if where else ""
+            rows = cur.execute(
+                f"""
+                SELECT v.id, v.semester, v.version_no, v.generated_at, v.generated_by, v.note, v.is_published,
+                       e.event_type, e.event_time
+                FROM schedule_versions v
+                LEFT JOIN schedule_version_events e ON e.schedule_version_id = v.id
+                {wsql}
+                ORDER BY v.generated_at DESC, v.id DESC
+                """,
+                params,
+            ).fetchall()
+            items = []
+            for r in rows:
+                items.append(
+                    {
+                        "id": int(r[0]),
+                        "semester": r[1] or "",
+                        "version_no": int(r[2] or 0),
+                        "generated_at": r[3] or "",
+                        "generated_by": r[4] or "",
+                        "note": r[5] or "",
+                        "is_published": bool(int(r[6] or 0)),
+                        "event_type": r[7] or "",
+                        "event_time": r[8] or "",
+                    }
+                )
+            return jsonify({"status": "ok", "items": items})
+    except Exception:
+        logger.exception("schedule_versions list failed")
+        return jsonify({"status": "error", "message": "فشل تحميل أرشيف نسخ الجدول"}), 500
+
+
+@schedule_bp.route("/versions/<int:version_id>")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def schedule_version_detail(version_id: int):
+    download = str(request.args.get("download") or "").lower() in ("1", "true", "yes")
+    format_json = str(request.args.get("format") or "").lower() == "json"
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            _ensure_schedule_version_tables(cur)
+            row = cur.execute(
+                """
+                SELECT id, semester, version_no, snapshot_json, generated_at, generated_by, note, is_published
+                FROM schedule_versions
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (int(version_id),),
+            ).fetchone()
+            if not row:
+                return jsonify({"status": "error", "message": "النسخة غير موجودة"}), 404
+            payload = {
+                "id": int(row[0]),
+                "semester": row[1] or "",
+                "version_no": int(row[2] or 0),
+                "generated_at": row[4] or "",
+                "generated_by": row[5] or "",
+                "note": row[6] or "",
+                "is_published": bool(int(row[7] or 0)),
+                "snapshot": json.loads(row[3] or "{}"),
+            }
+            if download or format_json:
+                return jsonify(payload)
+            snap = payload["snapshot"] if isinstance(payload["snapshot"], dict) else {}
+            rows = snap.get("rows") if isinstance(snap.get("rows"), list) else []
+            built = _build_schedule_matrix(rows, [], include_empty=False)
+            columns = built.get("columns") or []
+            matrix = built.get("matrix") or {}
+            payload["row_count"] = int(snap.get("row_count") or len(rows))
+            return render_template(
+                "schedule_version_preview.html",
+                item=payload,
+                columns=columns,
+                matrix=matrix,
+            )
+    except Exception:
+        logger.exception("schedule_version_detail failed")
+        return jsonify({"status": "error", "message": "فشل قراءة نسخة الجدول"}), 500
+
+
+@schedule_bp.route("/versions/<int:version_id>/restore_draft", methods=["POST"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def schedule_version_restore_draft(version_id: int):
+    """
+    استعادة نسخة جدول إلى جدول schedule الحالي كمسودة (بدون نشر).
+    لا يغيّر optimized_schedule ولا حالة publish مباشرة.
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            _ensure_schedule_version_tables(cur)
+            row = cur.execute(
+                "SELECT semester, version_no, snapshot_json FROM schedule_versions WHERE id = ? LIMIT 1",
+                (int(version_id),),
+            ).fetchone()
+            if not row:
+                return jsonify({"status": "error", "message": "النسخة غير موجودة"}), 404
+
+            semester = row[0] or ""
+            version_no = int(row[1] or 0)
+            try:
+                snap = json.loads(row[2] or "{}")
+            except Exception:
+                snap = {}
+            rows = snap.get("rows") if isinstance(snap, dict) else []
+            if not isinstance(rows, list):
+                rows = []
+
+            # استبدال المسودة الحالية بالكامل بصفوف النسخة
+            cur.execute("DELETE FROM schedule")
+            restored = 0
+            for it in rows:
+                if not isinstance(it, dict):
+                    continue
+                course_name = (it.get("course_name") or "").strip()
+                day = (it.get("day") or "").strip()
+                time = (it.get("time") or "").strip()
+                room = (it.get("room") or "").strip()
+                instructor = (it.get("instructor") or "").strip()
+                sem = (it.get("semester") or "").strip() or semester
+                if not course_name or not day or not time:
+                    continue
+                cur.execute(
+                    """
+                    INSERT INTO schedule (course_name, day, time, room, instructor, semester)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (course_name, day, time, room, instructor, sem),
+                )
+                restored += 1
+
+            try:
+                touch_schedule_updated_at(conn)
+            except Exception:
+                pass
+
+            try:
+                _create_schedule_version(
+                    conn,
+                    event_type="restore_draft",
+                    note=f"restored from version_id={int(version_id)} (v{version_no})",
+                    is_published=False,
+                )
+            except Exception:
+                logger.exception("failed to log restore_draft version event")
+            conn.commit()
+
+        try:
+            log_activity(
+                action="schedule_restore_draft",
+                details=f"version_id={int(version_id)}, version_no={version_no}, restored_rows={restored}",
+            )
+        except Exception:
+            pass
+
+        return jsonify(
+            {
+                "status": "ok",
+                "message": f"تمت استعادة النسخة #{version_no} كمسودة ({restored} صف). يمكنك مراجعتها ثم اعتمادها.",
+                "restored_rows": restored,
+                "version_no": version_no,
+                "semester": semester,
+            }
+        )
+    except Exception:
+        logger.exception("schedule_version_restore_draft failed")
+        return jsonify({"status": "error", "message": "فشل استعادة النسخة كمسودة"}), 500
 
 
 @schedule_bp.route("/student_timetable")
