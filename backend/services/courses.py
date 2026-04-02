@@ -1,10 +1,13 @@
 import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from models.models import Course
-from flask import Blueprint, request, jsonify, Response, current_app, session
+from flask import Blueprint, request, jsonify, Response, current_app, session, send_file
 from backend.core.auth import login_required, role_required
 from collections import defaultdict
 from .utilities import get_connection, table_to_dicts, df_from_query, excel_response_from_df, pdf_response_from_html
+import io
+import base64
+from datetime import datetime
 
 courses_bp = Blueprint("courses", __name__)
 
@@ -488,6 +491,375 @@ def prereq_status():
                 allowed.append(c)
 
     return jsonify({"status": "ok", "allowed": allowed, "blocked": blocked, "prereqs": prereq_map})
+
+
+def _load_courses_and_prereqs(conn):
+    cur = conn.cursor()
+    try:
+        rows_c = cur.execute("SELECT course_name, COALESCE(course_code,'') AS course_code FROM courses").fetchall()
+        courses = [{"course_name": r[0], "course_code": (r[1] or "")} for r in (rows_c or []) if r and r[0]]
+    except Exception:
+        rows_s = cur.execute("SELECT DISTINCT course_name FROM schedule").fetchall()
+        courses = [{"course_name": r[0], "course_code": ""} for r in (rows_s or []) if r and r[0]]
+
+    try:
+        rows_p = cur.execute("SELECT course_name, required_course_name FROM prereqs").fetchall()
+        prereqs = [{"course_name": r[0], "required_course_name": r[1]} for r in (rows_p or []) if r and r[0] and r[1]]
+    except Exception:
+        prereqs = []
+
+    # normalize + dedupe
+    seen = set()
+    out_courses = []
+    for c in courses:
+        key = (c.get("course_name") or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out_courses.append(c)
+    seen_p = set()
+    out_pr = []
+    for p in prereqs:
+        a = (p.get("required_course_name") or "").strip()
+        b = (p.get("course_name") or "").strip()
+        if not a or not b:
+            continue
+        k = (b.lower(), a.lower())
+        if k in seen_p:
+            continue
+        seen_p.add(k)
+        out_pr.append({"course_name": b, "required_course_name": a})
+    return out_courses, out_pr
+
+
+def _subgraph_for_course(prereqs_rows, focus_course: str, direction: str, depth: int):
+    focus = (focus_course or "").strip()
+    if not focus:
+        return prereqs_rows
+    direction = (direction or "both").strip().lower()
+    if direction not in ("both", "prereqs", "dependents"):
+        direction = "both"
+    try:
+        depth = int(depth or 2)
+    except Exception:
+        depth = 2
+    depth = max(1, min(depth, 10))
+
+    # Build adjacency
+    prereq_to_course = defaultdict(set)  # req -> {course}
+    course_to_prereq = defaultdict(set)  # course -> {req}
+    for row in prereqs_rows:
+        c = (row.get("course_name") or "").strip()
+        r = (row.get("required_course_name") or "").strip()
+        if not c or not r:
+            continue
+        prereq_to_course[r].add(c)
+        course_to_prereq[c].add(r)
+
+    included_courses = {focus}
+
+    def walk_prereqs():
+        frontier = {focus}
+        for _ in range(depth):
+            nxt = set()
+            for c in frontier:
+                for r in course_to_prereq.get(c, set()):
+                    if r not in included_courses:
+                        included_courses.add(r)
+                        nxt.add(r)
+            frontier = nxt
+            if not frontier:
+                break
+
+    def walk_dependents():
+        frontier = {focus}
+        for _ in range(depth):
+            nxt = set()
+            for r in frontier:
+                for c in prereq_to_course.get(r, set()):
+                    if c not in included_courses:
+                        included_courses.add(c)
+                        nxt.add(c)
+            frontier = nxt
+            if not frontier:
+                break
+
+    if direction in ("both", "prereqs"):
+        walk_prereqs()
+    if direction in ("both", "dependents"):
+        walk_dependents()
+
+    out = []
+    for row in prereqs_rows:
+        c = (row.get("course_name") or "").strip()
+        r = (row.get("required_course_name") or "").strip()
+        if c in included_courses and r in included_courses:
+            out.append(row)
+    return out
+
+
+def _render_prereq_flow_png(courses, prereqs_rows, focus_course: str = "", direction: str = "both", depth: int = 2):
+    # Import matplotlib lazily so the app runs without it until used.
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as e:
+        raise RuntimeError(
+            "ميزة خريطة المتطلبات تحتاج تثبيت مكتبة matplotlib. "
+            "نفّذ: pip install -r requirements.txt ثم أعد تشغيل السيرفر."
+        ) from e
+
+    # Optionally reduce to a focused subgraph
+    filtered_pr = _subgraph_for_course(prereqs_rows, focus_course=focus_course, direction=direction, depth=depth)
+
+    # Build nodes set (from edges + courses list)
+    nodes = set()
+    for p in filtered_pr:
+        nodes.add((p.get("course_name") or "").strip())
+        nodes.add((p.get("required_course_name") or "").strip())
+    nodes = {n for n in nodes if n}
+    if not nodes:
+        # fallback: show an "empty" image
+        fig = plt.figure(figsize=(10, 4), dpi=160)
+        ax = fig.add_subplot(111)
+        ax.axis("off")
+        ax.text(0.5, 0.5, "لا توجد متطلبات لعرضها", ha="center", va="center", fontsize=16)
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight")
+        plt.close(fig)
+        buf.seek(0)
+        return buf.getvalue()
+
+    # adjacency: prereq -> course
+    succ = defaultdict(list)
+    indeg = defaultdict(int)
+    for n in nodes:
+        indeg[n] = 0
+    for row in filtered_pr:
+        c = (row.get("course_name") or "").strip()
+        r = (row.get("required_course_name") or "").strip()
+        if not c or not r:
+            continue
+        if c not in nodes or r not in nodes:
+            continue
+        succ[r].append(c)
+        indeg[c] += 1
+
+    # Layering: Kahn + level propagation (best-effort even with cycles)
+    level = {n: 0 for n in nodes}
+    q = [n for n in nodes if indeg.get(n, 0) == 0]
+    processed = 0
+    while q:
+        n = q.pop(0)
+        processed += 1
+        for v in succ.get(n, []):
+            level[v] = max(level.get(v, 0), level.get(n, 0) + 1)
+            indeg[v] = max(0, indeg.get(v, 0) - 1)
+            if indeg[v] == 0:
+                q.append(v)
+    # cycles: keep existing level=0..N, but still plot
+
+    max_level = max(level.values()) if level else 0
+    layers = defaultdict(list)
+    for n, lv in level.items():
+        layers[lv].append(n)
+    for lv in layers:
+        layers[lv].sort(key=lambda x: x)
+
+    # coordinates
+    pos = {}
+    for lv in range(0, max_level + 1):
+        layer_nodes = layers.get(lv, [])
+        for i, n in enumerate(layer_nodes):
+            # x increases with level; y decreases with index for top-down
+            pos[n] = (lv, -i)
+
+    # Figure size scaling
+    max_layer_size = max((len(v) for v in layers.values()), default=1)
+    width = max(10, 2.5 + (max_level + 1) * 2.2)
+    height = max(4.5, 1.6 + max_layer_size * 0.9)
+
+    fig = plt.figure(figsize=(width, height), dpi=160)
+    ax = fig.add_subplot(111)
+    ax.axis("off")
+
+    # Build display labels with code if available
+    code_map = {}
+    for c in courses or []:
+        name = (c.get("course_name") or "").strip()
+        if not name:
+            continue
+        code_map[name] = (c.get("course_code") or "").strip()
+
+    def label_for(name: str) -> str:
+        code = (code_map.get(name) or "").strip()
+        return f"{name}\n({code})" if code else name
+
+    # Draw edges first
+    for row in filtered_pr:
+        c = (row.get("course_name") or "").strip()
+        r = (row.get("required_course_name") or "").strip()
+        if c not in pos or r not in pos:
+            continue
+        x1, y1 = pos[r]
+        x2, y2 = pos[c]
+        ax.annotate(
+            "",
+            xy=(x2, y2),
+            xytext=(x1, y1),
+            arrowprops=dict(arrowstyle="->", color="#334155", lw=1.2, shrinkA=12, shrinkB=12),
+            zorder=1,
+        )
+
+    # Draw nodes
+    for n, (x, y) in pos.items():
+        is_focus = (focus_course or "").strip() and n == (focus_course or "").strip()
+        fc = "#e2e8f0" if not is_focus else "#fde68a"
+        ec = "#94a3b8" if not is_focus else "#f59e0b"
+        ax.text(
+            x, y,
+            label_for(n),
+            ha="center",
+            va="center",
+            fontsize=10,
+            color="#0f172a",
+            bbox=dict(boxstyle="round,pad=0.35", fc=fc, ec=ec, lw=1.2),
+            zorder=2,
+        )
+
+    # Title
+    title = "خريطة المتطلبات بين المقررات"
+    if (focus_course or "").strip():
+        title += f" — ({focus_course})"
+    ax.text(0, 1.02, title, transform=ax.transAxes, ha="left", va="bottom", fontsize=14, fontweight="bold")
+
+    # Tight bounds with padding
+    xs = [p[0] for p in pos.values()]
+    ys = [p[1] for p in pos.values()]
+    ax.set_xlim(min(xs) - 1.0, max(xs) + 1.0)
+    ax.set_ylim(min(ys) - 1.0, max(ys) + 1.0)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+@courses_bp.route("/prereqs/flowchart/png")
+@login_required
+def prereqs_flowchart_png():
+    course = (request.args.get("course") or "").strip()
+    direction = (request.args.get("direction") or "both").strip()
+    depth = request.args.get("depth") or 2
+    with get_connection() as conn:
+        courses, prereqs_rows = _load_courses_and_prereqs(conn)
+    try:
+        png = _render_prereq_flow_png(courses, prereqs_rows, focus_course=course, direction=direction, depth=depth)
+        return send_file(io.BytesIO(png), mimetype="image/png", as_attachment=False, download_name="prereqs_flowchart.png")
+    except Exception as e:
+        current_app.logger.exception("flowchart png failed")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@courses_bp.route("/prereqs/flowchart/pdf")
+@role_required("admin", "admin_main", "head_of_department", "supervisor", "instructor", "student")
+def prereqs_flowchart_pdf():
+    course = (request.args.get("course") or "").strip()
+    direction = (request.args.get("direction") or "both").strip()
+    depth = request.args.get("depth") or 2
+    with get_connection() as conn:
+        courses, prereqs_rows = _load_courses_and_prereqs(conn)
+    try:
+        png = _render_prereq_flow_png(courses, prereqs_rows, focus_course=course, direction=direction, depth=depth)
+    except Exception as e:
+        current_app.logger.exception("flowchart render failed")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    b64 = base64.b64encode(png).decode("ascii")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    html = f"""
+    <!doctype html>
+    <html lang="ar" dir="rtl">
+      <head>
+        <meta charset="utf-8"/>
+        <title>خريطة المتطلبات</title>
+        <style>
+          body {{ font-family: DejaVu Sans, Arial, Tahoma; direction: rtl; }}
+          .meta {{ color:#475569; font-size: 12px; margin-bottom: 8px; }}
+          .imgwrap {{ width: 100%; text-align: center; }}
+          img {{ max-width: 100%; height: auto; }}
+        </style>
+      </head>
+      <body>
+        <h3 style="margin:0 0 6px 0;">خريطة المتطلبات بين المقررات</h3>
+        <div class="meta">التاريخ: {now}{(' — مقرر: ' + course) if course else ''}</div>
+        <div class="imgwrap">
+          <img src="data:image/png;base64,{b64}" alt="Prereqs Flowchart"/>
+        </div>
+      </body>
+    </html>
+    """
+    return pdf_response_from_html(html, filename_prefix="prereqs_flowchart")
+
+
+@courses_bp.route("/prereqs/flowchart/pptx")
+@role_required("admin", "admin_main", "head_of_department", "supervisor", "instructor", "student")
+def prereqs_flowchart_pptx():
+    course = (request.args.get("course") or "").strip()
+    direction = (request.args.get("direction") or "both").strip()
+    depth = request.args.get("depth") or 2
+    with get_connection() as conn:
+        courses, prereqs_rows = _load_courses_and_prereqs(conn)
+    try:
+        png = _render_prereq_flow_png(courses, prereqs_rows, focus_course=course, direction=direction, depth=depth)
+    except Exception as e:
+        current_app.logger.exception("flowchart render failed")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+    # Lazy import so app doesn't crash if dependency missing until used
+    try:
+        from pptx import Presentation
+        from pptx.util import Inches, Pt
+    except Exception as e:
+        current_app.logger.exception("pptx dependency missing")
+        return jsonify({
+            "status": "error",
+            "message": "تصدير PowerPoint يحتاج تثبيت python-pptx. نفّذ: pip install -r requirements.txt ثم أعد تشغيل السيرفر."
+        }), 500
+
+    prs = Presentation()
+    # Use a blank layout if possible
+    layout = prs.slide_layouts[6] if len(prs.slide_layouts) > 6 else prs.slide_layouts[0]
+    slide = prs.slides.add_slide(layout)
+
+    # Title (textbox)
+    title = "خريطة المتطلبات بين المقررات"
+    if course:
+        title += f" — {course}"
+    tx = slide.shapes.add_textbox(Inches(0.5), Inches(0.2), Inches(12.5), Inches(0.6))
+    tf = tx.text_frame
+    tf.clear()
+    p = tf.paragraphs[0]
+    run = p.add_run()
+    run.text = title
+    run.font.size = Pt(24)
+    run.font.bold = True
+
+    # Image
+    img_stream = io.BytesIO(png)
+    img_stream.seek(0)
+    slide.shapes.add_picture(img_stream, Inches(0.5), Inches(1.0), width=Inches(12.5))
+
+    out = io.BytesIO()
+    prs.save(out)
+    out.seek(0)
+    return send_file(
+        out,
+        mimetype="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        as_attachment=True,
+        download_name="prereqs_flowchart.pptx",
+    )
 
 # -----------------------
 # Export endpoints

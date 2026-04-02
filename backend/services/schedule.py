@@ -944,49 +944,45 @@ def export_schedule_pdf():
             .replace('"', "&quot;")
         )
 
-    # HTML table (نسخة مطابقة للشكل: لكل توقيت colspan=3)
-    thead_html = (
+    # جدول التصدير الرسمي بنفس تنسيق العرض الحالي (timetable--cols3)
+    timetable_html = (
+        "<table class='timetable timetable--cols3'>"
         "<thead>"
         "<tr>"
-        "<th rowspan='2'>اليوم / الوقت</th>"
-        + "".join(f"<th colspan='3'>{_escape_html(c)}</th>" for c in cols)
+        "<th rowspan='2' class='day-header'>اليوم</th>"
+        + "".join(f"<th colspan='3' class='time-header'>{_escape_html(c)}</th>" for c in cols)
         + "</tr>"
         "<tr>"
-        + "".join("<th>المقرر</th><th>الأستاذ</th><th>القاعة</th>" for _ in cols)
+        + "".join("<th class='sub-time-header'>المقرر</th><th class='sub-time-header'>الأستاذ</th><th class='sub-time-header'>القاعة</th>" for _ in cols)
         + "</tr>"
         "</thead>"
+        "<tbody>"
     )
 
-    body_rows = ""
     for day in matrix.keys():
-        tds = f"<th>{_escape_html(day)}</th>"
+        timetable_html += f"<tr><th class='day-header'>{_escape_html(day)}</th>"
         for c in cols:
             items = matrix[day].get(c) or []
+            timetable_html += "<td colspan='3' class='time-slot-cell slot-slot-block'>"
+            timetable_html += "<div class='slot-aligned-rows'>"
             if not items:
-                tds += "<td colspan='3'></td>"
-                continue
-
-            inner_rows = ""
-            for idx, it in enumerate(items):
-                if idx > 0:
-                    # صف فاصل أفقي بين المقررات لكن مع خلايا فارغة للتمكّن من امتداد الخط العمودي
-                    inner_rows += "<tr class='rec-sep'><td class='rec-course'></td><td class='rec-inst'></td><td class='rec-room'></td></tr>"
-                inner_rows += (
-                    "<tr>"
-                    f"<td class='rec-course'>{_escape_html(it.get('course_name') or '')}</td>"
-                    f"<td class='rec-inst'>{_escape_html(it.get('instructor') or '')}</td>"
-                    f"<td class='rec-room'>{_escape_html(it.get('room') or '')}</td>"
-                    "</tr>"
-                )
-
-            tds += (
-                "<td colspan='3'>"
-                "<div class='rec-wrap'><table class='rec-table'><tbody>"
-                + inner_rows
-                + "</tbody></table></div>"
-                "</td>"
-            )
-        body_rows += "<tr>" + tds + "</tr>"
+                timetable_html += "<div class='slot-course-record slot-course-record--empty'>"
+                timetable_html += "<div class='slot-cell slot-cell--course'><span class='slot-placeholder'>—</span></div>"
+                timetable_html += "<div class='slot-cell slot-cell--inst'><span class='slot-placeholder'>—</span></div>"
+                timetable_html += "<div class='slot-cell slot-cell--room'><span class='slot-placeholder'>—</span></div>"
+                timetable_html += "</div>"
+            else:
+                for idx, it in enumerate(items):
+                    if idx > 0:
+                        timetable_html += "<div class='slot-record-fullsep'></div>"
+                    timetable_html += "<div class='slot-course-record'>"
+                    timetable_html += f"<div class='slot-cell slot-cell--course'><span class='course-pub-label'>{_escape_html(it.get('course_name') or '')}</span></div>"
+                    timetable_html += f"<div class='slot-cell slot-cell--inst'><span class='slot-text'>{_escape_html(it.get('instructor') or '')}</span></div>"
+                    timetable_html += f"<div class='slot-cell slot-cell--room'><span class='slot-text'>{_escape_html(it.get('room') or '')}</span></div>"
+                    timetable_html += "</div>"
+            timetable_html += "</div></td>"
+        timetable_html += "</tr>"
+    timetable_html += "</tbody></table>"
 
     term_label = slots_info.get("term_label") or ""
 
@@ -1085,20 +1081,33 @@ def export_schedule_pdf():
         .meta.under {{ margin-bottom: 1px; }}
         .sep {{ padding: 0 6px; color: #aaa; }}
         .top-rule {{ border-top: 2px solid #000; margin: 1px 0 2px 0; }}
-        table {{ width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 0; }}
-        th, td {{ border: 1px solid #444; padding: 4px; font-size: 9.8px; vertical-align: top; word-wrap: break-word; }}
-        th {{ background: #f3f3f3; font-weight: 700; }}
-        td {{ min-height: 18px; line-height: 1.25; }}
-        .rec-table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
-        .rec-table td {{ border: 0 !important; padding: 2px 3px; font-size: 9.5px; vertical-align: top; }}
-        .rec-sep td {{ border-top: 1px dashed #444 !important; padding: 0; height: 3px; }}
-        .rec-course {{ width: 52%; word-wrap: break-word; }}
-        .rec-inst {{ width: 26%; word-wrap: break-word; }}
-        /* الفاصل المطلوب في التصدير: بين (عمود الأستاذ) و(عمود القاعة) */
-        .rec-room {{
-          width: 22%;
-          word-wrap: break-word;
-          border-left: 2px solid rgba(15,23,42,0.65) !important;
+        table.timetable {{ width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; margin-top: 0; border: 1px solid rgba(15,23,42,0.10); border-radius: 8px; }}
+        .timetable th, .timetable td {{ border-bottom: 1px solid rgba(15,23,42,0.08); border-left: 1px solid rgba(15,23,42,0.06); padding: 6px 4px; font-size: 9.8px; vertical-align: top; word-wrap: break-word; text-align: center; }}
+        .timetable th {{ background: #f8fafc; font-weight: 900; }}
+        .timetable th.day-header {{ width: 92px; background: #f1f5f9; }}
+        .sub-time-header {{ background: #eef2f7; font-weight: 900; font-size: 9.5px; }}
+        .timetable td.time-slot-cell {{ padding: 8px 10px; }}
+
+        .slot-aligned-rows {{ display: flex; flex-direction: column; gap: 0; position: relative; z-index: 2; }}
+        .slot-course-record {{ display: grid; grid-template-columns: minmax(0,1.15fr) minmax(0,1fr) minmax(0,0.9fr); gap: 6px 8px; align-items: start; padding: 4px 0; }}
+        .slot-course-record--empty {{ opacity: 0.85; }}
+        .slot-record-fullsep {{ height: 0; margin: 2px 0 4px; border: 0; border-top: 2px solid rgba(15,23,42,0.16); }}
+        .slot-cell {{ min-width: 0; text-align: right; }}
+        .slot-text {{ display: block; font-size: 9.8px; font-weight: 700; line-height: 1.25; color: #0f172a; word-break: break-word; }}
+        .slot-placeholder {{ color: #94a3b8; font-size: 10px; }}
+        .course-pub-label {{ display: block; font-size: 9.8px; font-weight: 700; padding: 3px 4px; border-radius: 6px; background: #e2e8f0; color: #0f172a; line-height: 1.3; }}
+
+        /* الفاصل المطلوب: بين عمود الأستاذ وعمود القاعة */
+        .timetable td.slot-slot-block {{ position: relative; }}
+        .timetable td.slot-slot-block::after {{
+          content: '';
+          position: absolute;
+          top: 6px;
+          bottom: 6px;
+          right: 29.5%;
+          border-left: 2px solid rgba(15,23,42,0.65);
+          pointer-events: none;
+          z-index: 1;
         }}
         /* التوقيع أسفل الجدول مباشرة */
         .sign-wrap {{
@@ -1112,10 +1121,7 @@ def export_schedule_pdf():
     </head>
     <body>
       {header_html}
-      <table>
-        {thead_html}
-        <tbody>{body_rows or ''}</tbody>
-      </table>
+      {timetable_html}
       {signature_block}
       {appendix_html}
     </body>

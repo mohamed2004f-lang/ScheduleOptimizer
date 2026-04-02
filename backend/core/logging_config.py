@@ -7,6 +7,21 @@ from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from datetime import datetime
 
 
+class SafeTimedRotatingFileHandler(TimedRotatingFileHandler):
+    """
+    Windows-safe TimedRotatingFileHandler.
+    في ويندوز قد يفشل os.rename أثناء doRollover بسبب قفل الملف (WinError 32).
+    بدل أن يكسر الـ logging thread، نتجاهل التدوير لهذه المرة ونكمل الكتابة.
+    """
+
+    def doRollover(self):
+        try:
+            return super().doRollover()
+        except PermissionError:
+            # ملف اللوج مقفول من عملية/محرر آخر. تجاهل التدوير الآن.
+            return
+
+
 def setup_logging(app, log_dir='logs'):
     """
     إعداد نظام Logging محسّن للتطبيق
@@ -39,11 +54,13 @@ def setup_logging(app, log_dir='logs'):
         app.logger.addHandler(console_handler)
     
     # معالج للـ File (دوراني - Rotating)
+    # delay=True يقلل مشاكل قفل الملفات على Windows (لا يفتح الملف إلا عند أول كتابة)
     file_handler = RotatingFileHandler(
         os.path.join(log_dir, 'schedule_optimizer.log'),
         maxBytes=10 * 1024 * 1024,  # 10 MB
         backupCount=10,
-        encoding='utf-8'
+        encoding='utf-8',
+        delay=True,
     )
     file_handler.setLevel(logging.INFO)
     file_formatter = logging.Formatter(
@@ -58,30 +75,36 @@ def setup_logging(app, log_dir='logs'):
         os.path.join(log_dir, 'errors.log'),
         maxBytes=10 * 1024 * 1024,  # 10 MB
         backupCount=10,
-        encoding='utf-8'
+        encoding='utf-8',
+        delay=True,
     )
     error_handler.setLevel(logging.ERROR)
     error_handler.setFormatter(file_formatter)
     app.logger.addHandler(error_handler)
     
     # معالج للسجلات اليومية (Daily Rotating)
-    daily_handler = TimedRotatingFileHandler(
-        os.path.join(log_dir, 'daily.log'),
-        when='midnight',
-        interval=1,
-        backupCount=30,  # الاحتفاظ بـ 30 يوم
-        encoding='utf-8'
-    )
-    daily_handler.setLevel(logging.INFO)
-    daily_handler.setFormatter(file_formatter)
-    app.logger.addHandler(daily_handler)
+    # في وضع التطوير (debug + reloader) على Windows قد يحدث WinError 32 عند التدوير
+    # لذلك نفعّله فقط خارج debug.
+    if not app.debug:
+        daily_handler = SafeTimedRotatingFileHandler(
+            os.path.join(log_dir, 'daily.log'),
+            when='midnight',
+            interval=1,
+            backupCount=30,  # الاحتفاظ بـ 30 يوم
+            encoding='utf-8',
+            delay=True,
+        )
+        daily_handler.setLevel(logging.INFO)
+        daily_handler.setFormatter(file_formatter)
+        app.logger.addHandler(daily_handler)
     
     # معالج للـ Access Log (طلبات HTTP)
     access_handler = RotatingFileHandler(
         os.path.join(log_dir, 'access.log'),
         maxBytes=10 * 1024 * 1024,  # 10 MB
         backupCount=10,
-        encoding='utf-8'
+        encoding='utf-8',
+        delay=True,
     )
     access_handler.setLevel(logging.INFO)
     access_formatter = logging.Formatter(

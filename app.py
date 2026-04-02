@@ -178,6 +178,12 @@ def student_view(student_id=None):
 def prereqs_form():
     return render_template("prereqs_form.html")
 
+
+@app.route("/prereqs_flowchart")
+@login_required
+def prereqs_flowchart_page():
+    return render_template("prereqs_flowchart.html")
+
 # ملاحظة: قالب صفحة الطلبة في مشروعك محفوظ باسم students_form.html
 @app.route("/students_form")
 @login_required
@@ -243,7 +249,14 @@ def exams_conflicts():
 
 @app.route("/registrations_form")
 def registrations_form():
-    return render_template("registrations_form.html")
+    return render_template("registrations_form.html", withdrawn_mode=False)
+
+
+@app.route("/withdrawn_file_list")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def withdrawn_file_list_page():
+    return render_template("registrations_form.html", withdrawn_mode=True)
 
 
 @app.route("/enrollment_plans")

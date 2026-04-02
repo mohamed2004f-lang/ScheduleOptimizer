@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>إدارة التسجيلات</title>
+  <title>{% if withdrawn_mode %}قائمة سحب الملف{% else %}إدارة التسجيلات{% endif %}</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
   <style>
@@ -44,14 +44,26 @@
   // سيتم تحديث هذه المتغيّرات لاحقاً من /users/auth عند توفرها
   let CURRENT_ROLE = "{{ session.get('user_role','') }}";
   let CURRENT_USER_ID = "{{ session.get('user') or '' }}";
+const WITHDRAWN_MODE = {{ 'true' if withdrawn_mode else 'false' }};
 </script>
 
 <main class="container-main container-1100">
   <div class="page-header">
     <div>
-      <h1 class="page-title">إدارة التسجيل</h1>
-      <p class="page-subtitle">عرض التسجيلات وتعديلها (إداري)، وإرسال طلبات إضافة/إسقاط (طالب)</p>
+      <h1 class="page-title">{% if withdrawn_mode %}قائمة سحب الملف{% else %}إدارة التسجيل{% endif %}</h1>
+      <p class="page-subtitle">
+        {% if withdrawn_mode %}
+        الطلبة بحالة سحب الملف مع إمكانية إعادتهم إلى حالة "مسجّل قيد"
+        {% else %}
+        عرض التسجيلات وتعديلها (إداري)، وإرسال طلبات إضافة/إسقاط (طالب)
+        {% endif %}
+      </p>
     </div>
+    {% if withdrawn_mode %}
+      <a href="/registrations_form" class="btn btn-outline-primary btn-sm">العودة إلى قائمة التسجيلات</a>
+    {% else %}
+      <a href="/withdrawn_file_list" class="btn btn-outline-secondary btn-sm">قائمة سحب الملف</a>
+    {% endif %}
   </div>
 
   <div id="registrationsAdmin">
@@ -115,7 +127,7 @@
             <select id="filterEnrollment" class="form-select form-select-sm">
               <option value="all">الكل</option>
               <option value="active">مسجّل قيد</option>
-              <option value="withdrawn">سحب ملف</option>
+              {% if withdrawn_mode %}<option value="withdrawn">سحب ملف</option>{% endif %}
               <option value="suspended">إيقاف قيد</option>
               <option value="graduated">خريج</option>
             </select>
@@ -331,6 +343,33 @@ function enrollmentBadgeClass(code){
   return 'bg-light text-dark';
 }
 
+function canManageEnrollmentStatus(){
+  const r = String(CURRENT_ROLE || '').trim().toLowerCase();
+  return r === 'admin' || r === 'admin_main' || r === 'head_of_department';
+}
+
+async function updateEnrollmentStatus(student, newStatus){
+  if (!student || !newStatus) return;
+  const sid = student.student_id || student.id || student.studentId;
+  if (!sid) return;
+  const targetLabel = newStatus === 'withdrawn' ? 'سحب الملف' : 'مسجّل قيد';
+  let reason = '';
+  if (newStatus === 'withdrawn') {
+    reason = prompt('سبب تغيير الحالة إلى "سحب ملف" (اختياري):', '') || '';
+  }
+  if (!confirm(`تأكيد تغيير حالة الطالب "${student.student_name || ''}" إلى "${targetLabel}"؟`)) return;
+  const payload = { student_id: sid, enrollment_status: newStatus, status_reason: reason };
+  const res = await fetchJSON('/students/update_status', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+  });
+  if (res.ok) {
+    await loadData();
+    alert('تم تحديث الحالة بنجاح.');
+  } else {
+    alert(res.json?.message || `فشل تحديث الحالة (${res.status})`);
+  }
+}
+
 function setStats(list){
   const arr = Array.isArray(list) ? list : STUDENTS;
   const total = arr.length;
@@ -461,7 +500,7 @@ function applyListFilters(){
 async function loadData(){
   const studentsUrl = (CURRENT_ROLE === 'student')
     ? '/students/list?active_only=1'
-    : '/students/list';
+    : (WITHDRAWN_MODE ? '/students/list?enrollment_status=withdrawn' : '/students/list');
   const [r1, r2] = await Promise.all([fetchJSON(studentsUrl), fetchJSON('/list_courses')]);
   STUDENTS = Array.isArray(r1.json) ? r1.json.map(s=>{
     return {
@@ -476,6 +515,10 @@ async function loadData(){
       form_version_no: 0
     };
   }) : [];
+  if (!WITHDRAWN_MODE) {
+    // إبقاء "سحب الملف" في صفحة منفصلة فقط
+    STUDENTS = STUDENTS.filter(s => enrollmentStatusNorm(s) !== 'withdrawn');
+  }
   STUDENTS.forEach(s=> s.registrations = []);
 
   COURSES = Array.isArray(r2.json) ? r2.json.map(c=>{
@@ -594,6 +637,19 @@ function renderStudents(list){
     const btnEdit = el('button','btn btn-sm btn-outline-secondary','تعديل');
     btnEdit.addEventListener('click', ()=> openEditModal(s));
     right.appendChild(btnEdit);
+
+    if (canManageEnrollmentStatus()) {
+      const es = enrollmentStatusNorm(s);
+      if (es === 'withdrawn') {
+        const btnRestore = el('button', 'btn btn-sm btn-outline-success', 'إرجاع إلى مسجّل');
+        btnRestore.addEventListener('click', ()=> updateEnrollmentStatus(s, 'active'));
+        right.appendChild(btnRestore);
+      } else {
+        const btnWithdraw = el('button', 'btn btn-sm btn-outline-dark', 'سحب ملف');
+        btnWithdraw.addEventListener('click', ()=> updateEnrollmentStatus(s, 'withdrawn'));
+        right.appendChild(btnWithdraw);
+      }
+    }
 
     if (CURRENT_ROLE !== 'student') {
       const btnPrintActual = el('button','btn btn-sm btn-outline-primary btn-print','طباعة التسجيل الفعلي');
@@ -1196,6 +1252,13 @@ if (fileImport){
     if (studentBox) studentBox.style.display = '';
   } else {
     loadFilterPrefs();
+    if (WITHDRAWN_MODE) {
+      const fe = document.getElementById('filterEnrollment');
+      if (fe) {
+        fe.value = 'withdrawn';
+        fe.disabled = true;
+      }
+    }
   }
 
   await loadData();

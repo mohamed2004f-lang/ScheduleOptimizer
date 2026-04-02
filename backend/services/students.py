@@ -117,6 +117,8 @@ def students_filtered_from_request(request):
         students = StudentService.get_all_students(active_only=True)
     else:
         students = StudentService.get_all_students(active_only=False)
+        # السلوك الافتراضي: إخفاء "سحب ملف" من قوائم الطلبة التشغيلية
+        students = [s for s in students if (s.get("enrollment_status") or "active") != "withdrawn"]
     if join_term:
         students = [s for s in students if (s.get("join_term") or "").strip() == join_term]
     if join_year:
@@ -136,7 +138,7 @@ def students_filter_summary_ar(request) -> str:
     elif active_only:
         parts.append("نطاق: مسجّلون فقط")
     else:
-        parts.append("نطاق: جميع حالات القيد")
+        parts.append("نطاق: جميع حالات القيد (مع إخفاء سحب الملف)")
     if join_term:
         parts.append("فصل الالتحاق: " + join_term)
     if join_year:
@@ -1741,7 +1743,7 @@ def add_student():
 
 
 @students_bp.route("/update_status", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "admin_main", "head_of_department")
 def update_student_status():
     """تحديث حالة قيد الطالب (مسجَّل، سحب الملف، موقوف قيده، خريج) عبر Service Layer"""
     try:

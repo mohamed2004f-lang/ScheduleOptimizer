@@ -78,6 +78,7 @@
             <li><a class="dropdown-item" id="navGraduates" href="/graduates_page">قائمة الخريجين</a></li>
             <li><a class="dropdown-item" id="navEnrollmentPlans" href="/enrollment_plans">خطط التسجيل</a></li>
             <li><a class="dropdown-item" id="navRegistrations" href="/registrations_form">التسجيلات الفعلية</a></li>
+            <li><a class="dropdown-item" id="navWithdrawnFiles" href="/withdrawn_file_list">قائمة سحب الملف</a></li>
             <li><a class="dropdown-item" id="navRegistrationRequests" href="/registration_requests_page">طلبات الإضافة والإسقاط</a></li>
             <li><a class="dropdown-item" id="navAttendance" href="/attendance_export">الحضور والغياب</a></li>
           </ul>
@@ -130,6 +131,7 @@
           <ul class="dropdown-menu" aria-labelledby="catalogMenu">
             <li><a class="dropdown-item" id="navCourses" href="/courses_form">المقررات</a></li>
             <li><a class="dropdown-item" id="navPrereqs" href="/prereqs_form">المتطلبات المسبقة</a></li>
+            <li><a class="dropdown-item" id="navPrereqsFlowchart" href="/prereqs_flowchart">خريطة المتطلبات</a></li>
           </ul>
         </li>
 
@@ -263,6 +265,7 @@
           'navCourseRegistrationReport',
           'navScheduleVersions',
           'navExamScheduleVersions',
+          'navWithdrawnFiles',
           'navUsersAdmin',
           'navAcademicRules',
         ];
@@ -280,6 +283,7 @@
           'navInstructors',
           'navPrereqs',
           'navRegistrations',
+          'navWithdrawnFiles',
           'navScheduleForm',
           'navAttendance',
           'navResults',
@@ -325,7 +329,9 @@
         ['/instructors_form','navInstructors'],
         ['/supervision_form','navSupervision'],
         ['/prereqs_form','navPrereqs'],
+        ['/prereqs_flowchart','navPrereqsFlowchart'],
         ['/registrations_form','navRegistrations'],
+        ['/withdrawn_file_list','navWithdrawnFiles'],
         ['/enrollment_plans','navEnrollmentPlans'],
         ['/schedule_form','navScheduleForm'],
         ['/attendance_export','navAttendance'],
