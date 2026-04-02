@@ -602,6 +602,17 @@ def ensure_tables():
                     cur.execute("ALTER TABLE students ADD COLUMN join_term TEXT DEFAULT ''")
                 except Exception:
                     pass
+                try:
+                    eco = [r[1] for r in cur.execute("PRAGMA table_info(enrollment_plans)").fetchall()]
+                except Exception:
+                    eco = []
+                if "prereq_validation_json" not in eco:
+                    try:
+                        cur.execute(
+                            "ALTER TABLE enrollment_plans ADD COLUMN prereq_validation_json TEXT"
+                        )
+                    except Exception:
+                        pass
 
                 conn.commit()
 

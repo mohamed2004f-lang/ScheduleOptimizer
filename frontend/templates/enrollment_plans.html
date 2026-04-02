@@ -60,6 +60,11 @@
           <div id="planStatus" class="ms-auto small text-muted"></div>
         </div>
         <div id="planMsg" class="mt-2"></div>
+        <div id="prereqPlanBanner" class="alert alert-warning d-none mt-2 mb-0" role="alert"></div>
+        <div class="mt-1 d-flex flex-wrap gap-2 align-items-center">
+          <button type="button" id="btnPrereqDetails" class="btn btn-outline-warning btn-sm d-none">تفاصيل المتطلبات</button>
+          <button type="button" id="btnPlanningHints" class="btn btn-outline-secondary btn-sm" title="ما الذي يفتح أكبر عدد من المقررات لاحقاً">أولوية المقررات</button>
+        </div>
       </div>
     </div>
 
@@ -88,6 +93,32 @@
       </div>
     </div>
 
+    <div class="modal fade" id="prereqDetailModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">تفاصيل متطلبات المقررات</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+          </div>
+          <div class="modal-body">
+            <div id="prereqDetailTableWrap" class="small"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal fade" id="planningHintsModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">أولوية إنجاز المقررات (يفتح مقررات لاحقة)</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+          </div>
+          <div class="modal-body small" id="planningHintsBody"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- نافذة تحسين المعدل: مقررات منجزة (في الجدول المعتمد) -->
     <div class="modal fade" id="improveGPAModal" tabindex="-1" aria-labelledby="improveGPAModalLabel" aria-hidden="true">
       <div class="modal-dialog modal-dialog-centered">
@@ -111,6 +142,27 @@
   <script>
     async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok,status:r.status,json:j}; }
 
+    /** رسالة خطأ اعتماد الخطة للمشرف: النص الأساسي + تفاصيل المتطلبات والإسقاط المقترن */
+    function formatEnrollmentApproveError(j){
+      if(!j) return 'تعذّر اعتماد الخطة.';
+      const head = j.message || j.error || 'تعذّر اعتماد الخطة.';
+      const parts = [head];
+      const b = j.blocked;
+      if(b && typeof b === 'object' && Object.keys(b).length){
+        parts.push('', '— مقررات بمتطلب غير مستوفٍ:');
+        for(const [course, reqs] of Object.entries(b)){
+          const arr = Array.isArray(reqs) ? reqs : [reqs];
+          parts.push(`• ${course}: ${arr.join('، ')}`);
+        }
+      }
+      const dv = j.drop_violations;
+      if(Array.isArray(dv) && dv.length){
+        parts.push('');
+        dv.forEach(v => { if(v && v.message_ar) parts.push('• ' + v.message_ar); });
+      }
+      return parts.join('\n');
+    }
+
     let STUDENTS = [];
     let COURSES = [];
     let currentPlanId = null;
@@ -125,6 +177,105 @@
     let lastGpaStudentId = null;
     /** آخر تنبيه مدة دراسة/حالة أكاديمية */
     let lastStatusNote = '';
+    let lastPrereqValidation = null;
+    /** مقررات الخطة قبل التعديل (للتحقق من إسقاط متطلب مقترن) */
+    let planCoursesBaseline = [];
+    let prereqValidateTimer = null;
+
+    function escPlain(s){
+      return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function buildPrereqTableHtml(coursesObj){
+      if(!coursesObj || typeof coursesObj !== 'object'){
+        return '<p class="text-muted small mb-0">لا توجد بيانات تفصيلية.</p>';
+      }
+      let rows = '';
+      for (const cname of Object.keys(coursesObj)){
+        const data = coursesObj[cname];
+        for (const req of (data.requirements || [])){
+          if (req.status === 'passed') continue;
+          rows += `<tr><td>${escPlain(cname)}</td><td>${escPlain(req.prereq)}</td><td><span class="badge bg-secondary">${escPlain(req.status)}</span></td><td>${escPlain(req.grade)}</td><td class="small">${escPlain(req.label_ar)}</td></tr>`;
+        }
+      }
+      if (!rows){
+        return '<p class="small text-success mb-0">لا توجد متطلبات غير منجزة في هذه القائمة.</p>';
+      }
+      return `<table class="table table-sm table-bordered mb-0"><thead><tr><th>المقرر</th><th>المتطلب</th><th>الحالة</th><th>الدرجة</th><th>الوصف</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    function updatePrereqPlanUI(data){
+      const ban = document.getElementById('prereqPlanBanner');
+      const btn = document.getElementById('btnPrereqDetails');
+      if(!ban || !btn) return;
+      lastPrereqValidation = data || null;
+      const n = data?.summary?.courses_with_unmet_count ?? 0;
+      if (!data || n === 0){
+        lastPrereqValidation = null;
+        ban.classList.add('d-none');
+        btn.classList.add('d-none');
+        return;
+      }
+      ban.classList.remove('d-none');
+      const hb = data.summary?.has_blocking ? ' يتضمّن متطلبات «ناقصة من الكشف» تحتاج قرار مشرف.' : '';
+      ban.innerHTML = `<strong>تنبيه متطلبات:</strong> <strong>${n}</strong> مقرراً في اختيارك به متطلبات غير مكتملة النجاح.${hb} يمكنك حفظ المسودة والإرسال؛ المشرف يقرر القبول أو الرفض.`;
+      btn.classList.remove('d-none');
+    }
+
+    function schedulePlanPrereqValidate(){
+      clearTimeout(prereqValidateTimer);
+      prereqValidateTimer = setTimeout(runPlanPrereqValidate, 450);
+    }
+
+    async function runPlanPrereqValidate(){
+      const sid = document.getElementById('studentSelect').value;
+      const sel = document.getElementById('planCoursesSelect');
+      const courses = Array.from(sel.selectedOptions).map(o=>o.value);
+      if(!sid || !courses.length){
+        updatePrereqPlanUI(null);
+        return;
+      }
+      const res = await fetchJSON('/enrollment/prereqs/validate', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          student_id: sid,
+          courses,
+          context: 'plan',
+          old_courses: planCoursesBaseline.length ? planCoursesBaseline : [],
+        }),
+      });
+      if(res.ok && res.json){
+        updatePrereqPlanUI(res.json);
+      }
+    }
+
+    function openPrereqDetailModal(){
+      const wrap = document.getElementById('prereqDetailTableWrap');
+      const src = lastPrereqValidation?.courses;
+      wrap.innerHTML = buildPrereqTableHtml(src);
+      const el = document.getElementById('prereqDetailModal');
+      if (el && window.bootstrap) new bootstrap.Modal(el).show();
+    }
+
+    async function openPlanningHintsModal(){
+      const sid = document.getElementById('studentSelect').value;
+      if(!sid){ setPlanMsg('warning','اختر الطالب أولاً.'); return; }
+      const r = await fetchJSON('/enrollment/prereqs/planning_hints?student_id='+encodeURIComponent(sid));
+      const body = document.getElementById('planningHintsBody');
+      if(!r.ok || !r.json){
+        body.innerHTML = '<div class="text-danger">تعذّر الجلب.</div>';
+      } else {
+        const pri = r.json.priorities || [];
+        body.innerHTML = pri.length
+          ? '<ul class="list-group">' + pri.slice(0, 50).map(x=>
+            `<li class="list-group-item"><strong>${escPlain(x.course)}</strong> — يفتح <strong>${x.unlocks_count}</strong> مقرراً: ${escPlain((x.unlocks_sample||[]).join('، '))}</li>`
+          ).join('') + '</ul>'
+          : '<p class="text-muted">لا توجد بيانات مخطط متطلبات كافية.</p>';
+      }
+      const el = document.getElementById('planningHintsModal');
+      if (el && window.bootstrap) new bootstrap.Modal(el).show();
+    }
 
     function setPlanMsg(kind, text){
       document.getElementById('planMsg').innerHTML = text ? `<div class="alert alert-${kind} p-2 mb-0">${text}</div>` : '';
@@ -365,6 +516,7 @@
       const sid = document.getElementById('studentSelect').value;
       const sem = document.getElementById('semesterInput').value.trim();
       currentPlanId = null;
+      planCoursesBaseline = [];
       document.getElementById('planStatus').textContent = '';
       setPlanMsg('', '');
       if(!sid || !sem){
@@ -378,6 +530,8 @@
       }
       const plans = Array.isArray(res.json?.plans) ? res.json.plans : [];
       if(!plans.length){
+        planCoursesBaseline = [];
+        updatePrereqPlanUI(null);
         setPlanMsg('info','لا توجد خطة سابقة لهذا الفصل. يمكنك إنشاء مسودة جديدة.');
         document.getElementById('planCoursesSelect').selectedIndex = -1;
         return;
@@ -389,6 +543,8 @@
       Array.from(sel.options).forEach(o=>{
         o.selected = plan.courses.includes(o.value);
       });
+      planCoursesBaseline = (plan.courses || []).slice();
+      schedulePlanPrereqValidate();
       // تحديث مجموع الوحدات المعروضة
       _calcUnitsSummary(Array.from(sel.selectedOptions).map(o=>o.value));
       let statusText = `حالة الخطة: ${plan.status}`;
@@ -420,8 +576,27 @@
       });
       if(res.ok){
         currentPlanId = res.json?.plan_id || currentPlanId;
+        planCoursesBaseline = courses.slice();
+        if (res.json?.prereq_validation) updatePrereqPlanUI(res.json.prereq_validation);
         document.getElementById('planStatus').textContent = 'حالة الخطة: Draft';
-        setPlanMsg('success','تم حفظ الخطة بصفتها مبدئية، وتخضع للمراجعة الأكاديمية قبل الاعتماد النهائي.');
+        let dmsg = 'تم حفظ الخطة بصفتها مبدئية، وتخضع للمراجعة الأكاديمية قبل الاعتماد النهائي.';
+        const pw = res.json?.prereq_warnings || [];
+        const pcp = res.json?.prereq_coregister_pairs || [];
+        if (pw.length || pcp.length){
+          const parts = [];
+          pw.forEach(x => { if (x && x.message_ar) parts.push(x.message_ar); });
+          if (pcp.length){
+            parts.push(
+              'أزواج متطلب+تابع: ' +
+              pcp.map(x => `«${x.prereq || ''}» + «${x.dependent || ''}»`).join('؛ ') +
+              ' — لا تُسقط المتطلب وحده؛ إما الإثنان معاً أو إسقاطهما معاً.'
+            );
+          }
+          dmsg += ' ' + parts.join(' ');
+          setPlanMsg('warning', dmsg);
+        } else {
+          setPlanMsg('success', dmsg);
+        }
       } else {
         setPlanMsg('danger', res.json?.message || `فشل الحفظ (${res.status})`);
       }
@@ -449,7 +624,25 @@
       const res = await fetchJSON(`/enrollment/plans/${currentPlanId}/submit`, {method:'POST'});
       if(res.ok){
         document.getElementById('planStatus').textContent = 'حالة الخطة: Pending';
-        setPlanMsg('success','تم إرسال الخطة للمراجعة.');
+        let smsg = 'تم إرسال الخطة للمراجعة.';
+        const pw = res.json?.prereq_warnings || [];
+        const pcp = res.json?.prereq_coregister_pairs || [];
+        if (res.json?.prereq_validation) updatePrereqPlanUI(res.json.prereq_validation);
+        if (pw.length || pcp.length){
+          const parts = [];
+          pw.forEach(x => { if (x && x.message_ar) parts.push(x.message_ar); });
+          if (pcp.length){
+            parts.push(
+              'أزواج متطلب+تابع: ' +
+              pcp.map(x => `«${x.prereq || ''}» + «${x.dependent || ''}»`).join('؛ ') +
+              ' — قاعدة الإسقاط المقترن.'
+            );
+          }
+          smsg += ' ' + parts.join(' ');
+          setPlanMsg('warning', smsg);
+        } else {
+          setPlanMsg('success', smsg);
+        }
       } else {
         setPlanMsg('danger', res.json?.message || `فشل الإرسال (${res.status})`);
       }
@@ -476,12 +669,22 @@
         const left = document.createElement('div');
         const st = STUDENTS.find(s=>s.student_id === p.student_id);
         const name = st ? (st.student_name || '') : '';
-        left.innerHTML = `<div><strong>${p.student_id}</strong> — ${name}</div>
+        const pv = p.prereq_validation;
+        const nUnmet = pv?.summary?.courses_with_unmet_count ?? 0;
+        const pBadge = !pv
+          ? `<span class="badge bg-secondary ms-1">بلا لقطة متطلبات</span>`
+          : (nUnmet > 0
+            ? `<span class="badge bg-warning text-dark ms-1">مخالفات متطلبات (${nUnmet})</span>`
+            : `<span class="badge bg-success ms-1">سليمة نسبياً</span>`);
+        const pvBody = buildPrereqTableHtml(pv?.courses);
+        left.innerHTML = `<div><strong>${p.student_id}</strong> — ${name} ${pBadge}</div>
                           <div class="small text-muted">الفصل: ${p.semester}</div>
                           <div class="small">المقررات: ${p.courses.join(', ') || '—'}</div>
                           <div class="mt-1">
                             <button type="button" class="btn btn-sm btn-outline-secondary" data-acad="${p.id}" title="عرض ملخص سريع (معدل/وحدات/غير منجزة/حالة)">ملخص أكاديمي</button>
+                            <button class="btn btn-sm btn-outline-info" type="button" data-bs-toggle="collapse" data-bs-target="#pv_${p.id}" aria-expanded="false">جدول المتطلبات (لقطة الإرسال)</button>
                           </div>
+                          <div class="collapse mt-2" id="pv_${p.id}"><div class="card card-body p-2 small">${pvBody}</div></div>
                           <div id="acadSummary_${p.id}" data-open="0"></div>`;
         const right = document.createElement('div');
         if (IS_VIEW_ONLY_ROLE) {
@@ -490,7 +693,7 @@
           const approveBtn = document.createElement('button');
           approveBtn.className = 'btn btn-sm btn-success mb-1';
           approveBtn.textContent = 'اعتماد';
-          approveBtn.addEventListener('click', ()=> approvePlan(p.id));
+          approveBtn.addEventListener('click', ()=> approvePlan(p.id, p.prereq_validation));
           const rejectBtn = document.createElement('button');
           rejectBtn.className = 'btn btn-sm btn-danger';
           rejectBtn.textContent = 'رفض';
@@ -516,8 +719,13 @@
       });
     }
 
-    async function approvePlan(id){
-      if(!confirm('هل تريد اعتماد هذه الخطة وترحيلها إلى التسجيلات الفعلية؟')) return;
+    async function approvePlan(id, prereqVal){
+      let cmsg = 'هل تريد اعتماد هذه الخطة وترحيلها إلى التسجيلات الفعلية؟';
+      const nu = prereqVal?.summary?.courses_with_unmet_count ?? 0;
+      if (nu > 0) {
+        cmsg = `تحذير: لقطة الإرسال تُظهر ${nu} مقرراً بمتطلبات غير مكتملة النجاح. ` + cmsg;
+      }
+      if(!confirm(cmsg)) return;
       const res = await fetchJSON(`/enrollment/plans/${id}/approve`, {method:'POST'});
       if(res.ok){
         await loadPending();
@@ -529,7 +737,10 @@
           alert(msg);
         }
       } else {
-        alert(res.json?.message || `فشل الاعتماد (${res.status})`);
+        const detail = formatEnrollmentApproveError(res.json);
+        alert(detail);
+        const esc = (s) => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+        setPlanMsg('danger', esc(detail));
       }
     }
 
@@ -558,6 +769,7 @@
         sel.appendChild(opt);
       }
       opt.selected = true;
+      schedulePlanPrereqValidate();
     }
 
     async function refreshEligibleCourses(){
@@ -731,7 +943,10 @@
           sel.value = preferred;
         }
       } catch(e) {}
-      document.getElementById('studentSelect').addEventListener('change', refreshEligibleCourses);
+      document.getElementById('studentSelect').addEventListener('change', ()=>{
+        planCoursesBaseline = [];
+        refreshEligibleCourses();
+      });
       document.getElementById('studentSelect').addEventListener('change', (ev)=>{
         const sid = ev.target.value;
         if (sid) {
@@ -745,8 +960,13 @@
         selPlanCourses.addEventListener('change', ()=>{
           const courses = Array.from(selPlanCourses.selectedOptions).map(o=>o.value);
           _calcUnitsSummary(courses);
+          schedulePlanPrereqValidate();
         });
       }
+      const btnPD = document.getElementById('btnPrereqDetails');
+      if (btnPD) btnPD.addEventListener('click', openPrereqDetailModal);
+      const btnPH = document.getElementById('btnPlanningHints');
+      if (btnPH) btnPH.addEventListener('click', openPlanningHintsModal);
       document.getElementById('btnLoadPlan').addEventListener('click', loadCurrentPlan);
       const btnImproveGPA = document.getElementById('btnImproveGPA');
       if (btnImproveGPA) btnImproveGPA.addEventListener('click', openImproveGPAModal);

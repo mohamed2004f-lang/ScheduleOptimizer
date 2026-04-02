@@ -138,6 +138,26 @@
 async function fetchJSON(url){ const r=await fetch(url); const j=await r.json().catch(()=>null); return {ok:r.ok,json:j,status:r.status}; }
 function esc(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
 
+function formatEnrollmentApproveError(j){
+  if(!j) return 'تعذّر اعتماد الخطة.';
+  const head = j.message || j.error || 'تعذّر اعتماد الخطة.';
+  const parts = [head];
+  const b = j.blocked;
+  if(b && typeof b === 'object' && Object.keys(b).length){
+    parts.push('', '— مقررات بمتطلب غير مستوفٍ:');
+    for(const [course, reqs] of Object.entries(b)){
+      const arr = Array.isArray(reqs) ? reqs : [reqs];
+      parts.push(`• ${course}: ${arr.join('، ')}`);
+    }
+  }
+  const dv = j.drop_violations;
+  if(Array.isArray(dv) && dv.length){
+    parts.push('');
+    dv.forEach(v => { if(v && v.message_ar) parts.push('• ' + v.message_ar); });
+  }
+  return parts.join('\n');
+}
+
 function renderPendingPlans(plans){
   const box = document.getElementById('pendingPlansList');
   if(!box) return;
@@ -168,10 +188,11 @@ async function approvePlanFromDashboard(id){
   const r = await fetchJSON(`/enrollment/plans/${id}/approve`, { method:'POST' });
   if(r.ok){
     await loadPendingPlans();
-    window.showToast ? window.showToast('تم اعتماد الخطة بنجاح', 'success') : alert('تم اعتماد الخطة بنجاح');
+    const okMsg = (r.json && r.json.message) ? r.json.message : 'تم اعتماد الخطة بنجاح';
+    window.showToast ? window.showToast(okMsg, 'success') : alert(okMsg);
   } else {
-    const msg = (r.json && (r.json.message || r.json.error)) ? (r.json.message || r.json.error) : `فشل الاعتماد (${r.status})`;
-    window.showToast ? window.showToast(msg, 'danger') : alert(msg);
+    const detail = formatEnrollmentApproveError(r.json);
+    alert(detail);
   }
 }
 

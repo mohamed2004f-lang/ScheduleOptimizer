@@ -17,6 +17,7 @@ from .utilities import (
     get_schedule_published_at,
     get_current_term,
 )
+from .prereg_helpers import evaluate_courses_prereqs
 
 students_bp = Blueprint("students", __name__)
 
@@ -1837,6 +1838,7 @@ def save_registrations():
     if not isinstance(courses, list):
         return jsonify({"status": "error", "message": "courses/registrations يجب أن تكون قائمة"}), 400
 
+    old_courses = set()
     # منع تسجيل طالب غير فعّال (سحب ملف، موقوف قيده، خريج)
     try:
         with get_connection() as conn:
@@ -1873,32 +1875,21 @@ def save_registrations():
     try:
         with get_connection() as conn:
             cur = conn.cursor()
-            blocked = {}
-            if courses:
-                placeholders = ",".join("?" for _ in courses)
-                q = f"SELECT course_name, required_course_name FROM prereqs WHERE course_name IN ({placeholders})"
-                try:
-                    rows = cur.execute(q, courses).fetchall()
-                except Exception:
-                    current_app.logger.exception("prereqs query failed")
-                    rows = []
-                prereq_map = defaultdict(list)
-                for course_name, required in rows:
-                    prereq_map[course_name].append(required)
-
-                for course in courses:
-                    reqs = prereq_map.get(course, [])
-                    missing = []
-                    for r in reqs:
-                        old = cur.execute(
-                            "SELECT grade FROM grades WHERE student_id = ? AND course_name = ? LIMIT 1",
-                            (sid, r)
-                        ).fetchone()
-                        if old is None or old[0] is None:
-                            missing.append(r)
-                    if missing:
-                        blocked[course] = missing
-
+            prereq_eval = evaluate_courses_prereqs(cur, sid, courses, old_courses)
+            drop_violations = prereq_eval.get("drop_violations") or []
+            if drop_violations:
+                return jsonify(
+                    {
+                        "status": "error",
+                        "code": "PREREQ_CO_DROP",
+                        "message": drop_violations[0].get(
+                            "message_ar",
+                            "لا يمكن إبقاء المقرر التابع وإسقاط متطلبه وحده.",
+                        ),
+                        "drop_violations": drop_violations,
+                    }
+                ), 400
+            blocked = prereq_eval.get("blocked") or {}
             if blocked:
                 return jsonify({"status": "error", "message": "بعض المتطلبات غير مستوفاة", "blocked": blocked}), 400
 
@@ -2134,7 +2125,15 @@ def save_registrations():
                 except Exception:
                     pass
 
-                return jsonify({"status": "ok", "message": "تم حفظ التسجيلات"}), 200
+                return jsonify(
+                    {
+                        "status": "ok",
+                        "message": "تم حفظ التسجيلات",
+                        "prereq_warnings": prereq_eval.get("warnings") or [],
+                        "prereq_coregister_pairs": prereq_eval.get("coregister_pairs") or [],
+                        "prereq_validation": prereq_eval,
+                    }
+                ), 200
             except Exception as e:
                 conn.rollback()
                 current_app.logger.exception("insert registrations failed")

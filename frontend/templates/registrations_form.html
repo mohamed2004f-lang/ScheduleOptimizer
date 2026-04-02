@@ -189,6 +189,8 @@ const WITHDRAWN_MODE = {{ 'true' if withdrawn_mode else 'false' }};
       <div class="modal-body">
         <div id="editStudentInfo" class="mb-2 small text-muted"></div>
         <div id="electivesStatusInModal" class="mb-2 small"></div>
+        <div id="regPrereqBanner" class="alert alert-warning d-none py-2 mb-2" role="alert"></div>
+        <button type="button" id="btnRegPrereqDetails" class="btn btn-outline-warning btn-sm d-none mb-2">تفاصيل المتطلبات</button>
 
         <div class="card mb-3">
           <div class="card-body">
@@ -261,13 +263,94 @@ const WITHDRAWN_MODE = {{ 'true' if withdrawn_mode else 'false' }};
   </div>
 </div>
 
+<div class="modal fade" id="regPrereqDetailModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content" dir="rtl">
+      <div class="modal-header">
+        <h5 class="modal-title">تفاصيل المتطلبات (التسجيل الفعلي)</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+      </div>
+      <div class="modal-body small" id="regPrereqDetailTableWrap"></div>
+    </div>
+  </div>
+</div>
+
 <script>
 /* state */
 let STUDENTS = []; // {student_id, student_name, university_number, enrollment_status, registrations: [...]}
 let COURSES = [];  // cached courses metadata
 let editing = null; // current student object
+let regEditBaseline = [];
+let lastRegPrereqValidation = null;
+let regPrereqTimer = null;
 
 const REG_FILTERS_LS = 'registrations_form_filters_v2';
+
+function buildRegPrereqTableHtml(coursesObj){
+  if(!coursesObj || typeof coursesObj !== 'object'){
+    return '<p class="text-muted small mb-0">لا توجد بيانات.</p>';
+  }
+  let rows = '';
+  for (const cname of Object.keys(coursesObj)){
+    const data = coursesObj[cname];
+    for (const req of (data.requirements || [])){
+      if (req.status === 'passed') continue;
+      rows += `<tr><td>${escapeHtml(cname)}</td><td>${escapeHtml(req.prereq)}</td><td><span class="badge bg-secondary">${escapeHtml(req.status)}</span></td><td>${escapeHtml(String(req.grade ?? ''))}</td><td class="small">${escapeHtml(req.label_ar || '')}</td></tr>`;
+    }
+  }
+  if (!rows) return '<p class="small text-success mb-0">لا توجد متطلبات غير منجزة في هذا التحديد.</p>';
+  return `<table class="table table-sm table-bordered mb-0"><thead><tr><th>المقرر</th><th>المتطلب</th><th>الحالة</th><th>الدرجة</th><th>الوصف</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function updateRegPrereqBanner(data){
+  const ban = document.getElementById('regPrereqBanner');
+  const btn = document.getElementById('btnRegPrereqDetails');
+  if (!ban || !btn) return;
+  lastRegPrereqValidation = data || null;
+  const n = data?.summary?.courses_with_unmet_count ?? 0;
+  if (!data || n === 0){
+    ban.classList.add('d-none');
+    btn.classList.add('d-none');
+    return;
+  }
+  ban.classList.remove('d-none');
+  btn.classList.remove('d-none');
+  const hb = data.summary?.has_blocking ? ' يوجد متطلب «مفقود من الكشف» قد يمنع الحفظ إن لم يُدرَس مع التابع.' : '';
+  ban.innerHTML = `<strong>تنبيه متطلبات:</strong> <strong>${n}</strong> مقرراً في التسجيل المقترح به متطلبات غير مكتملة النجاح.${hb}`;
+}
+
+function scheduleRegPrereqValidate(){
+  clearTimeout(regPrereqTimer);
+  regPrereqTimer = setTimeout(runRegPrereqValidate, 450);
+}
+
+async function runRegPrereqValidate(){
+  if (!editing) return;
+  const sid = editing.student_id || editing.id || editing.studentId;
+  const courses = editing.registrations || [];
+  if (!sid || !courses.length){
+    updateRegPrereqBanner(null);
+    return;
+  }
+  const res = await fetchJSON('/enrollment/prereqs/validate', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      student_id: sid,
+      courses,
+      context: 'registration',
+      old_courses: regEditBaseline.length ? regEditBaseline : [],
+    }),
+  });
+  if (res.ok && res.json) updateRegPrereqBanner(res.json);
+}
+
+function openRegPrereqDetailModal(){
+  const wrap = document.getElementById('regPrereqDetailTableWrap');
+  if (wrap) wrap.innerHTML = buildRegPrereqTableHtml(lastRegPrereqValidation?.courses);
+  const el = document.getElementById('regPrereqDetailModal');
+  if (el && window.bootstrap) new bootstrap.Modal(el).show();
+}
 
 // رفع ملف استمارة التسجيل الموقعة (للأدمن فقط) وربطه بالتوقيع
 (function initSignedFormUpload(){
@@ -713,6 +796,7 @@ function downloadActualRegistrationForm(student){
 /* edit modal: fetch eligible courses and completed list for this student */
 async function openEditModal(student){
   editing = student;
+  regEditBaseline = (student.registrations || []).slice();
   document.getElementById('editStudentInfo').textContent = `${student.student_name || student.name || ''} — ${student.university_number || ''}`;
   const electBox = document.getElementById('electivesStatusInModal');
   if (electBox) { electBox.textContent = ''; electBox.className = 'mb-2 small'; }
@@ -749,14 +833,9 @@ async function openEditModal(student){
     const chk = document.getElementById('regStudentSigned');
     const dt = document.getElementById('regSignedAt');
     const note = document.getElementById('regSignatureNote');
-      const fileId = document.getElementById('regSignedFileId');
-      const verSel = document.getElementById('regFormVersionSelect');
+    const fileId = document.getElementById('regSignedFileId');
     const link = document.getElementById('regSignedFileLink');
     const msg = document.getElementById('regSignedFileMsg');
-      if (verSel) {
-        const verId = (verSel.value || '').trim();
-        if (verId) fd.append('form_version_id', verId);
-      }
     if (sig.ok && sig.json) {
       if (chk) chk.checked = !!sig.json.student_signed;
       if (note) note.value = sig.json.signature_note || '';
@@ -907,6 +986,7 @@ async function openEditModal(student){
     } else {
       eligibleDiv.innerHTML = '<div class="list-group-item text-muted">لا توجد مقررات متاحة للإضافة</div>';
     }
+    scheduleRegPrereqValidate();
   }
 
   renderEditLists();
@@ -987,7 +1067,26 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
     if(res.ok){
       // تحديث جذري للقائمة الفعلية من السيرفر حتى تظهر التغييرات مباشرة
       try { await loadData(); } catch(e) {}
-      setEditMsg('success','تم حفظ التغييرات وتحديث القائمة');
+      regEditBaseline = regs.slice();
+      if (res.json?.prereq_validation) updateRegPrereqBanner(res.json.prereq_validation);
+      let saveMsg = 'تم حفظ التغييرات وتحديث القائمة';
+      const pw = res.json?.prereq_warnings || [];
+      const pcp = res.json?.prereq_coregister_pairs || [];
+      if (pw.length || pcp.length){
+        const parts = [];
+        pw.forEach(x => { if (x && x.message_ar) parts.push(x.message_ar); });
+        if (pcp.length){
+          parts.push(
+            'أزواج متطلب+تابع في التسجيل: ' +
+            pcp.map(x => `«${x.prereq || ''}» + «${x.dependent || ''}»`).join('؛ ') +
+            ' — لا يُسمح لاحقاً بإسقاط المتطلب وحده دون التابع.'
+          );
+        }
+        saveMsg += ' — ' + parts.join(' ');
+        setEditMsg('warning', saveMsg);
+      } else {
+        setEditMsg('success', saveMsg);
+      }
       const modal = bootstrap.Modal.getInstance(document.getElementById('editModal'));
       modal.hide();
     } else {
@@ -997,6 +1096,11 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
     if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = oldText || 'حفظ التغييرات'; }
   }
 });
+
+(function(){
+  const br = document.getElementById('btnRegPrereqDetails');
+  if (br) br.addEventListener('click', openRegPrereqDetailModal);
+})();
 
 /* delete all regs for student */
 async function deleteAllRegistrations(student){

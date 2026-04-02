@@ -10,6 +10,12 @@ from flask import Blueprint, request, jsonify, session, send_file, abort, curren
 from backend.core.auth import login_required, role_required, SUPERVISOR_USERNAME, ADMIN_USERNAME
 from .utilities import get_connection, log_activity, create_notification
 from backend.services.grades import _load_transcript_data
+from backend.services.prereg_helpers import (
+    evaluate_prereqs_for_student,
+    format_supervisor_prereq_summary,
+    planning_course_hints,
+    prereq_validation_snapshot,
+)
 
 DocxTemplate = None
 
@@ -46,6 +52,23 @@ def _ensure_docxtpl():
 _ensure_docxtpl()
 
 enrollment_bp = Blueprint("enrollment", __name__)
+
+
+def _enrollment_plans_has_prereq_json_column(cur) -> bool:
+    try:
+        cols = [x[1] for x in cur.execute("PRAGMA table_info(enrollment_plans)").fetchall()]
+        return "prereq_validation_json" in cols
+    except Exception:
+        return False
+
+
+def _parse_prereq_validation_column(raw):
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
 
 
 def _ensure_registration_form_versions_table(cur):
@@ -379,7 +402,11 @@ def list_plans():
 
     with get_connection() as conn:
         cur = conn.cursor()
-        q = "SELECT id, student_id, semester, status, rejection_reason, created_at, updated_at FROM enrollment_plans WHERE 1=1"
+        has_pv = _enrollment_plans_has_prereq_json_column(cur)
+        sel = "id, student_id, semester, status, rejection_reason, created_at, updated_at"
+        if has_pv:
+            sel += ", prereq_validation_json"
+        q = f"SELECT {sel} FROM enrollment_plans WHERE 1=1"
         params = []
         if student_id:
             q += " AND student_id = ?"
@@ -403,20 +430,166 @@ def list_plans():
                 "SELECT id, course_name FROM enrollment_plan_items WHERE plan_id = ? ORDER BY id",
                 (plan_id,),
             ).fetchall()
-            plans.append(
-                {
-                    "id": plan_id,
-                    "student_id": r[1],
-                    "semester": r[2],
-                    "status": r[3],
-                    "rejection_reason": r[4],
-                    "created_at": r[5],
-                    "updated_at": r[6],
-                    "courses": [it[1] for it in items],
-                }
-            )
+            entry = {
+                "id": plan_id,
+                "student_id": r[1],
+                "semester": r[2],
+                "status": r[3],
+                "rejection_reason": r[4],
+                "created_at": r[5],
+                "updated_at": r[6],
+                "courses": [it[1] for it in items],
+            }
+            if has_pv:
+                entry["prereq_validation"] = _parse_prereq_validation_column(
+                    r[7] if len(r) > 7 else None
+                )
+            plans.append(entry)
 
     return jsonify({"status": "ok", "plans": plans})
+
+
+@enrollment_bp.route("/prereqs/validate", methods=["POST"])
+@login_required
+def validate_prereqs():
+    """
+    فحص متطلبات دون حفظ. body: student_id, courses, old_courses (اختياري), context (اختياري plan|registration).
+    """
+    if _is_instructor_or_supervisor_view_only():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+    data = request.get_json(force=True) or {}
+    student_id = (data.get("student_id") or "").strip()
+    courses = data.get("courses") or []
+    old_courses = data.get("old_courses")
+    ctx = (data.get("context") or "plan").strip().lower()
+
+    user_role = session.get("user_role")
+    if user_role == "student":
+        sid_session = session.get("student_id") or session.get("user")
+        student_id = (sid_session or "").strip()
+
+    if not student_id:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
+    if not isinstance(courses, list):
+        return jsonify({"status": "error", "message": "courses يجب أن تكون قائمة"}), 400
+
+    is_supervisor_chk = (user_role == "supervisor") or (
+        user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1
+    )
+
+    old_set = None
+    if isinstance(old_courses, list):
+        old_set = {str(x).strip() for x in old_courses if x}
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        if is_supervisor_chk:
+            instructor_id = session.get("instructor_id")
+            if not instructor_id:
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "لا يوجد ربط بين هذا الحساب وعضو هيئة تدريس",
+                            "code": "FORBIDDEN",
+                        }
+                    ),
+                    403,
+                )
+            row_sv = cur.execute(
+                """
+                SELECT 1 FROM student_supervisor
+                WHERE instructor_id = ? AND student_id = ? LIMIT 1
+                """,
+                (instructor_id, student_id),
+            ).fetchone()
+            if not row_sv:
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "لا يمكن تقييم مقررات طالب غير مسند إليك",
+                        }
+                    ),
+                    403,
+                )
+        if old_set is None and ctx == "registration":
+            old_set = {
+                x[0]
+                for x in cur.execute(
+                    "SELECT course_name FROM registrations WHERE student_id = ?",
+                    (student_id,),
+                ).fetchall()
+                if x and x[0]
+            }
+        elif old_set is None:
+            old_set = set()
+
+        full = evaluate_prereqs_for_student(
+            cur,
+            student_id,
+            courses,
+            proposed_courses=courses,
+            old_registered=old_set,
+        )
+
+    out = dict(full)
+    out["status"] = "ok"
+    return jsonify(out)
+
+
+@enrollment_bp.route("/prereqs/planning_hints", methods=["GET"])
+@login_required
+def prereq_planning_hints():
+    """أولوية إنجاز مبسّطة: أي مقرر يفتح أكبر عدد من المقررات التالية مباشرة."""
+    if _is_instructor_or_supervisor_view_only():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+    student_id = (request.args.get("student_id") or "").strip()
+    user_role = session.get("user_role")
+    if user_role == "student":
+        sid_session = session.get("student_id") or session.get("user")
+        student_id = (sid_session or "").strip()
+    if not student_id:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
+
+    is_supervisor_chk = (user_role == "supervisor") or (
+        user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1
+    )
+    with get_connection() as conn:
+        cur = conn.cursor()
+        if is_supervisor_chk:
+            instructor_id = session.get("instructor_id")
+            if not instructor_id:
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "لا يوجد ربط بين هذا الحساب وعضو هيئة تدريس",
+                            "code": "FORBIDDEN",
+                        }
+                    ),
+                    403,
+                )
+            row_sv = cur.execute(
+                """
+                SELECT 1 FROM student_supervisor
+                WHERE instructor_id = ? AND student_id = ? LIMIT 1
+                """,
+                (instructor_id, student_id),
+            ).fetchone()
+            if not row_sv:
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "لا يمكن عرض تخطيط مقررات طالب غير مسند إليك",
+                        }
+                    ),
+                    403,
+                )
+        data = planning_course_hints(cur, student_id)
+    data["status"] = "ok"
+    return jsonify(data)
 
 
 @enrollment_bp.route("/plans", methods=["POST"])
@@ -511,16 +684,62 @@ def create_or_update_plan():
             (student_id, semester),
         ).fetchone()
 
+        old_plan_courses = set()
+        plan_id = None
         if row:
             plan_id = row[0]
-            cur.execute(
-                """
-                UPDATE enrollment_plans
-                SET status = 'Draft', rejection_reason = NULL, updated_at = ?
-                WHERE id = ?
-                """,
-                (now, plan_id),
+            old_plan_courses = {
+                r[0]
+                for r in cur.execute(
+                    "SELECT course_name FROM enrollment_plan_items WHERE plan_id = ?",
+                    (plan_id,),
+                ).fetchall()
+                if r and r[0]
+            }
+
+        prereq_eval = evaluate_prereqs_for_student(
+            cur,
+            student_id,
+            courses,
+            proposed_courses=courses,
+            old_registered=old_plan_courses,
+        )
+        drop_violations = prereq_eval.get("drop_violations") or []
+        if drop_violations:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "code": "PREREQ_CO_DROP",
+                        "message": drop_violations[0].get(
+                            "message_ar",
+                            "لا يمكن إبقاء المقرر التابع وإسقاط متطلبه وحده.",
+                        ),
+                        "drop_violations": drop_violations,
+                    }
+                ),
+                400,
             )
+
+        if row:
+            if _enrollment_plans_has_prereq_json_column(cur):
+                cur.execute(
+                    """
+                    UPDATE enrollment_plans
+                    SET status = 'Draft', rejection_reason = NULL, updated_at = ?, prereq_validation_json = NULL
+                    WHERE id = ?
+                    """,
+                    (now, plan_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE enrollment_plans
+                    SET status = 'Draft', rejection_reason = NULL, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, plan_id),
+                )
             cur.execute(
                 "DELETE FROM enrollment_plan_items WHERE plan_id = ?", (plan_id,)
             )
@@ -553,7 +772,15 @@ def create_or_update_plan():
     except Exception:
         pass
 
-    return jsonify({"status": "ok", "plan_id": plan_id})
+    return jsonify(
+        {
+            "status": "ok",
+            "plan_id": plan_id,
+            "prereq_warnings": prereq_eval.get("warnings") or [],
+            "prereq_coregister_pairs": prereq_eval.get("coregister_pairs") or [],
+            "prereq_validation": prereq_eval,
+        }
+    )
 
 
 @enrollment_bp.route("/plans/<int:plan_id>/submit", methods=["POST"])
@@ -607,14 +834,37 @@ def submit_plan(plan_id: int):
             _enforce_units_limit(cur, student_id, courses)
         except ValueError as ve:
             return jsonify({"status": "error", "message": str(ve), "code": "UNITS_LIMIT"}), 400
-        cur.execute(
-            """
-            UPDATE enrollment_plans
-            SET status = 'Pending', rejection_reason = NULL, updated_at = ?
-            WHERE id = ?
-            """,
-            (now, plan_id),
+
+        semester = (row[2] or "").strip()
+        full_eval = evaluate_prereqs_for_student(
+            cur,
+            # عند الإرسال لا نغيّر العناصر: old_registered = محتويات الخطة الحالية
+            student_id,
+            courses,
+            proposed_courses=courses,
+            old_registered=set(courses),
         )
+        prereq_summary = format_supervisor_prereq_summary(student_id, semester, full_eval)
+        snap = prereq_validation_snapshot(full_eval, semester)
+        snap_json = json.dumps(snap, ensure_ascii=False)
+        if _enrollment_plans_has_prereq_json_column(cur):
+            cur.execute(
+                """
+                UPDATE enrollment_plans
+                SET status = 'Pending', rejection_reason = NULL, updated_at = ?, prereq_validation_json = ?
+                WHERE id = ?
+                """,
+                (now, snap_json, plan_id),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE enrollment_plans
+                SET status = 'Pending', rejection_reason = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (now, plan_id),
+            )
         conn.commit()
 
     try:
@@ -628,16 +878,33 @@ def submit_plan(plan_id: int):
             target_users.add(SUPERVISOR_USERNAME)
         if ADMIN_USERNAME:
             target_users.add(ADMIN_USERNAME)
+        summ = full_eval.get("summary") or {}
+        has_issue = int(summ.get("courses_with_unmet_count") or 0) > 0
+        n_title = (
+            "خطة تسجيل تحتوي متطلبات غير مستوفاة"
+            if has_issue
+            else "خطة تسجيل جديدة معلّقة"
+        )
         for u in target_users:
             create_notification(
                 user=u,
-                title="خطة تسجيل جديدة معلّقة",
-                body=f"خطة جديدة بانتظار المراجعة. رقم الخطة: {plan_id}",
+                title=n_title,
+                body=(
+                    f"رقم الخطة: {plan_id} — الطالب: {student_id} — الفصل: {semester}\n\n"
+                    f"{prereq_summary}"
+                ),
             )
     except Exception:
         pass
 
-    return jsonify({"status": "ok"})
+    return jsonify(
+        {
+            "status": "ok",
+            "prereq_warnings": full_eval.get("warnings") or [],
+            "prereq_coregister_pairs": full_eval.get("coregister_pairs") or [],
+            "prereq_validation": full_eval,
+        }
+    )
 
 
 @enrollment_bp.route("/plans/<int:plan_id>/approve", methods=["POST"])
@@ -686,6 +953,38 @@ def approve_plan(plan_id: int):
             _enforce_units_limit(cur, student_id, courses)
         except ValueError as ve:
             return jsonify({"status": "error", "message": str(ve), "code": "UNITS_LIMIT"}), 400
+
+        old_reg = {
+            r[0]
+            for r in cur.execute(
+                "SELECT course_name FROM registrations WHERE student_id = ?",
+                (student_id,),
+            ).fetchall()
+            if r and r[0]
+        }
+        prereq_eval = evaluate_prereqs_for_student(
+            cur,
+            student_id,
+            courses,
+            proposed_courses=courses,
+            old_registered=old_reg,
+        )
+        drop_violations = prereq_eval.get("drop_violations") or []
+        if drop_violations:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "code": "PREREQ_CO_DROP",
+                        "message": drop_violations[0].get(
+                            "message_ar",
+                            "لا يمكن إبقاء المقرر التابع وإسقاط متطلبه وحده.",
+                        ),
+                        "drop_violations": drop_violations,
+                    }
+                ),
+                400,
+            )
 
         # استبدال تسجيلات الطالب الحالية بهذه المقررات
         cur.execute(
