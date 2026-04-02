@@ -610,6 +610,20 @@ def _render_prereq_flow_png(courses, prereqs_rows, focus_course: str = "", direc
             "نفّذ: pip install -r requirements.txt ثم أعد تشغيل السيرفر."
         ) from e
 
+    # Arabic shaping + bidi so Arabic renders correctly in matplotlib
+    try:
+        import arabic_reshaper
+        from bidi.algorithm import get_display
+
+        def _rtl_text(s: str) -> str:
+            txt = str(s or "")
+            if not txt:
+                return ""
+            return get_display(arabic_reshaper.reshape(txt))
+    except Exception:
+        def _rtl_text(s: str) -> str:
+            return str(s or "")
+
     # Optionally reduce to a focused subgraph
     filtered_pr = _subgraph_for_course(prereqs_rows, focus_course=focus_course, direction=direction, depth=depth)
 
@@ -624,7 +638,10 @@ def _render_prereq_flow_png(courses, prereqs_rows, focus_course: str = "", direc
         fig = plt.figure(figsize=(10, 4), dpi=160)
         ax = fig.add_subplot(111)
         ax.axis("off")
-        ax.text(0.5, 0.5, "لا توجد متطلبات لعرضها", ha="center", va="center", fontsize=16)
+        ax.text(
+            0.5, 0.5, _rtl_text("لا توجد متطلبات لعرضها"),
+            ha="center", va="center", fontsize=16, fontfamily="DejaVu Sans"
+        )
         buf = io.BytesIO()
         fig.savefig(buf, format="png", bbox_inches="tight")
         plt.close(fig)
@@ -667,17 +684,34 @@ def _render_prereq_flow_png(courses, prereqs_rows, focus_course: str = "", direc
     for lv in layers:
         layers[lv].sort(key=lambda x: x)
 
+    # Reduce edge crossings: reorder each layer by predecessor barycenter.
+    preds = defaultdict(list)  # course -> [prereq]
+    for row in filtered_pr:
+        c = (row.get("course_name") or "").strip()
+        r = (row.get("required_course_name") or "").strip()
+        if c and r:
+            preds[c].append(r)
+    for lv in range(1, max_level + 1):
+        prev_order = {n: i for i, n in enumerate(layers.get(lv - 1, []))}
+        def _bary(n):
+            ps = [prev_order[p] for p in preds.get(n, []) if p in prev_order]
+            if not ps:
+                return 10**9
+            return sum(ps) / max(1, len(ps))
+        layers[lv].sort(key=lambda n: (_bary(n), n))
+
     # coordinates
     pos = {}
+    x_scale = 1.45  # more horizontal separation between levels
     for lv in range(0, max_level + 1):
         layer_nodes = layers.get(lv, [])
         for i, n in enumerate(layer_nodes):
             # x increases with level; y decreases with index for top-down
-            pos[n] = (lv, -i)
+            pos[n] = (lv * x_scale, -i)
 
     # Figure size scaling
     max_layer_size = max((len(v) for v in layers.values()), default=1)
-    width = max(10, 2.5 + (max_level + 1) * 2.2)
+    width = max(10, 2.5 + (max_level + 1) * 2.8)
     height = max(4.5, 1.6 + max_layer_size * 0.9)
 
     fig = plt.figure(figsize=(width, height), dpi=160)
@@ -694,9 +728,12 @@ def _render_prereq_flow_png(courses, prereqs_rows, focus_course: str = "", direc
 
     def label_for(name: str) -> str:
         code = (code_map.get(name) or "").strip()
-        return f"{name}\n({code})" if code else name
+        raw = f"{name}\n({code})" if code else name
+        return _rtl_text(raw)
 
     # Draw edges first
+    is_full_plan = not (focus_course or "").strip()
+    edge_palette = ["#0f766e", "#1d4ed8", "#7c3aed", "#b45309", "#be123c", "#0f766e"]
     for row in filtered_pr:
         c = (row.get("course_name") or "").strip()
         r = (row.get("required_course_name") or "").strip()
@@ -704,11 +741,33 @@ def _render_prereq_flow_png(courses, prereqs_rows, focus_course: str = "", direc
             continue
         x1, y1 = pos[r]
         x2, y2 = pos[c]
+        src_level = int(level.get(r, 0) or 0)
+        color = edge_palette[src_level % len(edge_palette)]
+        # "core" edges are adjacent levels; others are lighter/dashed.
+        level_gap = abs(int(level.get(c, 0) or 0) - src_level)
+        core_edge = (level_gap <= 1)
+        lw = 1.8 if core_edge else 1.1
+        alpha = 0.72 if core_edge else 0.38
+        linestyle = "-" if core_edge else "--"
+        # In focused mode keep stronger edges for readability.
+        if not is_full_plan:
+            lw = 1.9 if core_edge else 1.4
+            alpha = 0.82 if core_edge else 0.55
+            linestyle = "-"
         ax.annotate(
             "",
             xy=(x2, y2),
             xytext=(x1, y1),
-            arrowprops=dict(arrowstyle="->", color="#334155", lw=1.2, shrinkA=12, shrinkB=12),
+            arrowprops=dict(
+                arrowstyle="-|>",
+                color=color,
+                lw=lw,
+                linestyle=linestyle,
+                alpha=alpha,
+                mutation_scale=9,
+                shrinkA=12,
+                shrinkB=12,
+            ),
             zorder=1,
         )
 
@@ -725,6 +784,7 @@ def _render_prereq_flow_png(courses, prereqs_rows, focus_course: str = "", direc
             fontsize=10,
             color="#0f172a",
             bbox=dict(boxstyle="round,pad=0.35", fc=fc, ec=ec, lw=1.2),
+            fontfamily="DejaVu Sans",
             zorder=2,
         )
 
@@ -732,7 +792,15 @@ def _render_prereq_flow_png(courses, prereqs_rows, focus_course: str = "", direc
     title = "خريطة المتطلبات بين المقررات"
     if (focus_course or "").strip():
         title += f" — ({focus_course})"
-    ax.text(0, 1.02, title, transform=ax.transAxes, ha="left", va="bottom", fontsize=14, fontweight="bold")
+    ax.text(
+        0, 1.02, _rtl_text(title),
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=14,
+        fontweight="bold",
+        fontfamily="DejaVu Sans",
+    )
 
     # Tight bounds with padding
     xs = [p[0] for p in pos.values()]
