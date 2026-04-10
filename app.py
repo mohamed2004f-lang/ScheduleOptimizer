@@ -42,12 +42,26 @@ csrf.init_app(app)
 # عرض مسار قاعدة البيانات في الكونسول لمراجعة أنه نفس الملف الذي يحتوي بياناتك
 print("Using DB_FILE:", os.path.abspath(DB_FILE))
 
-# فحص سريع: إذا وُجدت أكثر من نسخة من mechanical.db في المشروع، اطبع تحذيراً حتى لا يحدث التباس
-dups = []
-for dirpath, dirnames, filenames in os.walk(os.path.abspath('.')):
-    for fn in filenames:
-        if fn.lower() == 'mechanical.db':
-            dups.append(os.path.abspath(os.path.join(dirpath, fn)))
+# فحص سريع: أكثر من نسخة mechanical.db داخل المشروع (باستثناء نسخ احتياطية ومجلدات أدوات ونسخ متداخلة Users/...)
+_SKIP_WALK_DIRS = frozenset(
+    {".git", ".venv", "venv", "backups", "users", "__pycache__", ".pytest_cache", "node_modules"}
+)
+
+
+def _mechanical_db_candidates(project_root: str) -> list[str]:
+    found: list[str] = []
+    root = os.path.abspath(project_root)
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            d for d in dirnames if d.lower() not in _SKIP_WALK_DIRS and not d.startswith(".")
+        ]
+        for fn in filenames:
+            if fn.lower() == "mechanical.db":
+                found.append(os.path.abspath(os.path.join(dirpath, fn)))
+    return found
+
+
+dups = _mechanical_db_candidates(".")
 if len(dups) > 1:
     print('\nWARNING: Multiple mechanical.db files detected. This can cause stale/missing data in the app.')
     print(' Central DB (should be used):', os.path.abspath(DB_FILE))

@@ -17,4 +17,12 @@ def sqlite_ddl_to_postgres(sql: str) -> str:
         s,
         flags=re.IGNORECASE,
     )
+    # PostgreSQL يحجز user (وغيرها) كأسماء؛ نضع علامات اقتباس للأعمدة المتعارضة
+    s = re.sub(r"^(\s*)user(\s+TEXT\b)", r'\1"user"\2', s, flags=re.MULTILINE | re.IGNORECASE)
+    s = re.sub(
+        r"ON\s+notifications\s*\(\s*user\s*,",
+        'ON notifications ("user",',
+        s,
+        flags=re.IGNORECASE,
+    )
     return s

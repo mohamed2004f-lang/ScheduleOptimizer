@@ -48,24 +48,20 @@ DB_FILE = _sqlite_db_file_path()
 
 
 def get_connection(db_file=None):
-    """إنشاء اتصال بقاعدة البيانات مع تفعيل Foreign Keys (SQLite فقط في وقت التشغيل حالياً)."""
+    """إنشاء اتصال SQLite للتشغيل مع تفعيل Foreign Keys.
+
+    يمكن أن يكون ``DATABASE_URL`` موجّهاً إلى PostgreSQL (لـ Alembic/النقل)؛
+    التطبيق يقرأ ويكتب دائماً من ملف SQLite ``DATABASE_PATH`` / ``DB_FILE`` حتى اكتمال دعم Postgres في الكود.
+    """
     if make_url is not None:
         try:
             if make_url(DATABASE_URL).get_backend_name() != "sqlite":
-                raise RuntimeError(
-                    "DATABASE_URL يشير إلى محرك غير SQLite. تشغيل التطبيق يعتمد حالياً على sqlite3 فقط. "
-                    "استخدم sqlite:///... أو DATABASE_PATH للتشغيل، وأنشئ المخطط على Postgres عبر Alembic عند الحاجة. "
-                    "راجع docs/POSTGRES_MIGRATION.md"
+                logger.info(
+                    "DATABASE_URL يشير إلى محرك غير SQLite — تشغيل Flask يستخدم SQLite: %s",
+                    db_file or DB_FILE,
                 )
         except Exception:
-            if not str(DATABASE_URL).startswith("sqlite"):
-                raise RuntimeError(
-                    "DATABASE_URL غير صالح أو غير مدعوم لتشغيل التطبيق. راجع docs/POSTGRES_MIGRATION.md"
-                ) from None
-    elif not str(DATABASE_URL).startswith("sqlite"):
-        raise RuntimeError(
-            "DATABASE_URL يجب أن يشير إلى SQLite لتشغيل التطبيق حالياً. راجع docs/POSTGRES_MIGRATION.md"
-        )
+            pass
     db_path = db_file or DB_FILE
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row

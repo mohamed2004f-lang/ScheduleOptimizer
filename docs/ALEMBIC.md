@@ -17,6 +17,18 @@ alembic upgrade head
 alembic revision -m "describe change"
 ```
 
+### Windows والبيئة الافتراضية
+
+- **لا تستخدم** `python -m alembic` من **جذر المشروع**: المجلد المحلي `alembic/` (ترحيلات) له نفس اسم حزمة PyPI، فيُحمَّل كوحدة بدل الحزمة ويظهر خطأ مثل `No module named alembic.__main__`.
+- **استخدم** المُشغِّل المثبَّت في الـ venv بعد `pip install -r requirements.txt`:
+
+  ```powershell
+  .\.venv\Scripts\alembic.exe current
+  .\.venv\Scripts\alembic.exe upgrade head
+  ```
+
+- أو نفّذ `alembic` من PATH إذا كان يشير إلى نفس الـ venv (بعد التفعيل: `Activate.ps1`).
+
 ## ملاحظات
 
 - التطبيق يستخدم **`sqlite3`** في وقت التشغيل مع SQLite. راجع `docs/POSTGRES_MIGRATION.md` لخطة الانتقال الكاملة.

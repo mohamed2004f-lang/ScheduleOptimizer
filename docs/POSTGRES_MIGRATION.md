@@ -59,7 +59,7 @@
 - استبدال أو تحويل: `INSERT OR REPLACE` / `INSERT OR IGNORE`، واستعلامات `sqlite_master` و`PRAGMA`.
 - تعديل `df_from_query` وغيرها في `utilities.py` التي تفتح SQLite مباشرة.
 
-**حتى اكتمال المرحلة 4:** اجعل `DATABASE_URL` يشير إلى **SQLite** لتشغيل التطبيق (`sqlite:///...` أو الاعتماد على `DATABASE_PATH` في `config.py`). استخدم عنوان **Postgres** فقط عند تشغيل **Alembic** وسكربت **migrate_sqlite_to_postgres**.
+**حتى اكتمال المرحلة 4:** يمكن الإبقاء على `DATABASE_URL` لـ **Postgres** في `.env`؛ **Flask** يتصل تلقائياً بملف **SQLite** المحدَّد في `DATABASE_PATH` (انظر `get_connection` في `database.py`). استخدم عنوان Postgres لـ **Alembic** وسكربت **migrate_sqlite_to_postgres**.
 
 ## متغيرات مفيدة
 
@@ -69,6 +69,16 @@
 | `DATABASE_PATH` | مسار ملف SQLite عند عدم استخدام `DATABASE_URL` الكامل. |
 | `SQLITE_MIGRATION_SOURCE` | مسار ملف `.db` المصدر لسكربت النقل (اختياري). |
 
+## أدوات جاهزة (بعد النقل)
+
+| الغرض | الأمر |
+|--------|--------|
+| مزامنة دورية SQLite → Postgres (نسخ احتياطي ثم truncate + نقل) | من PowerShell في جذر المشروع: `.\scripts\sync_sqlite_to_postgres.ps1` |
+| `pg_dump` باستخدام `DATABASE_URL` من `.env` | `python scripts/pg_dump_via_env.py` (يتطلب `pg_dump` في PATH) |
+| تشغيل أقرب للإنتاج على ويندوز | `pip install -r requirements-production.txt` ثم `python scripts/run_waitress.py` |
+
+**تغيير كلمة مرور `postgres`:** نفّذها في الخادم (pgAdmin → Definition → Password، أو `ALTER USER postgres PASSWORD '...';` في psql) ثم حدّث `DATABASE_URL` في `.env`. تغيير `.env` وحده لا يكفي.
+
 ## ملاحظة أمان
 
-قبل أي قطع على الإنتاج: نسخة احتياطية كاملة من `mechanical.db`، ونافذة صيانة، وخطة تراجع (إعادة الملف أو استعادة Postgres من `pg_dump`).
+قبل أي قطع على الإنتاج: نسخة احتياطية كاملة من `mechanical.db`، ونافذة صيانة، وخطة تراجع (إعادة الملف أو استعادة Postgres من `pg_dump`). لا ترفع `.env` إلى Git (مُدرَج في `.gitignore`).
