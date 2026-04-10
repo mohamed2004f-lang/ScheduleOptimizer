@@ -64,6 +64,7 @@ venv.bak/
 .vscode/
 !.vscode/
 !.vscode/tasks.json
+!.vscode/settings.json
 *.swp
 *.swo
 *~

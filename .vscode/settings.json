@@ -1,0 +1,46 @@
+{
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/.venv/**": true,
+    "**/venv/**": true,
+    "**/env/**": true,
+    "**/.env/**": true,
+    "**/__pycache__/**": true,
+    "**/.pytest_cache/**": true,
+    "**/node_modules/**": true,
+    "**/htmlcov/**": true,
+    "**/backups/**": true,
+    "**/logs/**": true,
+    "**/.tox/**": true
+  },
+  "search.exclude": {
+    "**/.venv": true,
+    "**/venv": true,
+    "**/env": true,
+    "**/.env": true,
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/node_modules": true,
+    "**/htmlcov": true,
+    "**/backups": true,
+    "**/logs": true,
+    "**/*.sqlite": true,
+    "**/*.sqlite3": true,
+    "**/*.db": true
+  },
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/*.py[cod]": true
+  },
+  "python.analysis.exclude": [
+    "**/.venv",
+    "**/venv",
+    "**/env",
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.pytest_cache",
+    "**/htmlcov"
+  ]
+}
