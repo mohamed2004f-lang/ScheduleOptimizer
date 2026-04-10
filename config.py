@@ -61,6 +61,10 @@ DATABASE_PATH = os.environ.get(
     'DATABASE_PATH', 
     str(BASE_DIR / 'backend' / 'database' / 'mechanical.db')
 )
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if not DATABASE_URL:
+    # Default to SQLite in development when DATABASE_URL is not provided.
+    DATABASE_URL = f"sqlite:///{Path(DATABASE_PATH).resolve().as_posix()}"
 
 # ============================================
 # إعدادات الأمان

@@ -538,6 +538,9 @@
       }
       const plan = plans[0];
       currentPlanId = plan.id;
+      if (Number(plan.prereq_ack_by_student || 0) === 1 && plan.prereq_ack_reason){
+        setPlanMsg('warning', `تم إرسال الخطة سابقاً مع إقرار مخالفة متطلبات: ${plan.prereq_ack_reason}`);
+      }
       const sel = document.getElementById('planCoursesSelect');
       // إعادة التحديد
       Array.from(sel.options).forEach(o=>{
@@ -621,7 +624,26 @@
           return;
         }
       }
-      const res = await fetchJSON(`/enrollment/plans/${currentPlanId}/submit`, {method:'POST'});
+      const unmetCount = Number(lastPrereqValidation?.summary?.courses_with_unmet_count || 0);
+      let ackPayload = {};
+      if (unmetCount > 0){
+        const okAck = confirm(`الخطة تحتوي ${unmetCount} مقرراً بمتطلبات غير مكتملة. هل تريد الإرسال مع إقرار بالمخالفة؟`);
+        if (!okAck){
+          setPlanMsg('warning','تم إلغاء الإرسال. راجع تفاصيل المتطلبات أولاً.');
+          return;
+        }
+        const reason = prompt('اكتب سبب الإرسال رغم مخالفة المتطلبات (سيظهر للمشرف):', '') || '';
+        if (!reason.trim()){
+          setPlanMsg('danger','يلزم كتابة سبب واضح قبل الإرسال.');
+          return;
+        }
+        ackPayload = { ack_prereq_violation: true, ack_reason: reason.trim() };
+      }
+      const res = await fetchJSON(`/enrollment/plans/${currentPlanId}/submit`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(ackPayload),
+      });
       if(res.ok){
         document.getElementById('planStatus').textContent = 'حالة الخطة: Pending';
         let smsg = 'تم إرسال الخطة للمراجعة.';
@@ -644,6 +666,9 @@
           setPlanMsg('success', smsg);
         }
       } else {
+        if (res.json?.code === 'PREREQ_ACK_REQUIRED' && res.json?.prereq_validation){
+          updatePrereqPlanUI(res.json.prereq_validation);
+        }
         setPlanMsg('danger', res.json?.message || `فشل الإرسال (${res.status})`);
       }
     }
@@ -677,9 +702,14 @@
             ? `<span class="badge bg-warning text-dark ms-1">مخالفات متطلبات (${nUnmet})</span>`
             : `<span class="badge bg-success ms-1">سليمة نسبياً</span>`);
         const pvBody = buildPrereqTableHtml(pv?.courses);
-        left.innerHTML = `<div><strong>${p.student_id}</strong> — ${name} ${pBadge}</div>
+        const ackTag = Number(p.prereq_ack_by_student || 0) === 1
+          ? `<span class="badge bg-danger ms-1">إقرار طالب بالمخالفة</span>`
+          : '';
+        const ackReason = (p.prereq_ack_reason || '').trim();
+        left.innerHTML = `<div><strong>${p.student_id}</strong> — ${name} ${pBadge} ${ackTag}</div>
                           <div class="small text-muted">الفصل: ${p.semester}</div>
                           <div class="small">المقررات: ${p.courses.join(', ') || '—'}</div>
+                          ${ackReason ? `<div class="small text-danger">سبب الإرسال الاستثنائي: ${escPlain(ackReason)}</div>` : ''}
                           <div class="mt-1">
                             <button type="button" class="btn btn-sm btn-outline-secondary" data-acad="${p.id}" title="عرض ملخص سريع (معدل/وحدات/غير منجزة/حالة)">ملخص أكاديمي</button>
                             <button class="btn btn-sm btn-outline-info" type="button" data-bs-toggle="collapse" data-bs-target="#pv_${p.id}" aria-expanded="false">جدول المتطلبات (لقطة الإرسال)</button>

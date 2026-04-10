@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>سجل الحضور والغياب — {{ course_name }}</title>
+  <style>
+    @page { size: A4 landscape; margin: 10mm; }
+    body {
+      font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+      font-size: 9pt;
+      color: #111;
+      line-height: 1.35;
+    }
+    .no-print { text-align: center; margin-bottom: 12px; }
+    .no-print .print-hint {
+      font-size: 8.5pt;
+      color: #555;
+      margin: 8px auto 0;
+      max-width: 42em;
+      line-height: 1.4;
+    }
+    .no-print button {
+      padding: 8px 16px;
+      margin: 0 6px;
+      cursor: pointer;
+      border-radius: 6px;
+      border: 1px solid #0d6efd;
+      background: #0d6efd;
+      color: #fff;
+    }
+    .no-print .secondary { background: #fff; color: #0d6efd; }
+    .header {
+      text-align: center;
+      border-bottom: 2px solid #0d6efd;
+      padding-bottom: 8px;
+      margin-bottom: 10px;
+    }
+    .header h1 { font-size: 13pt; margin: 0; font-weight: 700; }
+    .header .sub { font-size: 9pt; color: #444; margin: 4px 0 0; }
+    .meta {
+      font-size: 8.5pt;
+      color: #333;
+      margin-bottom: 12px;
+      background: #f8f9fa;
+      padding: 10px 14px;
+      border-radius: 6px;
+      border: 1px solid #dee2e6;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 4px 28px;
+      text-align: right;
+    }
+    @media (max-width: 520px) {
+      .meta { grid-template-columns: 1fr; }
+    }
+    .title-row {
+      text-align: center;
+      font-weight: 700;
+      font-size: 11pt;
+      margin: 8px 0 10px;
+    }
+    .table-report-host {
+      width: 100%;
+      max-width: 100%;
+      overflow-x: auto;
+      margin-bottom: 12px;
+    }
+    /* عرض كامل: عمود الاسم يستفيد من المساحة بعد الرقم وأعمدة الأسابيع */
+    table.report {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    table.report th, table.report td {
+      border: 1px solid #333;
+      padding: 4px 5px;
+      vertical-align: middle;
+      text-align: center;
+    }
+    table.report th {
+      background: #e9ecef;
+      font-weight: 700;
+      font-size: 8pt;
+    }
+    table.report th.col-id,
+    table.report td.sticky-id {
+      white-space: nowrap;
+    }
+    table.report th.col-name,
+    table.report td.sticky-name {
+      text-align: right;
+    }
+    table.report td.sticky-name {
+      font-size: 8.5pt;
+      white-space: normal;
+      overflow-wrap: break-word;
+      word-break: break-word;
+      line-height: 1.25;
+    }
+    table.report td.sticky-id {
+      font-family: Consolas, monospace;
+      direction: ltr;
+      text-align: center;
+      font-size: 8pt;
+    }
+    table.report th.week-band {
+      font-size: 7pt;
+      font-weight: 600;
+      padding: 4px 6px;
+      line-height: 1.25;
+    }
+    table.report th.week-num {
+      box-sizing: border-box;
+      padding: 3px 2px;
+      font-size: 7.5pt;
+      font-weight: 700;
+      line-height: 1.1;
+      white-space: nowrap;
+    }
+    table.report td.week-cell {
+      box-sizing: border-box;
+      padding: 3px 2px;
+      font-size: 7pt;
+      line-height: 1.2;
+      white-space: normal;
+      word-break: break-word;
+      overflow-wrap: break-word;
+    }
+    .signatures {
+      margin-top: 20px;
+      padding-top: 12px;
+      border-top: 1px solid #ccc;
+      font-size: 9pt;
+      color: #111;
+      line-height: 1.9;
+      max-width: 100%;
+    }
+    /* توقيعات بعرض عمود الاسم ومحاذاة مع الجدول (RTL) */
+    .signatures-instructor {
+      box-sizing: border-box;
+      text-align: right;
+      direction: rtl;
+    }
+    .signatures .label-inline {
+      display: flex;
+      flex-direction: row;
+      align-items: flex-end;
+      gap: 6px;
+      margin: 8px 0;
+    }
+    .signatures .label-inline span:first-child { white-space: nowrap; }
+    .signatures .label-inline .rule {
+      flex: 1;
+      min-width: 0;
+      border-bottom: 1px solid #333;
+      min-height: 1.1em;
+    }
+    .signatures-chief {
+      margin-top: 18px;
+      text-align: center;
+      direction: rtl;
+    }
+    .signatures-chief .chief-sep {
+      border-top: 1px solid #333;
+      width: 36%;
+      min-width: 160px;
+      max-width: 280px;
+      margin: 0 auto;
+    }
+    .signatures-chief .chief-title {
+      font-weight: 600;
+      margin-top: 10px;
+      text-align: center;
+    }
+    @media print {
+      .no-print { display: none !important; }
+      .table-report-host { overflow: visible; }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print">
+    <button type="button" onclick="window.print()">طباعة</button>
+    <button type="button" class="secondary" onclick="window.close()">إغلاق</button>
+    <p class="print-hint">لتنسيق أوضح على الورق، اختر في نافذة الطباعة الاتجاه <strong>أفقي (Landscape)</strong> إن كان متاحاً. القالب مضبوط على A4 أفقي.</p>
+  </div>
+
+  <div class="header">
+    <h1>جامعة درنة — كلية الهندسة — قسم الهندسة الميكانيكية</h1>
+    <p class="sub">سجل الحضور والغياب</p>
+  </div>
+
+  <div class="title-row">كشف حضور وغياب المقرر</div>
+
+  <div class="meta">
+    <div><strong>المقرر:</strong> {{ course_name }}</div>
+    {% if course_code %}<div><strong>رمز المقرر:</strong> {{ course_code }}</div>{% endif %}
+    {% if semester_label %}<div><strong>الفصل الدراسي:</strong> {{ semester_label }}</div>{% endif %}
+    {% if instructor_name %}<div><strong>عضو هيئة التدريس:</strong> {{ instructor_name }}</div>{% endif %}
+    <div><strong>عدد الطلبة:</strong> {{ student_count }}</div>
+    <div><strong>عدد الأسابيع المعروضة:</strong> {{ weeks }}</div>
+    <div><strong>تاريخ الإصدار:</strong> {{ generated_at }}</div>
+  </div>
+
+  {# توزيع عرض الجدول: رقم ثابت، أسابيع بنسب متساوية، الباقي لاسم الطالب #}
+  {% set pct_id = 8 %}
+  {% set pct_weeks_total = 58 %}
+  {% set pct_week = (pct_weeks_total / weeks) if weeks else 0 %}
+  {% set pct_name = 100 - pct_id - pct_weeks_total %}
+  <div class="table-report-host">
+  <table class="report">
+    <colgroup>
+      <col class="col-id" style="width: {{ pct_id }}%;">
+      <col class="col-name" style="width: {{ pct_name }}%;">
+      {% for w in week_numbers %}
+      <col class="col-week" style="width: {{ pct_week }}%;">
+      {% endfor %}
+    </colgroup>
+    <thead>
+      <tr>
+        <th class="col-id" rowspan="2">الرقم الدراسي</th>
+        <th class="col-name" rowspan="2">اسم الطالب</th>
+        <th class="week-band" colspan="{{ weeks }}">أرقام تسلسل الأسابيع في الفصل</th>
+      </tr>
+      <tr>
+        {% for w in week_numbers %}
+        <th class="week-num">{{ w }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in table_rows %}
+      <tr>
+        <td class="sticky-id">{{ row.student_id }}</td>
+        <td class="sticky-name">{{ row.student_name }}</td>
+        {% for cell in row.weeks %}
+        <td class="week-cell">{{ cell }}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+      {% if not table_rows %}
+      <tr><td colspan="{{ 2 + weeks }}">لا توجد تسجيلات للمقرر في قائمة المسجلين.</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+  </div>
+
+  <div class="signatures">
+    <div class="signatures-instructor" style="width: {{ pct_name }}%; margin-inline-start: {{ pct_id }}%;">
+      <div class="label-inline">
+        <span>اسم أستاذ المقرر</span>
+        <span class="rule"></span>
+      </div>
+      <div class="label-inline">
+        <span>توقيع</span>
+        <span class="rule"></span>
+      </div>
+    </div>
+    <div class="signatures-chief">
+      <div class="chief-sep"></div>
+      <div class="chief-title">رئيس قسم الهندسة الميكانيكية</div>
+    </div>
+  </div>
+
+</body>
+</html>

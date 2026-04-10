@@ -1,6 +1,6 @@
 from flask import Flask, render_template, redirect, url_for, jsonify, session, request, abort
 from flask_wtf.csrf import CSRFProtect, CSRFError
-from backend.services.utilities import ensure_tables, DB_FILE
+from backend.database.database import ensure_tables, DB_FILE
 
 # Blueprints
 from backend.services.students import students_bp

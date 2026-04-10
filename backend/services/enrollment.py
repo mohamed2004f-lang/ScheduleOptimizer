@@ -406,6 +406,14 @@ def list_plans():
         sel = "id, student_id, semester, status, rejection_reason, created_at, updated_at"
         if has_pv:
             sel += ", prereq_validation_json"
+        has_ack_cols = False
+        try:
+            ep_cols = [x[1] for x in cur.execute("PRAGMA table_info(enrollment_plans)").fetchall()]
+            has_ack_cols = ("prereq_ack_by_student" in ep_cols and "prereq_ack_reason" in ep_cols)
+        except Exception:
+            has_ack_cols = False
+        if has_ack_cols:
+            sel += ", prereq_ack_by_student, prereq_ack_reason"
         q = f"SELECT {sel} FROM enrollment_plans WHERE 1=1"
         params = []
         if student_id:
@@ -444,6 +452,11 @@ def list_plans():
                 entry["prereq_validation"] = _parse_prereq_validation_column(
                     r[7] if len(r) > 7 else None
                 )
+            if has_ack_cols:
+                ack_i = 8 if has_pv else 7
+                rsn_i = 9 if has_pv else 8
+                entry["prereq_ack_by_student"] = int(r[ack_i] or 0)
+                entry["prereq_ack_reason"] = r[rsn_i] or ""
             plans.append(entry)
 
     return jsonify({"status": "ok", "plans": plans})
@@ -792,6 +805,9 @@ def submit_plan(plan_id: int):
     """
     if _is_instructor_or_supervisor_view_only():
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+    data = request.get_json(silent=True) or {}
+    ack_prereq_violation = bool(data.get("ack_prereq_violation"))
+    ack_reason = (data.get("ack_reason") or "").strip()
     now = _now_iso()
     with get_connection() as conn:
         cur = conn.cursor()
@@ -847,15 +863,45 @@ def submit_plan(plan_id: int):
         prereq_summary = format_supervisor_prereq_summary(student_id, semester, full_eval)
         snap = prereq_validation_snapshot(full_eval, semester)
         snap_json = json.dumps(snap, ensure_ascii=False)
-        if _enrollment_plans_has_prereq_json_column(cur):
-            cur.execute(
-                """
-                UPDATE enrollment_plans
-                SET status = 'Pending', rejection_reason = NULL, updated_at = ?, prereq_validation_json = ?
-                WHERE id = ?
-                """,
-                (now, snap_json, plan_id),
+        unmet_count = int((full_eval.get("summary") or {}).get("courses_with_unmet_count") or 0)
+        if user_role == "student" and unmet_count > 0 and (not ack_prereq_violation or not ack_reason):
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "code": "PREREQ_ACK_REQUIRED",
+                        "message": "الخطة تحتوي متطلبات غير مكتملة. يلزم الإقرار بالمخالفة وكتابة سبب قبل الإرسال.",
+                        "prereq_validation": full_eval,
+                    }
+                ),
+                400,
             )
+        ack_by_student = 1 if (user_role == "student" and ack_prereq_violation and ack_reason) else 0
+        ack_reason_val = ack_reason if ack_by_student else ""
+        if _enrollment_plans_has_prereq_json_column(cur):
+            try:
+                ep_cols = [x[1] for x in cur.execute("PRAGMA table_info(enrollment_plans)").fetchall()]
+            except Exception:
+                ep_cols = []
+            if "prereq_ack_by_student" in ep_cols and "prereq_ack_reason" in ep_cols:
+                cur.execute(
+                    """
+                    UPDATE enrollment_plans
+                    SET status = 'Pending', rejection_reason = NULL, updated_at = ?, prereq_validation_json = ?,
+                        prereq_ack_by_student = ?, prereq_ack_reason = ?
+                    WHERE id = ?
+                    """,
+                    (now, snap_json, ack_by_student, ack_reason_val, plan_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE enrollment_plans
+                    SET status = 'Pending', rejection_reason = NULL, updated_at = ?, prereq_validation_json = ?
+                    WHERE id = ?
+                    """,
+                    (now, snap_json, plan_id),
+                )
         else:
             cur.execute(
                 """

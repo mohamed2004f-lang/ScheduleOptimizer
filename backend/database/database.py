@@ -8,15 +8,64 @@ import logging
 from contextlib import contextmanager
 from pathlib import Path
 
+try:
+    from sqlalchemy.engine.url import make_url
+except ImportError:  # pragma: no cover - يُفضّل تثبيت SQLAlchemy (انظر requirements.txt)
+    make_url = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
-# مسار قاعدة البيانات
-BASE_DIR = Path(__file__).parent
-DB_FILE = os.environ.get('DATABASE_PATH', str(BASE_DIR / 'mechanical.db'))
+# تحميل config أولاً لضمان قراءة .env (DATABASE_URL / DATABASE_PATH)
+try:
+    from config import DATABASE_PATH, DATABASE_URL
+except ImportError:
+    BASE_DIR = Path(__file__).parent
+    DATABASE_PATH = os.environ.get("DATABASE_PATH", str(BASE_DIR / "mechanical.db"))
+    DATABASE_URL = os.environ.get("DATABASE_URL") or f"sqlite:///{Path(DATABASE_PATH).resolve().as_posix()}"
+
+# جذر المشروع (ScheduleOptimizer): backend/database/database.py -> .. -> ..
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _sqlite_db_file_path() -> str:
+    """مسار ملف SQLite الفعلي لاستخدامه مع sqlite3 (وليس لـ PostgreSQL)."""
+    if make_url is None:
+        return str(Path(DATABASE_PATH).resolve())
+    u = make_url(DATABASE_URL)
+    if u.get_backend_name() != "sqlite":
+        return str(Path(DATABASE_PATH).resolve())
+    if not u.database or u.database == ":memory:":
+        return str(Path(DATABASE_PATH).resolve())
+    p = Path(u.database)
+    if not p.is_absolute():
+        p = (PROJECT_ROOT / p).resolve()
+    else:
+        p = p.resolve()
+    return str(p)
+
+
+DB_FILE = _sqlite_db_file_path()
 
 
 def get_connection(db_file=None):
-    """إنشاء اتصال بقاعدة البيانات مع تفعيل Foreign Keys"""
+    """إنشاء اتصال بقاعدة البيانات مع تفعيل Foreign Keys (SQLite فقط في وقت التشغيل حالياً)."""
+    if make_url is not None:
+        try:
+            if make_url(DATABASE_URL).get_backend_name() != "sqlite":
+                raise RuntimeError(
+                    "DATABASE_URL يشير إلى محرك غير SQLite. تشغيل التطبيق يعتمد حالياً على sqlite3 فقط. "
+                    "استخدم sqlite:///... أو DATABASE_PATH للتشغيل، وأنشئ المخطط على Postgres عبر Alembic عند الحاجة. "
+                    "راجع docs/POSTGRES_MIGRATION.md"
+                )
+        except Exception:
+            if not str(DATABASE_URL).startswith("sqlite"):
+                raise RuntimeError(
+                    "DATABASE_URL غير صالح أو غير مدعوم لتشغيل التطبيق. راجع docs/POSTGRES_MIGRATION.md"
+                ) from None
+    elif not str(DATABASE_URL).startswith("sqlite"):
+        raise RuntimeError(
+            "DATABASE_URL يجب أن يشير إلى SQLite لتشغيل التطبيق حالياً. راجع docs/POSTGRES_MIGRATION.md"
+        )
     db_path = db_file or DB_FILE
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -55,6 +104,14 @@ TABLES_SCHEMA = {
             university_number TEXT,
             email TEXT,
             phone TEXT,
+            join_year TEXT,
+            enrollment_status TEXT NOT NULL DEFAULT 'active',
+            status_changed_at TEXT,
+            status_reason TEXT,
+            status_changed_term TEXT,
+            status_changed_year TEXT,
+            graduation_plan TEXT DEFAULT '',
+            join_term TEXT DEFAULT '',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
@@ -66,6 +123,8 @@ TABLES_SCHEMA = {
             course_code TEXT,
             units INTEGER DEFAULT 0 CHECK (units >= 0),
             grading_mode TEXT NOT NULL DEFAULT 'partial_final' CHECK (grading_mode IN ('partial_final','final_total_only')),
+            category TEXT NOT NULL DEFAULT 'required',
+            is_archived INTEGER NOT NULL DEFAULT 0 CHECK (is_archived IN (0, 1)),
             description TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
@@ -388,7 +447,203 @@ TABLES_SCHEMA = {
             FOREIGN KEY (student_id) REFERENCES students(student_id)
                 ON DELETE CASCADE ON UPDATE CASCADE
         )
-    """
+    """,
+
+    'activity_log': """
+        CREATE TABLE IF NOT EXISTS activity_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            actor TEXT,
+            action TEXT NOT NULL,
+            details TEXT
+        )
+    """,
+
+    'enrollment_plans': """
+        CREATE TABLE IF NOT EXISTS enrollment_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT NOT NULL,
+            semester TEXT NOT NULL,
+            status TEXT NOT NULL,
+            rejection_reason TEXT,
+            created_at TEXT,
+            updated_at TEXT,
+            prereq_validation_json TEXT,
+            prereq_ack_by_student INTEGER NOT NULL DEFAULT 0,
+            prereq_ack_reason TEXT DEFAULT '',
+            FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE
+        )
+    """,
+
+    'enrollment_plan_items': """
+        CREATE TABLE IF NOT EXISTS enrollment_plan_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id INTEGER NOT NULL,
+            course_name TEXT NOT NULL,
+            FOREIGN KEY (plan_id) REFERENCES enrollment_plans(id) ON DELETE CASCADE
+        )
+    """,
+
+    'users': """
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL,
+            student_id TEXT,
+            instructor_id INTEGER,
+            is_supervisor INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1
+        )
+    """,
+
+    'user_invites': """
+        CREATE TABLE IF NOT EXISTS user_invites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            email TEXT NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            used_at TEXT
+        )
+    """,
+
+    'notifications': """
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT,
+            is_read INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        )
+    """,
+
+    'system_settings': """
+        CREATE TABLE IF NOT EXISTS system_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """,
+
+    'academic_calendar': """
+        CREATE TABLE IF NOT EXISTS academic_calendar (
+            academic_year TEXT NOT NULL,
+            term TEXT NOT NULL,
+            item_no INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            event_date TEXT,
+            is_deleted INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT,
+            PRIMARY KEY (academic_year, term, item_no)
+        )
+    """,
+
+    'instructors': """
+        CREATE TABLE IF NOT EXISTS instructors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'internal',
+            email TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1
+        )
+    """,
+
+    'student_supervisor': """
+        CREATE TABLE IF NOT EXISTS student_supervisor (
+            student_id TEXT NOT NULL,
+            instructor_id INTEGER NOT NULL,
+            PRIMARY KEY (student_id, instructor_id),
+            FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE,
+            FOREIGN KEY (instructor_id) REFERENCES instructors(id) ON DELETE CASCADE
+        )
+    """,
+
+    'student_exceptions': """
+        CREATE TABLE IF NOT EXISTS student_exceptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            note TEXT,
+            created_by TEXT,
+            created_at TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1
+        )
+    """,
+
+    'academic_rules': """
+        CREATE TABLE IF NOT EXISTS academic_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_key TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL,
+            description TEXT,
+            category TEXT,
+            value_number REAL,
+            value_text TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1
+        )
+    """,
+
+    'registration_requests': """
+        CREATE TABLE IF NOT EXISTS registration_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT NOT NULL,
+            term TEXT DEFAULT '',
+            course_name TEXT NOT NULL,
+            action TEXT NOT NULL CHECK (action IN ('add','drop')),
+            status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','executed')),
+            requested_by TEXT DEFAULT '',
+            reviewed_by TEXT DEFAULT '',
+            request_reason TEXT,
+            review_note TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE,
+            FOREIGN KEY (course_name) REFERENCES courses(course_name) ON DELETE SET NULL
+        )
+    """,
+
+    'app_settings': """
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value_json TEXT,
+            updated_at TEXT,
+            updated_by TEXT
+        )
+    """,
+
+    'grade_drafts': """
+        CREATE TABLE IF NOT EXISTS grade_drafts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            semester TEXT NOT NULL,
+            course_name TEXT NOT NULL,
+            instructor_id INTEGER NOT NULL,
+            grading_mode TEXT NOT NULL DEFAULT 'partial_final' CHECK (grading_mode IN ('partial_final','final_total_only')),
+            status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft','Submitted','Approved','Rejected')),
+            created_at TEXT,
+            updated_at TEXT,
+            submitted_at TEXT,
+            approved_at TEXT,
+            approved_by TEXT,
+            note TEXT,
+            UNIQUE (semester, course_name, instructor_id)
+        )
+    """,
+
+    'grade_draft_items': """
+        CREATE TABLE IF NOT EXISTS grade_draft_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            draft_id INTEGER NOT NULL,
+            student_id TEXT NOT NULL,
+            partial REAL CHECK (partial IS NULL OR (partial >= 0 AND partial <= 100)),
+            final REAL CHECK (final IS NULL OR (final >= 0 AND final <= 100)),
+            total REAL CHECK (total IS NULL OR (total >= 0 AND total <= 100)),
+            computed_total REAL CHECK (computed_total IS NULL OR (computed_total >= 0 AND computed_total <= 100)),
+            updated_at TEXT,
+            UNIQUE (draft_id, student_id),
+            FOREIGN KEY (draft_id) REFERENCES grade_drafts(id) ON DELETE CASCADE
+        )
+    """,
 }
 
 # ============================================
@@ -408,6 +663,16 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_grade_audit_student ON grade_audit(student_id)",
     "CREATE INDEX IF NOT EXISTS idx_attendance_student ON attendance_records(student_id)",
     "CREATE INDEX IF NOT EXISTS idx_attendance_course ON attendance_records(course_name)",
+    "CREATE INDEX IF NOT EXISTS idx_enrollment_plans_student_sem ON enrollment_plans(student_id, semester)",
+    "CREATE INDEX IF NOT EXISTS idx_enrollment_items_plan ON enrollment_plan_items(plan_id)",
+    "CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)",
+    "CREATE INDEX IF NOT EXISTS idx_academic_calendar_year_term ON academic_calendar(academic_year, term)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_courses_code_unique ON courses(course_code) WHERE COALESCE(course_code,'') <> ''",
+    "CREATE INDEX IF NOT EXISTS idx_student_supervisor_instructor ON student_supervisor(instructor_id)",
+    "CREATE INDEX IF NOT EXISTS idx_reg_requests_status_created ON registration_requests(status, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_reg_requests_student ON registration_requests(student_id)",
+    "CREATE INDEX IF NOT EXISTS idx_reg_changes_student_time ON registration_changes_log(student_id, action_time)",
 ]
 
 
@@ -427,44 +692,103 @@ def ensure_tables(db_file=None):
             except Exception as e:
                 logger.warning(f"Could not create table {table_name}: {e}")
 
-        # ترقية جدول الطلاب لإضافة حالة القيد إن لم تكن موجودة
+        # ترقيات أعمدة جدول الطلاب لقواعد بيانات قديمة
         try:
             cols = [r[1] for r in cur.execute("PRAGMA table_info(students)").fetchall()]
-            if "enrollment_status" not in cols:
-                cur.execute(
-                    "ALTER TABLE students ADD COLUMN enrollment_status TEXT NOT NULL DEFAULT 'active'"
-                )
-            if "status_changed_at" not in cols:
-                cur.execute(
-                    "ALTER TABLE students ADD COLUMN status_changed_at TEXT"
-                )
-            if "status_reason" not in cols:
-                cur.execute(
-                    "ALTER TABLE students ADD COLUMN status_reason TEXT"
-                )
-            if "status_changed_term" not in cols:
-                cur.execute("ALTER TABLE students ADD COLUMN status_changed_term TEXT")
-            if "status_changed_year" not in cols:
-                cur.execute("ALTER TABLE students ADD COLUMN status_changed_year TEXT")
-            if "graduation_plan" not in cols:
-                cur.execute(
-                    "ALTER TABLE students ADD COLUMN graduation_plan TEXT DEFAULT ''"
-                )
-            if "join_term" not in cols:
-                cur.execute(
-                    "ALTER TABLE students ADD COLUMN join_term TEXT DEFAULT ''"
-                )
+            migrations = [
+                ("join_year", "ALTER TABLE students ADD COLUMN join_year TEXT"),
+                ("university_number", "ALTER TABLE students ADD COLUMN university_number TEXT"),
+                ("email", "ALTER TABLE students ADD COLUMN email TEXT"),
+                ("phone", "ALTER TABLE students ADD COLUMN phone TEXT"),
+                ("updated_at", "ALTER TABLE students ADD COLUMN updated_at TEXT"),
+                (
+                    "enrollment_status",
+                    "ALTER TABLE students ADD COLUMN enrollment_status TEXT NOT NULL DEFAULT 'active'",
+                ),
+                ("status_changed_at", "ALTER TABLE students ADD COLUMN status_changed_at TEXT"),
+                ("status_reason", "ALTER TABLE students ADD COLUMN status_reason TEXT"),
+                ("status_changed_term", "ALTER TABLE students ADD COLUMN status_changed_term TEXT"),
+                ("status_changed_year", "ALTER TABLE students ADD COLUMN status_changed_year TEXT"),
+                ("graduation_plan", "ALTER TABLE students ADD COLUMN graduation_plan TEXT DEFAULT ''"),
+                ("join_term", "ALTER TABLE students ADD COLUMN join_term TEXT DEFAULT ''"),
+            ]
+            for col, stmt in migrations:
+                if col not in cols:
+                    try:
+                        cur.execute(stmt)
+                    except Exception:
+                        pass
         except Exception as e:
-            # في حال فشل التعديل (مثلاً في قواعد بيانات قديمة جداً)، نكتفي بالتسجيل ولا نوقف التطبيق
-            logger.warning(f"Could not migrate students table with enrollment status columns: {e}")
-        
+            logger.warning(f"Could not migrate students table columns: {e}")
+
         # إنشاء الفهارس
         for idx_stmt in INDEXES:
             try:
                 cur.execute(idx_stmt)
             except Exception as e:
                 logger.warning(f"Could not create index: {e}")
-        
+
+        # بقية الترقيات الخفيفة (كانت في utilities.ensure_tables)
+        try:
+            cols = [r[1] for r in cur.execute("PRAGMA table_info(courses)").fetchall()]
+        except Exception:
+            cols = []
+        if "is_archived" not in cols:
+            try:
+                cur.execute("ALTER TABLE courses ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")
+            except Exception:
+                pass
+
+        try:
+            cur.execute(
+                "ALTER TABLE academic_calendar ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0"
+            )
+        except Exception:
+            pass
+
+        for stmt in (
+            "ALTER TABLE users ADD COLUMN instructor_id INTEGER",
+            "ALTER TABLE users ADD COLUMN is_supervisor INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
+        ):
+            try:
+                cur.execute(stmt)
+            except Exception:
+                pass
+
+        for stmt in (
+            "ALTER TABLE courses ADD COLUMN category TEXT NOT NULL DEFAULT 'required'",
+            "ALTER TABLE courses ADD COLUMN grading_mode TEXT NOT NULL DEFAULT 'partial_final'",
+        ):
+            try:
+                cur.execute(stmt)
+            except Exception:
+                pass
+
+        try:
+            eco = [r[1] for r in cur.execute("PRAGMA table_info(enrollment_plans)").fetchall()]
+        except Exception:
+            eco = []
+        if "prereq_validation_json" not in eco:
+            try:
+                cur.execute("ALTER TABLE enrollment_plans ADD COLUMN prereq_validation_json TEXT")
+            except Exception:
+                pass
+        if "prereq_ack_by_student" not in eco:
+            try:
+                cur.execute(
+                    "ALTER TABLE enrollment_plans ADD COLUMN prereq_ack_by_student INTEGER NOT NULL DEFAULT 0"
+                )
+            except Exception:
+                pass
+        if "prereq_ack_reason" not in eco:
+            try:
+                cur.execute(
+                    "ALTER TABLE enrollment_plans ADD COLUMN prereq_ack_reason TEXT DEFAULT ''"
+                )
+            except Exception:
+                pass
+
         conn.commit()
         logger.info("Database tables and indexes ensured")
 

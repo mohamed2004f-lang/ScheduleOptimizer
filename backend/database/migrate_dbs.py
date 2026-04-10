@@ -41,10 +41,10 @@ for p in found:
     shutil.copy2(p, os.path.join(backup_dir, os.path.relpath(p, ROOT).replace(os.sep, '_')))
 print('Backups written to', backup_dir)
 
-# Ensure central DB exists and has tables (use utilities.ensure_tables)
-sys.path.append(os.path.abspath(os.path.join(ROOT, 'backend', 'services')))
+# Ensure central DB exists and has tables (مصدر المخطط: backend.database.database)
+sys.path.insert(0, ROOT)
 try:
-    from backend.services.utilities import ensure_tables
+    from backend.database.database import ensure_tables
     ensure_tables()
     print('ensure_tables executed on central DB (if needed)')
 except Exception as e:
