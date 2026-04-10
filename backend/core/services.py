@@ -85,8 +85,11 @@ class StudentService:
     @staticmethod
     def _students_columns(cur) -> List[str]:
         """قائمة أعمدة جدول students (للتوافق مع قواعد قديمة بدون أعمدة حالة القيد)."""
-        cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
-        return cols
+        try:
+            from backend.database.database import fetch_table_columns
+        except ImportError:
+            from ..database.database import fetch_table_columns
+        return fetch_table_columns(cur.connection, "students")
 
     @staticmethod
     def get_all_students(active_only: bool = False) -> List[Dict]:
@@ -425,7 +428,7 @@ class StudentService:
         try:
             with get_connection() as conn:
                 cur = conn.cursor()
-                cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
+                cols = StudentService._students_columns(cur)
                 has_term_col = "status_changed_term" in cols
                 has_year_col = "status_changed_year" in cols
                 if status in ("withdrawn", "suspended") and has_term_col and has_year_col:

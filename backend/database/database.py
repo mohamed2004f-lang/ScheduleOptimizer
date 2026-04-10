@@ -3,6 +3,7 @@
 يتضمن Foreign Keys و Constraints لضمان سلامة البيانات
 """
 import os
+import re
 import sqlite3
 import logging
 from contextlib import contextmanager
@@ -47,25 +48,278 @@ def _sqlite_db_file_path() -> str:
 DB_FILE = _sqlite_db_file_path()
 
 
-def get_connection(db_file=None):
-    """إنشاء اتصال SQLite للتشغيل مع تفعيل Foreign Keys.
+def is_postgresql() -> bool:
+    """True إذا كان ``DATABASE_URL`` يشير إلى PostgreSQL (تشغيل التطبيق على Postgres)."""
+    if make_url is None:
+        return False
+    try:
+        return make_url(DATABASE_URL).get_backend_name() == "postgresql"
+    except Exception:
+        return False
 
-    يمكن أن يكون ``DATABASE_URL`` موجّهاً إلى PostgreSQL (لـ Alembic/النقل)؛
-    التطبيق يقرأ ويكتب دائماً من ملف SQLite ``DATABASE_PATH`` / ``DB_FILE`` حتى اكتمال دعم Postgres في الكود.
+
+def _pg_conninfo() -> str:
+    """سلسلة اتصال libpq/psycopg من عنوان SQLAlchemy."""
+    u = make_url(DATABASE_URL)
+    s = u.render_as_string(hide_password=False)
+    if "+psycopg" in s:
+        return s.replace("postgresql+psycopg", "postgresql", 1)
+    return s
+
+
+def fetch_table_columns(conn, table_name: str) -> list[str]:
+    """أسماء أعمدة جدول (بديل PRAGMA table_info) لـ SQLite وPostgreSQL."""
+    cur = conn.cursor()
+    if is_postgresql():
+        cur.execute(
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = 'public' AND lower(table_name) = lower(%s)
+            ORDER BY ordinal_position
+            """,
+            (table_name,),
+        )
+        rows = cur.fetchall()
+        out = []
+        for r in rows:
+            if isinstance(r, dict):
+                out.append(r.get("column_name") or list(r.values())[0])
+            else:
+                out.append(r[0])
+        return out
+    cur.execute(f"PRAGMA table_info({table_name})")
+    return [r[1] for r in cur.fetchall()]
+
+
+def table_exists(conn, name: str) -> bool:
+    """بديل sqlite_master لمعرفة وجود جدول."""
+    cur = conn.cursor()
+    if is_postgresql():
+        cur.execute(
+            """
+            SELECT 1 FROM pg_catalog.pg_tables
+            WHERE schemaname = 'public' AND lower(tablename) = lower(%s)
+            """,
+            (name,),
+        )
+        return cur.fetchone() is not None
+    cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?", (name,))
+    return cur.fetchone() is not None
+
+
+def _adapt_pg_execute_sql(sql: str) -> str:
+    from backend.database.pg_sql import adapt_sqlite_sql_to_postgres, qmarks_to_percent
+
+    s = adapt_sqlite_sql_to_postgres(sql)
+    s = s.replace("excluded.", "EXCLUDED.")
+    return qmarks_to_percent(s)
+
+
+class _PgRowAdapter:
     """
-    if make_url is not None:
-        try:
-            if make_url(DATABASE_URL).get_backend_name() != "sqlite":
-                logger.info(
-                    "DATABASE_URL يشير إلى محرك غير SQLite — تشغيل Flask يستخدم SQLite: %s",
-                    db_file or DB_FILE,
-                )
-        except Exception:
-            pass
+    يجمع بين وصول psycopg dict_row بالاسم وبين فهرسة رقمية مثل sqlite3.Row (row[0]).
+    """
+
+    __slots__ = ("_d", "_seq")
+
+    def __init__(self, mapping: dict, column_order: tuple[str, ...]):
+        self._d = mapping
+        self._seq = tuple(mapping.get(c) for c in column_order)
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._seq[key]
+        return self._d[key]
+
+    def __iter__(self):
+        return iter(self._seq)
+
+    def __len__(self):
+        return len(self._seq)
+
+    def keys(self):
+        return self._d.keys()
+
+    def get(self, key, default=None):
+        return self._d.get(key, default)
+
+
+def _wrap_pg_row(row, description) -> object:
+    """يحوّل صف dict_row إلى _PgRowAdapter عند الحاجة."""
+    if row is None or description is None:
+        return row
+    if not isinstance(row, dict):
+        return row
+    colnames = tuple(d[0] for d in description)
+    return _PgRowAdapter(row, colnames)
+
+
+class _PgCursorWrapper:
+    """محوّل ? إلى %s و lastrowid لـ psycopg."""
+
+    def __init__(self, raw, parent: "_PgConnectionWrapper"):
+        self._c = raw
+        self._parent = parent
+        self._lastrowid = None
+        self.description = None
+
+    @property
+    def connection(self):
+        """توافق مع sqlite3.Cursor.connection."""
+        return self._parent
+
+    def execute(self, sql, params=None):
+        self._lastrowid = None
+        s_in = sql.strip()
+        # محاكاة PRAGMA / sqlite_master لعدم تعديل كل الخدمات يدوياً
+        pm = re.match(
+            r"^\s*PRAGMA\s+table_info\s*\(\s*['\"]?([a-zA-Z0-9_]+)['\"]?\s*\)\s*$",
+            s_in,
+            re.I | re.DOTALL,
+        )
+        if pm:
+            tname = pm.group(1)
+            q = (
+                "SELECT ordinal_position AS cid, column_name AS name, data_type AS type, "
+                "0 AS notnull, NULL AS dflt_value, 0 AS pk "
+                "FROM information_schema.columns WHERE table_schema = 'public' "
+                "AND lower(table_name) = lower(%s) ORDER BY ordinal_position"
+            )
+            self._c.execute(q, (tname,))
+            self.description = self._c.description
+            return self
+
+        nrm = re.sub(r"\s+", " ", s_in)
+        if re.match(
+            r"^SELECT\s+name\s+FROM\s+sqlite_master\s+WHERE\s+type\s*=\s*['\"]table['\"]",
+            nrm,
+            re.I,
+        ):
+            self._c.execute(
+                "SELECT tablename AS name FROM pg_catalog.pg_tables "
+                "WHERE schemaname = 'public' ORDER BY tablename"
+            )
+            self.description = self._c.description
+            return self
+
+        sm = re.match(
+            r"^\s*SELECT\s+name\s+FROM\s+sqlite_master\s+WHERE\s+type\s*=\s*['\"]table['\"]\s+AND\s+name\s*=\s*\?\s*$",
+            s_in,
+            re.I,
+        )
+        if sm and params:
+            self._c.execute(
+                "SELECT tablename AS name FROM pg_catalog.pg_tables "
+                "WHERE schemaname = 'public' AND lower(tablename) = lower(%s)",
+                (params[0],),
+            )
+            self.description = self._c.description
+            return self
+
+        sm1 = re.match(
+            r"^\s*SELECT\s+1\s+FROM\s+sqlite_master\s+WHERE\s+type\s*=\s*['\"]table['\"]\s+AND\s+name\s*=\s*['\"]([a-zA-Z0-9_]+)['\"]\s*$",
+            s_in,
+            re.I,
+        )
+        if sm1:
+            t = sm1.group(1)
+            self._c.execute(
+                "SELECT 1 AS x FROM pg_catalog.pg_tables "
+                "WHERE schemaname = 'public' AND lower(tablename) = lower(%s)",
+                (t,),
+            )
+            self.description = self._c.description
+            return self
+
+        q = _adapt_pg_execute_sql(sql)
+        if params is None:
+            self._c.execute(q)
+        else:
+            self._c.execute(q, params)
+        self.description = self._c.description
+        uq = q.lstrip().upper()
+        if uq.startswith("INSERT"):
+            try:
+                self._c.execute("SELECT lastval()")
+                r = self._c.fetchone()
+                if r is not None:
+                    if isinstance(r, dict):
+                        lv = r.get("lastval")
+                        if lv is None and r:
+                            lv = next(iter(r.values()))
+                        self._lastrowid = int(lv) if lv is not None else None
+                    else:
+                        self._lastrowid = int(r[0])
+            except Exception:
+                self._lastrowid = None
+        return self
+
+    def executemany(self, sql, seq_of_params):
+        self._lastrowid = None
+        q = _adapt_pg_execute_sql(sql)
+        self._c.executemany(q, seq_of_params)
+        self.description = self._c.description
+        return self
+
+    def fetchone(self):
+        return _wrap_pg_row(self._c.fetchone(), self._c.description)
+
+    def fetchall(self):
+        desc = self._c.description
+        return [_wrap_pg_row(r, desc) for r in self._c.fetchall()]
+
+    @property
+    def lastrowid(self):
+        return self._lastrowid
+
+
+class _PgConnectionWrapper:
+    def __init__(self, raw_conn):
+        self._conn = raw_conn
+
+    def cursor(self):
+        return _PgCursorWrapper(self._conn.cursor(), self)
+
+    def commit(self):
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
+    def close(self):
+        return self._conn.close()
+
+    def execute(self, sql, params=None):
+        cur = self.cursor()
+        cur.execute(sql, params)
+        return cur
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self._conn.commit()
+        else:
+            self._conn.rollback()
+        self._conn.close()
+        return False
+
+
+def get_connection(db_file=None):
+    """اتصال قاعدة البيانات: PostgreSQL عبر psycopg أو SQLite كما سابقاً."""
+    if is_postgresql():
+        import psycopg
+        from psycopg.rows import dict_row
+
+        if db_file and Path(db_file).resolve() != Path(DB_FILE).resolve():
+            logger.warning("تجاهل db_file مع PostgreSQL: %s", db_file)
+        conn = psycopg.connect(_pg_conninfo(), row_factory=dict_row)
+        return _PgConnectionWrapper(conn)
+
     db_path = db_file or DB_FILE
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    # تفعيل Foreign Keys
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -672,8 +926,60 @@ INDEXES = [
 ]
 
 
+def _ensure_tables_postgresql() -> None:
+    """ترقيات خفيفة على PostgreSQL (إنشاء المخطط الأساسي عبر ``alembic upgrade head``)."""
+    pg_alters = [
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS join_year TEXT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS university_number TEXT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS email TEXT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS phone TEXT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS updated_at TEXT",
+        (
+            "ALTER TABLE students ADD COLUMN IF NOT EXISTS enrollment_status TEXT "
+            "NOT NULL DEFAULT 'active'"
+        ),
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS status_changed_at TEXT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS status_reason TEXT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS status_changed_term TEXT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS status_changed_year TEXT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS graduation_plan TEXT DEFAULT ''",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS join_term TEXT DEFAULT ''",
+        "ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_archived INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS is_deleted INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS instructor_id INTEGER",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_supervisor INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE courses ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'required'",
+        "ALTER TABLE courses ADD COLUMN IF NOT EXISTS grading_mode TEXT NOT NULL DEFAULT 'partial_final'",
+        "ALTER TABLE enrollment_plans ADD COLUMN IF NOT EXISTS prereq_validation_json TEXT",
+        (
+            "ALTER TABLE enrollment_plans ADD COLUMN IF NOT EXISTS prereq_ack_by_student "
+            "INTEGER NOT NULL DEFAULT 0"
+        ),
+        "ALTER TABLE enrollment_plans ADD COLUMN IF NOT EXISTS prereq_ack_reason TEXT DEFAULT ''",
+    ]
+    with get_connection() as conn:
+        cur = conn.cursor()
+        for stmt in pg_alters:
+            try:
+                cur.execute(stmt)
+            except Exception as e:
+                logger.debug("postgresql alter skipped: %s", e)
+        for idx_stmt in INDEXES:
+            try:
+                cur.execute(idx_stmt)
+            except Exception as e:
+                logger.warning(f"Could not create index on PostgreSQL: {e}")
+        conn.commit()
+    logger.info("PostgreSQL compatibility migrations applied")
+
+
 def ensure_tables(db_file=None):
     """إنشاء جميع الجداول والفهارس إذا لم تكن موجودة"""
+    if is_postgresql():
+        _ensure_tables_postgresql()
+        return
+
     db_path = db_file or DB_FILE
     os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
     
@@ -794,6 +1100,9 @@ def migrate_to_foreign_keys(db_file=None):
     ترحيل قاعدة البيانات القديمة لدعم Foreign Keys
     هذه الدالة تنشئ جداول جديدة وتنقل البيانات
     """
+    if is_postgresql():
+        return
+
     db_path = db_file or DB_FILE
     
     with get_connection(db_path) as conn:

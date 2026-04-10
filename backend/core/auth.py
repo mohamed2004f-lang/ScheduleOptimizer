@@ -367,7 +367,13 @@ def init_auth(app):
                             (username, username),
                         ).fetchone()
                     if row:
-                        _, pw_hash, db_role, db_student_id, db_instructor_id, db_is_active, db_is_supervisor = row
+                        # فهرس ثابت يعمل مع sqlite3.Row و psycopg (dict_row)
+                        pw_hash = row[1]
+                        db_role = row[2]
+                        db_student_id = row[3]
+                        db_instructor_id = row[4]
+                        db_is_active = row[5]
+                        db_is_supervisor = row[6]
                         if int(db_is_active or 1) == 0:
                             return jsonify({
                                 'status': 'error',
@@ -396,6 +402,8 @@ def init_auth(app):
                                 is_supervisor_flag = 0
             except Exception:
                 logger.exception("login: failed to query users table")
+                if users_count is None:
+                    users_count = 0
 
         # 2) إذا لم يكن هناك أي مستخدم في جدول users (bootstrap فقط)،
         #    اسمح بحساب admin من ملف الإعدادات كحالة خاصة أولية.
@@ -592,5 +600,13 @@ def init_auth(app):
         }), 501
     
     app.register_blueprint(auth_bp, url_prefix='/auth')
-    
+
+    # fetch + JSON لا يمرّران دائماً بتحقق CSRF كما في النماذج؛ إعفاء تسجيل الدخول يمنع 400 بدون سبب واضح
+    try:
+        csrf = app.extensions.get("csrf")
+        if csrf is not None:
+            csrf.exempt(login)
+    except Exception:
+        logger.exception("csrf.exempt(auth.login) failed")
+
     return auth_bp

@@ -5,6 +5,8 @@ from typing import Optional
 
 from flask import Blueprint, jsonify, render_template, request, session, current_app, abort
 from backend.core.auth import login_required, role_required
+from backend.database.database import table_exists
+
 from .utilities import DB_FILE, get_connection, get_current_term, log_activity
 
 admin_bp = Blueprint("admin", __name__)
@@ -70,38 +72,28 @@ def admin_summary():
     with get_connection() as conn:
         cur = conn.cursor()
 
-        def _table_exists(name: str) -> bool:
-            try:
-                row = cur.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
-                    (name,),
-                ).fetchone()
-                return row is not None
-            except Exception:
-                return False
-
         try:
-            if _table_exists("students"):
+            if table_exists(conn, "students"):
                 data["students"] = cur.execute(
                     "SELECT COUNT(*) FROM students"
                 ).fetchone()[0]
-            if _table_exists("courses"):
+            if table_exists(conn, "courses"):
                 data["courses"] = cur.execute(
                     "SELECT COUNT(*) FROM courses"
                 ).fetchone()[0]
-            if _table_exists("schedule"):
+            if table_exists(conn, "schedule"):
                 data["schedule_rows"] = cur.execute(
                     "SELECT COUNT(*) FROM schedule"
                 ).fetchone()[0]
-            if _table_exists("registrations"):
+            if table_exists(conn, "registrations"):
                 data["registrations"] = cur.execute(
                     "SELECT COUNT(*) FROM registrations"
                 ).fetchone()[0]
-            if _table_exists("grades"):
+            if table_exists(conn, "grades"):
                 data["grades"] = cur.execute(
                     "SELECT COUNT(*) FROM grades"
                 ).fetchone()[0]
-            if _table_exists("exams"):
+            if table_exists(conn, "exams"):
                 row = cur.execute(
                     "SELECT COUNT(*) FROM exams"
                 ).fetchone()
@@ -114,11 +106,11 @@ def admin_summary():
                     "SELECT COUNT(*) FROM exams WHERE exam_type = 'final'"
                 ).fetchone()
                 data["exams_final"] = row_f[0] if row_f else 0
-            if _table_exists("conflict_report"):
+            if table_exists(conn, "conflict_report"):
                 data["conflict_report_rows"] = cur.execute(
                     "SELECT COUNT(*) FROM conflict_report"
                 ).fetchone()[0]
-            if _table_exists("exam_conflicts"):
+            if table_exists(conn, "exam_conflicts"):
                 data["exam_conflicts_rows"] = cur.execute(
                     "SELECT COUNT(*) FROM exam_conflicts"
                 ).fetchone()[0]

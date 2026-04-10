@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify, send_file, session, render_template
 from backend.core.auth import login_required, role_required
+from backend.database.database import is_postgresql
 from .utilities import (
     get_connection,
     table_to_dicts,
@@ -15,7 +16,6 @@ from .utilities import (
     get_exam_schedule_updated_at,
     touch_exam_schedule_updated_at,
 )
-import sqlite3
 import json
 import logging
 from datetime import datetime
@@ -33,6 +33,8 @@ def _should_snapshot_exam_export():
 
 
 def _ensure_exam_schedule_version_tables(cur):
+    if is_postgresql():
+        return
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS exam_schedule_versions (
@@ -65,7 +67,7 @@ def _ensure_exam_schedule_version_tables(cur):
         cur.execute(
             "ALTER TABLE exam_schedule_versions ADD COLUMN is_published INTEGER NOT NULL DEFAULT 0"
         )
-    except sqlite3.OperationalError:
+    except Exception:
         pass
 
 
@@ -96,11 +98,11 @@ def _create_exam_schedule_version(
 
     rows = cur.execute(
         """
-        SELECT rowid, COALESCE(course_name,''), COALESCE(exam_date,''), COALESCE(exam_time,''),
+        SELECT id, COALESCE(course_name,''), COALESCE(exam_date,''), COALESCE(exam_time,''),
                COALESCE(room,''), COALESCE(instructor,''), exam_id
         FROM exams
         WHERE exam_type = ?
-        ORDER BY exam_date, exam_time, course_name, rowid
+        ORDER BY exam_date, exam_time, course_name, id
         """,
         (exam_type,),
     ).fetchall()
@@ -470,7 +472,7 @@ def list_exam_rows(exam_type):
         return jsonify([])
     with get_connection() as conn:
         cur = conn.cursor()
-        rows = cur.execute("SELECT rowid AS exam_id, course_name, exam_date, exam_time, room, instructor FROM exams WHERE exam_type=? ORDER BY exam_date, exam_time", (exam_type,)).fetchall()
+        rows = cur.execute("SELECT id AS exam_id, course_name, exam_date, exam_time, room, instructor FROM exams WHERE exam_type=? ORDER BY exam_date, exam_time", (exam_type,)).fetchall()
         return jsonify([dict(r) for r in rows])
 
 @exams_bp.route('/<exam_type>/check_conflicts', methods=['POST'])
@@ -531,7 +533,7 @@ def check_exam_conflicts(exam_type):
                     })
             
             # حذف الإضافة المؤقتة
-            cur.execute("DELETE FROM exams WHERE rowid = ?", (temp_rowid,))
+            cur.execute("DELETE FROM exams WHERE id = ?", (temp_rowid,))
             conn.commit()
             
             return jsonify({
@@ -599,7 +601,7 @@ def delete_exam_row(exam_type):
         return jsonify({"status":"error","message":"exam_id required"}), 400
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute('DELETE FROM exams WHERE rowid = ? AND exam_type = ?', (exam_id, exam_type))
+        cur.execute('DELETE FROM exams WHERE id = ? AND exam_type = ?', (exam_id, exam_type))
         conn.commit()
     try:
         touch_exam_schedule_updated_at(exam_type)
@@ -904,7 +906,7 @@ def update_exam_row(exam_type):
         return jsonify({"status":"error","message":"no fields to update"}), 400
     sets = ','.join([f"{k} = ?" for k in fields.keys()])
     params = list(fields.values()) + [exam_id, exam_type]
-    q = f"UPDATE exams SET {sets} WHERE rowid = ? AND exam_type = ?"
+    q = f"UPDATE exams SET {sets} WHERE id = ? AND exam_type = ?"
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(q, params)
@@ -952,7 +954,7 @@ def bulk_update_exam_rows(exam_type):
                 continue
             sets = ','.join([f"{k} = ?" for k in fields.keys()])
             params = list(fields.values()) + [exam_id, exam_type]
-            q = f"UPDATE exams SET {sets} WHERE rowid = ? AND exam_type = ?"
+            q = f"UPDATE exams SET {sets} WHERE id = ? AND exam_type = ?"
             try:
                 cur.execute(q, params)
             except Exception:
@@ -997,7 +999,7 @@ def student_exam_rows(exam_type):
     with get_connection() as conn:
         cur = conn.cursor()
         q = """
-        SELECT e.rowid AS exam_id,
+        SELECT e.id AS exam_id,
                e.course_name,
                e.exam_date,
                e.exam_time,

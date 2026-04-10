@@ -1,6 +1,7 @@
 from flask import Flask, render_template, redirect, url_for, jsonify, session, request, abort
 from flask_wtf.csrf import CSRFProtect, CSRFError
-from backend.database.database import ensure_tables, DB_FILE
+from backend.database.database import ensure_tables, DB_FILE, is_postgresql
+from config import DATABASE_URL
 
 # Blueprints
 from backend.services.students import students_bp
@@ -39,8 +40,11 @@ app.config.setdefault("WTF_CSRF_HEADERS", ["X-CSRFToken", "X-CSRF-Token"])
 csrf = CSRFProtect()
 csrf.init_app(app)
 
-# عرض مسار قاعدة البيانات في الكونسول لمراجعة أنه نفس الملف الذي يحتوي بياناتك
-print("Using DB_FILE:", os.path.abspath(DB_FILE))
+# عرض اتصال قاعدة البيانات في الكونسول
+if is_postgresql():
+    print("Using DATABASE_URL (PostgreSQL):", DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else "(configured)")
+else:
+    print("Using DB_FILE:", os.path.abspath(DB_FILE))
 
 # فحص سريع: أكثر من نسخة mechanical.db داخل المشروع (باستثناء نسخ احتياطية ومجلدات أدوات ونسخ متداخلة Users/...)
 _SKIP_WALK_DIRS = frozenset(

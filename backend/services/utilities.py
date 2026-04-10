@@ -12,6 +12,7 @@ from backend.database.database import (
     ALLOWED_TABLES,
     ensure_tables as ensure_schema,
     get_connection,
+    is_postgresql,
     table_to_dicts,
 )
 
@@ -256,6 +257,13 @@ def get_current_term(conn=None, db_file=DB_FILE):
 
 def df_from_query(query, params=(), db_file=DB_FILE):
     """إرجاع DataFrame من استعلام SQL"""
+    if is_postgresql():
+        from backend.database.pg_sql import adapt_sqlite_sql_to_postgres, qmarks_to_percent
+
+        q = qmarks_to_percent(adapt_sqlite_sql_to_postgres(query))
+        with get_connection(db_file) as conn:
+            raw = getattr(conn, "_conn", conn)
+            return pd.read_sql_query(q, raw, params=list(params))
     with sqlite3.connect(db_file) as conn:
         return pd.read_sql_query(query, conn, params=params)
 

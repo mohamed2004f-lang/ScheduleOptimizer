@@ -9,6 +9,8 @@ import logging
 import json
 import datetime
 import base64
+from backend.database.database import is_postgresql
+
 from .utilities import (
     get_connection,
     table_to_dicts,
@@ -466,7 +468,8 @@ def instructor_conflicts():
     """
     try:
         with get_connection() as conn:
-            conn.row_factory = sqlite3.Row
+            if not is_postgresql():
+                conn.row_factory = sqlite3.Row
             cur = conn.cursor()
             rows = cur.execute(
                 """
