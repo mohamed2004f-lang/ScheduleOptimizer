@@ -3,9 +3,234 @@
 """
 from __future__ import annotations
 
+import re
+import unicodedata
 from typing import Any, Callable
 
 from flask import jsonify, request, session
+
+
+def _attendance_course_key(name: str) -> str:
+    """مفتاح مطابقة أسماء المقررات: تطبيع Unicode، دمج المسافات، ثم lower (مثل قائمة الجدول مقابل باراميتر الرابط)."""
+    if not name:
+        return ""
+    t = unicodedata.normalize("NFKC", str(name).strip())
+    t = re.sub(r"\s+", " ", t)
+    return t.lower()
+
+
+def _dedupe_course_list(names: list) -> list:
+    seen = set()
+    ordered = []
+    for item in names:
+        if not item:
+            continue
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(item)
+    return ordered
+
+
+def _collapse_ws(s: str) -> str:
+    if not s:
+        return ""
+    t = unicodedata.normalize("NFKC", str(s).strip())
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _sqlite_norm_semester_expr(col: str) -> str:
+    """طمس مسافات متعددة داخل حقل الفصل في SQL (SQLite/PostgreSQL REPLACE)."""
+    t = f"TRIM(COALESCE({col}, ''))"
+    for _ in range(8):
+        t = f"REPLACE({t}, '  ', ' ')"
+    return t
+
+
+def build_schedule_semester_match(column: str, term_name: str | None, term_year: str | None) -> tuple[str, list]:
+    """
+    شرط AND لمطابقة schedule.<semester> مع إعدادات الفصل الحالي.
+    يدعم: النص المدمج، الاسم أو السنة منفردين، ونصاً في الجدول يحتوي الاسم والسنة (LIKE).
+    """
+    n = _collapse_ws(str(term_name or ""))
+    y = _collapse_ws(str(term_year or ""))
+    f = _collapse_ws(f"{n} {y}")
+    candidates: list[str] = []
+    for c in (f, n, y):
+        if c and c not in candidates:
+            candidates.append(c)
+    if not candidates:
+        return ("0=1", [])
+    norm = _sqlite_norm_semester_expr(column)
+    in_ph = ",".join("?" * len(candidates))
+    parts: list[str] = [f"{norm} IN ({in_ph})"]
+    bind: list = list(candidates)
+    if n and y and len(n) >= 2 and len(y) >= 2:
+        # %% لـ psycopg: النسبة المئوية الحرفية في LIKE (لا تُخلط مع %s)
+        parts.append(f"({norm} LIKE '%%' || ? || '%%' AND {norm} LIKE '%%' || ? || '%%')")
+        bind.extend([n, y])
+    return ("(" + " OR ".join(parts) + ")", bind)
+
+
+def semester_matches_term_settings(
+    schedule_semester: str,
+    term_name: str | None,
+    term_year: str | None,
+) -> bool:
+    """
+    مطابقة نص semester في الجدول مع إعدادات الفصل الحالي.
+    يبدأ بما يعادل شرط SQL، ثم يخفّف لمقارنة أرقام السنة (25-26 مقابل 2025-2026) عند تطابق اسم الفصل إن وُجد.
+    """
+    ss = _collapse_ws(schedule_semester)
+    n = _collapse_ws(str(term_name or ""))
+    y = _collapse_ws(str(term_year or ""))
+    # صف جدول بلا نص فصل: نعتمد وجود المقرر في الجدول مع التسجيل (لا نستبعد لغياب عمود الفصل).
+    if not ss:
+        return True
+
+    f = _collapse_ws(f"{n} {y}")
+    candidates: list[str] = []
+    for c in (f, n, y):
+        if c and c not in candidates:
+            candidates.append(c)
+    if candidates:
+        if ss in candidates:
+            return True
+        if n and y and len(n) >= 2 and len(y) >= 2 and n in ss and y in ss:
+            return True
+
+    if n and n not in ss:
+        return False
+    if not y:
+        return True
+    if y in ss:
+        return True
+    for part in re.findall(r"\d{2,4}", y):
+        if len(part) >= 2 and part in ss:
+            return True
+    if len(y) >= 4 and y.startswith("20"):
+        if y[2:4] in ss:
+            return True
+        if y[:4] in ss.replace(" ", ""):
+            return True
+    m_ss = re.search(r"(\d{2})\s*[-–/]\s*(\d{2})", ss)
+    if m_ss:
+        a, b = m_ss.group(1), m_ss.group(2)
+        if a in y or b in y or f"20{a}" in y or f"20{b}" in y:
+            return True
+    return False
+
+
+def _collapse_ws_equal(a: str, b: str) -> bool:
+    return _collapse_ws(a) == _collapse_ws(b)
+
+
+def fallback_distinct_attendance_courses(
+    cur,
+    term_name: str | None,
+    term_year: str | None,
+    *,
+    student_id: str | None = None,
+    supervisor_instructor_id: int | None = None,
+    instructor_name: str | None = None,
+) -> list[str]:
+    """
+    عند فشل JOIN SQL بين التسجيل والجدول (اختلاف صيغة الفصل/الاسم): مطابقة المقرر بمفتاح موحّد + فصل مرن + اختياري مدرّس الجدول.
+    """
+    where_extra = ""
+    params: list = []
+    if student_id:
+        where_extra = " AND r.student_id = ?"
+        params.append(student_id)
+    if supervisor_instructor_id is not None:
+        where_extra += " AND r.student_id IN (SELECT student_id FROM student_supervisor WHERE instructor_id = ?)"
+        params.append(supervisor_instructor_id)
+
+    try:
+        reg_rows = cur.execute(
+            f"""
+            SELECT DISTINCT TRIM(COALESCE(r.course_name, ''))
+            FROM registrations r
+            {_SQL_REG_ACTIVE_STUDENT}
+            WHERE TRIM(COALESCE(r.course_name, '')) <> ''
+            {where_extra}
+            """,
+            tuple(params),
+        ).fetchall()
+    except Exception:
+        reg_rows = []
+
+    try:
+        sch_rows = cur.execute(
+            """
+            SELECT TRIM(COALESCE(course_name, '')),
+                   TRIM(COALESCE(semester, '')),
+                   TRIM(COALESCE(instructor, ''))
+            FROM schedule
+            WHERE TRIM(COALESCE(course_name, '')) <> ''
+            """
+        ).fetchall()
+    except Exception:
+        sch_rows = []
+
+    by_key: dict[str, list[tuple[str, str]]] = {}
+    for cn, sem, inst in sch_rows:
+        if not cn:
+            continue
+        k = _attendance_course_key(cn)
+        if k not in by_key:
+            by_key[k] = []
+        by_key[k].append((sem, inst))
+
+    matched: list[str] = []
+    seen: set[str] = set()
+    for (rname,) in reg_rows:
+        if not rname:
+            continue
+        rk = _attendance_course_key(rname)
+        for sem, inst in by_key.get(rk, []):
+            if not semester_matches_term_settings(sem, term_name, term_year):
+                continue
+            if instructor_name is not None:
+                if not _collapse_ws_equal(inst, instructor_name):
+                    continue
+            if rname.lower() not in seen:
+                seen.add(rname.lower())
+                matched.append(rname)
+            break
+
+    return sorted(matched, key=lambda x: (x or "").lower())
+
+
+def course_rows_with_meta(cur, course_names: list[str]) -> list[tuple]:
+    """(course_name, course_code, units) لكل اسم مقرر."""
+    rows: list[tuple] = []
+    for name in course_names:
+        try:
+            r = cur.execute(
+                """
+                SELECT COALESCE(c.course_code,''), COALESCE(c.units,0)
+                FROM courses c
+                WHERE LOWER(TRIM(COALESCE(c.course_name,''))) = LOWER(TRIM(?))
+                LIMIT 1
+                """,
+                (name,),
+            ).fetchone()
+        except Exception:
+            r = None
+        if r:
+            rows.append((name, r[0], int(r[1] or 0)))
+        else:
+            rows.append((name, "", 0))
+    return rows
+
+
+# طالب نشط فقط — لا تُعرض مقررات من تسجيلات قديمة لطلبة غير مسجّلين أو منسحبين
+_SQL_REG_ACTIVE_STUDENT = (
+    "INNER JOIN students st ON st.student_id = r.student_id "
+    "AND COALESCE(st.enrollment_status, 'active') = 'active'"
+)
 
 
 def collect_attendance_export_state(
@@ -66,14 +291,16 @@ def collect_attendance_export_state(
         cur = conn.cursor()
 
         user_role = session.get("user_role")
-        semester_label = None
+        term_name, term_year = get_current_term(conn=conn)
+        semester_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
+        sem_match_sql, sem_match_params = build_schedule_semester_match("s.semester", term_name, term_year)
+        # صفوف بلا فصل في schedule تُقبل أيضاً (كثير من النشرات لا تملأ semester)
+        sched_sem_and = f" AND (({sem_match_sql}) OR TRIM(COALESCE(s.semester, '')) = '')"
         allowed_course_set = None
         allowed_student_filter_sql = None
         allowed_student_filter_params: list = []
 
         if user_role in ("student", "supervisor", "instructor"):
-            term_name, term_year = get_current_term(conn=conn)
-            semester_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
             if not semester_label:
                 return {
                     "kind": "http",
@@ -111,17 +338,26 @@ def collect_attendance_export_state(
             allowed_course_set = set(
                 c[0]
                 for c in cur.execute(
-                    """
-                    SELECT DISTINCT s.course_name
-                    FROM schedule s
-                    JOIN registrations r ON r.course_name = s.course_name
-                    WHERE s.semester = ?
-                      AND r.student_id = ?
-                      AND COALESCE(s.course_name,'') <> ''
+                    f"""
+                    SELECT DISTINCT r.course_name
+                    FROM registrations r
+                    {_SQL_REG_ACTIVE_STUDENT}
+                    INNER JOIN schedule s
+                      ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
+                    {sched_sem_and}
+                    WHERE r.student_id = ?
+                      AND COALESCE(r.course_name, '') <> ''
                     """,
-                    (semester_label, sid_session),
+                    tuple(sem_match_params) + (sid_session,),
                 ).fetchall()
+                if c and c[0]
             )
+            if not allowed_course_set:
+                allowed_course_set = set(
+                    fallback_distinct_attendance_courses(
+                        cur, term_name, term_year, student_id=sid_session
+                    )
+                )
 
         elif user_role == "supervisor" or (
             user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1
@@ -147,19 +383,28 @@ def collect_attendance_export_state(
             allowed_course_set = set(
                 c[0]
                 for c in cur.execute(
-                    """
-                    SELECT DISTINCT s.course_name
-                    FROM schedule s
-                    JOIN registrations r ON r.course_name = s.course_name
-                    WHERE s.semester = ?
-                      AND r.student_id IN (
+                    f"""
+                    SELECT DISTINCT r.course_name
+                    FROM registrations r
+                    {_SQL_REG_ACTIVE_STUDENT}
+                    INNER JOIN schedule s
+                      ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
+                    {sched_sem_and}
+                    WHERE r.student_id IN (
                           SELECT student_id FROM student_supervisor WHERE instructor_id = ?
                       )
-                      AND COALESCE(s.course_name,'') <> ''
+                      AND COALESCE(r.course_name, '') <> ''
                     """,
-                    (semester_label, instructor_id),
+                    tuple(sem_match_params) + (instructor_id,),
                 ).fetchall()
+                if c and c[0]
             )
+            if not allowed_course_set:
+                allowed_course_set = set(
+                    fallback_distinct_attendance_courses(
+                        cur, term_name, term_year, supervisor_instructor_id=int(instructor_id)
+                    )
+                )
 
         elif user_role == "instructor":
             instructor_id = session.get("instructor_id")
@@ -201,22 +446,52 @@ def collect_attendance_export_state(
             allowed_course_set = set(
                 c[0]
                 for c in cur.execute(
-                    """
-                    SELECT DISTINCT course_name
-                    FROM schedule
-                    WHERE semester = ?
-                      AND instructor = ?
-                      AND COALESCE(course_name,'') <> ''
+                    f"""
+                    SELECT DISTINCT r.course_name
+                    FROM registrations r
+                    {_SQL_REG_ACTIVE_STUDENT}
+                    INNER JOIN schedule s
+                      ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
+                    {sched_sem_and}
+                     AND TRIM(COALESCE(s.instructor, '')) = TRIM(?)
+                    WHERE COALESCE(r.course_name, '') <> ''
                     """,
-                    (semester_label, instructor_name),
+                    tuple(sem_match_params) + (instructor_name,),
                 ).fetchall()
+                if c and c[0]
             )
-
-        if semester_label is None:
-            term_name, term_year = get_current_term(conn=conn)
-            semester_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
+            if not allowed_course_set:
+                allowed_course_set = set(
+                    fallback_distinct_attendance_courses(
+                        cur, term_name, term_year, instructor_name=instructor_name
+                    )
+                )
 
         def _fetch_all_courses():
+            """مقررات يوجد لها طالب نشط مسجّل + صف جدول للفصل الحالي (لا احتياط بلا فصل)."""
+            sem = (semester_label or "").strip()
+            if sem:
+                names: list = []
+                try:
+                    rows = cur.execute(
+                        f"""
+                        SELECT DISTINCT r.course_name
+                        FROM registrations r
+                        {_SQL_REG_ACTIVE_STUDENT}
+                        INNER JOIN schedule s
+                          ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
+                        {sched_sem_and}
+                        WHERE COALESCE(r.course_name, '') <> ''
+                        ORDER BY r.course_name
+                        """,
+                        tuple(sem_match_params),
+                    ).fetchall()
+                    names = [r[0] for r in rows if r[0]]
+                except Exception:
+                    names = []
+                if not names:
+                    names = fallback_distinct_attendance_courses(cur, term_name, term_year)
+                return _dedupe_course_list(names)
             names = []
             try:
                 rows = cur.execute(
@@ -244,20 +519,47 @@ def collect_attendance_export_state(
             return ordered
 
         all_courses = _fetch_all_courses()
-        normalized_map = {c.lower(): c for c in all_courses}
+        normalized_map: dict[str, str] = {}
+        for c in all_courses:
+            k = _attendance_course_key(c)
+            if k and k not in normalized_map:
+                normalized_map[k] = c
+
+        # تقييد الإدارة بمجموعة المقررات المستخرجة من التسجيلات + الجدول (all_courses)
+        if user_role in ("admin", "admin_main", "head_of_department") and (semester_label or "").strip():
+            allowed_course_set = set(all_courses)
 
         if not selected_courses:
-            reg_rows = cur.execute(
-                "SELECT DISTINCT course_name FROM registrations WHERE COALESCE(course_name,'') <> '' ORDER BY course_name"
-            ).fetchall()
+            sem = (semester_label or "").strip()
+            if sem:
+                try:
+                    reg_rows = cur.execute(
+                        f"""
+                        SELECT DISTINCT r.course_name
+                        FROM registrations r
+                        {_SQL_REG_ACTIVE_STUDENT}
+                        INNER JOIN schedule s
+                          ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
+                        {sched_sem_and}
+                        WHERE COALESCE(r.course_name, '') <> ''
+                        ORDER BY r.course_name
+                        """,
+                        tuple(sem_match_params),
+                    ).fetchall()
+                except Exception:
+                    reg_rows = []
+            else:
+                reg_rows = []
             auto_courses = [r[0] for r in reg_rows if r[0]]
+            if not auto_courses and sem:
+                auto_courses = fallback_distinct_attendance_courses(cur, term_name, term_year)
             if not auto_courses:
                 auto_courses = all_courses
             selected_courses = auto_courses
         else:
             resolved = []
             for val in selected_courses:
-                match = normalized_map.get(val.lower())
+                match = normalized_map.get(_attendance_course_key(val))
                 if match:
                     resolved.append(match)
                 else:
@@ -266,7 +568,7 @@ def collect_attendance_export_state(
             seen_rc = set()
             filtered = []
             for c in resolved:
-                key = c.lower()
+                key = _attendance_course_key(c)
                 if key in seen_rc:
                     continue
                 seen_rc.add(key)
@@ -274,11 +576,17 @@ def collect_attendance_export_state(
             selected_courses = filtered
 
         if allowed_course_set is not None:
-            allowed_by_lower = {c.lower(): c for c in allowed_course_set if c}
+            allowed_by_key: dict[str, str] = {}
+            for c in allowed_course_set:
+                if not c:
+                    continue
+                k = _attendance_course_key(c)
+                if k and k not in allowed_by_key:
+                    allowed_by_key[k] = c
             selected_courses = [
-                allowed_by_lower.get(c.lower())
+                allowed_by_key.get(_attendance_course_key(c))
                 for c in selected_courses
-                if c and c.lower() in allowed_by_lower
+                if c and _attendance_course_key(c) in allowed_by_key
             ]
 
         if not selected_courses:
@@ -307,11 +615,11 @@ def collect_attendance_export_state(
 
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         reg_query = f"""
-            SELECT r.course_name, r.student_id, COALESCE(s.student_name, '') AS student_name
+            SELECT r.course_name, r.student_id, COALESCE(st.student_name, '') AS student_name
             FROM registrations r
-            LEFT JOIN students s ON s.student_id = r.student_id
+            {_SQL_REG_ACTIVE_STUDENT}
             {where_clause}
-            ORDER BY r.course_name, COALESCE(s.student_name,''), r.student_id
+            ORDER BY r.course_name, COALESCE(st.student_name,''), r.student_id
         """
         reg_rows = cur.execute(reg_query, params).fetchall()
         for row in reg_rows:

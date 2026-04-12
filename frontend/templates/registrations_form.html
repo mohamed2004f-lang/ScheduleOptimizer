@@ -394,7 +394,11 @@ function openRegPrereqDetailModal(){
 })();
 
 /* helpers */
-async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok,status:r.status,json:j}; }
+async function fetchJSON(url, opts){
+  const r = await fetch(url, { credentials: 'include', cache: 'no-store', ...opts });
+  const j = await r.json().catch(()=>null);
+  return { ok: r.ok, status: r.status, json: j };
+}
 function el(tag, cls, html){ const e=document.createElement(tag); if(cls) e.className=cls; if(html!==undefined) e.innerHTML=html; return e; }
 function setEditMsg(kind, text){ document.getElementById('editMsg').innerHTML = `<div class="alert alert-${kind} p-2 mb-0">${text}</div>`; setTimeout(()=>document.getElementById('editMsg').innerHTML='',3000);}
 function studentTotalUnits(s){
@@ -608,17 +612,20 @@ async function loadData(){
     return { course_name: c.course_name || '', course_code: c.course_code || c.code || '', units: (c.units==null?0:c.units) };
   }) : [];
 
-  const regs = await fetchJSON('/get_registrations');
+  const regs = await fetchJSON('/get_registrations?_=' + encodeURIComponent(String(Date.now())));
   let rows = Array.isArray(regs.json) ? regs.json : [];
   const map = {};
   rows.forEach(r => {
-    const sid = r.student_id || r.studentId || r.student || r['student_id'];
-    const cn = r.course_name || r.course || r['course_name'];
+    const sid = String(r.student_id ?? r.studentId ?? r.student ?? r['student_id'] ?? '').trim();
+    const cn = String(r.course_name ?? r.course ?? r['course_name'] ?? '').trim();
     if(!sid || !cn) return;
     map[sid] = map[sid] || [];
     map[sid].push(cn);
   });
-  STUDENTS.forEach(s => { s.registrations = map[s.student_id] || []; });
+  STUDENTS.forEach(s => {
+    const k = String(s.student_id || '').trim();
+    s.registrations = map[k] || [];
+  });
 
   // تحميل توثيق التوقيع للفصل الحالي ودمجه في القائمة
   try {
@@ -1064,10 +1071,15 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
     const res = await fetchJSON('/save_registrations', {
       method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
     });
-    if(res.ok){
-      // تحديث جذري للقائمة الفعلية من السيرفر حتى تظهر التغييرات مباشرة
-      try { await loadData(); } catch(e) {}
-      regEditBaseline = regs.slice();
+    if(res.ok && (res.json?.status === 'ok' || res.json?.status === undefined)){
+      // تحديث فوري للصف المعروض (لا يعتمد على كاش المتصفح لـ GET)
+      const sidSaved = String(payload.student_id || '').trim();
+      const regsNext = regs.slice();
+      const rowSt = STUDENTS.find(s => String(s.student_id || '').trim() === sidSaved);
+      if (rowSt) rowSt.registrations = regsNext;
+      regEditBaseline = regsNext.slice();
+      applyListFilters();
+      try { await loadData(); } catch(e) { console.warn('loadData after save', e); }
       if (res.json?.prereq_validation) updateRegPrereqBanner(res.json.prereq_validation);
       let saveMsg = 'تم حفظ التغييرات وتحديث القائمة';
       const pw = res.json?.prereq_warnings || [];

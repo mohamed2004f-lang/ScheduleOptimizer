@@ -342,7 +342,6 @@ def init_auth(app):
         if get_connection is not None:
             try:
                 with get_connection() as conn:
-                    conn.row_factory = None
                     cur = conn.cursor()
                     # احصل على عدد المستخدمين لمعرفة ما إذا كان الجدول فارغاً
                     try:
@@ -354,7 +353,7 @@ def init_auth(app):
                     # دعم تسجيل الدخول بـ username أو student_id أو instructor_id
                     row = cur.execute(
                         "SELECT username, password_hash, role, student_id, instructor_id, "
-                        "COALESCE(is_active,1), COALESCE(is_supervisor,0) "
+                        "COALESCE(is_active,1) AS is_active, COALESCE(is_supervisor,0) AS is_supervisor "
                         "FROM users WHERE username = ?",
                         (username,),
                     ).fetchone()
@@ -362,7 +361,7 @@ def init_auth(app):
                         # fallback: student_id or instructor_id
                         row = cur.execute(
                             "SELECT username, password_hash, role, student_id, instructor_id, "
-                            "COALESCE(is_active,1), COALESCE(is_supervisor,0) "
+                            "COALESCE(is_active,1) AS is_active, COALESCE(is_supervisor,0) AS is_supervisor "
                             "FROM users WHERE student_id = ? OR CAST(instructor_id AS TEXT) = ?",
                             (username, username),
                         ).fetchone()

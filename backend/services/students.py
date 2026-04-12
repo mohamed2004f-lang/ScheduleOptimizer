@@ -18,12 +18,21 @@ from .utilities import (
     get_current_term,
 )
 from .prereg_helpers import evaluate_courses_prereqs
-from .attendance_export_core import collect_attendance_export_state as _collect_attendance_export_state
+from .attendance_export_core import (
+    build_schedule_semester_match,
+    collect_attendance_export_state as _collect_attendance_export_state,
+    course_rows_with_meta,
+    fallback_distinct_attendance_courses,
+)
+from backend.database.database import is_postgresql
 
 students_bp = Blueprint("students", __name__)
 
 
 def _ensure_registration_signature_tables(cur):
+    # على PostgreSQL الجداول تُنشأ عبر Alembic (DDL متوافق)؛ إنشاء SQLite هنا يفشل (AUTOINCREMENT إلخ).
+    if is_postgresql():
+        return
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS registration_signatures (
@@ -294,7 +303,7 @@ def _course_registration_count_rows(conn):
         q = """
         SELECT r.course_name,
                COALESCE(c.course_code, '') AS course_code,
-               COALESCE(c.units, '') AS units,
+               COALESCE(c.units, 0) AS units,
                COUNT(DISTINCT r.student_id) AS student_count
         FROM registrations r
         LEFT JOIN courses c ON c.course_name = r.course_name
@@ -307,7 +316,7 @@ def _course_registration_count_rows(conn):
         q = """
         SELECT r.course_name,
                COALESCE(c.course_code, '') AS course_code,
-               COALESCE(c.units, '') AS units,
+               COALESCE(c.units, 0) AS units,
                COUNT(DISTINCT r.student_id) AS student_count
         FROM registrations r
         LEFT JOIN courses c ON c.course_name = r.course_name
@@ -321,7 +330,7 @@ def _course_registration_count_rows(conn):
         items.append({
             "course_name": (d.get("course_name") or "").strip(),
             "course_code": (d.get("course_code") or "").strip(),
-            "units": d.get("units"),
+            "units": int(d.get("units") or 0),
             "student_count": int(d.get("student_count") or 0),
         })
     return items
@@ -2143,6 +2152,16 @@ def save_registrations():
         current_app.logger.exception("save_registrations outer failure")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+def _json_no_cache(payload, code: int = 200):
+    """استجابة JSON مع منع التخزين المؤقت (تسجيلات فعلية تتغير بعد الحفظ)."""
+    resp = jsonify(payload)
+    resp.headers["Cache-Control"] = "no-store, max-age=0, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    if code != 200:
+        return resp, code
+    return resp
+
+
 @students_bp.route("/get_registrations")
 @login_required
 def get_registrations():
@@ -2160,23 +2179,23 @@ def get_registrations():
                 if user_role == "student":
                     sid_session = normalize_sid(session.get("student_id") or session.get("user"))
                     if not sid_session:
-                        return jsonify([]), 200
+                        return _json_no_cache([])
                     if student_id and student_id != sid_session:
-                        return jsonify([]), 403
+                        return _json_no_cache([], 403)
                     student_id = sid_session
 
                 # منع إرجاع جميع التسجيلات لهذه الأدوار
                 if not student_id:
-                    return jsonify([]), 200
+                    return _json_no_cache([])
 
                 if not allowed_student_ids or student_id not in allowed_student_ids:
-                    return jsonify([]), 200
+                    return _json_no_cache([])
 
                 rows = cur.execute(
                     "SELECT course_name FROM registrations WHERE student_id = ?",
                     (student_id,),
                 ).fetchall()
-                return jsonify([r[0] for r in rows])
+                return _json_no_cache([r[0] for r in rows])
 
             # unrestricted (admin/admin_main)
             if student_id:
@@ -2184,15 +2203,15 @@ def get_registrations():
                     "SELECT course_name FROM registrations WHERE student_id = ?",
                     (student_id,),
                 ).fetchall()
-                return jsonify([r[0] for r in rows])
+                return _json_no_cache([r[0] for r in rows])
 
             rows = cur.execute(
                 "SELECT student_id, course_name FROM registrations",
             ).fetchall()
-            return jsonify([{"student_id": r[0], "course_name": r[1]} for r in rows])
+            return _json_no_cache([{"student_id": r[0], "course_name": r[1]} for r in rows])
     except Exception:
         current_app.logger.exception("get_registrations failed")
-        return jsonify([])
+        return _json_no_cache([])
 
 @students_bp.route("/delete_registrations", methods=["POST"])
 @role_required("admin")
@@ -2884,8 +2903,17 @@ def _attendance_status_label_ar(code: str) -> str:
     return code or "—"
 
 
-def _attendance_print_context(course: str):
+def _normalize_attendance_print_orientation() -> str:
+    o = (request.args.get("orientation") or "landscape").strip().lower()
+    return o if o in ("portrait", "landscape") else "landscape"
+
+
+def _attendance_print_context(course: str, *, print_orientation: str | None = None):
     """يُرجع (None, dict للقالب) أو (tuple استجابة خطأ, None)."""
+    if print_orientation is None:
+        print_orientation = _normalize_attendance_print_orientation()
+    elif print_orientation not in ("portrait", "landscape"):
+        print_orientation = "landscape"
     course = (course or "").strip()
     if not course:
         return (jsonify({"status": "error", "message": "حدد اسم المقرر"}), 400), None
@@ -2952,6 +2980,7 @@ def _attendance_print_context(course: str):
         "table_rows": table_rows,
         "student_count": len(students_list),
         "generated_at": generated_at,
+        "print_orientation": print_orientation,
     }
     return None, ctx
 
@@ -2961,7 +2990,10 @@ def _attendance_print_context(course: str):
 def export_attendance_print():
     """معاينة رسمية للطباعة (مقرر واحد)."""
     try:
-        err, ctx = _attendance_print_context(request.args.get("course") or "")
+        err, ctx = _attendance_print_context(
+            request.args.get("course") or "",
+            print_orientation=_normalize_attendance_print_orientation(),
+        )
         if err is not None:
             return err
         return render_template("attendance_sheet_print.html", **ctx)
@@ -2975,7 +3007,10 @@ def export_attendance_print():
 def export_attendance_pdf():
     """تصدير PDF لمقرر واحد."""
     try:
-        err, ctx = _attendance_print_context(request.args.get("course") or "")
+        err, ctx = _attendance_print_context(
+            request.args.get("course") or "",
+            print_orientation=_normalize_attendance_print_orientation(),
+        )
         if err is not None:
             return err
         html = render_template("attendance_sheet_print.html", **ctx)
@@ -2990,27 +3025,46 @@ def export_attendance_pdf():
 @login_required
 def attendance_allowed_courses():
     """
-    تُرجع قائمة المقررات المسموح للأستاذ/المشرف بتصدير حضورها في الفصل الحالي فقط.
-    تُستخدم لملء قائمة المقررات في صفحة تصدير الحضور.
+    قائمة مقررات الحضور: مبنية على التسجيلات الفعلية (registrations) للفصل الحالي،
+    مربوطة بصف الجدول schedule بنفس الفصل مع تطبيع اسم المقرر (ليس مساواة حرفية صارمة).
     """
     user_role = session.get("user_role") or ""
     if not user_role:
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
 
-    # Admin: unrestricted
+    # الإدارة: مقررات لها تسجيل فعلي للفصل الحالي، مربوطة بالجدول بعد تطبيع اسم المقرر (كما في التصدير)
     if user_role in ("admin", "admin_main", "head_of_department"):
         with get_connection() as conn:
             cur = conn.cursor()
+            term_name, term_year = get_current_term(conn=conn)
+            semester_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
+            if not semester_label:
+                return jsonify(
+                    {"status": "error", "message": "لا يمكن تحديد الفصل الحالي", "code": "FORBIDDEN"}
+                ), 403
+            sem_sql, sem_bind = build_schedule_semester_match("s.semester", term_name, term_year)
+            sched_sem_and = f" AND (({sem_sql}) OR TRIM(COALESCE(s.semester, '')) = '')"
             rows = cur.execute(
-                """
-                SELECT DISTINCT course_name,
-                       COALESCE(course_code,'') AS course_code,
-                       COALESCE(units,0) AS units
-                FROM courses
-                WHERE COALESCE(course_name,'') <> ''
-                ORDER BY course_name
-                """
+                f"""
+                SELECT DISTINCT r.course_name,
+                       COALESCE(c.course_code,'') AS course_code,
+                       COALESCE(c.units,0) AS units
+                FROM registrations r
+                INNER JOIN students st ON st.student_id = r.student_id
+                    AND COALESCE(st.enrollment_status, 'active') = 'active'
+                INNER JOIN schedule s
+                  ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
+                {sched_sem_and}
+                LEFT JOIN courses c
+                  ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(c.course_name, '')))
+                WHERE COALESCE(r.course_name, '') <> ''
+                ORDER BY r.course_name
+                """,
+                tuple(sem_bind),
             ).fetchall()
+            if not rows:
+                fb = fallback_distinct_attendance_courses(cur, term_name, term_year)
+                rows = course_rows_with_meta(cur, fb)
         courses = [
             {"course_name": r[0], "course_code": r[1], "units": int(r[2] or 0)}
             for r in rows
@@ -3029,28 +3083,40 @@ def attendance_allowed_courses():
         if not semester_label:
             return jsonify({"status": "error", "message": "لا يمكن تحديد الفصل الحالي", "code": "FORBIDDEN"}), 403
 
+        sem_sql, sem_bind = build_schedule_semester_match("s.semester", term_name, term_year)
+        sched_sem_and = f" AND (({sem_sql}) OR TRIM(COALESCE(s.semester, '')) = '')"
+
         if effective_supervisor:
             instructor_id = session.get("instructor_id")
             if not instructor_id:
                 return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
 
             rows = cur.execute(
-                """
-                SELECT DISTINCT s.course_name,
+                f"""
+                SELECT DISTINCT r.course_name,
                                 COALESCE(c.course_code,'') AS course_code,
                                 COALESCE(c.units,0) AS units
-                FROM schedule s
-                JOIN registrations r ON r.course_name = s.course_name
-                LEFT JOIN courses c ON c.course_name = s.course_name
-                WHERE s.semester = ?
-                  AND r.student_id IN (
+                FROM registrations r
+                INNER JOIN students st ON st.student_id = r.student_id
+                    AND COALESCE(st.enrollment_status, 'active') = 'active'
+                INNER JOIN schedule s
+                  ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
+                {sched_sem_and}
+                LEFT JOIN courses c
+                  ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(c.course_name, '')))
+                WHERE r.student_id IN (
                       SELECT student_id FROM student_supervisor WHERE instructor_id = ?
                   )
-                  AND COALESCE(s.course_name,'') <> ''
-                ORDER BY s.course_name
+                  AND COALESCE(r.course_name, '') <> ''
+                ORDER BY r.course_name
                 """,
-                (semester_label, instructor_id),
+                tuple(sem_bind) + (instructor_id,),
             ).fetchall()
+            if not rows:
+                fb = fallback_distinct_attendance_courses(
+                    cur, term_name, term_year, supervisor_instructor_id=int(instructor_id)
+                )
+                rows = course_rows_with_meta(cur, fb)
 
         elif user_role == "instructor":
             instructor_id = session.get("instructor_id")
@@ -3066,19 +3132,29 @@ def attendance_allowed_courses():
 
             instructor_name = instr_row[0]
             rows = cur.execute(
-                """
-                SELECT DISTINCT s.course_name,
+                f"""
+                SELECT DISTINCT r.course_name,
                                 COALESCE(c.course_code,'') AS course_code,
                                 COALESCE(c.units,0) AS units
-                FROM schedule s
-                LEFT JOIN courses c ON c.course_name = s.course_name
-                WHERE s.semester = ?
-                  AND s.instructor = ?
-                  AND COALESCE(s.course_name,'') <> ''
-                ORDER BY s.course_name
+                FROM registrations r
+                INNER JOIN students st ON st.student_id = r.student_id
+                    AND COALESCE(st.enrollment_status, 'active') = 'active'
+                INNER JOIN schedule s
+                  ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
+                {sched_sem_and}
+                 AND TRIM(COALESCE(s.instructor, '')) = TRIM(?)
+                LEFT JOIN courses c
+                  ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(c.course_name, '')))
+                WHERE COALESCE(r.course_name, '') <> ''
+                ORDER BY r.course_name
                 """,
-                (semester_label, instructor_name),
+                tuple(sem_bind) + (instructor_name,),
             ).fetchall()
+            if not rows:
+                fb = fallback_distinct_attendance_courses(
+                    cur, term_name, term_year, instructor_name=instructor_name
+                )
+                rows = course_rows_with_meta(cur, fb)
 
         else:
             return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
@@ -3144,28 +3220,46 @@ def eligible_courses():
                         completed.append({**c, "grade": g})
                 return jsonify({"eligible": [], "completed": completed, "schedule_published": False})
 
-            schedule_course_names = set(
-                r[0] for r in cur.execute("SELECT DISTINCT course_name FROM schedule WHERE COALESCE(course_name,'') <> ''").fetchall()
-            )
+            schedule_course_names = {
+                str(r[0]).strip()
+                for r in cur.execute(
+                    "SELECT DISTINCT course_name FROM schedule WHERE COALESCE(course_name,'') <> ''"
+                ).fetchall()
+                if str(r[0] or "").strip()
+            }
             try:
-                all_rows = cur.execute("SELECT course_name, COALESCE(course_code, ''), COALESCE(units, 0) FROM courses").fetchall()
-                all_courses = [{"course_name": r[0], "course_code": r[1], "units": r[2]} for r in all_rows]
+                all_rows = cur.execute(
+                    "SELECT course_name, COALESCE(course_code, ''), COALESCE(units, 0) FROM courses"
+                ).fetchall()
+                all_courses = [
+                    {"course_name": str(r[0]).strip(), "course_code": r[1], "units": r[2]}
+                    for r in all_rows
+                    if str(r[0] or "").strip()
+                ]
             except Exception:
                 all_rows = cur.execute("SELECT DISTINCT course_name FROM schedule").fetchall()
-                all_courses = [{"course_name": r[0], "course_code": "", "units": 0} for r in all_rows]
+                all_courses = [
+                    {"course_name": str(r[0]).strip(), "course_code": "", "units": 0}
+                    for r in all_rows
+                    if str(r[0] or "").strip()
+                ]
 
-            all_courses = [c for c in all_courses if c["course_name"] in schedule_course_names]
+            # مقررات وردت في الجدول الدراسي دون صف مطابق في courses (أو اختلاف مسافات)
+            by_name = {c["course_name"]: c for c in all_courses}
+            for scn in schedule_course_names:
+                if scn not in by_name:
+                    by_name[scn] = {"course_name": scn, "course_code": "", "units": 0}
+            all_courses = [by_name[k] for k in sorted(by_name.keys()) if k in schedule_course_names]
 
-            try:
-                grade_rows = cur.execute("""
-                    SELECT course_name, grade FROM grades
-                    WHERE student_id = ?
-                    GROUP BY course_name
-                """, (sid,)).fetchall()
-            except Exception:
-                grade_rows = cur.execute("SELECT course_name, grade FROM grades WHERE student_id = ?", (sid,)).fetchall()
-
-            grade_map = {r[0]: r[1] for r in grade_rows}
+            grade_rows = cur.execute(
+                "SELECT course_name, grade FROM grades WHERE student_id = ? ORDER BY course_name",
+                (sid,),
+            ).fetchall()
+            grade_map = {}
+            for r in grade_rows:
+                cn = str(r[0] or "").strip()
+                if cn:
+                    grade_map[cn] = r[1]
 
             eligible = []
             completed = []

@@ -4,7 +4,8 @@
   <meta charset="utf-8">
   <title>سجل الحضور والغياب — {{ course_name }}</title>
   <style>
-    @page { size: A4 landscape; margin: 10mm; }
+    {% set _po = print_orientation|default('landscape') %}
+    @page { size: A4 {{ 'portrait' if _po == 'portrait' else 'landscape' }}; margin: 10mm; }
     body {
       font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
       font-size: 9pt;
@@ -29,6 +30,33 @@
       color: #fff;
     }
     .no-print .secondary { background: #fff; color: #0d6efd; }
+    .no-print .orientation-controls {
+      margin: 14px auto 0;
+      padding: 10px 14px;
+      max-width: 36em;
+      border: 1px solid #dee2e6;
+      border-radius: 8px;
+      background: #f8f9fa;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 12px 20px;
+    }
+    .no-print .orientation-controls .orient-title {
+      font-weight: 700;
+      font-size: 9pt;
+      color: #222;
+    }
+    .no-print .orientation-controls label {
+      font-size: 9pt;
+      cursor: pointer;
+      user-select: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .no-print .orientation-controls input { margin: 0; cursor: pointer; }
     .header {
       text-align: center;
       border-bottom: 2px solid #0d6efd;
@@ -82,9 +110,24 @@
       font-weight: 700;
       font-size: 8pt;
     }
-    table.report th.col-id,
-    table.report td.sticky-id {
+    table.report th.col-seq,
+    table.report td.sticky-seq {
       white-space: nowrap;
+      font-weight: 700;
+      font-size: 8.5pt;
+    }
+    /* الرقم الدراسي: يسمح بسطرين كحد أقصى حتى لا يتداخل مع اسم الطالب في الطباعة الأفقية */
+    table.report th.col-id {
+      white-space: normal;
+      line-height: 1.2;
+      font-size: 7.5pt;
+      padding: 3px 4px;
+    }
+    table.report td.sticky-id {
+      white-space: normal;
+      line-height: 1.15;
+      overflow-wrap: anywhere;
+      word-break: break-all;
     }
     table.report th.col-name,
     table.report td.sticky-name {
@@ -98,10 +141,10 @@
       line-height: 1.25;
     }
     table.report td.sticky-id {
-      font-family: Consolas, monospace;
+      font-family: Consolas, 'Segoe UI', monospace;
       direction: ltr;
       text-align: center;
-      font-size: 8pt;
+      font-size: 7.5pt;
     }
     table.report th.week-band {
       font-size: 7pt;
@@ -182,8 +225,35 @@
   <div class="no-print">
     <button type="button" onclick="window.print()">طباعة</button>
     <button type="button" class="secondary" onclick="window.close()">إغلاق</button>
-    <p class="print-hint">لتنسيق أوضح على الورق، اختر في نافذة الطباعة الاتجاه <strong>أفقي (Landscape)</strong> إن كان متاحاً. القالب مضبوط على A4 أفقي.</p>
+    <div class="orientation-controls" role="group" aria-label="اتجاه الصفحة">
+      <span class="orient-title">اتجاه الصفحة (معاينة وطباعة):</span>
+      <label>
+        <input type="radio" name="pageOrient" value="landscape" {% if _po != 'portrait' %}checked{% endif %}>
+        أفقي (A4)
+      </label>
+      <label>
+        <input type="radio" name="pageOrient" value="portrait" {% if _po == 'portrait' %}checked{% endif %}>
+        عمودي (A4)
+      </label>
+    </div>
+    <p class="print-hint">يُطبَّق اتجاه الصفحة أعلاه على المعاينة وعلى <strong>طباعة المتصفح</strong> (A4). عند تغيير الاتجاه تُحدَّث الصفحة تلقائياً.</p>
   </div>
+  <script>
+    (function () {
+      document.querySelectorAll('input[name="pageOrient"]').forEach(function (el) {
+        el.addEventListener('change', function () {
+          if (!this.checked) return;
+          try {
+            var u = new URL(window.location.href);
+            u.searchParams.set('orientation', this.value);
+            window.location.replace(u.toString());
+          } catch (e) {
+            window.location.reload();
+          }
+        });
+      });
+    })();
+  </script>
 
   <div class="header">
     <h1>جامعة درنة — كلية الهندسة — قسم الهندسة الميكانيكية</h1>
@@ -202,14 +272,16 @@
     <div><strong>تاريخ الإصدار:</strong> {{ generated_at }}</div>
   </div>
 
-  {# توزيع عرض الجدول: رقم ثابت، أسابيع بنسب متساوية، الباقي لاسم الطالب #}
-  {% set pct_id = 8 %}
+  {# توزيع عرض الجدول: تسلسل، رقم دراسي (أوسع قليلاً للفّ على سطرين)، أسابيع، الباقي لاسم الطالب #}
+  {% set pct_seq = 4 %}
+  {% set pct_id = 9 %}
   {% set pct_weeks_total = 58 %}
   {% set pct_week = (pct_weeks_total / weeks) if weeks else 0 %}
-  {% set pct_name = 100 - pct_id - pct_weeks_total %}
+  {% set pct_name = 100 - pct_seq - pct_id - pct_weeks_total %}
   <div class="table-report-host">
   <table class="report">
     <colgroup>
+      <col class="col-seq" style="width: {{ pct_seq }}%;">
       <col class="col-id" style="width: {{ pct_id }}%;">
       <col class="col-name" style="width: {{ pct_name }}%;">
       {% for w in week_numbers %}
@@ -218,7 +290,8 @@
     </colgroup>
     <thead>
       <tr>
-        <th class="col-id" rowspan="2">الرقم الدراسي</th>
+        <th class="col-seq" rowspan="2">م</th>
+        <th class="col-id" rowspan="2">الرقم<br>الدراسي</th>
         <th class="col-name" rowspan="2">اسم الطالب</th>
         <th class="week-band" colspan="{{ weeks }}">أرقام تسلسل الأسابيع في الفصل</th>
       </tr>
@@ -231,6 +304,7 @@
     <tbody>
       {% for row in table_rows %}
       <tr>
+        <td class="sticky-seq">{{ loop.index }}</td>
         <td class="sticky-id">{{ row.student_id }}</td>
         <td class="sticky-name">{{ row.student_name }}</td>
         {% for cell in row.weeks %}
@@ -239,14 +313,14 @@
       </tr>
       {% endfor %}
       {% if not table_rows %}
-      <tr><td colspan="{{ 2 + weeks }}">لا توجد تسجيلات للمقرر في قائمة المسجلين.</td></tr>
+      <tr><td colspan="{{ 3 + weeks }}">لا توجد تسجيلات للمقرر في قائمة المسجلين.</td></tr>
       {% endif %}
     </tbody>
   </table>
   </div>
 
   <div class="signatures">
-    <div class="signatures-instructor" style="width: {{ pct_name }}%; margin-inline-start: {{ pct_id }}%;">
+    <div class="signatures-instructor" style="width: {{ pct_name }}%; margin-inline-start: {{ pct_seq + pct_id }}%;">
       <div class="label-inline">
         <span>اسم أستاذ المقرر</span>
         <span class="rule"></span>

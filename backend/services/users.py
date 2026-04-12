@@ -1,14 +1,69 @@
 import hashlib
+import logging
+import re
 import secrets
 from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional
 
 from flask import Blueprint, request, jsonify
 
 from backend.core.auth import role_required, hash_password
+from backend.database.database import DB_FILE, is_postgresql
 from .utilities import get_connection
 from .mailer import send_email
 
 users_bp = Blueprint("users", __name__)
+logger = logging.getLogger(__name__)
+
+# أحرف عرض غير مرئية شائعة تُفسّر أسماء مستخدمين «فارغة» أو غير متطابقة في الواجهة
+_ZERO_WIDTH = re.compile(r"[\u200b\u200c\u200d\u200e\u200f\ufeff\u202a-\u202e]+")
+
+
+def _clean_username(s: str) -> str:
+    return _ZERO_WIDTH.sub("", (s or "").strip())
+
+
+def _admin_storage_meta() -> dict:
+    """معلومات تشخيصية لمسؤول النظام: أين تُخزَّن بيانات المستخدمين."""
+    if is_postgresql():
+        try:
+            from config import DATABASE_URL
+            from sqlalchemy.engine.url import make_url
+
+            u = make_url(DATABASE_URL)
+            host = u.host or "localhost"
+            dbn = (u.database or "").strip()
+            return {
+                "backend": "postgresql",
+                "storage_display": f"{host}/{dbn}" if dbn else host,
+                "sqlite_legacy_path": str(Path(DB_FILE).resolve()),
+                "note_ar": (
+                    "التطبيق يعمل على PostgreSQL: قائمة المستخدمين والحفظ من الخادم أعلاه. "
+                    "ملف mechanical.db في المشروع (إن وُجد) قديم/احتياطي ولا يعكس البيانات الحية طالما DATABASE_URL مفعّل."
+                ),
+            }
+        except Exception:
+            return {
+                "backend": "postgresql",
+                "storage_display": "PostgreSQL",
+                "sqlite_legacy_path": str(Path(DB_FILE).resolve()),
+                "note_ar": "التخزين الفعلي: PostgreSQL — لا تستخدم ملف SQLite للتحقق من المستخدمين.",
+            }
+    return {"backend": "sqlite", "storage_display": str(Path(DB_FILE).resolve())}
+
+
+def _user_dict_from_row(row) -> Optional[dict]:
+    if not row:
+        return None
+    return {
+        "username": row[0],
+        "role": row[1],
+        "student_id": row[2],
+        "instructor_id": row[3],
+        "is_supervisor": int(row[4] or 0),
+        "is_active": int(row[5] or 1),
+    }
 
 
 def _now_iso() -> str:
@@ -131,6 +186,7 @@ def invite_user():
     entity_type = (data.get("type") or "").strip().lower()
     entity_id = (data.get("id") or "").strip()
     username_in = (data.get("username") or "").strip().lower() or None
+    invite_sent = False
 
     if role not in ("student", "instructor", "head_of_department"):
         return jsonify({"status": "error", "message": "role غير صحيح"}), 400
@@ -171,8 +227,7 @@ def invite_user():
             if role not in ("instructor", "head_of_department"):
                 return jsonify({"status": "error", "message": "لا يمكن ربط type=instructor بدور غير instructor/head_of_department"}), 400
 
-        if not email:
-            return jsonify({"status": "error", "message": "يجب إدخال email في سجل الطالب/الأستاذ قبل إرسال الدعوة"}), 400
+        # بريد اختياري: إن وُجد يُنشأ token ويُرسل؛ وإلا يُنشأ الحساب فقط (كلمة عشوائية) ويُكمّل المسؤول يدوياً من «إضافة مباشرة»
 
         if username_in:
             username = _unique_username(conn, username_in)
@@ -202,33 +257,54 @@ def invite_user():
                 (username, pw_hash, role, student_id, instructor_id),
             )
 
-        token = secrets.token_urlsafe(32)
-        token_hash = _hash_token(token)
-        created_at = _now_iso()
-        expires_at = (datetime.utcnow() + timedelta(hours=48)).replace(microsecond=0).isoformat() + "Z"
-        cur.execute(
-            """
-            INSERT INTO user_invites (username, email, token_hash, created_at, expires_at, used_at)
-            VALUES (?,?,?,?,?,NULL)
-            """,
-            (username, email, token_hash, created_at, expires_at),
-        )
+        token = None
+        if email:
+            token = secrets.token_urlsafe(32)
+            token_hash = _hash_token(token)
+            created_at = _now_iso()
+            expires_at = (datetime.utcnow() + timedelta(hours=48)).replace(microsecond=0).isoformat() + "Z"
+            cur.execute(
+                """
+                INSERT INTO user_invites (username, email, token_hash, created_at, expires_at, used_at)
+                VALUES (?,?,?,?,?,NULL)
+                """,
+                (username, email, token_hash, created_at, expires_at),
+            )
+            invite_sent = True
         conn.commit()
 
-    # إرسال البريد (الرابط يعتمد على نفس الدومين)
-    base_url = request.host_url.rstrip("/")
-    invite_url = f"{base_url}/auth/invite/{token}"
-    subject = "تفعيل حسابك في النظام"
-    body = (
-        f"مرحباً {display_name or username}\n\n"
-        f"تم إنشاء حساب لك في النظام.\n"
-        f"اسم المستخدم: {username}\n\n"
-        f"لتعيين كلمة المرور لأول مرة، افتح الرابط التالي خلال 48 ساعة:\n{invite_url}\n\n"
-        f"إذا لم تطلب هذا، تجاهل الرسالة.\n"
-    )
-    send_email(email, subject, body_text=body)
+    if email and token:
+        base_url = request.host_url.rstrip("/")
+        invite_url = f"{base_url}/auth/invite/{token}"
+        subject = "تفعيل حسابك في النظام"
+        body = (
+            f"مرحباً {display_name or username}\n\n"
+            f"تم إنشاء حساب لك في النظام.\n"
+            f"اسم المستخدم: {username}\n\n"
+            f"لتعيين كلمة المرور لأول مرة، افتح الرابط التالي خلال 48 ساعة:\n{invite_url}\n\n"
+            f"إذا لم تطلب هذا، تجاهل الرسالة.\n"
+        )
+        try:
+            send_email(email, subject, body_text=body)
+        except Exception:
+            logger.exception("users/invite: فشل إرسال البريد (الحساب مُنشأ)")
+            invite_sent = False
 
-    return jsonify({"status": "ok", "username": username, "email": email}), 200
+    notice = None
+    if not email:
+        notice = (
+            "تم إنشاء الحساب بدون بريد في السجل؛ لم يُرسل رابط تلقائياً. "
+            "عيّن كلمة المرور من قسم «إضافة / تعديل مستخدم» أو أضف البريد للسجل ثم استخدم «إعادة إرسال الدعوة»."
+        )
+    return jsonify(
+        {
+            "status": "ok",
+            "username": username,
+            "email": email or "",
+            "invite_sent": bool(invite_sent),
+            "notice": notice,
+        }
+    ), 200
 
 
 @users_bp.route("/invite/resend", methods=["POST"])
@@ -498,7 +574,18 @@ def list_users():
                     "is_active": int(r[5] or 1),
                 }
             )
-    return jsonify({"users": items})
+    meta = _admin_storage_meta()
+    logger.info(
+        "users/list count=%s backend=%s storage=%s",
+        len(items),
+        meta.get("backend"),
+        meta.get("storage_display"),
+    )
+    resp = jsonify({"users": items, "total": len(items), "meta": meta})
+    # يمنع عرض قائمة قديمة من ذاكرة التخزين المؤقت للمتصفح بعد إضافة مستخدم
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 
 @users_bp.route("/add", methods=["POST"])
@@ -514,7 +601,7 @@ def add_user():
       - instructor_id (اختياري؛ مهم لدور supervisor)
     """
     data = request.get_json(force=True) or {}
-    username = (data.get("username") or "").strip()
+    username = _clean_username(data.get("username") or "")
     password = data.get("password")
     role = _normalize_role((data.get("role") or "").strip() or "student")
     student_id = (data.get("student_id") or "").strip() or None
@@ -549,6 +636,8 @@ def add_user():
         if password:
             return jsonify({"status": "error", "message": "غير مسموح تغيير كلمة المرور لرئيس القسم"}), 403
 
+    was_created = False
+    user_out: Optional[dict] = None
     with get_connection() as conn:
         cur = conn.cursor()
         existing = cur.execute(
@@ -610,6 +699,7 @@ def add_user():
                     ),
                     400,
                 )
+            was_created = True
             pw_hash = hash_password(password)
             cur.execute(
                 """
@@ -619,8 +709,26 @@ def add_user():
                 (username, pw_hash, role, student_id, instructor_id, is_supervisor, is_active),
             )
         conn.commit()
+        row = cur.execute(
+            "SELECT username, role, student_id, instructor_id, "
+            "COALESCE(is_supervisor,0) AS is_supervisor, COALESCE(is_active,1) AS is_active "
+            "FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        user_out = _user_dict_from_row(row)
 
-    return jsonify({"status": "ok"})
+    logger.info(
+        "users/add action=%s username=%s",
+        "created" if was_created else "updated",
+        username,
+    )
+    return jsonify(
+        {
+            "status": "ok",
+            "action": "created" if was_created else "updated",
+            "user": user_out,
+        }
+    )
 
 
 @users_bp.route("/delete", methods=["POST"])

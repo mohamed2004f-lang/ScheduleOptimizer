@@ -34,6 +34,9 @@ schedule_bp = Blueprint("schedule", __name__)
 
 
 def _ensure_schedule_version_tables(cur):
+    # الجداول تُنشأ عبر Alembic على PostgreSQL؛ DDL الخاص بـ SQLite هنا يفشل (AUTOINCREMENT).
+    if is_postgresql():
+        return
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS schedule_versions (

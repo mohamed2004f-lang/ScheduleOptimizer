@@ -21,11 +21,15 @@
       هذه الصفحة مخصصة للمسؤول (admin) فقط. إذا لم تكن تملك صلاحيات كافية، ستظهر لك أخطاء عند حفظ البيانات.
     </div>
 
-    <div class="card mb-3">
+    <div class="card mb-3" id="directUserCard">
       <div class="card-body">
-        <h5 class="card-title mb-3">إضافة / تعديل مستخدم</h5>
+        <h5 class="card-title mb-3">إضافة / تعديل مستخدم (مباشرة)</h5>
+        <div id="headDeptOnlyHint" class="alert alert-secondary p-2 small d-none">
+          بصلاحية <strong>رئيس القسم</strong>: يمكنك فقط <strong>تعديل</strong> حسابات <strong>عضو هيئة التدريس / رئيس القسم</strong> (إشراف، رقم مدرّس، الدور بين هذين الدورين). لا يمكن إنشاء مستخدم جديد من هنا، ولا الحذف، ولا تغيير كلمة المرور أو حالة التفعيل.
+        </div>
         <div class="alert alert-info p-2 small">
-          <strong>مستحسن:</strong> لإنشاء حساب لطالب/أستاذ استخدم <strong>الدعوة عبر البريد</strong> (توليد اسم مستخدم + إرسال رابط تعيين كلمة المرور).
+          <strong>الطريقة الأساسية:</strong> أدخل اسم المستخدم وكلمة المرور والدور والربط (رقم طالب أو رقم مدرّس حسب الدور) ثم <strong>حفظ المستخدم</strong>.
+          قسم «ربط من القائمة» أدناه <strong>اختياري</strong> ويُكمّل عند رغبتك بإرسال رابط بالبريد (للمسؤول الرئيسي فقط).
         </div>
         <div class="row g-2 align-items-end">
           <div class="col-md-4">
@@ -77,9 +81,10 @@
       </div>
     </div>
 
-    <div class="card mb-3">
+    <div class="card mb-3" id="inviteSection">
       <div class="card-body">
-        <h5 class="card-title mb-3">إنشاء حساب مرتبط (دعوة عبر البريد)</h5>
+        <h5 class="card-title mb-3">ربط طالب/أستاذ من القائمة (اختياري — دعوة بالبريد)</h5>
+        <p class="form-text small mb-2">يُنشئ حساباً مرتبطاً بالسجل. إن وُجد <strong>بريد</strong> في بيانات الطالب/الأستاذ يُرسل رابط تعيين كلمة المرور؛ وإن لم يوجد يُنشأ الحساب فقط ويمكنك لاحقاً تعيين كلمة المرور من القسم أعلاه.</p>
         <div class="row g-2 align-items-end">
           <div class="col-md-3">
             <label class="form-label">نوع</label>
@@ -107,11 +112,12 @@
             <input id="linkUsername" class="form-control form-control-sm">
           </div>
           <div class="col-md-4">
-            <label class="form-label">البريد</label>
+            <label class="form-label">البريد (من السجل)</label>
             <input id="linkEmail" class="form-control form-control-sm" disabled>
+            <div id="linkEmailHint" class="form-text small text-info d-none"></div>
           </div>
           <div class="col-md-4 d-grid">
-            <button id="btnSendInvite" class="btn btn-success btn-sm">إنشاء وإرسال الدعوة</button>
+            <button id="btnSendInvite" class="btn btn-success btn-sm">إنشاء الحساب المرتبط</button>
           </div>
         </div>
         <div id="inviteMsg" class="mt-2"></div>
@@ -120,7 +126,18 @@
 
     <div class="card">
       <div class="card-body">
-        <h5 class="card-title mb-3">قائمة المستخدمين</h5>
+        <h5 class="card-title mb-2 d-flex flex-wrap align-items-center gap-2">
+          قائمة المستخدمين
+          <span id="usersTotalBadge" class="badge bg-secondary">—</span>
+        </h5>
+        <p id="usersStorageHint" class="text-muted small mb-2 font-monospace" title="مسار التخزين الفعلي للتحقق من عدم وجود أكثر من ملف قاعدة بيانات"></p>
+        <div id="pgStorageNote" class="alert alert-warning py-2 px-3 small d-none" role="status"></div>
+        <div class="row g-2 mb-2">
+          <div class="col-md-6">
+            <label for="usersFilter" class="form-label small mb-0">تصفية سريعة</label>
+            <input type="search" id="usersFilter" class="form-control form-control-sm" placeholder="ابحث باسم المستخدم…" autocomplete="off" title="إن لم يظهر مستخدم بعد إضافته، امسح هذا الحقل — التصفية تخفي غير المطابقين">
+          </div>
+        </div>
         <div class="d-flex flex-wrap gap-2 mb-2">
           <button id="btnInviteCleanup" class="btn btn-sm btn-outline-secondary">تنظيف الدعوات القديمة</button>
           <div class="text-muted small align-self-center">يحذف الدعوات المستخدمة/المنتهية الأقدم من 30 يوم.</div>
@@ -131,7 +148,12 @@
   </main>
 
   <script>
-    async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok,status:r.status,json:j}; }
+    async function fetchJSON(url, opts){
+      /* منع عرض قائمة مستخدمين قديمة بعد الحفظ: لا تخزين مؤقت لطلبات JSON */
+      const r = await fetch(url, { credentials: 'include', cache: 'no-store', ...opts });
+      const j = await r.json().catch(()=>null);
+      return { ok: r.ok, status: r.status, json: j };
+    }
 
     function setUserMsg(kind, text){
       document.getElementById('userMsg').innerHTML = text ? `<div class="alert alert-${kind} p-2 mb-0">${text}</div>` : '';
@@ -140,97 +162,199 @@
       document.getElementById('inviteMsg').innerHTML = text ? `<div class="alert alert-${kind} p-2 mb-0">${text}</div>` : '';
     }
 
+    function buildUserListItem(u){
+      const item = document.createElement('div');
+      item.className = 'list-group-item d-flex justify-content-between align-items-center';
+      item.dataset.username = u.username != null ? String(u.username) : '';
+      item.dataset.userRole = u.role || '';
+      const left = document.createElement('div');
+      const line1 = document.createElement('div');
+      const strong = document.createElement('strong');
+      strong.textContent = u.username != null ? String(u.username) : '';
+      line1.appendChild(strong);
+      line1.appendChild(document.createTextNode(' — الدور: ' + (u.role || '')));
+      if(u.is_supervisor){
+        const b = document.createElement('span');
+        b.className = 'badge bg-info text-dark ms-1';
+        b.textContent = 'مشرف أكاديمي';
+        line1.appendChild(document.createTextNode(' '));
+        line1.appendChild(b);
+      }
+      if(u.is_active === 0 || u.is_active === false){
+        const b = document.createElement('span');
+        b.className = 'badge bg-secondary ms-1';
+        b.textContent = 'معطّل';
+        line1.appendChild(document.createTextNode(' '));
+        line1.appendChild(b);
+      } else {
+        const b = document.createElement('span');
+        b.className = 'badge bg-success ms-1';
+        b.textContent = 'نشط';
+        line1.appendChild(document.createTextNode(' '));
+        line1.appendChild(b);
+      }
+      const line2 = document.createElement('div');
+      line2.className = 'text-muted small';
+      line2.textContent = 'الرقم الدراسي: ' + (u.student_id || '—') + ' — رقم المدرّس: ' + (u.instructor_id != null && u.instructor_id !== '' ? u.instructor_id : '—');
+      left.appendChild(line1);
+      left.appendChild(line2);
+      const right = document.createElement('div');
+      right.className = 'd-flex gap-1 align-items-center';
+
+      if(CURRENT_ROLE === 'admin_main' || CURRENT_ROLE === 'admin'){
+        const statusBtn = document.createElement('button');
+        statusBtn.className = 'btn btn-sm btn-outline-primary';
+        statusBtn.textContent = 'حالة الدعوات';
+        statusBtn.title = 'عرض آخر روابط التفعيل';
+        statusBtn.addEventListener('click', async (ev)=>{
+          ev.stopPropagation();
+          await showInviteStatus(u.username);
+        });
+        right.appendChild(statusBtn);
+
+        const resendBtn = document.createElement('button');
+        resendBtn.className = 'btn btn-sm btn-outline-success';
+        resendBtn.textContent = 'إعادة إرسال الدعوة';
+        resendBtn.title = 'إرسال رابط تعيين كلمة المرور بالبريد';
+        resendBtn.addEventListener('click', async (ev)=>{
+          ev.stopPropagation();
+          await resendInvite(u.username);
+        });
+        right.appendChild(resendBtn);
+
+        const revokeBtn = document.createElement('button');
+        revokeBtn.className = 'btn btn-sm btn-outline-danger';
+        revokeBtn.textContent = 'إلغاء الدعوات';
+        revokeBtn.title = 'إلغاء كل الدعوات غير المستخدمة لهذا المستخدم';
+        revokeBtn.addEventListener('click', async (ev)=>{
+          ev.stopPropagation();
+          await revokeInvites(u.username);
+        });
+        right.appendChild(revokeBtn);
+      }
+
+      const canManageSupervisor = (CURRENT_ROLE === 'admin_main' || CURRENT_ROLE === 'admin' || CURRENT_ROLE === 'head_of_department');
+      const isInstructorTarget = (u.role === 'instructor' || u.role === 'head_of_department');
+      if(canManageSupervisor && isInstructorTarget){
+        const supBtn = document.createElement('button');
+        supBtn.className = u.is_supervisor ? 'btn btn-sm btn-outline-secondary' : 'btn btn-sm btn-outline-info';
+        supBtn.textContent = u.is_supervisor ? 'إلغاء مشرف' : 'تعيين مشرف';
+        supBtn.title = 'تفعيل/إلغاء المشرف الأكاديمي';
+        supBtn.addEventListener('click', async (ev)=>{
+          ev.stopPropagation();
+          await toggleSupervisor(u.username, !u.is_supervisor);
+        });
+        right.appendChild(supBtn);
+      }
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn btn-sm btn-danger btn-delete-user';
+      delBtn.textContent = 'حذف';
+      delBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); deleteUser(u.username); });
+      right.appendChild(delBtn);
+      item.appendChild(left);
+      item.appendChild(right);
+      item.addEventListener('click', ()=>{
+        if(CURRENT_ROLE === 'head_of_department' && u.role !== 'instructor' && u.role !== 'head_of_department'){
+          setUserMsg('warning','رئيس القسم يعدّل حسابات أعضاء هيئة التدريس ورؤساء الأقسام فقط.');
+          return;
+        }
+        document.getElementById('usernameInput').value = u.username != null ? String(u.username) : '';
+        document.getElementById('passwordInput').value = '';
+        document.getElementById('roleSelect').value = u.role || '';
+        document.getElementById('studentIdInput').value = u.student_id || '';
+        document.getElementById('instructorIdInput').value = u.instructor_id != null && u.instructor_id !== '' ? String(u.instructor_id) : '';
+        document.getElementById('isSupervisor').checked = !!u.is_supervisor;
+        document.getElementById('isActive').checked = !(u.is_active === 0 || u.is_active === false);
+        syncSupervisorAvailability();
+      });
+      return item;
+    }
+
+    function applyUsersFilter(){
+      const q = (document.getElementById('usersFilter')?.value || '').trim().toLowerCase();
+      document.querySelectorAll('#usersList .list-group-item').forEach((el)=>{
+        const u = (el.dataset.username || '').toLowerCase();
+        el.style.display = (!q || u.includes(q)) ? '' : 'none';
+      });
+    }
+
     async function loadUsers(){
       const container = document.getElementById('usersList');
+      const badge = document.getElementById('usersTotalBadge');
+      const hint = document.getElementById('usersStorageHint');
+      const pgNote = document.getElementById('pgStorageNote');
       container.innerHTML = '';
-      const res = await fetchJSON('/users/list');
+      const res = await fetchJSON('/users/list?_=' + Date.now());
       if(!res.ok){
         container.innerHTML = `<div class="text-danger p-2">فشل جلب المستخدمين: ${res.json?.message || res.status}</div>`;
-        return;
+        if(badge) badge.textContent = '!';
+        if(hint) hint.textContent = '';
+        if(pgNote){ pgNote.textContent = ''; pgNote.classList.add('d-none'); }
+        return null;
       }
       const arr = Array.isArray(res.json?.users) ? res.json.users : [];
+      const total = res.json?.total;
+      const meta = res.json?.meta;
+      if(badge) badge.textContent = total != null ? String(total) : String(arr.length);
+      if(hint && meta && meta.storage_display){
+        const bk = meta.backend === 'postgresql' ? 'PostgreSQL' : 'SQLite';
+        hint.textContent = 'التخزين (' + bk + '): ' + meta.storage_display;
+        if(meta.backend === 'postgresql' && meta.sqlite_legacy_path){
+          hint.textContent += ' — ملف SQLite الظاهر: ' + meta.sqlite_legacy_path + ' (غير مستخدم للتشغيل الحالي)';
+        }
+      } else if(hint){
+        hint.textContent = '';
+      }
+      if(pgNote){
+        if(meta && meta.backend === 'postgresql' && meta.note_ar){
+          pgNote.textContent = meta.note_ar;
+          pgNote.classList.remove('d-none');
+        } else {
+          pgNote.textContent = '';
+          pgNote.classList.add('d-none');
+        }
+      }
       if(!arr.length){
         container.innerHTML = '<div class="text-muted p-2">لا توجد حسابات مستخدمين بعد.</div>';
-        return;
+        applyPermissions();
+        return [];
       }
       arr.forEach(u=>{
-        const item = document.createElement('div');
-        item.className = 'list-group-item d-flex justify-content-between align-items-center';
-        const left = document.createElement('div');
-        const supBadge = u.is_supervisor ? ' <span class="badge bg-info text-dark">مشرف أكاديمي</span>' : '';
-        const activeBadge = (u.is_active === 0 || u.is_active === false) ? ' <span class="badge bg-secondary">معطّل</span>' : ' <span class="badge bg-success">نشط</span>';
-        left.innerHTML = `<div><strong>${u.username}</strong> — الدور: ${u.role}${supBadge}${activeBadge}</div>
-                          <div class="text-muted small">الرقم الدراسي: ${u.student_id || '—'} — رقم المدرّس: ${u.instructor_id || '—'}</div>`;
-        const right = document.createElement('div');
-        right.className = 'd-flex gap-1 align-items-center';
-
-        if(CURRENT_ROLE === 'admin_main' || CURRENT_ROLE === 'admin'){
-          const statusBtn = document.createElement('button');
-          statusBtn.className = 'btn btn-sm btn-outline-primary';
-          statusBtn.textContent = 'حالة الدعوات';
-          statusBtn.title = 'عرض آخر روابط التفعيل';
-          statusBtn.addEventListener('click', async (ev)=>{
-            ev.stopPropagation();
-            await showInviteStatus(u.username);
-          });
-          right.appendChild(statusBtn);
-
-          const resendBtn = document.createElement('button');
-          resendBtn.className = 'btn btn-sm btn-outline-success';
-          resendBtn.textContent = 'إعادة إرسال الدعوة';
-          resendBtn.title = 'إرسال رابط تعيين كلمة المرور بالبريد';
-          resendBtn.addEventListener('click', async (ev)=>{
-            ev.stopPropagation();
-            await resendInvite(u.username);
-          });
-          right.appendChild(resendBtn);
-
-          const revokeBtn = document.createElement('button');
-          revokeBtn.className = 'btn btn-sm btn-outline-danger';
-          revokeBtn.textContent = 'إلغاء الدعوات';
-          revokeBtn.title = 'إلغاء كل الدعوات غير المستخدمة لهذا المستخدم';
-          revokeBtn.addEventListener('click', async (ev)=>{
-            ev.stopPropagation();
-            await revokeInvites(u.username);
-          });
-          right.appendChild(revokeBtn);
+        try {
+          container.appendChild(buildUserListItem(u));
+        } catch(e){
+          console.error('buildUserListItem failed', u, e);
         }
-
-        const canManageSupervisor = (CURRENT_ROLE === 'admin_main' || CURRENT_ROLE === 'admin' || CURRENT_ROLE === 'head_of_department');
-        const isInstructorTarget = (u.role === 'instructor' || u.role === 'head_of_department');
-        if(canManageSupervisor && isInstructorTarget){
-          const supBtn = document.createElement('button');
-          supBtn.className = u.is_supervisor ? 'btn btn-sm btn-outline-secondary' : 'btn btn-sm btn-outline-info';
-          supBtn.textContent = u.is_supervisor ? 'إلغاء مشرف' : 'تعيين مشرف';
-          supBtn.title = 'تفعيل/إلغاء المشرف الأكاديمي';
-          supBtn.addEventListener('click', async (ev)=>{
-            ev.stopPropagation();
-            await toggleSupervisor(u.username, !u.is_supervisor);
-          });
-          right.appendChild(supBtn);
-        }
-
-        const delBtn = document.createElement('button');
-        delBtn.className = 'btn btn-sm btn-danger btn-delete-user';
-        delBtn.textContent = 'حذف';
-        delBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); deleteUser(u.username); });
-        right.appendChild(delBtn);
-        item.appendChild(left);
-        item.appendChild(right);
-        item.addEventListener('click', ()=>{
-          document.getElementById('usernameInput').value = u.username;
-          document.getElementById('passwordInput').value = '';
-          document.getElementById('roleSelect').value = u.role;
-          document.getElementById('studentIdInput').value = u.student_id || '';
-          document.getElementById('instructorIdInput').value = u.instructor_id || '';
-          document.getElementById('isSupervisor').checked = !!u.is_supervisor;
-          document.getElementById('isActive').checked = !(u.is_active === 0 || u.is_active === false);
-          syncSupervisorAvailability();
-        });
-        container.appendChild(item);
       });
-
+      applyUsersFilter();
       applyPermissions();
+      return arr;
+    }
+
+    function mergeUserRowIfMissing(listArr, saved){
+      if(!saved || saved.username == null || !Array.isArray(listArr)) return;
+      const un = String(saved.username);
+      const found = listArr.some((x)=> String(x.username) === un);
+      if(found) return;
+      const container = document.getElementById('usersList');
+      if(!container) return;
+      const emptyMsg = container.querySelector('.text-muted.p-2');
+      if(emptyMsg && emptyMsg.textContent && emptyMsg.textContent.includes('لا توجد')){
+        container.innerHTML = '';
+      }
+      try {
+        container.appendChild(buildUserListItem(saved));
+        applyUsersFilter();
+        applyPermissions();
+        const badge = document.getElementById('usersTotalBadge');
+        if(badge){
+          const n = container.querySelectorAll('.list-group-item').length;
+          badge.textContent = String(n);
+        }
+      } catch(e){
+        console.error('mergeUserRowIfMissing', e);
+      }
     }
 
     async function saveUser(){
@@ -256,9 +380,35 @@
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify(body)
       });
-      if(res.ok){
-        setUserMsg('success','تم حفظ المستخدم بنجاح.');
-        await loadUsers();
+      if(res.ok && res.json && res.json.status === 'ok'){
+        const act = res.json.action;
+        const saved = res.json.user;
+        if(saved && saved.username != null){
+          document.getElementById('usernameInput').value = String(saved.username);
+        }
+        let msg = 'تم حفظ المستخدم بنجاح.';
+        if(act === 'created'){
+          msg = 'تم إنشاء مستخدم جديد. القائمة مرتبة أبجدياً؛ يُميّز الصف لثوانٍ.';
+        } else if(act === 'updated'){
+          msg = 'تم تحديث مستخدم كان موجوداً مسبقاً (نفس اسم المستخدم) — ليس بالضرورة صفاً جديداً في القائمة.';
+        }
+        setUserMsg('success', msg);
+        const filt = document.getElementById('usersFilter');
+        if(filt) filt.value = '';
+        const listArr = await loadUsers();
+        if(saved && saved.username != null){
+          mergeUserRowIfMissing(listArr, saved);
+          const un = String(saved.username);
+          const esc = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(un) : un.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+          const row = document.querySelector('#usersList [data-username="' + esc + '"]');
+          if(row){
+            row.classList.add('list-group-item-info');
+            row.scrollIntoView({behavior:'smooth', block:'nearest'});
+            setTimeout(()=> row.classList.remove('list-group-item-info'), 2600);
+          } else {
+            setUserMsg('warning', msg + ' — لم يُعثر على الصف في الواجهة. جرّب F5. إن استمرت المشكلة راجع سطر «التخزين» أعلاه (ملف قاعدة البيانات) للتأكد من عدم وجود أكثر من نسخة.');
+          }
+        }
       } else {
         setUserMsg('danger', res.json?.message || `فشل الحفظ (${res.status})`);
       }
@@ -273,6 +423,8 @@
       });
       if(res.ok){
         setUserMsg('success','تم حذف المستخدم.');
+        const f = document.getElementById('usersFilter');
+        if(f) f.value = '';
         await loadUsers();
       } else {
         setUserMsg('danger', res.json?.message || `فشل الحذف (${res.status})`);
@@ -287,6 +439,8 @@
       });
       if(res.ok){
         setUserMsg('success', makeSupervisor ? 'تم تعيين المستخدم كمشرف أكاديمي.' : 'تم إلغاء المشرف الأكاديمي.');
+        const f = document.getElementById('usersFilter');
+        if(f) f.value = '';
         await loadUsers();
       } else {
         setUserMsg('danger', res.json?.message || `فشل العملية (${res.status})`);
@@ -379,6 +533,21 @@
       const isAdminMain = (role === 'admin_main' || role === 'admin');
       const isHead = (role === 'head_of_department');
 
+      document.getElementById('headDeptOnlyHint')?.classList.toggle('d-none', !isHead);
+      document.getElementById('inviteSection')?.classList.toggle('d-none', !isAdminMain);
+
+      const roleSelect = document.getElementById('roleSelect');
+      if(roleSelect){
+        roleSelect.querySelectorAll('option').forEach((opt)=>{
+          const v = opt.value;
+          if(isHead){
+            opt.disabled = (v !== 'instructor' && v !== 'head_of_department');
+          } else {
+            opt.disabled = false;
+          }
+        });
+      }
+
       // رئيس القسم: يمنع إنشاء/حذف/تعطيل/تغيير كلمة المرور؛ يسمح فقط بتعديل الأساتذة (إشراف/رقم مدرس)
       const passwordEl = document.getElementById('passwordInput');
       const activeEl = document.getElementById('isActive');
@@ -407,6 +576,10 @@
           document.getElementById('adminWarning').classList.remove('d-none');
         }
       } catch(e){}
+      const usersFilter = document.getElementById('usersFilter');
+      if(usersFilter){
+        usersFilter.addEventListener('input', applyUsersFilter);
+      }
       document.getElementById('btnSaveUser').addEventListener('click', saveUser);
       document.getElementById('btnSendInvite').addEventListener('click', sendInvite);
       document.getElementById('btnInviteCleanup').addEventListener('click', cleanupInvites);
@@ -477,12 +650,25 @@
       }
     }
 
+    function updateLinkEmailHint(){
+      const hint = document.getElementById('linkEmailHint');
+      const em = (document.getElementById('linkEmail')?.value || '').trim();
+      if(!hint) return;
+      if(em){
+        hint.classList.add('d-none');
+        return;
+      }
+      hint.classList.remove('d-none');
+      hint.textContent = 'لا يوجد بريد في السجل — سيُنشأ الحساب بدون إرسال بريد؛ عيّن كلمة المرور لاحقاً من «إضافة / تعديل مستخدم» أو أضف البريد ثم استخدم «إعادة إرسال الدعوة» من القائمة.';
+    }
+
     async function suggestLinked(){
       const type = document.getElementById('linkType').value;
       const id = document.getElementById('linkEntity').value;
       if(!id){
         document.getElementById('linkUsername').value = '';
         document.getElementById('linkEmail').value = '';
+        updateLinkEmailHint();
         return;
       }
       const r = await fetchJSON(`/users/suggest_linked?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}`);
@@ -490,6 +676,15 @@
         document.getElementById('linkUsername').value = r.json?.username || '';
         document.getElementById('linkEmail').value = r.json?.email || '';
       }
+      updateLinkEmailHint();
+    }
+
+    function inviteHttpErrorText(r){
+      const j = r.json;
+      if(!j) return `فشل الإرسال (HTTP ${r.status})`;
+      if(typeof j.message === 'string' && j.message.trim()) return j.message;
+      if(typeof j.error === 'string' && j.error.trim()) return j.error;
+      return `فشل الإرسال (HTTP ${r.status})`;
     }
 
     async function sendInvite(){
@@ -501,17 +696,26 @@
         setInviteMsg('warning','اختر اسماً من القائمة.');
         return;
       }
-      setInviteMsg('info','جاري الإرسال...');
+      setInviteMsg('info','جاري التنفيذ...');
       const r = await fetchJSON('/users/invite', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({type, id, role, username})
       });
       if(r.ok){
-        setInviteMsg('success', `تم إنشاء الحساب وإرسال الدعوة إلى: ${r.json?.email || '—'} (username: ${r.json?.username || username})`);
+        const j = r.json || {};
+        const un = j.username || username;
+        if(j.invite_sent){
+          setInviteMsg('success', `تم إنشاء الحساب وأُرسل رابط التفعيل إلى: ${j.email || '—'} — username: <strong>${un}</strong>`);
+        } else {
+          const extra = j.notice ? `<div class="small mt-1">${j.notice}</div>` : '';
+          setInviteMsg('info', `تم إنشاء الحساب (username: <strong>${un}</strong>). لم يُرسل بريد (لا يوجد بريد في السجل أو فشل الإرسال).${extra}`);
+        }
+        const f = document.getElementById('usersFilter');
+        if(f) f.value = '';
         await loadUsers();
       } else {
-        setInviteMsg('danger', r.json?.message || `فشل الإرسال (${r.status})`);
+        setInviteMsg('danger', inviteHttpErrorText(r));
       }
     }
   </script>

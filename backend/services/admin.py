@@ -5,7 +5,7 @@ from typing import Optional
 
 from flask import Blueprint, jsonify, render_template, request, session, current_app, abort
 from backend.core.auth import login_required, role_required
-from backend.database.database import table_exists
+from backend.database.database import is_postgresql, table_exists
 
 from .utilities import DB_FILE, get_connection, get_current_term, log_activity
 
@@ -30,16 +30,41 @@ def set_current_term():
     if not name:
         return jsonify({"status": "error", "message": "term_name مطلوب"}), 400
     with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('current_term_name', ?)",
-            (name,),
-        )
-        cur.execute(
-            "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('current_term_year', ?)",
-            (year,),
-        )
-        conn.commit()
+        if is_postgresql():
+            # إلغاء أي معاملة معطوبة من طلب سابق، ثم autocommit لكل أمر (يتجنب InFailedSqlTransaction).
+            raw = getattr(conn, "_conn", None)
+            prev_auto = getattr(raw, "autocommit", False) if raw is not None else False
+            try:
+                if raw is not None:
+                    try:
+                        raw.rollback()
+                    except Exception:
+                        pass
+                    raw.autocommit = True
+                cur = conn.cursor()
+                for key, val in (("current_term_name", name), ("current_term_year", year)):
+                    cur.execute("DELETE FROM system_settings WHERE key = ?", (key,))
+                    cur.execute(
+                        "INSERT INTO system_settings (key, value) VALUES (?, ?)",
+                        (key, val),
+                    )
+            finally:
+                if raw is not None:
+                    try:
+                        raw.autocommit = prev_auto
+                    except Exception:
+                        pass
+        else:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('current_term_name', ?)",
+                (name,),
+            )
+            cur.execute(
+                "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('current_term_year', ?)",
+                (year,),
+            )
+            conn.commit()
     return jsonify({"status": "ok", "message": "تم حفظ الفصل الحالي", "term_name": name, "term_year": year})
 
 

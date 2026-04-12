@@ -29,6 +29,20 @@
             <input type="number" id="weeks-input" name="weeks" class="form-control" min="1" max="30" value="14" required>
             <div class="form-text">يمكنك اختيار أي عدد من 1 إلى 30 أسبوعًا.</div>
 
+            <div class="mt-3">
+              <span class="form-label fw-semibold small d-block">اتجاه الطباعة (معاينة / PDF)</span>
+              <div class="d-flex flex-wrap gap-3 mt-1">
+                <div class="form-check mb-0">
+                  <input class="form-check-input" type="radio" name="printOrientation" id="orient-landscape" value="landscape" checked>
+                  <label class="form-check-label" for="orient-landscape">أفقي</label>
+                </div>
+                <div class="form-check mb-0">
+                  <input class="form-check-input" type="radio" name="printOrientation" id="orient-portrait" value="portrait">
+                  <label class="form-check-label" for="orient-portrait">عمودي</label>
+                </div>
+              </div>
+            </div>
+
             <div class="mt-4">
               <button type="button" class="btn btn-outline-primary btn-sm w-100 mb-2" id="select-all-btn">تحديد كل المقررات</button>
               <button type="button" class="btn btn-outline-secondary btn-sm w-100" id="clear-selection-btn">إلغاء التحديد</button>
@@ -69,35 +83,37 @@
       const select = document.getElementById('courses-select');
       const preview = document.getElementById('selection-preview');
       try {
-        const authResp = await fetch('/auth/check', { credentials: 'include' }).catch(()=>null);
-        const auth = authResp ? await authResp.json().catch(()=>({})) : {};
-        const role = auth?.role || '';
-        const isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(auth?.is_supervisor || 0) === 1);
-
-        let data = [];
-        if (role === 'instructor' || isSupervisor) {
-          // استخدم المقررات المسموحة فقط حسب التكليف في schedule (Semester الحالي)
-          const allowedResp = await fetch('/students/attendance_allowed_courses', { credentials: 'include' }).catch(()=>null);
-          const allowedJson = allowedResp ? await allowedResp.json().catch(()=>null) : null;
-          data = Array.isArray(allowedJson?.courses) ? allowedJson.courses : [];
-        } else {
-          const resp = await fetch('/courses/list');
-          data = resp.ok ? await resp.json() : [];
-        }
-
-        if (!data.length) {
+        // دائماً من الخادم: تسجيلات + جدول + فصل حالي (لا /courses/list). الصفحة نفسها تسمح فقط بأدوار الموظفين.
+        const allowedResp = await fetch('/students/attendance_allowed_courses', { credentials: 'include' }).catch(()=>null);
+        const allowedJson = allowedResp ? await allowedResp.json().catch(()=>null) : null;
+        if (!allowedResp || !allowedResp.ok) {
+          const msg = allowedJson?.message || 'تعذر جلب قائمة المقررات.';
           select.innerHTML = '';
           const opt = document.createElement('option');
-          opt.textContent = 'لا توجد مقررات مسجلة';
+          opt.textContent = msg;
           opt.disabled = true;
           select.appendChild(opt);
-          preview.textContent = 'لم يتم العثور على مقررات في قاعدة البيانات.';
+          preview.textContent = msg;
           return;
         }
-        data
-          .filter(item => item?.course_name)
+        const data = Array.isArray(allowedJson?.courses) ? allowedJson.courses : [];
+
+        const rows = (Array.isArray(data) ? data : []).filter(
+          (item) => item && String(item.course_name || '').trim()
+        );
+        if (!rows.length) {
+          select.innerHTML = '';
+          const opt = document.createElement('option');
+          opt.textContent = 'لا توجد مقررات مطابقة';
+          opt.disabled = true;
+          select.appendChild(opt);
+          preview.textContent =
+            'لا توجد مقررات تربط تسجيل الطلبة بجدول الفصل الحالي. تأكد من: (1) ضبط الفصل الحالي في إعدادات النظام ليطابق حقل الفصل في الجدول الدراسي، (2) تطابق اسم المقرر بين التسجيل والجدول، (3) أن حالة الطالب «نشط» إن كانت مستخدمة.';
+          return;
+        }
+        rows
           .sort((a, b) => (a.course_name || '').localeCompare(b.course_name || '', 'ar'))
-          .forEach(item => {
+          .forEach((item) => {
             const opt = document.createElement('option');
             opt.value = item.course_name;
             opt.textContent = item.course_code
@@ -114,7 +130,13 @@
     function updateSelectionPreview() {
       const select = document.getElementById('courses-select');
       const preview = document.getElementById('selection-preview');
-      const chosen = Array.from(select.selectedOptions).map(opt => opt.textContent);
+      const selectable = Array.from(select.options).filter((o) => !o.disabled);
+      if (!selectable.length) {
+        return;
+      }
+      const chosen = Array.from(select.selectedOptions)
+        .filter((o) => !o.disabled)
+        .map((opt) => opt.textContent);
       if (!chosen.length) {
         preview.textContent = 'لا توجد مقررات محددة — سيتم تصدير جميع المقررات التي لديها تسجيلات.';
         return;
@@ -179,6 +201,11 @@
         return null;
       }
 
+      function getPrintOrientation() {
+        const r = document.querySelector('input[name="printOrientation"]:checked');
+        return r && r.value ? r.value : 'landscape';
+      }
+
       document.getElementById('btn-attendance-print').addEventListener('click', () => {
         const feedback = document.getElementById('form-feedback');
         feedback.textContent = '';
@@ -193,7 +220,8 @@
           return;
         }
         const w = document.getElementById('weeks-input').value;
-        const url = `/students/export/attendance/print?course=${encodeURIComponent(c)}&weeks=${encodeURIComponent(w)}`;
+        const o = getPrintOrientation();
+        const url = `/students/export/attendance/print?course=${encodeURIComponent(c)}&weeks=${encodeURIComponent(w)}&orientation=${encodeURIComponent(o)}`;
         window.open(url, '_blank', 'noopener,noreferrer');
       });
 
@@ -211,7 +239,8 @@
           return;
         }
         const w = document.getElementById('weeks-input').value;
-        const url = `/students/export/attendance/pdf?course=${encodeURIComponent(c)}&weeks=${encodeURIComponent(w)}`;
+        const o = getPrintOrientation();
+        const url = `/students/export/attendance/pdf?course=${encodeURIComponent(c)}&weeks=${encodeURIComponent(w)}&orientation=${encodeURIComponent(o)}`;
         window.open(url, '_blank', 'noopener,noreferrer');
       });
     });

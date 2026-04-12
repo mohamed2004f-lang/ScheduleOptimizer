@@ -16,6 +16,7 @@ from backend.services.prereg_helpers import (
     planning_course_hints,
     prereq_validation_snapshot,
 )
+from backend.database.database import is_postgresql
 
 DocxTemplate = None
 
@@ -72,6 +73,8 @@ def _parse_prereq_validation_column(raw):
 
 
 def _ensure_registration_form_versions_table(cur):
+    if is_postgresql():
+        return
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS registration_form_versions (

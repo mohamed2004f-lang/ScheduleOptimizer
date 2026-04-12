@@ -56,6 +56,22 @@ def list_courses():
                 except Exception:
                     setattr(c, "is_archived", 0)
                 courses.append(c)
+            # إن كان جدول courses فارغاً لكن الجدول الدراسي يحوي مقررات، نعرضها (مثل بيئة بعد ترحيل أو بيانات جزئية)
+            if not courses:
+                rows = cur.execute(
+                    "SELECT DISTINCT course_name FROM schedule WHERE COALESCE(course_name,'') <> '' ORDER BY course_name"
+                ).fetchall()
+                seen = set()
+                for r in rows:
+                    cname = r[0]
+                    key = cname.strip().lower() if cname else ""
+                    if not cname or key in seen:
+                        continue
+                    seen.add(key)
+                    c = Course(cname, "", 0)
+                    setattr(c, "category", "required")
+                    setattr(c, "is_archived", 0)
+                    courses.append(c)
         except Exception:
             rows = cur.execute("SELECT DISTINCT course_name FROM schedule WHERE COALESCE(course_name,'') <> '' ORDER BY course_name").fetchall()
             seen = set()
@@ -346,7 +362,9 @@ def add_prereq():
         """)
         # collect known courses and build tolerant maps
         try:
-            rows = cur.execute("SELECT course_name, IFNULL(course_code, '') FROM courses").fetchall()
+            rows = cur.execute(
+                "SELECT course_name, COALESCE(course_code, '') FROM courses"
+            ).fetchall()
             known = set()
             name_map = {}   # normalized -> actual name
             code_map = {}   # normalized code -> actual name

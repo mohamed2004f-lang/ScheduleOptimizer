@@ -30,6 +30,7 @@ from backend.core.monitoring import init_monitoring
 import os
 import pprint
 import logging
+import sqlite3
 from pathlib import Path
 
 # استخدم مجلد القوالب/الستايتك كما في مشروعك
@@ -40,11 +41,25 @@ app.config.setdefault("WTF_CSRF_HEADERS", ["X-CSRFToken", "X-CSRF-Token"])
 csrf = CSRFProtect()
 csrf.init_app(app)
 
-# عرض اتصال قاعدة البيانات في الكونسول
+# عرض اتصال قاعدة البيانات في الكونسول (مهم: مع PostgreSQL لا يُستخدم ملف mechanical.db)
 if is_postgresql():
-    print("Using DATABASE_URL (PostgreSQL):", DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else "(configured)")
+    tail = DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else "(configured)"
+    print("ACTIVE DATABASE: PostgreSQL —", tail)
+    print(
+        "NOTE: While DATABASE_URL is set, the app does NOT read/write SQLite file mechanical.db.",
+        "If you inspect backend/database/mechanical.db in a DB browser, it will NOT match live data.",
+    )
+    _dbp = os.path.abspath(DB_FILE)
+    if os.path.isfile(_dbp):
+        try:
+            _c = sqlite3.connect(_dbp)
+            _nu = _c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            _c.close()
+            print(f"  (Legacy SQLite file still on disk: {_dbp} — {int(_nu)} user rows there; ignore for live app.)")
+        except Exception:
+            print(f"  (Legacy SQLite file exists: {_dbp})")
 else:
-    print("Using DB_FILE:", os.path.abspath(DB_FILE))
+    print("ACTIVE DATABASE: SQLite —", os.path.abspath(DB_FILE))
 
 # فحص سريع: أكثر من نسخة mechanical.db داخل المشروع (باستثناء نسخ احتياطية ومجلدات أدوات ونسخ متداخلة Users/...)
 _SKIP_WALK_DIRS = frozenset(

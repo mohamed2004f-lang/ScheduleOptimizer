@@ -28,15 +28,26 @@ except ImportError:
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
+def _resolve_config_database_path() -> Path:
+    """
+    يحل DATABASE_PATH إلى مسار مطلق ثابت نسبةً لجذر المشروع.
+    تجنّباً لملفات SQLite مختلفة عند تغيّر مجلد العمل (cwd) بين عمليات التشغيل.
+    """
+    dp = Path(DATABASE_PATH)
+    if not dp.is_absolute():
+        return (PROJECT_ROOT / dp).resolve()
+    return dp.resolve()
+
+
 def _sqlite_db_file_path() -> str:
     """مسار ملف SQLite الفعلي لاستخدامه مع sqlite3 (وليس لـ PostgreSQL)."""
     if make_url is None:
-        return str(Path(DATABASE_PATH).resolve())
+        return str(_resolve_config_database_path())
     u = make_url(DATABASE_URL)
     if u.get_backend_name() != "sqlite":
-        return str(Path(DATABASE_PATH).resolve())
+        return str(_resolve_config_database_path())
     if not u.database or u.database == ":memory:":
-        return str(Path(DATABASE_PATH).resolve())
+        return str(_resolve_config_database_path())
     p = Path(u.database)
     if not p.is_absolute():
         p = (PROJECT_ROOT / p).resolve()
@@ -268,9 +279,22 @@ class _PgCursorWrapper:
         desc = self._c.description
         return [_wrap_pg_row(r, desc) for r in self._c.fetchall()]
 
+    def __iter__(self):
+        """مثل sqlite3.Cursor: for row in cur.execute(...)."""
+        while True:
+            row = self.fetchone()
+            if row is None:
+                break
+            yield row
+
     @property
     def lastrowid(self):
         return self._lastrowid
+
+    @property
+    def rowcount(self):
+        """متوافق مع sqlite3: عدد الصفوف المتأثرة بآخر execute / executemany."""
+        return getattr(self._c, "rowcount", -1)
 
 
 class _PgConnectionWrapper:
@@ -915,10 +939,10 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_attendance_course ON attendance_records(course_name)",
     "CREATE INDEX IF NOT EXISTS idx_enrollment_plans_student_sem ON enrollment_plans(student_id, semester)",
     "CREATE INDEX IF NOT EXISTS idx_enrollment_items_plan ON enrollment_plan_items(plan_id)",
-    "CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user, created_at)",
+    'CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications("user", created_at)',
     "CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)",
     "CREATE INDEX IF NOT EXISTS idx_academic_calendar_year_term ON academic_calendar(academic_year, term)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_courses_code_unique ON courses(course_code) WHERE COALESCE(course_code,'') <> ''",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_courses_code_unique ON courses(course_code) WHERE course_code IS NOT NULL AND course_code <> ''",
     "CREATE INDEX IF NOT EXISTS idx_student_supervisor_instructor ON student_supervisor(instructor_id)",
     "CREATE INDEX IF NOT EXISTS idx_reg_requests_status_created ON registration_requests(status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_reg_requests_student ON registration_requests(student_id)",
@@ -957,20 +981,32 @@ def _ensure_tables_postgresql() -> None:
             "INTEGER NOT NULL DEFAULT 0"
         ),
         "ALTER TABLE enrollment_plans ADD COLUMN IF NOT EXISTS prereq_ack_reason TEXT DEFAULT ''",
+        # أرقام معرفات طويلة (وطني/داخلي) تتجاوز INTEGER في PostgreSQL
+        "ALTER TABLE users ALTER COLUMN instructor_id TYPE BIGINT USING instructor_id::bigint",
     ]
     with get_connection() as conn:
         cur = conn.cursor()
+        # كل جملة في معاملة منفصلة حتى لا يُلغى تنفيذ الباقي بعد فشل واحد (PostgreSQL يرفض المتابعة في نفس المعاملة)
         for stmt in pg_alters:
             try:
                 cur.execute(stmt)
+                conn.commit()
             except Exception as e:
                 logger.debug("postgresql alter skipped: %s", e)
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
         for idx_stmt in INDEXES:
             try:
                 cur.execute(idx_stmt)
+                conn.commit()
             except Exception as e:
-                logger.warning(f"Could not create index on PostgreSQL: {e}")
-        conn.commit()
+                logger.warning("Could not create index on PostgreSQL: %s", e)
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
     logger.info("PostgreSQL compatibility migrations applied")
 
 
