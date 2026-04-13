@@ -27,14 +27,15 @@ ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin-mohamed')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
 
 if not ADMIN_PASSWORD:
-    import warnings
-    warnings.warn(
-        "تحذير أمان: ADMIN_PASSWORD غير معيَّنة في متغيرات البيئة أو ملف .env. "
-        "سيتم استخدام كلمة مرور افتراضية لأغراض التطوير فقط، ويجب تغييرها في الإنتاج.",
-        UserWarning,
+    raise RuntimeError(
+        "\n\n"
+        "===== خطأ أمان حرج =====\n"
+        "متغير البيئة ADMIN_PASSWORD غير معيَّن!\n"
+        "يجب تعيين ADMIN_PASSWORD في ملف .env أو متغيرات البيئة قبل تشغيل التطبيق.\n"
+        "مثال: ADMIN_PASSWORD=YourStr0ng!Passw0rd\n"
+        "راجع ملف .env.example للتفاصيل.\n"
+        "============================\n"
     )
-    # كلمة مرور افتراضية للتطوير فقط
-    ADMIN_PASSWORD = "change-me-now"
 
 # ============================================
 # إعدادات Flask
@@ -51,7 +52,7 @@ if not SECRET_KEY:
     )
 
 FLASK_ENV = os.environ.get('FLASK_ENV', 'development')
-FLASK_DEBUG = os.environ.get('FLASK_DEBUG', '1') == '1'
+FLASK_DEBUG = os.environ.get('FLASK_DEBUG', '0') == '1'
 
 # ============================================
 # إعدادات قاعدة البيانات
@@ -65,6 +66,12 @@ DATABASE_URL = os.environ.get('DATABASE_URL')
 if not DATABASE_URL:
     # Default to SQLite in development when DATABASE_URL is not provided.
     DATABASE_URL = f"sqlite:///{Path(DATABASE_PATH).resolve().as_posix()}"
+
+# ============================================
+# إعدادات Connection Pool (لـ PostgreSQL فقط)
+# ============================================
+PG_POOL_MIN_SIZE = int(os.environ.get('PG_POOL_MIN_SIZE', '2'))
+PG_POOL_MAX_SIZE = int(os.environ.get('PG_POOL_MAX_SIZE', '10'))
 
 # ============================================
 # إعدادات الأمان

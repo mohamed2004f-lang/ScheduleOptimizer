@@ -8,9 +8,10 @@ services:
       - "5000:5000"
     environment:
       - FLASK_ENV=production
-      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
-      - SECRET_KEY=${SECRET_KEY:-change-this-secret-key}
+      - FLASK_DEBUG=0
+      - ADMIN_USERNAME=${ADMIN_USERNAME:?يجب تعيين ADMIN_USERNAME في ملف .env}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?يجب تعيين ADMIN_PASSWORD في ملف .env}
+      - SECRET_KEY=${SECRET_KEY:?يجب تعيين SECRET_KEY في ملف .env}
       - DB_FILE=backend/database/mechanical.db
     volumes:
       # حفظ قاعدة البيانات خارج الحاوية
@@ -30,4 +31,3 @@ services:
 networks:
   schedule-network:
     driver: bridge
-

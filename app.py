@@ -1,7 +1,8 @@
 from flask import Flask, render_template, redirect, url_for, jsonify, session, request, abort
 from flask_wtf.csrf import CSRFProtect, CSRFError
-from backend.database.database import ensure_tables, DB_FILE, is_postgresql
+from backend.database.database import ensure_tables, DB_FILE, is_postgresql, close_pool
 from config import DATABASE_URL
+import atexit
 
 # Blueprints
 from backend.services.students import students_bp
@@ -91,6 +92,9 @@ if len(dups) > 1:
 
 # تهيئة الجداول
 ensure_tables()
+
+# إغلاق connection pool عند إيقاف التطبيق
+atexit.register(close_pool)
 
 # تهيئة نظام Logging المحسّن
 setup_logging(app)
@@ -202,6 +206,7 @@ def analytics_dashboard_page():
 
 @app.route("/student_view")
 @app.route("/student_view/<student_id>")
+@login_required
 def student_view(student_id=None):
     return render_template("student_view.html", student_id=student_id)
 
@@ -225,6 +230,7 @@ def students_form():
 
 
 @app.route("/graduates_page")
+@login_required
 def graduates_page():
     """صفحة قائمة الخريجين (تحت شؤون الطلبة)."""
     return render_template("graduates.html")
@@ -267,20 +273,24 @@ def schedule_form():
 
 
 @app.route("/exams/midterms")
+@login_required
 def exams_midterms():
     return render_template("exams_midterms.html")
 
 
 @app.route("/exams/finals")
+@login_required
 def exams_finals():
     return render_template("exams_finals.html")
 
 
 @app.route("/exams/conflicts")
+@login_required
 def exams_conflicts():
     return render_template("exams_conflicts.html")
 
 @app.route("/registrations_form")
+@login_required
 def registrations_form():
     return render_template("registrations_form.html", withdrawn_mode=False)
 
@@ -298,10 +308,13 @@ def enrollment_plans_page():
     return render_template("enrollment_plans.html")
 
 @app.route("/notifications_center")
+@login_required
 def notifications_center_page():
     return render_template("notifications_center.html")
 
 @app.route("/users_admin")
+@login_required
+@role_required("admin", "admin_main")
 def users_admin_page():
     return render_template("users_admin.html")
 
@@ -324,6 +337,7 @@ def academic_calendar_page():
 
 
 @app.route("/academic_rules_page")
+@login_required
 def academic_rules_page():
     return render_template("academic_rules.html")
 
@@ -381,6 +395,7 @@ def performance_report_page():
 
 
 @app.route("/registration_requests_page")
+@login_required
 def registration_requests_page():
     return render_template("registration_requests.html")
 
@@ -488,22 +503,27 @@ def system_docs_page():
 # مسارات توافقية (للحفاظ على عمل الواجهة القديمة)
 # -----------------------------
 @app.route("/list_students")
+@login_required
 def compat_list_students():
     return redirect(url_for("students.list_students"))
 
 @app.route("/list_courses")
+@login_required
 def compat_list_courses():
     return redirect(url_for("courses.list_courses"))
 
 @app.route("/list_prereqs")
+@login_required
 def compat_list_prereqs():
     return redirect(url_for("courses.list_prereqs"))
 
 @app.route("/list_schedule_rows")
+@login_required
 def compat_list_schedule_rows():
     return redirect(url_for("schedule.list_schedule_rows"))
 
 @app.route("/results_data")
+@login_required
 def compat_results_data():
     from backend.services.utilities import table_to_dicts
     out = {}
@@ -536,36 +556,44 @@ def compat_results_data():
     return jsonify(out)
 
 @app.route("/add_student", methods=["POST"])
+@login_required
 def compat_add_student():
     return redirect(url_for("students.add_student"), code=307)
 
 @app.route("/add_course", methods=["POST"])
+@login_required
 def compat_add_course():
     return redirect(url_for("courses.add_course"), code=307)
 
 @app.route("/add_schedule_row", methods=["POST"])
+@login_required
 def compat_add_schedule_row():
     return redirect(url_for("schedule.add_schedule_row"), code=307)
 
 
 @app.route("/delete_schedule_row", methods=["POST"])
+@login_required
 def compat_delete_schedule_row():
     return redirect(url_for("schedule.delete_schedule_row"), code=307)
 
 
 @app.route("/update_schedule_row", methods=["POST"])
+@login_required
 def compat_update_schedule_row():
     return redirect(url_for("schedule.update_schedule_row"), code=307)
 
 @app.route("/save_registrations", methods=["POST"])
+@login_required
 def compat_save_registrations():
     return redirect(url_for("students.save_registrations"), code=307)
 
 @app.route("/get_registrations")
+@login_required
 def compat_get_registrations():
     return redirect(url_for("students.get_registrations"))
 
 @app.route("/delete_registrations", methods=["POST"])
+@login_required
 def compat_delete_registrations():
     # مسار توافقي لحذف تسجيلات طالب بالكامل
     return redirect(url_for("students.delete_registrations"), code=307)
@@ -586,23 +614,28 @@ def compat_update_grade():
     return redirect(url_for("grades.update_grade"), code=307)
 
 @app.route("/update_course", methods=["POST"])
+@login_required
 def compat_update_course():
     return redirect(url_for("courses.update_course"), code=307)
 
 @app.route("/delete_student", methods=["POST"])
+@login_required
 def compat_delete_student():
     return redirect(url_for("students.delete_student"), code=307)
 
 @app.route("/delete_course", methods=["POST"])
+@login_required
 def compat_delete_course():
     return redirect(url_for("courses.delete_course"), code=307)
 
 @app.route("/run-optimize", methods=["POST"])
+@login_required
 def compat_run_optimize():
     # No schedule.run_optimize endpoint exists; return a message or handle here
     return jsonify({"error": "Endpoint not implemented. Please implement schedule.run_optimize or use another endpoint."}), 501
 
 @app.route("/proposed_move/<int:section_id>", methods=["POST"])
+@login_required
 def compat_proposed_move(section_id):
     return redirect(url_for("schedule.proposed_move_action", section_id=section_id), code=307)
 
@@ -612,6 +645,7 @@ def compat_proposed_move(section_id):
 # بعض الواجهات القديمة أو قوالبك قد ترْسِل إلى /add_prereq — هذا يسبب 404 لأن الراوت الحقيقي هو /courses/prereqs/add
 # هذا الراوت يبقي التوافق ويعيد التوجيه مع الحفاظ على طريقة الطلب (307) حتى يعمل الـ POST كما هو متوقع.
 @app.route("/add_prereq", methods=["POST"])
+@login_required
 def compat_add_prereq():
     return redirect(url_for("courses.add_prereq"), code=307)
 
@@ -619,4 +653,5 @@ def compat_add_prereq():
 # تشغيل التطبيق
 # -----------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    from config import FLASK_DEBUG
+    app.run(host="0.0.0.0", port=5000, debug=FLASK_DEBUG)

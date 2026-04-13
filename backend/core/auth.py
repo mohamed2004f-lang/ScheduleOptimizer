@@ -45,7 +45,15 @@ try:
 except ImportError as e:
     logger.warning(f"Could not import from config.py: {e}")
     ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
-    ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')
+    ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
+    if not ADMIN_PASSWORD:
+        raise RuntimeError(
+            "\n\n"
+            "===== خطأ أمان حرج =====\n"
+            "ADMIN_PASSWORD غير معيَّنة في متغيرات البيئة ولم يتم استيراد config.py.\n"
+            "يجب تعيين ADMIN_PASSWORD في ملف .env أو متغيرات البيئة.\n"
+            "============================\n"
+        )
     SECRET_KEY = os.environ.get('SECRET_KEY', secrets.token_hex(32))
     SESSION_LIFETIME_MINUTES = 60
 
@@ -254,11 +262,20 @@ def role_required(*roles):
                 except Exception:
                     is_logged_in = False
             if not is_logged_in:
-                return jsonify({
-                    'status': 'error',
-                    'message': 'يجب تسجيل الدخول للوصول إلى هذه الصفحة',
-                    'code': 'UNAUTHORIZED'
-                }), 401
+                accept = (request.headers.get("Accept") or "").lower()
+                is_api_request = (
+                    request.is_json
+                    or "application/json" in accept
+                    or request.path.startswith("/api/")
+                    or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+                )
+                if is_api_request:
+                    return jsonify({
+                        'status': 'error',
+                        'message': 'يجب تسجيل الدخول للوصول إلى هذه الصفحة',
+                        'code': 'UNAUTHORIZED'
+                    }), 401
+                return redirect("/login")
             user_role = None
             if current_user is not None:
                 try:

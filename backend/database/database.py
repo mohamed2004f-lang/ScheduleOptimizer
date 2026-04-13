@@ -18,11 +18,13 @@ logger = logging.getLogger(__name__)
 
 # تحميل config أولاً لضمان قراءة .env (DATABASE_URL / DATABASE_PATH)
 try:
-    from config import DATABASE_PATH, DATABASE_URL
+    from config import DATABASE_PATH, DATABASE_URL, PG_POOL_MIN_SIZE, PG_POOL_MAX_SIZE
 except ImportError:
     BASE_DIR = Path(__file__).parent
     DATABASE_PATH = os.environ.get("DATABASE_PATH", str(BASE_DIR / "mechanical.db"))
     DATABASE_URL = os.environ.get("DATABASE_URL") or f"sqlite:///{Path(DATABASE_PATH).resolve().as_posix()}"
+    PG_POOL_MIN_SIZE = int(os.environ.get("PG_POOL_MIN_SIZE", "2"))
+    PG_POOL_MAX_SIZE = int(os.environ.get("PG_POOL_MAX_SIZE", "10"))
 
 # جذر المشروع (ScheduleOptimizer): backend/database/database.py -> .. -> ..
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -298,8 +300,13 @@ class _PgCursorWrapper:
 
 
 class _PgConnectionWrapper:
-    def __init__(self, raw_conn):
+    """
+    Wrapper لاتصال PostgreSQL يوفر توافق مع واجهة sqlite3.Connection.
+    يدعم العمل مع connection pool: عند الإغلاق يعيد الاتصال للـ pool بدلاً من إغلاقه فعلياً.
+    """
+    def __init__(self, raw_conn, pool=None):
         self._conn = raw_conn
+        self._pool = pool
 
     def cursor(self):
         return _PgCursorWrapper(self._conn.cursor(), self)
@@ -311,7 +318,11 @@ class _PgConnectionWrapper:
         return self._conn.rollback()
 
     def close(self):
-        return self._conn.close()
+        if self._pool is not None:
+            # إعادة الاتصال للـ pool بدلاً من إغلاقه
+            self._pool.putconn(self._conn)
+        else:
+            self._conn.close()
 
     def execute(self, sql, params=None):
         cur = self.cursor()
@@ -326,20 +337,93 @@ class _PgConnectionWrapper:
             self._conn.commit()
         else:
             self._conn.rollback()
-        self._conn.close()
+        self.close()
         return False
 
 
+# ============================================
+# Connection Pool لـ PostgreSQL
+# ============================================
+_pg_pool = None  # متغير عام يحمل الـ pool
+
+
+def _get_or_create_pool():
+    """
+    إنشاء أو إرجاع connection pool لـ PostgreSQL.
+    يستخدم psycopg_pool.ConnectionPool مع إعدادات min_size و max_size من config.
+    """
+    global _pg_pool
+    if _pg_pool is not None:
+        return _pg_pool
+
+    try:
+        from psycopg_pool import ConnectionPool
+    except ImportError:
+        logger.warning(
+            "مكتبة psycopg_pool غير مثبتة. سيتم إنشاء اتصال جديد لكل طلب. "
+            "ثبّتها عبر: pip install psycopg_pool"
+        )
+        return None
+
+    conninfo = _pg_conninfo()
+    logger.info(
+        "Initializing PostgreSQL connection pool (min=%d, max=%d)",
+        PG_POOL_MIN_SIZE,
+        PG_POOL_MAX_SIZE,
+    )
+    _pg_pool = ConnectionPool(
+        conninfo=conninfo,
+        min_size=PG_POOL_MIN_SIZE,
+        max_size=PG_POOL_MAX_SIZE,
+        # الاتصالات تستخدم dict_row للتوافق مع بقية الكود
+        kwargs={"row_factory": __import__("psycopg.rows", fromlist=["dict_row"]).dict_row},
+    )
+    return _pg_pool
+
+
+def close_pool():
+    """
+    إغلاق connection pool عند إيقاف التطبيق.
+    يجب استدعاؤها في teardown أو atexit.
+    """
+    global _pg_pool
+    if _pg_pool is not None:
+        logger.info("Closing PostgreSQL connection pool.")
+        try:
+            _pg_pool.close()
+        except Exception as e:
+            logger.warning("Error closing pool: %s", e)
+        finally:
+            _pg_pool = None
+
+
 def get_connection(db_file=None):
-    """اتصال قاعدة البيانات: PostgreSQL عبر psycopg أو SQLite كما سابقاً."""
+    """
+    اتصال قاعدة البيانات: PostgreSQL عبر psycopg (مع pool) أو SQLite كما سابقاً.
+
+    لـ PostgreSQL:
+    - يحاول أخذ اتصال من الـ pool أولاً.
+    - إذا لم يكن الـ pool متاحاً (مكتبة psycopg_pool غير مثبتة)، ينشئ اتصال جديد مباشرة.
+    - _PgConnectionWrapper.__exit__ يعيد الاتصال للـ pool بدلاً من إغلاقه.
+
+    لـ SQLite:
+    - يبقى السلوك كما هو (اتصال مباشر بدون pool).
+    """
     if is_postgresql():
         import psycopg
         from psycopg.rows import dict_row
 
         if db_file and Path(db_file).resolve() != Path(DB_FILE).resolve():
             logger.warning("تجاهل db_file مع PostgreSQL: %s", db_file)
-        conn = psycopg.connect(_pg_conninfo(), row_factory=dict_row)
-        return _PgConnectionWrapper(conn)
+
+        pool = _get_or_create_pool()
+        if pool is not None:
+            conn = pool.getconn()
+            return _PgConnectionWrapper(conn, pool=pool)
+        else:
+            # Fallback: إنشاء اتصال مباشر بدون pool
+            conn = psycopg.connect(_pg_conninfo(), row_factory=dict_row)
+            return _PgConnectionWrapper(conn, pool=None)
 
     db_path = db_file or DB_FILE
     conn = sqlite3.connect(db_path)

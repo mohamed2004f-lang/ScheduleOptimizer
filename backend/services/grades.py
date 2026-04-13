@@ -1185,6 +1185,183 @@ def _load_transcript_data(student_id: str):
     }
 
 
+def _load_all_transcripts_bulk(student_ids: list[str] | None = None) -> dict:
+    """
+    جلب بيانات كشوف الدرجات لجميع الطلاب (أو مجموعة محددة) دفعة واحدة.
+    تُرجع dict مفتاحه student_id وقيمته نفس الهيكل الذي تُرجعه _load_transcript_data.
+    تحل مشكلة N+1 Queries عند الحاجة لبيانات عدد كبير من الطلاب.
+    """
+    result: dict = {}
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+
+        # --- 1) جلب بيانات الطلاب الأساسية ---
+        cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
+        has_plan = "graduation_plan" in cols
+        has_join = "join_term" in cols and "join_year" in cols
+
+        sel_parts = ["student_id", "COALESCE(student_name, '') AS student_name"]
+        if has_plan:
+            sel_parts.append("COALESCE(graduation_plan, '') AS graduation_plan")
+        if has_join:
+            sel_parts.append("COALESCE(join_term, '') AS join_term")
+            sel_parts.append("COALESCE(join_year, '') AS join_year")
+
+        if student_ids is not None:
+            if len(student_ids) == 0:
+                return result
+            placeholders = ",".join("?" for _ in student_ids)
+            sql = "SELECT " + ", ".join(sel_parts) + f" FROM students WHERE student_id IN ({placeholders})"
+            student_rows = cur.execute(sql, tuple(student_ids)).fetchall()
+        else:
+            sql = "SELECT " + ", ".join(sel_parts) + " FROM students"
+            student_rows = cur.execute(sql).fetchall()
+
+        students_map: dict = {}
+        for sr in student_rows:
+            sid = sr["student_id"]
+            students_map[sid] = {
+                "student_name": (sr["student_name"] or ""),
+                "graduation_plan": ((sr["graduation_plan"] or "").strip() if has_plan else ""),
+                "join_term": ((sr["join_term"] or "").strip() if has_join else ""),
+                "join_year": ((sr["join_year"] or "").strip() if has_join else ""),
+            }
+
+        if not students_map:
+            return result
+
+        all_sids = list(students_map.keys())
+
+        # --- 2) جلب جميع الدرجات دفعة واحدة ---
+        placeholders = ",".join("?" for _ in all_sids)
+        grade_rows = cur.execute(
+            f"""
+            SELECT student_id, semester, course_name, course_code, units, grade
+            FROM grades
+            WHERE student_id IN ({placeholders})
+            ORDER BY student_id, semester, course_name
+            """,
+            tuple(all_sids),
+        ).fetchall()
+
+        # تجميع الدرجات حسب الطالب
+        grades_by_student: dict = defaultdict(list)
+        for gr in grade_rows:
+            grades_by_student[gr["student_id"]].append(gr)
+
+        # --- 3) جلب وحدات المقررات من جدول courses (دفعة واحدة) ---
+        all_course_names: set = set()
+        for gr in grade_rows:
+            cname = gr["course_name"] or ""
+            if cname:
+                all_course_names.add(cname)
+
+        course_units_from_db: dict = {}
+        if all_course_names:
+            cnames_list = list(all_course_names)
+            placeholders_c = ",".join("?" for _ in cnames_list)
+            course_rows = cur.execute(
+                f"SELECT course_name, COALESCE(units, 0) AS u FROM courses WHERE course_name IN ({placeholders_c})",
+                tuple(cnames_list),
+            ).fetchall()
+            for cr in course_rows:
+                u = int(cr["u"] or 0)
+                if u > 0:
+                    course_units_from_db[cr["course_name"]] = u
+
+        # --- 4) معالجة بيانات كل طالب ---
+        for sid, sinfo in students_map.items():
+            student_grade_rows = grades_by_student.get(sid, [])
+
+            transcript = OrderedDict()
+            gpa_by_semester: dict = defaultdict(list)
+            best_map: dict = {}
+
+            for row in student_grade_rows:
+                sem = row["semester"] or ""
+                course_name = row["course_name"] or ""
+                course_code = row["course_code"] or ""
+                units = row["units"] or 0
+                grade = row["grade"]
+
+                transcript.setdefault(sem, []).append({
+                    "course_name": course_name,
+                    "course_code": course_code,
+                    "units": units,
+                    "grade": grade,
+                })
+
+                if grade is not None:
+                    gpa_by_semester[sem].append((grade, units))
+
+                if grade is not None:
+                    if course_name not in best_map or grade > best_map[course_name]["best_grade"]:
+                        best_map[course_name] = {"best_grade": grade, "units": units}
+                    else:
+                        if units and (not best_map[course_name]["units"] or units > best_map[course_name]["units"]):
+                            best_map[course_name]["units"] = units
+
+            semester_gpas: dict = {}
+            for sem, lst in gpa_by_semester.items():
+                total_units_sem = sum(max(u, 0) for _, u in lst)
+                semester_gpas[sem] = (
+                    round(
+                        sum(g * max(u, 0) for g, u in lst) / total_units_sem,
+                        2,
+                    )
+                    if total_units_sem
+                    else 0.0
+                )
+
+            # الوحدات المنجزة لكل فصل دراسي
+            semester_completed_units: dict = {}
+            for sem, courses_list in transcript.items():
+                sem_completed = 0
+                for c in courses_list:
+                    u = max(c.get("units") or 0, 0)
+                    if u <= 0 and (c.get("course_name") or "") in course_units_from_db:
+                        u = course_units_from_db[c["course_name"]]
+                    g = c.get("grade")
+                    if g is not None and float(g) >= PASSING_GRADE:
+                        sem_completed += max(0, u)
+                semester_completed_units[sem] = int(sem_completed)
+
+            total_points = 0.0
+            total_units = 0.0
+            completed_units = 0
+            for course_name, info in best_map.items():
+                units = max(info["units"] or 0, 0)
+                if units <= 0 and course_name in course_units_from_db:
+                    units = course_units_from_db[course_name]
+                grade_best = info["best_grade"]
+                passed = grade_best is not None and grade_best >= PASSING_GRADE
+                total_units += units
+                total_points += (grade_best * units) if grade_best is not None else 0.0
+                if passed:
+                    completed_units += units
+            cumulative_gpa = round(total_points / total_units, 2) if total_units else 0.0
+            completed_units = int(completed_units)
+
+            ordered_semesters = list(transcript.keys())
+
+            result[sid] = {
+                "student_id": sid,
+                "student_name": sinfo["student_name"],
+                "graduation_plan": sinfo["graduation_plan"],
+                "join_term": sinfo["join_term"],
+                "join_year": sinfo["join_year"],
+                "transcript": transcript,
+                "ordered_semesters": ordered_semesters,
+                "semester_gpas": semester_gpas,
+                "semester_completed_units": semester_completed_units,
+                "cumulative_gpa": cumulative_gpa,
+                "completed_units": completed_units,
+            }
+
+    return result
+
+
 def _normalize_student_id(value):
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return ""

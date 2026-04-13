@@ -4,7 +4,7 @@ from flask import Blueprint, jsonify, render_template, request, send_file, sessi
 
 from backend.core.auth import role_required
 from .utilities import get_connection, excel_response_from_df, pdf_response_from_html, get_current_term
-from backend.services.grades import _load_transcript_data
+from backend.services.grades import _load_transcript_data, _load_all_transcripts_bulk
 
 
 performance_bp = Blueprint("performance", __name__)
@@ -272,6 +272,34 @@ def _build_performance_export_rows(conn) -> list[dict]:
     cur = conn.cursor()
     meta_rows = _fetch_students_performance_meta(cur)
 
+    # --- Bulk load: جلب جميع بيانات الدرجات دفعة واحدة بدلاً من N+1 ---
+    all_sids = [r["student_id"] for r in meta_rows]
+    transcripts_bulk = _load_all_transcripts_bulk(all_sids) if all_sids else {}
+
+    # --- Bulk load: جلب جميع student_exceptions دفعة واحدة ---
+    exceptions_map: dict = {}
+    if all_sids:
+        placeholders = ",".join("?" for _ in all_sids)
+        exc_rows = cur.execute(
+            f"""
+            SELECT se.student_id, se.id, se.note, se.is_active
+            FROM student_exceptions se
+            INNER JOIN (
+                SELECT student_id, MAX(id) AS max_id
+                FROM student_exceptions
+                WHERE type = 'extra_chance'
+                  AND student_id IN ({placeholders})
+                GROUP BY student_id
+            ) latest ON se.id = latest.max_id
+            """,
+            tuple(all_sids),
+        ).fetchall()
+        for er in exc_rows:
+            exceptions_map[er["student_id"]] = {
+                "is_active": bool(er["is_active"]),
+                "note": er["note"] or "",
+            }
+
     data_rows: list[dict] = []
     for r in meta_rows:
         sid = r["student_id"]
@@ -283,7 +311,7 @@ def _build_performance_export_rows(conn) -> list[dict]:
         status_changed_term = r.get("status_changed_term") or ""
         status_changed_year = r.get("status_changed_year") or ""
 
-        tr = _load_transcript_data(sid)
+        tr = transcripts_bulk.get(sid, {})
         ordered = tr.get("ordered_semesters", []) or []
         sem_gpas = tr.get("semester_gpas", {}) or {}
         cumulative_gpa = tr.get("cumulative_gpa", 0.0)
@@ -300,18 +328,9 @@ def _build_performance_export_rows(conn) -> list[dict]:
         status = _compute_status(ordered, sem_gpas, cumulative_gpa)
         status = _override_status_by_enrollment(enrollment_status, status)
 
-        exc_row = cur.execute(
-            """
-            SELECT id, type, note, is_active
-            FROM student_exceptions
-            WHERE student_id = ? AND type = 'extra_chance'
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (sid,),
-        ).fetchone()
-        has_extra = bool(exc_row and exc_row[3])
-        extra_note = exc_row[2] if exc_row else ""
+        exc_info = exceptions_map.get(sid)
+        has_extra = bool(exc_info and exc_info["is_active"])
+        extra_note = exc_info["note"] if exc_info else ""
 
         data_rows.append(
             {
@@ -533,6 +552,34 @@ def performance_report():
             else:
                 meta_rows = []
 
+        # --- Bulk load: جلب جميع بيانات الدرجات دفعة واحدة بدلاً من N+1 ---
+        report_sids = [r["student_id"] for r in meta_rows]
+        transcripts_bulk = _load_all_transcripts_bulk(report_sids) if report_sids else {}
+
+        # --- Bulk load: جلب جميع student_exceptions دفعة واحدة ---
+        exceptions_map: dict = {}
+        if report_sids:
+            placeholders = ",".join("?" for _ in report_sids)
+            exc_rows = cur.execute(
+                f"""
+                SELECT se.student_id, se.id, se.note, se.is_active
+                FROM student_exceptions se
+                INNER JOIN (
+                    SELECT student_id, MAX(id) AS max_id
+                    FROM student_exceptions
+                    WHERE type = 'extra_chance'
+                      AND student_id IN ({placeholders})
+                    GROUP BY student_id
+                ) latest ON se.id = latest.max_id
+                """,
+                tuple(report_sids),
+            ).fetchall()
+            for er in exc_rows:
+                exceptions_map[er["student_id"]] = {
+                    "is_active": bool(er["is_active"]),
+                    "note": er["note"] or "",
+                }
+
         for r in meta_rows:
             sid = r["student_id"]
             name = r["student_name"]
@@ -543,7 +590,7 @@ def performance_report():
             status_changed_term = r.get("status_changed_term") or ""
             status_changed_year = r.get("status_changed_year") or ""
 
-            data = _load_transcript_data(sid)
+            data = transcripts_bulk.get(sid, {})
             ordered = data.get("ordered_semesters", []) or []
             sem_gpas = data.get("semester_gpas", {}) or {}
             cumulative_gpa = data.get("cumulative_gpa", 0.0)
@@ -560,18 +607,9 @@ def performance_report():
             status = _compute_status(ordered, sem_gpas, cumulative_gpa)
             status = _override_status_by_enrollment(enrollment_status, status)
 
-            exc_row = cur.execute(
-                """
-                SELECT id, type, note, is_active
-                FROM student_exceptions
-                WHERE student_id = ? AND type = 'extra_chance'
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (sid,),
-            ).fetchone()
-            has_extra = bool(exc_row and exc_row[3])
-            extra_note = exc_row[2] if exc_row else ""
+            exc_info = exceptions_map.get(sid)
+            has_extra = bool(exc_info and exc_info["is_active"])
+            extra_note = exc_info["note"] if exc_info else ""
 
             results.append(
                 {
