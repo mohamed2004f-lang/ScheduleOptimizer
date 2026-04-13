@@ -5,15 +5,13 @@ import pandas as pd
 import shutil
 import tempfile
 import logging
-from flask import send_file, render_template, jsonify
+from flask import send_file, jsonify
 from datetime import datetime
 from backend.database.database import (
     DB_FILE,
-    ALLOWED_TABLES,
     ensure_tables as ensure_schema,
     get_connection,
     is_postgresql,
-    table_to_dicts,
 )
 
 logger = logging.getLogger(__name__)

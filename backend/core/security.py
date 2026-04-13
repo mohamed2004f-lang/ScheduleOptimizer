@@ -5,7 +5,7 @@
 import re
 import logging
 from functools import wraps
-from flask import request, jsonify, g
+from flask import request, jsonify
 from typing import Optional, Tuple, Any
 
 logger = logging.getLogger(__name__)

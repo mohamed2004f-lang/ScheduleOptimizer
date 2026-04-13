@@ -151,19 +151,31 @@ def _execute_registration_change(conn, student_id: str, course_name: str, action
         proposed.add(course_name)
     elif action == "drop" and course_name in proposed:
         proposed.remove(course_name)
-    total_units = 0
+    # جلب وحدات ورموز المقررات دفعة واحدة (يشمل المقرر المُنفَّذ حتى لو خرج من مجموعة proposed بعد الإسقاط)
+    meta_names = proposed | {course_name}
+    course_lookup: dict[str, tuple[str, int]] = {}
     try:
-        if proposed:
-            lst = list(proposed)
+        if meta_names:
+            lst = list(meta_names)
             placeholders = ",".join("?" for _ in lst)
             rows_u = cur.execute(
-                f"SELECT course_name, COALESCE(units,0) AS units FROM courses WHERE course_name IN ({placeholders})",
+                f"""
+                SELECT course_name, COALESCE(course_code,'') AS course_code,
+                       COALESCE(units,0) AS units
+                FROM courses
+                WHERE course_name IN ({placeholders})
+                """,
                 lst,
             ).fetchall()
-            units_map = {r[0]: int(r[1] or 0) for r in rows_u}
-            total_units = sum(int(units_map.get(c, 0) or 0) for c in proposed)
+            for r in rows_u:
+                course_lookup[r[0]] = ((r[1] or "").strip(), int(r[2] or 0))
     except Exception:
-        # إذا تعذر الحساب لأي سبب، لا نوقف التنفيذ هنا
+        course_lookup = {}
+
+    total_units = 0
+    try:
+        total_units = sum(course_lookup.get(c, ("", 0))[1] for c in proposed)
+    except Exception:
         total_units = 0
     if total_units and (total_units < 12 or total_units > 19):
         if role != "admin":
@@ -196,19 +208,7 @@ def _execute_registration_change(conn, student_id: str, course_name: str, action
     except Exception:
         student_name = ""
 
-    def _get_course_meta(name: str):
-        try:
-            row = cur.execute(
-                "SELECT COALESCE(course_code,''), COALESCE(units,0) FROM courses WHERE course_name = ?",
-                (name,),
-            ).fetchone()
-            if row:
-                return row[0], int(row[1] or 0)
-        except Exception:
-            pass
-        return "", 0
-
-    course_code, units = _get_course_meta(course_name)
+    course_code, units = course_lookup.get(course_name, ("", 0))
     performed_by = _current_user()
     # نحاول ربط السجل بالفصل الحالي
     try:
@@ -217,7 +217,7 @@ def _execute_registration_change(conn, student_id: str, course_name: str, action
         term_label = f"{term_name} {term_year}".strip()
     except Exception:
         term_label = ""
-    now_iso = datetime.datetime.utcnow().isoformat()
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     prev_state = '{"registered": false}'
     new_state = '{"registered": true}'
@@ -271,7 +271,7 @@ def approve_request():
         return jsonify({"status": "error", "message": "id مطلوب"}), 400
 
     reviewer = _current_user()
-    now_iso = datetime.datetime.utcnow().isoformat()
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     with get_connection() as conn:
         cur = conn.cursor()
@@ -363,7 +363,7 @@ def reject_request():
         return jsonify({"status": "error", "message": "id مطلوب"}), 400
 
     reviewer = _current_user()
-    now_iso = datetime.datetime.utcnow().isoformat()
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     with get_connection() as conn:
         cur = conn.cursor()

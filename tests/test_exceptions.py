@@ -23,18 +23,20 @@ class TestExceptions:
         assert exc.message == "حدث خطأ غير متوقع"
         assert exc.to_dict() == {
             'status': 'error',
-            'message': 'حدث خطأ غير متوقع'
+            'message': 'حدث خطأ غير متوقع',
+            'code': 'INTERNAL_ERROR',
         }
     
     def test_app_exception_custom(self):
         """اختبار الاستثناء الأساسي بقيم مخصصة"""
-        exc = AppException("خطأ مخصص", 400, {'field': 'value'})
+        exc = AppException("خطأ مخصص", status_code=400, payload={'field': 'value'})
         assert exc.status_code == 400
         assert exc.message == "خطأ مخصص"
         assert exc.to_dict() == {
             'status': 'error',
             'message': 'خطأ مخصص',
-            'field': 'value'
+            'code': 'INTERNAL_ERROR',
+            'field': 'value',
         }
     
     def test_validation_error(self):

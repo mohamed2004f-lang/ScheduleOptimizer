@@ -427,7 +427,7 @@ window.addEventListener('load', async ()=>{
     const role = auth?.role || '';
     const isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(auth?.is_supervisor || 0) === 1);
     IS_VIEW_ONLY_ROLE = (role === 'instructor') || isSupervisor;
-    IS_ADMIN = role === 'admin';
+    IS_ADMIN = (role === 'admin' || role === 'admin_main' || role === 'head_of_department');
   } catch(e){
     IS_ADMIN = false;
     IS_VIEW_ONLY_ROLE = false;

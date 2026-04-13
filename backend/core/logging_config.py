@@ -4,7 +4,6 @@
 import os
 import logging
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
-from datetime import datetime
 
 
 class SafeTimedRotatingFileHandler(TimedRotatingFileHandler):

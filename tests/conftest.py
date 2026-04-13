@@ -149,6 +149,52 @@ CREATE TABLE IF NOT EXISTS prereqs (
     required_course_name TEXT NOT NULL,
     UNIQUE (course_name, required_course_name)
 );
+
+CREATE TABLE IF NOT EXISTS registration_changes_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id TEXT NOT NULL,
+    student_name TEXT DEFAULT '',
+    term TEXT DEFAULT '',
+    course_name TEXT NOT NULL,
+    course_code TEXT DEFAULT '',
+    units INTEGER DEFAULT 0,
+    action TEXT NOT NULL CHECK (action IN ('add','drop','change')),
+    action_phase TEXT DEFAULT '',
+    action_time TEXT DEFAULT CURRENT_TIMESTAMP,
+    performed_by TEXT DEFAULT '',
+    reason TEXT,
+    notes TEXT,
+    prev_state TEXT,
+    new_state TEXT,
+    FOREIGN KEY (student_id) REFERENCES students(student_id),
+    FOREIGN KEY (course_name) REFERENCES courses(course_name)
+);
+
+CREATE TABLE IF NOT EXISTS registration_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id TEXT NOT NULL,
+    term TEXT DEFAULT '',
+    course_name TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('add','drop')),
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','approved','rejected','executed')),
+    requested_by TEXT DEFAULT '',
+    reviewed_by TEXT DEFAULT '',
+    request_reason TEXT,
+    review_note TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (student_id) REFERENCES students(student_id),
+    FOREIGN KEY (course_name) REFERENCES courses(course_name)
+);
+
+CREATE TABLE IF NOT EXISTS activity_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    actor TEXT,
+    action TEXT NOT NULL,
+    details TEXT
+);
 """
 
 
@@ -187,6 +233,21 @@ def _seed_sample_data(conn):
     cur.execute("INSERT OR IGNORE INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES ('S002', 'خريف 44-45', 'رياضيات 1', 'MATH101', 3, 40)")
     cur.execute("INSERT OR IGNORE INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES ('S002', 'ربيع 44-45', 'كيمياء 1', 'CHEM101', 2, 90)")
 
+    conn.commit()
+
+
+def _seed_student_user(conn):
+    """حساب طالب للاختبارات (طلبات التسجيل وغيرها)."""
+    try:
+        from werkzeug.security import generate_password_hash
+        pw_hash = generate_password_hash("TestP@ssw0rd!")
+    except ImportError:
+        from backend.core.auth import hash_password
+        pw_hash = hash_password("TestP@ssw0rd!")
+    conn.execute(
+        "INSERT OR IGNORE INTO users (username, password_hash, role, student_id) VALUES (?, ?, ?, ?)",
+        ("student-s001", pw_hash, "student", "S001"),
+    )
     conn.commit()
 
 
@@ -268,6 +329,7 @@ def _setup_shared_db():
     _shared_conn.executescript(_MINIMAL_TABLES)
     _seed_admin(_shared_conn)
     _seed_sample_data(_shared_conn)
+    _seed_student_user(_shared_conn)
 
     # Monkey-patch get_connection everywhere it is imported.
     import backend.database.database as db_mod
@@ -363,6 +425,20 @@ def auth_client(client):
     )
     assert resp.status_code == 200, f"Login failed: {resp.get_data(as_text=True)}"
     return client
+
+
+@pytest.fixture
+def student_auth_client(app):
+    """
+    عميل مسجّل كطالب (S001). منفصل عن ``auth_client`` حتى لا تُستبدل جلسة الأدمن المشتركة.
+    """
+    with app.test_client() as c:
+        resp = c.post(
+            "/auth/login",
+            json={"username": "student-s001", "password": "TestP@ssw0rd!"},
+        )
+        assert resp.status_code == 200, f"Student login failed: {resp.get_data(as_text=True)}"
+        yield c
 
 
 @pytest.fixture()

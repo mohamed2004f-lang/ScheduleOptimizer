@@ -1,7 +1,7 @@
 from flask import Flask, render_template, redirect, url_for, jsonify, session, request, abort
 from flask_wtf.csrf import CSRFProtect, CSRFError
 from backend.database.database import ensure_tables, DB_FILE, is_postgresql, close_pool
-from config import DATABASE_URL
+from config import DATABASE_URL, FLASK_ENV, FLASK_DEBUG
 import atexit
 
 # Blueprints
@@ -32,10 +32,25 @@ import os
 import pprint
 import logging
 import sqlite3
+import importlib
 from pathlib import Path
 
 # استخدم مجلد القوالب/الستايتك كما في مشروعك
 app = Flask(__name__, template_folder="frontend/templates", static_folder="frontend/static")
+
+# إعدادات تطوير محلية لتفادي الحاجة لإعادة تشغيل المنظومة بعد كل تعديل.
+if FLASK_ENV != "production":
+    app.config["TEMPLATES_AUTO_RELOAD"] = True
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+
+    @app.after_request
+    def _disable_dev_cache(resp):
+        # أثناء التطوير: امنع التخزين المؤقت لملفات الواجهة/HTML حتى تظهر التغييرات فورًا.
+        if request.path.startswith("/static/") or "text/html" in (resp.content_type or ""):
+            resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            resp.headers["Pragma"] = "no-cache"
+            resp.headers["Expires"] = "0"
+        return resp
 
 # CSRF protection (Web UI). API routes can be exempted.
 app.config.setdefault("WTF_CSRF_HEADERS", ["X-CSRFToken", "X-CSRF-Token"])
@@ -124,6 +139,31 @@ app.register_blueprint(academic_rules_bp, url_prefix="/academic_rules")
 app.register_blueprint(instructors_bp, url_prefix="/instructors")
 app.register_blueprint(performance_bp, url_prefix="/performance")
 app.register_blueprint(students_api_bp)
+
+
+def _startup_verify_critical_symbols() -> None:
+    """
+    فحص مبكر للاستيرادات/الدوال الحرجة حتى لا تظهر أخطاء ImportError وقت الاستخدام.
+    """
+    checks = [
+        ("backend.database.database", "table_to_dicts"),
+        ("backend.services.utilities", "get_connection"),
+    ]
+    missing: list[str] = []
+    for module_name, symbol_name in checks:
+        try:
+            mod = importlib.import_module(module_name)
+            if not hasattr(mod, symbol_name):
+                missing.append(f"{module_name}.{symbol_name}")
+        except Exception:
+            missing.append(f"{module_name}.{symbol_name}")
+    if missing:
+        raise RuntimeError(
+            "Startup validation failed. Missing critical symbol(s): " + ", ".join(missing)
+        )
+
+
+_startup_verify_critical_symbols()
 
 # Exempt API blueprints from CSRF (as requested)
 try:
@@ -525,7 +565,7 @@ def compat_list_schedule_rows():
 @app.route("/results_data")
 @login_required
 def compat_results_data():
-    from backend.services.utilities import table_to_dicts
+    from backend.database.database import table_to_dicts
     out = {}
     # جدول التعارضات
     try:
@@ -653,5 +693,4 @@ def compat_add_prereq():
 # تشغيل التطبيق
 # -----------------------------
 if __name__ == "__main__":
-    from config import FLASK_DEBUG
     app.run(host="0.0.0.0", port=5000, debug=FLASK_DEBUG)

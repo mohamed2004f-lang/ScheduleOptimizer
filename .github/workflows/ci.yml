@@ -13,7 +13,7 @@ jobs:
     
     strategy:
       matrix:
-        python-version: [3.10, 3.11]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     
     steps:
     - name: Checkout code
@@ -32,7 +32,7 @@ jobs:
     
     - name: Run tests
       run: |
-        pytest tests/ -v --cov=backend --cov-report=xml --cov-report=html
+        pytest tests/ -v --cov=backend --cov-report=xml --cov-report=html --cov-fail-under=17
     
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
@@ -42,7 +42,7 @@ jobs:
         name: codecov-umbrella
 
   lint:
-    name: Code Linting
+    name: Ruff Lint
     runs-on: ubuntu-latest
     
     steps:
@@ -52,20 +52,15 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.11'
+        python-version: "3.11"
     
-    - name: Install linting tools
+    - name: Install Ruff
       run: |
-        pip install flake8 pylint
+        pip install "ruff>=0.8,<1"
     
-    - name: Run flake8
+    - name: Ruff check
       run: |
-        flake8 backend/ --count --select=E9,F63,F7,F82 --show-source --statistics
-        flake8 backend/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-    
-    - name: Run pylint
-      run: |
-        pylint backend/ --exit-zero || true
+        ruff check backend/
 
   docker-build:
     name: Build Docker Image

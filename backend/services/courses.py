@@ -1,10 +1,11 @@
-import sys, os
+import sys
+import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from models.models import Course
 from flask import Blueprint, request, jsonify, Response, current_app, session, send_file
 from backend.core.auth import login_required, role_required
 from collections import defaultdict
-from .utilities import get_connection, table_to_dicts, df_from_query, excel_response_from_df, pdf_response_from_html
+from .utilities import get_connection, df_from_query, excel_response_from_df, pdf_response_from_html
 import io
 import base64
 from datetime import datetime
@@ -907,7 +908,7 @@ def prereqs_flowchart_pptx():
     try:
         from pptx import Presentation
         from pptx.util import Inches, Pt
-    except Exception as e:
+    except Exception:
         current_app.logger.exception("pptx dependency missing")
         return jsonify({
             "status": "error",

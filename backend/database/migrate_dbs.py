@@ -9,7 +9,11 @@
 
 ملاحظة: نفّذ هذا السكربت محليًا. يأخذ احتياطًا بسيطًا (نسخ ملفات) قبل التعديل.
 """
-import os, shutil, sqlite3, datetime, sys
+import os
+import shutil
+import sqlite3
+import datetime
+import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 CENTRAL = os.path.abspath(os.path.join(os.path.dirname(__file__), 'mechanical.db'))

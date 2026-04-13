@@ -3,7 +3,7 @@ Service Layer - فصل منطق العمل عن Routes
 يوفر واجهة موحدة للتعامل مع البيانات
 """
 import logging
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Dict, Optional, Any
 from datetime import datetime
 from contextlib import contextmanager
 
@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 
 # استيراد الأدوات المساعدة
 try:
-    from ..services.utilities import get_connection, DB_FILE, SEMESTER_LABEL
+    from ..services.utilities import get_connection, SEMESTER_LABEL
 except ImportError:
-    from backend.services.utilities import get_connection, DB_FILE, SEMESTER_LABEL
+    from backend.services.utilities import get_connection, SEMESTER_LABEL
 
 # استيراد الاستثناءات
 try:
@@ -39,7 +39,7 @@ except ImportError:
             return None
         try:
             return float(grade)
-        except:
+        except (TypeError, ValueError):
             return None
     
     def normalize_units(units):
@@ -47,7 +47,7 @@ except ImportError:
             return 0
         try:
             return max(0, int(units))
-        except:
+        except (TypeError, ValueError):
             return 0
     
     def sanitize_input(value, max_length=500):
@@ -81,7 +81,12 @@ def db_transaction():
 
 class StudentService:
     """خدمة إدارة الطلاب"""
-    
+
+    @staticmethod
+    def normalize_sid(sid):
+        """تطبيع معرّف الطالب (واجهة موحّدة فوق ``normalize_student_id``)."""
+        return normalize_student_id(sid)
+
     @staticmethod
     def _students_columns(cur) -> List[str]:
         """قائمة أعمدة جدول students (للتوافق مع قواعد قديمة بدون أعمدة حالة القيد)."""
@@ -293,7 +298,7 @@ class StudentService:
                         ) VALUES (
                             ?, ?,
                             COALESCE((SELECT enrollment_status FROM students WHERE student_id = ?), 'active'),
-                            COALESCE((SELECT status_changed_at FROM students WHERE student_id = ?), CURRENT_TIMESTAMP),
+                            COALESCE((SELECT status_changed_at FROM students WHERE student_id = ?), CAST(CURRENT_TIMESTAMP AS TEXT)),
                             ?, ?, ?
                         )
                         """,
@@ -308,7 +313,7 @@ class StudentService:
                         ) VALUES (
                             ?, ?,
                             COALESCE((SELECT enrollment_status FROM students WHERE student_id = ?), 'active'),
-                            COALESCE((SELECT status_changed_at FROM students WHERE student_id = ?), CURRENT_TIMESTAMP),
+                            COALESCE((SELECT status_changed_at FROM students WHERE student_id = ?), CAST(CURRENT_TIMESTAMP AS TEXT)),
                             ?
                         )
                         """,
@@ -323,7 +328,7 @@ class StudentService:
                         ) VALUES (
                             ?, ?,
                             COALESCE((SELECT enrollment_status FROM students WHERE student_id = ?), 'active'),
-                            COALESCE((SELECT status_changed_at FROM students WHERE student_id = ?), CURRENT_TIMESTAMP)
+                            COALESCE((SELECT status_changed_at FROM students WHERE student_id = ?), CAST(CURRENT_TIMESTAMP AS TEXT))
                         )
                         """,
                         (sid, name, sid, sid),

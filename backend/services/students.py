@@ -1,15 +1,17 @@
-import sys, os
+import sys
+import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from models.models import Student
 from flask import Blueprint, request, jsonify, render_template, current_app, send_file, session
 from backend.core.auth import login_required, role_required
 from collections import defaultdict
-import sqlite3, pandas as pd, io, datetime, hashlib
+import sqlite3
+import pandas as pd
+import datetime
+import hashlib
 from .utilities import (
     get_connection,
-    table_to_dicts,
     DB_FILE,
-    df_from_query,
     excel_response_from_df,
     excel_response_from_frames,
     pdf_response_from_html,
@@ -1412,7 +1414,7 @@ def failed_courses_report_pdf():
         allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
         if allowed_student_ids is not None and not allowed_student_ids:
             # بدون بيانات: صفحة PDF فارغة تجنب أي تسريب
-            html = f"""
+            html = """
             <html dir="rtl" lang="ar"><body style="font-family:Arial,sans-serif;">
               <h2>تقرير مقررات الرسوب</h2>
               <p>لا توجد بيانات ضمن نطاق صلاحياتك.</p>
@@ -1633,7 +1635,7 @@ def list_students():
             setattr(obj, "join_year", s.get("join_year", ""))
             students_objects.append(obj)
         return jsonify([s.__dict__ for s in students_objects])
-    except AppException as e:
+    except AppException:
         # fallback مباشر من قاعدة البيانات إذا فشل Service Layer
         try:
             with get_connection() as conn:
@@ -1745,7 +1747,7 @@ def add_student():
             join_year=join_year,
         )
         return jsonify(result), 200
-    except AppException as e:
+    except AppException:
         # يتم التعامل مع AppException تلقائياً من خلال error handlers
         raise
     except Exception as e:
@@ -1810,7 +1812,7 @@ def delete_student():
             pass  # تجاهل الأخطاء في الحذف المرتبط
         
         return jsonify(result), 200
-    except AppException as e:
+    except AppException:
         # يتم التعامل مع AppException تلقائياً من خلال error handlers
         raise
     except Exception as e:
@@ -2123,7 +2125,7 @@ def save_registrations():
                                 (conf.get('student_id',''), conf.get('day',''), conf.get('time',''), conf.get('conflicting_sections',''))
                             )
                     conn.commit()
-                except Exception as e:
+                except Exception:
                     current_app.logger.exception("recompute conflict_report failed")
 
                 # تسجيل العملية في سجل النشاط
@@ -3418,7 +3420,6 @@ def timetable_conflicts():
 
             # determine which time columns exist
             has_start = 'start_time' in col_names and 'end_time' in col_names
-            has_time_single = 'time' in col_names or 'time_range' in col_names or 'timeslot' in col_names
             # build query selecting flexible columns (use COALESCE and aliases)
             select_cols = []
             # day

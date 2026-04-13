@@ -252,19 +252,9 @@ class _PgCursorWrapper:
         self.description = self._c.description
         uq = q.lstrip().upper()
         if uq.startswith("INSERT"):
-            try:
-                self._c.execute("SELECT lastval()")
-                r = self._c.fetchone()
-                if r is not None:
-                    if isinstance(r, dict):
-                        lv = r.get("lastval")
-                        if lv is None and r:
-                            lv = next(iter(r.values()))
-                        self._lastrowid = int(lv) if lv is not None else None
-                    else:
-                        self._lastrowid = int(r[0])
-            except Exception:
-                self._lastrowid = None
+            # PostgreSQL: لا نستدعي lastval() هنا لأن جداول كثيرة لا تستخدم sequence
+            # (مثل users بمفتاح نصي)، واستدعاؤه يفشل ويُفسد المعاملة الحالية.
+            self._lastrowid = None
         return self
 
     def executemany(self, sql, seq_of_params):
@@ -1068,6 +1058,38 @@ def _ensure_tables_postgresql() -> None:
         # أرقام معرفات طويلة (وطني/داخلي) تتجاوز INTEGER في PostgreSQL
         "ALTER TABLE users ALTER COLUMN instructor_id TYPE BIGINT USING instructor_id::bigint",
     ]
+    pg_constraints = [
+        (
+            "users_student_requires_student_id_chk",
+            """
+            ALTER TABLE users
+            ADD CONSTRAINT users_student_requires_student_id_chk
+            CHECK (
+                role <> 'student'
+                OR (
+                    student_id IS NOT NULL
+                    AND btrim(student_id) <> ''
+                )
+            ) NOT VALID
+            """,
+        ),
+        (
+            "users_staff_requires_instructor_id_chk",
+            """
+            ALTER TABLE users
+            ADD CONSTRAINT users_staff_requires_instructor_id_chk
+            CHECK (
+                role NOT IN ('instructor', 'head_of_department')
+                OR instructor_id IS NOT NULL
+            ) NOT VALID
+            """,
+        ),
+    ]
+    enable_lower_username_unique = (os.environ.get("ENABLE_USERS_LOWER_UNIQUE_IDX") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
     with get_connection() as conn:
         cur = conn.cursor()
         # كل جملة في معاملة منفصلة حتى لا يُلغى تنفيذ الباقي بعد فشل واحد (PostgreSQL يرفض المتابعة في نفس المعاملة)
@@ -1091,6 +1113,40 @@ def _ensure_tables_postgresql() -> None:
                     conn.rollback()
                 except Exception:
                     pass
+        for constraint_name, ddl in pg_constraints:
+            try:
+                exists_row = cur.execute(
+                    """
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname = %s
+                    LIMIT 1
+                    """,
+                    (constraint_name,),
+                ).fetchone()
+                if not exists_row:
+                    cur.execute(ddl)
+                    conn.commit()
+            except Exception as e:
+                logger.warning("Could not create PostgreSQL constraint %s: %s", constraint_name, e)
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+        if enable_lower_username_unique:
+            try:
+                cur.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower_unique ON users (lower(username))"
+                )
+                conn.commit()
+            except Exception as e:
+                logger.warning("Could not create optional unique lower(username) index: %s", e)
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+        else:
+            logger.info("Skipping optional lower(username) unique index (ENABLE_USERS_LOWER_UNIQUE_IDX is off)")
     logger.info("PostgreSQL compatibility migrations applied")
 
 

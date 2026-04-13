@@ -3,7 +3,11 @@ Attach-based fast migration from backup DB files into central DB.
 Creates an extra backup of central before modifying. Uses INSERT OR REPLACE with common columns.
 Usage: run from project root: python backend/database/attach_migrate.py
 """
-import os, sqlite3, shutil, datetime, sys
+import os
+import sqlite3
+import shutil
+import datetime
+import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 CENTRAL = os.path.abspath(os.path.join(os.path.dirname(__file__), 'mechanical.db'))
 BACKUP_DIR = os.path.join(ROOT, 'backups')

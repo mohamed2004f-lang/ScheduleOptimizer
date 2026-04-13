@@ -6,7 +6,7 @@ import re
 import logging
 from functools import wraps
 from flask import request, jsonify
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 

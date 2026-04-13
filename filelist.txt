@@ -1,4 +1,4 @@
-﻿C:\Users\BARCODE\ScheduleOptimizer\.dockerignore
+C:\Users\BARCODE\ScheduleOptimizer\.dockerignore
 C:\Users\BARCODE\ScheduleOptimizer\.env
 C:\Users\BARCODE\ScheduleOptimizer\.env.example
 C:\Users\BARCODE\ScheduleOptimizer\.gitignore
@@ -61,7 +61,6 @@ C:\Users\BARCODE\ScheduleOptimizer\backend\services\enrollment.py
 C:\Users\BARCODE\ScheduleOptimizer\backend\services\exams.py
 C:\Users\BARCODE\ScheduleOptimizer\backend\services\grades.py
 C:\Users\BARCODE\ScheduleOptimizer\backend\services\grades.py.corrupted.bak
-C:\Users\BARCODE\ScheduleOptimizer\backend\services\grades_new.py
 C:\Users\BARCODE\ScheduleOptimizer\backend\services\instructors.py
 C:\Users\BARCODE\ScheduleOptimizer\backend\services\mailer.py
 C:\Users\BARCODE\ScheduleOptimizer\backend\services\notifications.py

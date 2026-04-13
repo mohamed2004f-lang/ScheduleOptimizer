@@ -20,7 +20,10 @@
     <div class="card mb-3">
       <div class="card-body">
         <form id="instructor-form" class="row g-3">
-          <input type="hidden" id="inst-id">
+          <div class="col-md-2">
+            <label for="inst-id" class="form-label">رقم عضو هيئة التدريس</label>
+            <input type="number" id="inst-id" class="form-control" min="1" step="1" placeholder="يولد تلقائياً إن تُرك فارغاً">
+          </div>
           <div class="col-md-4">
             <label for="inst-name" class="form-label">الاسم</label>
             <input type="text" id="inst-name" class="form-control" required>
@@ -59,7 +62,7 @@
           <table class="table table-sm table-striped align-middle" id="instructors-table">
             <thead>
               <tr>
-                <th style="width:5%;">#</th>
+                <th style="width:10%;">رقم المدرس</th>
                 <th>الاسم</th>
                 <th>النوع</th>
                 <th>البريد الإلكتروني</th>
@@ -86,10 +89,10 @@
         const data = await resp.json();
         const tbody = document.querySelector("#instructors-table tbody");
         tbody.innerHTML = "";
-        (data.instructors || []).forEach((inst, idx) => {
+        (data.instructors || []).forEach((inst) => {
           const tr = document.createElement("tr");
           tr.innerHTML = `
-            <td>${idx + 1}</td>
+            <td>${inst.id ?? ""}</td>
             <td>${inst.name || ""}</td>
             <td>${inst.type === "external" ? "متعاون من خارج القسم" : "من داخل القسم"}</td>
             <td>${inst.email || ""}</td>

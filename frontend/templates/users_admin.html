@@ -53,11 +53,13 @@
         <div class="row g-2 align-items-end mt-2">
           <div class="col-md-4">
             <label class="form-label">الرقم الدراسي (لطالب فقط)</label>
-            <input id="studentIdInput" class="form-control form-control-sm">
+            <input id="studentIdInput" list="studentIdOptions" class="form-control form-control-sm">
+            <datalist id="studentIdOptions"></datalist>
           </div>
           <div class="col-md-4">
             <label class="form-label">رقم عضو هيئة التدريس (للأستاذ/رئيس القسم)</label>
-            <input id="instructorIdInput" class="form-control form-control-sm">
+            <input id="instructorIdInput" list="instructorIdOptions" class="form-control form-control-sm">
+            <datalist id="instructorIdOptions"></datalist>
           </div>
           <div class="col-md-4">
             <button id="btnSaveUser" class="btn btn-primary btn-sm mt-3">حفظ المستخدم</button>
@@ -130,7 +132,7 @@
           قائمة المستخدمين
           <span id="usersTotalBadge" class="badge bg-secondary">—</span>
         </h5>
-        <p id="usersStorageHint" class="text-muted small mb-2 font-monospace" title="مسار التخزين الفعلي للتحقق من عدم وجود أكثر من ملف قاعدة بيانات"></p>
+        <p id="usersStorageHint" class="text-muted small mb-2" title=""></p>
         <div id="pgStorageNote" class="alert alert-warning py-2 px-3 small d-none" role="status"></div>
         <div class="row g-2 mb-2">
           <div class="col-md-6">
@@ -140,14 +142,23 @@
         </div>
         <div class="d-flex flex-wrap gap-2 mb-2">
           <button id="btnInviteCleanup" class="btn btn-sm btn-outline-secondary">تنظيف الدعوات القديمة</button>
+          <button id="btnUsersValidationReport" class="btn btn-sm btn-outline-warning">فحص سلامة بيانات المستخدمين</button>
+          <button id="btnUsersAuditLog" class="btn btn-sm btn-outline-dark">تحديث سجل التدقيق</button>
           <div class="text-muted small align-self-center">يحذف الدعوات المستخدمة/المنتهية الأقدم من 30 يوم.</div>
         </div>
+        <div id="usersValidationSummary" class="small text-muted mb-2"></div>
+        <div id="usersValidationIssues" class="small"></div>
+        <div id="usersAuditSummary" class="small text-muted mb-1"></div>
+        <div id="usersAuditList" class="small"></div>
         <div id="usersList" class="list-group small"></div>
       </div>
     </div>
   </main>
 
   <script>
+    let VALID_STUDENT_IDS = new Set();
+    let VALID_INSTRUCTOR_IDS = new Set();
+
     async function fetchJSON(url, opts){
       /* منع عرض قائمة مستخدمين قديمة بعد الحفظ: لا تخزين مؤقت لطلبات JSON */
       const r = await fetch(url, { credentials: 'include', cache: 'no-store', ...opts });
@@ -284,12 +295,13 @@
       const badge = document.getElementById('usersTotalBadge');
       const hint = document.getElementById('usersStorageHint');
       const pgNote = document.getElementById('pgStorageNote');
+      const isAdminMain = (CURRENT_ROLE === 'admin_main' || CURRENT_ROLE === 'admin');
       container.innerHTML = '';
       const res = await fetchJSON('/users/list?_=' + Date.now());
       if(!res.ok){
         container.innerHTML = `<div class="text-danger p-2">فشل جلب المستخدمين: ${res.json?.message || res.status}</div>`;
         if(badge) badge.textContent = '!';
-        if(hint) hint.textContent = '';
+        if(hint){ hint.textContent = ''; hint.classList.remove('font-monospace'); hint.title = ''; }
         if(pgNote){ pgNote.textContent = ''; pgNote.classList.add('d-none'); }
         return null;
       }
@@ -297,17 +309,43 @@
       const total = res.json?.total;
       const meta = res.json?.meta;
       if(badge) badge.textContent = total != null ? String(total) : String(arr.length);
-      if(hint && meta && meta.storage_display){
-        const bk = meta.backend === 'postgresql' ? 'PostgreSQL' : 'SQLite';
-        hint.textContent = 'التخزين (' + bk + '): ' + meta.storage_display;
-        if(meta.backend === 'postgresql' && meta.sqlite_legacy_path){
-          hint.textContent += ' — ملف SQLite الظاهر: ' + meta.sqlite_legacy_path + ' (غير مستخدم للتشغيل الحالي)';
+      if(hint && meta){
+        if(!isAdminMain){
+          hint.textContent = '';
+          hint.classList.remove('font-monospace');
+          hint.title = '';
+        } else {
+        hint.classList.toggle('font-monospace', !!(meta.storage_verbose && meta.backend === 'postgresql'));
+        hint.title = (meta.storage_verbose && meta.backend === 'postgresql')
+          ? 'مسار التخزين للتشخيص (وضع مطوّر): تحقق من عدم وجود أكثر من نسخة لقاعدة البيانات'
+          : '';
+        if(meta.backend === 'postgresql'){
+          if(meta.storage_verbose && meta.storage_display){
+            let t = 'التخزين (PostgreSQL): ' + meta.storage_display;
+            if(meta.sqlite_legacy_path){
+              t += ' — ملف SQLite الظاهر: ' + meta.sqlite_legacy_path + ' (غير مستخدم للتشغيل الحالي)';
+            }
+            hint.textContent = t;
+          } else if(meta.storage_brief_ar){
+            hint.textContent = meta.storage_brief_ar;
+          } else {
+            hint.textContent = '';
+          }
+        } else if(meta.storage_display){
+          hint.classList.add('font-monospace');
+          hint.title = 'مسار ملف SQLite الحالي';
+          hint.textContent = 'التخزين (SQLite): ' + meta.storage_display;
+        } else {
+          hint.textContent = '';
+        }
         }
       } else if(hint){
         hint.textContent = '';
+        hint.classList.remove('font-monospace');
+        hint.title = '';
       }
       if(pgNote){
-        if(meta && meta.backend === 'postgresql' && meta.note_ar){
+        if(isAdminMain && meta && meta.backend === 'postgresql' && meta.storage_verbose && meta.note_ar){
           pgNote.textContent = meta.note_ar;
           pgNote.classList.remove('d-none');
         } else {
@@ -369,6 +407,26 @@
         setUserMsg('warning','يرجى إدخال اسم المستخدم.');
         return;
       }
+      if(role === 'student'){
+        if(!studentId){
+          setUserMsg('warning', 'يرجى إدخال الرقم الدراسي للطالب.');
+          return;
+        }
+        if(VALID_STUDENT_IDS.size && !VALID_STUDENT_IDS.has(studentId)){
+          setUserMsg('warning', `الرقم الدراسي غير موجود في القائمة الحالية: ${studentId}. اختر رقمًا صحيحًا من الاقتراحات.`);
+          return;
+        }
+      }
+      if(role === 'instructor' || role === 'head_of_department'){
+        if(!instructorId){
+          setUserMsg('warning', 'يرجى إدخال رقم عضو هيئة التدريس.');
+          return;
+        }
+        if(VALID_INSTRUCTOR_IDS.size && !VALID_INSTRUCTOR_IDS.has(instructorId)){
+          setUserMsg('warning', `رقم عضو هيئة التدريس غير موجود في القائمة الحالية: ${instructorId}. اختر رقمًا صحيحًا من الاقتراحات.`);
+          return;
+        }
+      }
       const body = {username, role};
       if(password) body.password = password;
       if(studentId) body.student_id = studentId;
@@ -406,7 +464,7 @@
             row.scrollIntoView({behavior:'smooth', block:'nearest'});
             setTimeout(()=> row.classList.remove('list-group-item-info'), 2600);
           } else {
-            setUserMsg('warning', msg + ' — لم يُعثر على الصف في الواجهة. جرّب F5. إن استمرت المشكلة راجع سطر «التخزين» أعلاه (ملف قاعدة البيانات) للتأكد من عدم وجود أكثر من نسخة.');
+            setUserMsg('warning', msg + ' — لم يُعثر على الصف في الواجهة. جرّب تحديث الصفحة (F5). إن استمرت المشكلة راجع المطوّر (تلميح التخزين التفصيلي يظهر فقط عند SHOW_USER_LIST_STORAGE_DIAGNOSTICS=1 لمسؤول النظام).');
           }
         }
       } else {
@@ -528,6 +586,44 @@
 
     let CURRENT_ROLE = null;
 
+    async function loadValidDirectLinkOptions(){
+      const studentList = document.getElementById('studentIdOptions');
+      const instructorList = document.getElementById('instructorIdOptions');
+      if(!studentList || !instructorList) return;
+
+      VALID_STUDENT_IDS = new Set();
+      VALID_INSTRUCTOR_IDS = new Set();
+      studentList.innerHTML = '';
+      instructorList.innerHTML = '';
+
+      const [studentsRes, instructorsRes] = await Promise.all([
+        fetchJSON('/students/list'),
+        fetchJSON('/instructors/list')
+      ]);
+
+      const students = Array.isArray(studentsRes.json) ? studentsRes.json : [];
+      students.forEach((s)=>{
+        const sid = (s?.student_id ?? '').toString().trim();
+        if(!sid) return;
+        VALID_STUDENT_IDS.add(sid);
+        const opt = document.createElement('option');
+        opt.value = sid;
+        opt.label = `${s.student_name || ''}`;
+        studentList.appendChild(opt);
+      });
+
+      const instructors = Array.isArray(instructorsRes.json?.instructors) ? instructorsRes.json.instructors : [];
+      instructors.forEach((i)=>{
+        const iid = (i?.id ?? '').toString().trim();
+        if(!iid) return;
+        VALID_INSTRUCTOR_IDS.add(iid);
+        const opt = document.createElement('option');
+        opt.value = iid;
+        opt.label = `${i.name || ''}`;
+        instructorList.appendChild(opt);
+      });
+    }
+
     function applyPermissions(){
       const role = CURRENT_ROLE || '';
       const isAdminMain = (role === 'admin_main' || role === 'admin');
@@ -583,6 +679,8 @@
       document.getElementById('btnSaveUser').addEventListener('click', saveUser);
       document.getElementById('btnSendInvite').addEventListener('click', sendInvite);
       document.getElementById('btnInviteCleanup').addEventListener('click', cleanupInvites);
+      document.getElementById('btnUsersValidationReport').addEventListener('click', loadUsersValidationReport);
+      document.getElementById('btnUsersAuditLog').addEventListener('click', loadUsersAuditLog);
       document.getElementById('linkType').addEventListener('change', async ()=>{ await loadLinkedEntities(); await suggestLinked(); });
       document.getElementById('linkEntity').addEventListener('change', suggestLinked);
       document.getElementById('linkRole').addEventListener('change', ()=>{
@@ -598,11 +696,84 @@
       const roleEl = document.getElementById('roleSelect');
       if(roleEl) roleEl.addEventListener('change', syncSupervisorAvailability);
       await loadUsers();
+      await loadValidDirectLinkOptions();
       await loadLinkedEntities();
       await suggestLinked();
       syncSupervisorAvailability();
       applyPermissions();
+      await loadUsersValidationReport();
+      await loadUsersAuditLog();
     });
+
+    async function loadUsersValidationReport(){
+      const summary = document.getElementById('usersValidationSummary');
+      const issuesBox = document.getElementById('usersValidationIssues');
+      if(!summary || !issuesBox) return;
+      summary.textContent = 'جاري فحص سلامة البيانات...';
+      issuesBox.innerHTML = '';
+      const res = await fetchJSON('/users/validation_report');
+      if(!res.ok){
+        summary.textContent = `تعذر تحميل تقرير السلامة (HTTP ${res.status}).`;
+        return;
+      }
+      const j = res.json || {};
+      const total = Number(j.total_users || 0);
+      const invalid = Number(j.invalid_count || 0);
+      summary.textContent = `تقرير السلامة: ${invalid} صف غير متوافق من أصل ${total} مستخدم.`;
+      if(!invalid){
+        issuesBox.innerHTML = '<div class="alert alert-success py-2 px-3 mb-2">لا توجد مخالفات في ربط الأدوار.</div>';
+        return;
+      }
+      const items = Array.isArray(j.invalid_users) ? j.invalid_users : [];
+      const lis = items.slice(0, 30).map((u)=>{
+        const issues = Array.isArray(u.issues) ? u.issues.join(', ') : '';
+        return `<li><strong>${u.username || '—'}</strong> (${u.role || '—'}) — ${issues}</li>`;
+      }).join('');
+      const more = items.length > 30 ? `<div class="small text-muted mt-1">... ويوجد ${items.length - 30} حالة إضافية.</div>` : '';
+      issuesBox.innerHTML = `<div class="alert alert-warning py-2 px-3 mb-2"><ul class="mb-0 ps-3">${lis}</ul>${more}</div>`;
+    }
+
+    async function loadUsersAuditLog(){
+      const summary = document.getElementById('usersAuditSummary');
+      const listBox = document.getElementById('usersAuditList');
+      if(!summary || !listBox) return;
+      summary.textContent = 'جاري تحميل سجل التدقيق...';
+      listBox.innerHTML = '';
+      const res = await fetchJSON('/users/audit_log?limit=50');
+      if(!res.ok){
+        summary.textContent = `تعذر تحميل سجل التدقيق (HTTP ${res.status}).`;
+        return;
+      }
+      const items = Array.isArray(res.json?.items) ? res.json.items : [];
+      summary.textContent = `سجل التدقيق: آخر ${items.length} عملية على المستخدمين.`;
+      if(!items.length){
+        listBox.innerHTML = '<div class="alert alert-light py-2 px-3 mb-2">لا توجد سجلات تدقيق بعد.</div>';
+        return;
+      }
+      const rows = items.slice(0, 30).map((x)=>{
+        const d = x.details || {};
+        const target = d.username || d.after?.username || d.before?.username || '—';
+        return `<tr>
+          <td>${x.id ?? ''}</td>
+          <td>${x.ts || '—'}</td>
+          <td>${x.actor || '—'}</td>
+          <td><code>${x.action || '—'}</code></td>
+          <td>${target}</td>
+        </tr>`;
+      }).join('');
+      const more = items.length > 30 ? `<div class="small text-muted mt-1">... ويوجد ${items.length - 30} سجل إضافي.</div>` : '';
+      listBox.innerHTML = `
+        <div class="table-responsive mb-2">
+          <table class="table table-sm table-bordered align-middle mb-0">
+            <thead class="table-light">
+              <tr><th>#</th><th>الوقت</th><th>المنفّذ</th><th>الإجراء</th><th>المستخدم</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        ${more}
+      `;
+    }
 
     async function cleanupInvites(){
       if(!(CURRENT_ROLE === 'admin_main' || CURRENT_ROLE === 'admin')){

@@ -11,8 +11,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from flask import Blueprint, request, jsonify, Response, send_file, session, current_app
 from backend.core.auth import login_required, role_required
-from models.models import Grade
-from .utilities import get_connection, get_current_term, df_from_query, excel_response_from_df, pdf_response_from_html, log_activity
+from .utilities import get_connection, get_current_term, excel_response_from_df, pdf_response_from_html, log_activity
 
 PASSING_GRADE = 50
 
@@ -165,12 +164,6 @@ def _resolve_catalog_course(cur, course_name: str = "", course_code: str = ""):
     if not str(out_code).strip():
         raise ValueError(f"المقرر '{out_name}' لا يملك رمزاً معتمداً في دليل المقررات")
     return {"course_name": str(out_name).strip(), "course_code": str(out_code).strip(), "units": int(out_units or 0)}
-    try:
-        p = float(partial or 0)
-        f = float(final or 0)
-        return p + f
-    except Exception:
-        return None
 
 
 @grades_bp.route("/drafts/courses", methods=["GET"])

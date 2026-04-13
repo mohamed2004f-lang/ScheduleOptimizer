@@ -1,6 +1,6 @@
 import datetime
 
-from flask import Blueprint, request, jsonify, session
+from flask import Blueprint, request, jsonify
 
 from backend.core.auth import login_required, role_required
 from .utilities import get_connection

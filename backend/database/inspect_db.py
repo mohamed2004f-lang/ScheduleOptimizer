@@ -1,4 +1,5 @@
-import sqlite3, os
+import sqlite3
+import os
 db='mechanical.db'
 print('DB file:', os.path.abspath(db))
 with sqlite3.connect(db) as conn:

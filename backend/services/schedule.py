@@ -1,10 +1,11 @@
-import sys, os
+import sys
+import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from models.models import ScheduleRow
 from flask import Blueprint, request, jsonify, render_template, session
 from backend.core.auth import login_required, role_required
 from collections import defaultdict
-import sqlite3, pandas as pd
+import sqlite3
+import pandas as pd
 import logging
 import json
 import datetime
@@ -13,10 +14,7 @@ from backend.database.database import is_postgresql
 
 from .utilities import (
     get_connection,
-    table_to_dicts,
     SEMESTER_LABEL,
-    DB_FILE,
-    df_from_query,
     excel_response_from_df,
     pdf_response_from_html,
     log_activity,
@@ -144,7 +142,8 @@ def _time_to_minutes_hhmm(s: str):
         s = (s or "").strip()
         if len(s) != 5 or s[2] != ":":
             return None
-        hh = int(s[0:2]); mm = int(s[3:5])
+        hh = int(s[0:2])
+        mm = int(s[3:5])
         if 0 <= hh <= 23 and 0 <= mm <= 59:
             return hh * 60 + mm
     except Exception:
@@ -222,7 +221,8 @@ def _validate_time_slot_format(s: str) -> bool:
         def ok(p):
             if len(p) != 5 or p[2] != ":":
                 return False
-            hh = int(p[0:2]); mm = int(p[3:5])
+            hh = int(p[0:2])
+            mm = int(p[3:5])
             return 0 <= hh <= 23 and 0 <= mm <= 59
         return ok(a) and ok(b)
     except Exception:
@@ -1008,7 +1008,7 @@ def export_schedule_pdf():
     now_print = datetime.datetime.now().strftime("%Y-%m-%d")
     signature_block = ""
     if official and not include_empty:
-        signature_block = f"""
+        signature_block = """
         <div class="sign-wrap">
           <div class="sign-name">محمد فرج الحاسي</div>
           <div class="sign-title">رئيس قسم الهندسة الميكانيكية</div>

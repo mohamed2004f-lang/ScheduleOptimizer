@@ -313,7 +313,7 @@ def project_status_save_note():
             _write_setting(conn, PROJECT_VERSION_LABEL_KEY, label)
             _write_setting(conn, PROJECT_VERSION_NOTE_KEY, note)
         log_activity(action="admin_project_status_note_save", details=f"label_len={len(label)}, note_len={len(note)}")
-    except Exception as e:
+    except Exception:
         current_app.logger.exception("Failed saving project status note")
         return jsonify({"status": "error", "message": "تعذّر حفظ الملاحظة حالياً"}), 500
     return jsonify({"status": "ok", "message": "تم الحفظ"})
@@ -338,6 +338,6 @@ def backup_now():
         session["last_backup_now_ts"] = now_ts
         log_activity(action="admin_backup_now", details=f"backup={result.get('name','')}")
         return jsonify({"status": "ok", "message": "تم إنشاء نسخة احتياطية بنجاح", "backup": {"name": result.get("name", "")}})
-    except Exception as e:
+    except Exception:
         current_app.logger.exception("Backup now failed")
         return jsonify({"status": "error", "message": "فشل إنشاء النسخة الاحتياطية. حاول لاحقًا."}), 500

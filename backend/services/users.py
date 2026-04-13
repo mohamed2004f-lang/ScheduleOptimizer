@@ -1,12 +1,14 @@
 import hashlib
+import json
 import logging
+import os
 import re
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, session
 
 from backend.core.auth import role_required, hash_password
 from backend.database.database import DB_FILE, is_postgresql
@@ -24,9 +26,24 @@ def _clean_username(s: str) -> str:
     return _ZERO_WIDTH.sub("", (s or "").strip())
 
 
-def _admin_storage_meta() -> dict:
-    """معلومات تشخيصية لمسؤول النظام: أين تُخزَّن بيانات المستخدمين."""
+_STORAGE_BRIEF_PG_AR = (
+    "البيانات الحية على PostgreSQL فقط؛ تجاهل ملف mechanical.db المحلي إن وُجد "
+    "(لا يعكس بيانات الخادم)."
+)
+
+
+def _admin_storage_meta(*, verbose_storage_hint: bool = False) -> dict:
+    """معلومات تشخيصية لمسؤول النظام: أين تُخزَّن بيانات المستخدمين.
+
+    عند ``verbose_storage_hint=False`` (الوضع الافتراضي لغير المطوّرين): نص موجز فقط.
+    عند ``True`` (تعريف صريح عبر ``SHOW_USER_LIST_STORAGE_DIAGNOSTICS=1`` ودور admin_main): مسارات وتفاصيل للتشخيص.
+    """
     if is_postgresql():
+        sqlite_path = str(Path(DB_FILE).resolve())
+        note_long = (
+            "التطبيق يعمل على PostgreSQL: قائمة المستخدمين والحفظ من الخادم أعلاه. "
+            "ملف mechanical.db في المشروع (إن وُجد) قديم/احتياطي ولا يعكس البيانات الحية طالما DATABASE_URL مفعّل."
+        )
         try:
             from config import DATABASE_URL
             from sqlalchemy.engine.url import make_url
@@ -34,22 +51,20 @@ def _admin_storage_meta() -> dict:
             u = make_url(DATABASE_URL)
             host = u.host or "localhost"
             dbn = (u.database or "").strip()
-            return {
-                "backend": "postgresql",
-                "storage_display": f"{host}/{dbn}" if dbn else host,
-                "sqlite_legacy_path": str(Path(DB_FILE).resolve()),
-                "note_ar": (
-                    "التطبيق يعمل على PostgreSQL: قائمة المستخدمين والحفظ من الخادم أعلاه. "
-                    "ملف mechanical.db في المشروع (إن وُجد) قديم/احتياطي ولا يعكس البيانات الحية طالما DATABASE_URL مفعّل."
-                ),
-            }
+            storage_display = f"{host}/{dbn}" if dbn else host
         except Exception:
-            return {
-                "backend": "postgresql",
-                "storage_display": "PostgreSQL",
-                "sqlite_legacy_path": str(Path(DB_FILE).resolve()),
-                "note_ar": "التخزين الفعلي: PostgreSQL — لا تستخدم ملف SQLite للتحقق من المستخدمين.",
-            }
+            storage_display = "PostgreSQL"
+
+        base = {
+            "backend": "postgresql",
+            "storage_brief_ar": _STORAGE_BRIEF_PG_AR,
+            "storage_verbose": bool(verbose_storage_hint),
+        }
+        if verbose_storage_hint:
+            base["storage_display"] = storage_display
+            base["sqlite_legacy_path"] = sqlite_path
+            base["note_ar"] = note_long
+        return base
     return {"backend": "sqlite", "storage_display": str(Path(DB_FILE).resolve())}
 
 
@@ -67,7 +82,7 @@ def _user_dict_from_row(row) -> Optional[dict]:
 
 
 def _now_iso() -> str:
-    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def _hash_token(token: str) -> str:
@@ -117,12 +132,18 @@ def _unique_username(conn, base: str) -> str:
         base = "user"
 
     cur = conn.cursor()
-    exists = cur.execute("SELECT 1 FROM users WHERE username = ? LIMIT 1", (base,)).fetchone()
+    exists = cur.execute(
+        "SELECT 1 FROM users WHERE lower(username) = lower(?) LIMIT 1",
+        (base,),
+    ).fetchone()
     if not exists:
         return base
     for i in range(2, 10000):
         cand = f"{base}{i}"
-        exists = cur.execute("SELECT 1 FROM users WHERE username = ? LIMIT 1", (cand,)).fetchone()
+        exists = cur.execute(
+            "SELECT 1 FROM users WHERE lower(username) = lower(?) LIMIT 1",
+            (cand,),
+        ).fetchone()
         if not exists:
             return cand
     return f"{base}{secrets.randbelow(99999)}"
@@ -139,6 +160,10 @@ def suggest_linked():
         return jsonify({"status": "error", "message": "id مطلوب"}), 400
 
     with get_connection() as conn:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         cur = conn.cursor()
         if entity_type == "student":
             row = cur.execute(
@@ -238,24 +263,40 @@ def invite_user():
 
         # أنشئ/حدّث المستخدم بكلمة مرور عشوائية غير معروفة (سيتم تعيينها عبر الدعوة)
         pw_hash = hash_password(secrets.token_urlsafe(24))
-        existing = cur.execute("SELECT username FROM users WHERE username = ? LIMIT 1", (username,)).fetchone()
-        if existing:
-            cur.execute(
-                """
-                UPDATE users
-                SET password_hash = ?, role = ?, student_id = ?, instructor_id = ?, is_supervisor = COALESCE(is_supervisor,0), is_active = 1
-                WHERE username = ?
-                """,
-                (pw_hash, role, student_id, instructor_id, username),
-            )
-        else:
-            cur.execute(
-                """
-                INSERT INTO users (username, password_hash, role, student_id, instructor_id, is_supervisor, is_active)
-                VALUES (?,?,?,?,?,0,1)
-                """,
-                (username, pw_hash, role, student_id, instructor_id),
-            )
+        try:
+            existing = cur.execute(
+                "SELECT username FROM users WHERE lower(username) = lower(?) LIMIT 1",
+                (username,),
+            ).fetchone()
+            existing_username = (existing[0] if existing else None)
+            if existing:
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET password_hash = ?, role = ?, student_id = ?, instructor_id = ?, is_supervisor = COALESCE(is_supervisor,0), is_active = 1
+                    WHERE username = ?
+                    """,
+                    (pw_hash, role, student_id, instructor_id, existing_username),
+                )
+                username = existing_username
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO users (username, password_hash, role, student_id, instructor_id, is_supervisor, is_active)
+                    VALUES (?,?,?,?,?,0,1)
+                    """,
+                    (username, pw_hash, role, student_id, instructor_id),
+                )
+        except Exception as write_err:
+            conn.rollback()
+            msg = str(write_err)
+            if "idx_users_username_lower_unique" in msg or "duplicate key value violates unique constraint" in msg:
+                return jsonify({"status": "error", "message": "اسم المستخدم مستخدم مسبقاً (مع تجاهل حالة الأحرف)."}), 409
+            if "users_staff_requires_instructor_id_chk" in msg:
+                return jsonify({"status": "error", "message": "instructor_id مطلوب لدور عضو هيئة التدريس/رئيس القسم"}), 400
+            if "users_student_requires_student_id_chk" in msg:
+                return jsonify({"status": "error", "message": "student_id مطلوب لدور الطالب"}), 400
+            raise
 
         token = None
         if email:
@@ -548,6 +589,66 @@ def _current_role() -> str:
         return ""
 
 
+def _current_actor() -> str:
+    """اسم المستخدم الحالي (لـ audit)."""
+    try:
+        return (session.get("user") or session.get("username") or "").strip() or "system"
+    except Exception:
+        return "system"
+
+
+def _is_pg_connection(conn) -> bool:
+    """تحقق فعلي من نوع الاتصال الحالي (وليس فقط إعدادات البيئة)."""
+    raw = getattr(conn, "_conn", conn)
+    mod = (getattr(raw.__class__, "__module__", "") or "").lower()
+    return "psycopg" in mod
+
+
+def _normalize_user_links_for_role(
+    role: str, student_id: Optional[str], instructor_id: Optional[int], is_supervisor: int
+) -> tuple[Optional[str], Optional[int], int, Optional[str]]:
+    """تطبيع وربط الحقول التابعة للدور قبل التخزين."""
+    role_n = _normalize_role(role)
+    sid = (student_id or "").strip() or None
+    iid = instructor_id
+    sup = int(bool(is_supervisor))
+
+    if role_n == "student":
+        if not sid:
+            return sid, iid, sup, "student_id مطلوب لدور الطالب"
+        return sid, None, 0, None
+
+    if role_n in ("instructor", "head_of_department"):
+        if iid is None:
+            return sid, iid, sup, "instructor_id مطلوب لدور عضو هيئة التدريس/رئيس القسم"
+        return None, iid, sup, None
+
+    if role_n == "admin_main":
+        return None, None, 0, None
+
+    return sid, iid, sup, None
+
+
+def _log_user_audit(conn, *, action: str, actor: str, username: str, before: Optional[dict], after: Optional[dict]) -> None:
+    """تسجيل تغييرات المستخدمين في activity_log (best-effort)."""
+    try:
+        details = {
+            "username": username,
+            "before": before,
+            "after": after,
+        }
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO activity_log (ts, actor, action, details)
+            VALUES (?, ?, ?, ?)
+            """,
+            (_now_iso(), actor, action, json.dumps(details, ensure_ascii=False)),
+        )
+    except Exception:
+        logger.exception("users audit log write failed action=%s username=%s", action, username)
+
+
 @users_bp.route("/list")
 @role_required("admin_main", "head_of_department")
 def list_users():
@@ -574,18 +675,93 @@ def list_users():
                     "is_active": int(r[5] or 1),
                 }
             )
-    meta = _admin_storage_meta()
+    role_norm = _normalize_role(_current_role())
+    _diag_env = (os.environ.get("SHOW_USER_LIST_STORAGE_DIAGNOSTICS") or "").strip().lower()
+    verbose_meta = _diag_env in ("1", "true", "yes") and role_norm == "admin_main"
+    meta = _admin_storage_meta(verbose_storage_hint=verbose_meta)
     logger.info(
-        "users/list count=%s backend=%s storage=%s",
+        "users/list count=%s backend=%s storage=%s verbose_meta=%s",
         len(items),
         meta.get("backend"),
-        meta.get("storage_display"),
+        meta.get("storage_display") or meta.get("storage_brief_ar", "")[:80],
+        verbose_meta,
     )
     resp = jsonify({"users": items, "total": len(items), "meta": meta})
     # يمنع عرض قائمة قديمة من ذاكرة التخزين المؤقت للمتصفح بعد إضافة مستخدم
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     return resp
+
+
+@users_bp.route("/validation_report", methods=["GET"])
+@role_required("admin_main", "head_of_department")
+def users_validation_report():
+    """تقرير فحص سلامة ربط المستخدمين حسب الدور (للتحقق اليدوي)."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        rows = cur.execute(
+            """
+            SELECT username, role, student_id, instructor_id,
+                   COALESCE(is_supervisor,0) AS is_supervisor,
+                   COALESCE(is_active,1) AS is_active
+            FROM users
+            ORDER BY username
+            """
+        ).fetchall()
+
+    issues = []
+    for r in rows:
+        username = r[0]
+        role = _normalize_role(r[1] or "")
+        student_id = (r[2] or "").strip()
+        instructor_id = r[3]
+        is_supervisor = int(r[4] or 0)
+        is_active = int(r[5] or 1)
+
+        row_issues = []
+        if role == "student":
+            if not student_id:
+                row_issues.append("MISSING_STUDENT_ID_FOR_STUDENT")
+            if instructor_id is not None:
+                row_issues.append("UNEXPECTED_INSTRUCTOR_ID_FOR_STUDENT")
+            if is_supervisor:
+                row_issues.append("UNEXPECTED_SUPERVISOR_FLAG_FOR_STUDENT")
+        elif role in ("instructor", "head_of_department"):
+            if instructor_id is None:
+                row_issues.append("MISSING_INSTRUCTOR_ID_FOR_STAFF")
+            if student_id:
+                row_issues.append("UNEXPECTED_STUDENT_ID_FOR_STAFF")
+        elif role == "admin_main":
+            if student_id:
+                row_issues.append("UNEXPECTED_STUDENT_ID_FOR_ADMIN_MAIN")
+            if instructor_id is not None:
+                row_issues.append("UNEXPECTED_INSTRUCTOR_ID_FOR_ADMIN_MAIN")
+            if is_supervisor:
+                row_issues.append("UNEXPECTED_SUPERVISOR_FLAG_FOR_ADMIN_MAIN")
+        else:
+            row_issues.append("UNKNOWN_ROLE")
+
+        if row_issues:
+            issues.append(
+                {
+                    "username": username,
+                    "role": role,
+                    "student_id": student_id or None,
+                    "instructor_id": instructor_id,
+                    "is_supervisor": is_supervisor,
+                    "is_active": is_active,
+                    "issues": row_issues,
+                }
+            )
+
+    return jsonify(
+        {
+            "status": "ok",
+            "total_users": len(rows),
+            "invalid_count": len(issues),
+            "invalid_users": issues,
+        }
+    ), 200
 
 
 @users_bp.route("/add", methods=["POST"])
@@ -625,6 +801,11 @@ def add_user():
             jsonify({"status": "error", "message": "role غير صحيح"}),
             400,
         )
+    student_id, instructor_id, is_supervisor, links_err = _normalize_user_links_for_role(
+        role, student_id, instructor_id, is_supervisor
+    )
+    if links_err:
+        return jsonify({"status": "error", "message": links_err}), 400
 
     actor_role = _normalize_role(_current_role())
     if actor_role != "admin_main":
@@ -638,84 +819,173 @@ def add_user():
 
     was_created = False
     user_out: Optional[dict] = None
-    with get_connection() as conn:
-        cur = conn.cursor()
-        existing = cur.execute(
-            "SELECT username FROM users WHERE username = ?", (username,)
-        ).fetchone()
-        if existing:
-            old_role_row = cur.execute("SELECT role FROM users WHERE username = ?", (username,)).fetchone()
-            old_role = _normalize_role(old_role_row[0] if old_role_row else "")
-            if old_role == "admin_main" and actor_role != "admin_main":
-                return jsonify({"status": "error", "message": "لا يمكن تعديل مستخدم admin_main إلا بواسطة admin_main"}), 403
-            if actor_role != "admin_main":
-                # رئيس القسم يسمح فقط بتعديل الأساتذة: is_supervisor و instructor_id و role= instructor/ head_of_department
-                if old_role not in ("instructor", "head_of_department"):
-                    return jsonify({"status": "error", "message": "رئيس القسم يمكنه تعديل الأساتذة فقط"}), 403
-                if role not in ("instructor", "head_of_department"):
-                    return jsonify({"status": "error", "message": "لا يمكن تغيير دور الأستاذ إلى هذا الدور من قبل رئيس القسم"}), 403
-        if existing:
-            # تحديث مستخدم موجود
-            if actor_role == "admin_main":
-                if password:
+    actor = _current_actor()
+    affected_rows = 0
+    try:
+        with get_connection() as conn:
+            # PostgreSQL pooled connections may occasionally return with a failed transaction state.
+            # Clearing it defensively avoids "InFailedSqlTransaction" on the first write.
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            cur = conn.cursor()
+            if _is_pg_connection(conn):
+                if role == "student" and student_id:
+                    student_exists = cur.execute(
+                        "SELECT 1 FROM students WHERE student_id = ? LIMIT 1",
+                        (student_id,),
+                    ).fetchone()
+                    if not student_exists:
+                        return jsonify({"status": "error", "message": f"الرقم الدراسي غير موجود: {student_id}"}), 400
+                if role in ("instructor", "head_of_department") and instructor_id is not None:
+                    instructor_exists = cur.execute(
+                        "SELECT 1 FROM instructors WHERE id = ? LIMIT 1",
+                        (instructor_id,),
+                    ).fetchone()
+                    if not instructor_exists:
+                        return jsonify({"status": "error", "message": f"رقم عضو هيئة التدريس غير موجود: {instructor_id}"}), 400
+            existing = cur.execute(
+                "SELECT username, role, student_id, instructor_id, COALESCE(is_supervisor,0), COALESCE(is_active,1) "
+                "FROM users WHERE lower(username) = lower(?)",
+                (username,),
+            ).fetchone()
+            before_user = _user_dict_from_row(existing) if existing else None
+            if existing:
+                old_role = _normalize_role(existing[1] if existing else "")
+                if old_role == "admin_main" and actor_role != "admin_main":
+                    return jsonify({"status": "error", "message": "لا يمكن تعديل مستخدم admin_main إلا بواسطة admin_main"}), 403
+                if actor_role != "admin_main":
+                    # رئيس القسم يسمح فقط بتعديل الأساتذة: is_supervisor و instructor_id و role= instructor/ head_of_department
+                    if old_role not in ("instructor", "head_of_department"):
+                        return jsonify({"status": "error", "message": "رئيس القسم يمكنه تعديل الأساتذة فقط"}), 403
+                    if role not in ("instructor", "head_of_department"):
+                        return jsonify({"status": "error", "message": "لا يمكن تغيير دور الأستاذ إلى هذا الدور من قبل رئيس القسم"}), 403
+            try:
+                if existing:
+                    # تحديث مستخدم موجود
+                    if actor_role == "admin_main":
+                        if password:
+                            pw_hash = hash_password(password)
+                            cur.execute(
+                                """
+                                UPDATE users
+                                SET password_hash = ?, role = ?, student_id = ?, instructor_id = ?, is_supervisor = ?, is_active = ?
+                                WHERE username = ?
+                                """,
+                                (pw_hash, role, student_id, instructor_id, is_supervisor, is_active, username),
+                            )
+                            affected_rows = cur.rowcount if cur.rowcount is not None else affected_rows
+                        else:
+                            cur.execute(
+                                """
+                                UPDATE users
+                                SET role = ?, student_id = ?, instructor_id = ?, is_supervisor = ?, is_active = ?
+                                WHERE username = ?
+                                """,
+                                (role, student_id, instructor_id, is_supervisor, is_active, username),
+                            )
+                            affected_rows = cur.rowcount if cur.rowcount is not None else affected_rows
+                    else:
+                        # رئيس القسم: تحديث محدود للأساتذة فقط
+                        cur.execute(
+                            """
+                            UPDATE users
+                            SET role = ?, instructor_id = ?, is_supervisor = ?
+                            WHERE username = ?
+                            """,
+                            (role, instructor_id, is_supervisor, username),
+                        )
+                        affected_rows = cur.rowcount if cur.rowcount is not None else affected_rows
+                else:
+                    if actor_role != "admin_main":
+                        return jsonify({"status": "error", "message": "رئيس القسم لا يمكنه إنشاء مستخدم جديد"}), 403
+                    if not password:
+                        return (
+                            jsonify(
+                                {
+                                    "status": "error",
+                                    "message": "password مطلوب عند إنشاء مستخدم جديد",
+                                }
+                            ),
+                            400,
+                        )
+                    was_created = True
                     pw_hash = hash_password(password)
                     cur.execute(
                         """
-                        UPDATE users
-                        SET password_hash = ?, role = ?, student_id = ?, instructor_id = ?, is_supervisor = ?, is_active = ?
-                        WHERE username = ?
+                        INSERT INTO users (username, password_hash, role, student_id, instructor_id, is_supervisor, is_active)
+                        VALUES (?,?,?,?,?,?,?)
                         """,
-                        (pw_hash, role, student_id, instructor_id, is_supervisor, is_active, username),
+                        (username, pw_hash, role, student_id, instructor_id, is_supervisor, is_active),
                     )
-                else:
-                    cur.execute(
-                        """
-                        UPDATE users
-                        SET role = ?, student_id = ?, instructor_id = ?, is_supervisor = ?, is_active = ?
-                        WHERE username = ?
-                        """,
-                        (role, student_id, instructor_id, is_supervisor, is_active, username),
+                    affected_rows = cur.rowcount if cur.rowcount is not None else affected_rows
+            except Exception as write_err:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                msg = str(write_err)
+                if "idx_users_username_lower_unique" in msg or "duplicate key value violates unique constraint" in msg:
+                    return jsonify({"status": "error", "message": "اسم المستخدم مستخدم مسبقاً (مع تجاهل حالة الأحرف)."}), 409
+                if "users_staff_requires_instructor_id_chk" in msg:
+                    return jsonify({"status": "error", "message": "instructor_id مطلوب لدور عضو هيئة التدريس/رئيس القسم"}), 400
+                if "users_student_requires_student_id_chk" in msg:
+                    return jsonify({"status": "error", "message": "student_id مطلوب لدور الطالب"}), 400
+                if "violates foreign key constraint" in msg and "users_instructor_id_fkey" in msg:
+                    return jsonify({"status": "error", "message": f"رقم عضو هيئة التدريس غير موجود: {instructor_id}"}), 400
+                if "violates foreign key constraint" in msg and "users_student_id_fkey" in msg:
+                    return jsonify({"status": "error", "message": f"الرقم الدراسي غير موجود: {student_id}"}), 400
+                if "infailedsqltransaction" in msg.lower():
+                    return jsonify({"status": "error", "message": "تعذر الحفظ بسبب معاملة قاعدة بيانات سابقة غير مكتملة. أعد المحاولة الآن."}), 409
+                raise
+            row = cur.execute(
+                "SELECT username, role, student_id, instructor_id, "
+                "COALESCE(is_supervisor,0) AS is_supervisor, COALESCE(is_active,1) AS is_active "
+                "FROM users WHERE lower(username) = lower(?)",
+                (username,),
+            ).fetchone()
+            user_out = _user_dict_from_row(row)
+            if user_out is None:
+                # تشخيص خاص: قد يوجد تعارض case-insensitive عند تفعيل فهرس lower(username)
+                maybe_same_lower = cur.execute(
+                    "SELECT username FROM users WHERE lower(username) = lower(?) LIMIT 1",
+                    (username,),
+                ).fetchone()
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                logger.error(
+                    "users/add post-check failed: username=%s role=%s was_created=%s affected_rows=%s",
+                    username,
+                    role,
+                    was_created,
+                    affected_rows,
+                )
+                if maybe_same_lower:
+                    return (
+                        jsonify(
+                            {
+                                "status": "error",
+                                "message": f"اسم المستخدم موجود بالفعل بحالة أحرف مختلفة: {maybe_same_lower[0]}",
+                            }
+                        ),
+                        409,
                     )
-            else:
-                # رئيس القسم: تحديث محدود للأساتذة فقط
-                cur.execute(
-                    """
-                    UPDATE users
-                    SET role = ?, instructor_id = ?, is_supervisor = ?
-                    WHERE username = ?
-                    """,
-                    (role, instructor_id, is_supervisor, username),
-                )
-        else:
-            if actor_role != "admin_main":
-                return jsonify({"status": "error", "message": "رئيس القسم لا يمكنه إنشاء مستخدم جديد"}), 403
-            if not password:
-                return (
-                    jsonify(
-                        {
-                            "status": "error",
-                            "message": "password مطلوب عند إنشاء مستخدم جديد",
-                        }
-                    ),
-                    400,
-                )
-            was_created = True
-            pw_hash = hash_password(password)
-            cur.execute(
-                """
-                INSERT INTO users (username, password_hash, role, student_id, instructor_id, is_supervisor, is_active)
-                VALUES (?,?,?,?,?,?,?)
-                """,
-                (username, pw_hash, role, student_id, instructor_id, is_supervisor, is_active),
+                return jsonify({"status": "error", "message": "تعذر التحقق من حفظ المستخدم؛ لم يتم إيجاد السجل بعد العملية."}), 500
+            _log_user_audit(
+                conn,
+                action="users.created" if was_created else "users.updated",
+                actor=actor,
+                username=username,
+                before=before_user,
+                after=user_out,
             )
-        conn.commit()
-        row = cur.execute(
-            "SELECT username, role, student_id, instructor_id, "
-            "COALESCE(is_supervisor,0) AS is_supervisor, COALESCE(is_active,1) AS is_active "
-            "FROM users WHERE username = ?",
-            (username,),
-        ).fetchone()
-        user_out = _user_dict_from_row(row)
+            conn.commit()
+    except Exception:
+        logger.exception("users/add failed username=%s role=%s", username, role)
+        return jsonify({"status": "error", "message": "فشل حفظ المستخدم في قاعدة البيانات"}), 500
 
     logger.info(
         "users/add action=%s username=%s",
@@ -746,10 +1016,30 @@ def delete_user():
             jsonify({"status": "error", "message": "username مطلوب"}),
             400,
         )
+    actor = _current_actor()
     with get_connection() as conn:
         cur = conn.cursor()
+        before = cur.execute(
+            "SELECT username, role, student_id, instructor_id, "
+            "COALESCE(is_supervisor,0) AS is_supervisor, COALESCE(is_active,1) AS is_active "
+            "FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        before_user = _user_dict_from_row(before) if before else None
         cur.execute("DELETE FROM users WHERE username = ?", (username,))
+        deleted = cur.rowcount if cur.rowcount is not None else 0
+        if deleted:
+            _log_user_audit(
+                conn,
+                action="users.deleted",
+                actor=actor,
+                username=username,
+                before=before_user,
+                after=None,
+            )
         conn.commit()
+    if not deleted:
+        return jsonify({"status": "error", "message": "المستخدم غير موجود"}), 404
     return jsonify({"status": "ok"})
 
 
@@ -763,12 +1053,18 @@ def toggle_active():
         return jsonify({"status": "error", "message": "username مطلوب"}), 400
 
     actor_role = _normalize_role(_current_role())
+    actor = _current_actor()
     with get_connection() as conn:
         cur = conn.cursor()
-        row = cur.execute("SELECT role FROM users WHERE username = ?", (username,)).fetchone()
+        row = cur.execute(
+            "SELECT username, role, student_id, instructor_id, COALESCE(is_supervisor,0), COALESCE(is_active,1) "
+            "FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
         if not row:
             return jsonify({"status": "error", "message": "المستخدم غير موجود"}), 404
-        target_role = _normalize_role(row[0])
+        before_user = _user_dict_from_row(row)
+        target_role = _normalize_role(row[1])
         if target_role == "admin_main" and actor_role != "admin_main":
             return jsonify({"status": "error", "message": "لا يمكن تعطيل admin_main إلا بواسطة admin_main"}), 403
         if target_role == "admin_main" and active == 0:
@@ -776,6 +1072,19 @@ def toggle_active():
             if cnt <= 1:
                 return jsonify({"status": "error", "message": "لا يمكن تعطيل آخر مستخدم admin_main"}), 400
         cur.execute("UPDATE users SET is_active = ? WHERE username = ?", (active, username))
+        after = cur.execute(
+            "SELECT username, role, student_id, instructor_id, COALESCE(is_supervisor,0), COALESCE(is_active,1) "
+            "FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        _log_user_audit(
+            conn,
+            action="users.toggle_active",
+            actor=actor,
+            username=username,
+            before=before_user,
+            after=_user_dict_from_row(after),
+        )
         conn.commit()
     return jsonify({"status": "ok", "message": "تم تحديث الحالة"}), 200
 
@@ -788,15 +1097,89 @@ def set_supervisor():
     is_sup = int(bool(data.get("is_supervisor", True)))
     if not username:
         return jsonify({"status": "error", "message": "username مطلوب"}), 400
+    actor = _current_actor()
     with get_connection() as conn:
         cur = conn.cursor()
-        row = cur.execute("SELECT role FROM users WHERE username = ?", (username,)).fetchone()
+        row = cur.execute(
+            "SELECT username, role, student_id, instructor_id, COALESCE(is_supervisor,0), COALESCE(is_active,1) "
+            "FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
         if not row:
             return jsonify({"status": "error", "message": "المستخدم غير موجود"}), 404
-        role = _normalize_role(row[0])
+        before_user = _user_dict_from_row(row)
+        role = _normalize_role(row[1])
         if role not in ("instructor", "head_of_department"):
             return jsonify({"status": "error", "message": "يمكن تعيين الإشراف للأستاذ/رئيس القسم فقط"}), 400
         cur.execute("UPDATE users SET is_supervisor = ? WHERE username = ?", (is_sup, username))
+        after = cur.execute(
+            "SELECT username, role, student_id, instructor_id, COALESCE(is_supervisor,0), COALESCE(is_active,1) "
+            "FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        _log_user_audit(
+            conn,
+            action="users.set_supervisor",
+            actor=actor,
+            username=username,
+            before=before_user,
+            after=_user_dict_from_row(after),
+        )
         conn.commit()
     return jsonify({"status": "ok", "message": "تم تحديث الإشراف الأكاديمي"}), 200
 
+
+@users_bp.route("/audit_log", methods=["GET"])
+@role_required("admin_main", "head_of_department")
+def users_audit_log():
+    """آخر سجلات تدقيق عمليات المستخدمين مع فلاتر بسيطة."""
+    actor = (request.args.get("actor") or "").strip()
+    username = (request.args.get("username") or "").strip()
+    action = (request.args.get("action") or "").strip()
+    try:
+        limit = int(request.args.get("limit", 50))
+    except (TypeError, ValueError):
+        limit = 50
+    limit = max(1, min(limit, 200))
+
+    q = """
+        SELECT id, ts, actor, action, details
+        FROM activity_log
+        WHERE action LIKE 'users.%%'
+    """
+    params = []
+    if actor:
+        q += " AND actor = ?"
+        params.append(actor)
+    if username:
+        q += " AND details LIKE ?"
+        params.append(f'%"{username}"%')
+    if action:
+        q += " AND action = ?"
+        params.append(action)
+    q += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        rows = cur.execute(q, params).fetchall()
+
+    out = []
+    for r in rows:
+        details_raw = r[4] or ""
+        details = None
+        if details_raw:
+            try:
+                details = json.loads(details_raw)
+            except Exception:
+                details = {"raw": str(details_raw)}
+        out.append(
+            {
+                "id": r[0],
+                "ts": r[1],
+                "actor": r[2],
+                "action": r[3],
+                "details": details,
+            }
+        )
+    return jsonify({"status": "ok", "count": len(out), "items": out}), 200

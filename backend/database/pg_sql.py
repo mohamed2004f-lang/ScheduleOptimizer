@@ -148,7 +148,7 @@ def adapt_sqlite_sql_to_postgres(sql: str) -> str:
             )
         )
 
-    # grades_new INSERT OR REPLACE
+    # INSERT OR REPLACE INTO grades (صيغة سطر واحد — خدمة الدرجات)
     if n == _norm(
         "INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES (?, ?, ?, ?, ?, ?)"
     ):
@@ -165,7 +165,7 @@ def adapt_sqlite_sql_to_postgres(sql: str) -> str:
             "INSERT INTO students ( student_id, student_name, enrollment_status, status_changed_at, "
             "graduation_plan, join_term, join_year ) VALUES ( ?, ?, COALESCE((SELECT enrollment_status "
             "FROM students WHERE student_id = ?), 'active'), COALESCE((SELECT status_changed_at FROM students "
-            "WHERE student_id = ?), CURRENT_TIMESTAMP), ?, ?, ? ) "
+            "WHERE student_id = ?), CAST(CURRENT_TIMESTAMP AS TEXT)), ?, ?, ? ) "
             "ON CONFLICT (student_id) DO UPDATE SET student_name = EXCLUDED.student_name, "
             "enrollment_status = EXCLUDED.enrollment_status, status_changed_at = EXCLUDED.status_changed_at, "
             "graduation_plan = EXCLUDED.graduation_plan, join_term = EXCLUDED.join_term, "
@@ -175,7 +175,7 @@ def adapt_sqlite_sql_to_postgres(sql: str) -> str:
         return (
             "INSERT INTO students ( student_id, student_name, enrollment_status, status_changed_at, graduation_plan ) "
             "VALUES ( ?, ?, COALESCE((SELECT enrollment_status FROM students WHERE student_id = ?), 'active'), "
-            "COALESCE((SELECT status_changed_at FROM students WHERE student_id = ?), CURRENT_TIMESTAMP), ? ) "
+            "COALESCE((SELECT status_changed_at FROM students WHERE student_id = ?), CAST(CURRENT_TIMESTAMP AS TEXT)), ? ) "
             "ON CONFLICT (student_id) DO UPDATE SET student_name = EXCLUDED.student_name, "
             "enrollment_status = EXCLUDED.enrollment_status, status_changed_at = EXCLUDED.status_changed_at, "
             "graduation_plan = EXCLUDED.graduation_plan"
@@ -184,7 +184,7 @@ def adapt_sqlite_sql_to_postgres(sql: str) -> str:
         return (
             "INSERT INTO students ( student_id, student_name, enrollment_status, status_changed_at ) VALUES ( "
             "?, ?, COALESCE((SELECT enrollment_status FROM students WHERE student_id = ?), 'active'), "
-            "COALESCE((SELECT status_changed_at FROM students WHERE student_id = ?), CURRENT_TIMESTAMP) ) "
+            "COALESCE((SELECT status_changed_at FROM students WHERE student_id = ?), CAST(CURRENT_TIMESTAMP AS TEXT)) ) "
             "ON CONFLICT (student_id) DO UPDATE SET student_name = EXCLUDED.student_name, "
             "enrollment_status = EXCLUDED.enrollment_status, status_changed_at = EXCLUDED.status_changed_at"
         )
@@ -198,7 +198,7 @@ def adapt_sqlite_sql_to_postgres(sql: str) -> str:
             "course_code = EXCLUDED.course_code, units = EXCLUDED.units, grade = EXCLUDED.grade"
         )
 
-    # INSERT OR IGNORE students — قيمة فرعية (grades_new)
+    # INSERT OR IGNORE students — فرعية (استيراد/واجهات)
     if (
         "INSERT OR IGNORE INTO students (student_id, student_name)" in _norm(s)
         and "COALESCE((SELECT student_name FROM students WHERE student_id = ?)" in _norm(s)

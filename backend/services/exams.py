@@ -1,10 +1,8 @@
 from flask import Blueprint, request, jsonify, send_file, session, render_template
 from backend.core.auth import login_required, role_required
-from backend.database.database import is_postgresql
+from backend.database.database import is_postgresql, table_to_dicts
 from .utilities import (
     get_connection,
-    table_to_dicts,
-    DB_FILE,
     df_from_query,
     excel_response_from_df,
     pdf_response_from_html,
@@ -19,7 +17,6 @@ from .utilities import (
 import json
 import logging
 from datetime import datetime
-from collections import defaultdict
 
 exams_bp = Blueprint("exams", __name__)
 logger = logging.getLogger(__name__)
@@ -810,7 +807,6 @@ def export_conflicts(exam_type):
     HAVING ccount > 1
     '''
     import io
-    import pandas as pd
     rows = df_from_query(q, params=(exam_type,))
     if fmt == 'txt':
         buf = io.BytesIO()

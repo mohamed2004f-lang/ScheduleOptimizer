@@ -1,0 +1,13 @@
+[tool.ruff]
+target-version = "py310"
+line-length = 127
+src = ["backend"]
+
+[tool.coverage.run]
+source = ["backend"]
+
+[tool.coverage.report]
+# يطابق الوضع الحالي (~18%)؛ ارفع القيمة تدريجياً (هدف معقول 40+)
+fail_under = 17
+precision = 0
+omit = ["*/tests/*"]

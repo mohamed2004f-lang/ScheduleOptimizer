@@ -45,7 +45,7 @@ def save_instructor():
       - is_active (اختياري: 1/0 أو true/false)
     """
     data = request.get_json(force=True) or {}
-    inst_id = data.get("id")
+    inst_id_raw = data.get("id")
     name = (data.get("name") or "").strip()
     inst_type = (data.get("type") or "internal").strip() or "internal"
     email = (data.get("email") or "").strip() or None
@@ -64,25 +64,48 @@ def save_instructor():
     elif isinstance(is_active_raw, (int, bool)):
         is_active = 1 if bool(is_active_raw) else 0
 
+    inst_id = None
+    if inst_id_raw not in (None, ""):
+        try:
+            inst_id = int(inst_id_raw)
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "رقم عضو هيئة التدريس يجب أن يكون رقمًا صحيحًا"}), 400
+
     with get_connection() as conn:
         cur = conn.cursor()
-        if inst_id:
-            cur.execute(
-                """
-                UPDATE instructors
-                SET name = ?, type = ?, email = ?, is_active = ?
-                WHERE id = ?
-                """,
-                (name, inst_type, email, is_active, inst_id),
-            )
-        else:
-            cur.execute(
-                """
-                INSERT INTO instructors (name, type, email, is_active)
-                VALUES (?,?,?,?)
-                """,
-                (name, inst_type, email, is_active),
-            )
+        try:
+            if inst_id is not None:
+                exists = cur.execute("SELECT 1 FROM instructors WHERE id = ? LIMIT 1", (inst_id,)).fetchone()
+                if exists:
+                    cur.execute(
+                        """
+                        UPDATE instructors
+                        SET name = ?, type = ?, email = ?, is_active = ?
+                        WHERE id = ?
+                        """,
+                        (name, inst_type, email, is_active, inst_id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO instructors (id, name, type, email, is_active)
+                        VALUES (?,?,?,?,?)
+                        """,
+                        (inst_id, name, inst_type, email, is_active),
+                    )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO instructors (name, type, email, is_active)
+                    VALUES (?,?,?,?)
+                    """,
+                    (name, inst_type, email, is_active),
+                )
+        except Exception as e:
+            msg = str(e).lower()
+            if "duplicate" in msg or "unique" in msg:
+                return jsonify({"status": "error", "message": "رقم عضو هيئة التدريس مستخدم بالفعل"}), 409
+            raise
         conn.commit()
 
     return jsonify({"status": "ok"})

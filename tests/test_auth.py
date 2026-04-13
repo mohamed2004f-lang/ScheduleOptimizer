@@ -20,9 +20,12 @@ class TestAuth:
         
         # يجب أن يكون التشفير مختلفاً عن النص الأصلي
         assert hashed != password
-        
-        # يجب أن يكون التشفير ثابتاً لنفس كلمة المرور
-        assert hash_password(password) == hashed
+
+        # Werkzeug يولّد salt عشوائياً لكل استدعاء — الهاش يختلف لكن التحقق ينجح
+        hashed_again = hash_password(password)
+        assert hashed_again != password
+        assert verify_password(password, hashed)
+        assert verify_password(password, hashed_again)
     
     def test_verify_password(self):
         """اختبار التحقق من كلمة المرور"""
