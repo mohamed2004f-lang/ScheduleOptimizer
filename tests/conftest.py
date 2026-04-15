@@ -24,9 +24,27 @@ if PROJECT_ROOT not in sys.path:
 os.environ.setdefault("ADMIN_PASSWORD", "TestP@ssw0rd!")
 os.environ.setdefault("ADMIN_USERNAME", "admin-test")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-pytest")
-os.environ.setdefault("FLASK_ENV", "testing")
-# Force SQLite (no PostgreSQL) for tests.
-os.environ["DATABASE_URL"] = "sqlite://"
+# فرض بيئة الاختبار حتى لا تُستبدل بصمت من FLASK_ENV=production في .env أو في البيئة
+os.environ["FLASK_ENV"] = "testing"
+
+
+def _use_postgres_repos() -> bool:
+    """عند التفعيل: اختبارات المستودعات على PostgreSQL (CI) بدل SQLite في الذاكرة."""
+    v = (os.environ.get("PYTEST_USE_POSTGRES_REPOS") or "").strip().lower()
+    return v in ("1", "true", "yes")
+
+
+if _use_postgres_repos():
+    _pg_url = (os.environ.get("PG_REPO_TEST_URL") or "").strip()
+    if not _pg_url:
+        raise RuntimeError(
+            "PYTEST_USE_POSTGRES_REPOS is set but PG_REPO_TEST_URL is missing "
+            "(e.g. postgresql+psycopg://user:pass@localhost:5432/dbname)"
+        )
+    os.environ["DATABASE_URL"] = _pg_url
+else:
+    # افتراضي: SQLite في الذاكرة — تعيين صريح (لا setdefault) لتجاوز .env
+    os.environ["DATABASE_URL"] = "sqlite://"
 
 
 # ---------------------------------------------------------------------------
@@ -111,8 +129,52 @@ CREATE TABLE IF NOT EXISTS schedule (
     time TEXT NOT NULL,
     room TEXT DEFAULT '',
     instructor TEXT DEFAULT '',
+    instructor_id INTEGER,
     semester TEXT DEFAULT '',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS faculty_section_axis_status (
+    section_id INTEGER NOT NULL,
+    instructor_id INTEGER NOT NULL,
+    axis_key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (section_id, instructor_id, axis_key)
+);
+
+CREATE TABLE IF NOT EXISTS faculty_course_plans (
+    section_id INTEGER NOT NULL,
+    instructor_id INTEGER NOT NULL,
+    week_no INTEGER NOT NULL,
+    week_topic TEXT DEFAULT '',
+    lecture_status TEXT NOT NULL DEFAULT 'planned',
+    resources_text TEXT DEFAULT '',
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT DEFAULT '',
+    PRIMARY KEY (section_id, instructor_id, week_no)
+);
+
+CREATE TABLE IF NOT EXISTS faculty_course_announcements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    section_id INTEGER NOT NULL,
+    instructor_id INTEGER NOT NULL,
+    title TEXT DEFAULT '',
+    body TEXT NOT NULL,
+    announcement_type TEXT NOT NULL DEFAULT 'general',
+    lecture_date TEXT,
+    published_to_students INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    created_by TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS faculty_course_syllabi (
+    section_id INTEGER NOT NULL,
+    instructor_id INTEGER NOT NULL,
+    syllabus_text TEXT DEFAULT '',
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT DEFAULT '',
+    PRIMARY KEY (section_id, instructor_id)
 );
 
 CREATE TABLE IF NOT EXISTS system_settings (
@@ -233,6 +295,29 @@ def _seed_sample_data(conn):
     cur.execute("INSERT OR IGNORE INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES ('S002', 'خريف 44-45', 'رياضيات 1', 'MATH101', 3, 40)")
     cur.execute("INSERT OR IGNORE INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES ('S002', 'ربيع 44-45', 'كيمياء 1', 'CHEM101', 2, 90)")
 
+    # حساب أستاذ + صف في الجدول يطابق الاسم في دليل instructors (لاختبارات «مقرراتي»)
+    try:
+        from werkzeug.security import generate_password_hash
+        _pw_inst = generate_password_hash("TestP@ssw0rd!")
+    except ImportError:
+        from backend.core.auth import hash_password
+        _pw_inst = hash_password("TestP@ssw0rd!")
+    cur.execute(
+        "INSERT OR IGNORE INTO instructors (id, name, type) VALUES (1, 'أستاذ تجريبي', 'internal')"
+    )
+    cur.execute(
+        "INSERT OR IGNORE INTO users (username, password_hash, role, instructor_id) VALUES (?, ?, ?, ?)",
+        ("inst-test", _pw_inst, "instructor", 1),
+    )
+    cur.execute(
+        """INSERT INTO schedule (course_name, day, time, room, instructor, semester)
+           VALUES ('رياضيات 1', 'الأحد', '08:00-09:30', 'قاعة 1', 'أستاذ  تجريبي', 'خريف 44-45')"""
+    )
+    cur.execute(
+        """INSERT INTO schedule (course_name, day, time, room, instructor_id, semester)
+           VALUES ('فيزياء 1', 'الاثنين', '10:00-11:30', 'قاعة 2', 1, 'خريف 44-45')"""
+    )
+
     conn.commit()
 
 
@@ -246,6 +331,64 @@ def _seed_student_user(conn):
         pw_hash = hash_password("TestP@ssw0rd!")
     conn.execute(
         "INSERT OR IGNORE INTO users (username, password_hash, role, student_id) VALUES (?, ?, ?, ?)",
+        ("student-s001", pw_hash, "student", "S001"),
+    )
+    conn.commit()
+
+
+def _seed_postgres_repositories(conn):
+    """بذور متوافقة مع PostgreSQL لاختبارات المستودعات (ON CONFLICT)."""
+    try:
+        from werkzeug.security import generate_password_hash
+        pw_hash = generate_password_hash("TestP@ssw0rd!")
+    except ImportError:
+        from backend.core.auth import hash_password
+        pw_hash = hash_password("TestP@ssw0rd!")
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?) "
+        "ON CONFLICT (username) DO NOTHING",
+        ("admin-test", pw_hash, "admin"),
+    )
+    for sid, name, jy in (("S001", "طالب أول", "1445"), ("S002", "طالب ثاني", "1445")):
+        cur.execute(
+            "INSERT INTO students (student_id, student_name, join_year) VALUES (?, ?, ?) "
+            "ON CONFLICT (student_id) DO NOTHING",
+            (sid, name, jy),
+        )
+    for cn, cc, u in (
+        ("رياضيات 1", "MATH101", 3),
+        ("فيزياء 1", "PHYS101", 3),
+        ("كيمياء 1", "CHEM101", 2),
+    ):
+        cur.execute(
+            "INSERT INTO courses (course_name, course_code, units) VALUES (?, ?, ?) "
+            "ON CONFLICT (course_name) DO NOTHING",
+            (cn, cc, u),
+        )
+    cur.execute(
+        "INSERT INTO grades (student_id, semester, course_name, course_code, units, grade) "
+        "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (student_id, semester, course_name) DO NOTHING",
+        ("S001", "خريف 44-45", "رياضيات 1", "MATH101", 3, 85),
+    )
+    cur.execute(
+        "INSERT INTO grades (student_id, semester, course_name, course_code, units, grade) "
+        "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (student_id, semester, course_name) DO NOTHING",
+        ("S001", "خريف 44-45", "فيزياء 1", "PHYS101", 3, 70),
+    )
+    cur.execute(
+        "INSERT INTO grades (student_id, semester, course_name, course_code, units, grade) "
+        "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (student_id, semester, course_name) DO NOTHING",
+        ("S002", "خريف 44-45", "رياضيات 1", "MATH101", 3, 40),
+    )
+    cur.execute(
+        "INSERT INTO grades (student_id, semester, course_name, course_code, units, grade) "
+        "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (student_id, semester, course_name) DO NOTHING",
+        ("S002", "ربيع 44-45", "كيمياء 1", "CHEM101", 2, 90),
+    )
+    cur.execute(
+        "INSERT INTO users (username, password_hash, role, student_id) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT (username) DO NOTHING",
         ("student-s001", pw_hash, "student", "S001"),
     )
     conn.commit()
@@ -322,6 +465,21 @@ def _patched_get_connection(db_file=None):
 @pytest.fixture(scope="session", autouse=True)
 def _setup_shared_db():
     """Create the shared in-memory SQLite DB once per test session."""
+    if _use_postgres_repos():
+        from backend.database.database import ensure_tables, get_connection, is_postgresql
+
+        if not is_postgresql():
+            pytest.fail("PG_REPO_TEST_URL must point to PostgreSQL when PYTEST_USE_POSTGRES_REPOS=1")
+        ensure_tables()
+        with get_connection() as conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            _seed_postgres_repositories(conn)
+        yield
+        return
+
     global _shared_conn
     _shared_conn = sqlite3.connect(":memory:")
     _shared_conn.row_factory = sqlite3.Row
@@ -386,13 +544,14 @@ def _setup_shared_db():
 @pytest.fixture(scope="session")
 def app(_setup_shared_db):
     """Create and configure the Flask application for testing."""
-    # Patch *before* importing app module so that ensure_tables() uses our DB.
     import backend.database.database as db_mod
-    _orig_ensure = db_mod.ensure_tables
-    db_mod.ensure_tables = lambda *a, **kw: None  # no-op; tables already created
 
+    _orig_ensure = db_mod.ensure_tables
     _orig_is_pg = db_mod.is_postgresql
-    db_mod.is_postgresql = lambda: False
+    if not _use_postgres_repos():
+        # SQLite في الذاكرة: الجداول جاهزة عبر _MINIMAL_TABLES — لا نعيد ensure_tables عند استيراد app
+        db_mod.ensure_tables = lambda *a, **kw: None  # noqa: ARG005
+        db_mod.is_postgresql = lambda: False
 
     from app import app as flask_app
 
@@ -402,7 +561,6 @@ def app(_setup_shared_db):
 
     yield flask_app
 
-    # Restore originals (good hygiene).
     db_mod.ensure_tables = _orig_ensure
     db_mod.is_postgresql = _orig_is_pg
 
@@ -444,4 +602,6 @@ def student_auth_client(app):
 @pytest.fixture()
 def db_conn():
     """Direct access to the shared in-memory SQLite connection for unit tests."""
+    if _use_postgres_repos():
+        pytest.skip("db_conn متاح فقط لمسار SQLite؛ استخدم get_connection() في اختبارات PostgreSQL")
     return _shared_conn

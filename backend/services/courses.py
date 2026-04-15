@@ -6,6 +6,8 @@ from flask import Blueprint, request, jsonify, Response, current_app, session, s
 from backend.core.auth import login_required, role_required
 from collections import defaultdict
 from .utilities import get_connection, df_from_query, excel_response_from_df, pdf_response_from_html
+from backend.database.database import fetch_table_columns, is_postgresql
+from backend.repositories import courses_repo
 import io
 import base64
 from datetime import datetime
@@ -25,7 +27,7 @@ def list_courses():
         cur = conn.cursor()
         try:
             try:
-                cols = [r[1] for r in cur.execute("PRAGMA table_info(courses)").fetchall()]
+                cols = fetch_table_columns(conn, "courses")
             except Exception:
                 cols = []
             has_cat = "category" in cols
@@ -105,27 +107,15 @@ def add_course():
         return jsonify({"status": "error", "message": "اسم المقرر (course_name) مطلوب"}), 400
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS courses (
-                course_name TEXT PRIMARY KEY,
-                course_code TEXT,
-                units INTEGER
-            )
-        """)
+        # الجداول تُنشأ عند التشغيل عبر ensure_tables في database.py — لا CREATE في المسار
         # منع تكرار الاسم (تطبيع بسيط lower/strip)
-        row = cur.execute(
-            "SELECT course_name FROM courses WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
-            (cname,),
-        ).fetchone()
+        row = courses_repo.find_course_name_duplicate_ci(conn, cname)
         if row:
             return jsonify({"status": "error", "message": "يوجد مقرر آخر بنفس الاسم. استخدم زر \"تحرير\" لتعديله."}), 400
 
         # منع تكرار الرمز إذا تم إدخاله
         if code:
-            row = cur.execute(
-                "SELECT course_name FROM courses WHERE COALESCE(course_code,'') <> '' AND LOWER(TRIM(course_code)) = LOWER(TRIM(?))",
-                (code,),
-            ).fetchone()
+            row = courses_repo.find_course_code_duplicate_ci(conn, code)
             if row:
                 return jsonify(
                     {
@@ -134,9 +124,9 @@ def add_course():
                     }
                 ), 400
 
-        # تأكد من وجود عمود category (قواعد قديمة)
+        # تأكد من وجود عمود category (قواعد قديمة / توافق SQLite وPostgreSQL)
         try:
-            cols = [r[1] for r in cur.execute("PRAGMA table_info(courses)").fetchall()]
+            cols = fetch_table_columns(conn, "courses")
         except Exception:
             cols = []
         if "category" in cols:
@@ -193,9 +183,9 @@ def update_course():
                     }
                 ), 400
 
-        # تأكد من وجود عمود category (قواعد قديمة)
+        # تأكد من وجود عمود category (قواعد قديمة / توافق SQLite وPostgreSQL)
         try:
-            cols = [r[1] for r in cur.execute("PRAGMA table_info(courses)").fetchall()]
+            cols = fetch_table_columns(conn, "courses")
         except Exception:
             cols = []
         has_cat = "category" in cols
@@ -280,12 +270,12 @@ def delete_course():
                 links[tbl] = 0
 
         has_links = any(v > 0 for v in links.values())
-        # ensure archive column exists
+        # عمود الأرشيف من ensure_tables؛ ALTER يبقى لقواعد SQLite القديمة فقط
         try:
-            cols = [r[1] for r in cur.execute("PRAGMA table_info(courses)").fetchall()]
+            cols = fetch_table_columns(conn, "courses")
         except Exception:
             cols = []
-        if "is_archived" not in cols:
+        if "is_archived" not in cols and not is_postgresql():
             try:
                 cur.execute("ALTER TABLE courses ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")
             except Exception:
@@ -353,14 +343,7 @@ def add_prereq():
 
     with get_connection() as conn:
         cur = conn.cursor()
-        # Ensure prereqs table exists
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS prereqs (
-                course_name TEXT,
-                required_course_name TEXT,
-                PRIMARY KEY (course_name, required_course_name)
-            )
-        """)
+        # جدول prereqs يُنشأ عند التشغيل عبر ensure_tables — لا CREATE في المسار
         # collect known courses and build tolerant maps
         try:
             rows = cur.execute(

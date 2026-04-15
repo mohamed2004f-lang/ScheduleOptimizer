@@ -1823,11 +1823,21 @@ def delete_student():
 # التسجيلات
 # -----------------------------
 @students_bp.route("/save_registrations", methods=["POST"])
-@role_required("admin")
+@role_required("admin", "head_of_department")
 def save_registrations():
     data = request.get_json(force=True) or {}
     sid = normalize_sid(data.get("student_id"))
     override_reason = (data.get("override_reason") or "").strip()
+    prereq_override = bool(data.get("prereq_override"))
+    prereq_override_reason = (data.get("prereq_override_reason") or "").strip()
+    role = (session.get("user_role") or "").strip().lower()
+    can_override_prereq = role in ("admin", "admin_main", "head_of_department")
+    # توافق خلفي: بعض نسخ الواجهة القديمة لا ترسل مفاتيح prereq_override* وتكتفي بسبب عام.
+    # في هذه الحالة، إذا كان الدور مخوّلاً، نستخدم override_reason كتجاوز متطلبات.
+    if can_override_prereq and not prereq_override_reason and override_reason:
+        prereq_override_reason = override_reason
+    if can_override_prereq and prereq_override_reason and not prereq_override:
+        prereq_override = True
     sig = data.get("signature") or {}
     student_signed = bool(sig.get("student_signed")) if isinstance(sig, dict) else bool(data.get("student_signed"))
     signed_at = (sig.get("signed_at") if isinstance(sig, dict) else data.get("signed_at")) or ""
@@ -1903,7 +1913,16 @@ def save_registrations():
                 ), 400
             blocked = prereq_eval.get("blocked") or {}
             if blocked:
-                return jsonify({"status": "error", "message": "بعض المتطلبات غير مستوفاة", "blocked": blocked}), 400
+                if not (can_override_prereq and prereq_override and prereq_override_reason):
+                    return jsonify(
+                        {
+                            "status": "error",
+                            "code": "PREREQ_BLOCKED",
+                            "message": "بعض المتطلبات غير مستوفاة",
+                            "blocked": blocked,
+                            "can_override": bool(can_override_prereq),
+                        }
+                    ), 400
 
             # التحقق من حد الوحدات 12-19 (إلزامي) مع استثناء للأدمن فقط بشرط سبب
             try:
@@ -1918,8 +1937,7 @@ def save_registrations():
                     total_units = sum(int(units_map.get(c, 0) or 0) for c in courses)
                 out_of_range = (total_units < 12) or (total_units > 19)
                 if out_of_range:
-                    role = session.get("user_role") or ""
-                    if role != "admin":
+                    if role not in ("admin", "admin_main", "head_of_department"):
                         return jsonify({
                             "status": "error",
                             "code": "UNITS_LIMIT",
@@ -2055,6 +2073,9 @@ def save_registrations():
                 try:
                     for cname in added:
                         code, units = _get_course_meta(cname)
+                        reason_txt = (override_reason if out_of_range else "")
+                        if prereq_override and prereq_override_reason:
+                            reason_txt = (reason_txt + " | " if reason_txt else "") + f"prereq_override: {prereq_override_reason}"
                         cur.execute(
                             """
                             INSERT INTO registration_changes_log
@@ -2073,7 +2094,7 @@ def save_registrations():
                                 "manual",
                                 now_iso,
                                 performed_by,
-                                (override_reason if out_of_range else ""),
+                                reason_txt,
                                 ("units_override" if out_of_range else "bulk_save"),
                                 '{"registered": false}',
                                 '{"registered": true}',
@@ -2082,6 +2103,9 @@ def save_registrations():
 
                     for cname in dropped:
                         code, units = _get_course_meta(cname)
+                        reason_txt = (override_reason if out_of_range else "")
+                        if prereq_override and prereq_override_reason:
+                            reason_txt = (reason_txt + " | " if reason_txt else "") + f"prereq_override: {prereq_override_reason}"
                         cur.execute(
                             """
                             INSERT INTO registration_changes_log
@@ -2100,7 +2124,7 @@ def save_registrations():
                                 "manual",
                                 now_iso,
                                 performed_by,
-                                (override_reason if out_of_range else ""),
+                                reason_txt,
                                 ("units_override" if out_of_range else "bulk_save"),
                                 '{"registered": true}',
                                 '{"registered": false}',
@@ -2144,6 +2168,7 @@ def save_registrations():
                         "prereq_warnings": prereq_eval.get("warnings") or [],
                         "prereq_coregister_pairs": prereq_eval.get("coregister_pairs") or [],
                         "prereq_validation": prereq_eval,
+                        "prereq_overridden": bool(prereq_override and blocked),
                     }
                 ), 200
             except Exception as e:

@@ -22,6 +22,27 @@ class TestPublicRoutes:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["status"] == "healthy"
+        assert "uptime_seconds" in data
+        assert "version" in data
+        assert "environment" in data
+
+    def test_health_reflects_request_id_header(self, client):
+        """العميل يمكنه تمرير X-Request-ID ويُعاد في الاستجابة."""
+        resp = client.get("/health", headers={"X-Request-ID": "test-req-abc-001"})
+        assert resp.status_code == 200
+        assert resp.headers.get("X-Request-ID") == "test-req-abc-001"
+
+    def test_health_ready_checks_database(self, client):
+        """GET /health/ready يتحقق من الاتصال بقاعدة البيانات."""
+        resp = client.get("/health/ready")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get("status") == "ready"
+        assert data.get("database_ok") is True
+
+    def test_system_diagnostics_requires_login(self, client):
+        resp = client.get("/admin/system_diagnostics")
+        assert resp.status_code in (401, 403, 302)
 
     def test_login_page_accessible(self, client):
         """GET /login يجب أن يكون متاحاً (200 أو 500 إذا كان القالب غير موجود في بيئة الاختبار)."""
@@ -105,6 +126,11 @@ class TestAuthFlow:
             assert resp.status_code == 200
             data = resp.get_json()
             assert data["authenticated"] is True
+            assert "capabilities" in data
+            caps = data["capabilities"]
+            assert caps is not None
+            assert caps.get("v") == 1
+            assert caps.get("can_manage_schedule_edit") is True
 
     def test_logout(self, app):
         """POST /auth/logout بعد تسجيل الدخول يجب أن يرجع 200."""
@@ -185,6 +211,16 @@ class TestProtectedRoutesAuthenticated:
         assert "conflict_report" in data
         assert "proposed_moves" in data
         assert "optimized_schedule" in data
+
+    def test_system_diagnostics_returns_json(self, auth_client):
+        """GET /admin/system_diagnostics يعيد ملخصاً آمناً للمسؤول."""
+        resp = auth_client.get("/admin/system_diagnostics")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get("status") == "ok"
+        assert "database" in data
+        assert "last_critical_errors" in data
+        assert "users_count" in data
 
 
 # ═══════════════════════════════════════════════════════
@@ -334,3 +370,172 @@ class TestRegistrationRequestsRoutes:
             ("S001", "فيزياء 1"),
         ).fetchone()
         assert reg is not None
+
+
+class TestSaveRegistrationsPrereqOverride:
+    """تغطية fallback لتجاوز المتطلبات مع payload قديم."""
+
+    def test_admin_legacy_override_reason_allows_prereq_override(self, app, monkeypatch):
+        # نجبر التحقق ليُرجع مقررات محجوبة، للتأكد من مسار التجاوز.
+        monkeypatch.setattr(
+            "backend.services.students.evaluate_courses_prereqs",
+            lambda cur, sid, courses, old_courses: {
+                "blocked": {"فيزياء 1": ["رياضيات 1"]},
+                "warnings": [],
+                "coregister_pairs": [],
+                "drop_violations": [],
+            },
+        )
+        with app.test_client() as c:
+            login = c.post(
+                "/auth/login",
+                json={"username": "admin-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login.status_code == 200
+
+            resp = c.post(
+                "/students/save_registrations",
+                json={
+                    "student_id": "S001",
+                    "courses": ["رياضيات 1", "فيزياء 1", "كيمياء 1"],
+                    # Legacy payload: لا يرسل prereq_override/prereq_override_reason
+                    "override_reason": "عدم وجود كشف درجات للطالب",
+                },
+            )
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert data is not None
+            assert data.get("status") == "ok"
+            assert data.get("prereq_overridden") is True
+
+
+class TestInstructorMyCourses:
+    """لوحة مقرراتي والـ API المرتبطة."""
+
+    def test_my_courses_page_requires_instructor(self, app):
+        with app.test_client() as c:
+            r = c.get("/my_courses")
+            assert r.status_code in (302, 401, 403)
+
+    def test_my_assigned_sections_for_instructor(self, app):
+        with app.test_client() as c:
+            login = c.post(
+                "/auth/login",
+                json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login.status_code == 200
+            resp = c.get("/schedule/my_assigned_sections")
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert "rows" in data
+            assert len(data["rows"]) == 2
+            assert data.get("instructor_name") == "أستاذ تجريبي"
+            names = {r.get("course_name") for r in data["rows"]}
+            assert names == {"رياضيات 1", "فيزياء 1"}
+            assert "axes" in data["rows"][0]
+            assert data["rows"][0]["axes"].get("assessment") == "pending"
+            assert "axis_catalog" in data
+
+    def test_my_axis_status_post(self, app):
+        with app.test_client() as c:
+            login = c.post(
+                "/auth/login",
+                json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login.status_code == 200
+            r0 = c.get("/schedule/my_assigned_sections").get_json()
+            sid = r0["rows"][0]["section_id"]
+            save = c.post(
+                "/schedule/my_axis_status",
+                json={"section_id": sid, "axis_key": "assessment", "status": "done"},
+            )
+            assert save.status_code == 200
+            assert save.get_json().get("status") == "ok"
+            r1 = c.get("/schedule/my_assigned_sections").get_json()
+            row = next(x for x in r1["rows"] if x["section_id"] == sid)
+            assert row["axes"]["assessment"] == "done"
+
+    def test_my_assigned_sections_forbidden_for_admin(self, auth_client):
+        resp = auth_client.get("/schedule/my_assigned_sections")
+        assert resp.status_code == 403
+
+    def test_my_course_admin_save_plan_and_syllabus(self, app):
+        with app.test_client() as c:
+            login = c.post(
+                "/auth/login",
+                json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login.status_code == 200
+            r0 = c.get("/schedule/my_assigned_sections").get_json()
+            sid = r0["rows"][0]["section_id"]
+            s1 = c.post(
+                "/schedule/my_course_syllabus",
+                json={"section_id": sid, "syllabus_text": "الأسبوع 1-3: أساسيات المقرر"},
+            )
+            assert s1.status_code == 200
+            p1 = c.post(
+                "/schedule/my_course_plan",
+                json={
+                    "section_id": sid,
+                    "week_no": 1,
+                    "week_topic": "مقدمة وتمهيد",
+                    "lecture_status": "planned",
+                    "resources_text": "ملف تمهيدي",
+                },
+            )
+            assert p1.status_code == 200
+            details = c.get(f"/schedule/my_course_admin?section_id={sid}")
+            assert details.status_code == 200
+            body = details.get_json()
+            assert body.get("syllabus_text") == "الأسبوع 1-3: أساسيات المقرر"
+            plan = body.get("weekly_plan") or []
+            assert any(int(x.get("week_no") or 0) == 1 for x in plan)
+
+    def test_student_announcements_scoped_to_registered_sections(self, app):
+        with app.test_client() as c:
+            # إنشاء إعلانين: واحد على مقرر مسجل للطالب S001 وآخر على مقرر غير مسجل.
+            login_inst = c.post(
+                "/auth/login",
+                json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_inst.status_code == 200
+            sections = c.get("/schedule/my_assigned_sections").get_json().get("rows") or []
+            assert len(sections) >= 2
+            s_registered = sections[0]["section_id"]
+            s_other = sections[1]["section_id"]
+            # نضبط تسجيلات الطالب يدوياً لتشمل فقط أول مقرر.
+            with app.app_context():
+                from backend.services.utilities import get_connection
+                with get_connection() as conn:
+                    cur = conn.cursor()
+                    course_registered = sections[0]["course_name"]
+                    cur.execute("DELETE FROM registrations WHERE student_id = ?", ("S001",))
+                    cur.execute(
+                        "INSERT INTO registrations (student_id, course_name) VALUES (?, ?)",
+                        ("S001", course_registered),
+                    )
+                    conn.commit()
+
+            a1 = c.post(
+                "/schedule/my_course_announcement",
+                json={"section_id": s_registered, "body": "إعلان لشعبتي", "announcement_type": "general"},
+            )
+            assert a1.status_code == 200
+            a2 = c.post(
+                "/schedule/my_course_announcement",
+                json={"section_id": s_other, "body": "إعلان لشعبة أخرى", "announcement_type": "general"},
+            )
+            assert a2.status_code == 200
+            c.post("/auth/logout")
+
+            login_student = c.post(
+                "/auth/login",
+                json={"username": "student-s001", "password": "TestP@ssw0rd!"},
+            )
+            assert login_student.status_code == 200
+            out = c.get("/schedule/student_my_announcements")
+            assert out.status_code == 200
+            items = out.get_json().get("items") or []
+            bodies = {x.get("body") for x in items}
+            assert "إعلان لشعبتي" in bodies
+            assert "إعلان لشعبة أخرى" not in bodies

@@ -214,15 +214,16 @@
         html += '<div class="list-group">';
         courses.forEach(cn => {
           const d = byCourse[cn];
+          const escCn = String(cn || '').replace(/"/g, '&quot;');
           if (d) {
-            html += '<div class="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2">';
+            html += '<div class="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2" data-course-name="' + escCn + '">';
             html += '<span>' + cn + '</span><span>';
             html += '<span class="badge bg-secondary me-1">' + d.status + '</span>';
             html += '<button type="button" class="btn btn-sm btn-primary" data-open-draft="' + d.id + '">متابعة</button>';
             html += '</span></div>';
           } else {
             const disabled = blocking ? ' disabled' : '';
-            html += '<div class="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2">';
+            html += '<div class="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2" data-course-name="' + escCn + '">';
             html += '<span>' + cn + '</span>';
             html += '<button type="button" class="btn btn-sm btn-outline-primary js-new-draft"' + disabled + ' data-new-course="' + encodeURIComponent(cn) + '">بدء مسودة</button>';
             html += '</div>';
@@ -230,6 +231,20 @@
         });
         html += '</div>';
         wrap.innerHTML = html;
+
+        try {
+          const pre = new URLSearchParams(window.location.search).get('course_name');
+          if (pre) {
+            const want = decodeURIComponent(pre).trim();
+            wrap.querySelectorAll('[data-course-name]').forEach(el => {
+              const t = (el.getAttribute('data-course-name') || '').trim();
+              if (t === want) {
+                el.classList.add('border', 'border-primary', 'rounded');
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }
+            });
+          }
+        } catch (e) { /* ignore */ }
 
         wrap.querySelectorAll('.js-new-draft').forEach(btn => {
           btn.addEventListener('click', async () => {

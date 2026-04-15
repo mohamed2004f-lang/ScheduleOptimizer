@@ -168,10 +168,11 @@
                 <input id="newRoom" class="form-control" placeholder="A1">
               </div>
               <div class="col-md-3">
-                <label class="form-label">الأستاذ</label>
-                <select id="newInstructor" class="form-select">
+                <label class="form-label">الأستاذ (من الدليل)</label>
+                <select id="newInstructor" class="form-select" aria-describedby="newInstructorHelp">
                   <option value="">-- اختر أستاذ --</option>
                 </select>
+                <div id="newInstructorHelp" class="form-text small">يُفضَّل الاختيار من القائمة لربط الصف بمعرّف عضو هيئة التدريس (حساب «مقرراتي»).</div>
               </div>
               <div class="col-12">
                 <button type="submit" class="btn btn-primary btn-sm">إضافة</button>
@@ -301,7 +302,8 @@ async function loadInstructors(){
       INSTRUCTORS.forEach(inst => {
         if (!inst.is_active) return;
         const o = document.createElement('option');
-        o.value = inst.name || '';
+        o.value = inst.id != null ? String(inst.id) : '';
+        o.setAttribute('data-inst-name', (inst.name || '').trim());
         const typeLabel = inst.type === 'external' ? ' (متعاون)' : '';
         o.text = (inst.name || '') + typeLabel;
         sel.appendChild(o);
@@ -310,6 +312,27 @@ async function loadInstructors(){
   } catch (err) {
     console.error('loadInstructors error', err);
   }
+}
+
+/** اسم الأستاذ + instructor_id للحفظ (قيمة القائمة = معرّف الدليل) */
+function instructorPayloadFromSelect() {
+  const sel = document.getElementById('newInstructor');
+  if (!sel) return { instructor: '', instructor_id: null };
+  const v = sel.value;
+  const opt = sel.selectedOptions && sel.selectedOptions[0];
+  if (!v) return { instructor: '', instructor_id: null };
+  if (v === 'legacy') {
+    const raw = (opt && opt.getAttribute('data-legacy-name')) ? opt.getAttribute('data-legacy-name') : '';
+    return { instructor: raw, instructor_id: null };
+  }
+  if (/^\d+$/.test(String(v))) {
+    const inst = INSTRUCTORS.find(x => String(x.id) === String(v));
+    return {
+      instructor: inst ? (inst.name || '').trim() : '',
+      instructor_id: parseInt(v, 10)
+    };
+  }
+  return { instructor: v, instructor_id: null };
 }
 
 /* ---------- Timetable building ---------- */
@@ -553,7 +576,8 @@ function fillManageCoursesModal(day, time){
         course.section_id,
         course.course_name || '',
         course.room || '',
-        course.instructor || ''
+        course.instructor || '',
+        course.instructor_id
       );
     });
 
@@ -594,7 +618,7 @@ function openManageCourses(day, time){
   bootstrap.Modal.getOrCreateInstance(modalEl).show();
 }
 
-function startEditExistingCourse(sectionId, courseName, room, instructor){
+function startEditExistingCourse(sectionId, courseName, room, instructor, instructorId){
   EDITING_SECTION_ID = sectionId;
   const sel = document.getElementById('newCourseSelect');
   const roomInput = document.getElementById('newRoom');
@@ -606,17 +630,36 @@ function startEditExistingCourse(sectionId, courseName, room, instructor){
     roomInput.value = room || '';
   }
   if(instInput){
-    // إذا كان الاسم موجوداً في قائمة الأساتذة، اختره؛ وإلا أضف خياراً موقتاً
-    const name = instructor || '';
-    const options = Array.from(instInput.options);
-    const exists = options.some(o => o.value === name);
-    if (name && !exists) {
-      const opt = document.createElement('option');
-      opt.value = name;
-      opt.text = name;
-      instInput.appendChild(opt);
+    instInput.querySelectorAll('option[data-legacy]').forEach(o => o.remove());
+    const name = (instructor || '').trim();
+    let set = false;
+    if (instructorId != null && instructorId !== '' && String(instructorId) !== '0') {
+      const idStr = String(instructorId);
+      const hasId = Array.from(instInput.options).some(o => o.value === idStr);
+      if (hasId) {
+        instInput.value = idStr;
+        set = true;
+      }
     }
-    instInput.value = name;
+    if (!set && name) {
+      const byName = INSTRUCTORS.find(i => (i.name || '').trim() === name);
+      if (byName && byName.id != null) {
+        instInput.value = String(byName.id);
+        set = true;
+      }
+    }
+    if (!set && name) {
+      const opt = document.createElement('option');
+      opt.value = 'legacy';
+      opt.setAttribute('data-legacy', '1');
+      opt.setAttribute('data-legacy-name', name);
+      opt.textContent = name + ' (غير مربوط بدليل)';
+      instInput.appendChild(opt);
+      instInput.value = 'legacy';
+    }
+    if (!set && !name) {
+      instInput.value = '';
+    }
   }
   showMsg('وضع التعديل: سيتم تحديث هذا الصف في الجدول عند الحفظ.', 'info', 4000, 'modalMsg');
 }
@@ -625,7 +668,9 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
   e.preventDefault();
   const course = document.getElementById('newCourseSelect').value;
   const room = document.getElementById('newRoom').value;
-  const instructor = document.getElementById('newInstructor').value;
+  const instPayload = instructorPayloadFromSelect();
+  const instructor = instPayload.instructor;
+  const instructor_id = instPayload.instructor_id;
   
   if(!course){
     showMsg('اختر مقرراً', 'warning', 3000, 'modalMsg');
@@ -645,7 +690,8 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
           day: currentModalDay,
           time: currentModalTime,
           room: room,
-          instructor: instructor
+          instructor: instructor,
+          instructor_id: instructor_id
         })
       });
       const j = await resp.json().catch(()=>null);
@@ -684,6 +730,7 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
         time: currentModalTime,
         room: room,
         instructor: instructor,
+        instructor_id: instructor_id,
         semester: ''
       })
     });
@@ -717,6 +764,7 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
         time: currentModalTime,
         room: room,
         instructor: instructor,
+        instructor_id: instructor_id,
         semester: ''
       })
     });
@@ -1439,9 +1487,14 @@ document.addEventListener('DOMContentLoaded', () => {
   // Determine role once and apply view-only rules
   fetch('/auth/check').then(r=>r.json()).then(auth=>{
     const role = auth?.role || '';
-    const isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(auth?.is_supervisor || 0) === 1);
+    const caps = auth?.capabilities;
+    const isSupervisor = (caps && caps.v >= 1)
+      ? !!caps.is_supervisor_effective
+      : ((role === 'supervisor') || (role === 'instructor' && Number(auth?.is_supervisor || 0) === 1));
     IS_VIEW_ONLY_ROLE = (role === 'instructor') || isSupervisor;
-    IS_ADMIN = ['admin', 'admin_main', 'head_of_department'].includes(role);
+    IS_ADMIN = (caps && caps.v >= 1)
+      ? !!caps.can_manage_schedule_edit
+      : ['admin', 'admin_main', 'head_of_department'].includes(role);
     const btnSaveSlots = document.getElementById('btnSaveTimeSlots');
     const btnNormalize = document.getElementById('btnNormalizeTimes');
     const btnClear = document.getElementById('btnClearSchedule');

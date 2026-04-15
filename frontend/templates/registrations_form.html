@@ -435,6 +435,11 @@ function canManageEnrollmentStatus(){
   return r === 'admin' || r === 'admin_main' || r === 'head_of_department';
 }
 
+function canOverridePrereqRegistrations(){
+  const r = String(CURRENT_ROLE || '').trim().toLowerCase();
+  return r === 'admin' || r === 'admin_main' || r === 'head_of_department';
+}
+
 async function updateEnrollmentStatus(student, newStatus){
   if (!student || !newStatus) return;
   const sid = student.student_id || student.id || student.studentId;
@@ -1042,8 +1047,10 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
   const reasonWrap = document.getElementById('overrideReasonWrap');
   const reasonEl = document.getElementById('overrideReason');
   const overrideReason = (reasonEl ? reasonEl.value.trim() : '');
+  let prereqOverride = false;
+  let prereqOverrideReason = '';
   if (out){
-    if (CURRENT_ROLE !== 'admin'){
+    if (!(String(CURRENT_ROLE || '').trim().toLowerCase() === 'admin' || String(CURRENT_ROLE || '').trim().toLowerCase() === 'admin_main' || String(CURRENT_ROLE || '').trim().toLowerCase() === 'head_of_department')){
       alert(`لا يمكن الحفظ لأن إجمالي الوحدات (${totalUnits}) خارج 12-19.`);
       return;
     }
@@ -1055,10 +1062,34 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
     }
   }
 
+  // التحقق قبل الحفظ: السماح بتجاوز المتطلبات فقط للإدارة العليا مع تأكيدين
+  await runRegPrereqValidate();
+  const blockedNow = (lastRegPrereqValidation?.blocked) || {};
+  const hasBlocked = Object.keys(blockedNow).length > 0;
+  if (hasBlocked){
+    if (!canOverridePrereqRegistrations()){
+      alert('لا يمكن الحفظ لأن بعض المتطلبات غير مستوفاة.');
+      return;
+    }
+    const c1 = confirm('تنبيه: توجد متطلبات غير مستوفاة. هل تريد متابعة الحفظ كتجاوز إداري؟');
+    if (!c1) return;
+    const c2 = confirm('تأكيد نهائي: أنت على وشك تجاوز المتطلبات وحفظ التسجيلات. هل أنت متأكد؟');
+    if (!c2) return;
+    const rsn = prompt('أدخل سبب تجاوز المتطلبات (إلزامي):', '') || '';
+    if (!rsn.trim()){
+      alert('سبب التجاوز مطلوب.');
+      return;
+    }
+    prereqOverride = true;
+    prereqOverrideReason = rsn.trim();
+  }
+
   const payload = {
     student_id: editing.student_id || editing.id || editing.studentId,
     registrations: regs,
     override_reason: out ? overrideReason : '',
+    prereq_override: prereqOverride,
+    prereq_override_reason: prereqOverrideReason,
     signature: {
       student_signed: !!document.getElementById('regStudentSigned')?.checked,
       signed_at: (document.getElementById('regSignedAt')?.value || '').trim(),
@@ -1068,9 +1099,37 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
     }
   };
   try{
-    const res = await fetchJSON('/save_registrations', {
+    // ملاحظة: الإرسال المباشر للمسار النهائي يتجنب أي التباس في إعادة التوجيه 307.
+    let res = await fetchJSON('/students/save_registrations', {
       method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
     });
+
+    // حماية إضافية: إذا أعاد الخادم PREREQ_BLOCKED مع صلاحية تجاوز،
+    // نطبّق التأكيد المزدوج (إن لم يُرسل مسبقاً) ثم نعيد المحاولة مرة واحدة.
+    if (!res.ok && res.json?.code === 'PREREQ_BLOCKED' && res.json?.can_override) {
+      if (!payload.prereq_override || !payload.prereq_override_reason) {
+        const c1 = confirm('تنبيه من الخادم: توجد متطلبات غير مستوفاة. هل تريد متابعة الحفظ كتجاوز إداري؟');
+        if (!c1) {
+          setEditMsg('warning', 'تم إلغاء الحفظ.');
+          return;
+        }
+        const c2 = confirm('تأكيد نهائي: سيتم الحفظ مع تجاوز المتطلبات. هل أنت متأكد؟');
+        if (!c2) {
+          setEditMsg('warning', 'تم إلغاء الحفظ.');
+          return;
+        }
+        const rsn2 = prompt('أدخل سبب تجاوز المتطلبات (إلزامي):', '') || '';
+        if (!rsn2.trim()) {
+          setEditMsg('danger', 'سبب التجاوز مطلوب.');
+          return;
+        }
+        payload.prereq_override = true;
+        payload.prereq_override_reason = rsn2.trim();
+      }
+      res = await fetchJSON('/students/save_registrations', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+      });
+    }
     if(res.ok && (res.json?.status === 'ok' || res.json?.status === undefined)){
       // تحديث فوري للصف المعروض (لا يعتمد على كاش المتصفح لـ GET)
       const sidSaved = String(payload.student_id || '').trim();
@@ -1082,6 +1141,9 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
       try { await loadData(); } catch(e) { console.warn('loadData after save', e); }
       if (res.json?.prereq_validation) updateRegPrereqBanner(res.json.prereq_validation);
       let saveMsg = 'تم حفظ التغييرات وتحديث القائمة';
+      if (res.json?.prereq_overridden) {
+        saveMsg += ' — تم الحفظ مع تجاوز المتطلبات بموافقة إدارية.';
+      }
       const pw = res.json?.prereq_warnings || [];
       const pcp = res.json?.prereq_coregister_pairs || [];
       if (pw.length || pcp.length){

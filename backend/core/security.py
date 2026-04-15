@@ -2,6 +2,7 @@
 نظام الأمان المحسّن
 يتضمن حماية CSRF، Rate Limiting، وتحقق من المدخلات
 """
+import os
 import re
 import logging
 from functools import wraps
@@ -204,14 +205,22 @@ class RateLimiter:
 rate_limiter = RateLimiter()
 
 
-def rate_limit(max_requests: int = 100, window_seconds: int = 60):
-    """ديكوراتور لتحديد معدل الطلبات"""
+def rate_limit(
+    max_requests: int = 100,
+    window_seconds: int = 60,
+    *,
+    enabled: bool = True,
+):
+    """ديكوراتور لتحديد معدل الطلبات (حسب عنوان IP). عند ``enabled=False`` يُعاد المسار دون قيد."""
     def decorator(f):
+        if not enabled:
+            return f
+
         @wraps(f)
         def decorated_function(*args, **kwargs):
             # استخدام IP كمفتاح
             key = request.remote_addr or 'unknown'
-            
+
             if not rate_limiter.is_allowed(key, max_requests, window_seconds):
                 logger.warning(f"Rate limit exceeded for {key}")
                 return jsonify({
@@ -219,7 +228,7 @@ def rate_limit(max_requests: int = 100, window_seconds: int = 60):
                     'message': 'تم تجاوز الحد المسموح من الطلبات. يرجى المحاولة لاحقاً.',
                     'code': 'RATE_LIMIT_EXCEEDED'
                 }), 429
-            
+
             return f(*args, **kwargs)
         return decorated_function
     return decorator
@@ -229,16 +238,39 @@ def rate_limit(max_requests: int = 100, window_seconds: int = 60):
 # Security Headers
 # ============================================
 
+def _csp_header_value() -> Optional[str]:
+    """
+    سياسة CSP متوافقة مع Bootstrap CDN وخطوط Google والسكربتات المضمّنة في القوالب.
+    تعطيل: ENABLE_CSP=0
+    """
+    v = (os.environ.get("ENABLE_CSP", "1") or "").strip().lower()
+    if v in ("0", "false", "no", "off"):
+        return None
+    if (os.environ.get("FLASK_ENV") or "").strip().lower() != "production":
+        return None
+    return (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com data:; "
+        "img-src 'self' data: blob:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'self'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
+
+
 def add_security_headers(response):
     """إضافة رؤوس الأمان للاستجابة"""
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     response.headers['X-XSS-Protection'] = '1; mode=block'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-    
-    # Content Security Policy (يمكن تخصيصها حسب الحاجة)
-    # response.headers['Content-Security-Policy'] = "default-src 'self'"
-    
+    csp = _csp_header_value()
+    if csp:
+        response.headers['Content-Security-Policy'] = csp
+
     return response
 
 

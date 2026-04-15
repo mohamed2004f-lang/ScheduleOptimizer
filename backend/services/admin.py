@@ -262,6 +262,66 @@ def _is_project_status_enabled() -> bool:
     return v not in ("0", "false", "no", "off")
 
 
+def _summarize_database_url_safe(url: str) -> dict:
+    """ملخص آمن لـ DATABASE_URL (بدون كلمة مرور)."""
+    try:
+        from sqlalchemy.engine.url import make_url
+
+        u = make_url(url)
+        b = u.get_backend_name()
+        if b == "postgresql":
+            return {
+                "backend": "postgresql",
+                "host": u.host,
+                "port": u.port,
+                "database": u.database,
+                "username": u.username,
+            }
+        if b == "sqlite":
+            db = (u.database or "") or ""
+            return {"backend": "sqlite", "path_hint": db[:200]}
+    except Exception:
+        pass
+    return {"backend": "unknown", "configured": bool((url or "").strip())}
+
+
+@admin_bp.route("/system_diagnostics", methods=["GET"])
+@role_required("admin", "admin_main")
+def system_diagnostics():
+    """JSON للمسؤول: بيئة، قاعدة البيانات، النسخ، آخر أخطاء حرجة، عدد المستخدمين."""
+    from config import DATABASE_URL, FLASK_ENV
+    from backend.core.monitoring import app_stats, get_critical_errors_snapshot
+
+    user_count = None
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            row = cur.execute("SELECT COUNT(*) FROM users").fetchone()
+            user_count = int(row[0] if row is not None else 0)
+    except Exception:
+        pass
+
+    db_meta = _summarize_database_url_safe(DATABASE_URL or "")
+    db_meta["active_backend"] = "postgresql" if is_postgresql() else "sqlite"
+
+    uptime = (datetime.now() - app_stats["start_time"]).total_seconds()
+
+    return jsonify(
+        {
+            "status": "ok",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "flask_env": FLASK_ENV,
+            "app_version": (os.environ.get("APP_VERSION") or "2.0.0").strip(),
+            "uptime_seconds": uptime,
+            "database": db_meta,
+            "users_count": user_count,
+            "requests_total": app_stats.get("request_count"),
+            "errors_http_4xx_5xx_total": app_stats.get("error_count"),
+            "last_critical_errors": get_critical_errors_snapshot()[-10:],
+        }
+    )
+
+
 @admin_bp.route("/project_status")
 @role_required("admin_main")
 def admin_project_status_page():

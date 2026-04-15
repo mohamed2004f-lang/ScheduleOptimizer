@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>مقرراتي</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal schedule-wide">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">مقرراتي</h1>
+        <p class="page-subtitle">المقررات والشعب المكلَّف بها في الجدول الدراسي (كما يحددها رئيس القسم أو الإدارة)</p>
+      </div>
+      <div class="d-flex gap-2 flex-wrap">
+        <a href="/schedule_form" class="btn btn-outline-secondary btn-sm">الجدول الدراسي</a>
+        <a href="/grade_drafts" class="btn btn-outline-primary btn-sm">مسودات الدرجات</a>
+      </div>
+    </div>
+
+    <div id="bannerHint" class="alert alert-info small d-none"></div>
+    <div id="bannerDraft" class="alert alert-warning small d-none">
+      الجدول لم يُنشر للطلاب بعد؛ يظهر تكليفك الحالي كما في نسخة العمل.
+    </div>
+
+    <div class="card">
+      <div class="card-header fw-semibold d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span>شعب الجدول المرتبطة بحسابك</span>
+        <span class="text-muted small" id="instructorLabel"></span>
+      </div>
+      <div class="card-body">
+        <div id="loadState" class="text-muted small">جاري التحميل…</div>
+        <div id="emptyState" class="d-none alert alert-secondary mb-0">
+          لا توجد صفوف جدول مرتبطة باسمك في دليل هيئة التدريس، أو لم يُسند إليك مقرر بعد.
+        </div>
+        <div class="table-responsive d-none" id="tableWrap">
+          <table class="table table-sm table-striped align-middle">
+            <thead>
+              <tr>
+                <th>المقرر</th>
+                <th>اليوم</th>
+                <th>الوقت</th>
+                <th>القاعة</th>
+                <th>الفصل الدراسي</th>
+                <th class="text-nowrap">روابط سريعة</th>
+                <th style="min-width:20rem;">إدارة المقرر</th>
+                <th style="min-width:14rem;">متابعة المحاور</th>
+              </tr>
+            </thead>
+            <tbody id="tbodySections"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s == null ? '' : String(s);
+      return d.innerHTML;
+    }
+
+    function axisSelectHtml(sectionId, axisKey, labelAr, current) {
+      const v = current || 'pending';
+      const sel = (val) => (v === val ? ' selected' : '');
+      return (
+        '<div class="mb-2">' +
+        '<label class="small text-muted d-block mb-0">' + esc(labelAr) + '</label>' +
+        '<select class="form-select form-select-sm axis-select" data-section="' + sectionId + '" data-axis="' + esc(axisKey) + '">' +
+        '<option value="pending"' + sel('pending') + '>قيد المتابعة</option>' +
+        '<option value="done"' + sel('done') + '>منجز</option>' +
+        '<option value="na"' + sel('na') + '>لا ينطبق</option>' +
+        '</select></div>'
+      );
+    }
+
+    function sectionAdminHtml(sectionId) {
+      return (
+        '<div class="small">' +
+        '<div class="mb-2">' +
+        '<label class="form-label mb-1">مفردات المقرر</label>' +
+        '<textarea class="form-control form-control-sm mc-syllabus" data-section="' + sectionId + '" rows="2" placeholder="اكتب مفردات/خطة المقرر المختصرة"></textarea>' +
+        '<button type="button" class="btn btn-sm btn-outline-primary mt-1 mc-save-syllabus" data-section="' + sectionId + '">حفظ المفردات</button>' +
+        '</div>' +
+        '<div class="mb-2 p-2 border rounded bg-light-subtle">' +
+        '<div class="fw-semibold mb-1">الخطة الأسبوعية</div>' +
+        '<div class="d-flex gap-1 mb-1">' +
+        '<input class="form-control form-control-sm mc-week-no" data-section="' + sectionId + '" type="number" min="1" max="52" placeholder="الأسبوع">' +
+        '<select class="form-select form-select-sm mc-week-status" data-section="' + sectionId + '">' +
+        '<option value="planned">مخطط</option>' +
+        '<option value="done">تم التنفيذ</option>' +
+        '<option value="postponed">مؤجل</option>' +
+        '<option value="compensated">تعويضي</option>' +
+        '</select>' +
+        '</div>' +
+        '<input class="form-control form-control-sm mb-1 mc-week-topic" data-section="' + sectionId + '" placeholder="موضوع الأسبوع">' +
+        '<input class="form-control form-control-sm mb-1 mc-week-res" data-section="' + sectionId + '" placeholder="مواد داعمة/روابط">' +
+        '<button type="button" class="btn btn-sm btn-outline-success mc-save-plan" data-section="' + sectionId + '">حفظ أسبوع</button>' +
+        '<div class="mc-plan-list mt-1 text-muted" data-section="' + sectionId + '"></div>' +
+        '</div>' +
+        '<div class="p-2 border rounded">' +
+        '<div class="fw-semibold mb-1">إعلانات الشعبة</div>' +
+        '<input class="form-control form-control-sm mb-1 mc-ann-title" data-section="' + sectionId + '" placeholder="عنوان (اختياري)">' +
+        '<textarea class="form-control form-control-sm mb-1 mc-ann-body" data-section="' + sectionId + '" rows="2" placeholder="نص الإعلان"></textarea>' +
+        '<div class="d-flex gap-1 mb-1">' +
+        '<select class="form-select form-select-sm mc-ann-type" data-section="' + sectionId + '">' +
+        '<option value="general">عام</option>' +
+        '<option value="postponement">تأجيل</option>' +
+        '<option value="makeup">تعويض</option>' +
+        '<option value="extra_lecture">محاضرة إضافية</option>' +
+        '</select>' +
+        '<input class="form-control form-control-sm mc-ann-date" data-section="' + sectionId + '" type="date">' +
+        '</div>' +
+        '<button type="button" class="btn btn-sm btn-outline-dark mc-save-ann" data-section="' + sectionId + '">نشر إعلان</button>' +
+        '<div class="mc-ann-list mt-1 text-muted" data-section="' + sectionId + '"></div>' +
+        '</div>' +
+        '</div>'
+      );
+    }
+
+    (async function () {
+      const loadState = document.getElementById('loadState');
+      const emptyState = document.getElementById('emptyState');
+      const tableWrap = document.getElementById('tableWrap');
+      const tbody = document.getElementById('tbodySections');
+      const bannerHint = document.getElementById('bannerHint');
+      const bannerDraft = document.getElementById('bannerDraft');
+      const instructorLabel = document.getElementById('instructorLabel');
+
+      try {
+        const resp = await fetch('/schedule/my_assigned_sections', { credentials: 'include' });
+        const data = await resp.json().catch(() => ({}));
+        loadState.classList.add('d-none');
+
+        if (resp.status === 403) {
+          emptyState.textContent = 'غير مصرح بعرض هذه الصفحة.';
+          emptyState.classList.remove('d-none');
+          return;
+        }
+
+        if (data.hint) {
+          bannerHint.textContent = data.hint;
+          bannerHint.classList.remove('d-none');
+        }
+        if (data.schedule_published === false) {
+          bannerDraft.classList.remove('d-none');
+        } else {
+          bannerDraft.classList.add('d-none');
+        }
+        if (data.instructor_name) {
+          instructorLabel.textContent = 'الاسم المرجعي: ' + data.instructor_name;
+        }
+
+        const catalog = data.axis_catalog || [];
+        const rows = data.rows || [];
+        if (!rows.length) {
+          emptyState.classList.remove('d-none');
+          return;
+        }
+
+        tbody.innerHTML = rows.map((r) => {
+          const axes = r.axes || {};
+          const cn = r.course_name || '';
+          const q = encodeURIComponent(cn);
+          const links =
+            '<a class="btn btn-sm btn-outline-primary py-0 mb-1 d-inline-block" href="/grade_drafts?course_name=' + q + '">مسودات الدرجات</a><br>' +
+            '<a class="btn btn-sm btn-outline-secondary py-0 d-inline-block" href="/exams/midterms" title="ابحث عن المقرر في الجدول بعد التحميل">امتحانات جزئية</a>';
+          const axisCells = catalog.map((c) =>
+            axisSelectHtml(r.section_id, c.key, c.label_ar, axes[c.key])
+          ).join('');
+          return (
+            '<tr>' +
+            '<td>' + esc(r.course_name) + '</td>' +
+            '<td>' + esc(r.day) + '</td>' +
+            '<td>' + esc(r.time) + '</td>' +
+            '<td>' + esc(r.room) + '</td>' +
+            '<td>' + esc(r.semester) + '</td>' +
+            '<td class="small">' + links + '</td>' +
+            '<td>' + sectionAdminHtml(r.section_id) + '</td>' +
+            '<td class="small">' + axisCells + '</td>' +
+            '</tr>'
+          );
+        }).join('');
+        tableWrap.classList.remove('d-none');
+
+        async function refreshCourseAdmin(sectionId) {
+          const r = await fetch('/schedule/my_course_admin?section_id=' + encodeURIComponent(sectionId), { credentials: 'include' });
+          if (!r.ok) return;
+          const dataAdmin = await r.json().catch(() => ({}));
+          const sy = document.querySelector('.mc-syllabus[data-section="' + sectionId + '"]');
+          if (sy) sy.value = dataAdmin.syllabus_text || '';
+          const planEl = document.querySelector('.mc-plan-list[data-section="' + sectionId + '"]');
+          if (planEl) {
+            const rowsPlan = dataAdmin.weekly_plan || [];
+            planEl.innerHTML = rowsPlan.length
+              ? rowsPlan.slice(0, 5).map((p) => ('<div>أسبوع ' + esc(p.week_no) + ': ' + esc(p.week_topic) + ' (' + esc(p.lecture_status) + ')</div>')).join('')
+              : '<div>لا توجد خطة أسبوعية محفوظة بعد.</div>';
+          }
+          const annEl = document.querySelector('.mc-ann-list[data-section="' + sectionId + '"]');
+          if (annEl) {
+            const anns = dataAdmin.announcements || [];
+            annEl.innerHTML = anns.length
+              ? anns.slice(0, 4).map((a) => ('<div><span class="text-muted">[' + esc(a.announcement_type) + ']</span> ' + esc(a.body) + '</div>')).join('')
+              : '<div>لا توجد إعلانات حتى الآن.</div>';
+          }
+        }
+
+        rows.forEach((r) => { refreshCourseAdmin(r.section_id).catch(() => {}); });
+
+        document.querySelectorAll('.axis-select').forEach((el) => {
+          el.addEventListener('change', async () => {
+            const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+            const sectionId = parseInt(el.getAttribute('data-section'), 10);
+            const axisKey = el.getAttribute('data-axis');
+            const status = el.value;
+            const headers = { 'Content-Type': 'application/json' };
+            if (csrf) headers['X-CSRFToken'] = csrf;
+            try {
+              const r = await fetch('/schedule/my_axis_status', {
+                method: 'POST',
+                credentials: 'include',
+                headers,
+                body: JSON.stringify({ section_id: sectionId, axis_key: axisKey, status }),
+              });
+              if (!r.ok) {
+                alert('تعذر حفظ الحالة. تحقق من الجلسة أو الصلاحيات.');
+              }
+            } catch (e) {
+              alert('خطأ في الاتصال.');
+            }
+          });
+        });
+
+        document.querySelectorAll('.mc-save-syllabus').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const sectionId = parseInt(btn.getAttribute('data-section') || '0', 10);
+            const txt = document.querySelector('.mc-syllabus[data-section="' + sectionId + '"]')?.value || '';
+            const r = await fetch('/schedule/my_course_syllabus', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ section_id: sectionId, syllabus_text: txt }),
+            });
+            if (!r.ok) alert('تعذر حفظ المفردات');
+            await refreshCourseAdmin(sectionId);
+          });
+        });
+
+        document.querySelectorAll('.mc-save-plan').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const sectionId = parseInt(btn.getAttribute('data-section') || '0', 10);
+            const weekNo = parseInt((document.querySelector('.mc-week-no[data-section="' + sectionId + '"]')?.value || '0'), 10);
+            const lectureStatus = document.querySelector('.mc-week-status[data-section="' + sectionId + '"]')?.value || 'planned';
+            const weekTopic = document.querySelector('.mc-week-topic[data-section="' + sectionId + '"]')?.value || '';
+            const resourcesText = document.querySelector('.mc-week-res[data-section="' + sectionId + '"]')?.value || '';
+            const r = await fetch('/schedule/my_course_plan', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                section_id: sectionId,
+                week_no: weekNo,
+                lecture_status: lectureStatus,
+                week_topic: weekTopic,
+                resources_text: resourcesText,
+              }),
+            });
+            if (!r.ok) alert('تعذر حفظ الخطة الأسبوعية');
+            await refreshCourseAdmin(sectionId);
+          });
+        });
+
+        document.querySelectorAll('.mc-save-ann').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const sectionId = parseInt(btn.getAttribute('data-section') || '0', 10);
+            const title = document.querySelector('.mc-ann-title[data-section="' + sectionId + '"]')?.value || '';
+            const body = document.querySelector('.mc-ann-body[data-section="' + sectionId + '"]')?.value || '';
+            const announcementType = document.querySelector('.mc-ann-type[data-section="' + sectionId + '"]')?.value || 'general';
+            const lectureDate = document.querySelector('.mc-ann-date[data-section="' + sectionId + '"]')?.value || '';
+            const r = await fetch('/schedule/my_course_announcement', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                section_id: sectionId,
+                title,
+                body,
+                announcement_type: announcementType,
+                lecture_date: lectureDate,
+                published_to_students: true,
+              }),
+            });
+            if (!r.ok) {
+              alert('تعذر نشر الإعلان');
+            } else {
+              const bodyEl = document.querySelector('.mc-ann-body[data-section="' + sectionId + '"]');
+              if (bodyEl) bodyEl.value = '';
+            }
+            await refreshCourseAdmin(sectionId);
+          });
+        });
+      } catch (e) {
+        loadState.classList.add('d-none');
+        emptyState.textContent = 'تعذر تحميل البيانات.';
+        emptyState.classList.remove('d-none');
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -2,11 +2,25 @@
 نظام معالجة الأخطاء الموحد
 يوفر استثناءات مخصصة ومعالجات أخطاء لـ Flask
 """
-from flask import jsonify
+from flask import jsonify, has_request_context, request, g
 import logging
 import traceback
 
+from backend.core.monitoring import record_critical_error
+
 logger = logging.getLogger(__name__)
+
+
+def _ctx_for_error():
+    path = None
+    rid = None
+    try:
+        if has_request_context():
+            path = request.path
+            rid = getattr(g, "request_id", None)
+    except Exception:
+        pass
+    return path, rid
 
 
 # ============================================
@@ -170,6 +184,8 @@ def register_error_handlers(app):
         """معالجة خطأ داخلي"""
         logger.error(f"Internal server error: {str(e)}")
         logger.error(traceback.format_exc())
+        p, rid = _ctx_for_error()
+        record_critical_error(message=str(e), exc=e if isinstance(e, BaseException) else None, path=p, request_id=rid)
         return jsonify({
             'status': 'error',
             'message': 'حدث خطأ داخلي في الخادم',
@@ -190,6 +206,8 @@ def register_error_handlers(app):
         """معالجة الاستثناءات العامة"""
         logger.error(f"Unhandled exception: {str(e)}")
         logger.error(traceback.format_exc())
+        p, rid = _ctx_for_error()
+        record_critical_error(message=str(e), exc=e, path=p, request_id=rid)
         return jsonify({
             'status': 'error',
             'message': 'حدث خطأ غير متوقع',

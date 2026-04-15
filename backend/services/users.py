@@ -12,6 +12,7 @@ from flask import Blueprint, request, jsonify, session
 
 from backend.core.auth import role_required, hash_password
 from backend.database.database import DB_FILE, is_postgresql
+from backend.repositories import instructors_repo, students_repo, users_repo
 from .utilities import get_connection
 from .mailer import send_email
 
@@ -656,25 +657,7 @@ def list_users():
     إرجاع قائمة المستخدمين (بدون كلمات المرور الصريحة).
     """
     with get_connection() as conn:
-        cur = conn.cursor()
-        rows = cur.execute(
-            "SELECT username, role, student_id, instructor_id, "
-            "COALESCE(is_supervisor,0) AS is_supervisor, "
-            "COALESCE(is_active,1) AS is_active "
-            "FROM users ORDER BY username"
-        ).fetchall()
-        items = []
-        for r in rows:
-            items.append(
-                {
-                    "username": r[0],
-                    "role": r[1],
-                    "student_id": r[2],
-                    "instructor_id": r[3],
-                    "is_supervisor": int(r[4] or 0),
-                    "is_active": int(r[5] or 1),
-                }
-            )
+        items = users_repo.fetch_all_users_ordered(conn)
     role_norm = _normalize_role(_current_role())
     _diag_env = (os.environ.get("SHOW_USER_LIST_STORAGE_DIAGNOSTICS") or "").strip().lower()
     verbose_meta = _diag_env in ("1", "true", "yes") and role_norm == "admin_main"
@@ -698,25 +681,16 @@ def list_users():
 def users_validation_report():
     """تقرير فحص سلامة ربط المستخدمين حسب الدور (للتحقق اليدوي)."""
     with get_connection() as conn:
-        cur = conn.cursor()
-        rows = cur.execute(
-            """
-            SELECT username, role, student_id, instructor_id,
-                   COALESCE(is_supervisor,0) AS is_supervisor,
-                   COALESCE(is_active,1) AS is_active
-            FROM users
-            ORDER BY username
-            """
-        ).fetchall()
+        rows = users_repo.fetch_all_users_ordered(conn)
 
     issues = []
-    for r in rows:
-        username = r[0]
-        role = _normalize_role(r[1] or "")
-        student_id = (r[2] or "").strip()
-        instructor_id = r[3]
-        is_supervisor = int(r[4] or 0)
-        is_active = int(r[5] or 1)
+    for u in rows:
+        username = u["username"]
+        role = _normalize_role(u["role"] or "")
+        student_id = (u["student_id"] or "").strip()
+        instructor_id = u["instructor_id"]
+        is_supervisor = int(u["is_supervisor"] or 0)
+        is_active = int(u["is_active"] or 1)
 
         row_issues = []
         if role == "student":
@@ -832,24 +806,12 @@ def add_user():
             cur = conn.cursor()
             if _is_pg_connection(conn):
                 if role == "student" and student_id:
-                    student_exists = cur.execute(
-                        "SELECT 1 FROM students WHERE student_id = ? LIMIT 1",
-                        (student_id,),
-                    ).fetchone()
-                    if not student_exists:
+                    if not students_repo.exists_student_id(conn, student_id):
                         return jsonify({"status": "error", "message": f"الرقم الدراسي غير موجود: {student_id}"}), 400
                 if role in ("instructor", "head_of_department") and instructor_id is not None:
-                    instructor_exists = cur.execute(
-                        "SELECT 1 FROM instructors WHERE id = ? LIMIT 1",
-                        (instructor_id,),
-                    ).fetchone()
-                    if not instructor_exists:
+                    if not instructors_repo.exists_instructor_id(conn, instructor_id):
                         return jsonify({"status": "error", "message": f"رقم عضو هيئة التدريس غير موجود: {instructor_id}"}), 400
-            existing = cur.execute(
-                "SELECT username, role, student_id, instructor_id, COALESCE(is_supervisor,0), COALESCE(is_active,1) "
-                "FROM users WHERE lower(username) = lower(?)",
-                (username,),
-            ).fetchone()
+            existing = users_repo.fetch_user_row_by_username_ci(conn, username)
             before_user = _user_dict_from_row(existing) if existing else None
             if existing:
                 old_role = _normalize_role(existing[1] if existing else "")
@@ -939,19 +901,11 @@ def add_user():
                 if "infailedsqltransaction" in msg.lower():
                     return jsonify({"status": "error", "message": "تعذر الحفظ بسبب معاملة قاعدة بيانات سابقة غير مكتملة. أعد المحاولة الآن."}), 409
                 raise
-            row = cur.execute(
-                "SELECT username, role, student_id, instructor_id, "
-                "COALESCE(is_supervisor,0) AS is_supervisor, COALESCE(is_active,1) AS is_active "
-                "FROM users WHERE lower(username) = lower(?)",
-                (username,),
-            ).fetchone()
+            row = users_repo.fetch_user_row_after_write_ci(conn, username)
             user_out = _user_dict_from_row(row)
             if user_out is None:
                 # تشخيص خاص: قد يوجد تعارض case-insensitive عند تفعيل فهرس lower(username)
-                maybe_same_lower = cur.execute(
-                    "SELECT username FROM users WHERE lower(username) = lower(?) LIMIT 1",
-                    (username,),
-                ).fetchone()
+                maybe_same_lower = users_repo.fetch_username_row_ci(conn, username)
                 try:
                     conn.rollback()
                 except Exception:

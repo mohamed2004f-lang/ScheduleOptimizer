@@ -1,6 +1,23 @@
-version: '3.8'
-
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: schedule-optimizer-db
+    environment:
+      POSTGRES_USER: schedule
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?يجب تعيين POSTGRES_PASSWORD في ملف .env}
+      POSTGRES_DB: schedule_optimizer
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - schedule-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U schedule -d schedule_optimizer"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
   web:
     build: .
     container_name: schedule-optimizer
@@ -12,13 +29,15 @@ services:
       - ADMIN_USERNAME=${ADMIN_USERNAME:?يجب تعيين ADMIN_USERNAME في ملف .env}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:?يجب تعيين ADMIN_PASSWORD في ملف .env}
       - SECRET_KEY=${SECRET_KEY:?يجب تعيين SECRET_KEY في ملف .env}
-      - DB_FILE=backend/database/mechanical.db
+      # نفس كلمة مرور POSTGRES_PASSWORD في الخدمة db — يُفضّل أحرف بسيطة بدون @ : / في كلمة المرور
+      - DATABASE_URL=postgresql+psycopg://schedule:${POSTGRES_PASSWORD}@db:5432/schedule_optimizer
     volumes:
-      # حفظ قاعدة البيانات خارج الحاوية
-      - ./backend/database:/app/backend/database
       - ./logs:/app/logs
       - ./backups:/app/backups
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - schedule-network
     healthcheck:
@@ -27,6 +46,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+volumes:
+  postgres_data:
 
 networks:
   schedule-network:

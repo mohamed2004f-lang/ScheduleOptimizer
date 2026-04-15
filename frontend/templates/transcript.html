@@ -993,12 +993,17 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
       // للطالب نستخدم student_id من الجلسة فقط (حتى لا تختلط مع username)
       window.CURRENT_USER_ID = auth.json.student_id || null;
       window.CURRENT_USERNAME = auth.json.user || null;
+      const _caps = auth.json.capabilities;
+      CAN_MANAGE_TRANSCRIPT = (_caps && _caps.v >= 1)
+        ? !!_caps.can_manage_transcript_admin
+        : ['admin', 'admin_main', 'head_of_department'].includes(CURRENT_ROLE || '');
+    } else {
+      CAN_MANAGE_TRANSCRIPT = ['admin', 'admin_main', 'head_of_department'].includes(CURRENT_ROLE || '');
     }
   } catch(e){
     CURRENT_ROLE = null;
+    CAN_MANAGE_TRANSCRIPT = ['admin', 'admin_main', 'head_of_department'].includes(CURRENT_ROLE || '');
   }
-
-  CAN_MANAGE_TRANSCRIPT = ['admin', 'admin_main', 'head_of_department'].includes(CURRENT_ROLE || '');
 
   // إخفاء أدوات الإدخال/الاستيراد لغير الإداريين (عرض كشف فقط)
   if (!CAN_MANAGE_TRANSCRIPT){

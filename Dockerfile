@@ -9,7 +9,7 @@ LABEL description="Schedule Optimizer Application"
 # تعيين متغيرات البيئة
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    FLASK_APP=app.py \
+    FLASK_APP=wsgi.py \
     FLASK_ENV=production
 
 # إنشاء مجلد العمل
@@ -42,6 +42,6 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')" || exit 1
 
-# تشغيل التطبيق
-CMD ["python", "app.py"]
+# تشغيل الإنتاج عبر Gunicorn (لا تعتمد على app.run)
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--threads", "4", "--timeout", "120", "wsgi:application"]
 

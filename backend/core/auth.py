@@ -13,6 +13,8 @@ from datetime import timedelta
 
 logger = logging.getLogger(__name__)
 
+from backend.core.security import rate_limit
+
 try:
     from backend.services.utilities import get_connection
 except Exception:  # pragma: no cover - حماية فقط في حال مشاكل الاستيراد
@@ -73,6 +75,45 @@ def _normalize_role(role: str) -> str:
     if r == "admin":
         return "admin_main"
     return r
+
+
+def compute_capabilities(user_role: str | None, is_supervisor_val: int | None) -> dict:
+    """
+    قدرات الواجهة (مصدر الخادم) — تفضّل استخدامها بدل مقارنة سلاسل الدور في JavaScript.
+
+    تُحاكي منطق ``base_nav.html`` السابق مع إمكانية التوسعة دون تغيير كل قالب.
+    """
+    role = (user_role or "").strip()
+    try:
+        isv = int(is_supervisor_val or 0) == 1
+    except (TypeError, ValueError):
+        isv = False
+
+    is_supervisor_effective = (role == "supervisor") or (role == "instructor" and isv)
+    staff_planning = role in ("admin", "admin_main", "head_of_department")
+    show_grade_drafts = (role in ("admin_main", "head_of_department")) or (
+        role == "instructor" and not is_supervisor_effective
+    )
+
+    return {
+        "v": 1,
+        "nav_my_assigned_courses": role == "instructor",
+        "nav_users_admin": role in ("admin", "admin_main"),
+        "nav_supervision": role in ("admin", "admin_main"),
+        "nav_academic_rules": role in ("admin", "admin_main"),
+        "nav_course_registration_report": staff_planning,
+        "nav_schedule_versions": staff_planning,
+        "nav_exam_schedule_versions": staff_planning,
+        "nav_grade_drafts": show_grade_drafts,
+        "is_supervisor_effective": bool(is_supervisor_effective),
+        "is_instructor_or_supervisor_nav": (role == "instructor")
+        or (role == "supervisor")
+        or is_supervisor_effective,
+        "is_student": role == "student",
+        "can_manage_schedule_edit": staff_planning,
+        "can_manage_courses_edit": staff_planning,
+        "can_manage_transcript_admin": staff_planning,
+    }
 
 
 def _effective_roles(user_role: str) -> set:
@@ -332,8 +373,23 @@ def init_auth(app):
             login_manager.init_app(app)
     except Exception:
         logger.exception("failed to init Flask-Login")
-    
+
+    _login_rl_enabled = (os.environ.get("FLASK_ENV") or "").strip().lower() == "production"
+    try:
+        _login_rl_max = max(5, int(os.environ.get("LOGIN_RATE_LIMIT_MAX", "20")))
+    except ValueError:
+        _login_rl_max = 20
+    try:
+        _login_rl_win = max(10, int(os.environ.get("LOGIN_RATE_LIMIT_WINDOW", "60")))
+    except ValueError:
+        _login_rl_win = 60
+
     @auth_bp.route('/login', methods=['POST'])
+    @rate_limit(
+        max_requests=_login_rl_max,
+        window_seconds=_login_rl_win,
+        enabled=_login_rl_enabled,
+    )
     def login():
         """تسجيل الدخول"""
         data = request.get_json(force=True) or {}
@@ -595,6 +651,10 @@ def init_auth(app):
                     instructor_id_val = getattr(current_user, "instructor_id", instructor_id_val)
             except Exception:
                 pass
+        caps = None
+        if is_authenticated:
+            caps = compute_capabilities(role, int(is_supervisor_val or 0))
+
         return jsonify({
             'status': 'ok',
             'authenticated': is_authenticated,
@@ -603,6 +663,7 @@ def init_auth(app):
             'is_supervisor': int(is_supervisor_val or 0) if is_authenticated else 0,
             'student_id': student_id_val if is_authenticated else None,
             'instructor_id': instructor_id_val if is_authenticated else None,
+            'capabilities': caps,
         }), 200
     
     @auth_bp.route('/change_password', methods=['POST'])

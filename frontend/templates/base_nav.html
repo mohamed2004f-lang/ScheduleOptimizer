@@ -4,6 +4,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/css/theme-mechanical-engineering.css">
+<link rel="stylesheet" href="/static/css/ui-consistency.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <meta name="csrf-token" content="{{ csrf_token() }}">
 <script src="/static/js/common.js"></script>
@@ -65,6 +66,11 @@
         <li class="nav-item">
           <a class="nav-link" id="navDashboard" href="/dashboard">
             <i class="fa-solid fa-gauge-high ms-1"></i> لوحة القيادة
+          </a>
+        </li>
+        <li class="nav-item" id="navMyCoursesWrap" style="display:none;">
+          <a class="nav-link" id="navMyCourses" href="/my_courses">
+            <i class="fa-solid fa-chalkboard-user ms-1"></i> مقرراتي
           </a>
         </li>
 
@@ -212,43 +218,64 @@
         }
         return;
       }
-      // إخفاء بعض الروابط حسب الدور
       const role = data.role;
-      if (role !== 'admin' && role !== 'admin_main') {
+      const caps = data.capabilities;
+      window.SO_AUTH = data;
+      window.SO_CAPS = caps || null;
+
+      // إخفاء بعض الروابط — يُفضّل capabilities من الخادم؛ احتياطياً منطق الأدوار القديم
+      let navUsers = false, navSup = false, navRules = false;
+      let showCourseReg = false, showScheduleVersions = false, showExamArch = false, showGradeDrafts = false;
+      let isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(data.is_supervisor || 0) === 1);
+      if (caps && caps.v >= 1) {
+        navUsers = !!caps.nav_users_admin;
+        navSup = !!caps.nav_supervision;
+        navRules = !!caps.nav_academic_rules;
+        showCourseReg = !!caps.nav_course_registration_report;
+        showScheduleVersions = !!caps.nav_schedule_versions;
+        showExamArch = !!caps.nav_exam_schedule_versions;
+        showGradeDrafts = !!caps.nav_grade_drafts;
+        isSupervisor = !!caps.is_supervisor_effective;
+      } else {
+        navUsers = (role === 'admin' || role === 'admin_main');
+        navSup = navUsers;
+        navRules = navUsers;
+        showCourseReg = ['admin', 'admin_main', 'head_of_department'].includes(role || '');
+        showScheduleVersions = showCourseReg;
+        showExamArch = showCourseReg;
+        showGradeDrafts = (role === 'admin_main' || role === 'head_of_department' || (role === 'instructor' && !isSupervisor));
+      }
+      const showMyCourses = (caps && caps.v >= 1 && caps.nav_my_assigned_courses) || role === 'instructor';
+      const wrapMy = document.getElementById('navMyCoursesWrap');
+      if (wrapMy) wrapMy.style.display = showMyCourses ? '' : 'none';
+
+      if (!navUsers) {
         const elUsers = document.getElementById('navUsersAdmin');
         if (elUsers) elUsers.style.display = 'none';
+      }
+      if (!navSup) {
         const elSup = document.getElementById('navSupervision');
         if (elSup) elSup.style.display = 'none';
+      }
+      if (!navRules) {
         const elRules = document.getElementById('navAcademicRules');
         if (elRules) elRules.style.display = 'none';
       }
-      // إخفاء لوحة المشرف عن غير المشرفين (supervisor أو instructor مع is_supervisor=1)
-      const isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(data.is_supervisor || 0) === 1);
       const elCourseRegReport = document.getElementById('navCourseRegistrationReport');
-      if (elCourseRegReport) {
-        const showCourseReg = ['admin', 'admin_main', 'head_of_department'].includes(role || '');
-        elCourseRegReport.style.display = showCourseReg ? '' : 'none';
-      }
+      if (elCourseRegReport) elCourseRegReport.style.display = showCourseReg ? '' : 'none';
       const elScheduleVersions = document.getElementById('navScheduleVersions');
-      if (elScheduleVersions) {
-        const showScheduleVersions = ['admin', 'admin_main', 'head_of_department'].includes(role || '');
-        elScheduleVersions.style.display = showScheduleVersions ? '' : 'none';
-      }
+      if (elScheduleVersions) elScheduleVersions.style.display = showScheduleVersions ? '' : 'none';
       const elExamScheduleVersions = document.getElementById('navExamScheduleVersions');
-      if (elExamScheduleVersions) {
-        const showExamArch = ['admin', 'admin_main', 'head_of_department'].includes(role || '');
-        elExamScheduleVersions.style.display = showExamArch ? '' : 'none';
-      }
+      if (elExamScheduleVersions) elExamScheduleVersions.style.display = showExamArch ? '' : 'none';
       const elGradeDrafts = document.getElementById('navGradeDrafts');
-      if (elGradeDrafts) {
-        const showGradeDrafts = (role === 'admin_main' || role === 'head_of_department' || (role === 'instructor' && !isSupervisor));
-        elGradeDrafts.style.display = showGradeDrafts ? '' : 'none';
-      }
+      if (elGradeDrafts) elGradeDrafts.style.display = showGradeDrafts ? '' : 'none';
       if (!isSupervisor) {
         const elSD = document.getElementById('navSupervisorDashboard');
         if (elSD) elSD.style.display = 'none';
       }
-      const isInstructorOrSupervisor = (role === 'instructor') || (role === 'supervisor') || isSupervisor;
+      const isInstructorOrSupervisor = (caps && caps.v >= 1)
+        ? !!caps.is_instructor_or_supervisor_nav
+        : ((role === 'instructor') || (role === 'supervisor') || isSupervisor);
       if (isInstructorOrSupervisor) {
         // phase-2 RBAC UI: إخفاء الصفحات غير المسموحة وإبقاء العرض فقط
         const hideIds = [
@@ -274,7 +301,8 @@
           if (el) el.style.display = 'none';
         });
       }
-      if (role === 'student') {
+      const isStudentUi = (caps && caps.v >= 1) ? !!caps.is_student : (role === 'student');
+      if (isStudentUi) {
         // الطالب لا يحتاج لرؤية بعض الروابط الإدارية
         const hideIds = [
           'navStudents',
@@ -320,6 +348,7 @@
       // تفعيل الرابط الحالي (Active state) حسب المسار
       const path = (window.location.pathname || '/').toLowerCase();
       const map = [
+        ['/my_courses','navMyCourses'],
         ['/dashboard','navDashboard'],
         ['/analytics','navAnalytics'],
         ['/academic_calendar_page','navAcademicCalendar'],

@@ -13,21 +13,26 @@
 docker build -t schedule-optimizer .
 ```
 
-### تشغيل الحاوية
+### تشغيل الحاوية (بدون Compose)
+يحتاج التطبيق في الإنتاج إلى **PostgreSQL** (`DATABASE_URL`). مثال مع خادم Postgres على الشبكة نفسها:
 ```bash
 docker run -d -p 5000:5000 \
+  -e FLASK_ENV=production \
   -e ADMIN_USERNAME=admin \
   -e ADMIN_PASSWORD=your_password \
-  -v $(pwd)/backend/database:/app/backend/database \
+  -e SECRET_KEY=$(python -c "import secrets; print(secrets.token_hex(32))") \
+  -e DATABASE_URL=postgresql+psycopg://user:pass@host:5432/schedule_optimizer \
   -v $(pwd)/logs:/app/logs \
+  -v $(pwd)/backups:/app/backups \
   --name schedule-optimizer \
   schedule-optimizer
 ```
 
-### استخدام Docker Compose (الأسهل)
+### استخدام Docker Compose (الأسهل — Postgres مدمج)
+أنشئ ملف `.env` من `.env.example` وعيّن على الأقل: `ADMIN_USERNAME`، `ADMIN_PASSWORD`، `SECRET_KEY`، **`POSTGRES_PASSWORD`** (لخدمة `db` واتصال `web`).
 ```bash
-# تشغيل التطبيق
-docker-compose up -d
+# تشغيل التطبيق وقاعدة البيانات
+docker compose up -d
 
 # عرض السجلات
 docker-compose logs -f
@@ -40,13 +45,7 @@ docker-compose up -d --build
 ```
 
 ### متغيرات البيئة في docker-compose.yml
-يمكنك تعديل المتغيرات في ملف `docker-compose.yml`:
-```yaml
-environment:
-  - ADMIN_USERNAME=admin
-  - ADMIN_PASSWORD=your_password
-  - SECRET_KEY=your-secret-key
-```
+القيم الحساسة تُقرأ من ملف `.env` (مثل `ADMIN_*`، `SECRET_KEY`، `POSTGRES_PASSWORD`). عنوان `DATABASE_URL` يُبنى تلقائياً للاتصال بخدمة `db` داخل الشبكة الداخلية.
 
 ## 🔄 CI/CD
 
@@ -120,5 +119,5 @@ docker-compose up -d
 ```
 
 ### النسخ الاحتياطي
-قاعدة البيانات محفوظة في `backend/database/` ويمكن نسخها احتياطياً بسهولة.
+مع Compose، بيانات PostgreSQL في Docker volume اسمه `postgres_data`. للنسخ الاحتياطي استخدم `pg_dump` من حاوية `db` أو من عميل على الخادم. مجلدا `logs/` و`backups/` يُركّبان من المضيف كما في `docker-compose.yml`.
 

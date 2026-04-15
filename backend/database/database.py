@@ -486,6 +486,7 @@ TABLES_SCHEMA = {
             time TEXT NOT NULL,
             room TEXT DEFAULT '',
             instructor TEXT DEFAULT '',
+            instructor_id INTEGER,
             semester TEXT DEFAULT '',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (course_name) REFERENCES courses(course_name) 
@@ -992,6 +993,61 @@ TABLES_SCHEMA = {
             FOREIGN KEY (draft_id) REFERENCES grade_drafts(id) ON DELETE CASCADE
         )
     """,
+
+    'faculty_section_axis_status': """
+        CREATE TABLE IF NOT EXISTS faculty_section_axis_status (
+            section_id INTEGER NOT NULL,
+            instructor_id INTEGER NOT NULL,
+            axis_key TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending', 'done', 'na')),
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (section_id, instructor_id, axis_key)
+        )
+    """,
+
+    'faculty_course_plans': """
+        CREATE TABLE IF NOT EXISTS faculty_course_plans (
+            section_id INTEGER NOT NULL,
+            instructor_id INTEGER NOT NULL,
+            week_no INTEGER NOT NULL,
+            week_topic TEXT DEFAULT '',
+            lecture_status TEXT NOT NULL DEFAULT 'planned'
+                CHECK (lecture_status IN ('planned', 'done', 'postponed', 'compensated')),
+            resources_text TEXT DEFAULT '',
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_by TEXT DEFAULT '',
+            PRIMARY KEY (section_id, instructor_id, week_no)
+        )
+    """,
+
+    'faculty_course_announcements': """
+        CREATE TABLE IF NOT EXISTS faculty_course_announcements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            section_id INTEGER NOT NULL,
+            instructor_id INTEGER NOT NULL,
+            title TEXT DEFAULT '',
+            body TEXT NOT NULL,
+            announcement_type TEXT NOT NULL DEFAULT 'general'
+                CHECK (announcement_type IN ('general', 'postponement', 'makeup', 'extra_lecture')),
+            lecture_date TEXT,
+            published_to_students INTEGER NOT NULL DEFAULT 1
+                CHECK (published_to_students IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            created_by TEXT DEFAULT ''
+        )
+    """,
+
+    'faculty_course_syllabi': """
+        CREATE TABLE IF NOT EXISTS faculty_course_syllabi (
+            section_id INTEGER NOT NULL,
+            instructor_id INTEGER NOT NULL,
+            syllabus_text TEXT DEFAULT '',
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_by TEXT DEFAULT '',
+            PRIMARY KEY (section_id, instructor_id)
+        )
+    """,
 }
 
 # ============================================
@@ -1003,6 +1059,11 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_registrations_course ON registrations(course_name)",
     "CREATE INDEX IF NOT EXISTS idx_schedule_course ON schedule(course_name)",
     "CREATE INDEX IF NOT EXISTS idx_schedule_day_time ON schedule(day, time)",
+    "CREATE INDEX IF NOT EXISTS idx_schedule_instructor_id ON schedule(instructor_id)",
+    "CREATE INDEX IF NOT EXISTS idx_faculty_axis_inst ON faculty_section_axis_status(instructor_id)",
+    "CREATE INDEX IF NOT EXISTS idx_faculty_plan_inst_sec ON faculty_course_plans(instructor_id, section_id)",
+    "CREATE INDEX IF NOT EXISTS idx_faculty_ann_sec_pub ON faculty_course_announcements(section_id, published_to_students)",
+    "CREATE INDEX IF NOT EXISTS idx_faculty_syllabus_inst_sec ON faculty_course_syllabi(instructor_id, section_id)",
     "CREATE INDEX IF NOT EXISTS idx_grades_student_semester ON grades(student_id, semester)",
     "CREATE INDEX IF NOT EXISTS idx_grades_course ON grades(course_name)",
     "CREATE INDEX IF NOT EXISTS idx_conflict_report_student ON conflict_report(student_id)",
@@ -1055,6 +1116,7 @@ def _ensure_tables_postgresql() -> None:
             "INTEGER NOT NULL DEFAULT 0"
         ),
         "ALTER TABLE enrollment_plans ADD COLUMN IF NOT EXISTS prereq_ack_reason TEXT DEFAULT ''",
+        "ALTER TABLE schedule ADD COLUMN IF NOT EXISTS instructor_id INTEGER",
         # أرقام معرفات طويلة (وطني/داخلي) تتجاوز INTEGER في PostgreSQL
         "ALTER TABLE users ALTER COLUMN instructor_id TYPE BIGINT USING instructor_id::bigint",
     ]
@@ -1147,6 +1209,100 @@ def _ensure_tables_postgresql() -> None:
                     pass
         else:
             logger.info("Skipping optional lower(username) unique index (ENABLE_USERS_LOWER_UNIQUE_IDX is off)")
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS faculty_section_axis_status (
+                    section_id INTEGER NOT NULL,
+                    instructor_id BIGINT NOT NULL,
+                    axis_key TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (section_id, instructor_id, axis_key),
+                    CONSTRAINT faculty_axis_status_chk CHECK (status IN ('pending', 'done', 'na'))
+                )
+                """
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning("Could not ensure faculty_section_axis_status on PostgreSQL: %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS faculty_course_plans (
+                    section_id INTEGER NOT NULL,
+                    instructor_id BIGINT NOT NULL,
+                    week_no INTEGER NOT NULL,
+                    week_topic TEXT DEFAULT '',
+                    lecture_status TEXT NOT NULL DEFAULT 'planned',
+                    resources_text TEXT DEFAULT '',
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_by TEXT DEFAULT '',
+                    PRIMARY KEY (section_id, instructor_id, week_no),
+                    CONSTRAINT faculty_course_plans_status_chk
+                        CHECK (lecture_status IN ('planned', 'done', 'postponed', 'compensated'))
+                )
+                """
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning("Could not ensure faculty_course_plans on PostgreSQL: %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS faculty_course_announcements (
+                    id BIGSERIAL PRIMARY KEY,
+                    section_id INTEGER NOT NULL,
+                    instructor_id BIGINT NOT NULL,
+                    title TEXT DEFAULT '',
+                    body TEXT NOT NULL,
+                    announcement_type TEXT NOT NULL DEFAULT 'general',
+                    lecture_date TEXT,
+                    published_to_students INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    created_by TEXT DEFAULT '',
+                    CONSTRAINT faculty_course_ann_type_chk
+                        CHECK (announcement_type IN ('general', 'postponement', 'makeup', 'extra_lecture')),
+                    CONSTRAINT faculty_course_ann_pub_chk
+                        CHECK (published_to_students IN (0, 1))
+                )
+                """
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning("Could not ensure faculty_course_announcements on PostgreSQL: %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS faculty_course_syllabi (
+                    section_id INTEGER NOT NULL,
+                    instructor_id BIGINT NOT NULL,
+                    syllabus_text TEXT DEFAULT '',
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_by TEXT DEFAULT '',
+                    PRIMARY KEY (section_id, instructor_id)
+                )
+                """
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning("Could not ensure faculty_course_syllabi on PostgreSQL: %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
     logger.info("PostgreSQL compatibility migrations applied")
 
 
@@ -1264,6 +1420,16 @@ def ensure_tables(db_file=None):
                 cur.execute(
                     "ALTER TABLE enrollment_plans ADD COLUMN prereq_ack_reason TEXT DEFAULT ''"
                 )
+            except Exception:
+                pass
+
+        try:
+            scols = [r[1] for r in cur.execute("PRAGMA table_info(schedule)").fetchall()]
+        except Exception:
+            scols = []
+        if "instructor_id" not in scols:
+            try:
+                cur.execute("ALTER TABLE schedule ADD COLUMN instructor_id INTEGER")
             except Exception:
                 pass
 

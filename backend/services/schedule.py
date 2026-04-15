@@ -11,6 +11,13 @@ import json
 import datetime
 import base64
 from backend.database.database import is_postgresql
+from backend.core.exceptions import ValidationError
+from backend.core.faculty_axes import (
+    FACULTY_AXIS_KEYS,
+    VALID_AXIS_STATUS,
+    axis_labels_for_api,
+    normalize_instructor_name,
+)
 
 from .utilities import (
     get_connection,
@@ -29,6 +36,8 @@ from .students import compute_per_student_conflicts, recompute_conflict_report
 logger = logging.getLogger(__name__)
 
 schedule_bp = Blueprint("schedule", __name__)
+VALID_LECTURE_STATUS = frozenset({"planned", "done", "postponed", "compensated"})
+VALID_ANNOUNCEMENT_TYPES = frozenset({"general", "postponement", "makeup", "extra_lecture"})
 
 
 def _ensure_schedule_version_tables(cur):
@@ -430,10 +439,11 @@ def list_schedule_rows():
                     s.room, 
                     s.instructor, 
                     s.semester,
+                    s.instructor_id,
                     COUNT(DISTINCT r.student_id) AS student_count
                 FROM schedule s
                 LEFT JOIN registrations r ON s.course_name = r.course_name
-                GROUP BY s.rowid, s.course_name, s.day, s.time, s.room, s.instructor, s.semester
+                GROUP BY s.rowid, s.course_name, s.day, s.time, s.room, s.instructor, s.semester, s.instructor_id
                 ORDER BY s.rowid
             """).fetchall()
             result = []
@@ -446,7 +456,8 @@ def list_schedule_rows():
                     'room': r[4],
                     'instructor': r[5],
                     'semester': r[6],
-                    'student_count': r[7] or 0
+                    'instructor_id': r[7],
+                    'student_count': r[8] or 0
                 })
             return jsonify(result)
         except Exception as e:
@@ -587,15 +598,21 @@ def check_conflicts():
             cur = conn.cursor()
             
             # إضافة مؤقتة للجدول
+            _iid = data.get("instructor_id")
+            try:
+                _iid = int(_iid) if _iid is not None and _iid != "" else None
+            except (TypeError, ValueError):
+                _iid = None
             cur.execute("""
-                INSERT INTO schedule (course_name, day, time, room, instructor, semester)
-                VALUES (?,?,?,?,?,?)
+                INSERT INTO schedule (course_name, day, time, room, instructor, instructor_id, semester)
+                VALUES (?,?,?,?,?,?,?)
             """, (
                 course_name,
                 day,
                 time,
                 data.get("room", ""),
                 data.get("instructor", ""),
+                _iid,
                 data.get("semester", SEMESTER_LABEL)
             ))
             temp_rowid = cur.lastrowid
@@ -657,6 +674,15 @@ def check_conflicts():
         }), 500
 
 # Original add_row (kept)
+def _parse_instructor_id_payload(raw):
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 @schedule_bp.route("/add_row", methods=["POST"])
 @role_required("admin", "admin_main", "head_of_department")
 def add_schedule_row():
@@ -665,19 +691,29 @@ def add_schedule_row():
     for k in required:
         if not data.get(k):
             return jsonify({"status": "error", "message": f"{k} مطلوب"}), 400
-    with get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO schedule (course_name, day, time, room, instructor, semester)
-            VALUES (?,?,?,?,?,?)
-        """, (data.get("course_name"), data.get("day"), data.get("time"),
-              data.get("room", ""), data.get("instructor", ""), data.get("semester", SEMESTER_LABEL)))
-        last = cur.lastrowid
+    try:
+        from backend.core.services import ScheduleService
+
+        res = ScheduleService.add_schedule_row(
+            data.get("course_name"),
+            data.get("day"),
+            data.get("time"),
+            room=data.get("room", ""),
+            instructor=data.get("instructor", ""),
+            semester=data.get("semester") or SEMESTER_LABEL,
+            instructor_id=_parse_instructor_id_payload(data.get("instructor_id")),
+        )
+        last = res.get("rowid")
         try:
-            touch_schedule_updated_at(conn)
+            with get_connection() as conn:
+                touch_schedule_updated_at(conn)
         except Exception:
             pass
-        conn.commit()
+    except ValidationError as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+    except Exception as e:
+        logger.exception("add_schedule_row failed")
+        return jsonify({"status": "error", "message": str(e)}), 400
 
     try:
         log_activity(
@@ -686,12 +722,6 @@ def add_schedule_row():
         )
     except Exception:
         pass
-    # تحديث الجدول النهائي وتقرير التعارضات تلقائياً (خارج with block)
-    # Disabled: optimize_with_move_suggestions() is not defined
-    # try:
-    #     optimize_with_move_suggestions()
-    # except Exception as e:
-    #     logger.error(f"Error updating optimized schedule after add: {e}")
     return jsonify({"status": "ok", "message": "تم إضافة صف إلى الجدول", "rowid": last}), 200
 
 # Alias to match frontend calls that use /add_schedule_row
@@ -733,7 +763,7 @@ def update_schedule_row():
     if not section_id:
         return jsonify({"status": "error", "message": "section_id مطلوب"}), 400
     fields = {}
-    for k in ("course_name", "day", "time", "room", "instructor", "semester"):
+    for k in ("course_name", "day", "time", "room", "instructor", "semester", "instructor_id"):
         if k in data:
             fields[k] = data.get(k)
     try:
@@ -1529,6 +1559,492 @@ def student_timetable():
     return jsonify({"rows": out, "published": True})
 
 
+def _assigned_section_rows(cur, instructor_db_id: int, canonical_instructor_name: str):
+    """
+    صفوف schedule المكلَّف بها الأستاذ:
+    - تطابق مباشر على schedule.instructor_id عند تعبئته من الإدارة؛
+    - أو مطابقة الاسم النصّي بعد تطبيع الفراغات (الترقية من الجداول القديمة).
+    """
+    norm = normalize_instructor_name(canonical_instructor_name)
+    q = """
+        SELECT s.rowid AS section_id,
+               s.course_name,
+               s.day,
+               s.time,
+               s.room,
+               s.instructor,
+               s.semester,
+               s.instructor_id
+        FROM schedule s
+        WHERE s.instructor_id = ?
+           OR (
+                (s.instructor_id IS NULL OR s.instructor_id = 0)
+                AND TRIM(COALESCE(s.instructor, '')) <> ''
+           )
+        ORDER BY s.semester, s.day, s.time, s.course_name
+    """
+    raw = cur.execute(q, (instructor_db_id,)).fetchall()
+    out = []
+    for r in raw:
+        sid, cn, day, tim, room, inst_txt, sem = r[0], r[1], r[2], r[3], r[4], r[5], r[6]
+        iid_col = r[7] if len(r) > 7 else None
+        try:
+            iid_int = int(iid_col) if iid_col is not None else None
+        except (TypeError, ValueError):
+            iid_int = None
+        if iid_int == instructor_db_id:
+            out.append((sid, cn, day, tim, room, inst_txt, sem))
+            continue
+        if (iid_int is None or iid_int == 0) and normalize_instructor_name(inst_txt) == norm:
+            out.append((sid, cn, day, tim, room, inst_txt, sem))
+    return out
+
+
+def _axis_status_map_for_sections(cur, instructor_db_id: int, section_ids: list) -> dict:
+    """خريطة section_id -> {axis_key: status}."""
+    if not section_ids:
+        return {}
+    placeholders = ",".join(["?"] * len(section_ids))
+    q = f"""
+        SELECT section_id, axis_key, status
+        FROM faculty_section_axis_status
+        WHERE instructor_id = ? AND section_id IN ({placeholders})
+    """
+    rows = cur.execute(q, (instructor_db_id, *section_ids)).fetchall()
+    m: dict = {int(sid): {} for sid in section_ids}
+    for sid, ax, st in rows:
+        m.setdefault(int(sid), {})[ax] = st
+    return m
+
+
+def _course_admin_payload(cur, instructor_id: int, section_id: int) -> dict:
+    """تحميل بيانات إدارة المقرر (الخطة الأسبوعية + الإعلانات + المفردات) لشعبة واحدة."""
+    plan_rows = cur.execute(
+        """
+        SELECT week_no, COALESCE(week_topic,''), COALESCE(lecture_status,'planned'), COALESCE(resources_text,'')
+        FROM faculty_course_plans
+        WHERE section_id = ? AND instructor_id = ?
+        ORDER BY week_no
+        """,
+        (section_id, instructor_id),
+    ).fetchall()
+    ann_rows = cur.execute(
+        """
+        SELECT id, COALESCE(title,''), COALESCE(body,''), COALESCE(announcement_type,'general'),
+               COALESCE(lecture_date,''), COALESCE(published_to_students,1), COALESCE(created_at,'')
+        FROM faculty_course_announcements
+        WHERE section_id = ? AND instructor_id = ?
+        ORDER BY id DESC
+        LIMIT 20
+        """,
+        (section_id, instructor_id),
+    ).fetchall()
+    syl_row = cur.execute(
+        """
+        SELECT COALESCE(syllabus_text,'')
+        FROM faculty_course_syllabi
+        WHERE section_id = ? AND instructor_id = ?
+        LIMIT 1
+        """,
+        (section_id, instructor_id),
+    ).fetchone()
+    return {
+        "weekly_plan": [
+            {
+                "week_no": int(r[0] or 0),
+                "week_topic": r[1] or "",
+                "lecture_status": r[2] or "planned",
+                "resources_text": r[3] or "",
+            }
+            for r in (plan_rows or [])
+        ],
+        "announcements": [
+            {
+                "id": int(r[0]),
+                "title": r[1] or "",
+                "body": r[2] or "",
+                "announcement_type": r[3] or "general",
+                "lecture_date": r[4] or "",
+                "published_to_students": bool(int(r[5] or 0)),
+                "created_at": r[6] or "",
+            }
+            for r in (ann_rows or [])
+        ],
+        "syllabus_text": (syl_row[0] if syl_row else "") or "",
+    }
+
+
+def _instructor_display_name_for_session() -> tuple[str | None, int | None]:
+    """
+    اسم العرض المطابق لحقل schedule.instructor من جدول instructors، ومعرف السجل.
+    يُستخدم لربط حساب المستخدم (instructor_id) بالصفوف المكلَّف بها في الجدول.
+    """
+    if session.get("user_role") != "instructor":
+        return None, None
+    instructor_id = session.get("instructor_id")
+    if not instructor_id:
+        return None, None
+    try:
+        iid = int(instructor_id)
+    except (TypeError, ValueError):
+        return None, None
+    with get_connection() as conn:
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT COALESCE(TRIM(name), '') FROM instructors WHERE id = ? LIMIT 1",
+            (iid,),
+        ).fetchone()
+    name = (row[0] if row else "") or ""
+    if not name.strip():
+        return None, iid
+    return normalize_instructor_name(name), iid
+
+
+@schedule_bp.route("/my_assigned_sections")
+@login_required
+def my_assigned_sections():
+    """
+    الشعب/الصفوف في الجدول الدراسي المكلَّف بها الأستاذ (حسب تطابق الاسم مع schedule.instructor).
+    لا يشترط نشر الجدول — يظهر التكليف كما أعدّه رئيس القسم/الإدارة في الجدول الحالي.
+    """
+    user_role = session.get("user_role")
+    if user_role != "instructor":
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+
+    inst_name, instructor_id = _instructor_display_name_for_session()
+    published_at = None
+    with get_connection() as conn:
+        published_at = get_schedule_published_at(conn)
+
+    if not inst_name:
+        return jsonify(
+            {
+                "rows": [],
+                "instructor_name": None,
+                "instructor_id": instructor_id,
+                "schedule_published": published_at is not None,
+                "axis_catalog": axis_labels_for_api(),
+                "hint": "لا يوجد ربط باسم في دليل هيئة التدريس — راجع المسؤول لربط الحساب بسجل عضو هيئة التدريس.",
+            }
+        )
+
+    iid = int(instructor_id)
+    default_axes = {k: "pending" for k in FACULTY_AXIS_KEYS}
+    with get_connection() as conn:
+        cur = conn.cursor()
+        tuples = _assigned_section_rows(cur, iid, inst_name)
+        section_ids = [t[0] for t in tuples]
+        axis_map = _axis_status_map_for_sections(cur, iid, section_ids)
+        out = []
+        for t in tuples:
+            sid, cn, day, tim, room, inst_txt, sem = t
+            merged_axes = {**default_axes, **axis_map.get(int(sid), {})}
+            out.append(
+                {
+                    "section_id": sid,
+                    "course_name": cn,
+                    "day": day,
+                    "time": tim,
+                    "room": room,
+                    "instructor": inst_txt,
+                    "semester": sem,
+                    "axes": merged_axes,
+                }
+            )
+    return jsonify(
+        {
+            "rows": out,
+            "instructor_name": inst_name,
+            "instructor_id": instructor_id,
+            "schedule_published": published_at is not None,
+            "axis_catalog": axis_labels_for_api(),
+        }
+    )
+
+
+@schedule_bp.route("/my_axis_status", methods=["POST"])
+@login_required
+def save_my_axis_status():
+    """تحديث حالة محور واحد لشعبة مكلَّف بها الأستاذ."""
+    if session.get("user_role") != "instructor":
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    data = request.get_json(force=True) or {}
+    try:
+        section_id = int(data.get("section_id"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "section_id غير صالح"}), 400
+    axis_key = (data.get("axis_key") or "").strip()
+    status = (data.get("status") or "pending").strip()
+    if axis_key not in FACULTY_AXIS_KEYS or status not in VALID_AXIS_STATUS:
+        return jsonify({"status": "error", "message": "axis_key أو status غير صالح"}), 400
+
+    inst_name, instructor_id = _instructor_display_name_for_session()
+    if not instructor_id:
+        return jsonify({"status": "error", "message": "لا يوجد ربط بعضو هيئة التدريس"}), 400
+    iid = int(instructor_id)
+
+    from datetime import datetime, timezone
+
+    ts = datetime.now(timezone.utc).isoformat()
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        tuples = _assigned_section_rows(cur, iid, inst_name or "")
+        allowed_ids = {int(t[0]) for t in tuples}
+        if section_id not in allowed_ids:
+            return jsonify({"status": "error", "message": "هذه الشعبة غير مكلَّفة لحسابك"}), 403
+
+        if is_postgresql():
+            cur.execute(
+                """
+                INSERT INTO faculty_section_axis_status (section_id, instructor_id, axis_key, status, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (section_id, instructor_id, axis_key)
+                DO UPDATE SET status = EXCLUDED.status, updated_at = EXCLUDED.updated_at
+                """,
+                (section_id, iid, axis_key, status, ts),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO faculty_section_axis_status
+                    (section_id, instructor_id, axis_key, status, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (section_id, iid, axis_key, status, ts),
+            )
+        conn.commit()
+    return jsonify({"status": "ok", "section_id": section_id, "axis_key": axis_key, "saved": status})
+
+
+@schedule_bp.route("/my_course_admin")
+@login_required
+def my_course_admin():
+    """تفاصيل إدارة المقرر لشعبة مكلّف بها الأستاذ."""
+    if session.get("user_role") != "instructor":
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    try:
+        section_id = int((request.args.get("section_id") or "").strip())
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "section_id غير صالح"}), 400
+
+    inst_name, instructor_id = _instructor_display_name_for_session()
+    if not instructor_id:
+        return jsonify({"status": "error", "message": "لا يوجد ربط بعضو هيئة التدريس"}), 400
+    iid = int(instructor_id)
+    with get_connection() as conn:
+        cur = conn.cursor()
+        tuples = _assigned_section_rows(cur, iid, inst_name or "")
+        allowed_ids = {int(t[0]) for t in tuples}
+        if section_id not in allowed_ids:
+            return jsonify({"status": "error", "message": "هذه الشعبة غير مكلَّفة لحسابك"}), 403
+        payload = _course_admin_payload(cur, iid, section_id)
+    return jsonify({"status": "ok", "section_id": section_id, **payload})
+
+
+@schedule_bp.route("/my_course_plan", methods=["POST"])
+@login_required
+def save_my_course_plan():
+    """حفظ أو تحديث عنصر في الخطة الأسبوعية لشعبة مكلّف بها الأستاذ."""
+    if session.get("user_role") != "instructor":
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    data = request.get_json(force=True) or {}
+    try:
+        section_id = int(data.get("section_id"))
+        week_no = int(data.get("week_no"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "section_id/week_no غير صالح"}), 400
+    if week_no < 1 or week_no > 52:
+        return jsonify({"status": "error", "message": "week_no يجب أن يكون بين 1 و 52"}), 400
+    lecture_status = (data.get("lecture_status") or "planned").strip()
+    if lecture_status not in VALID_LECTURE_STATUS:
+        return jsonify({"status": "error", "message": "lecture_status غير صالح"}), 400
+    week_topic = (data.get("week_topic") or "").strip()
+    resources_text = (data.get("resources_text") or "").strip()
+
+    inst_name, instructor_id = _instructor_display_name_for_session()
+    if not instructor_id:
+        return jsonify({"status": "error", "message": "لا يوجد ربط بعضو هيئة التدريس"}), 400
+    iid = int(instructor_id)
+    actor = (session.get("user") or "").strip()
+    ts = datetime.datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        tuples = _assigned_section_rows(cur, iid, inst_name or "")
+        allowed_ids = {int(t[0]) for t in tuples}
+        if section_id not in allowed_ids:
+            return jsonify({"status": "error", "message": "هذه الشعبة غير مكلَّفة لحسابك"}), 403
+        if is_postgresql():
+            cur.execute(
+                """
+                INSERT INTO faculty_course_plans
+                    (section_id, instructor_id, week_no, week_topic, lecture_status, resources_text, updated_at, updated_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (section_id, instructor_id, week_no)
+                DO UPDATE SET week_topic = EXCLUDED.week_topic,
+                              lecture_status = EXCLUDED.lecture_status,
+                              resources_text = EXCLUDED.resources_text,
+                              updated_at = EXCLUDED.updated_at,
+                              updated_by = EXCLUDED.updated_by
+                """,
+                (section_id, iid, week_no, week_topic, lecture_status, resources_text, ts, actor),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO faculty_course_plans
+                    (section_id, instructor_id, week_no, week_topic, lecture_status, resources_text, updated_at, updated_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (section_id, iid, week_no, week_topic, lecture_status, resources_text, ts, actor),
+            )
+        conn.commit()
+        payload = _course_admin_payload(cur, iid, section_id)
+    return jsonify({"status": "ok", "section_id": section_id, **payload})
+
+
+@schedule_bp.route("/my_course_syllabus", methods=["POST"])
+@login_required
+def save_my_course_syllabus():
+    """حفظ مفردات المقرر (syllabus) لشعبة مكلّف بها الأستاذ."""
+    if session.get("user_role") != "instructor":
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    data = request.get_json(force=True) or {}
+    try:
+        section_id = int(data.get("section_id"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "section_id غير صالح"}), 400
+    syllabus_text = (data.get("syllabus_text") or "").strip()
+    inst_name, instructor_id = _instructor_display_name_for_session()
+    if not instructor_id:
+        return jsonify({"status": "error", "message": "لا يوجد ربط بعضو هيئة التدريس"}), 400
+    iid = int(instructor_id)
+    actor = (session.get("user") or "").strip()
+    ts = datetime.datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        tuples = _assigned_section_rows(cur, iid, inst_name or "")
+        allowed_ids = {int(t[0]) for t in tuples}
+        if section_id not in allowed_ids:
+            return jsonify({"status": "error", "message": "هذه الشعبة غير مكلَّفة لحسابك"}), 403
+        if is_postgresql():
+            cur.execute(
+                """
+                INSERT INTO faculty_course_syllabi (section_id, instructor_id, syllabus_text, updated_at, updated_by)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (section_id, instructor_id)
+                DO UPDATE SET syllabus_text = EXCLUDED.syllabus_text,
+                              updated_at = EXCLUDED.updated_at,
+                              updated_by = EXCLUDED.updated_by
+                """,
+                (section_id, iid, syllabus_text, ts, actor),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO faculty_course_syllabi
+                    (section_id, instructor_id, syllabus_text, updated_at, updated_by)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (section_id, iid, syllabus_text, ts, actor),
+            )
+        conn.commit()
+        payload = _course_admin_payload(cur, iid, section_id)
+    return jsonify({"status": "ok", "section_id": section_id, **payload})
+
+
+@schedule_bp.route("/my_course_announcement", methods=["POST"])
+@login_required
+def save_my_course_announcement():
+    """إضافة إعلان لشعبة مكلّف بها الأستاذ."""
+    if session.get("user_role") != "instructor":
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    data = request.get_json(force=True) or {}
+    try:
+        section_id = int(data.get("section_id"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "section_id غير صالح"}), 400
+    body = (data.get("body") or "").strip()
+    if not body:
+        return jsonify({"status": "error", "message": "نص الإعلان مطلوب"}), 400
+    title = (data.get("title") or "").strip()
+    announcement_type = (data.get("announcement_type") or "general").strip()
+    if announcement_type not in VALID_ANNOUNCEMENT_TYPES:
+        return jsonify({"status": "error", "message": "نوع الإعلان غير صالح"}), 400
+    lecture_date = (data.get("lecture_date") or "").strip()
+    published_to_students = 1 if bool(data.get("published_to_students", True)) else 0
+
+    inst_name, instructor_id = _instructor_display_name_for_session()
+    if not instructor_id:
+        return jsonify({"status": "error", "message": "لا يوجد ربط بعضو هيئة التدريس"}), 400
+    iid = int(instructor_id)
+    actor = (session.get("user") or "").strip()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        tuples = _assigned_section_rows(cur, iid, inst_name or "")
+        allowed_ids = {int(t[0]) for t in tuples}
+        if section_id not in allowed_ids:
+            return jsonify({"status": "error", "message": "هذه الشعبة غير مكلَّفة لحسابك"}), 403
+        cur.execute(
+            """
+            INSERT INTO faculty_course_announcements
+                (section_id, instructor_id, title, body, announcement_type, lecture_date, published_to_students, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (section_id, iid, title, body, announcement_type, lecture_date, published_to_students, actor),
+        )
+        conn.commit()
+        payload = _course_admin_payload(cur, iid, section_id)
+    return jsonify({"status": "ok", "section_id": section_id, **payload})
+
+
+@schedule_bp.route("/student_my_announcements")
+@login_required
+def student_my_announcements():
+    """إعلانات المقررات للطالب الحالي، فقط من شعب مقرراته المسجلة."""
+    if session.get("user_role") != "student":
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    sid = (session.get("student_id") or session.get("user") or "").strip()
+    if not sid:
+        return jsonify({"items": []})
+    with get_connection() as conn:
+        cur = conn.cursor()
+        rows = cur.execute(
+            """
+            SELECT a.id,
+                   a.section_id,
+                   COALESCE(s.course_name,'') AS course_name,
+                   COALESCE(a.title,'') AS title,
+                   COALESCE(a.body,'') AS body,
+                   COALESCE(a.announcement_type,'general') AS announcement_type,
+                   COALESCE(a.lecture_date,'') AS lecture_date,
+                   COALESCE(a.created_at,'') AS created_at
+            FROM faculty_course_announcements a
+            JOIN schedule s ON s.rowid = a.section_id
+            JOIN registrations r ON r.course_name = s.course_name
+            WHERE r.student_id = ?
+              AND COALESCE(a.published_to_students, 1) = 1
+            ORDER BY a.id DESC
+            LIMIT 50
+            """,
+            (sid,),
+        ).fetchall()
+    out = [
+        {
+            "id": int(r[0]),
+            "section_id": int(r[1]),
+            "course_name": r[2] or "",
+            "title": r[3] or "",
+            "body": r[4] or "",
+            "announcement_type": r[5] or "general",
+            "lecture_date": r[6] or "",
+            "created_at": r[7] or "",
+        }
+        for r in (rows or [])
+    ]
+    return jsonify({"items": out})
+
+
 @schedule_bp.route("/instructor_timetable")
 @login_required
 def instructor_timetable():
@@ -1559,32 +2075,28 @@ def instructor_timetable():
     if not inst_name.strip():
         return jsonify({"rows": [], "published": True})
 
+    canon = normalize_instructor_name(inst_name)
+    try:
+        iid_int = int(instructor_id)
+    except (TypeError, ValueError):
+        return jsonify({"rows": [], "published": True})
+
     with get_connection() as conn:
         cur = conn.cursor()
-        q = """
-        SELECT s.rowid AS section_id,
-               s.course_name,
-               s.day,
-               s.time,
-               s.room,
-               s.instructor,
-               s.semester
-        FROM schedule s
-        WHERE TRIM(COALESCE(s.instructor, '')) = ?
-        ORDER BY s.day, s.time, s.course_name
-        """
-        rows = cur.execute(q, (inst_name.strip(),)).fetchall()
+        tuples = _assigned_section_rows(cur, iid_int, canon)
+        tuples.sort(key=lambda x: ((x[2] or ""), (x[3] or ""), (x[1] or "")))
         out = []
-        for r in rows:
+        for t in tuples:
+            sid, cn, day, tim, room, inst_txt, sem = t
             out.append(
                 {
-                    "section_id": r[0],
-                    "course_name": r[1],
-                    "day": r[2],
-                    "time": r[3],
-                    "room": r[4],
-                    "instructor": r[5],
-                    "semester": r[6],
+                    "section_id": sid,
+                    "course_name": cn,
+                    "day": day,
+                    "time": tim,
+                    "room": room,
+                    "instructor": inst_txt,
+                    "semester": sem,
                 }
             )
     return jsonify({"rows": out, "published": True})

@@ -425,9 +425,14 @@ window.addEventListener('load', async ()=>{
   try {
     const auth = await fetch('/auth/check').then(r=>r.json()).catch(()=>({}));
     const role = auth?.role || '';
-    const isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(auth?.is_supervisor || 0) === 1);
+    const caps = auth?.capabilities;
+    const isSupervisor = (caps && caps.v >= 1)
+      ? !!caps.is_supervisor_effective
+      : ((role === 'supervisor') || (role === 'instructor' && Number(auth?.is_supervisor || 0) === 1));
     IS_VIEW_ONLY_ROLE = (role === 'instructor') || isSupervisor;
-    IS_ADMIN = (role === 'admin' || role === 'admin_main' || role === 'head_of_department');
+    IS_ADMIN = (caps && caps.v >= 1)
+      ? !!caps.can_manage_courses_edit
+      : (role === 'admin' || role === 'admin_main' || role === 'head_of_department');
   } catch(e){
     IS_ADMIN = false;
     IS_VIEW_ONLY_ROLE = false;

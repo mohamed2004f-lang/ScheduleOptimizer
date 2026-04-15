@@ -750,10 +750,11 @@ class ScheduleService:
                         s.room, 
                         s.instructor, 
                         s.semester,
+                        s.instructor_id,
                         COUNT(DISTINCT r.student_id) AS student_count
                     FROM schedule s
                     LEFT JOIN registrations r ON s.course_name = r.course_name
-                    GROUP BY s.rowid, s.course_name, s.day, s.time, s.room, s.instructor, s.semester
+                    GROUP BY s.rowid, s.course_name, s.day, s.time, s.room, s.instructor, s.semester, s.instructor_id
                     ORDER BY s.rowid
                 """).fetchall()
                 return [
@@ -765,7 +766,8 @@ class ScheduleService:
                         'room': r[4] or '',
                         'instructor': r[5] or '',
                         'semester': r[6] or '',
-                        'student_count': r[7] or 0
+                        'instructor_id': r[7],
+                        'student_count': r[8] or 0
                     }
                     for r in rows
                 ]
@@ -774,30 +776,51 @@ class ScheduleService:
             raise DatabaseError(f"فشل جلب الجدول الدراسي: {str(e)}")
     
     @staticmethod
-    def add_schedule_row(course_name: str, day: str, time: str, 
-                        room: str = "", instructor: str = "", semester: str = "") -> Dict:
+    def add_schedule_row(
+        course_name: str,
+        day: str,
+        time: str,
+        room: str = "",
+        instructor: str = "",
+        semester: str = "",
+        instructor_id: Optional[int] = None,
+    ) -> Dict:
         """إضافة صف جديد للجدول الدراسي"""
         name = sanitize_input(course_name, 200)
         day_val = sanitize_input(day, 20)
         time_val = sanitize_input(time, 20)
-        
+        room_v = sanitize_input(room, 50)
+        inst_text = sanitize_input(instructor, 100)
+        sem_v = sanitize_input(semester, 50) or SEMESTER_LABEL
+
         if not name:
             raise ValidationError("اسم المقرر مطلوب")
         if not day_val:
             raise ValidationError("اليوم مطلوب")
         if not time_val:
             raise ValidationError("الوقت مطلوب")
-        
+
         try:
             with get_connection() as conn:
                 cur = conn.cursor()
+                iid = instructor_id
+                if iid is not None:
+                    try:
+                        iid = int(iid)
+                    except (TypeError, ValueError):
+                        iid = None
+                if iid is not None:
+                    row_n = cur.execute(
+                        "SELECT COALESCE(TRIM(name), '') FROM instructors WHERE id = ? LIMIT 1",
+                        (iid,),
+                    ).fetchone()
+                    if row_n and (row_n[0] or "").strip():
+                        inst_text = sanitize_input((row_n[0] or "").strip(), 100)
+
                 cur.execute(
-                    """INSERT INTO schedule (course_name, day, time, room, instructor, semester) 
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (name, day_val, time_val, 
-                     sanitize_input(room, 50), 
-                     sanitize_input(instructor, 100), 
-                     sanitize_input(semester, 50) or SEMESTER_LABEL)
+                    """INSERT INTO schedule (course_name, day, time, room, instructor, instructor_id, semester)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (name, day_val, time_val, room_v, inst_text, iid, sem_v),
                 )
                 rowid = cur.lastrowid
 
@@ -825,16 +848,50 @@ class ScheduleService:
         if not section_id:
             raise ValidationError("معرّف الصف مطلوب")
         
-        allowed_fields = {'course_name', 'day', 'time', 'room', 'instructor', 'semester'}
-        updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
-        
+        allowed_fields = {'course_name', 'day', 'time', 'room', 'instructor', 'semester', 'instructor_id'}
+        updates: Dict[str, Any] = {}
+        for k, v in kwargs.items():
+            if k not in allowed_fields:
+                continue
+            if k == "instructor_id":
+                if v is None or v == "":
+                    updates[k] = None
+                else:
+                    try:
+                        updates[k] = int(v)
+                    except (TypeError, ValueError):
+                        raise ValidationError("instructor_id غير صالح")
+                continue
+            if v is not None:
+                updates[k] = v
+
         if not updates:
             raise ValidationError("لا توجد بيانات للتحديث")
-        
+
         try:
             with get_connection() as conn:
                 cur = conn.cursor()
-                
+
+                if updates.get("instructor_id") is not None:
+                    row_n = cur.execute(
+                        "SELECT COALESCE(TRIM(name), '') FROM instructors WHERE id = ? LIMIT 1",
+                        (int(updates["instructor_id"]),),
+                    ).fetchone()
+                    if row_n and (row_n[0] or "").strip():
+                        updates["instructor"] = sanitize_input((row_n[0] or "").strip(), 100)
+
+                _lims = {
+                    "course_name": 200,
+                    "day": 20,
+                    "time": 20,
+                    "room": 50,
+                    "instructor": 100,
+                    "semester": 50,
+                }
+                for fk in ("course_name", "day", "time", "room", "instructor", "semester"):
+                    if fk in updates and updates[fk] is not None:
+                        updates[fk] = sanitize_input(updates[fk], _lims[fk])
+
                 set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
                 values = list(updates.values()) + [section_id]
                 

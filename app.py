@@ -27,6 +27,7 @@ from backend.core.auth import init_auth
 from backend.core.auth import login_required, role_required
 from backend.core.logging_config import setup_logging
 from backend.core.monitoring import init_monitoring
+from backend.core.security import init_security_headers
 
 import os
 import pprint
@@ -119,6 +120,9 @@ init_auth(app)
 
 # تهيئة نظام Monitoring
 init_monitoring(app)
+
+# رؤوس أمان HTTP (CSP في الإنتاج فقط عند تفعيل ENABLE_CSP)
+init_security_headers(app)
 
 # تسجيل معالجات الأخطاء
 register_error_handlers(app)
@@ -229,8 +233,55 @@ def index():
 
 @app.route("/health")
 def health():
-    """Health check endpoint للـ Docker"""
-    return jsonify({"status": "healthy"}), 200
+    """Health check خفيف للـ Docker / LB (بدون ضرب قاعدة البيانات)."""
+    from datetime import datetime
+    from backend.core.monitoring import app_stats
+
+    return jsonify(
+        {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "uptime_seconds": (datetime.now() - app_stats["start_time"]).total_seconds(),
+            "version": (os.environ.get("APP_VERSION") or "2.0.0").strip(),
+            "environment": FLASK_ENV,
+        }
+    ), 200
+
+
+@app.route("/health/ready")
+def health_ready():
+    """جاهزية الخدمة مع التحقق من قاعدة البيانات (Kubernetes readiness)."""
+    from datetime import datetime
+
+    try:
+        from backend.services.utilities import get_connection
+
+        with get_connection() as conn:
+            conn.execute("SELECT 1").fetchone()
+        return jsonify(
+            {
+                "status": "ready",
+                "database_ok": True,
+                "timestamp": datetime.now().isoformat(),
+            }
+        ), 200
+    except Exception as e:
+        return jsonify(
+            {
+                "status": "not_ready",
+                "database_ok": False,
+                "error": str(e),
+                "timestamp": datetime.now().isoformat(),
+            }
+        ), 503
+
+@app.route("/my_courses")
+@login_required
+@role_required("instructor")
+def my_courses_page():
+    """مقرراتي: الشعب المكلَّف بها في الجدول (حسب ربط الحساب بجدول instructors)."""
+    return render_template("my_courses.html", active_page="my_courses")
+
 
 @app.route("/dashboard")
 @role_required("admin", "admin_main", "head_of_department")
@@ -693,4 +744,9 @@ def compat_add_prereq():
 # تشغيل التطبيق
 # -----------------------------
 if __name__ == "__main__":
+    if FLASK_ENV == "production":
+        logging.getLogger(__name__).warning(
+            "التشغيل عبر app.run() في الإنتاج غير مُستحسن. استخدم: "
+            "gunicorn -w 2 -b 0.0.0.0:5000 wsgi:application"
+        )
     app.run(host="0.0.0.0", port=5000, debug=FLASK_DEBUG)

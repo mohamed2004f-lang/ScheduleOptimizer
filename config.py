@@ -12,8 +12,8 @@ try:
     # البحث عن ملف .env في المجلد الجذر للمشروع
     env_path = Path(__file__).parent / '.env'
     if env_path.exists():
-        # override=True لضمان أن القيم في .env هي المصدر الرئيسي
-        load_dotenv(env_path, override=True)
+        # override=False: المتغيرات المعرّفة في البيئة (مثل pytest أو Docker) لا تُستبدل بصمت من .env
+        load_dotenv(env_path, override=False)
 except ImportError:
     # إذا لم تكن مكتبة python-dotenv مثبتة، نستمر بدونها
     pass
@@ -62,10 +62,32 @@ DATABASE_PATH = os.environ.get(
     'DATABASE_PATH', 
     str(BASE_DIR / 'backend' / 'database' / 'mechanical.db')
 )
-DATABASE_URL = os.environ.get('DATABASE_URL')
-if not DATABASE_URL:
-    # Default to SQLite in development when DATABASE_URL is not provided.
+# مصدر صريح من البيئة (قبل أي افتراض SQLite) — مطلوب للتحقق من الإنتاج
+_RAW_DATABASE_URL = (os.environ.get('DATABASE_URL') or '').strip()
+if not _RAW_DATABASE_URL:
+    # Default to SQLite in development/testing when DATABASE_URL is not provided.
     DATABASE_URL = f"sqlite:///{Path(DATABASE_PATH).resolve().as_posix()}"
+else:
+    DATABASE_URL = _RAW_DATABASE_URL
+
+_flask_env_lower = FLASK_ENV.strip().lower()
+if _flask_env_lower == 'production':
+    if not _RAW_DATABASE_URL:
+        raise RuntimeError(
+            "\n\n===== إعدادات الإنتاج =====\n"
+            "عند FLASK_ENV=production يجب تعيين DATABASE_URL صراحةً إلى PostgreSQL.\n"
+            "لا يُسمح بالاعتماد على افتراض SQLite أو ملف mechanical.db.\n"
+            "مثال: DATABASE_URL=postgresql+psycopg://user:pass@host:5432/dbname\n"
+            "============================\n"
+        )
+    _dbu = DATABASE_URL.strip().lower()
+    if not (_dbu.startswith('postgresql://') or _dbu.startswith('postgresql+')):
+        raise RuntimeError(
+            "\n\n===== إعدادات الإنتاج =====\n"
+            "في الإنتاج يجب أن يبدأ DATABASE_URL بـ postgresql:// أو postgresql+...\n"
+            "SQLite غير مسموح لبيئة حقيقة واحدة على PostgreSQL.\n"
+            "============================\n"
+        )
 
 # ============================================
 # إعدادات Connection Pool (لـ PostgreSQL فقط)
