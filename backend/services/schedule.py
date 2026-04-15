@@ -38,6 +38,9 @@ logger = logging.getLogger(__name__)
 schedule_bp = Blueprint("schedule", __name__)
 VALID_LECTURE_STATUS = frozenset({"planned", "done", "postponed", "compensated"})
 VALID_ANNOUNCEMENT_TYPES = frozenset({"general", "postponement", "makeup", "extra_lecture"})
+VALID_FACULTY_ASSIGNMENT_TYPES = frozenset({"course", "committee", "service", "quality", "supervision"})
+VALID_FACULTY_LOG_TYPES = frozenset({"communication", "supervision_session", "quality_report"})
+VALID_FACULTY_LOG_APPROVAL = frozenset({"draft", "submitted", "approved", "rejected"})
 
 
 def _ensure_schedule_version_tables(cur):
@@ -1700,6 +1703,24 @@ def _instructor_display_name_for_session() -> tuple[str | None, int | None]:
     return normalize_instructor_name(name), iid
 
 
+def _is_privileged_assignment_viewer() -> bool:
+    role = (session.get("user_role") or "").strip()
+    return role in ("admin", "admin_main", "head_of_department")
+
+
+def _can_access_assignment(instructor_id: int) -> bool:
+    if _is_privileged_assignment_viewer():
+        return True
+    role = (session.get("user_role") or "").strip()
+    if role != "instructor":
+        return False
+    try:
+        sid = int(session.get("instructor_id") or 0)
+    except (TypeError, ValueError):
+        return False
+    return sid == int(instructor_id)
+
+
 @schedule_bp.route("/my_assigned_sections")
 @login_required
 def my_assigned_sections():
@@ -1760,6 +1781,238 @@ def my_assigned_sections():
             "axis_catalog": axis_labels_for_api(),
         }
     )
+
+
+@schedule_bp.route("/faculty_assignments", methods=["GET"])
+@login_required
+def list_faculty_assignments():
+    role = (session.get("user_role") or "").strip()
+    if role not in ("admin", "admin_main", "head_of_department", "instructor"):
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+
+    requested_instructor_id = request.args.get("instructor_id", type=int)
+    include_inactive = int(request.args.get("include_inactive", type=int) or 0) == 1
+    if _is_privileged_assignment_viewer():
+        effective_instructor_id = requested_instructor_id
+    else:
+        effective_instructor_id = int(session.get("instructor_id") or 0) or None
+        if requested_instructor_id and requested_instructor_id != effective_instructor_id:
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        params = []
+        q = """
+            SELECT a.id,
+                   a.instructor_id,
+                   COALESCE(i.name,'') AS instructor_name,
+                   COALESCE(a.assignment_type,'') AS assignment_type,
+                   a.section_id,
+                   COALESCE(a.title,'') AS title,
+                   COALESCE(a.decision_ref,'') AS decision_ref,
+                   COALESCE(a.assignment_date,'') AS assignment_date,
+                   COALESCE(a.start_date,'') AS start_date,
+                   COALESCE(a.end_date,'') AS end_date,
+                   COALESCE(a.is_active,1) AS is_active
+            FROM faculty_assignments a
+            LEFT JOIN instructors i ON i.id = a.instructor_id
+            WHERE 1=1
+        """
+        if effective_instructor_id:
+            q += " AND a.instructor_id = ?"
+            params.append(int(effective_instructor_id))
+        if not include_inactive:
+            q += " AND COALESCE(a.is_active,1) = 1"
+        q += " ORDER BY a.assignment_date DESC, a.id DESC"
+        rows = cur.execute(q, tuple(params)).fetchall()
+
+    out = []
+    for r in rows or []:
+        out.append(
+            {
+                "id": int(r[0]),
+                "instructor_id": int(r[1]),
+                "instructor_name": r[2] or "",
+                "assignment_type": r[3] or "",
+                "section_id": (int(r[4]) if r[4] not in (None, "") else None),
+                "title": r[5] or "",
+                "decision_ref": r[6] or "",
+                "assignment_date": r[7] or "",
+                "start_date": r[8] or "",
+                "end_date": r[9] or "",
+                "is_active": bool(int(r[10] or 0)),
+            }
+        )
+    return jsonify({"status": "ok", "items": out})
+
+
+@schedule_bp.route("/faculty_assignments", methods=["POST"])
+@role_required("admin", "admin_main", "head_of_department")
+def create_faculty_assignment():
+    data = request.get_json(force=True) or {}
+    instructor_id = data.get("instructor_id")
+    assignment_type = (data.get("assignment_type") or "").strip().lower()
+    title = (data.get("title") or "").strip()
+    decision_ref = (data.get("decision_ref") or "").strip()
+    assignment_date = (data.get("assignment_date") or "").strip()
+    start_date = (data.get("start_date") or "").strip()
+    end_date = (data.get("end_date") or "").strip()
+    section_id_raw = data.get("section_id")
+
+    try:
+        instructor_id = int(instructor_id)
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "instructor_id غير صالح"}), 400
+    if assignment_type not in VALID_FACULTY_ASSIGNMENT_TYPES:
+        return jsonify({"status": "error", "message": "assignment_type غير صالح"}), 400
+    if not title:
+        return jsonify({"status": "error", "message": "title مطلوب"}), 400
+    if not decision_ref:
+        return jsonify({"status": "error", "message": "decision_ref مطلوب"}), 400
+    section_id = None
+    if section_id_raw not in (None, ""):
+        try:
+            section_id = int(section_id_raw)
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "section_id غير صالح"}), 400
+
+    actor = (session.get("user") or session.get("username") or "").strip() or "system"
+    now = datetime.datetime.utcnow().isoformat()
+    assignment_date = assignment_date or now
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM instructors WHERE id = ? LIMIT 1", (instructor_id,))
+        if not cur.fetchone():
+            return jsonify({"status": "error", "message": "instructor_id غير موجود"}), 400
+        cur.execute(
+            """
+            INSERT INTO faculty_assignments
+                (instructor_id, assignment_type, section_id, title, decision_ref, assignment_date, start_date, end_date, is_active, created_at, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            """,
+            (instructor_id, assignment_type, section_id, title, decision_ref, assignment_date, start_date, end_date, now, actor),
+        )
+        aid = int(cur.lastrowid or 0)
+        conn.commit()
+    return jsonify({"status": "ok", "assignment_id": aid}), 200
+
+
+@schedule_bp.route("/faculty_assignment_logs", methods=["GET"])
+@login_required
+def list_faculty_assignment_logs():
+    role = (session.get("user_role") or "").strip()
+    if role not in ("admin", "admin_main", "head_of_department", "instructor"):
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    assignment_id = request.args.get("assignment_id", type=int)
+    if not assignment_id:
+        return jsonify({"status": "error", "message": "assignment_id مطلوب"}), 400
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT instructor_id FROM faculty_assignments WHERE id = ? LIMIT 1",
+            (int(assignment_id),),
+        ).fetchone()
+        if not row:
+            return jsonify({"status": "error", "message": "assignment not found"}), 404
+        assignment_instructor = int(row[0])
+        if not _can_access_assignment(assignment_instructor):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+        rows = cur.execute(
+            """
+            SELECT id, assignment_id, instructor_id, section_id, log_type, notes, created_at, created_by,
+                   approval_status, approved_at, approved_by
+            FROM faculty_assignment_logs
+            WHERE assignment_id = ?
+            ORDER BY id DESC
+            """,
+            (int(assignment_id),),
+        ).fetchall()
+    out = []
+    for r in rows or []:
+        out.append(
+            {
+                "id": int(r[0]),
+                "assignment_id": int(r[1]),
+                "instructor_id": int(r[2]),
+                "section_id": (int(r[3]) if r[3] not in (None, "") else None),
+                "log_type": r[4] or "",
+                "notes": r[5] or "",
+                "created_at": r[6] or "",
+                "created_by": r[7] or "",
+                "approval_status": r[8] or "draft",
+                "approved_at": r[9] or "",
+                "approved_by": r[10] or "",
+            }
+        )
+    return jsonify({"status": "ok", "items": out})
+
+
+@schedule_bp.route("/faculty_assignment_logs", methods=["POST"])
+@login_required
+def create_faculty_assignment_log():
+    role = (session.get("user_role") or "").strip()
+    if role not in ("admin", "admin_main", "head_of_department", "instructor"):
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    data = request.get_json(force=True) or {}
+    assignment_id = data.get("assignment_id")
+    log_type = (data.get("log_type") or "").strip().lower()
+    notes = (data.get("notes") or "").strip()
+    approval_status = (data.get("approval_status") or "draft").strip().lower()
+
+    try:
+        assignment_id = int(assignment_id)
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "assignment_id غير صالح"}), 400
+    if log_type not in VALID_FACULTY_LOG_TYPES:
+        return jsonify({"status": "error", "message": "log_type غير صالح"}), 400
+    if approval_status not in VALID_FACULTY_LOG_APPROVAL:
+        return jsonify({"status": "error", "message": "approval_status غير صالح"}), 400
+    if not notes:
+        return jsonify({"status": "error", "message": "notes مطلوبة"}), 400
+
+    actor = (session.get("user") or session.get("username") or "").strip() or "system"
+    now = datetime.datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT id, instructor_id, section_id FROM faculty_assignments WHERE id = ? LIMIT 1",
+            (assignment_id,),
+        ).fetchone()
+        if not row:
+            return jsonify({"status": "error", "message": "assignment not found"}), 404
+        assignment_instructor_id = int(row[1])
+        section_id = row[2]
+        if not _can_access_assignment(assignment_instructor_id):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        if role == "instructor" and approval_status in ("approved", "rejected"):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+        approved_at = now if approval_status in ("approved", "rejected") else None
+        approved_by = actor if approval_status in ("approved", "rejected") else None
+        cur.execute(
+            """
+            INSERT INTO faculty_assignment_logs
+                (assignment_id, instructor_id, section_id, log_type, notes, created_at, created_by, approval_status, approved_at, approved_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                assignment_id,
+                assignment_instructor_id,
+                section_id,
+                log_type,
+                notes,
+                now,
+                actor,
+                approval_status,
+                approved_at,
+                approved_by,
+            ),
+        )
+        lid = int(cur.lastrowid or 0)
+        conn.commit()
+    return jsonify({"status": "ok", "log_id": lid}), 200
 
 
 @schedule_bp.route("/my_axis_status", methods=["POST"])

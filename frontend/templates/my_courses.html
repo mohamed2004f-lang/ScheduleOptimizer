@@ -55,6 +55,29 @@
         </div>
       </div>
     </div>
+
+    <div class="card mt-3">
+      <div class="card-header fw-semibold">التكليفات الرسمية (لجان/خدمة/إشراف)</div>
+      <div class="card-body">
+        <div id="assignmentsLoad" class="text-muted small">جاري التحميل…</div>
+        <div id="assignmentsEmpty" class="alert alert-secondary d-none mb-0">لا توجد تكليفات رسمية مفعلة حالياً.</div>
+        <div class="table-responsive d-none" id="assignmentsWrap">
+          <table class="table table-sm table-striped align-middle mb-0">
+            <thead>
+              <tr>
+                <th>النوع</th>
+                <th>العنوان</th>
+                <th>رقم القرار</th>
+                <th>من</th>
+                <th>إلى</th>
+                <th>الحالة</th>
+              </tr>
+            </thead>
+            <tbody id="assignmentsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </main>
 
   <script>
@@ -130,6 +153,10 @@
       const bannerHint = document.getElementById('bannerHint');
       const bannerDraft = document.getElementById('bannerDraft');
       const instructorLabel = document.getElementById('instructorLabel');
+      const assignmentsLoad = document.getElementById('assignmentsLoad');
+      const assignmentsEmpty = document.getElementById('assignmentsEmpty');
+      const assignmentsWrap = document.getElementById('assignmentsWrap');
+      const assignmentsBody = document.getElementById('assignmentsBody');
 
       try {
         const resp = await fetch('/schedule/my_assigned_sections', { credentials: 'include' });
@@ -210,6 +237,32 @@
         }
 
         rows.forEach((r) => { refreshCourseAdmin(r.section_id).catch(() => {}); });
+
+        try {
+          const ra = await fetch('/schedule/faculty_assignments', { credentials: 'include' });
+          const da = await ra.json().catch(() => ({}));
+          assignmentsLoad.classList.add('d-none');
+          const items = da.items || [];
+          if (!ra.ok || !items.length) {
+            assignmentsEmpty.classList.remove('d-none');
+          } else {
+            assignmentsBody.innerHTML = items.map((a) => (
+              '<tr>' +
+              '<td>' + esc(a.assignment_type || '') + '</td>' +
+              '<td>' + esc(a.title || '') + '</td>' +
+              '<td>' + esc(a.decision_ref || '') + '</td>' +
+              '<td>' + esc(a.start_date || '') + '</td>' +
+              '<td>' + esc(a.end_date || '') + '</td>' +
+              '<td>' + (a.is_active ? 'مفعل' : 'غير مفعل') + '</td>' +
+              '</tr>'
+            )).join('');
+            assignmentsWrap.classList.remove('d-none');
+          }
+        } catch (e) {
+          assignmentsLoad.classList.add('d-none');
+          assignmentsEmpty.textContent = 'تعذر تحميل التكليفات الرسمية.';
+          assignmentsEmpty.classList.remove('d-none');
+        }
 
         document.querySelectorAll('.axis-select').forEach((el) => {
           el.addEventListener('change', async () => {

@@ -539,3 +539,169 @@ class TestInstructorMyCourses:
             bodies = {x.get("body") for x in items}
             assert "إعلان لشعبتي" in bodies
             assert "إعلان لشعبة أخرى" not in bodies
+
+    def test_faculty_assignments_scoped_for_instructor(self, app):
+        with app.test_client() as c:
+            login_admin = c.post(
+                "/auth/login",
+                json={"username": "admin-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_admin.status_code == 200
+            created = c.post(
+                "/schedule/faculty_assignments",
+                json={
+                    "instructor_id": 1,
+                    "assignment_type": "committee",
+                    "title": "لجنة الجودة",
+                    "decision_ref": "DEC-2026-01",
+                    "start_date": "2026-01-01",
+                    "end_date": "2026-12-31",
+                },
+            )
+            assert created.status_code == 200
+            assignment_id = (created.get_json() or {}).get("assignment_id")
+            assert assignment_id is not None
+            c.post("/auth/logout")
+
+            login_inst = c.post(
+                "/auth/login",
+                json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_inst.status_code == 200
+            mine = c.get("/schedule/faculty_assignments")
+            assert mine.status_code == 200
+            items = (mine.get_json() or {}).get("items") or []
+            assert any(int(x.get("id") or 0) == int(assignment_id) for x in items)
+
+            forbidden = c.get("/schedule/faculty_assignments?instructor_id=999")
+            assert forbidden.status_code == 403
+
+    def test_faculty_assignment_logs_follow_assignment_scope(self, app):
+        with app.test_client() as c:
+            login_admin = c.post(
+                "/auth/login",
+                json={"username": "admin-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_admin.status_code == 200
+            created = c.post(
+                "/schedule/faculty_assignments",
+                json={
+                    "instructor_id": 1,
+                    "assignment_type": "quality",
+                    "title": "تقرير جودة المقرر",
+                    "decision_ref": "DEC-2026-02",
+                },
+            )
+            assert created.status_code == 200
+            assignment_id = int((created.get_json() or {}).get("assignment_id") or 0)
+            assert assignment_id > 0
+            c.post("/auth/logout")
+
+            login_inst = c.post(
+                "/auth/login",
+                json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_inst.status_code == 200
+            add_log = c.post(
+                "/schedule/faculty_assignment_logs",
+                json={
+                    "assignment_id": assignment_id,
+                    "log_type": "quality_report",
+                    "notes": "تم إعداد تقرير أولي للمقرر.",
+                    "approval_status": "submitted",
+                },
+            )
+            assert add_log.status_code == 200
+            c.post("/auth/logout")
+
+            login_admin2 = c.post(
+                "/auth/login",
+                json={"username": "admin-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_admin2.status_code == 200
+            logs_resp = c.get(f"/schedule/faculty_assignment_logs?assignment_id={assignment_id}")
+            assert logs_resp.status_code == 200
+            logs = (logs_resp.get_json() or {}).get("items") or []
+            assert any((x.get("log_type") == "quality_report") for x in logs)
+
+
+class TestGradeDraftsSectionScope:
+    def test_grade_draft_requires_assigned_section(self, app):
+        with app.test_client() as c:
+            login_inst = c.post(
+                "/auth/login",
+                json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_inst.status_code == 200
+            sections_resp = c.get("/grades/drafts/courses")
+            assert sections_resp.status_code == 200
+            sections = (sections_resp.get_json() or {}).get("sections") or []
+            assert sections
+            s0 = sections[0]
+            create_ok = c.post(
+                "/grades/drafts",
+                json={"course_name": s0.get("course_name"), "section_id": s0.get("section_id")},
+            )
+            assert create_ok.status_code == 200
+            did = int((create_ok.get_json() or {}).get("draft_id") or 0)
+            assert did > 0
+
+            bad_roster = c.get(
+                "/grades/drafts/roster?course_name="
+                + str(s0.get("course_name"))
+                + "&section_id=999999"
+            )
+            assert bad_roster.status_code == 403
+
+    def test_grade_special_case_create_and_review(self, app):
+        with app.test_client() as c:
+            login_inst = c.post(
+                "/auth/login",
+                json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_inst.status_code == 200
+            sec_resp = c.get("/grades/drafts/courses")
+            sections = (sec_resp.get_json() or {}).get("sections") or []
+            assert sections
+            sec = sections[0]
+            course_name = sec.get("course_name")
+            section_id = sec.get("section_id")
+            with app.app_context():
+                from backend.services.utilities import get_connection
+                with get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute(
+                        "INSERT OR IGNORE INTO registrations (student_id, course_name) VALUES (?, ?)",
+                        ("S001", course_name),
+                    )
+                    conn.commit()
+
+            create_case = c.post(
+                "/grades/special_cases",
+                json={
+                    "course_name": course_name,
+                    "section_id": section_id,
+                    "student_id": "S001",
+                    "case_type": "cheating",
+                    "reason": "محضر موثق من لجنة الاختبار",
+                },
+            )
+            assert create_case.status_code == 200
+            case_id = int((create_case.get_json() or {}).get("case_id") or 0)
+            assert case_id > 0
+            c.post("/auth/logout")
+
+            login_admin = c.post(
+                "/auth/login",
+                json={"username": "admin-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_admin.status_code == 200
+            review = c.post(
+                f"/grades/special_cases/{case_id}/review",
+                json={"status": "approved", "review_note": "تمت المراجعة والاعتماد"},
+            )
+            assert review.status_code == 200
+            listed = c.get("/grades/special_cases?status=approved")
+            assert listed.status_code == 200
+            items = (listed.get_json() or {}).get("items") or []
+            assert any(int(x.get("id") or 0) == case_id for x in items)

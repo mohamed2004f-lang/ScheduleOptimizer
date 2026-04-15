@@ -94,6 +94,50 @@ CREATE TABLE IF NOT EXISTS grades (
     UNIQUE (student_id, semester, course_name)
 );
 
+CREATE TABLE IF NOT EXISTS grade_drafts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    semester TEXT NOT NULL,
+    course_name TEXT NOT NULL,
+    section_id INTEGER,
+    instructor_id INTEGER NOT NULL,
+    grading_mode TEXT NOT NULL DEFAULT 'partial_final',
+    status TEXT NOT NULL DEFAULT 'Draft',
+    created_at TEXT,
+    updated_at TEXT,
+    submitted_at TEXT,
+    approved_at TEXT,
+    approved_by TEXT,
+    note TEXT
+);
+
+CREATE TABLE IF NOT EXISTS grade_draft_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    draft_id INTEGER NOT NULL,
+    student_id TEXT NOT NULL,
+    partial REAL,
+    final REAL,
+    total REAL,
+    computed_total REAL,
+    updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS grade_special_cases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    semester TEXT NOT NULL,
+    section_id INTEGER NOT NULL,
+    course_name TEXT NOT NULL,
+    instructor_id INTEGER NOT NULL,
+    student_id TEXT NOT NULL,
+    case_type TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'submitted',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    created_by TEXT DEFAULT '',
+    reviewed_at TEXT,
+    reviewed_by TEXT,
+    review_note TEXT DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS users (
     username TEXT PRIMARY KEY,
     password_hash TEXT NOT NULL,
@@ -175,6 +219,35 @@ CREATE TABLE IF NOT EXISTS faculty_course_syllabi (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_by TEXT DEFAULT '',
     PRIMARY KEY (section_id, instructor_id)
+);
+
+CREATE TABLE IF NOT EXISTS faculty_assignments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instructor_id INTEGER NOT NULL,
+    assignment_type TEXT NOT NULL,
+    section_id INTEGER,
+    title TEXT NOT NULL DEFAULT '',
+    decision_ref TEXT NOT NULL DEFAULT '',
+    assignment_date TEXT DEFAULT CURRENT_TIMESTAMP,
+    start_date TEXT DEFAULT '',
+    end_date TEXT DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    created_by TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS faculty_assignment_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assignment_id INTEGER NOT NULL,
+    instructor_id INTEGER NOT NULL,
+    section_id INTEGER,
+    log_type TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    created_by TEXT DEFAULT '',
+    approval_status TEXT NOT NULL DEFAULT 'draft',
+    approved_at TEXT,
+    approved_by TEXT
 );
 
 CREATE TABLE IF NOT EXISTS system_settings (
@@ -316,6 +389,12 @@ def _seed_sample_data(conn):
     cur.execute(
         """INSERT INTO schedule (course_name, day, time, room, instructor_id, semester)
            VALUES ('فيزياء 1', 'الاثنين', '10:00-11:30', 'قاعة 2', 1, 'خريف 44-45')"""
+    )
+    cur.execute(
+        "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('current_term_name', 'خريف')"
+    )
+    cur.execute(
+        "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('current_term_year', '44-45')"
     )
 
     conn.commit()

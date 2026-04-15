@@ -966,6 +966,7 @@ TABLES_SCHEMA = {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             semester TEXT NOT NULL,
             course_name TEXT NOT NULL,
+            section_id INTEGER,
             instructor_id INTEGER NOT NULL,
             grading_mode TEXT NOT NULL DEFAULT 'partial_final' CHECK (grading_mode IN ('partial_final','final_total_only')),
             status TEXT NOT NULL DEFAULT 'Draft' CHECK (status IN ('Draft','Submitted','Approved','Rejected')),
@@ -975,7 +976,7 @@ TABLES_SCHEMA = {
             approved_at TEXT,
             approved_by TEXT,
             note TEXT,
-            UNIQUE (semester, course_name, instructor_id)
+            UNIQUE (semester, course_name, instructor_id, section_id)
         )
     """,
 
@@ -991,6 +992,26 @@ TABLES_SCHEMA = {
             updated_at TEXT,
             UNIQUE (draft_id, student_id),
             FOREIGN KEY (draft_id) REFERENCES grade_drafts(id) ON DELETE CASCADE
+        )
+    """,
+    'grade_special_cases': """
+        CREATE TABLE IF NOT EXISTS grade_special_cases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            semester TEXT NOT NULL,
+            section_id INTEGER NOT NULL,
+            course_name TEXT NOT NULL,
+            instructor_id INTEGER NOT NULL,
+            student_id TEXT NOT NULL,
+            case_type TEXT NOT NULL
+                CHECK (case_type IN ('postponed', 'deprivation', 'cheating')),
+            reason TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'submitted'
+                CHECK (status IN ('submitted', 'approved', 'rejected')),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            created_by TEXT DEFAULT '',
+            reviewed_at TEXT,
+            reviewed_by TEXT,
+            review_note TEXT DEFAULT ''
         )
     """,
 
@@ -1048,6 +1069,42 @@ TABLES_SCHEMA = {
             PRIMARY KEY (section_id, instructor_id)
         )
     """,
+    'faculty_assignments': """
+        CREATE TABLE IF NOT EXISTS faculty_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            instructor_id INTEGER NOT NULL,
+            assignment_type TEXT NOT NULL
+                CHECK (assignment_type IN ('course', 'committee', 'service', 'quality', 'supervision')),
+            section_id INTEGER,
+            title TEXT NOT NULL DEFAULT '',
+            decision_ref TEXT NOT NULL DEFAULT '',
+            assignment_date TEXT DEFAULT CURRENT_TIMESTAMP,
+            start_date TEXT DEFAULT '',
+            end_date TEXT DEFAULT '',
+            is_active INTEGER NOT NULL DEFAULT 1
+                CHECK (is_active IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            created_by TEXT DEFAULT ''
+        )
+    """,
+    'faculty_assignment_logs': """
+        CREATE TABLE IF NOT EXISTS faculty_assignment_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            assignment_id INTEGER NOT NULL,
+            instructor_id INTEGER NOT NULL,
+            section_id INTEGER,
+            log_type TEXT NOT NULL
+                CHECK (log_type IN ('communication', 'supervision_session', 'quality_report')),
+            notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            created_by TEXT DEFAULT '',
+            approval_status TEXT NOT NULL DEFAULT 'draft'
+                CHECK (approval_status IN ('draft', 'submitted', 'approved', 'rejected')),
+            approved_at TEXT,
+            approved_by TEXT,
+            FOREIGN KEY (assignment_id) REFERENCES faculty_assignments(id) ON DELETE CASCADE
+        )
+    """,
 }
 
 # ============================================
@@ -1064,7 +1121,14 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_faculty_plan_inst_sec ON faculty_course_plans(instructor_id, section_id)",
     "CREATE INDEX IF NOT EXISTS idx_faculty_ann_sec_pub ON faculty_course_announcements(section_id, published_to_students)",
     "CREATE INDEX IF NOT EXISTS idx_faculty_syllabus_inst_sec ON faculty_course_syllabi(instructor_id, section_id)",
+    "CREATE INDEX IF NOT EXISTS idx_faculty_assignments_inst_active ON faculty_assignments(instructor_id, is_active)",
+    "CREATE INDEX IF NOT EXISTS idx_faculty_assignments_type ON faculty_assignments(assignment_type)",
+    "CREATE INDEX IF NOT EXISTS idx_faculty_logs_assignment_time ON faculty_assignment_logs(assignment_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_faculty_logs_instructor ON faculty_assignment_logs(instructor_id)",
     "CREATE INDEX IF NOT EXISTS idx_grades_student_semester ON grades(student_id, semester)",
+    "CREATE INDEX IF NOT EXISTS idx_grade_drafts_section ON grade_drafts(section_id, semester)",
+    "CREATE INDEX IF NOT EXISTS idx_grade_special_cases_scope ON grade_special_cases(section_id, student_id, semester)",
+    "CREATE INDEX IF NOT EXISTS idx_grade_special_cases_status ON grade_special_cases(status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_grades_course ON grades(course_name)",
     "CREATE INDEX IF NOT EXISTS idx_conflict_report_student ON conflict_report(student_id)",
     "CREATE INDEX IF NOT EXISTS idx_exams_course ON exams(course_name)",
@@ -1117,6 +1181,7 @@ def _ensure_tables_postgresql() -> None:
         ),
         "ALTER TABLE enrollment_plans ADD COLUMN IF NOT EXISTS prereq_ack_reason TEXT DEFAULT ''",
         "ALTER TABLE schedule ADD COLUMN IF NOT EXISTS instructor_id INTEGER",
+        "ALTER TABLE grade_drafts ADD COLUMN IF NOT EXISTS section_id INTEGER",
         # أرقام معرفات طويلة (وطني/داخلي) تتجاوز INTEGER في PostgreSQL
         "ALTER TABLE users ALTER COLUMN instructor_id TYPE BIGINT USING instructor_id::bigint",
     ]
@@ -1303,6 +1368,99 @@ def _ensure_tables_postgresql() -> None:
                 conn.rollback()
             except Exception:
                 pass
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS faculty_assignments (
+                    id BIGSERIAL PRIMARY KEY,
+                    instructor_id BIGINT NOT NULL,
+                    assignment_type TEXT NOT NULL,
+                    section_id INTEGER,
+                    title TEXT NOT NULL DEFAULT '',
+                    decision_ref TEXT NOT NULL DEFAULT '',
+                    assignment_date TEXT DEFAULT CURRENT_TIMESTAMP,
+                    start_date TEXT DEFAULT '',
+                    end_date TEXT DEFAULT '',
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    created_by TEXT DEFAULT '',
+                    CONSTRAINT faculty_assignments_type_chk
+                        CHECK (assignment_type IN ('course', 'committee', 'service', 'quality', 'supervision')),
+                    CONSTRAINT faculty_assignments_active_chk
+                        CHECK (is_active IN (0, 1))
+                )
+                """
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning("Could not ensure faculty_assignments on PostgreSQL: %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS faculty_assignment_logs (
+                    id BIGSERIAL PRIMARY KEY,
+                    assignment_id BIGINT NOT NULL,
+                    instructor_id BIGINT NOT NULL,
+                    section_id INTEGER,
+                    log_type TEXT NOT NULL,
+                    notes TEXT NOT NULL DEFAULT '',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    created_by TEXT DEFAULT '',
+                    approval_status TEXT NOT NULL DEFAULT 'draft',
+                    approved_at TEXT,
+                    approved_by TEXT,
+                    CONSTRAINT faculty_logs_assignment_fk
+                        FOREIGN KEY (assignment_id) REFERENCES faculty_assignments(id) ON DELETE CASCADE,
+                    CONSTRAINT faculty_logs_type_chk
+                        CHECK (log_type IN ('communication', 'supervision_session', 'quality_report')),
+                    CONSTRAINT faculty_logs_approval_chk
+                        CHECK (approval_status IN ('draft', 'submitted', 'approved', 'rejected'))
+                )
+                """
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning("Could not ensure faculty_assignment_logs on PostgreSQL: %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS grade_special_cases (
+                    id BIGSERIAL PRIMARY KEY,
+                    semester TEXT NOT NULL,
+                    section_id INTEGER NOT NULL,
+                    course_name TEXT NOT NULL,
+                    instructor_id BIGINT NOT NULL,
+                    student_id TEXT NOT NULL,
+                    case_type TEXT NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'submitted',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    created_by TEXT DEFAULT '',
+                    reviewed_at TEXT,
+                    reviewed_by TEXT,
+                    review_note TEXT DEFAULT '',
+                    CONSTRAINT grade_special_case_type_chk
+                        CHECK (case_type IN ('postponed', 'deprivation', 'cheating')),
+                    CONSTRAINT grade_special_case_status_chk
+                        CHECK (status IN ('submitted', 'approved', 'rejected'))
+                )
+                """
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning("Could not ensure grade_special_cases on PostgreSQL: %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
     logger.info("PostgreSQL compatibility migrations applied")
 
 
@@ -1384,6 +1542,7 @@ def ensure_tables(db_file=None):
             "ALTER TABLE users ADD COLUMN instructor_id INTEGER",
             "ALTER TABLE users ADD COLUMN is_supervisor INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE grade_drafts ADD COLUMN section_id INTEGER",
         ):
             try:
                 cur.execute(stmt)

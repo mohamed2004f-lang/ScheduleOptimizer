@@ -70,6 +70,54 @@
           <div id="editorFeedback" class="small text-danger mt-2"></div>
         </div>
       </div>
+
+      <div class="card mt-3">
+        <div class="card-header fw-semibold">الحالات الخاصة للتقييم</div>
+        <div class="card-body">
+          <p class="small text-muted mb-2">تأجيل / حرمان / غش مع سبب موثق على مستوى الشعبة.</p>
+          <div class="row g-2 align-items-end">
+            <div class="col-md-3">
+              <label class="form-label small mb-1">الشعبة</label>
+              <select id="spSection" class="form-select form-select-sm"></select>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label small mb-1">نوع الحالة</label>
+              <select id="spCaseType" class="form-select form-select-sm">
+                <option value="postponed">تأجيل</option>
+                <option value="deprivation">حرمان</option>
+                <option value="cheating">غش</option>
+              </select>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label small mb-1">رقم الطالب</label>
+              <input id="spStudentId" class="form-control form-control-sm" placeholder="S001">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label small mb-1">السبب</label>
+              <input id="spReason" class="form-control form-control-sm" placeholder="سبب موثق">
+            </div>
+            <div class="col-md-1">
+              <button type="button" id="btnSpCreate" class="btn btn-sm btn-outline-danger w-100">إرسال</button>
+            </div>
+          </div>
+          <hr>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+              <thead>
+                <tr>
+                  <th>الطالب</th>
+                  <th>المقرر/الشعبة</th>
+                  <th>النوع</th>
+                  <th>السبب</th>
+                  <th>الحالة</th>
+                </tr>
+              </thead>
+              <tbody id="spInstructorBody"></tbody>
+            </table>
+          </div>
+          <div id="spInstructorEmpty" class="text-muted small mt-2 d-none">لا توجد حالات خاصة حتى الآن.</div>
+        </div>
+      </div>
     </div>
 
     <!-- وضع الاعتماد -->
@@ -94,6 +142,28 @@
             </table>
           </div>
           <div id="pendingEmpty" class="p-3 text-muted small d-none">لا توجد مسودات بانتظار الاعتماد للفصل الحالي.</div>
+        </div>
+      </div>
+
+      <div class="card mt-3">
+        <div class="card-header fw-semibold">مراجعة الحالات الخاصة</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0">
+              <thead>
+                <tr>
+                  <th>الطالب</th>
+                  <th>المقرر/الشعبة</th>
+                  <th>النوع</th>
+                  <th>السبب</th>
+                  <th>الحالة</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="spApproverBody"></tbody>
+            </table>
+          </div>
+          <div id="spApproverEmpty" class="p-3 text-muted small d-none">لا توجد حالات خاصة بانتظار المراجعة.</div>
         </div>
       </div>
 
@@ -157,6 +227,150 @@
     })();
 
     let state = { draft: null, items: [], roster: [], draftId: null, gradingMode: 'partial_final' };
+    let instructorSections = [];
+
+    function sectionCourseNameById(sectionId) {
+      const it = (instructorSections || []).find(x => Number(x.section_id) === Number(sectionId));
+      return it ? (it.course_name || '') : '';
+    }
+
+    async function loadInstructorSpecialCases() {
+      const tbody = document.getElementById('spInstructorBody');
+      const empty = document.getElementById('spInstructorEmpty');
+      if (!tbody || !empty) return;
+      const r = await fetch('/grades/special_cases', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        tbody.innerHTML = '<tr><td colspan="5">تعذر التحميل</td></tr>';
+        empty.classList.add('d-none');
+        return;
+      }
+      const items = Array.isArray(j.items) ? j.items : [];
+      if (!items.length) {
+        tbody.innerHTML = '';
+        empty.classList.remove('d-none');
+        return;
+      }
+      empty.classList.add('d-none');
+      tbody.innerHTML = '';
+      items.forEach(it => {
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td>' + (it.student_id || '') + '</td>' +
+          '<td>' + (it.course_name || '') + ' <span class="text-muted small">#' + (it.section_id || '') + '</span></td>' +
+          '<td>' + (it.case_type || '') + '</td>' +
+          '<td>' + (it.reason || '') + '</td>' +
+          '<td><span class="badge bg-secondary">' + (it.status || '') + '</span></td>';
+        tbody.appendChild(tr);
+      });
+    }
+
+    function setupInstructorSpecialCasesUI() {
+      const secSel = document.getElementById('spSection');
+      const studentInput = document.getElementById('spStudentId');
+      const reasonInput = document.getElementById('spReason');
+      const caseTypeSel = document.getElementById('spCaseType');
+      const btn = document.getElementById('btnSpCreate');
+      if (!secSel || !studentInput || !reasonInput || !caseTypeSel || !btn) return;
+      secSel.innerHTML = '';
+      (instructorSections || []).forEach(s => {
+        const op = document.createElement('option');
+        op.value = String(s.section_id || '');
+        op.textContent = (s.course_name || '') + ' - شعبة #' + (s.section_id || '');
+        secSel.appendChild(op);
+      });
+      btn.onclick = async () => {
+        const sectionId = Number(secSel.value || '0');
+        const courseName = sectionCourseNameById(sectionId);
+        const studentId = (studentInput.value || '').trim();
+        const reason = (reasonInput.value || '').trim();
+        const caseType = (caseTypeSel.value || '').trim();
+        if (!sectionId || !courseName || !studentId || !reason) {
+          window.showToast && window.showToast('أكمل بيانات الحالة الخاصة', 'warning');
+          return;
+        }
+        const r = await fetch('/grades/special_cases', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({
+            section_id: sectionId,
+            course_name: courseName,
+            student_id: studentId,
+            case_type: caseType,
+            reason
+          })
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          window.showToast && window.showToast(j.message || 'تعذر حفظ الحالة', 'danger');
+          return;
+        }
+        studentInput.value = '';
+        reasonInput.value = '';
+        window.showToast && window.showToast('تم إرسال الحالة الخاصة', 'success');
+        loadInstructorSpecialCases().catch(() => {});
+      };
+      loadInstructorSpecialCases().catch(() => {});
+    }
+
+    async function loadApproverSpecialCases() {
+      const tbody = document.getElementById('spApproverBody');
+      const empty = document.getElementById('spApproverEmpty');
+      if (!tbody || !empty) return;
+      const r = await fetch('/grades/special_cases?status=submitted', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        tbody.innerHTML = '<tr><td colspan="6">تعذر التحميل</td></tr>';
+        empty.classList.add('d-none');
+        return;
+      }
+      const items = Array.isArray(j.items) ? j.items : [];
+      if (!items.length) {
+        tbody.innerHTML = '';
+        empty.classList.remove('d-none');
+        return;
+      }
+      empty.classList.add('d-none');
+      tbody.innerHTML = '';
+      items.forEach(it => {
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td>' + (it.student_id || '') + '</td>' +
+          '<td>' + (it.course_name || '') + ' <span class="text-muted small">#' + (it.section_id || '') + '</span></td>' +
+          '<td>' + (it.case_type || '') + '</td>' +
+          '<td>' + (it.reason || '') + '</td>' +
+          '<td><span class="badge bg-warning text-dark">' + (it.status || '') + '</span></td>' +
+          '<td>' +
+            '<button class="btn btn-sm btn-success me-1" data-sp-approve="' + it.id + '">اعتماد</button>' +
+            '<button class="btn btn-sm btn-outline-danger" data-sp-reject="' + it.id + '">رفض</button>' +
+          '</td>';
+        tbody.appendChild(tr);
+      });
+      tbody.querySelectorAll('[data-sp-approve]').forEach(btn => {
+        btn.addEventListener('click', () => reviewSpecialCase(Number(btn.getAttribute('data-sp-approve')), 'approved'));
+      });
+      tbody.querySelectorAll('[data-sp-reject]').forEach(btn => {
+        btn.addEventListener('click', () => reviewSpecialCase(Number(btn.getAttribute('data-sp-reject')), 'rejected'));
+      });
+    }
+
+    async function reviewSpecialCase(caseId, status) {
+      const note = prompt(status === 'approved' ? 'ملاحظة الاعتماد (اختياري):' : 'سبب الرفض (اختياري):', '') || '';
+      const r = await fetch('/grades/special_cases/' + caseId + '/review', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ status, review_note: note })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        window.showToast && window.showToast(j.message || 'تعذر تحديث الحالة', 'danger');
+        return;
+      }
+      window.showToast && window.showToast('تم تحديث الحالة', 'success');
+      loadApproverSpecialCases().catch(() => {});
+    }
 
     async function loadInstructorWeeklyTimetable() {
       const el = document.getElementById('instructorWeeklyWrap');
@@ -195,6 +409,8 @@
         const cj = cRes.ok ? await cRes.json() : {};
         const mj = mRes.ok ? await mRes.json() : {};
         const courses = Array.isArray(cj.courses) ? cj.courses : [];
+        const sections = Array.isArray(cj.sections) ? cj.sections : [];
+        instructorSections = sections.slice();
         const drafts = Array.isArray(mj.drafts) ? mj.drafts : [];
         const sem = mj.semester || '';
 
@@ -203,8 +419,11 @@
           return;
         }
 
-        const byCourse = {};
-        drafts.forEach(d => { byCourse[d.course_name] = d; });
+        const bySection = {};
+        drafts.forEach(d => {
+          const key = String(d.course_name || '') + '::' + String(d.section_id || '');
+          bySection[key] = d;
+        });
 
         const blocking = drafts.find(d => d.status === 'Draft' || d.status === 'Submitted');
         let html = '<p class="small text-muted mb-2">الفصل: <strong>' + (sem || '—') + '</strong></p>';
@@ -212,20 +431,24 @@
           html += '<div class="alert alert-warning py-2 small">مسودة نشطة: <strong>' + blocking.course_name + '</strong> (' + blocking.status + '). أكملها أو سلّمها قبل بدء مقرر آخر.</div>';
         }
         html += '<div class="list-group">';
-        courses.forEach(cn => {
-          const d = byCourse[cn];
+        (sections.length ? sections : courses.map((c) => ({ course_name: c, section_id: '' }))).forEach(sec => {
+          const cn = sec.course_name || '';
+          const sid = sec.section_id;
+          const secLabel = sid ? ('#' + sid) : '';
+          const key = String(cn) + '::' + String(sid || '');
+          const d = bySection[key] || (!sid ? bySection[String(cn) + '::'] : null);
           const escCn = String(cn || '').replace(/"/g, '&quot;');
           if (d) {
             html += '<div class="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2" data-course-name="' + escCn + '">';
-            html += '<span>' + cn + '</span><span>';
+            html += '<span>' + cn + (secLabel ? (' <span class="text-muted small">(' + secLabel + ')</span>') : '') + '</span><span>';
             html += '<span class="badge bg-secondary me-1">' + d.status + '</span>';
             html += '<button type="button" class="btn btn-sm btn-primary" data-open-draft="' + d.id + '">متابعة</button>';
             html += '</span></div>';
           } else {
             const disabled = blocking ? ' disabled' : '';
             html += '<div class="list-group-item d-flex justify-content-between align-items-center flex-wrap gap-2" data-course-name="' + escCn + '">';
-            html += '<span>' + cn + '</span>';
-            html += '<button type="button" class="btn btn-sm btn-outline-primary js-new-draft"' + disabled + ' data-new-course="' + encodeURIComponent(cn) + '">بدء مسودة</button>';
+            html += '<span>' + cn + (secLabel ? (' <span class="text-muted small">(' + secLabel + ')</span>') : '') + '</span>';
+            html += '<button type="button" class="btn btn-sm btn-outline-primary js-new-draft"' + disabled + ' data-new-course="' + encodeURIComponent(cn) + '" data-section-id="' + (sid || '') + '">بدء مسودة</button>';
             html += '</div>';
           }
         });
@@ -249,11 +472,12 @@
         wrap.querySelectorAll('.js-new-draft').forEach(btn => {
           btn.addEventListener('click', async () => {
             const course = decodeURIComponent(btn.getAttribute('data-new-course') || '');
+            const sectionId = Number(btn.getAttribute('data-section-id') || '0');
             const r = await fetch('/grades/drafts', {
               method: 'POST',
               credentials: 'include',
               headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-              body: JSON.stringify({ course_name: course })
+              body: JSON.stringify({ course_name: course, section_id: sectionId || null })
             });
             const j = await r.json().catch(() => ({}));
             if (!r.ok) {
@@ -266,6 +490,7 @@
         wrap.querySelectorAll('[data-open-draft]').forEach(btn => {
           btn.addEventListener('click', () => openDraft(Number(btn.getAttribute('data-open-draft'))));
         });
+        setupInstructorSpecialCasesUI();
       } catch (e) {
         console.error(e);
         wrap.textContent = 'فشل تحميل البيانات.';
@@ -291,7 +516,8 @@
         items.forEach(it => { itemMap[it.student_id] = it; });
 
         const courseName = dj.draft.course_name;
-        const rRes = await fetch('/grades/drafts/roster?course_name=' + encodeURIComponent(courseName), { credentials: 'include' });
+        const sectionId = dj.draft.section_id || '';
+        const rRes = await fetch('/grades/drafts/roster?course_name=' + encodeURIComponent(courseName) + '&section_id=' + encodeURIComponent(sectionId), { credentials: 'include' });
         const rj = await rRes.json();
         const roster = (rRes.ok && rj.roster) ? rj.roster : [];
 
@@ -308,7 +534,7 @@
           };
         });
 
-        document.getElementById('editorTitle').textContent = 'مسودة: ' + courseName;
+        document.getElementById('editorTitle').textContent = 'مسودة: ' + courseName + (sectionId ? (' (شعبة #' + sectionId + ')') : '');
         document.getElementById('editorStatus').textContent = dj.draft.status || '';
         const isReadOnly = (dj.draft.status || '') !== 'Draft';
         document.getElementById('btnSaveDraft').disabled = isReadOnly;
@@ -458,6 +684,7 @@
         console.error(e);
         tbody.innerHTML = '<tr><td colspan="4">تعذر تحميل القائمة</td></tr>';
       }
+      loadApproverSpecialCases().catch(() => {});
     }
 
     async function previewDraft(id) {
