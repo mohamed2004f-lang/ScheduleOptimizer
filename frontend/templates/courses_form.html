@@ -62,6 +62,26 @@
                   <option value="elective_free">اختياري (حر)</option>
                 </select>
               </div>
+              <div class="col-md-2">
+                <label class="form-label">تصنيف التقييم</label>
+                <select id="course_assessment_type" class="form-select">
+                  <option value="theoretical">نظري</option>
+                  <option value="practical">عملي</option>
+                  <option value="training">تدريب</option>
+                </select>
+              </div>
+              <div class="col-md-1">
+                <label class="form-label">أعمال</label>
+                <input id="course_cw_weight" type="number" class="form-control" min="0" max="100" step="0.01" placeholder="10">
+              </div>
+              <div class="col-md-1">
+                <label class="form-label">جزئي</label>
+                <input id="course_mid_weight" type="number" class="form-control" min="0" max="100" step="0.01" placeholder="30">
+              </div>
+              <div class="col-md-1">
+                <label class="form-label">نهائي</label>
+                <input id="course_final_weight" type="number" class="form-control" min="0" max="100" step="0.01" placeholder="60">
+              </div>
               <div class="col-md-2 d-grid">
                 <button id="btnAddCourse" class="btn btn-primary" type="button">أضف</button>
               </div>
@@ -114,6 +134,28 @@
           <option value="elective_free">اختياري (حر)</option>
         </select>
       </div>
+      <div class="mb-2">
+        <label class="form-label">تصنيف التقييم</label>
+        <select id="ecAssessmentType" class="form-select">
+          <option value="theoretical">نظري</option>
+          <option value="practical">عملي</option>
+          <option value="training">تدريب</option>
+        </select>
+      </div>
+      <div class="row g-2">
+        <div class="col-4">
+          <label class="form-label">أعمال</label>
+          <input id="ecCwWeight" type="number" class="form-control" min="0" max="100" step="0.01" placeholder="10">
+        </div>
+        <div class="col-4">
+          <label class="form-label">جزئي</label>
+          <input id="ecMidWeight" type="number" class="form-control" min="0" max="100" step="0.01" placeholder="30">
+        </div>
+        <div class="col-4">
+          <label class="form-label">نهائي</label>
+          <input id="ecFinalWeight" type="number" class="form-control" min="0" max="100" step="0.01" placeholder="60">
+        </div>
+      </div>
             <div id="ecMsg" class="mt-2"></div>
           </div>
           <div class="modal-footer">
@@ -137,6 +179,12 @@ function categoryLabel(cat){
   if(cat === 'elective_major') return 'اختياري (تخصصي)';
   if(cat === 'elective_free') return 'اختياري (حر)';
   return 'إجباري';
+}
+
+function assessmentTypeLabel(t){
+  if(t === 'practical') return 'عملي';
+  if(t === 'training') return 'تدريب';
+  return 'نظري';
 }
 
 function showAlert(elId, kind, text){
@@ -199,6 +247,8 @@ function renderCourses(list){
         <th>الرمز</th>
         <th class="text-center">الوحدات</th>
         <th class="text-center">النوع</th>
+        <th class="text-center">تصنيف التقييم</th>
+        <th class="text-center">الأوزان (أ/ج/ن)</th>
         <th class="text-center">إجراءات</th>
       </tr>
     </thead>
@@ -213,6 +263,8 @@ function renderCourses(list){
       <td>${escapeHtml(c.course_code || '')}</td>
       <td class="text-center">${(typeof c.units === 'number' ? c.units : (c.units || 0))}</td>
       <td class="text-center">${escapeHtml(categoryLabel(c.category))}</td>
+      <td class="text-center">${escapeHtml(assessmentTypeLabel(c.assessment_type || 'theoretical'))}</td>
+      <td class="text-center">${escapeHtml((c.coursework_weight ?? 10) + '/' + (c.midterm_weight ?? 30) + '/' + (c.final_exam_weight ?? 60))}</td>
       <td class="text-center">
         ${IS_ADMIN ? `
           <button class="btn btn-sm btn-outline-primary me-1" data-action="edit" data-name="${escapeAttr(c.course_name)}">تحرير</button>
@@ -266,6 +318,13 @@ document.getElementById('btnAddCourse').addEventListener('click', async () => {
   const unitsRaw = document.getElementById('course_units').value;
   const units = Number(unitsRaw || 0);
   const category = (document.getElementById('course_category')||{}).value || 'required';
+  const assessmentType = (document.getElementById('course_assessment_type')||{}).value || 'theoretical';
+  const cwWeightRaw = (document.getElementById('course_cw_weight')||{}).value || '';
+  const midWeightRaw = (document.getElementById('course_mid_weight')||{}).value || '';
+  const finalWeightRaw = (document.getElementById('course_final_weight')||{}).value || '';
+  const cwWeight = cwWeightRaw === '' ? null : Number(cwWeightRaw);
+  const midWeight = midWeightRaw === '' ? null : Number(midWeightRaw);
+  const finalWeight = finalWeightRaw === '' ? null : Number(finalWeightRaw);
 
   if(!name){
     showAlert('cr_msg', 'warning', 'أدخل اسم المقرر');
@@ -273,6 +332,11 @@ document.getElementById('btnAddCourse').addEventListener('click', async () => {
   }
   if(unitsRaw !== '' && (isNaN(units) || units < 0)){
     showAlert('cr_msg', 'warning', 'عدد الوحدات يجب أن يكون رقماً صحيحاً >= 0');
+    return;
+  }
+  const weights = [cwWeight, midWeight, finalWeight];
+  if(weights.some(w => w !== null && (isNaN(w) || w < 0 || w > 100))){
+    showAlert('cr_msg', 'warning', 'أوزان التقييم يجب أن تكون بين 0 و 100');
     return;
   }
 
@@ -289,7 +353,16 @@ document.getElementById('btnAddCourse').addEventListener('click', async () => {
     const resp = await fetch('/add_course',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({course_name: name, course_code: code, units, category})
+      body: JSON.stringify({
+        course_name: name,
+        course_code: code,
+        units,
+        category,
+        assessment_type: assessmentType,
+        coursework_weight: cwWeight,
+        midterm_weight: midWeight,
+        final_exam_weight: finalWeight
+      })
     });
     const j = await resp.json().catch(()=>({}));
     showAlert('cr_msg', resp.ok ? 'success' : 'danger', j.message||j.status||'');
@@ -298,6 +371,10 @@ document.getElementById('btnAddCourse').addEventListener('click', async () => {
       document.getElementById('course_code').value='';
       document.getElementById('course_units').value='';
       const catEl = document.getElementById('course_category'); if(catEl) catEl.value = 'required';
+      const atEl = document.getElementById('course_assessment_type'); if(atEl) atEl.value = 'theoretical';
+      const cwEl = document.getElementById('course_cw_weight'); if(cwEl) cwEl.value = '';
+      const mdEl = document.getElementById('course_mid_weight'); if(mdEl) mdEl.value = '';
+      const feEl = document.getElementById('course_final_weight'); if(feEl) feEl.value = '';
       await loadCourses();
     }
   } catch (err) {
@@ -319,6 +396,14 @@ function openEdit(name){
   document.getElementById('ecUnits').value = (typeof c.units === 'number' ? c.units : (c.units || ''));
   const catEl = document.getElementById('ecCategory');
   if (catEl) catEl.value = c.category || 'required';
+  const assEl = document.getElementById('ecAssessmentType');
+  if (assEl) assEl.value = c.assessment_type || 'theoretical';
+  const cwEl = document.getElementById('ecCwWeight');
+  const mdEl = document.getElementById('ecMidWeight');
+  const feEl = document.getElementById('ecFinalWeight');
+  if (cwEl) cwEl.value = (c.coursework_weight ?? '');
+  if (mdEl) mdEl.value = (c.midterm_weight ?? '');
+  if (feEl) feEl.value = (c.final_exam_weight ?? '');
   document.getElementById('ecMsg').innerHTML = '';
   editModal.show();
 }
@@ -328,8 +413,20 @@ document.getElementById('ecSaveBtn').addEventListener('click', async ()=>{
   const unitsRaw = document.getElementById('ecUnits').value;
   const units = Number(unitsRaw || 0);
   const category = (document.getElementById('ecCategory')||{}).value || 'required';
+  const assessmentType = (document.getElementById('ecAssessmentType')||{}).value || 'theoretical';
+  const cwWeightRaw = (document.getElementById('ecCwWeight')||{}).value || '';
+  const midWeightRaw = (document.getElementById('ecMidWeight')||{}).value || '';
+  const finalWeightRaw = (document.getElementById('ecFinalWeight')||{}).value || '';
+  const cwWeight = cwWeightRaw === '' ? null : Number(cwWeightRaw);
+  const midWeight = midWeightRaw === '' ? null : Number(midWeightRaw);
+  const finalWeight = finalWeightRaw === '' ? null : Number(finalWeightRaw);
   if(unitsRaw !== '' && (isNaN(units) || units < 0)){
     showInModal('ecMsg', 'warning', 'عدد الوحدات يجب أن يكون رقماً صحيحاً >= 0');
+    return;
+  }
+  const weights = [cwWeight, midWeight, finalWeight];
+  if(weights.some(w => w !== null && (isNaN(w) || w < 0 || w > 100))){
+    showInModal('ecMsg', 'warning', 'أوزان التقييم يجب أن تكون بين 0 و 100');
     return;
   }
   try {
@@ -341,7 +438,11 @@ document.getElementById('ecSaveBtn').addEventListener('click', async ()=>{
         new_course_name: editCourseName,
         course_code: code,
         units,
-        category
+        category,
+        assessment_type: assessmentType,
+        coursework_weight: cwWeight,
+        midterm_weight: midWeight,
+        final_exam_weight: finalWeight
       })
     });
     const j = await resp.json().catch(()=>({}));

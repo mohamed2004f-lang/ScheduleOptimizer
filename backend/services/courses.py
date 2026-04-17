@@ -19,6 +19,31 @@ def _is_instructor_or_supervisor_view_only() -> bool:
     role = (session.get("user_role") or "").strip()
     return role == "supervisor" or (role == "instructor") or (role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
 
+
+def _normalize_assessment_type(raw: str) -> str:
+    v = (raw or "").strip().lower()
+    if v in ("theoretical", "practical", "training"):
+        return v
+    if v in ("نظري",):
+        return "theoretical"
+    if v in ("عملي",):
+        return "practical"
+    if v in ("تدريب",):
+        return "training"
+    return "theoretical"
+
+
+def _safe_weight(raw, fallback: float | None = None):
+    if raw in (None, ""):
+        return fallback
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return fallback
+    if v < 0 or v > 100:
+        return fallback
+    return v
+
 @courses_bp.route("/list")
 @login_required
 def list_courses():
@@ -32,11 +57,23 @@ def list_courses():
                 cols = []
             has_cat = "category" in cols
             has_archived = "is_archived" in cols
+            has_assessment_type = "assessment_type" in cols
+            has_cw_weight = "coursework_weight" in cols
+            has_mid_weight = "midterm_weight" in cols
+            has_final_weight = "final_exam_weight" in cols
             sel = "SELECT DISTINCT course_name, course_code, units"
             if has_cat:
                 sel += ", COALESCE(category,'required') AS category"
             if has_archived:
                 sel += ", COALESCE(is_archived,0) AS is_archived"
+            if has_assessment_type:
+                sel += ", COALESCE(assessment_type,'theoretical') AS assessment_type"
+            if has_cw_weight:
+                sel += ", coursework_weight"
+            if has_mid_weight:
+                sel += ", midterm_weight"
+            if has_final_weight:
+                sel += ", final_exam_weight"
             sel += " FROM courses WHERE COALESCE(course_name,'') <> '' ORDER BY course_name"
             rows = cur.execute(sel).fetchall()
             # إزالة التكرار البرمجيًا أيضًا (احتياطي)
@@ -58,6 +95,28 @@ def list_courses():
                     setattr(c, "is_archived", int(r[archived_idx] or 0) if has_archived else 0)
                 except Exception:
                     setattr(c, "is_archived", 0)
+                idx = 5 if has_cat else 4
+                if not has_archived:
+                    idx -= 1
+                try:
+                    setattr(c, "assessment_type", _normalize_assessment_type(r[idx] if has_assessment_type else "theoretical"))
+                except Exception:
+                    setattr(c, "assessment_type", "theoretical")
+                idx += 1 if has_assessment_type else 0
+                try:
+                    setattr(c, "coursework_weight", r[idx] if has_cw_weight else None)
+                except Exception:
+                    setattr(c, "coursework_weight", None)
+                idx += 1 if has_cw_weight else 0
+                try:
+                    setattr(c, "midterm_weight", r[idx] if has_mid_weight else None)
+                except Exception:
+                    setattr(c, "midterm_weight", None)
+                idx += 1 if has_mid_weight else 0
+                try:
+                    setattr(c, "final_exam_weight", r[idx] if has_final_weight else None)
+                except Exception:
+                    setattr(c, "final_exam_weight", None)
                 courses.append(c)
             # إن كان جدول courses فارغاً لكن الجدول الدراسي يحوي مقررات، نعرضها (مثل بيئة بعد ترحيل أو بيانات جزئية)
             if not courses:
@@ -74,6 +133,10 @@ def list_courses():
                     c = Course(cname, "", 0)
                     setattr(c, "category", "required")
                     setattr(c, "is_archived", 0)
+                    setattr(c, "assessment_type", "theoretical")
+                    setattr(c, "coursework_weight", None)
+                    setattr(c, "midterm_weight", None)
+                    setattr(c, "final_exam_weight", None)
                     courses.append(c)
         except Exception:
             rows = cur.execute("SELECT DISTINCT course_name FROM schedule WHERE COALESCE(course_name,'') <> '' ORDER BY course_name").fetchall()
@@ -87,6 +150,10 @@ def list_courses():
                 seen.add(key)
                 c = Course(r[0], "", 0)
                 setattr(c, "category", "required")
+                setattr(c, "assessment_type", "theoretical")
+                setattr(c, "coursework_weight", None)
+                setattr(c, "midterm_weight", None)
+                setattr(c, "final_exam_weight", None)
                 courses.append(c)
     return jsonify([c.__dict__ for c in courses])
 
@@ -103,6 +170,10 @@ def add_course():
     category = (data.get("category") or "required").strip() or "required"
     if category not in ("required", "elective_major", "elective_free"):
         category = "required"
+    assessment_type = _normalize_assessment_type(data.get("assessment_type") or "theoretical")
+    coursework_weight = _safe_weight(data.get("coursework_weight"), None)
+    midterm_weight = _safe_weight(data.get("midterm_weight"), None)
+    final_exam_weight = _safe_weight(data.get("final_exam_weight"), None)
     if not cname:
         return jsonify({"status": "error", "message": "اسم المقرر (course_name) مطلوب"}), 400
     with get_connection() as conn:
@@ -130,10 +201,21 @@ def add_course():
         except Exception:
             cols = []
         if "category" in cols:
-            cur.execute(
-                "INSERT INTO courses (course_name, course_code, units, category) VALUES (?, ?, ?, ?)",
-                (cname, code, units, category),
-            )
+            has_assessment_cols = all(k in cols for k in ("assessment_type", "coursework_weight", "midterm_weight", "final_exam_weight"))
+            if has_assessment_cols:
+                cur.execute(
+                    """
+                    INSERT INTO courses
+                    (course_name, course_code, units, category, assessment_type, coursework_weight, midterm_weight, final_exam_weight)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (cname, code, units, category, assessment_type, coursework_weight, midterm_weight, final_exam_weight),
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO courses (course_name, course_code, units, category) VALUES (?, ?, ?, ?)",
+                    (cname, code, units, category),
+                )
         else:
             cur.execute(
                 "INSERT INTO courses (course_name, course_code, units) VALUES (?, ?, ?)",
@@ -151,6 +233,10 @@ def update_course():
     new_units = data.get("units")
     new_code = (data.get("course_code") or "").strip()
     category = (data.get("category") or "").strip()
+    assessment_type = _normalize_assessment_type(data.get("assessment_type") or "theoretical")
+    coursework_weight = _safe_weight(data.get("coursework_weight"), None)
+    midterm_weight = _safe_weight(data.get("midterm_weight"), None)
+    final_exam_weight = _safe_weight(data.get("final_exam_weight"), None)
     if not old_name or not new_name:
         return jsonify({"status": "error", "message": "old_course_name و new_course_name مطلوبة"}), 400
 
@@ -189,18 +275,49 @@ def update_course():
         except Exception:
             cols = []
         has_cat = "category" in cols
+        has_assessment_cols = all(k in cols for k in ("assessment_type", "coursework_weight", "midterm_weight", "final_exam_weight"))
         cat_value = category if category in ("required", "elective_major", "elective_free") else None
         if has_cat:
             if cat_value is None:
-                cur.execute(
-                    "UPDATE courses SET course_name=?, course_code=?, units=? WHERE course_name=?",
-                    (new_name, new_code or "", (int(new_units) if new_units is not None else None), old_name),
-                )
+                if has_assessment_cols:
+                    cur.execute(
+                        """
+                        UPDATE courses
+                        SET course_name=?, course_code=?, units=?,
+                            assessment_type=?, coursework_weight=?, midterm_weight=?, final_exam_weight=?
+                        WHERE course_name=?
+                        """,
+                        (
+                            new_name, new_code or "", (int(new_units) if new_units is not None else None),
+                            assessment_type, coursework_weight, midterm_weight, final_exam_weight,
+                            old_name,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE courses SET course_name=?, course_code=?, units=? WHERE course_name=?",
+                        (new_name, new_code or "", (int(new_units) if new_units is not None else None), old_name),
+                    )
             else:
-                cur.execute(
-                    "UPDATE courses SET course_name=?, course_code=?, units=?, category=? WHERE course_name=?",
-                    (new_name, new_code or "", (int(new_units) if new_units is not None else None), cat_value, old_name),
-                )
+                if has_assessment_cols:
+                    cur.execute(
+                        """
+                        UPDATE courses
+                        SET course_name=?, course_code=?, units=?, category=?,
+                            assessment_type=?, coursework_weight=?, midterm_weight=?, final_exam_weight=?
+                        WHERE course_name=?
+                        """,
+                        (
+                            new_name, new_code or "", (int(new_units) if new_units is not None else None), cat_value,
+                            assessment_type, coursework_weight, midterm_weight, final_exam_weight,
+                            old_name,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE courses SET course_name=?, course_code=?, units=?, category=? WHERE course_name=?",
+                        (new_name, new_code or "", (int(new_units) if new_units is not None else None), cat_value, old_name),
+                    )
         else:
             cur.execute(
                 "UPDATE courses SET course_name=?, course_code=?, units=? WHERE course_name=?",
