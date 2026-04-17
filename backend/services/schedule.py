@@ -30,6 +30,7 @@ from .utilities import (
     get_schedule_updated_at,
     touch_schedule_updated_at,
     get_current_term,
+    schedule_semester_matches_current_term,
 )
 from .students import compute_per_student_conflicts, recompute_conflict_report
 
@@ -41,6 +42,100 @@ VALID_ANNOUNCEMENT_TYPES = frozenset({"general", "postponement", "makeup", "extr
 VALID_FACULTY_ASSIGNMENT_TYPES = frozenset({"course", "committee", "service", "quality", "supervision"})
 VALID_FACULTY_LOG_TYPES = frozenset({"communication", "supervision_session", "quality_report"})
 VALID_FACULTY_LOG_APPROVAL = frozenset({"draft", "submitted", "approved", "rejected"})
+
+
+def _current_term_label_safe(conn) -> str:
+    try:
+        tname, tyear = get_current_term(conn=conn)
+        return f"{(tname or '').strip()} {(tyear or '').strip()}".strip() or SEMESTER_LABEL
+    except Exception:
+        return SEMESTER_LABEL
+
+
+def _faculty_cycle_lock_key(term_label: str) -> str:
+    return f"faculty_cycle_lock::{(term_label or '').strip()}"
+
+
+def _is_faculty_cycle_locked(conn, term_label: str) -> bool:
+    key = _faculty_cycle_lock_key(term_label)
+    row = conn.cursor().execute(
+        "SELECT COALESCE(value_json,'false') FROM app_settings WHERE key = ? LIMIT 1",
+        (key,),
+    ).fetchone()
+    val = (row[0] if row else "false") or "false"
+    return str(val).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _set_faculty_cycle_locked(conn, term_label: str, locked: bool, actor: str):
+    key = _faculty_cycle_lock_key(term_label)
+    now = datetime.datetime.utcnow().isoformat()
+    conn.cursor().execute(
+        """
+        INSERT OR REPLACE INTO app_settings (key, value_json, updated_at, updated_by)
+        VALUES (?, ?, ?, ?)
+        """,
+        (key, "true" if locked else "false", now, actor),
+    )
+    conn.commit()
+
+
+def _append_governance_audit(conn, actor: str, action: str, scope_type: str, scope_id: str, old_value: str = "", new_value: str = "", reason: str = ""):
+    now = datetime.datetime.utcnow().isoformat()
+    conn.cursor().execute(
+        """
+        INSERT INTO governance_audit_logs (ts, actor, action, scope_type, scope_id, old_value, new_value, reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (now, actor or "", action or "", scope_type or "", scope_id or "", old_value or "", new_value or "", reason or ""),
+    )
+
+
+def _has_section_evidence(cur, section_id: int, instructor_id: int) -> bool:
+    plan = cur.execute(
+        """
+        SELECT 1 FROM faculty_course_plans
+        WHERE section_id = ? AND instructor_id = ?
+          AND COALESCE(lecture_status,'planned') IN ('done', 'compensated')
+        LIMIT 1
+        """,
+        (section_id, instructor_id),
+    ).fetchone()
+    if plan:
+        return True
+    ann = cur.execute(
+        """
+        SELECT 1 FROM faculty_course_announcements
+        WHERE section_id = ? AND instructor_id = ?
+        LIMIT 1
+        """,
+        (section_id, instructor_id),
+    ).fetchone()
+    if ann:
+        return True
+    closure = cur.execute(
+        """
+        SELECT 1 FROM course_closure_reports
+        WHERE section_id = ? AND instructor_id = ?
+          AND COALESCE(status,'draft') IN ('submitted', 'approved')
+        LIMIT 1
+        """,
+        (section_id, instructor_id),
+    ).fetchone()
+    if closure:
+        return True
+    log_ok = cur.execute(
+        """
+        SELECT 1
+        FROM faculty_assignment_logs l
+        JOIN faculty_assignments a ON a.id = l.assignment_id
+        WHERE l.instructor_id = ?
+          AND COALESCE(l.approval_status,'draft') = 'approved'
+          AND (l.section_id = ? OR a.section_id = ?)
+        LIMIT 1
+        """,
+        (instructor_id, section_id, section_id),
+    ).fetchone()
+    return bool(log_ok)
 
 
 def _ensure_schedule_version_tables(cur):
@@ -595,8 +690,12 @@ def check_conflicts():
                 "message": "بيانات غير كاملة"
             }), 400
         
-        # محاكاة إضافة المقرر مؤقتاً للتحقق من التعارضات
+        # محاكاة إضافة المقرر مؤقتاً للتحقق من التعارضات (بفصل حالي صريح)
         with get_connection() as conn:
+            term_name, term_year = get_current_term(conn=conn)
+            semester_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
+            if not semester_label:
+                return jsonify({"status": "error", "message": "يجب تحديد الفصل الحالي أولاً من الإعدادات"}), 400
             # حفظ حالة الجدول الحالي
             cur = conn.cursor()
             
@@ -616,7 +715,7 @@ def check_conflicts():
                 data.get("room", ""),
                 data.get("instructor", ""),
                 _iid,
-                data.get("semester", SEMESTER_LABEL)
+                (data.get("semester") or "").strip() or semester_label
             ))
             temp_rowid = cur.lastrowid
             
@@ -697,13 +796,21 @@ def add_schedule_row():
     try:
         from backend.core.services import ScheduleService
 
+        sem = (data.get("semester") or "").strip()
+        if not sem:
+            with get_connection() as conn:
+                tname, tyear = get_current_term(conn=conn)
+            sem = f"{(tname or '').strip()} {(tyear or '').strip()}".strip()
+        if not sem:
+            return jsonify({"status": "error", "message": "يجب تحديد الفصل الحالي أولاً من الإعدادات"}), 400
+
         res = ScheduleService.add_schedule_row(
             data.get("course_name"),
             data.get("day"),
             data.get("time"),
             room=data.get("room", ""),
             instructor=data.get("instructor", ""),
-            semester=data.get("semester") or SEMESTER_LABEL,
+            semester=sem,
             instructor_id=_parse_instructor_id_payload(data.get("instructor_id")),
         )
         last = res.get("rowid")
@@ -1418,6 +1525,8 @@ def schedule_version_restore_draft(version_id: int):
         with get_connection() as conn:
             cur = conn.cursor()
             _ensure_schedule_version_tables(cur)
+            tname, tyear = get_current_term(conn=conn)
+            current_label = f"{(tname or '').strip()} {(tyear or '').strip()}".strip()
             row = cur.execute(
                 "SELECT semester, version_no, snapshot_json FROM schedule_versions WHERE id = ? LIMIT 1",
                 (int(version_id),),
@@ -1425,7 +1534,11 @@ def schedule_version_restore_draft(version_id: int):
             if not row:
                 return jsonify({"status": "error", "message": "النسخة غير موجودة"}), 404
 
-            semester = row[0] or ""
+            semester = (row[0] or "").strip()
+            if not semester:
+                semester = current_label
+            if not semester:
+                return jsonify({"status": "error", "message": "يجب تحديد الفصل الحالي أولاً من الإعدادات"}), 400
             version_no = int(row[1] or 0)
             try:
                 snap = json.loads(row[2] or "{}")
@@ -1562,6 +1675,22 @@ def student_timetable():
     return jsonify({"rows": out, "published": True})
 
 
+def _canonical_schedule_day_label(day: str | None) -> str:
+    """توحيد تهجئة اليوم مع واجهة الجدول (مثلاً الاثنين → الإثنين)."""
+    s = (day or "").strip()
+    if not s:
+        return s
+    aliases = {
+        "الاثنين": "الإثنين",
+        "إثنين": "الإثنين",
+        "الثلاثا": "الثلاثاء",
+        "الاربعاء": "الأربعاء",
+        "الأربعا": "الأربعاء",
+        "اربعاء": "الأربعاء",
+    }
+    return aliases.get(s, s)
+
+
 def _assigned_section_rows(cur, instructor_db_id: int, canonical_instructor_name: str):
     """
     صفوف schedule المكلَّف بها الأستاذ:
@@ -1651,6 +1780,17 @@ def _course_admin_payload(cur, instructor_id: int, section_id: int) -> dict:
         """,
         (section_id, instructor_id),
     ).fetchone()
+    closure_row = cur.execute(
+        """
+        SELECT id, COALESCE(implementation_summary,''), COALESCE(improvement_notes,''),
+               COALESCE(reflection_text,''), COALESCE(status,'draft'), COALESCE(updated_at,'')
+        FROM course_closure_reports
+        WHERE section_id = ? AND instructor_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (section_id, instructor_id),
+    ).fetchone()
     return {
         "weekly_plan": [
             {
@@ -1674,6 +1814,14 @@ def _course_admin_payload(cur, instructor_id: int, section_id: int) -> dict:
             for r in (ann_rows or [])
         ],
         "syllabus_text": (syl_row[0] if syl_row else "") or "",
+        "closure_report": {
+            "id": (int(closure_row[0]) if closure_row else None),
+            "implementation_summary": (closure_row[1] if closure_row else "") or "",
+            "improvement_notes": (closure_row[2] if closure_row else "") or "",
+            "reflection_text": (closure_row[3] if closure_row else "") or "",
+            "status": (closure_row[4] if closure_row else "draft") or "draft",
+            "updated_at": (closure_row[5] if closure_row else "") or "",
+        },
     }
 
 
@@ -2042,10 +2190,15 @@ def save_my_axis_status():
 
     with get_connection() as conn:
         cur = conn.cursor()
+        term_label = _current_term_label_safe(conn)
+        if _is_faculty_cycle_locked(conn, term_label):
+            return jsonify({"status": "error", "message": "تم إغلاق دورة الفصل الحالي للتعديل"}), 423
         tuples = _assigned_section_rows(cur, iid, inst_name or "")
         allowed_ids = {int(t[0]) for t in tuples}
         if section_id not in allowed_ids:
             return jsonify({"status": "error", "message": "هذه الشعبة غير مكلَّفة لحسابك"}), 403
+        if status == "done" and not _has_section_evidence(cur, section_id, iid):
+            return jsonify({"status": "error", "message": "لا يمكن إنهاء المحور دون وجود دليل تنفيذ فعلي للشعبة"}), 400
 
         if is_postgresql():
             cur.execute(
@@ -2123,6 +2276,9 @@ def save_my_course_plan():
     ts = datetime.datetime.utcnow().isoformat()
     with get_connection() as conn:
         cur = conn.cursor()
+        term_label = _current_term_label_safe(conn)
+        if _is_faculty_cycle_locked(conn, term_label):
+            return jsonify({"status": "error", "message": "تم إغلاق دورة الفصل الحالي للتعديل"}), 423
         tuples = _assigned_section_rows(cur, iid, inst_name or "")
         allowed_ids = {int(t[0]) for t in tuples}
         if section_id not in allowed_ids:
@@ -2176,6 +2332,9 @@ def save_my_course_syllabus():
     ts = datetime.datetime.utcnow().isoformat()
     with get_connection() as conn:
         cur = conn.cursor()
+        term_label = _current_term_label_safe(conn)
+        if _is_faculty_cycle_locked(conn, term_label):
+            return jsonify({"status": "error", "message": "تم إغلاق دورة الفصل الحالي للتعديل"}), 423
         tuples = _assigned_section_rows(cur, iid, inst_name or "")
         allowed_ids = {int(t[0]) for t in tuples}
         if section_id not in allowed_ids:
@@ -2234,6 +2393,9 @@ def save_my_course_announcement():
     actor = (session.get("user") or "").strip()
     with get_connection() as conn:
         cur = conn.cursor()
+        term_label = _current_term_label_safe(conn)
+        if _is_faculty_cycle_locked(conn, term_label):
+            return jsonify({"status": "error", "message": "تم إغلاق دورة الفصل الحالي للتعديل"}), 423
         tuples = _assigned_section_rows(cur, iid, inst_name or "")
         allowed_ids = {int(t[0]) for t in tuples}
         if section_id not in allowed_ids:
@@ -2249,6 +2411,425 @@ def save_my_course_announcement():
         conn.commit()
         payload = _course_admin_payload(cur, iid, section_id)
     return jsonify({"status": "ok", "section_id": section_id, **payload})
+
+
+@schedule_bp.route("/my_course_closure", methods=["POST"])
+@login_required
+def save_my_course_closure():
+    """حفظ/إرسال تقرير إقفال المقرر لشعبة مكلّف بها الأستاذ."""
+    if session.get("user_role") != "instructor":
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    data = request.get_json(force=True) or {}
+    try:
+        section_id = int(data.get("section_id"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "section_id غير صالح"}), 400
+    status = (data.get("status") or "draft").strip().lower()
+    if status not in ("draft", "submitted"):
+        return jsonify({"status": "error", "message": "status غير صالح"}), 400
+    implementation_summary = (data.get("implementation_summary") or "").strip()
+    improvement_notes = (data.get("improvement_notes") or "").strip()
+    reflection_text = (data.get("reflection_text") or "").strip()
+
+    inst_name, instructor_id = _instructor_display_name_for_session()
+    if not instructor_id:
+        return jsonify({"status": "error", "message": "لا يوجد ربط بعضو هيئة التدريس"}), 400
+    iid = int(instructor_id)
+    actor = (session.get("user") or "").strip()
+    now = datetime.datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        term_label = _current_term_label_safe(conn)
+        if _is_faculty_cycle_locked(conn, term_label):
+            return jsonify({"status": "error", "message": "تم إغلاق دورة الفصل الحالي للتعديل"}), 423
+        tuples = _assigned_section_rows(cur, iid, inst_name or "")
+        allowed_ids = {int(t[0]) for t in tuples}
+        if section_id not in allowed_ids:
+            return jsonify({"status": "error", "message": "هذه الشعبة غير مكلَّفة لحسابك"}), 403
+        sem_row = next((t for t in tuples if int(t[0]) == section_id), None)
+        semester = (sem_row[6] if sem_row else "") or "UNKNOWN_TERM"
+        if is_postgresql():
+            cur.execute(
+                """
+                INSERT INTO course_closure_reports
+                    (section_id, instructor_id, semester, implementation_summary, improvement_notes, reflection_text,
+                     status, created_at, created_by, updated_at, updated_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (section_id, instructor_id, semester)
+                DO UPDATE SET implementation_summary = EXCLUDED.implementation_summary,
+                              improvement_notes = EXCLUDED.improvement_notes,
+                              reflection_text = EXCLUDED.reflection_text,
+                              status = EXCLUDED.status,
+                              updated_at = EXCLUDED.updated_at,
+                              updated_by = EXCLUDED.updated_by
+                """,
+                (section_id, iid, semester, implementation_summary, improvement_notes, reflection_text, status, now, actor, now, actor),
+            )
+        else:
+            row = cur.execute(
+                "SELECT id FROM course_closure_reports WHERE section_id=? AND instructor_id=? AND semester=? LIMIT 1",
+                (section_id, iid, semester),
+            ).fetchone()
+            if row:
+                cur.execute(
+                    """
+                    UPDATE course_closure_reports
+                    SET implementation_summary=?, improvement_notes=?, reflection_text=?, status=?, updated_at=?, updated_by=?
+                    WHERE id=?
+                    """,
+                    (implementation_summary, improvement_notes, reflection_text, status, now, actor, int(row[0])),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO course_closure_reports
+                        (section_id, instructor_id, semester, implementation_summary, improvement_notes, reflection_text,
+                         status, created_at, created_by, updated_at, updated_by)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (section_id, iid, semester, implementation_summary, improvement_notes, reflection_text, status, now, actor, now, actor),
+                )
+        conn.commit()
+        payload = _course_admin_payload(cur, iid, section_id)
+    return jsonify({"status": "ok", "section_id": section_id, **payload})
+
+
+@schedule_bp.route("/course_closure_reports", methods=["GET"])
+@role_required("admin", "admin_main", "head_of_department")
+def list_course_closure_reports():
+    status = (request.args.get("status") or "").strip().lower()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        q = """
+            SELECT c.id, c.section_id, c.instructor_id, COALESCE(i.name,'') AS instructor_name,
+                   COALESCE(s.course_name,'') AS course_name, COALESCE(c.semester,'') AS semester,
+                   COALESCE(c.implementation_summary,'') AS implementation_summary,
+                   COALESCE(c.improvement_notes,'') AS improvement_notes,
+                   COALESCE(c.reflection_text,'') AS reflection_text,
+                   COALESCE(c.status,'draft') AS status,
+                   COALESCE(c.updated_at,'') AS updated_at,
+                   COALESCE(c.approved_at,'') AS approved_at,
+                   COALESCE(c.approved_by,'') AS approved_by
+            FROM course_closure_reports c
+            LEFT JOIN instructors i ON i.id = c.instructor_id
+            LEFT JOIN schedule s ON s.rowid = c.section_id
+            WHERE 1=1
+        """
+        params = []
+        if status in ("draft", "submitted", "approved", "rejected"):
+            q += " AND c.status = ?"
+            params.append(status)
+        q += " ORDER BY c.updated_at DESC, c.id DESC"
+        rows = cur.execute(q, tuple(params)).fetchall()
+    items = [dict(r) for r in (rows or [])]
+    return jsonify({"status": "ok", "items": items})
+
+
+@schedule_bp.route("/course_closure_reports/<int:report_id>/review", methods=["POST"])
+@role_required("admin", "admin_main", "head_of_department")
+def review_course_closure_report(report_id: int):
+    data = request.get_json(force=True) or {}
+    status = (data.get("status") or "").strip().lower()
+    if status not in ("approved", "rejected"):
+        return jsonify({"status": "error", "message": "status غير صالح"}), 400
+    review_note = (data.get("review_note") or "").strip()
+    actor = (session.get("user") or "").strip() or "system"
+    now = datetime.datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        row = cur.execute("SELECT id FROM course_closure_reports WHERE id = ? LIMIT 1", (int(report_id),)).fetchone()
+        if not row:
+            return jsonify({"status": "error", "message": "report not found"}), 404
+        cur.execute(
+            """
+            UPDATE course_closure_reports
+            SET status = ?, review_note = ?, approved_at = ?, approved_by = ?, updated_at = ?, updated_by = ?
+            WHERE id = ?
+            """,
+            (status, review_note, now, actor, now, actor, int(report_id)),
+        )
+        _append_governance_audit(
+            conn=conn,
+            actor=actor,
+            action="COURSE_CLOSURE_REVIEW",
+            scope_type="course_closure_report",
+            scope_id=str(int(report_id)),
+            old_value="submitted",
+            new_value=status,
+            reason=review_note,
+        )
+        conn.commit()
+    return jsonify({"status": "ok", "report_id": int(report_id), "reviewed_status": status}), 200
+
+
+def _closure_status_score(status: str) -> float:
+    s = (status or "").strip().lower()
+    if s == "approved":
+        return 1.0
+    if s == "submitted":
+        return 0.6
+    if s == "rejected":
+        return 0.1
+    if s == "draft":
+        return 0.3
+    return 0.0
+
+
+def _section_scorecard(cur, section_id: int, instructor_id: int, course_name: str, semester: str) -> dict:
+    plan_rows = cur.execute(
+        """
+        SELECT COALESCE(lecture_status,'planned')
+        FROM faculty_course_plans
+        WHERE section_id = ? AND instructor_id = ?
+        """,
+        (section_id, instructor_id),
+    ).fetchall()
+    plan_total = len(plan_rows or [])
+    plan_done = sum(1 for r in (plan_rows or []) if (r[0] or "") in ("done", "compensated"))
+    plan_progress = (float(plan_done) / float(plan_total)) if plan_total else 0.0
+
+    axis_done_row = cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM faculty_section_axis_status
+        WHERE section_id = ? AND instructor_id = ? AND status = 'done'
+        """,
+        (section_id, instructor_id),
+    ).fetchone()
+    axis_done = int((axis_done_row[0] if axis_done_row else 0) or 0)
+    axis_progress = float(axis_done) / float(len(FACULTY_AXIS_KEYS)) if FACULTY_AXIS_KEYS else 0.0
+
+    closure_row = cur.execute(
+        """
+        SELECT COALESCE(status,'draft')
+        FROM course_closure_reports
+        WHERE section_id = ? AND instructor_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (section_id, instructor_id),
+    ).fetchone()
+    closure_status = (closure_row[0] if closure_row else "draft") or "draft"
+    closure_score = _closure_status_score(closure_status)
+
+    assignments_row = cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM faculty_assignments
+        WHERE instructor_id = ?
+          AND COALESCE(is_active,1) = 1
+          AND (section_id = ? OR section_id IS NULL)
+        """,
+        (instructor_id, section_id),
+    ).fetchone()
+    assignments_count = int((assignments_row[0] if assignments_row else 0) or 0)
+
+    approved_logs_row = cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM faculty_assignment_logs
+        WHERE instructor_id = ?
+          AND approval_status = 'approved'
+          AND (section_id = ? OR section_id IS NULL)
+        """,
+        (instructor_id, section_id),
+    ).fetchone()
+    approved_logs = int((approved_logs_row[0] if approved_logs_row else 0) or 0)
+    service_score = 1.0 if (approved_logs > 0 or assignments_count > 0) else 0.0
+
+    # وزن المؤشر: تنفيذ الخطة 40% + المحاور 25% + تقرير الإقفال 20% + التكليفات الرسمية 15%
+    overall_score = round((0.40 * plan_progress + 0.25 * axis_progress + 0.20 * closure_score + 0.15 * service_score) * 100.0, 1)
+    return {
+        "section_id": int(section_id),
+        "instructor_id": int(instructor_id),
+        "course_name": course_name or "",
+        "semester": semester or "",
+        "plan_total": int(plan_total),
+        "plan_done": int(plan_done),
+        "plan_progress": round(plan_progress * 100.0, 1),
+        "axis_done": int(axis_done),
+        "axis_total": int(len(FACULTY_AXIS_KEYS)),
+        "axis_progress": round(axis_progress * 100.0, 1),
+        "closure_status": closure_status,
+        "assignments_count": int(assignments_count),
+        "approved_assignment_logs": int(approved_logs),
+        "overall_score": overall_score,
+    }
+
+
+@schedule_bp.route("/faculty_scorecards", methods=["GET"])
+@login_required
+def faculty_scorecards():
+    role = (session.get("user_role") or "").strip()
+    if role not in ("admin", "admin_main", "head_of_department", "instructor"):
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+
+    requested_instructor_id = request.args.get("instructor_id", type=int)
+    with get_connection() as conn:
+        cur = conn.cursor()
+        tuples = []
+        if role == "instructor":
+            inst_name, instructor_id = _instructor_display_name_for_session()
+            if not instructor_id:
+                return jsonify({"status": "ok", "items": []}), 200
+            if requested_instructor_id and int(requested_instructor_id) != int(instructor_id):
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+            tuples = _assigned_section_rows(cur, int(instructor_id), inst_name or "")
+        else:
+            params = []
+            q = """
+                SELECT s.rowid AS section_id, COALESCE(s.course_name,''), COALESCE(s.day,''), COALESCE(s.time,''),
+                       COALESCE(s.room,''), COALESCE(s.instructor,''), COALESCE(s.semester,''), COALESCE(s.instructor_id,0)
+                FROM schedule s
+                WHERE COALESCE(s.instructor_id,0) > 0
+            """
+            if requested_instructor_id:
+                q += " AND s.instructor_id = ?"
+                params.append(int(requested_instructor_id))
+            q += " ORDER BY s.semester, s.course_name, s.rowid"
+            rows = cur.execute(q, tuple(params)).fetchall()
+            tuples = [(r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]) for r in (rows or [])]
+
+        out = []
+        for t in tuples or []:
+            sid, cn, _day, _tim, _room, _inst, sem = t[0], t[1], t[2], t[3], t[4], t[5], t[6]
+            iid = int(t[7]) if len(t) > 7 and t[7] not in (None, "") else int(session.get("instructor_id") or 0)
+            if not iid:
+                continue
+            card = _section_scorecard(cur, int(sid), int(iid), cn or "", sem or "")
+            iname_row = cur.execute(
+                "SELECT COALESCE(name,'') FROM instructors WHERE id = ? LIMIT 1",
+                (int(iid),),
+            ).fetchone()
+            card["instructor_name"] = (iname_row[0] if iname_row else "") or ""
+            out.append(card)
+    out.sort(key=lambda x: (x.get("semester") or "", x.get("course_name") or "", int(x.get("section_id") or 0)))
+    return jsonify({"status": "ok", "items": out}), 200
+
+
+@schedule_bp.route("/faculty_cycle_lock", methods=["GET"])
+@login_required
+def get_faculty_cycle_lock():
+    """Return whether the faculty cycle is locked for the current term (readable by any logged-in user)."""
+    with get_connection() as conn:
+        term_label = _current_term_label_safe(conn)
+        locked = _is_faculty_cycle_locked(conn, term_label)
+    return jsonify({"status": "ok", "term_label": term_label, "locked": bool(locked)})
+
+
+@schedule_bp.route("/faculty_cycle_lock", methods=["POST"])
+@role_required("admin", "admin_main", "head_of_department")
+def set_faculty_cycle_lock():
+    data = request.get_json(force=True) or {}
+    locked = bool(data.get("locked", False))
+    reason = (data.get("reason") or "").strip()
+    actor = (session.get("user") or session.get("username") or "").strip() or "system"
+    with get_connection() as conn:
+        term_label = _current_term_label_safe(conn)
+        old_locked = _is_faculty_cycle_locked(conn, term_label)
+        if old_locked and (not locked) and not reason:
+            return jsonify({"status": "error", "message": "سبب إعادة فتح الدورة مطلوب"}), 400
+        _set_faculty_cycle_locked(conn, term_label, locked, actor)
+        _append_governance_audit(
+            conn=conn,
+            actor=actor,
+            action=("FACULTY_CYCLE_LOCKED" if locked else "FACULTY_CYCLE_UNLOCKED"),
+            scope_type="term",
+            scope_id=term_label,
+            old_value=("locked" if old_locked else "open"),
+            new_value=("locked" if locked else "open"),
+            reason=reason,
+        )
+        conn.commit()
+    return jsonify({"status": "ok", "term_label": term_label, "locked": bool(locked)})
+
+
+@schedule_bp.route("/governance_audit_logs", methods=["GET"])
+@role_required("admin", "admin_main", "head_of_department")
+def governance_audit_logs():
+    action = (request.args.get("action") or "").strip().upper()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        q = """
+            SELECT id, ts, actor, action, scope_type, scope_id, old_value, new_value, reason
+            FROM governance_audit_logs
+            WHERE 1=1
+        """
+        params = []
+        if action:
+            q += " AND action = ?"
+            params.append(action)
+        q += " ORDER BY id DESC LIMIT 300"
+        rows = cur.execute(q, tuple(params)).fetchall()
+    return jsonify({"status": "ok", "items": [dict(r) for r in (rows or [])]})
+
+
+def _final_dossier_rows(cur, instructor_id: int | None = None) -> list[dict]:
+    q = """
+        SELECT s.rowid AS section_id,
+               COALESCE(s.course_name,'') AS course_name,
+               COALESCE(s.semester,'') AS semester,
+               COALESCE(s.instructor_id,0) AS instructor_id,
+               COALESCE(i.name,'') AS instructor_name
+        FROM schedule s
+        LEFT JOIN instructors i ON i.id = s.instructor_id
+        WHERE COALESCE(s.instructor_id,0) > 0
+    """
+    params = []
+    if instructor_id:
+        q += " AND s.instructor_id = ?"
+        params.append(int(instructor_id))
+    q += " ORDER BY s.semester, s.course_name, s.rowid"
+    rows = cur.execute(q, tuple(params)).fetchall()
+    out = []
+    for r in rows or []:
+        sid = int(r[0])
+        iid = int(r[3] or 0)
+        card = _section_scorecard(cur, sid, iid, r[1] or "", r[2] or "")
+        out.append(
+            {
+                "section_id": sid,
+                "course_name": r[1] or "",
+                "semester": r[2] or "",
+                "instructor_id": iid,
+                "instructor_name": r[4] or "",
+                "overall_score": card.get("overall_score", 0),
+                "plan_progress": card.get("plan_progress", 0),
+                "axis_progress": card.get("axis_progress", 0),
+                "closure_status": card.get("closure_status", "draft"),
+                "assignments_count": card.get("assignments_count", 0),
+                "approved_assignment_logs": card.get("approved_assignment_logs", 0),
+            }
+        )
+    return out
+
+
+@schedule_bp.route("/faculty_final_dossier", methods=["GET"])
+@role_required("admin", "admin_main", "head_of_department")
+def faculty_final_dossier():
+    instructor_id = request.args.get("instructor_id", type=int)
+    with get_connection() as conn:
+        cur = conn.cursor()
+        rows = _final_dossier_rows(cur, instructor_id=instructor_id)
+    return jsonify({"status": "ok", "items": rows})
+
+
+@schedule_bp.route("/faculty_final_dossier/export", methods=["GET"])
+@role_required("admin", "admin_main", "head_of_department")
+def export_faculty_final_dossier():
+    fmt = (request.args.get("format") or "excel").strip().lower()
+    instructor_id = request.args.get("instructor_id", type=int)
+    with get_connection() as conn:
+        cur = conn.cursor()
+        rows = _final_dossier_rows(cur, instructor_id=instructor_id)
+
+    if not rows:
+        rows = [{"section_id": "", "course_name": "", "semester": "", "instructor_name": "", "overall_score": 0}]
+    df = pd.DataFrame(rows)
+    if fmt == "pdf":
+        html = "<h3 style='direction:rtl'>ملف الإنجاز النهائي</h3>" + df.to_html(index=False, border=1)
+        return pdf_response_from_html(html, filename_prefix="faculty_final_dossier")
+    return excel_response_from_df(df, filename_prefix="faculty_final_dossier")
 
 
 @schedule_bp.route("/student_my_announcements")
@@ -2336,16 +2917,20 @@ def instructor_timetable():
 
     with get_connection() as conn:
         cur = conn.cursor()
+        term_name, term_year = get_current_term(conn=conn)
+        term_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
         tuples = _assigned_section_rows(cur, iid_int, canon)
         tuples.sort(key=lambda x: ((x[2] or ""), (x[3] or ""), (x[1] or "")))
         out = []
         for t in tuples:
             sid, cn, day, tim, room, inst_txt, sem = t
+            if not schedule_semester_matches_current_term(sem, term_label):
+                continue
             out.append(
                 {
                     "section_id": sid,
                     "course_name": cn,
-                    "day": day,
+                    "day": _canonical_schedule_day_label(day),
                     "time": tim,
                     "room": room,
                     "instructor": inst_txt,

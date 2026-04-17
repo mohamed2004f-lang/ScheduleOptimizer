@@ -174,7 +174,8 @@ def admin_summary():
 
 PROJECT_VERSION_LABEL_KEY = "project_version_label"
 PROJECT_VERSION_NOTE_KEY = "project_version_note"
-AUTO_BACKUP_DIR = os.path.abspath(os.path.join(os.path.dirname(DB_FILE), "..", "..", "backups", "auto"))
+# Use project-local backups directory (works for Postgres too).
+AUTO_BACKUP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backups", "auto"))
 BACKUP_MIN_INTERVAL_SECONDS = 30
 
 
@@ -198,6 +199,8 @@ def _write_setting(conn, key: str, value: str) -> None:
 def _db_file_mtime_utc_iso() -> Optional[str]:
     """وقت آخر تعديل لملف قاعدة البيانات (مؤشر آمن لنشاط البيانات دون Git)."""
     try:
+        if is_postgresql():
+            return None
         path = os.path.abspath(DB_FILE)
         if not os.path.isfile(path):
             return None
@@ -241,12 +244,59 @@ def _latest_auto_backup_info() -> dict:
 
 def _run_db_backup(kind: str = "manual") -> dict:
     _ensure_auto_backup_dir()
-    src = os.path.abspath(DB_FILE)
-    if not os.path.isfile(src):
-        raise FileNotFoundError("ملف قاعدة البيانات غير موجود")
     safe_kind = (kind or "manual").strip().lower()
     if safe_kind not in ("manual", "daily", "weekly"):
         safe_kind = "manual"
+    if is_postgresql():
+        # pg_dump backup (requires pg_dump in PATH)
+        from config import DATABASE_URL
+        try:
+            from sqlalchemy.engine.url import make_url
+        except Exception as e:
+            raise RuntimeError("SQLAlchemy مطلوب لنسخ PostgreSQL الاحتياطي") from e
+
+        u = make_url(DATABASE_URL or "")
+        if u.get_backend_name() != "postgresql":
+            raise RuntimeError("DATABASE_URL يجب أن يشير إلى PostgreSQL")
+        host = u.host or "localhost"
+        port = int(u.port or 5432)
+        user = u.username or "postgres"
+        db = u.database or ""
+        password = u.password or ""
+
+        fname = f"{_now_stamp()}_{safe_kind}_{db}.dump"
+        dst = os.path.join(AUTO_BACKUP_DIR, fname)
+
+        env = os.environ.copy()
+        if password:
+            env["PGPASSWORD"] = password
+        cmd = [
+            "pg_dump",
+            "-h",
+            host,
+            "-p",
+            str(port),
+            "-U",
+            user,
+            "-d",
+            db,
+            "-F",
+            "c",
+            "-f",
+            dst,
+        ]
+        import subprocess
+
+        try:
+            subprocess.run(cmd, env=env, check=True)
+        except FileNotFoundError as e:
+            raise RuntimeError("لم يُعثر على pg_dump. أضف مجلد bin الخاص بـ PostgreSQL إلى PATH.") from e
+        return {"path": dst, "name": fname}
+
+    # SQLite legacy backup (kept for archival use only)
+    src = os.path.abspath(DB_FILE)
+    if not os.path.isfile(src):
+        raise FileNotFoundError("ملف قاعدة البيانات غير موجود")
     fname = f"{_now_stamp()}_{safe_kind}_mechanical.db"
     dst = os.path.join(AUTO_BACKUP_DIR, fname)
     shutil.copy2(src, dst)

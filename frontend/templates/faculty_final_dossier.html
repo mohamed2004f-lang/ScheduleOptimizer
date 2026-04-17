@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>الملف النهائي للشعب</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">الملف النهائي للشعب</h1>
+        <p class="page-subtitle">تقرير نهائي موحّد قابل للتصدير</p>
+      </div>
+      <div class="d-flex gap-2">
+        <button id="btnExportExcel" class="btn btn-sm btn-outline-success">تصدير Excel</button>
+        <button id="btnExportPdf" class="btn btn-sm btn-outline-danger">تصدير PDF</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header fw-semibold">النتائج</div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead>
+              <tr>
+                <th>المقرر/الشعبة</th>
+                <th>الأستاذ</th>
+                <th>الفصل</th>
+                <th>الخطة %</th>
+                <th>المحاور %</th>
+                <th>الإقفال</th>
+                <th>المؤشر الكلي</th>
+              </tr>
+            </thead>
+            <tbody id="dossierBody"></tbody>
+          </table>
+        </div>
+        <div id="dossierEmpty" class="p-3 text-muted small d-none">لا توجد بيانات.</div>
+      </div>
+    </div>
+  </main>
+  <script>
+    async function loadDossier() {
+      const r = await fetch('/schedule/faculty_final_dossier', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      const body = document.getElementById('dossierBody');
+      const empty = document.getElementById('dossierEmpty');
+      if (!r.ok) {
+        body.innerHTML = '<tr><td colspan="7">تعذر التحميل</td></tr>';
+        empty.classList.add('d-none');
+        return;
+      }
+      const items = Array.isArray(j.items) ? j.items : [];
+      if (!items.length) {
+        body.innerHTML = '';
+        empty.classList.remove('d-none');
+        return;
+      }
+      empty.classList.add('d-none');
+      body.innerHTML = '';
+      items.forEach(it => {
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td>' + (it.course_name || '') + ' <span class="text-muted small">#' + (it.section_id || '') + '</span></td>' +
+          '<td>' + (it.instructor_name || '') + '</td>' +
+          '<td>' + (it.semester || '') + '</td>' +
+          '<td>' + (it.plan_progress || 0) + '%</td>' +
+          '<td>' + (it.axis_progress || 0) + '%</td>' +
+          '<td><span class="badge bg-secondary">' + (it.closure_status || 'draft') + '</span></td>' +
+          '<td><strong>' + (it.overall_score || 0) + '%</strong></td>';
+        body.appendChild(tr);
+      });
+    }
+    document.getElementById('btnExportExcel').addEventListener('click', () => {
+      window.location.href = '/schedule/faculty_final_dossier/export?format=excel';
+    });
+    document.getElementById('btnExportPdf').addEventListener('click', () => {
+      window.location.href = '/schedule/faculty_final_dossier/export?format=pdf';
+    });
+    loadDossier().catch(() => {});
+  </script>
+</body>
+</html>

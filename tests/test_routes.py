@@ -445,6 +445,18 @@ class TestInstructorMyCourses:
             assert login.status_code == 200
             r0 = c.get("/schedule/my_assigned_sections").get_json()
             sid = r0["rows"][0]["section_id"]
+            # إثبات تنفيذ مطلوب قبل وضع المحور «منجز»
+            ann = c.post(
+                "/schedule/my_course_announcement",
+                json={
+                    "section_id": sid,
+                    "title": "اختبار محور",
+                    "body": "إعلان توثيقي للاختبار",
+                    "announcement_type": "general",
+                    "published_to_students": 1,
+                },
+            )
+            assert ann.status_code == 200
             save = c.post(
                 "/schedule/my_axis_status",
                 json={"section_id": sid, "axis_key": "assessment", "status": "done"},
@@ -624,6 +636,140 @@ class TestInstructorMyCourses:
             logs = (logs_resp.get_json() or {}).get("items") or []
             assert any((x.get("log_type") == "quality_report") for x in logs)
 
+    def test_course_closure_report_saved_and_visible_to_department(self, app):
+        with app.test_client() as c:
+            login_inst = c.post(
+                "/auth/login",
+                json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_inst.status_code == 200
+            sections = c.get("/schedule/my_assigned_sections").get_json().get("rows") or []
+            assert sections
+            sid = int(sections[0]["section_id"])
+            save = c.post(
+                "/schedule/my_course_closure",
+                json={
+                    "section_id": sid,
+                    "implementation_summary": "تم تنفيذ 90% من الخطة.",
+                    "improvement_notes": "زيادة أمثلة عملية.",
+                    "reflection_text": "تحسن التفاعل بعد اختبار قصير.",
+                    "status": "submitted",
+                },
+            )
+            assert save.status_code == 200
+            c.post("/auth/logout")
+
+            login_admin = c.post(
+                "/auth/login",
+                json={"username": "admin-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_admin.status_code == 200
+            listed = c.get("/schedule/course_closure_reports?status=submitted")
+            assert listed.status_code == 200
+            items = (listed.get_json() or {}).get("items") or []
+            assert any(int(x.get("section_id") or 0) == sid for x in items)
+
+    def test_faculty_scorecards_scope(self, app):
+        with app.test_client() as c:
+            login_inst = c.post(
+                "/auth/login",
+                json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_inst.status_code == 200
+            mine = c.get("/schedule/faculty_scorecards")
+            assert mine.status_code == 200
+            my_items = (mine.get_json() or {}).get("items") or []
+            assert len(my_items) >= 1
+            assert all(int(x.get("instructor_id") or 0) == 1 for x in my_items)
+            forbidden = c.get("/schedule/faculty_scorecards?instructor_id=999")
+            assert forbidden.status_code == 403
+            c.post("/auth/logout")
+
+            login_admin = c.post(
+                "/auth/login",
+                json={"username": "admin-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_admin.status_code == 200
+            all_cards = c.get("/schedule/faculty_scorecards")
+            assert all_cards.status_code == 200
+            items = (all_cards.get_json() or {}).get("items") or []
+            assert len(items) >= 1
+
+    def test_cycle_lock_blocks_instructor_updates(self, app):
+        with app.test_client() as c:
+            login_admin = c.post(
+                "/auth/login",
+                json={"username": "admin-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_admin.status_code == 200
+            lock = c.post("/schedule/faculty_cycle_lock", json={"locked": True})
+            assert lock.status_code == 200
+            c.post("/auth/logout")
+
+            login_inst = c.post(
+                "/auth/login",
+                json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_inst.status_code == 200
+            sections = c.get("/schedule/my_assigned_sections").get_json().get("rows") or []
+            sid = int(sections[0]["section_id"])
+            upd = c.post(
+                "/schedule/my_course_plan",
+                json={
+                    "section_id": sid,
+                    "week_no": 2,
+                    "week_topic": "locked",
+                    "lecture_status": "planned",
+                    "resources_text": "",
+                },
+            )
+            assert upd.status_code == 423
+            lock_grade = c.post(
+                "/grades/drafts",
+                json={"course_name": sections[0].get("course_name"), "section_id": sid},
+            )
+            assert lock_grade.status_code == 423
+            c.post("/auth/logout")
+
+            login_admin2 = c.post(
+                "/auth/login",
+                json={"username": "admin-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_admin2.status_code == 200
+            unlock_bad = c.post("/schedule/faculty_cycle_lock", json={"locked": False})
+            assert unlock_bad.status_code == 400
+            unlock = c.post("/schedule/faculty_cycle_lock", json={"locked": False, "reason": "فتح بعد المراجعة"})
+            assert unlock.status_code == 200
+            audit = c.get("/schedule/governance_audit_logs")
+            assert audit.status_code == 200
+            items = (audit.get_json() or {}).get("items") or []
+            assert any((x.get("action") or "") == "FACULTY_CYCLE_LOCKED" for x in items)
+            assert any((x.get("action") or "") == "FACULTY_CYCLE_UNLOCKED" for x in items)
+
+    def test_axis_done_requires_evidence(self, app):
+        with app.test_client() as c:
+            login_inst = c.post(
+                "/auth/login",
+                json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_inst.status_code == 200
+            sections = c.get("/schedule/my_assigned_sections").get_json().get("rows") or []
+            sid = int(sections[0]["section_id"])
+            with app.app_context():
+                from backend.services.utilities import get_connection
+                with get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM faculty_course_plans WHERE section_id = ? AND instructor_id = ?", (sid, 1))
+                    cur.execute("DELETE FROM faculty_course_announcements WHERE section_id = ? AND instructor_id = ?", (sid, 1))
+                    cur.execute("DELETE FROM course_closure_reports WHERE section_id = ? AND instructor_id = ?", (sid, 1))
+                    cur.execute("DELETE FROM faculty_assignment_logs WHERE section_id = ? AND instructor_id = ?", (sid, 1))
+                    conn.commit()
+            bad = c.post(
+                "/schedule/my_axis_status",
+                json={"section_id": sid, "axis_key": "documentation_quality", "status": "done"},
+            )
+            assert bad.status_code == 400
+
 
 class TestGradeDraftsSectionScope:
     def test_grade_draft_requires_assigned_section(self, app):
@@ -705,3 +851,140 @@ class TestGradeDraftsSectionScope:
             assert listed.status_code == 200
             items = (listed.get_json() or {}).get("items") or []
             assert any(int(x.get("id") or 0) == case_id for x in items)
+
+    def test_draft_return_then_resubmit(self, app):
+        with app.test_client() as c:
+            login_inst = c.post(
+                "/auth/login",
+                json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_inst.status_code == 200
+            sec_resp = c.get("/grades/drafts/courses")
+            sections = (sec_resp.get_json() or {}).get("sections") or []
+            assert sections
+            sec = sections[0]
+            create = c.post(
+                "/grades/drafts",
+                json={"course_name": sec.get("course_name"), "section_id": sec.get("section_id")},
+            )
+            if create.status_code == 200:
+                draft_id = int((create.get_json() or {}).get("draft_id") or 0)
+            else:
+                mine = c.get("/grades/drafts/mine")
+                assert mine.status_code == 200
+                drafts = (mine.get_json() or {}).get("drafts") or []
+                assert drafts
+                draft_id = int(drafts[0].get("id") or 0)
+            assert draft_id > 0
+            submit = c.post(f"/grades/drafts/{draft_id}/submit")
+            assert submit.status_code == 200
+            c.post("/auth/logout")
+
+            login_admin = c.post(
+                "/auth/login",
+                json={"username": "admin-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_admin.status_code == 200
+            rej = c.post(
+                f"/grades/drafts/{draft_id}/reject",
+                json={"note": "يرجى تدقيق درجة الأعمال"},
+            )
+            assert rej.status_code == 200
+            c.post("/auth/logout")
+
+            login_inst2 = c.post(
+                "/auth/login",
+                json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_inst2.status_code == 200
+            save_items = c.post(
+                f"/grades/drafts/{draft_id}/items",
+                json={
+                    "items": [
+                        {"student_id": "S001", "coursework": 35, "midterm": 16, "final_exam": 30},
+                    ]
+                },
+            )
+            assert save_items.status_code == 200
+            submit2 = c.post(f"/grades/drafts/{draft_id}/submit")
+            assert submit2.status_code == 200
+
+    def test_absent_exam_forces_zero_and_total_limit(self, app):
+        with app.test_client() as c:
+            login_inst = c.post(
+                "/auth/login",
+                json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login_inst.status_code == 200
+            sec_resp = c.get("/grades/drafts/courses")
+            sections = (sec_resp.get_json() or {}).get("sections") or []
+            assert sections
+            sec = sections[0]
+            create = c.post(
+                "/grades/drafts",
+                json={"course_name": sec.get("course_name"), "section_id": sec.get("section_id")},
+            )
+            if create.status_code == 200:
+                draft_id = int((create.get_json() or {}).get("draft_id") or 0)
+            else:
+                mine = c.get("/grades/drafts/mine")
+                drafts = (mine.get_json() or {}).get("drafts") or []
+                draft_id = int(drafts[0].get("id") or 0)
+            assert draft_id > 0
+            d0 = c.get(f"/grades/drafts/{draft_id}")
+            assert d0.status_code == 200
+            st = ((d0.get_json() or {}).get("draft") or {}).get("status")
+            if st == "Submitted":
+                c.post("/auth/logout")
+                login_admin = c.post(
+                    "/auth/login",
+                    json={"username": "admin-test", "password": "TestP@ssw0rd!"},
+                )
+                assert login_admin.status_code == 200
+                rej = c.post(f"/grades/drafts/{draft_id}/reject", json={"note": "فتح للاختبار"})
+                assert rej.status_code == 200
+                c.post("/auth/logout")
+                login_inst = c.post(
+                    "/auth/login",
+                    json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+                )
+                assert login_inst.status_code == 200
+
+            save_ok = c.post(
+                f"/grades/drafts/{draft_id}/items",
+                json={
+                    "items": [
+                        {
+                            "student_id": "S001",
+                            "coursework": 35,
+                            "midterm": 19,
+                            "final_exam": 35,
+                            "absent_final_exam": True,
+                        }
+                    ]
+                },
+            )
+            assert save_ok.status_code == 200
+            details = c.get(f"/grades/drafts/{draft_id}")
+            assert details.status_code == 200
+            items = (details.get_json() or {}).get("items") or []
+            row = next((x for x in items if x.get("student_id") == "S001"), None)
+            assert row is not None
+            assert int(row.get("absent_final_exam") or 0) == 1
+            assert float(row.get("final_exam") or 0) == 0.0
+            assert float(row.get("computed_total") or 0) <= 100.0
+
+            save_bad = c.post(
+                f"/grades/drafts/{draft_id}/items",
+                json={
+                    "items": [
+                        {
+                            "student_id": "S001",
+                            "coursework": 40,
+                            "midterm": 20,
+                            "final_exam": 41,
+                        }
+                    ]
+                },
+            )
+            assert save_bad.status_code == 400

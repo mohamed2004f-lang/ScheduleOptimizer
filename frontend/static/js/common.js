@@ -386,6 +386,34 @@ function formatDate(date, format = 'ar-SA') {
 // ============================================
 window.SCHEDULE_DAYS = ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'];
 
+/**
+ * يوحّد تهجئة اليوم كما في SCHEDULE_DAYS حتى تظهر الحصص في الشبكة حتى لو الجدول خزّن «الاثنين» بدل «الإثنين».
+ * @param {string} dayStr
+ * @returns {string}
+ */
+function canonicalScheduleDayForGrid(dayStr) {
+    const raw = String(dayStr || '').trim();
+    if (!raw) return '';
+    const days = window.SCHEDULE_DAYS || [];
+    if (days.includes(raw)) return raw;
+    const alias = {
+        'الاثنين': 'الإثنين',
+        'إثنين': 'الإثنين',
+        'الثلاثا': 'الثلاثاء',
+        'الاربعاء': 'الأربعاء',
+        'الأربعا': 'الأربعاء',
+        'اربعاء': 'الأربعاء',
+        'الخميس': 'الخميس',
+    };
+    if (alias[raw]) return alias[raw];
+    const fold = (s) => String(s).replace(/\u0640/g, '').replace(/\s/g, '');
+    const rf = fold(raw);
+    for (const d of days) {
+        if (fold(d) === rf) return d;
+    }
+    return raw;
+}
+
 function escapeHtmlSchedule(s) {
     return String(s ?? '')
         .replace(/&/g, '&amp;')
@@ -434,7 +462,7 @@ function buildPublishedTimetableHtml(scheduleRows, opts) {
     const timeSlots = Array.from(timeSet).sort((a, b) => a.localeCompare(b, 'ar'));
     const slotsMap = {};
     rows.forEach(row => {
-        const d = String(row.day || '').trim();
+        const d = canonicalScheduleDayForGrid(row.day);
         const t = String(row.time || '').trim();
         const key = `${d}|${t}`;
         if (!slotsMap[key]) slotsMap[key] = [];

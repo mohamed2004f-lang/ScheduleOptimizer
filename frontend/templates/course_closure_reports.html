@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>تقارير إقفال المقرر</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">تقارير إقفال المقرر</h1>
+        <p class="page-subtitle">اعتماد تقارير الشعب من أعضاء هيئة التدريس</p>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+        <span>التقارير</span>
+        <select id="statusFilter" class="form-select form-select-sm" style="max-width:220px;">
+          <option value="submitted">بانتظار الاعتماد</option>
+          <option value="approved">معتمدة</option>
+          <option value="rejected">مرفوضة</option>
+          <option value="">الكل</option>
+        </select>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead>
+              <tr>
+                <th>المقرر/الشعبة</th>
+                <th>الأستاذ</th>
+                <th>الفصل</th>
+                <th>الملخص</th>
+                <th>الحالة</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="reportsBody"></tbody>
+          </table>
+        </div>
+        <div id="reportsEmpty" class="p-3 text-muted small d-none">لا توجد تقارير مطابقة للفلتر.</div>
+      </div>
+    </div>
+  </main>
+  <script>
+    async function loadReports() {
+      const st = document.getElementById('statusFilter').value || '';
+      const url = '/schedule/course_closure_reports' + (st ? ('?status=' + encodeURIComponent(st)) : '');
+      const r = await fetch(url, { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      const body = document.getElementById('reportsBody');
+      const empty = document.getElementById('reportsEmpty');
+      if (!r.ok) {
+        body.innerHTML = '<tr><td colspan="6">تعذر التحميل</td></tr>';
+        empty.classList.add('d-none');
+        return;
+      }
+      const items = Array.isArray(j.items) ? j.items : [];
+      if (!items.length) {
+        body.innerHTML = '';
+        empty.classList.remove('d-none');
+        return;
+      }
+      empty.classList.add('d-none');
+      body.innerHTML = '';
+      items.forEach(it => {
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td>' + (it.course_name || '') + ' <span class="text-muted small">#' + (it.section_id || '') + '</span></td>' +
+          '<td>' + (it.instructor_name || '') + '</td>' +
+          '<td>' + (it.semester || '') + '</td>' +
+          '<td class="small">' + ((it.implementation_summary || '').slice(0, 120) || '—') + '</td>' +
+          '<td><span class="badge bg-secondary">' + (it.status || '') + '</span></td>' +
+          '<td>' +
+            '<button class="btn btn-sm btn-success me-1" data-approve="' + it.id + '">اعتماد</button>' +
+            '<button class="btn btn-sm btn-outline-danger" data-reject="' + it.id + '">رفض</button>' +
+          '</td>';
+        body.appendChild(tr);
+      });
+      body.querySelectorAll('[data-approve]').forEach(btn => {
+        btn.addEventListener('click', () => reviewReport(Number(btn.getAttribute('data-approve')), 'approved'));
+      });
+      body.querySelectorAll('[data-reject]').forEach(btn => {
+        btn.addEventListener('click', () => reviewReport(Number(btn.getAttribute('data-reject')), 'rejected'));
+      });
+    }
+    async function reviewReport(id, status) {
+      const note = prompt(status === 'approved' ? 'ملاحظة الاعتماد (اختياري):' : 'سبب الرفض (اختياري):', '') || '';
+      const r = await fetch('/schedule/course_closure_reports/' + id + '/review', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ status, review_note: note })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        window.showToast && window.showToast(j.message || 'تعذر تحديث التقرير', 'danger');
+        return;
+      }
+      window.showToast && window.showToast('تم تحديث حالة التقرير', 'success');
+      loadReports().catch(() => {});
+    }
+    document.getElementById('statusFilter').addEventListener('change', () => loadReports().catch(() => {}));
+    loadReports().catch(() => {});
+  </script>
+</body>
+</html>

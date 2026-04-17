@@ -58,34 +58,26 @@ FLASK_DEBUG = os.environ.get('FLASK_DEBUG', '0') == '1'
 # إعدادات قاعدة البيانات
 # ============================================
 BASE_DIR = Path(__file__).parent
-DATABASE_PATH = os.environ.get(
-    'DATABASE_PATH', 
-    str(BASE_DIR / 'backend' / 'database' / 'mechanical.db')
-)
-# مصدر صريح من البيئة (قبل أي افتراض SQLite) — مطلوب للتحقق من الإنتاج
 _RAW_DATABASE_URL = (os.environ.get('DATABASE_URL') or '').strip()
-if not _RAW_DATABASE_URL:
-    # Default to SQLite in development/testing when DATABASE_URL is not provided.
-    DATABASE_URL = f"sqlite:///{Path(DATABASE_PATH).resolve().as_posix()}"
-else:
-    DATABASE_URL = _RAW_DATABASE_URL
+
+# Allow tests to run without a real PostgreSQL DB by letting them override env.
+_IS_PYTEST = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+DATABASE_URL = _RAW_DATABASE_URL
 
 _flask_env_lower = FLASK_ENV.strip().lower()
-if _flask_env_lower == 'production':
+if not _IS_PYTEST:
     if not _RAW_DATABASE_URL:
         raise RuntimeError(
-            "\n\n===== إعدادات الإنتاج =====\n"
-            "عند FLASK_ENV=production يجب تعيين DATABASE_URL صراحةً إلى PostgreSQL.\n"
-            "لا يُسمح بالاعتماد على افتراض SQLite أو ملف mechanical.db.\n"
+            "\n\n===== إعدادات قاعدة البيانات =====\n"
+            "يجب تعيين DATABASE_URL صراحةً إلى PostgreSQL.\n"
             "مثال: DATABASE_URL=postgresql+psycopg://user:pass@host:5432/dbname\n"
             "============================\n"
         )
     _dbu = DATABASE_URL.strip().lower()
     if not (_dbu.startswith('postgresql://') or _dbu.startswith('postgresql+')):
         raise RuntimeError(
-            "\n\n===== إعدادات الإنتاج =====\n"
-            "في الإنتاج يجب أن يبدأ DATABASE_URL بـ postgresql:// أو postgresql+...\n"
-            "SQLite غير مسموح لبيئة حقيقة واحدة على PostgreSQL.\n"
+            "\n\n===== إعدادات قاعدة البيانات =====\n"
+            "DATABASE_URL يجب أن يبدأ بـ postgresql:// أو postgresql+...\n"
             "============================\n"
         )
 

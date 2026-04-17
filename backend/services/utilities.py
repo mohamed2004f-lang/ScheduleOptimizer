@@ -249,6 +249,18 @@ def get_current_term(conn=None, db_file=DB_FILE):
         return _get(c)
 
 
+def schedule_semester_matches_current_term(schedule_semester, term_label: str) -> bool:
+    """
+    يحدد إن كان عمود semester في صف الجدول يُعدّ ضمن «الفصل الحالي».
+    ملاحظة: في التشغيل الحي يجب أن تكون قيمة semester مُعبأة دائماً.
+    """
+    t = (term_label or "").strip()
+    if not t:
+        return False
+    s = str(schedule_semester or "").strip()
+    return bool(s) and s == t
+
+
 # -----------------------------
 # دوال مساعدة للاستيراد/التصدير
 # -----------------------------

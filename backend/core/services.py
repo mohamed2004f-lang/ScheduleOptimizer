@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 
 # استيراد الأدوات المساعدة
 try:
-    from ..services.utilities import get_connection, SEMESTER_LABEL
+    from ..services.utilities import get_connection, get_current_term, SEMESTER_LABEL
 except ImportError:
-    from backend.services.utilities import get_connection, SEMESTER_LABEL
+    from backend.services.utilities import get_connection, get_current_term, SEMESTER_LABEL
 
 # استيراد الاستثناءات
 try:
@@ -791,7 +791,15 @@ class ScheduleService:
         time_val = sanitize_input(time, 20)
         room_v = sanitize_input(room, 50)
         inst_text = sanitize_input(instructor, 100)
-        sem_v = sanitize_input(semester, 50) or SEMESTER_LABEL
+        sem_v = sanitize_input(semester, 50)
+        if not sem_v:
+            try:
+                tname, tyear = get_current_term()
+                sem_v = f"{(tname or '').strip()} {(tyear or '').strip()}".strip()
+            except Exception:
+                sem_v = ""
+        if not sem_v:
+            raise ValidationError("يجب تحديد الفصل الحالي أولاً (الإعدادات) أو تمرير semester بشكل صريح")
 
         if not name:
             raise ValidationError("اسم المقرر مطلوب")

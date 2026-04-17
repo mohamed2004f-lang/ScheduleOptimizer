@@ -5,9 +5,9 @@
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/css/theme-mechanical-engineering.css">
 <link rel="stylesheet" href="/static/css/ui-consistency.css">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link rel="stylesheet" href="/static/vendor/fontawesome/all.min.css">
 <meta name="csrf-token" content="{{ csrf_token() }}">
-<script src="/static/js/common.js"></script>
+<script src="/static/js/common.js?v=20260416"></script>
 
 <!-- Loading Overlay (ثيم قسم الهندسة الميكانيكية) -->
 <div class="loading-overlay" id="loadingOverlay" aria-hidden="true">
@@ -150,6 +150,10 @@
             <li><a class="dropdown-item" id="navInstructors" href="/instructors_form">أعضاء هيئة التدريس</a></li>
             <li><a class="dropdown-item" id="navSupervision" href="/supervision_form">الإشراف الأكاديمي</a></li>
             <li><a class="dropdown-item" id="navSupervisorDashboard" href="/supervisor_dashboard">لوحة المشرف</a></li>
+            <li><hr class="dropdown-divider" id="navFacultyQualityDivider" style="display:none;"></li>
+            <li><a class="dropdown-item" id="navCourseClosureReports" href="/course_closure_reports_page" style="display:none;">تقارير إقفال المقررات</a></li>
+            <li><a class="dropdown-item" id="navFacultyScorecards" href="/faculty_scorecards_page" style="display:none;">مؤشرات إنجاز الشعب</a></li>
+            <li><a class="dropdown-item" id="navFacultyFinalDossier" href="/faculty_final_dossier_page" style="display:none;">الملف النهائي الموحّد</a></li>
           </ul>
         </li>
 
@@ -226,6 +230,7 @@
       // إخفاء بعض الروابط — يُفضّل capabilities من الخادم؛ احتياطياً منطق الأدوار القديم
       let navUsers = false, navSup = false, navRules = false;
       let showCourseReg = false, showScheduleVersions = false, showExamArch = false, showGradeDrafts = false;
+      let showClosureReports = false, showFacultyScorecards = false, showFacultyDossier = false;
       let isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(data.is_supervisor || 0) === 1);
       if (caps && caps.v >= 1) {
         navUsers = !!caps.nav_users_admin;
@@ -235,6 +240,9 @@
         showScheduleVersions = !!caps.nav_schedule_versions;
         showExamArch = !!caps.nav_exam_schedule_versions;
         showGradeDrafts = !!caps.nav_grade_drafts;
+        showClosureReports = !!caps.nav_course_closure_reports;
+        showFacultyScorecards = !!caps.nav_faculty_scorecards;
+        showFacultyDossier = !!caps.nav_faculty_final_dossier;
         isSupervisor = !!caps.is_supervisor_effective;
       } else {
         navUsers = (role === 'admin' || role === 'admin_main');
@@ -244,6 +252,9 @@
         showScheduleVersions = showCourseReg;
         showExamArch = showCourseReg;
         showGradeDrafts = (role === 'admin_main' || role === 'head_of_department' || (role === 'instructor' && !isSupervisor));
+        showClosureReports = showCourseReg;
+        showFacultyScorecards = showCourseReg || role === 'instructor';
+        showFacultyDossier = showCourseReg;
       }
       const showMyCourses = (caps && caps.v >= 1 && caps.nav_my_assigned_courses) || role === 'instructor';
       const wrapMy = document.getElementById('navMyCoursesWrap');
@@ -269,6 +280,15 @@
       if (elExamScheduleVersions) elExamScheduleVersions.style.display = showExamArch ? '' : 'none';
       const elGradeDrafts = document.getElementById('navGradeDrafts');
       if (elGradeDrafts) elGradeDrafts.style.display = showGradeDrafts ? '' : 'none';
+      const anyFacultyQuality = showClosureReports || showFacultyScorecards || showFacultyDossier;
+      const elFacultyQualityDivider = document.getElementById('navFacultyQualityDivider');
+      if (elFacultyQualityDivider) elFacultyQualityDivider.style.display = anyFacultyQuality ? '' : 'none';
+      const elClosure = document.getElementById('navCourseClosureReports');
+      if (elClosure) elClosure.style.display = showClosureReports ? '' : 'none';
+      const elScorecards = document.getElementById('navFacultyScorecards');
+      if (elScorecards) elScorecards.style.display = showFacultyScorecards ? '' : 'none';
+      const elDossier = document.getElementById('navFacultyFinalDossier');
+      if (elDossier) elDossier.style.display = showFacultyDossier ? '' : 'none';
       if (!isSupervisor) {
         const elSD = document.getElementById('navSupervisorDashboard');
         if (elSD) elSD.style.display = 'none';
@@ -330,6 +350,10 @@
           'navExamsMidterms',
           'navExamsFinals',
           'navExamsConflicts',
+          'navFacultyQualityDivider',
+          'navCourseClosureReports',
+          'navFacultyScorecards',
+          'navFacultyFinalDossier',
         ];
         hideIds.forEach(id => {
           const el = document.getElementById(id);
@@ -376,6 +400,9 @@
         ['/exam_schedule_versions_page','navExamScheduleVersions'],
         ['/performance_report','navPerformance'],
         ['/supervisor_dashboard','navSupervisorDashboard'],
+        ['/course_closure_reports_page','navCourseClosureReports'],
+        ['/faculty_scorecards_page','navFacultyScorecards'],
+        ['/faculty_final_dossier_page','navFacultyFinalDossier'],
         ['/results','navResults'],
         ['/notifications_center','navNotifications'],
         ['/users_admin','navUsersAdmin'],

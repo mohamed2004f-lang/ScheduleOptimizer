@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>مقرراتي</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
@@ -141,6 +141,17 @@
         '<button type="button" class="btn btn-sm btn-outline-dark mc-save-ann" data-section="' + sectionId + '">نشر إعلان</button>' +
         '<div class="mc-ann-list mt-1 text-muted" data-section="' + sectionId + '"></div>' +
         '</div>' +
+        '<div class="mt-2 p-2 border rounded bg-light-subtle">' +
+        '<div class="fw-semibold mb-1">تقرير إقفال المقرر</div>' +
+        '<textarea class="form-control form-control-sm mb-1 mc-close-impl" data-section="' + sectionId + '" rows="2" placeholder="ملخص تنفيذ المقرر"></textarea>' +
+        '<textarea class="form-control form-control-sm mb-1 mc-close-improve" data-section="' + sectionId + '" rows="2" placeholder="ملاحظات التحسين"></textarea>' +
+        '<textarea class="form-control form-control-sm mb-1 mc-close-reflect" data-section="' + sectionId + '" rows="2" placeholder="انعكاس الأستاذ"></textarea>' +
+        '<div class="d-flex gap-1">' +
+          '<button type="button" class="btn btn-sm btn-outline-primary mc-save-close-draft" data-section="' + sectionId + '">حفظ مسودة</button>' +
+          '<button type="button" class="btn btn-sm btn-primary mc-submit-close" data-section="' + sectionId + '">إرسال لاعتماد القسم</button>' +
+        '</div>' +
+        '<div class="small text-muted mt-1 mc-close-status" data-section="' + sectionId + '"></div>' +
+        '</div>' +
         '</div>'
       );
     }
@@ -234,6 +245,15 @@
               ? anns.slice(0, 4).map((a) => ('<div><span class="text-muted">[' + esc(a.announcement_type) + ']</span> ' + esc(a.body) + '</div>')).join('')
               : '<div>لا توجد إعلانات حتى الآن.</div>';
           }
+          const cr = dataAdmin.closure_report || {};
+          const impl = document.querySelector('.mc-close-impl[data-section="' + sectionId + '"]');
+          const imp = document.querySelector('.mc-close-improve[data-section="' + sectionId + '"]');
+          const ref = document.querySelector('.mc-close-reflect[data-section="' + sectionId + '"]');
+          const st = document.querySelector('.mc-close-status[data-section="' + sectionId + '"]');
+          if (impl) impl.value = cr.implementation_summary || '';
+          if (imp) imp.value = cr.improvement_notes || '';
+          if (ref) ref.value = cr.reflection_text || '';
+          if (st) st.textContent = cr.status ? ('حالة التقرير: ' + cr.status) : 'حالة التقرير: draft';
         }
 
         rows.forEach((r) => { refreshCourseAdmin(r.section_id).catch(() => {}); });
@@ -354,6 +374,41 @@
               if (bodyEl) bodyEl.value = '';
             }
             await refreshCourseAdmin(sectionId);
+          });
+        });
+
+        async function saveClosure(sectionId, reportStatus) {
+          const implementationSummary = document.querySelector('.mc-close-impl[data-section="' + sectionId + '"]')?.value || '';
+          const improvementNotes = document.querySelector('.mc-close-improve[data-section="' + sectionId + '"]')?.value || '';
+          const reflectionText = document.querySelector('.mc-close-reflect[data-section="' + sectionId + '"]')?.value || '';
+          const r = await fetch('/schedule/my_course_closure', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              section_id: sectionId,
+              implementation_summary: implementationSummary,
+              improvement_notes: improvementNotes,
+              reflection_text: reflectionText,
+              status: reportStatus,
+            }),
+          });
+          if (!r.ok) {
+            alert('تعذر حفظ تقرير الإقفال');
+          }
+          await refreshCourseAdmin(sectionId);
+        }
+
+        document.querySelectorAll('.mc-save-close-draft').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const sectionId = parseInt(btn.getAttribute('data-section') || '0', 10);
+            await saveClosure(sectionId, 'draft');
+          });
+        });
+        document.querySelectorAll('.mc-submit-close').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const sectionId = parseInt(btn.getAttribute('data-section') || '0', 10);
+            await saveClosure(sectionId, 'submitted');
           });
         });
       } catch (e) {

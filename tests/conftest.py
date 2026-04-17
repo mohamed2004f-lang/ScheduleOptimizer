@@ -114,11 +114,17 @@ CREATE TABLE IF NOT EXISTS grade_draft_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     draft_id INTEGER NOT NULL,
     student_id TEXT NOT NULL,
+    coursework REAL,
+    midterm REAL,
+    final_exam REAL,
+    absent_midterm INTEGER NOT NULL DEFAULT 0,
+    absent_final_exam INTEGER NOT NULL DEFAULT 0,
     partial REAL,
     final REAL,
     total REAL,
     computed_total REAL,
-    updated_at TEXT
+    updated_at TEXT,
+    UNIQUE (draft_id, student_id)
 );
 
 CREATE TABLE IF NOT EXISTS grade_special_cases (
@@ -250,9 +256,46 @@ CREATE TABLE IF NOT EXISTS faculty_assignment_logs (
     approved_by TEXT
 );
 
+CREATE TABLE IF NOT EXISTS course_closure_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    section_id INTEGER NOT NULL,
+    instructor_id INTEGER NOT NULL,
+    semester TEXT NOT NULL,
+    implementation_summary TEXT DEFAULT '',
+    improvement_notes TEXT DEFAULT '',
+    reflection_text TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'draft',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    created_by TEXT DEFAULT '',
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT DEFAULT '',
+    approved_at TEXT,
+    approved_by TEXT,
+    review_note TEXT DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS system_settings (
     key TEXT PRIMARY KEY,
     value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value_json TEXT,
+    updated_at TEXT,
+    updated_by TEXT
+);
+
+CREATE TABLE IF NOT EXISTS governance_audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT DEFAULT CURRENT_TIMESTAMP,
+    actor TEXT DEFAULT '',
+    action TEXT NOT NULL,
+    scope_type TEXT DEFAULT '',
+    scope_id TEXT DEFAULT '',
+    old_value TEXT DEFAULT '',
+    new_value TEXT DEFAULT '',
+    reason TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS notifications (

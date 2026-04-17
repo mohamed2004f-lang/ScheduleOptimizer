@@ -3070,7 +3070,7 @@ def attendance_allowed_courses():
                     {"status": "error", "message": "لا يمكن تحديد الفصل الحالي", "code": "FORBIDDEN"}
                 ), 403
             sem_sql, sem_bind = build_schedule_semester_match("s.semester", term_name, term_year)
-            sched_sem_and = f" AND (({sem_sql}) OR TRIM(COALESCE(s.semester, '')) = '')"
+            sched_sem_and = f" AND ({sem_sql})"
             rows = cur.execute(
                 f"""
                 SELECT DISTINCT r.course_name,
@@ -3111,7 +3111,7 @@ def attendance_allowed_courses():
             return jsonify({"status": "error", "message": "لا يمكن تحديد الفصل الحالي", "code": "FORBIDDEN"}), 403
 
         sem_sql, sem_bind = build_schedule_semester_match("s.semester", term_name, term_year)
-        sched_sem_and = f" AND (({sem_sql}) OR TRIM(COALESCE(s.semester, '')) = '')"
+        sched_sem_and = f" AND ({sem_sql})"
 
         if effective_supervisor:
             instructor_id = session.get("instructor_id")
@@ -3667,12 +3667,29 @@ def students_import_excel():
         if not {"student_id","student_name"}.issubset(df.columns):
             return jsonify({"status":"error","message":"Columns required: student_id, student_name"}), 400
         rows = df.to_dict(orient="records")
-        with sqlite3.connect(DB_FILE) as conn:
+        with get_connection() as conn:
             cur = conn.cursor()
             for r in rows:
                 sid = normalize_sid(r.get("student_id"))
-                name = r.get("student_name") or ""
-                cur.execute("INSERT OR REPLACE INTO students (student_id, student_name) VALUES (?,?)", (sid, name))
+                name = (r.get("student_name") or "").strip()
+                if not sid:
+                    continue
+                if is_postgresql():
+                    cur.execute(
+                        """
+                        INSERT INTO students (student_id, student_name)
+                        VALUES (?, ?)
+                        ON CONFLICT(student_id) DO UPDATE SET
+                          student_name=excluded.student_name,
+                          updated_at=CURRENT_TIMESTAMP
+                        """,
+                        (sid, name),
+                    )
+                else:
+                    cur.execute(
+                        "INSERT OR REPLACE INTO students (student_id, student_name) VALUES (?,?)",
+                        (sid, name),
+                    )
             conn.commit()
         return jsonify({"status":"ok","imported":len(rows)}), 200
     except Exception as e:

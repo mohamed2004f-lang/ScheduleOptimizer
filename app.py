@@ -1,6 +1,6 @@
-from flask import Flask, render_template, redirect, url_for, jsonify, session, request, abort
+from flask import Flask, render_template, redirect, url_for, jsonify, session, request, abort, send_from_directory
 from flask_wtf.csrf import CSRFProtect, CSRFError
-from backend.database.database import ensure_tables, DB_FILE, is_postgresql, close_pool
+from backend.database.database import ensure_tables, is_postgresql, close_pool
 from config import DATABASE_URL, FLASK_ENV, FLASK_DEBUG
 import atexit
 
@@ -32,12 +32,21 @@ from backend.core.security import init_security_headers
 import os
 import pprint
 import logging
-import sqlite3
 import importlib
 from pathlib import Path
 
 # استخدم مجلد القوالب/الستايتك كما في مشروعك
 app = Flask(__name__, template_folder="frontend/templates", static_folder="frontend/static")
+
+
+@app.route("/static/vendor/webfonts/<path:filename>")
+def fontawesome_webfonts_compat(filename):
+    """
+    توافق مسارات Font Awesome القديمة:
+    all.min.css يشير إلى /static/vendor/webfonts/* بينما الملفات الفعلية ضمن
+    /static/vendor/fontawesome/webfonts/*
+    """
+    return send_from_directory("frontend/static/vendor/fontawesome/webfonts", filename)
 
 # إعدادات تطوير محلية لتفادي الحاجة لإعادة تشغيل المنظومة بعد كل تعديل.
 if FLASK_ENV != "production":
@@ -53,58 +62,25 @@ if FLASK_ENV != "production":
             resp.headers["Expires"] = "0"
         return resp
 
+
+@app.after_request
+def _disable_grade_drafts_cache(resp):
+    """امنَع كاش صفحة مسودات الدرجات دائماً لتفادي ظهور نسخة واجهة قديمة."""
+    p = (request.path or "").strip().lower()
+    if p.startswith("/grade_drafts") or p.startswith("/grades/drafts"):
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
+
 # CSRF protection (Web UI). API routes can be exempted.
 app.config.setdefault("WTF_CSRF_HEADERS", ["X-CSRFToken", "X-CSRF-Token"])
 csrf = CSRFProtect()
 csrf.init_app(app)
 
-# عرض اتصال قاعدة البيانات في الكونسول (مهم: مع PostgreSQL لا يُستخدم ملف mechanical.db)
-if is_postgresql():
-    tail = DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else "(configured)"
-    print("ACTIVE DATABASE: PostgreSQL —", tail)
-    print(
-        "NOTE: While DATABASE_URL is set, the app does NOT read/write SQLite file mechanical.db.",
-        "If you inspect backend/database/mechanical.db in a DB browser, it will NOT match live data.",
-    )
-    _dbp = os.path.abspath(DB_FILE)
-    if os.path.isfile(_dbp):
-        try:
-            _c = sqlite3.connect(_dbp)
-            _nu = _c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-            _c.close()
-            print(f"  (Legacy SQLite file still on disk: {_dbp} — {int(_nu)} user rows there; ignore for live app.)")
-        except Exception:
-            print(f"  (Legacy SQLite file exists: {_dbp})")
-else:
-    print("ACTIVE DATABASE: SQLite —", os.path.abspath(DB_FILE))
-
-# فحص سريع: أكثر من نسخة mechanical.db داخل المشروع (باستثناء نسخ احتياطية ومجلدات أدوات ونسخ متداخلة Users/...)
-_SKIP_WALK_DIRS = frozenset(
-    {".git", ".venv", "venv", "backups", "users", "__pycache__", ".pytest_cache", "node_modules"}
-)
-
-
-def _mechanical_db_candidates(project_root: str) -> list[str]:
-    found: list[str] = []
-    root = os.path.abspath(project_root)
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            d for d in dirnames if d.lower() not in _SKIP_WALK_DIRS and not d.startswith(".")
-        ]
-        for fn in filenames:
-            if fn.lower() == "mechanical.db":
-                found.append(os.path.abspath(os.path.join(dirpath, fn)))
-    return found
-
-
-dups = _mechanical_db_candidates(".")
-if len(dups) > 1:
-    print('\nWARNING: Multiple mechanical.db files detected. This can cause stale/missing data in the app.')
-    print(' Central DB (should be used):', os.path.abspath(DB_FILE))
-    print(' All detected DBs:')
-    for p in dups:
-        print('  -', p)
-    print('Backups of migrated DBs are stored in the backups/ folder. Consider deleting duplicates after verifying data.')
+# عرض اتصال قاعدة البيانات في الكونسول
+tail = DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else "(configured)"
+print("ACTIVE DATABASE:", ("PostgreSQL — " + tail) if is_postgresql() else tail)
 
 # تهيئة الجداول
 ensure_tables()
@@ -472,9 +448,14 @@ def grade_drafts_page():
     """واجهة مسودات الدرجات: أستاذ (غير مشرف) أو اعتماد من رئيس القسم / الإدارة الرئيسية."""
     role = (session.get("user_role") or "").strip()
     is_sup = (role == "supervisor") or (role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
-    if role == "instructor" and not is_sup:
+    has_instructor = bool(session.get("instructor_id"))
+    can_instructor_ui = has_instructor and not is_sup and role != "supervisor"
+    can_approver_ui = role in ("admin", "admin_main", "head_of_department")
+    if can_instructor_ui and can_approver_ui:
+        return render_template("grade_drafts.html", page_mode="both", active_page="grade_drafts")
+    if can_instructor_ui:
         return render_template("grade_drafts.html", page_mode="instructor", active_page="grade_drafts")
-    if role in ("admin_main", "head_of_department"):
+    if can_approver_ui:
         return render_template("grade_drafts.html", page_mode="approver", active_page="grade_drafts")
     return redirect(url_for("transcript_page"))
 
@@ -559,6 +540,30 @@ def schedule_versions_page():
 def exam_schedule_versions_page():
     """أرشيف نسخ جداول الامتحانات (جزئي / نهائي)."""
     return render_template("exam_versions.html")
+
+
+@app.route("/course_closure_reports_page")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def course_closure_reports_page():
+    """لوحة رئيس القسم لاعتماد تقارير إقفال المقرر."""
+    return render_template("course_closure_reports.html")
+
+
+@app.route("/faculty_scorecards_page")
+@login_required
+@role_required("admin", "admin_main", "head_of_department", "instructor")
+def faculty_scorecards_page():
+    """لوحة مؤشرات إنجاز الشعب (Scorecard)."""
+    return render_template("faculty_scorecards.html")
+
+
+@app.route("/faculty_final_dossier_page")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def faculty_final_dossier_page():
+    """واجهة الملف النهائي الموحّد للشعب."""
+    return render_template("faculty_final_dossier.html")
 
 
 def _read_text_doc(path: str) -> str:

@@ -91,9 +91,11 @@ def compute_capabilities(user_role: str | None, is_supervisor_val: int | None) -
 
     is_supervisor_effective = (role == "supervisor") or (role == "instructor" and isv)
     staff_planning = role in ("admin", "admin_main", "head_of_department")
-    show_grade_drafts = (role in ("admin_main", "head_of_department")) or (
+    show_grade_drafts = (role in ("admin", "admin_main", "head_of_department")) or (
         role == "instructor" and not is_supervisor_effective
     )
+    staff_quality = role in ("admin", "admin_main", "head_of_department")
+    show_faculty_scorecards = staff_quality or role == "instructor"
 
     return {
         "v": 1,
@@ -105,6 +107,9 @@ def compute_capabilities(user_role: str | None, is_supervisor_val: int | None) -
         "nav_schedule_versions": staff_planning,
         "nav_exam_schedule_versions": staff_planning,
         "nav_grade_drafts": show_grade_drafts,
+        "nav_course_closure_reports": staff_quality,
+        "nav_faculty_scorecards": show_faculty_scorecards,
+        "nav_faculty_final_dossier": staff_quality,
         "is_supervisor_effective": bool(is_supervisor_effective),
         "is_instructor_or_supervisor_nav": (role == "instructor")
         or (role == "supervisor")

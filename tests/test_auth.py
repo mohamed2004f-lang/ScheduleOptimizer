@@ -44,6 +44,9 @@ class TestAuth:
         assert caps["v"] == 1
         assert caps["can_manage_schedule_edit"] is True
         assert caps["nav_users_admin"] is False
+        assert caps.get("nav_course_closure_reports") is True
+        assert caps.get("nav_faculty_scorecards") is True
+        assert caps.get("nav_faculty_final_dossier") is True
 
     def test_compute_capabilities_student(self):
         caps = compute_capabilities("student", 0)
@@ -53,5 +56,11 @@ class TestAuth:
     def test_compute_capabilities_instructor_my_courses_nav(self):
         caps = compute_capabilities("instructor", 0)
         assert caps.get("nav_my_assigned_courses") is True
+        assert caps.get("nav_faculty_scorecards") is True
+        assert caps.get("nav_course_closure_reports") is False
+        assert caps.get("nav_faculty_final_dossier") is False
         caps2 = compute_capabilities("admin_main", 0)
         assert caps2.get("nav_my_assigned_courses") is False
+        assert caps2.get("nav_course_closure_reports") is True
+        assert caps2.get("nav_faculty_scorecards") is True
+        assert caps2.get("nav_faculty_final_dossier") is True

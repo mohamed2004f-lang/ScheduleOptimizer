@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>مؤشرات إنجاز الشعب</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">مؤشرات إنجاز الشعب</h1>
+        <p class="page-subtitle">مؤشر موحّد: تنفيذ الخطة + المحاور + تقرير الإقفال + التكليفات الرسمية</p>
+      </div>
+    </div>
+    <div id="scoreScopeBanner" class="alert alert-info small py-2 mb-3 d-none" role="status"></div>
+    <div class="card">
+      <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+        <span>النتائج</span>
+        <div class="d-flex gap-2 align-items-center">
+          <span id="lockState" class="small text-muted"></span>
+          <button id="btnToggleLock" class="btn btn-sm btn-outline-danger d-none">قفل/فتح</button>
+          <button id="btnRefresh" class="btn btn-sm btn-outline-secondary">تحديث</button>
+        </div>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead>
+              <tr>
+                <th>المقرر/الشعبة</th>
+                <th>الأستاذ</th>
+                <th>الفصل</th>
+                <th>الخطة</th>
+                <th>المحاور</th>
+                <th>الإقفال</th>
+                <th>تكليفات/اعتمادات</th>
+                <th>المؤشر الكلي</th>
+              </tr>
+            </thead>
+            <tbody id="scoreBody"></tbody>
+          </table>
+        </div>
+        <div id="scoreEmpty" class="p-3 text-muted small d-none">لا توجد بيانات متاحة.</div>
+      </div>
+    </div>
+  </main>
+  <script>
+    function soJsonHeaders() {
+      const m = document.querySelector('meta[name="csrf-token"]');
+      const t = m ? (m.getAttribute('content') || '').trim() : '';
+      const h = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+      if (t) h['X-CSRFToken'] = t;
+      return h;
+    }
+    function badgeColor(v) {
+      const n = Number(v || 0);
+      if (n >= 85) return 'bg-success';
+      if (n >= 70) return 'bg-primary';
+      if (n >= 50) return 'bg-warning text-dark';
+      return 'bg-danger';
+    }
+    async function loadLockState() {
+      const lockState = document.getElementById('lockState');
+      const btn = document.getElementById('btnToggleLock');
+      const auth = await fetch('/auth/check', { credentials: 'include' }).then(x => x.json()).catch(() => ({}));
+      const role = (auth && auth.role) ? String(auth.role) : '';
+      const canToggleLock = ['admin', 'admin_main', 'head_of_department'].includes(role);
+      const r = await fetch('/schedule/faculty_cycle_lock', { credentials: 'include' });
+      if (!r.ok) {
+        lockState.textContent = '';
+        btn.classList.add('d-none');
+        return;
+      }
+      const j = await r.json().catch(() => ({}));
+      const locked = !!(j && j.locked);
+      lockState.textContent = 'دورة الفصل: ' + (locked ? 'مغلقة — لا يمكن لعضو هيئة التدريس حفظ تعديلات الخطة أو الدرجات أو التقارير حتى يُعاد فتح الدورة' : 'مفتوحة');
+      if (canToggleLock) {
+        btn.classList.remove('d-none');
+        btn.textContent = locked ? 'فتح الدورة' : 'إغلاق الدورة';
+        btn.onclick = async () => {
+          const rCur = await fetch('/schedule/faculty_cycle_lock', { credentials: 'include' });
+          const jCur = rCur.ok ? await rCur.json().catch(() => ({})) : {};
+          const curLocked = !!(jCur && jCur.locked);
+          const nextLocked = !curLocked;
+          const payload = { locked: nextLocked };
+          if (curLocked && !nextLocked) {
+            const reason = window.prompt('سبب إعادة فتح الدورة (إلزامي):', '');
+            if (!reason || !String(reason).trim()) {
+              window.showToast && window.showToast('يجب إدخال سبب لإعادة فتح الدورة', 'warning');
+              return;
+            }
+            payload.reason = String(reason).trim();
+          }
+          const rr = await fetch('/schedule/faculty_cycle_lock', {
+            method: 'POST',
+            credentials: 'include',
+            headers: soJsonHeaders(),
+            body: JSON.stringify(payload)
+          });
+          const jr = await rr.json().catch(() => ({}));
+          if (!rr.ok) {
+            window.showToast && window.showToast(jr.message || 'تعذر تغيير حالة الدورة', 'danger');
+            return;
+          }
+          window.showToast && window.showToast('تم تحديث حالة دورة الفصل', 'success');
+          loadLockState().catch(() => {});
+        };
+      } else {
+        btn.classList.add('d-none');
+      }
+    }
+    async function loadScorecards() {
+      const r = await fetch('/schedule/faculty_scorecards', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      const body = document.getElementById('scoreBody');
+      const empty = document.getElementById('scoreEmpty');
+      if (!r.ok) {
+        body.innerHTML = '<tr><td colspan="8">تعذر التحميل</td></tr>';
+        empty.classList.add('d-none');
+        return;
+      }
+      const items = Array.isArray(j.items) ? j.items : [];
+      if (!items.length) {
+        body.innerHTML = '';
+        empty.classList.remove('d-none');
+        return;
+      }
+      empty.classList.add('d-none');
+      body.innerHTML = '';
+      items.forEach(it => {
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td>' + (it.course_name || '') + ' <span class="text-muted small">#' + (it.section_id || '') + '</span></td>' +
+          '<td>' + (it.instructor_name || '') + '</td>' +
+          '<td>' + (it.semester || '') + '</td>' +
+          '<td class="small">' + (it.plan_done || 0) + '/' + (it.plan_total || 0) + ' (' + (it.plan_progress || 0) + '%)</td>' +
+          '<td class="small">' + (it.axis_done || 0) + '/' + (it.axis_total || 0) + ' (' + (it.axis_progress || 0) + '%)</td>' +
+          '<td><span class="badge bg-secondary">' + (it.closure_status || 'draft') + '</span></td>' +
+          '<td class="small">' + (it.assignments_count || 0) + ' / ' + (it.approved_assignment_logs || 0) + '</td>' +
+          '<td><span class="badge ' + badgeColor(it.overall_score) + '">' + (it.overall_score || 0) + '%</span></td>';
+        body.appendChild(tr);
+      });
+    }
+    document.getElementById('btnRefresh').addEventListener('click', () => loadScorecards().catch(() => {}));
+    (async function initScorePage() {
+      try {
+        const auth = await fetch('/auth/check', { credentials: 'include' }).then(x => x.json()).catch(() => ({}));
+        const role = (auth && auth.role) ? String(auth.role) : '';
+        const b = document.getElementById('scoreScopeBanner');
+        if (b && role === 'instructor') {
+          b.textContent = 'عرض مقيّد: تظهر هنا شعبك المسندة في الجدول للفصل الحالي فقط (مقارنةً برؤية القسم لجميع الأساتذة).';
+          b.classList.remove('d-none');
+        }
+      } catch (e) { /* ignore */ }
+      loadLockState().catch(() => {});
+      loadScorecards().catch(() => {});
+    })();
+  </script>
+</body>
+</html>

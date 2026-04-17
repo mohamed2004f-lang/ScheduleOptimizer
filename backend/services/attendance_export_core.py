@@ -85,9 +85,9 @@ def semester_matches_term_settings(
     ss = _collapse_ws(schedule_semester)
     n = _collapse_ws(str(term_name or ""))
     y = _collapse_ws(str(term_year or ""))
-    # صف جدول بلا نص فصل: نعتمد وجود المقرر في الجدول مع التسجيل (لا نستبعد لغياب عمود الفصل).
+    # في التشغيل الحي يجب أن تكون قيمة الفصل في الجدول مُعبأة دائماً.
     if not ss:
-        return True
+        return False
 
     f = _collapse_ws(f"{n} {y}")
     candidates: list[str] = []
@@ -295,7 +295,7 @@ def collect_attendance_export_state(
         semester_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
         sem_match_sql, sem_match_params = build_schedule_semester_match("s.semester", term_name, term_year)
         # صفوف بلا فصل في schedule تُقبل أيضاً (كثير من النشرات لا تملأ semester)
-        sched_sem_and = f" AND (({sem_match_sql}) OR TRIM(COALESCE(s.semester, '')) = '')"
+        sched_sem_and = f" AND ({sem_match_sql})"
         allowed_course_set = None
         allowed_student_filter_sql = None
         allowed_student_filter_params: list = []
