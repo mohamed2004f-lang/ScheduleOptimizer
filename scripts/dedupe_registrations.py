@@ -1,6 +1,6 @@
 """
 Script to remove duplicate registrations (and optionally create a unique index)
-- Removes duplicates keeping the lowest rowid per (student_id, course_name)
+- Removes duplicates keeping the lowest id per (student_id, course_name)
 - Creates a UNIQUE index on (student_id, course_name) to prevent future duplicates
 
 Run: python scripts/dedupe_registrations.py
@@ -26,9 +26,9 @@ def run():
         before = cur.fetchone()[0]
         print('registrations before:', before)
 
-        # delete duplicates, keeping the first (min rowid)
+        # delete duplicates, keeping the first (min id)
         cur.execute("BEGIN")
-        cur.execute("DELETE FROM registrations WHERE rowid NOT IN (SELECT MIN(rowid) FROM registrations GROUP BY student_id, course_name)")
+        cur.execute("DELETE FROM registrations WHERE id NOT IN (SELECT MIN(id) FROM registrations GROUP BY student_id, course_name)")
         cur.execute("COMMIT")
 
         cur.execute("SELECT COUNT(*) FROM registrations")

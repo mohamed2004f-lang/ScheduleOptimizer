@@ -10,7 +10,8 @@ import pandas as pd
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from flask import Blueprint, request, jsonify, Response, send_file, session, current_app
-from backend.core.auth import login_required, role_required
+from backend.core.auth import login_required, role_required, current_supervisor_effective
+from backend.database.database import is_postgresql, schedule_pk_column, fetch_table_columns
 from .utilities import (
     get_connection,
     get_current_term,
@@ -26,6 +27,16 @@ DEFAULT_MIDTERM_WEIGHT = 30.0
 DEFAULT_FINAL_EXAM_WEIGHT = 60.0
 
 grades_bp = Blueprint("grades", __name__)
+SCHEDULE_PK_COL = "id"
+
+
+def _sync_schedule_pk_col(conn) -> str:
+    global SCHEDULE_PK_COL
+    try:
+        SCHEDULE_PK_COL = schedule_pk_column(conn)
+    except Exception:
+        pass
+    return SCHEDULE_PK_COL
 
 
 def _now_iso_z() -> str:
@@ -37,8 +48,7 @@ def _current_user_name() -> str:
 
 
 def _is_supervisor_role() -> bool:
-    r = (session.get("user_role") or "").strip()
-    return (r == "supervisor") or (r == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    return current_supervisor_effective()
 
 
 def _current_semester_label(conn) -> str:
@@ -167,7 +177,7 @@ def _can_delete_grade_draft(conn, draft_row) -> bool:
 
 def _course_grading_mode(conn, course_name: str) -> str:
     cur = conn.cursor()
-    cols = [r[1] for r in cur.execute("PRAGMA table_info(courses)").fetchall()]
+    cols = fetch_table_columns(conn, "courses")
     if "grading_mode" not in cols:
         return "partial_final"
     row = cur.execute(
@@ -417,19 +427,20 @@ def draft_roster_for_course():
     if not course_name:
         return jsonify({"status": "error", "message": "course_name مطلوب"}), 400
     with get_connection() as conn:
+        _sync_schedule_pk_col(conn)
         section_row = _resolve_assigned_section_for_course(conn, course_name, section_id)
         if not section_row:
             return jsonify({"status": "error", "message": "المقرر غير مسند لك في الفصل الحالي"}), 403
         section_id = int(section_row["section_id"])
         cur = conn.cursor()
         rows = cur.execute(
-            """
+            f"""
             SELECT DISTINCT r.student_id, COALESCE(s.student_name, '') AS student_name
             FROM registrations r
             JOIN schedule sc ON sc.course_name = r.course_name
             LEFT JOIN students s ON s.student_id = r.student_id
             WHERE r.course_name = ?
-              AND sc.rowid = ?
+              AND sc.{SCHEDULE_PK_COL} = ?
             ORDER BY student_name, r.student_id
             """,
             (course_name, section_id),
@@ -518,6 +529,7 @@ def create_grade_draft():
         return jsonify({"status": "error", "message": "course_name مطلوب"}), 400
 
     with get_connection() as conn:
+        _sync_schedule_pk_col(conn)
         cur = conn.cursor()
         semester_label = _current_semester_label(conn)
         if _is_faculty_cycle_locked(conn, semester_label):
@@ -583,15 +595,27 @@ def create_grade_draft():
 
         grading_mode = _course_grading_mode(conn, course_name)
         now = _now_iso_z()
-        cur.execute(
-            """
-            INSERT INTO grade_drafts
-            (semester, course_name, section_id, instructor_id, grading_mode, status, created_at, updated_at)
-            VALUES (?,?,?,?,?, 'Draft', ?, ?)
-            """,
-            (semester_label, course_name, section_id, int(instructor_id), grading_mode, now, now),
-        )
-        draft_id = cur.lastrowid
+        if is_postgresql():
+            row_new = cur.execute(
+                """
+                INSERT INTO grade_drafts
+                (semester, course_name, section_id, instructor_id, grading_mode, status, created_at, updated_at)
+                VALUES (?,?,?,?,?, 'Draft', ?, ?)
+                RETURNING id
+                """,
+                (semester_label, course_name, section_id, int(instructor_id), grading_mode, now, now),
+            ).fetchone()
+            draft_id = int(row_new[0]) if row_new else 0
+        else:
+            cur.execute(
+                """
+                INSERT INTO grade_drafts
+                (semester, course_name, section_id, instructor_id, grading_mode, status, created_at, updated_at)
+                VALUES (?,?,?,?,?, 'Draft', ?, ?)
+                """,
+                (semester_label, course_name, section_id, int(instructor_id), grading_mode, now, now),
+            )
+            draft_id = int(cur.lastrowid or 0)
         conn.commit()
 
     return jsonify({"status": "ok", "draft_id": int(draft_id), "grading_mode": grading_mode, "section_id": section_id}), 200
@@ -895,25 +919,47 @@ def request_grade_draft_correction(draft_id: int):
         if pending:
             req_id = int(pending["id"] if hasattr(pending, "keys") else pending[0])
             return jsonify({"status": "ok", "request_id": req_id, "existing": True}), 200
-        cur.execute(
-            """
-            INSERT INTO grade_correction_requests
-            (semester, draft_id, course_name, section_id, instructor_id, requested_by, reason, status, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,'pending',?,?)
-            """,
-            (
-                (d["semester"] or "").strip(),
-                int(draft_id),
-                (d["course_name"] or "").strip(),
-                d["section_id"],
-                int(d["instructor_id"] or 0),
-                actor,
-                reason,
-                now,
-                now,
-            ),
-        )
-        req_id = int(cur.lastrowid)
+        if is_postgresql():
+            row_new = cur.execute(
+                """
+                INSERT INTO grade_correction_requests
+                (semester, draft_id, course_name, section_id, instructor_id, requested_by, reason, status, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,'pending',?,?)
+                RETURNING id
+                """,
+                (
+                    (d["semester"] or "").strip(),
+                    int(draft_id),
+                    (d["course_name"] or "").strip(),
+                    d["section_id"],
+                    int(d["instructor_id"] or 0),
+                    actor,
+                    reason,
+                    now,
+                    now,
+                ),
+            ).fetchone()
+            req_id = int(row_new[0]) if row_new else 0
+        else:
+            cur.execute(
+                """
+                INSERT INTO grade_correction_requests
+                (semester, draft_id, course_name, section_id, instructor_id, requested_by, reason, status, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,'pending',?,?)
+                """,
+                (
+                    (d["semester"] or "").strip(),
+                    int(draft_id),
+                    (d["course_name"] or "").strip(),
+                    d["section_id"],
+                    int(d["instructor_id"] or 0),
+                    actor,
+                    reason,
+                    now,
+                    now,
+                ),
+            )
+            req_id = int(cur.lastrowid or 0)
         conn.commit()
     try:
         log_activity(action="grade_correction_request_create", details=f"draft_id={draft_id}, request_id={req_id}")
@@ -1077,11 +1123,11 @@ def create_grade_special_case():
             return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         # الطالب يجب أن يكون مسجلاً في نفس الشعبة.
         row = cur.execute(
-            """
+            f"""
             SELECT 1
             FROM registrations r
             JOIN schedule s ON s.course_name = r.course_name
-            WHERE r.student_id = ? AND r.course_name = ? AND s.rowid = ?
+            WHERE r.student_id = ? AND r.course_name = ? AND s.{SCHEDULE_PK_COL} = ?
             LIMIT 1
             """,
             (student_id, course_name, int(section_id)),
@@ -1090,25 +1136,47 @@ def create_grade_special_case():
             return jsonify({"status": "error", "message": "الطالب غير مسجل في هذه الشعبة"}), 400
         actor = _current_user_name() or "system"
         now = _now_iso_z()
-        cur.execute(
-            """
-            INSERT INTO grade_special_cases
-                (semester, section_id, course_name, instructor_id, student_id, case_type, reason, status, created_at, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?)
-            """,
-            (
-                semester,
-                int(section_id),
-                course_name,
-                int(session.get("instructor_id") or 0),
-                student_id,
-                case_type,
-                reason,
-                now,
-                actor,
-            ),
-        )
-        case_id = int(cur.lastrowid or 0)
+        if is_postgresql():
+            row_new = cur.execute(
+                """
+                INSERT INTO grade_special_cases
+                    (semester, section_id, course_name, instructor_id, student_id, case_type, reason, status, created_at, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?)
+                RETURNING id
+                """,
+                (
+                    semester,
+                    int(section_id),
+                    course_name,
+                    int(session.get("instructor_id") or 0),
+                    student_id,
+                    case_type,
+                    reason,
+                    now,
+                    actor,
+                ),
+            ).fetchone()
+            case_id = int(row_new[0]) if row_new else 0
+        else:
+            cur.execute(
+                """
+                INSERT INTO grade_special_cases
+                    (semester, section_id, course_name, instructor_id, student_id, case_type, reason, status, created_at, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?)
+                """,
+                (
+                    semester,
+                    int(section_id),
+                    course_name,
+                    int(session.get("instructor_id") or 0),
+                    student_id,
+                    case_type,
+                    reason,
+                    now,
+                    actor,
+                ),
+            )
+            case_id = int(cur.lastrowid or 0)
         conn.commit()
     return jsonify({"status": "ok", "case_id": case_id}), 200
 
@@ -1190,7 +1258,14 @@ def save_grades():
                 )
 
                 cur.execute(
-                    "INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES (?, ?, ?, ?, ?, ?)",
+                    """
+                    INSERT INTO grades (student_id, semester, course_name, course_code, units, grade)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (student_id, semester, course_name) DO UPDATE SET
+                        course_code = EXCLUDED.course_code,
+                        units = EXCLUDED.units,
+                        grade = EXCLUDED.grade
+                    """,
                     (sid, semester, course, resolved["course_code"], int(resolved["units"] or 0),
                      (float(new_grade) if new_grade is not None else None))
                 )
@@ -1473,8 +1548,9 @@ def import_semester_excel():
             else:
                 cur.execute(
                     """
-                    INSERT OR IGNORE INTO students (student_id, student_name)
+                    INSERT INTO students (student_id, student_name)
                     VALUES (?, COALESCE((SELECT student_name FROM students WHERE student_id = ?), ''))
+                    ON CONFLICT (student_id) DO NOTHING
                     """,
                     (student_id, student_id),
                 )
@@ -1518,8 +1594,12 @@ def import_semester_excel():
 
                 cur.execute(
                     """
-                    INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade)
+                    INSERT INTO grades (student_id, semester, course_name, course_code, units, grade)
                     VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (student_id, semester, course_name) DO UPDATE SET
+                        course_code = EXCLUDED.course_code,
+                        units = EXCLUDED.units,
+                        grade = EXCLUDED.grade
                     """,
                     (
                         student_id,
@@ -1575,7 +1655,7 @@ def migrate_registrations_to_transcript():
         # if present; otherwise select only course_name and look up code/units from `courses`.
         regs = None
         try:
-            cols = [r[1] for r in cur.execute("PRAGMA table_info('registrations')").fetchall()]
+            cols = fetch_table_columns(conn, "registrations")
         except Exception:
             cols = []
 
@@ -1659,7 +1739,7 @@ def migrate_registrations_to_transcript():
 def _load_transcript_data(student_id: str):
     with get_connection() as conn:
         cur = conn.cursor()
-        cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
+        cols = fetch_table_columns(conn, "students")
         has_plan = "graduation_plan" in cols
         has_join = "join_term" in cols and "join_year" in cols
         sel = "SELECT COALESCE(student_name, '') AS student_name"
@@ -1824,7 +1904,7 @@ def _load_all_transcripts_bulk(student_ids: list[str] | None = None) -> dict:
         cur = conn.cursor()
 
         # --- 1) جلب بيانات الطلاب الأساسية ---
-        cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
+        cols = fetch_table_columns(conn, "students")
         has_plan = "graduation_plan" in cols
         has_join = "join_term" in cols and "join_year" in cols
 
@@ -2183,8 +2263,9 @@ def _import_export_style_single_student(parsed, student_id_override, student_nam
         else:
             cur.execute(
                 """
-                INSERT OR IGNORE INTO students (student_id, student_name)
+                INSERT INTO students (student_id, student_name)
                 VALUES (?, COALESCE((SELECT student_name FROM students WHERE student_id = ?), ''))
+                ON CONFLICT (student_id) DO NOTHING
                 """,
                 (student_id, student_id),
             )
@@ -2241,8 +2322,12 @@ def _import_export_style_single_student(parsed, student_id_override, student_nam
 
                 cur.execute(
                     """
-                    INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade)
+                    INSERT INTO grades (student_id, semester, course_name, course_code, units, grade)
                     VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (student_id, semester, course_name) DO UPDATE SET
+                        course_code = EXCLUDED.course_code,
+                        units = EXCLUDED.units,
+                        grade = EXCLUDED.grade
                     """,
                     (
                         student_id,
@@ -2425,7 +2510,14 @@ def update_grade():
         )
 
         cur.execute(
-            "INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES (?, ?, ?, ?, ?, ?)",
+            """
+            INSERT INTO grades (student_id, semester, course_name, course_code, units, grade)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (student_id, semester, course_name) DO UPDATE SET
+                course_code = EXCLUDED.course_code,
+                units = EXCLUDED.units,
+                grade = EXCLUDED.grade
+            """,
             (
                 sid,
                 semester,
@@ -2676,8 +2768,8 @@ def get_transcript(student_id):
                 "code": "FORBIDDEN"
             }), 403
     # المشرف يمكنه عرض سجلات الطلبة المسندين إليه فقط
-    is_supervisor = (user_role == "supervisor") or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
-    if is_supervisor:
+    sup_eff = current_supervisor_effective()
+    if sup_eff:
         instructor_id = session.get("instructor_id")
         if not instructor_id:
             return jsonify({
@@ -2698,7 +2790,7 @@ def get_transcript(student_id):
                     "code": "FORBIDDEN"
                 }), 403
     # الأستاذ (غير المشرف) يمكنه عرض سجلات الطلاب المرتبطين بمقرراته في الفصل الحالي فقط
-    if user_role == "instructor" and not is_supervisor:
+    if user_role == "instructor" and not sup_eff:
         instructor_id = session.get("instructor_id")
         if not instructor_id:
             return jsonify({
@@ -2975,8 +3067,8 @@ def export_transcript(student_id):
                 "code": "FORBIDDEN"
             }), 403
 
-    is_supervisor = (user_role == "supervisor") or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
-    if is_supervisor:
+    sup_eff = current_supervisor_effective()
+    if sup_eff:
         instructor_id = session.get("instructor_id")
         if not instructor_id:
             return jsonify({
@@ -2997,7 +3089,7 @@ def export_transcript(student_id):
                     "code": "FORBIDDEN"
                 }), 403
 
-    if user_role == "instructor" and not is_supervisor:
+    if user_role == "instructor" and not sup_eff:
         instructor_id = session.get("instructor_id")
         if not instructor_id:
             return jsonify({

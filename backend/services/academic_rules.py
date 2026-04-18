@@ -93,9 +93,10 @@ def _ensure_default_rules(conn):
     for r in DEFAULT_RULES:
         cur.execute(
             """
-            INSERT OR IGNORE INTO academic_rules
+            INSERT INTO academic_rules
             (rule_key, title, description, category, value_number, value_text, is_active)
             VALUES (?, ?, ?, ?, ?, ?, 1)
+            ON CONFLICT (rule_key) DO NOTHING
             """,
             (
                 r["rule_key"],
@@ -205,9 +206,16 @@ def save_rule():
         else:
             cur.execute(
                 """
-                INSERT OR REPLACE INTO academic_rules
+                INSERT INTO academic_rules
                 (rule_key, title, description, category, value_number, value_text, is_active)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (rule_key) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    description = EXCLUDED.description,
+                    category = EXCLUDED.category,
+                    value_number = EXCLUDED.value_number,
+                    value_text = EXCLUDED.value_text,
+                    is_active = EXCLUDED.is_active
                 """,
                 (rule_key, title, description, category, value_number, value_text, is_active),
             )

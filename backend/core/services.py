@@ -8,12 +8,30 @@ from datetime import datetime
 from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
+SCHEDULE_PK_COL = "id"
 
 # استيراد الأدوات المساعدة
 try:
     from ..services.utilities import get_connection, get_current_term, SEMESTER_LABEL
 except ImportError:
     from backend.services.utilities import get_connection, get_current_term, SEMESTER_LABEL
+try:
+    from ..database.database import is_postgresql
+except ImportError:
+    from backend.database.database import is_postgresql
+try:
+    from ..database.database import schedule_pk_column
+except ImportError:
+    from backend.database.database import schedule_pk_column
+
+
+def _sync_schedule_pk_col(conn) -> str:
+    global SCHEDULE_PK_COL
+    try:
+        SCHEDULE_PK_COL = schedule_pk_column(conn)
+    except Exception:
+        pass
+    return SCHEDULE_PK_COL
 
 # استيراد الاستثناءات
 try:
@@ -292,7 +310,7 @@ class StudentService:
                 if has_status and has_plan and has_join:
                     cur.execute(
                         """
-                        INSERT OR REPLACE INTO students (
+                        INSERT INTO students (
                             student_id, student_name,
                             enrollment_status, status_changed_at, graduation_plan, join_term, join_year
                         ) VALUES (
@@ -301,13 +319,20 @@ class StudentService:
                             COALESCE((SELECT status_changed_at FROM students WHERE student_id = ?), CAST(CURRENT_TIMESTAMP AS TEXT)),
                             ?, ?, ?
                         )
+                        ON CONFLICT (student_id) DO UPDATE SET
+                            student_name = EXCLUDED.student_name,
+                            enrollment_status = EXCLUDED.enrollment_status,
+                            status_changed_at = EXCLUDED.status_changed_at,
+                            graduation_plan = EXCLUDED.graduation_plan,
+                            join_term = EXCLUDED.join_term,
+                            join_year = EXCLUDED.join_year
                         """,
                         (sid, name, sid, sid, plan, term, year),
                     )
                 elif has_status and has_plan:
                     cur.execute(
                         """
-                        INSERT OR REPLACE INTO students (
+                        INSERT INTO students (
                             student_id, student_name,
                             enrollment_status, status_changed_at, graduation_plan
                         ) VALUES (
@@ -316,13 +341,18 @@ class StudentService:
                             COALESCE((SELECT status_changed_at FROM students WHERE student_id = ?), CAST(CURRENT_TIMESTAMP AS TEXT)),
                             ?
                         )
+                        ON CONFLICT (student_id) DO UPDATE SET
+                            student_name = EXCLUDED.student_name,
+                            enrollment_status = EXCLUDED.enrollment_status,
+                            status_changed_at = EXCLUDED.status_changed_at,
+                            graduation_plan = EXCLUDED.graduation_plan
                         """,
                         (sid, name, sid, sid, plan),
                     )
                 elif has_status:
                     cur.execute(
                         """
-                        INSERT OR REPLACE INTO students (
+                        INSERT INTO students (
                             student_id, student_name,
                             enrollment_status, status_changed_at
                         ) VALUES (
@@ -330,12 +360,19 @@ class StudentService:
                             COALESCE((SELECT enrollment_status FROM students WHERE student_id = ?), 'active'),
                             COALESCE((SELECT status_changed_at FROM students WHERE student_id = ?), CAST(CURRENT_TIMESTAMP AS TEXT))
                         )
+                        ON CONFLICT (student_id) DO UPDATE SET
+                            student_name = EXCLUDED.student_name,
+                            enrollment_status = EXCLUDED.enrollment_status,
+                            status_changed_at = EXCLUDED.status_changed_at
                         """,
                         (sid, name, sid, sid),
                     )
                 else:
                     cur.execute(
-                        "INSERT OR REPLACE INTO students (student_id, student_name) VALUES (?, ?)",
+                        """
+                        INSERT INTO students (student_id, student_name) VALUES (?, ?)
+                        ON CONFLICT (student_id) DO UPDATE SET student_name = EXCLUDED.student_name
+                        """,
                         (sid, name),
                     )
                 conn.commit()
@@ -602,7 +639,12 @@ class CourseService:
             with get_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(
-                    "INSERT OR REPLACE INTO courses (course_name, course_code, units) VALUES (?, ?, ?)",
+                    """
+                    INSERT INTO courses (course_name, course_code, units) VALUES (?, ?, ?)
+                    ON CONFLICT (course_name) DO UPDATE SET
+                        course_code = EXCLUDED.course_code,
+                        units = EXCLUDED.units
+                    """,
                     (name, code, units_val)
                 )
                 conn.commit()
@@ -740,10 +782,11 @@ class ScheduleService:
         """جلب جميع صفوف الجدول الدراسي مع عدد الطلاب"""
         try:
             with get_connection() as conn:
+                _sync_schedule_pk_col(conn)
                 cur = conn.cursor()
-                rows = cur.execute("""
+                rows = cur.execute(f"""
                     SELECT 
-                        s.rowid AS section_id, 
+                        s.{SCHEDULE_PK_COL} AS section_id,
                         s.course_name, 
                         s.day, 
                         s.time, 
@@ -754,8 +797,8 @@ class ScheduleService:
                         COUNT(DISTINCT r.student_id) AS student_count
                     FROM schedule s
                     LEFT JOIN registrations r ON s.course_name = r.course_name
-                    GROUP BY s.rowid, s.course_name, s.day, s.time, s.room, s.instructor, s.semester, s.instructor_id
-                    ORDER BY s.rowid
+                    GROUP BY s.{SCHEDULE_PK_COL}, s.course_name, s.day, s.time, s.room, s.instructor, s.semester, s.instructor_id
+                    ORDER BY s.{SCHEDULE_PK_COL}
                 """).fetchall()
                 return [
                     {
@@ -810,6 +853,7 @@ class ScheduleService:
 
         try:
             with get_connection() as conn:
+                _sync_schedule_pk_col(conn)
                 cur = conn.cursor()
                 iid = instructor_id
                 if iid is not None:
@@ -825,12 +869,20 @@ class ScheduleService:
                     if row_n and (row_n[0] or "").strip():
                         inst_text = sanitize_input((row_n[0] or "").strip(), 100)
 
-                cur.execute(
-                    """INSERT INTO schedule (course_name, day, time, room, instructor, instructor_id, semester)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (name, day_val, time_val, room_v, inst_text, iid, sem_v),
-                )
-                rowid = cur.lastrowid
+                if is_postgresql():
+                    row_new = cur.execute(
+                        f"""INSERT INTO schedule (course_name, day, time, room, instructor, instructor_id, semester)
+                           VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING {SCHEDULE_PK_COL}""",
+                        (name, day_val, time_val, room_v, inst_text, iid, sem_v),
+                    ).fetchone()
+                    section_id = int(row_new[0]) if row_new else 0
+                else:
+                    cur.execute(
+                        """INSERT INTO schedule (course_name, day, time, room, instructor, instructor_id, semester)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (name, day_val, time_val, room_v, inst_text, iid, sem_v),
+                    )
+                    section_id = int(cur.lastrowid or 0)
 
                 # أي تغيير في الجدول الدراسي يجعل الجدول النهائي/تقرير التعارضات قديمة،
                 # لذا نفرّغ الجداول المشتقة لتُعاد حساباتها عند الضغط على زر التحسين.
@@ -845,7 +897,7 @@ class ScheduleService:
 
                 conn.commit()
                 logger.info(f"Schedule row added: {name} on {day_val}")
-                return {'status': 'ok', 'message': 'تم إضافة الصف للجدول الدراسي', 'rowid': rowid}
+                return {'status': 'ok', 'message': 'تم إضافة الصف للجدول الدراسي', 'section_id': section_id}
         except Exception as e:
             logger.error(f"Error adding schedule row: {e}")
             raise DatabaseError(f"فشل إضافة الصف: {str(e)}")
@@ -878,6 +930,7 @@ class ScheduleService:
 
         try:
             with get_connection() as conn:
+                _sync_schedule_pk_col(conn)
                 cur = conn.cursor()
 
                 if updates.get("instructor_id") is not None:
@@ -903,10 +956,7 @@ class ScheduleService:
                 set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
                 values = list(updates.values()) + [section_id]
                 
-                cur.execute(
-                    f"UPDATE schedule SET {set_clause} WHERE rowid = ?",
-                    values
-                )
+                cur.execute(f"UPDATE schedule SET {set_clause} WHERE {SCHEDULE_PK_COL} = ?", values)
                 
                 if cur.rowcount == 0:
                     raise NotFoundError("الصف غير موجود")
@@ -937,8 +987,9 @@ class ScheduleService:
         
         try:
             with get_connection() as conn:
+                _sync_schedule_pk_col(conn)
                 cur = conn.cursor()
-                cur.execute("DELETE FROM schedule WHERE rowid = ?", (section_id,))
+                cur.execute(f"DELETE FROM schedule WHERE {SCHEDULE_PK_COL} = ?", (section_id,))
                 if cur.rowcount == 0:
                     raise NotFoundError("الصف غير موجود")
 
@@ -1127,9 +1178,13 @@ class GradeService:
                 
                 # حفظ الدرجة
                 cur.execute("""
-                    INSERT OR REPLACE INTO grades 
+                    INSERT INTO grades 
                     (student_id, semester, course_name, course_code, units, grade)
                     VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (student_id, semester, course_name) DO UPDATE SET
+                        course_code = EXCLUDED.course_code,
+                        units = EXCLUDED.units,
+                        grade = EXCLUDED.grade
                 """, (sid, semester, course_name, course_code, normalize_units(units), grade_val))
                 
                 conn.commit()

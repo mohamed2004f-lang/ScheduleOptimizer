@@ -57,11 +57,17 @@ def set_current_term():
         else:
             cur = conn.cursor()
             cur.execute(
-                "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('current_term_name', ?)",
+                """
+                INSERT INTO system_settings (key, value) VALUES ('current_term_name', ?)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+                """,
                 (name,),
             )
             cur.execute(
-                "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('current_term_year', ?)",
+                """
+                INSERT INTO system_settings (key, value) VALUES ('current_term_year', ?)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+                """,
                 (year,),
             )
             conn.commit()
@@ -190,7 +196,10 @@ def _read_setting(cur, key: str, default: str = "") -> str:
 def _write_setting(conn, key: str, value: str) -> None:
     cur = conn.cursor()
     cur.execute(
-        "INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)",
+        """
+        INSERT INTO system_settings (key, value) VALUES (?, ?)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """,
         (key, value),
     )
     conn.commit()

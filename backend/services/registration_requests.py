@@ -1,8 +1,9 @@
 import datetime
 from flask import Blueprint, request, jsonify, session
 
+from backend.database.database import is_postgresql
 from backend.services.utilities import get_connection
-from backend.core.auth import login_required, role_required
+from backend.core.auth import login_required, role_required, current_supervisor_effective
 
 
 registration_requests_bp = Blueprint("registration_requests", __name__)
@@ -40,16 +41,28 @@ def create_request():
 
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO registration_requests
-            (student_id, term, course_name, action, status, requested_by, request_reason)
-            VALUES (?,?,?,?, 'pending', ?, ?)
-            """,
-            (student_id, term, course_name, action, requested_by, reason or None),
-        )
+        if is_postgresql():
+            row_new = cur.execute(
+                """
+                INSERT INTO registration_requests
+                (student_id, term, course_name, action, status, requested_by, request_reason)
+                VALUES (?,?,?,?, 'pending', ?, ?)
+                RETURNING id
+                """,
+                (student_id, term, course_name, action, requested_by, reason or None),
+            ).fetchone()
+            req_id = int(row_new[0]) if row_new else 0
+        else:
+            cur.execute(
+                """
+                INSERT INTO registration_requests
+                (student_id, term, course_name, action, status, requested_by, request_reason)
+                VALUES (?,?,?,?, 'pending', ?, ?)
+                """,
+                (student_id, term, course_name, action, requested_by, reason or None),
+            )
+            req_id = int(cur.lastrowid or 0)
         conn.commit()
-        req_id = cur.lastrowid
 
     return jsonify({"status": "ok", "id": req_id, "message": "تم إرسال الطلب للمراجعة"}), 200
 
@@ -58,7 +71,7 @@ def create_request():
 @role_required("admin", "supervisor")
 def list_requests():
     raw_role = session.get("user_role") or ""
-    is_supervisor = (raw_role == "supervisor") or (raw_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    is_supervisor = current_supervisor_effective()
     # منع الأستاذ غير المشرف من هذا المسار
     if raw_role == "instructor" and not is_supervisor:
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
@@ -185,7 +198,7 @@ def _execute_registration_change(conn, student_id: str, course_name: str, action
         if course_name in current:
             return
         cur.execute(
-            "INSERT OR IGNORE INTO registrations (student_id, course_name) VALUES (?,?)",
+            "INSERT INTO registrations (student_id, course_name) VALUES (?,?) ON CONFLICT (student_id, course_name) DO NOTHING",
             (sid, course_name),
         )
     elif action == "drop":
@@ -259,7 +272,7 @@ def _execute_registration_change(conn, student_id: str, course_name: str, action
 @role_required("admin", "supervisor")
 def approve_request():
     raw_role = session.get("user_role") or ""
-    is_supervisor = (raw_role == "supervisor") or (raw_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    is_supervisor = current_supervisor_effective()
     if raw_role == "instructor" and not is_supervisor:
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
 
@@ -352,7 +365,7 @@ def approve_request():
 @role_required("admin", "supervisor")
 def reject_request():
     raw_role = session.get("user_role") or ""
-    is_supervisor = (raw_role == "supervisor") or (raw_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    is_supervisor = current_supervisor_effective()
     if raw_role == "instructor" and not is_supervisor:
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
 

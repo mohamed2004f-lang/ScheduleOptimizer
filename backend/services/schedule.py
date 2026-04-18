@@ -2,15 +2,14 @@ import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from flask import Blueprint, request, jsonify, render_template, session
-from backend.core.auth import login_required, role_required
+from backend.core.auth import login_required, role_required, current_supervisor_effective
 from collections import defaultdict
-import sqlite3
 import pandas as pd
 import logging
 import json
 import datetime
 import base64
-from backend.database.database import is_postgresql
+from backend.database.database import is_postgresql, schedule_pk_column
 from backend.core.exceptions import ValidationError
 from backend.core.faculty_axes import (
     FACULTY_AXIS_KEYS,
@@ -37,6 +36,16 @@ from .students import compute_per_student_conflicts, recompute_conflict_report
 logger = logging.getLogger(__name__)
 
 schedule_bp = Blueprint("schedule", __name__)
+SCHEDULE_PK_COL = "id"
+
+
+def _sync_schedule_pk_col(conn):
+    global SCHEDULE_PK_COL
+    try:
+        SCHEDULE_PK_COL = schedule_pk_column(conn)
+    except Exception:
+        pass
+    return SCHEDULE_PK_COL
 VALID_LECTURE_STATUS = frozenset({"planned", "done", "postponed", "compensated"})
 VALID_ANNOUNCEMENT_TYPES = frozenset({"general", "postponement", "makeup", "extra_lecture"})
 VALID_FACULTY_ASSIGNMENT_TYPES = frozenset({"course", "committee", "service", "quality", "supervision"})
@@ -71,8 +80,12 @@ def _set_faculty_cycle_locked(conn, term_label: str, locked: bool, actor: str):
     now = datetime.datetime.utcnow().isoformat()
     conn.cursor().execute(
         """
-        INSERT OR REPLACE INTO app_settings (key, value_json, updated_at, updated_by)
+        INSERT INTO app_settings (key, value_json, updated_at, updated_by)
         VALUES (?, ?, ?, ?)
+        ON CONFLICT (key) DO UPDATE SET
+            value_json = EXCLUDED.value_json,
+            updated_at = EXCLUDED.updated_at,
+            updated_by = EXCLUDED.updated_by
         """,
         (key, "true" if locked else "false", now, actor),
     )
@@ -172,6 +185,7 @@ def _ensure_schedule_version_tables(cur):
 
 
 def _create_schedule_version(conn, event_type: str, note: str = "", is_published: bool = False):
+    _sync_schedule_pk_col(conn)
     cur = conn.cursor()
     _ensure_schedule_version_tables(cur)
     try:
@@ -181,18 +195,18 @@ def _create_schedule_version(conn, event_type: str, note: str = "", is_published
         semester = SEMESTER_LABEL
 
     rows = cur.execute(
-        """
-        SELECT rowid, COALESCE(course_name,''), COALESCE(day,''), COALESCE(time,''),
+        f"""
+        SELECT {SCHEDULE_PK_COL}, COALESCE(course_name,''), COALESCE(day,''), COALESCE(time,''),
                COALESCE(room,''), COALESCE(instructor,''), COALESCE(semester,'')
         FROM schedule
-        ORDER BY day, time, course_name, rowid
+        ORDER BY day, time, course_name, {SCHEDULE_PK_COL}
         """
     ).fetchall()
     items = []
     for r in rows:
         items.append(
             {
-                "rowid": int(r[0]),
+                "section_id": int(r[0]),
                 "course_name": r[1],
                 "day": r[2],
                 "time": r[3],
@@ -216,23 +230,43 @@ def _create_schedule_version(conn, event_type: str, note: str = "", is_published
         "row_count": len(items),
         "rows": items,
     }
-    cur.execute(
-        """
-        INSERT INTO schedule_versions
-        (semester, version_no, snapshot_json, generated_at, generated_by, note, is_published)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            semester,
-            version_no,
-            json.dumps(snapshot, ensure_ascii=False),
-            now,
-            actor,
-            (note or ""),
-            1 if is_published else 0,
-        ),
-    )
-    ver_id = int(cur.lastrowid)
+    if is_postgresql():
+        row_new = cur.execute(
+            """
+            INSERT INTO schedule_versions
+            (semester, version_no, snapshot_json, generated_at, generated_by, note, is_published)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
+            """,
+            (
+                semester,
+                version_no,
+                json.dumps(snapshot, ensure_ascii=False),
+                now,
+                actor,
+                (note or ""),
+                1 if is_published else 0,
+            ),
+        ).fetchone()
+        ver_id = int(row_new[0]) if row_new else 0
+    else:
+        cur.execute(
+            """
+            INSERT INTO schedule_versions
+            (semester, version_no, snapshot_json, generated_at, generated_by, note, is_published)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                semester,
+                version_no,
+                json.dumps(snapshot, ensure_ascii=False),
+                now,
+                actor,
+                (note or ""),
+                1 if is_published else 0,
+            ),
+        )
+        ver_id = int(cur.lastrowid or 0)
     cur.execute(
         """
         INSERT INTO schedule_version_events
@@ -525,12 +559,13 @@ def _build_schedule_triple_export_matrix(rows: list, time_slots: list, include_e
 @login_required
 def list_schedule_rows():
     with get_connection() as conn:
+        _sync_schedule_pk_col(conn)
         cur = conn.cursor()
         try:
             # استخدام JOIN لتحسين الأداء بدلاً من استعلامات منفصلة في loop
-            rows = cur.execute("""
+            rows = cur.execute(f"""
                 SELECT 
-                    s.rowid AS section_id, 
+                    s.{SCHEDULE_PK_COL} AS section_id, 
                     s.course_name, 
                     s.day, 
                     s.time, 
@@ -541,8 +576,8 @@ def list_schedule_rows():
                     COUNT(DISTINCT r.student_id) AS student_count
                 FROM schedule s
                 LEFT JOIN registrations r ON s.course_name = r.course_name
-                GROUP BY s.rowid, s.course_name, s.day, s.time, s.room, s.instructor, s.semester, s.instructor_id
-                ORDER BY s.rowid
+                GROUP BY s.{SCHEDULE_PK_COL}, s.course_name, s.day, s.time, s.room, s.instructor, s.semester, s.instructor_id
+                ORDER BY s.{SCHEDULE_PK_COL}
             """).fetchall()
             result = []
             for r in rows:
@@ -580,13 +615,12 @@ def instructor_conflicts():
     """
     try:
         with get_connection() as conn:
-            if not is_postgresql():
-                conn.row_factory = sqlite3.Row
+            _sync_schedule_pk_col(conn)
             cur = conn.cursor()
             rows = cur.execute(
-                """
+                f"""
                 SELECT
-                  s.rowid AS section_id,
+                  s.{SCHEDULE_PK_COL} AS section_id,
                   COALESCE(s.course_name,'') AS course_name,
                   COALESCE(s.day,'') AS day,
                   COALESCE(s.time,'') AS time,
@@ -705,25 +739,47 @@ def check_conflicts():
                 _iid = int(_iid) if _iid is not None and _iid != "" else None
             except (TypeError, ValueError):
                 _iid = None
-            cur.execute("""
-                INSERT INTO schedule (course_name, day, time, room, instructor, instructor_id, semester)
-                VALUES (?,?,?,?,?,?,?)
-            """, (
-                course_name,
-                day,
-                time,
-                data.get("room", ""),
-                data.get("instructor", ""),
-                _iid,
-                (data.get("semester") or "").strip() or semester_label
-            ))
-            temp_rowid = cur.lastrowid
+            if is_postgresql():
+                row_new = cur.execute(
+                    f"""
+                    INSERT INTO schedule (course_name, day, time, room, instructor, instructor_id, semester)
+                    VALUES (?,?,?,?,?,?,?)
+                    RETURNING {SCHEDULE_PK_COL}
+                    """,
+                    (
+                        course_name,
+                        day,
+                        time,
+                        data.get("room", ""),
+                        data.get("instructor", ""),
+                        _iid,
+                        (data.get("semester") or "").strip() or semester_label
+                    ),
+                ).fetchone()
+                temp_rowid = int(row_new[0]) if row_new else 0
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO schedule (course_name, day, time, room, instructor, instructor_id, semester)
+                    VALUES (?,?,?,?,?,?,?)
+                    """,
+                    (
+                        course_name,
+                        day,
+                        time,
+                        data.get("room", ""),
+                        data.get("instructor", ""),
+                        _iid,
+                        (data.get("semester") or "").strip() or semester_label
+                    ),
+                )
+                temp_rowid = int(cur.lastrowid or 0)
             
             # حساب التعارضات
             conflicts = compute_per_student_conflicts(conn)
             
             # حذف الإضافة المؤقتة
-            cur.execute("DELETE FROM schedule WHERE rowid = ?", (temp_rowid,))
+            cur.execute(f"DELETE FROM schedule WHERE {SCHEDULE_PK_COL} = ?", (temp_rowid,))
             conn.commit()
             
             # تصفية التعارضات المتعلقة بالمقرر الجديد
@@ -813,7 +869,7 @@ def add_schedule_row():
             semester=sem,
             instructor_id=_parse_instructor_id_payload(data.get("instructor_id")),
         )
-        last = res.get("rowid")
+        last = res.get("section_id")
         try:
             with get_connection() as conn:
                 touch_schedule_updated_at(conn)
@@ -832,7 +888,7 @@ def add_schedule_row():
         )
     except Exception:
         pass
-    return jsonify({"status": "ok", "message": "تم إضافة صف إلى الجدول", "rowid": last}), 200
+    return jsonify({"status": "ok", "message": "تم إضافة صف إلى الجدول", "section_id": last}), 200
 
 # Alias to match frontend calls that use /add_schedule_row
 @schedule_bp.route("/add_schedule_row", methods=["POST"])
@@ -1043,7 +1099,14 @@ def save_time_slots():
         payload = json.dumps({"slots": cleaned}, ensure_ascii=False)
         cur = conn.cursor()
         cur.execute(
-            "INSERT OR REPLACE INTO app_settings (key, value_json, updated_at, updated_by) VALUES (?,?,?,?)",
+            """
+            INSERT INTO app_settings (key, value_json, updated_at, updated_by)
+            VALUES (?,?,?,?)
+            ON CONFLICT (key) DO UPDATE SET
+                value_json = EXCLUDED.value_json,
+                updated_at = EXCLUDED.updated_at,
+                updated_by = EXCLUDED.updated_by
+            """,
             (key, payload, now, actor),
         )
         conn.commit()
@@ -1358,12 +1421,13 @@ def publish_schedule():
     """اعتماد/نشر الجدول من الأدمن الرئيسي. بعدها يراه الطالب والمشرف وتُستمد منه المقررات المتاحة في خطط التسجيل."""
     try:
         with get_connection() as conn:
+            _sync_schedule_pk_col(conn)
             cur = conn.cursor()
             # نسخ الجدول الحالي (schedule) إلى الجدول النهائي (optimized_schedule) لظهوره في صفحة النتائج
             cur.execute("DELETE FROM optimized_schedule")
-            cur.execute("""
+            cur.execute(f"""
                 INSERT INTO optimized_schedule (section_id, course_name, day, time, room, instructor, semester)
-                SELECT rowid, course_name, day, time, COALESCE(room,''), COALESCE(instructor,''), COALESCE(semester,'')
+                SELECT {SCHEDULE_PK_COL}, course_name, day, time, COALESCE(room,''), COALESCE(instructor,''), COALESCE(semester,'')
                 FROM schedule
                 WHERE course_name IS NOT NULL AND course_name != '' AND day IS NOT NULL AND day != '' AND time IS NOT NULL AND time != ''
             """)
@@ -1420,6 +1484,7 @@ def schedule_versions():
     event_type = (request.args.get("event_type") or "").strip()
     try:
         with get_connection() as conn:
+            _sync_schedule_pk_col(conn)
             cur = conn.cursor()
             _ensure_schedule_version_tables(cur)
             where = []
@@ -1624,7 +1689,7 @@ def student_timetable():
     user_role = session.get("user_role")
     if user_role == "student":
         sid = session.get("student_id") or session.get("user") or ""
-    elif user_role == "supervisor" or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1):
+    elif current_supervisor_effective():
         # المشرف يمكنه عرض جدول طلبته المسندين إليه فقط
         sid = (request.args.get("student_id") or "").strip()
         instructor_id = session.get("instructor_id")
@@ -1644,9 +1709,10 @@ def student_timetable():
         return jsonify({"rows": [], "published": True})
 
     with get_connection() as conn:
+        _sync_schedule_pk_col(conn)
         cur = conn.cursor()
-        q = """
-        SELECT s.rowid AS section_id,
+        q = f"""
+        SELECT s.{SCHEDULE_PK_COL} AS section_id,
                s.course_name,
                s.day,
                s.time,
@@ -1697,9 +1763,10 @@ def _assigned_section_rows(cur, instructor_db_id: int, canonical_instructor_name
     - تطابق مباشر على schedule.instructor_id عند تعبئته من الإدارة؛
     - أو مطابقة الاسم النصّي بعد تطبيع الفراغات (الترقية من الجداول القديمة).
     """
+    _sync_schedule_pk_col(cur.connection)
     norm = normalize_instructor_name(canonical_instructor_name)
-    q = """
-        SELECT s.rowid AS section_id,
+    q = f"""
+        SELECT s.{SCHEDULE_PK_COL} AS section_id,
                s.course_name,
                s.day,
                s.time,
@@ -2032,15 +2099,27 @@ def create_faculty_assignment():
         cur.execute("SELECT 1 FROM instructors WHERE id = ? LIMIT 1", (instructor_id,))
         if not cur.fetchone():
             return jsonify({"status": "error", "message": "instructor_id غير موجود"}), 400
-        cur.execute(
-            """
-            INSERT INTO faculty_assignments
-                (instructor_id, assignment_type, section_id, title, decision_ref, assignment_date, start_date, end_date, is_active, created_at, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-            """,
-            (instructor_id, assignment_type, section_id, title, decision_ref, assignment_date, start_date, end_date, now, actor),
-        )
-        aid = int(cur.lastrowid or 0)
+        if is_postgresql():
+            row_new = cur.execute(
+                """
+                INSERT INTO faculty_assignments
+                    (instructor_id, assignment_type, section_id, title, decision_ref, assignment_date, start_date, end_date, is_active, created_at, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                RETURNING id
+                """,
+                (instructor_id, assignment_type, section_id, title, decision_ref, assignment_date, start_date, end_date, now, actor),
+            ).fetchone()
+            aid = int(row_new[0]) if row_new else 0
+        else:
+            cur.execute(
+                """
+                INSERT INTO faculty_assignments
+                    (instructor_id, assignment_type, section_id, title, decision_ref, assignment_date, start_date, end_date, is_active, created_at, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (instructor_id, assignment_type, section_id, title, decision_ref, assignment_date, start_date, end_date, now, actor),
+            )
+            aid = int(cur.lastrowid or 0)
         conn.commit()
     return jsonify({"status": "ok", "assignment_id": aid}), 200
 
@@ -2139,26 +2218,49 @@ def create_faculty_assignment_log():
 
         approved_at = now if approval_status in ("approved", "rejected") else None
         approved_by = actor if approval_status in ("approved", "rejected") else None
-        cur.execute(
-            """
-            INSERT INTO faculty_assignment_logs
-                (assignment_id, instructor_id, section_id, log_type, notes, created_at, created_by, approval_status, approved_at, approved_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                assignment_id,
-                assignment_instructor_id,
-                section_id,
-                log_type,
-                notes,
-                now,
-                actor,
-                approval_status,
-                approved_at,
-                approved_by,
-            ),
-        )
-        lid = int(cur.lastrowid or 0)
+        if is_postgresql():
+            row_new = cur.execute(
+                """
+                INSERT INTO faculty_assignment_logs
+                    (assignment_id, instructor_id, section_id, log_type, notes, created_at, created_by, approval_status, approved_at, approved_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                RETURNING id
+                """,
+                (
+                    assignment_id,
+                    assignment_instructor_id,
+                    section_id,
+                    log_type,
+                    notes,
+                    now,
+                    actor,
+                    approval_status,
+                    approved_at,
+                    approved_by,
+                ),
+            ).fetchone()
+            lid = int(row_new[0]) if row_new else 0
+        else:
+            cur.execute(
+                """
+                INSERT INTO faculty_assignment_logs
+                    (assignment_id, instructor_id, section_id, log_type, notes, created_at, created_by, approval_status, approved_at, approved_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    assignment_id,
+                    assignment_instructor_id,
+                    section_id,
+                    log_type,
+                    notes,
+                    now,
+                    actor,
+                    approval_status,
+                    approved_at,
+                    approved_by,
+                ),
+            )
+            lid = int(cur.lastrowid or 0)
         conn.commit()
     return jsonify({"status": "ok", "log_id": lid}), 200
 
@@ -2200,25 +2302,15 @@ def save_my_axis_status():
         if status == "done" and not _has_section_evidence(cur, section_id, iid):
             return jsonify({"status": "error", "message": "لا يمكن إنهاء المحور دون وجود دليل تنفيذ فعلي للشعبة"}), 400
 
-        if is_postgresql():
-            cur.execute(
-                """
-                INSERT INTO faculty_section_axis_status (section_id, instructor_id, axis_key, status, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT (section_id, instructor_id, axis_key)
-                DO UPDATE SET status = EXCLUDED.status, updated_at = EXCLUDED.updated_at
-                """,
-                (section_id, iid, axis_key, status, ts),
-            )
-        else:
-            cur.execute(
-                """
-                INSERT OR REPLACE INTO faculty_section_axis_status
-                    (section_id, instructor_id, axis_key, status, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (section_id, iid, axis_key, status, ts),
-            )
+        cur.execute(
+            """
+            INSERT INTO faculty_section_axis_status (section_id, instructor_id, axis_key, status, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (section_id, instructor_id, axis_key)
+            DO UPDATE SET status = EXCLUDED.status, updated_at = EXCLUDED.updated_at
+            """,
+            (section_id, iid, axis_key, status, ts),
+        )
         conn.commit()
     return jsonify({"status": "ok", "section_id": section_id, "axis_key": axis_key, "saved": status})
 
@@ -2283,30 +2375,20 @@ def save_my_course_plan():
         allowed_ids = {int(t[0]) for t in tuples}
         if section_id not in allowed_ids:
             return jsonify({"status": "error", "message": "هذه الشعبة غير مكلَّفة لحسابك"}), 403
-        if is_postgresql():
-            cur.execute(
-                """
-                INSERT INTO faculty_course_plans
-                    (section_id, instructor_id, week_no, week_topic, lecture_status, resources_text, updated_at, updated_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (section_id, instructor_id, week_no)
-                DO UPDATE SET week_topic = EXCLUDED.week_topic,
-                              lecture_status = EXCLUDED.lecture_status,
-                              resources_text = EXCLUDED.resources_text,
-                              updated_at = EXCLUDED.updated_at,
-                              updated_by = EXCLUDED.updated_by
-                """,
-                (section_id, iid, week_no, week_topic, lecture_status, resources_text, ts, actor),
-            )
-        else:
-            cur.execute(
-                """
-                INSERT OR REPLACE INTO faculty_course_plans
-                    (section_id, instructor_id, week_no, week_topic, lecture_status, resources_text, updated_at, updated_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (section_id, iid, week_no, week_topic, lecture_status, resources_text, ts, actor),
-            )
+        cur.execute(
+            """
+            INSERT INTO faculty_course_plans
+                (section_id, instructor_id, week_no, week_topic, lecture_status, resources_text, updated_at, updated_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (section_id, instructor_id, week_no)
+            DO UPDATE SET week_topic = EXCLUDED.week_topic,
+                          lecture_status = EXCLUDED.lecture_status,
+                          resources_text = EXCLUDED.resources_text,
+                          updated_at = EXCLUDED.updated_at,
+                          updated_by = EXCLUDED.updated_by
+            """,
+            (section_id, iid, week_no, week_topic, lecture_status, resources_text, ts, actor),
+        )
         conn.commit()
         payload = _course_admin_payload(cur, iid, section_id)
     return jsonify({"status": "ok", "section_id": section_id, **payload})
@@ -2339,27 +2421,17 @@ def save_my_course_syllabus():
         allowed_ids = {int(t[0]) for t in tuples}
         if section_id not in allowed_ids:
             return jsonify({"status": "error", "message": "هذه الشعبة غير مكلَّفة لحسابك"}), 403
-        if is_postgresql():
-            cur.execute(
-                """
-                INSERT INTO faculty_course_syllabi (section_id, instructor_id, syllabus_text, updated_at, updated_by)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT (section_id, instructor_id)
-                DO UPDATE SET syllabus_text = EXCLUDED.syllabus_text,
-                              updated_at = EXCLUDED.updated_at,
-                              updated_by = EXCLUDED.updated_by
-                """,
-                (section_id, iid, syllabus_text, ts, actor),
-            )
-        else:
-            cur.execute(
-                """
-                INSERT OR REPLACE INTO faculty_course_syllabi
-                    (section_id, instructor_id, syllabus_text, updated_at, updated_by)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (section_id, iid, syllabus_text, ts, actor),
-            )
+        cur.execute(
+            """
+            INSERT INTO faculty_course_syllabi (section_id, instructor_id, syllabus_text, updated_at, updated_by)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (section_id, instructor_id)
+            DO UPDATE SET syllabus_text = EXCLUDED.syllabus_text,
+                          updated_at = EXCLUDED.updated_at,
+                          updated_by = EXCLUDED.updated_by
+            """,
+            (section_id, iid, syllabus_text, ts, actor),
+        )
         conn.commit()
         payload = _course_admin_payload(cur, iid, section_id)
     return jsonify({"status": "ok", "section_id": section_id, **payload})
@@ -2499,8 +2571,9 @@ def save_my_course_closure():
 def list_course_closure_reports():
     status = (request.args.get("status") or "").strip().lower()
     with get_connection() as conn:
+        _sync_schedule_pk_col(conn)
         cur = conn.cursor()
-        q = """
+        q = f"""
             SELECT c.id, c.section_id, c.instructor_id, COALESCE(i.name,'') AS instructor_name,
                    COALESCE(s.course_name,'') AS course_name, COALESCE(c.semester,'') AS semester,
                    COALESCE(c.implementation_summary,'') AS implementation_summary,
@@ -2512,7 +2585,7 @@ def list_course_closure_reports():
                    COALESCE(c.approved_by,'') AS approved_by
             FROM course_closure_reports c
             LEFT JOIN instructors i ON i.id = c.instructor_id
-            LEFT JOIN schedule s ON s.rowid = c.section_id
+            LEFT JOIN schedule s ON s.{SCHEDULE_PK_COL} = c.section_id
             WHERE 1=1
         """
         params = []
@@ -2666,6 +2739,7 @@ def faculty_scorecards():
 
     requested_instructor_id = request.args.get("instructor_id", type=int)
     with get_connection() as conn:
+        _sync_schedule_pk_col(conn)
         cur = conn.cursor()
         tuples = []
         if role == "instructor":
@@ -2677,8 +2751,8 @@ def faculty_scorecards():
             tuples = _assigned_section_rows(cur, int(instructor_id), inst_name or "")
         else:
             params = []
-            q = """
-                SELECT s.rowid AS section_id, COALESCE(s.course_name,''), COALESCE(s.day,''), COALESCE(s.time,''),
+            q = f"""
+                SELECT s.{SCHEDULE_PK_COL} AS section_id, COALESCE(s.course_name,''), COALESCE(s.day,''), COALESCE(s.time,''),
                        COALESCE(s.room,''), COALESCE(s.instructor,''), COALESCE(s.semester,''), COALESCE(s.instructor_id,0)
                 FROM schedule s
                 WHERE COALESCE(s.instructor_id,0) > 0
@@ -2686,7 +2760,7 @@ def faculty_scorecards():
             if requested_instructor_id:
                 q += " AND s.instructor_id = ?"
                 params.append(int(requested_instructor_id))
-            q += " ORDER BY s.semester, s.course_name, s.rowid"
+            q += f" ORDER BY s.semester, s.course_name, s.{SCHEDULE_PK_COL}"
             rows = cur.execute(q, tuple(params)).fetchall()
             tuples = [(r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]) for r in (rows or [])]
 
@@ -2765,8 +2839,9 @@ def governance_audit_logs():
 
 
 def _final_dossier_rows(cur, instructor_id: int | None = None) -> list[dict]:
-    q = """
-        SELECT s.rowid AS section_id,
+    _sync_schedule_pk_col(cur.connection)
+    q = f"""
+        SELECT s.{SCHEDULE_PK_COL} AS section_id,
                COALESCE(s.course_name,'') AS course_name,
                COALESCE(s.semester,'') AS semester,
                COALESCE(s.instructor_id,0) AS instructor_id,
@@ -2779,7 +2854,7 @@ def _final_dossier_rows(cur, instructor_id: int | None = None) -> list[dict]:
     if instructor_id:
         q += " AND s.instructor_id = ?"
         params.append(int(instructor_id))
-    q += " ORDER BY s.semester, s.course_name, s.rowid"
+    q += f" ORDER BY s.semester, s.course_name, s.{SCHEDULE_PK_COL}"
     rows = cur.execute(q, tuple(params)).fetchall()
     out = []
     for r in rows or []:
@@ -2842,9 +2917,10 @@ def student_my_announcements():
     if not sid:
         return jsonify({"items": []})
     with get_connection() as conn:
+        _sync_schedule_pk_col(conn)
         cur = conn.cursor()
         rows = cur.execute(
-            """
+            f"""
             SELECT a.id,
                    a.section_id,
                    COALESCE(s.course_name,'') AS course_name,
@@ -2854,7 +2930,7 @@ def student_my_announcements():
                    COALESCE(a.lecture_date,'') AS lecture_date,
                    COALESCE(a.created_at,'') AS created_at
             FROM faculty_course_announcements a
-            JOIN schedule s ON s.rowid = a.section_id
+            JOIN schedule s ON s.{SCHEDULE_PK_COL} = a.section_id
             JOIN registrations r ON r.course_name = s.course_name
             WHERE r.student_id = ?
               AND COALESCE(a.published_to_students, 1) = 1

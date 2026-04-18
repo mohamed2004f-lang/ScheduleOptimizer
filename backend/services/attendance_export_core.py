@@ -9,6 +9,8 @@ from typing import Any, Callable
 
 from flask import jsonify, request, session
 
+from backend.core.auth import current_supervisor_effective
+
 
 def _attendance_course_key(name: str) -> str:
     """مفتاح مطابقة أسماء المقررات: تطبيع Unicode، دمج المسافات، ثم lower (مثل قائمة الجدول مقابل باراميتر الرابط)."""
@@ -359,9 +361,7 @@ def collect_attendance_export_state(
                     )
                 )
 
-        elif user_role == "supervisor" or (
-            user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1
-        ):
+        elif current_supervisor_effective():
             instructor_id = session.get("instructor_id")
             if not instructor_id:
                 return {

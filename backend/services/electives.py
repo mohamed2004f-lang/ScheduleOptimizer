@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Dict, Any
+from backend.database.database import fetch_table_columns
 
 
 ELECTIVE_CATEGORIES = ("elective_major", "elective_free")
@@ -74,7 +75,7 @@ def check_electives_requirement(cur, student_id: str, *, required_electives: int
 
     # وجود category في courses (قواعد قديمة)
     try:
-        cols = [r[1] for r in cur.execute("PRAGMA table_info(courses)").fetchall()]
+        cols = fetch_table_columns(cur.connection, "courses")
     except Exception:
         cols = []
     has_cat = "category" in cols

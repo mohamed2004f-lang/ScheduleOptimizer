@@ -9,6 +9,26 @@
 </head>
 <body>
   {% include "base_nav.html" %}
+  <script>
+    (function () {
+      fetch('/auth/check', { credentials: 'include' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          var role = (d && d.role) || '';
+          var caps = d && d.capabilities;
+          var eff = caps && caps.v >= 1
+            ? !!caps.is_supervisor_effective
+            : (role === 'supervisor' || (role === 'instructor' && Number(d.is_supervisor || 0) === 1));
+          var el = document.getElementById('gradeDraftsHeaderNavLink');
+          if (!el) return;
+          if (role === 'instructor' && !eff) {
+            el.setAttribute('href', '/my_courses');
+            el.textContent = 'مقرراتي';
+          }
+        })
+        .catch(function () {});
+    })();
+  </script>
   <main class="container-main container-1100 theme-formal schedule-wide">
     <div class="page-header">
       <div>
@@ -16,7 +36,7 @@
         <p class="page-subtitle" id="pageSubtitle">إدخال الدرجات عبر مسودة ثم إرسالها للاعتماد</p>
       </div>
       <div>
-        <a href="/transcript_page" class="btn btn-outline-secondary btn-sm">كشف الدرجات</a>
+        <a id="gradeDraftsHeaderNavLink" href="/transcript_page" class="btn btn-outline-secondary btn-sm">كشف الدرجات</a>
       </div>
     </div>
 

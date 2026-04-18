@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/static/css/ui-consistency.css">
 <link rel="stylesheet" href="/static/vendor/fontawesome/all.min.css">
 <meta name="csrf-token" content="{{ csrf_token() }}">
-<script src="/static/js/common.js?v=20260416"></script>
+<script src="/static/js/common.js?v=20260418"></script>
 
 <!-- Loading Overlay (ثيم قسم الهندسة الميكانيكية) -->
 <div class="loading-overlay" id="loadingOverlay" aria-hidden="true">
@@ -52,6 +52,20 @@
     </div>
   </div>
 </header>
+
+<!-- تبديل وضع العمل: أستاذ / مشرف (يظهر فقط إذا كان الحساب instructor و is_supervisor=1 في قاعدة البيانات) -->
+<div id="activeModeBanner" class="container-fluid py-2 mb-0 d-none alert alert-info rounded-0 border-0 border-bottom border-primary border-3" role="region" aria-label="تبديل وضع العمل" style="border-radius:0!important;">
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+    <div class="small fw-semibold">
+      <i class="fa-solid fa-right-left ms-1" aria-hidden="true"></i>
+      <span id="activeModeBannerLabel">وضع العمل</span>
+    </div>
+    <div class="btn-group btn-group-sm" role="group" aria-label="تبديل وضع العمل">
+      <button type="button" class="btn btn-outline-primary" id="btnActiveModeInstructor">وضع الأستاذ</button>
+      <button type="button" class="btn btn-outline-primary" id="btnActiveModeSupervisor">وضع المشرف الأكاديمي</button>
+    </div>
+  </div>
+</div>
 
 <!-- primary navigation (Bootstrap) -->
 <nav class="app-navbar navbar navbar-expand-lg navbar-light">
@@ -251,7 +265,7 @@
         showCourseReg = ['admin', 'admin_main', 'head_of_department'].includes(role || '');
         showScheduleVersions = showCourseReg;
         showExamArch = showCourseReg;
-        showGradeDrafts = (role === 'admin_main' || role === 'head_of_department' || (role === 'instructor' && !isSupervisor));
+        showGradeDrafts = ['admin', 'admin_main', 'head_of_department'].includes(role || '');
         showClosureReports = showCourseReg;
         showFacultyScorecards = showCourseReg || role === 'instructor';
         showFacultyDossier = showCourseReg;
@@ -321,6 +335,64 @@
           if (el) el.style.display = 'none';
         });
       }
+
+      let showTranscriptNav = true;
+      let saAttendanceOnly = false;
+      if (caps && caps.v >= 1) {
+        showTranscriptNav = !!caps.nav_transcript_nav;
+        saAttendanceOnly = !!caps.nav_student_affairs_attendance_only;
+      } else {
+        showTranscriptNav = ['admin', 'admin_main', 'head_of_department'].includes(role || '')
+          || role === 'student' || role === 'supervisor' || (role === 'instructor' && isSupervisor);
+        saAttendanceOnly = (role === 'instructor' && !isSupervisor);
+      }
+      const elTranscript = document.getElementById('navTranscript');
+      if (elTranscript) elTranscript.style.display = showTranscriptNav ? '' : 'none';
+      if (saAttendanceOnly) {
+        ['navStudents', 'navGraduates', 'navEnrollmentPlans', 'navRegistrations', 'navWithdrawnFiles', 'navRegistrationRequests'].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = 'none';
+        });
+      }
+
+      const modeBanner = document.getElementById('activeModeBanner');
+      const dualInstructorSupervisor = role === 'instructor' && Number(data.is_supervisor || 0) === 1;
+      const canSwitchMode = (caps && caps.v >= 1)
+        ? !!caps.can_switch_active_mode
+        : dualInstructorSupervisor;
+      if (modeBanner) {
+        if (canSwitchMode) {
+          modeBanner.classList.remove('d-none');
+          const am = (data.active_mode || 'instructor').toString().toLowerCase();
+          const labelEl = document.getElementById('activeModeBannerLabel');
+          if (labelEl) {
+            labelEl.textContent = am === 'supervisor'
+              ? 'الوضع الحالي: مشرف أكاديمي'
+              : 'الوضع الحالي: أستاذ (مقرراتي وتدريس)';
+          }
+          const bIns = document.getElementById('btnActiveModeInstructor');
+          const bSup = document.getElementById('btnActiveModeSupervisor');
+          const switchMode = function(mode) {
+            fetch('/auth/active_mode', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ mode: mode })
+            }).then(function(r) { if (r.ok) window.location.reload(); });
+          };
+          if (bIns) {
+            bIns.classList.toggle('active', am === 'instructor');
+            bIns.onclick = function() { switchMode('instructor'); };
+          }
+          if (bSup) {
+            bSup.classList.toggle('active', am === 'supervisor');
+            bSup.onclick = function() { switchMode('supervisor'); };
+          }
+        } else {
+          modeBanner.classList.add('d-none');
+        }
+      }
+
       const isStudentUi = (caps && caps.v >= 1) ? !!caps.is_student : (role === 'student');
       if (isStudentUi) {
         // الطالب لا يحتاج لرؤية بعض الروابط الإدارية

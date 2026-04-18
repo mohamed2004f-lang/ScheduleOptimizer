@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.core.faculty_axes import normalize_instructor_name
-from backend.database.database import get_connection, is_postgresql
+from backend.database.database import get_connection, is_postgresql, schedule_pk_column
 from backend.services.utilities import get_current_term, schedule_semester_matches_current_term
 
 
@@ -26,6 +26,7 @@ def main() -> int:
     print("needle:", repr(needle))
     print("backend:", "PostgreSQL" if is_postgresql() else "SQLite")
     with get_connection() as conn:
+        sched_pk = schedule_pk_column(conn)
         cur = conn.cursor()
         term_name, term_year = get_current_term(conn=conn)
         term_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
@@ -74,8 +75,8 @@ def main() -> int:
 
             if is_postgresql():
                 cur.execute(
-                    """
-                    SELECT rowid, course_name, semester, instructor, instructor_id, day, time
+                    f"""
+                    SELECT {sched_pk}, course_name, semester, instructor, instructor_id, day, time
                     FROM schedule
                     WHERE instructor_id = %s
                        OR (
@@ -88,8 +89,8 @@ def main() -> int:
                 )
             else:
                 cur.execute(
-                    """
-                    SELECT rowid, course_name, semester, instructor, instructor_id, day, time
+                    f"""
+                    SELECT {sched_pk}, course_name, semester, instructor, instructor_id, day, time
                     FROM schedule
                     WHERE instructor_id = ?
                        OR (
@@ -104,7 +105,7 @@ def main() -> int:
             matched = []
             for r in sched:
                 if isinstance(r, dict):
-                    sid = r["rowid"]
+                    sid = r[sched_pk]
                     cn = r["course_name"]
                     sem = r["semester"]
                     inst_txt = r["instructor"] or ""
@@ -128,7 +129,7 @@ def main() -> int:
                     flag = "OK_TERM"
                 else:
                     flag = "SEM_MISMATCH"
-                print(" ", flag, "section_id(rowid)=", sid, "course=", repr(cn), "semester=", repr(sem), "instructor_col=", repr(inst_txt), how)
+                print(" ", flag, "section_id=", sid, "course=", repr(cn), "semester=", repr(sem), "instructor_col=", repr(inst_txt), how)
             if len(matched) > 40:
                 print("  ...", len(matched) - 40, "more")
 

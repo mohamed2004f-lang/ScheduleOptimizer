@@ -17,7 +17,7 @@ courses_bp = Blueprint("courses", __name__)
 
 def _is_instructor_or_supervisor_view_only() -> bool:
     role = (session.get("user_role") or "").strip()
-    return role == "supervisor" or (role == "instructor") or (role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    return role in ("supervisor", "instructor")
 
 
 def _normalize_assessment_type(raw: str) -> str:
@@ -529,7 +529,10 @@ def add_prereq():
                     errors.append({"course":course,"required":req,"reason":"المقرر لا يمكن أن يكون متطلباً لنفسه"})
                     continue
 
-                cur.execute("INSERT OR IGNORE INTO prereqs (course_name, required_course_name) VALUES (?,?)", (real_course, real_req))
+                cur.execute(
+                    "INSERT INTO prereqs (course_name, required_course_name) VALUES (?,?) ON CONFLICT (course_name, required_course_name) DO NOTHING",
+                    (real_course, real_req),
+                )
                 if cur.rowcount == 0:
                     ignored.append({"course":real_course,"required":real_req})
                 else:

@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend.database.database import get_connection, is_postgresql  # noqa: E402
+from backend.database.database import get_connection, is_postgresql, schedule_pk_column  # noqa: E402
 from backend.services.utilities import get_current_term  # noqa: E402
 
 
@@ -50,6 +50,7 @@ def main() -> int:
     args = ap.parse_args()
 
     with get_connection() as conn:
+        sched_pk = schedule_pk_column(conn)
         term = _term_label(conn)
         if not term:
             print("ERROR: current term is not set in system_settings.", file=sys.stderr)
@@ -81,8 +82,8 @@ def main() -> int:
 
         sample = _fetchall(
             conn,
-            """
-            SELECT rowid, course_name, day, time, room, instructor, instructor_id, semester
+            f"""
+            SELECT {sched_pk}, course_name, day, time, room, instructor, instructor_id, semester
             FROM schedule
             WHERE TRIM(COALESCE(semester,'')) = '' OR TRIM(COALESCE(semester,'')) <> ?
             ORDER BY semester, course_name, day, time
@@ -94,7 +95,7 @@ def main() -> int:
         if args.csv:
             with open(args.csv, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
-                w.writerow(["rowid", "course_name", "day", "time", "room", "instructor", "instructor_id", "semester"])
+                w.writerow(["section_id", "course_name", "day", "time", "room", "instructor", "instructor_id", "semester"])
                 for r in sample:
                     w.writerow(list(r))
             print("wrote_csv:", args.csv)
@@ -102,10 +103,10 @@ def main() -> int:
             if sample:
                 print("\nSAMPLE (blank or mismatched semester):")
                 for r in sample:
-                    rowid, course_name, day, time, room, instructor, instructor_id, semester = r
+                    section_id, course_name, day, time, room, instructor, instructor_id, semester = r
                     print(
-                        " - rowid=%s course=%r day=%r time=%r room=%r instructor=%r instructor_id=%r semester=%r"
-                        % (rowid, course_name, day, time, room, instructor, instructor_id, semester)
+                        " - section_id=%s course=%r day=%r time=%r room=%r instructor=%r instructor_id=%r semester=%r"
+                        % (section_id, course_name, day, time, room, instructor, instructor_id, semester)
                     )
 
     return 0

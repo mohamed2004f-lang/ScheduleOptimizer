@@ -223,7 +223,7 @@ def migrate(
 
     with psycopg.connect(dsn) as pg:
         serial_tables = [
-            ("schedule", "rowid"),
+            ("schedule", "id"),
             ("registrations", "id"),
             ("grades", "id"),
             ("prereqs", "id"),

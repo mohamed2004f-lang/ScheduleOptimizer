@@ -18,6 +18,11 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 CENTRAL = os.path.abspath(os.path.join(os.path.dirname(__file__), 'mechanical.db'))
 
+if (os.environ.get("ALLOW_SQLITE_LEGACY") or "").strip().lower() not in ("1", "true", "yes"):
+    print("This legacy SQLite migration tool is disabled by default.")
+    print("Set ALLOW_SQLITE_LEGACY=1 to run it intentionally.")
+    sys.exit(2)
+
 print('Root:', ROOT)
 print('Central DB path:', CENTRAL)
 

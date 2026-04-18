@@ -132,24 +132,45 @@ def _create_exam_schedule_version(
         "row_count": len(items),
         "rows": items,
     }
-    cur.execute(
-        """
-        INSERT INTO exam_schedule_versions
-        (exam_type, semester, version_no, snapshot_json, generated_at, generated_by, note, is_published)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            exam_type,
-            semester,
-            version_no,
-            json.dumps(snapshot, ensure_ascii=False),
-            now,
-            actor,
-            (note or ""),
-            1 if is_published else 0,
-        ),
-    )
-    ver_id = int(cur.lastrowid)
+    if is_postgresql():
+        row_new = cur.execute(
+            """
+            INSERT INTO exam_schedule_versions
+            (exam_type, semester, version_no, snapshot_json, generated_at, generated_by, note, is_published)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
+            """,
+            (
+                exam_type,
+                semester,
+                version_no,
+                json.dumps(snapshot, ensure_ascii=False),
+                now,
+                actor,
+                (note or ""),
+                1 if is_published else 0,
+            ),
+        ).fetchone()
+        ver_id = int(row_new[0]) if row_new else 0
+    else:
+        cur.execute(
+            """
+            INSERT INTO exam_schedule_versions
+            (exam_type, semester, version_no, snapshot_json, generated_at, generated_by, note, is_published)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                exam_type,
+                semester,
+                version_no,
+                json.dumps(snapshot, ensure_ascii=False),
+                now,
+                actor,
+                (note or ""),
+                1 if is_published else 0,
+            ),
+        )
+        ver_id = int(cur.lastrowid or 0)
     cur.execute(
         """
         INSERT INTO exam_schedule_version_events
@@ -504,9 +525,18 @@ def check_exam_conflicts(exam_type):
             cur = conn.cursor()
             
             # إضافة مؤقتة للامتحان
-            cur.execute("INSERT INTO exams (exam_type, exam_id, course_name, exam_date, exam_time, room, instructor) VALUES (?,?,?,?,?,?,?)",
-                        (exam_type, None, course_name, exam_date, data.get('exam_time',''), data.get('room',''), data.get('instructor','')))
-            temp_rowid = cur.lastrowid
+            if is_postgresql():
+                row_new = cur.execute(
+                    "INSERT INTO exams (exam_type, exam_id, course_name, exam_date, exam_time, room, instructor) VALUES (?,?,?,?,?,?,?) RETURNING id",
+                    (exam_type, None, course_name, exam_date, data.get('exam_time',''), data.get('room',''), data.get('instructor',''))
+                ).fetchone()
+                temp_rowid = int(row_new[0]) if row_new else 0
+            else:
+                cur.execute(
+                    "INSERT INTO exams (exam_type, exam_id, course_name, exam_date, exam_time, room, instructor) VALUES (?,?,?,?,?,?,?)",
+                    (exam_type, None, course_name, exam_date, data.get('exam_time',''), data.get('room',''), data.get('instructor',''))
+                )
+                temp_rowid = int(cur.lastrowid or 0)
             
             # حساب التعارضات
             q = '''

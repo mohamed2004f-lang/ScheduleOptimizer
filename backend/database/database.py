@@ -3,7 +3,6 @@
 يتضمن Foreign Keys و Constraints لضمان سلامة البيانات
 """
 import os
-import re
 import sqlite3
 import logging
 from contextlib import contextmanager
@@ -104,6 +103,26 @@ def fetch_table_columns(conn, table_name: str) -> list[str]:
     return [r[1] for r in cur.fetchall()]
 
 
+def schedule_pk_column(conn) -> str:
+    """
+    عمود المفتاح الأساسي المفضل لجدول schedule.
+    في PostgreSQL يجب أن يكون id موجوداً بشكل صريح.
+    """
+    try:
+        cols = {str(c).strip().lower() for c in fetch_table_columns(conn, "schedule")}
+        if "id" in cols:
+            return "id"
+        if is_postgresql():
+            raise RuntimeError(
+                "PostgreSQL schema is invalid: schedule.id is missing. "
+                "Run schema migration/ensure_tables before runtime."
+            )
+    except Exception:
+        if is_postgresql():
+            raise
+    return "id"
+
+
 def table_exists(conn, name: str) -> bool:
     """بديل sqlite_master لمعرفة وجود جدول."""
     cur = conn.cursor()
@@ -121,11 +140,8 @@ def table_exists(conn, name: str) -> bool:
 
 
 def _adapt_pg_execute_sql(sql: str) -> str:
-    from backend.database.pg_sql import adapt_sqlite_sql_to_postgres, qmarks_to_percent
-
-    s = adapt_sqlite_sql_to_postgres(sql)
-    s = s.replace("excluded.", "EXCLUDED.")
-    return qmarks_to_percent(s)
+    # Runtime is now PostgreSQL-native; keep only placeholder adaptation.
+    return sql.replace("?", "%s")
 
 
 class _PgRowAdapter:
@@ -183,67 +199,6 @@ class _PgCursorWrapper:
 
     def execute(self, sql, params=None):
         self._lastrowid = None
-        s_in = sql.strip()
-        # محاكاة PRAGMA / sqlite_master لعدم تعديل كل الخدمات يدوياً
-        pm = re.match(
-            r"^\s*PRAGMA\s+table_info\s*\(\s*['\"]?([a-zA-Z0-9_]+)['\"]?\s*\)\s*$",
-            s_in,
-            re.I | re.DOTALL,
-        )
-        if pm:
-            tname = pm.group(1)
-            q = (
-                "SELECT ordinal_position AS cid, column_name AS name, data_type AS type, "
-                "0 AS notnull, NULL AS dflt_value, 0 AS pk "
-                "FROM information_schema.columns WHERE table_schema = 'public' "
-                "AND lower(table_name) = lower(%s) ORDER BY ordinal_position"
-            )
-            self._c.execute(q, (tname,))
-            self.description = self._c.description
-            return self
-
-        nrm = re.sub(r"\s+", " ", s_in)
-        if re.match(
-            r"^SELECT\s+name\s+FROM\s+sqlite_master\s+WHERE\s+type\s*=\s*['\"]table['\"]",
-            nrm,
-            re.I,
-        ):
-            self._c.execute(
-                "SELECT tablename AS name FROM pg_catalog.pg_tables "
-                "WHERE schemaname = 'public' ORDER BY tablename"
-            )
-            self.description = self._c.description
-            return self
-
-        sm = re.match(
-            r"^\s*SELECT\s+name\s+FROM\s+sqlite_master\s+WHERE\s+type\s*=\s*['\"]table['\"]\s+AND\s+name\s*=\s*\?\s*$",
-            s_in,
-            re.I,
-        )
-        if sm and params:
-            self._c.execute(
-                "SELECT tablename AS name FROM pg_catalog.pg_tables "
-                "WHERE schemaname = 'public' AND lower(tablename) = lower(%s)",
-                (params[0],),
-            )
-            self.description = self._c.description
-            return self
-
-        sm1 = re.match(
-            r"^\s*SELECT\s+1\s+FROM\s+sqlite_master\s+WHERE\s+type\s*=\s*['\"]table['\"]\s+AND\s+name\s*=\s*['\"]([a-zA-Z0-9_]+)['\"]\s*$",
-            s_in,
-            re.I,
-        )
-        if sm1:
-            t = sm1.group(1)
-            self._c.execute(
-                "SELECT 1 AS x FROM pg_catalog.pg_tables "
-                "WHERE schemaname = 'public' AND lower(tablename) = lower(%s)",
-                (t,),
-            )
-            self.description = self._c.description
-            return self
-
         q = _adapt_pg_execute_sql(sql)
         if params is None:
             self._c.execute(q)
@@ -414,6 +369,13 @@ def get_connection(db_file=None):
             # Fallback: إنشاء اتصال مباشر بدون pool
             conn = psycopg.connect(_pg_conninfo(), row_factory=dict_row)
             return _PgConnectionWrapper(conn, pool=None)
+
+    allow_sqlite_legacy = (os.environ.get("ALLOW_SQLITE_LEGACY") or "").strip().lower() in ("1", "true", "yes")
+    if not allow_sqlite_legacy and not os.environ.get("PYTEST_CURRENT_TEST"):
+        raise RuntimeError(
+            "SQLite runtime connection is disabled. "
+            "Set DATABASE_URL to PostgreSQL (recommended) or ALLOW_SQLITE_LEGACY=1 for temporary legacy tools."
+        )
 
     db_path = db_file or DB_FILE
     conn = sqlite3.connect(db_path)
@@ -1221,6 +1183,7 @@ INDEXES = [
 def _ensure_tables_postgresql() -> None:
     """ترقيات خفيفة على PostgreSQL (إنشاء المخطط الأساسي عبر ``alembic upgrade head``)."""
     pg_alters = [
+        "ALTER TABLE schedule ADD COLUMN IF NOT EXISTS id BIGINT",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS join_year TEXT",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS university_number TEXT",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS email TEXT",
@@ -1308,6 +1271,15 @@ def _ensure_tables_postgresql() -> None:
                     conn.rollback()
                 except Exception:
                     pass
+        # مرحلة انتقالية: تعبئة id من rowid عند وجود بيانات قديمة.
+        try:
+            cur.execute("UPDATE schedule SET id = rowid WHERE id IS NULL")
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         for idx_stmt in INDEXES:
             try:
                 cur.execute(idx_stmt)

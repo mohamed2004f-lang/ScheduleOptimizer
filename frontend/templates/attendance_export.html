@@ -151,9 +151,12 @@
           .then(r => r.json())
           .then(auth => {
             const role = auth?.role || '';
-            const isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(auth?.is_supervisor || 0) === 1);
-            if (role === 'instructor' && !isSupervisor) backLink.href = '/transcript_page';
-            if (isSupervisor) backLink.href = '/supervisor_dashboard';
+            const caps = auth?.capabilities;
+            const eff = caps && caps.v >= 1
+              ? !!caps.is_supervisor_effective
+              : ((role === 'supervisor') || (role === 'instructor' && Number(auth?.is_supervisor || 0) === 1));
+            if (role === 'instructor' && !eff) backLink.href = '/my_courses';
+            if (eff) backLink.href = '/supervisor_dashboard';
           })
           .catch(()=>{});
       }

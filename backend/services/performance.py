@@ -2,7 +2,8 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, render_template, request, send_file, session
 
-from backend.core.auth import role_required
+from backend.core.auth import role_required, current_supervisor_effective
+from backend.database.database import fetch_table_columns
 from .utilities import get_connection, excel_response_from_df, pdf_response_from_html, get_current_term
 from backend.services.grades import _load_transcript_data, _load_all_transcripts_bulk
 
@@ -174,7 +175,7 @@ def _format_status_action_period(term: str, year: str) -> str:
 
 
 def _fetch_students_performance_meta(cur) -> list[dict]:
-    cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
+    cols = fetch_table_columns(cur.connection, "students")
     has_es = "enrollment_status" in cols
     parts = [
         "student_id",
@@ -503,7 +504,7 @@ def performance_report():
         # Scope enforcement:
         # supervisor يرى فقط طلابه المسندين، بينما admin يرى الجميع
         user_role = session.get("user_role")
-        is_supervisor = (user_role == "supervisor") or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+        is_supervisor = current_supervisor_effective()
         if is_supervisor or user_role == "instructor":
             instructor_id = session.get("instructor_id")
             if not instructor_id:
@@ -664,7 +665,7 @@ def performance_status(student_id: str):
             if (sid_session or "").strip() != sid:
                 return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
 
-        is_supervisor = (user_role == "supervisor") or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+        is_supervisor = current_supervisor_effective()
         if is_supervisor:
             instructor_id = session.get("instructor_id")
             if not instructor_id:
@@ -712,7 +713,7 @@ def performance_status(student_id: str):
             if not allowed:
                 return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
 
-        cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
+        cols = fetch_table_columns(conn, "students")
         has_enrollment_status = "enrollment_status" in cols
 
         data = _load_transcript_data(sid)

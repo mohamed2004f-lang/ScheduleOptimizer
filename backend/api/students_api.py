@@ -11,7 +11,7 @@ from functools import wraps
 
 from flask import Blueprint, jsonify, request, session
 
-from backend.core.auth import login_required, role_required
+from backend.core.auth import login_required, role_required, current_supervisor_effective
 from backend.services.utilities import get_connection
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ def _can_view_student(conn, student_id: str) -> bool:
     if role == "student":
         sid_session = session.get("student_id") or session.get("user")
         return bool(sid_session and str(sid_session) == str(student_id))
-    is_supervisor = (role == "supervisor") or (role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    is_supervisor = current_supervisor_effective()
     if is_supervisor:
         instructor_id = session.get("instructor_id")
         if not instructor_id:
@@ -100,7 +100,7 @@ def _can_view_student(conn, student_id: str) -> bool:
 def get_students():
     """Get students with pagination + search. Admin/Supervisor only."""
     role = session.get("user_role") or ""
-    is_supervisor = (role == "supervisor") or (role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    is_supervisor = current_supervisor_effective()
     if role != "admin" and not is_supervisor:
         raise APIError("ليس لديك صلاحية لعرض قائمة الطلبة", 403)
 

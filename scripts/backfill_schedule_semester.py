@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend.database.database import get_connection, is_postgresql  # noqa: E402
+from backend.database.database import get_connection, is_postgresql, schedule_pk_column  # noqa: E402
 from backend.services.utilities import get_current_term  # noqa: E402
 
 
@@ -56,6 +56,7 @@ def main() -> int:
     args = ap.parse_args()
 
     with get_connection() as conn:
+        sched_pk = schedule_pk_column(conn)
         term = _term_label(conn)
         if not term:
             print("ERROR: current term is not set (system_settings current_term_name/year).", file=sys.stderr)
@@ -63,8 +64,8 @@ def main() -> int:
 
         rows = _fetchall(
             conn,
-            """
-            SELECT rowid, course_name, day, time, instructor, instructor_id, semester
+            f"""
+            SELECT {sched_pk}, course_name, day, time, instructor, instructor_id, semester
             FROM schedule
             WHERE TRIM(COALESCE(semester,'')) = ''
             ORDER BY course_name, day, time
@@ -82,10 +83,10 @@ def main() -> int:
         if rows:
             print("\nSAMPLE (blank semester):")
             for r in rows:
-                rowid, course_name, day, time, instructor, instructor_id, semester = r
+                section_id, course_name, day, time, instructor, instructor_id, semester = r
                 print(
-                    " - rowid=%s course=%r day=%r time=%r instructor=%r instructor_id=%r semester=%r"
-                    % (rowid, course_name, day, time, instructor, instructor_id, semester)
+                    " - section_id=%s course=%r day=%r time=%r instructor=%r instructor_id=%r semester=%r"
+                    % (section_id, course_name, day, time, instructor, instructor_id, semester)
                 )
 
         if args.mode == "preview":

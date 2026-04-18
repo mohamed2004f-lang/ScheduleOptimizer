@@ -13,6 +13,11 @@ CENTRAL = os.path.abspath(os.path.join(os.path.dirname(__file__), 'mechanical.db
 BACKUP_DIR = os.path.join(ROOT, 'backups')
 SPECIFIC_BACKUP = os.path.join(BACKUP_DIR, '20251110_225006')
 
+if (os.environ.get("ALLOW_SQLITE_LEGACY") or "").strip().lower() not in ("1", "true", "yes"):
+    print("This legacy SQLite migration tool is disabled by default.")
+    print("Set ALLOW_SQLITE_LEGACY=1 to run it intentionally.")
+    sys.exit(2)
+
 if not os.path.exists(SPECIFIC_BACKUP):
     print('Backup folder not found:', SPECIFIC_BACKUP)
     sys.exit(1)

@@ -68,6 +68,9 @@ STUDENT_PASSWORD = os.environ.get("STUDENT_PASSWORD")
 SESSION_KEY = 'authenticated'
 SESSION_USER = 'user'
 SESSION_LOGIN_TIME = 'login_time'
+# وضع العمل داخل الجلسة: أستاذ يملك صلاحية مشرف في DB يختار instructor | supervisor
+SESSION_ACTIVE_MODE = "active_mode"
+
 
 def _normalize_role(role: str) -> str:
     """تطبيع الأدوار لتوافق الإصدارات السابقة."""
@@ -77,7 +80,45 @@ def _normalize_role(role: str) -> str:
     return r
 
 
-def compute_capabilities(user_role: str | None, is_supervisor_val: int | None) -> dict:
+def is_supervisor_effective_session(
+    user_role: str | None,
+    is_supervisor_db: int | None,
+    active_mode: str | None,
+) -> bool:
+    """
+    هل تعمل الجلسة حالياً بوصف «مشرف» (صلاحيات وواجهة الإشراف)؟
+    - حساب بدور supervisor: دائماً نعم.
+    - أستاذ + is_supervisor في قاعدة البيانات: يعتمد على active_mode (افتراضي instructor).
+    """
+    r = (user_role or "").strip()
+    if r == "supervisor":
+        return True
+    if r != "instructor":
+        return False
+    try:
+        isv = int(is_supervisor_db or 0) == 1
+    except (TypeError, ValueError):
+        isv = False
+    if not isv:
+        return False
+    m = (active_mode or "instructor").strip().lower()
+    return m == "supervisor"
+
+
+def current_supervisor_effective() -> bool:
+    """نسخة مريحة تعتمد على جلسة Flask الحالية."""
+    return is_supervisor_effective_session(
+        session.get("user_role"),
+        session.get("is_supervisor"),
+        session.get(SESSION_ACTIVE_MODE),
+    )
+
+
+def compute_capabilities(
+    user_role: str | None,
+    is_supervisor_val: int | None,
+    active_mode: str | None = None,
+) -> dict:
     """
     قدرات الواجهة (مصدر الخادم) — تفضّل استخدامها بدل مقارنة سلاسل الدور في JavaScript.
 
@@ -89,11 +130,10 @@ def compute_capabilities(user_role: str | None, is_supervisor_val: int | None) -
     except (TypeError, ValueError):
         isv = False
 
-    is_supervisor_effective = (role == "supervisor") or (role == "instructor" and isv)
+    is_supervisor_effective = is_supervisor_effective_session(role, is_supervisor_val, active_mode)
     staff_planning = role in ("admin", "admin_main", "head_of_department")
-    show_grade_drafts = (role in ("admin", "admin_main", "head_of_department")) or (
-        role == "instructor" and not is_supervisor_effective
-    )
+    # مسودات الدرجات من القائمة العلوية: الإدارة/رئيس القسم فقط؛ الأستاذ يدخلها من «مقرراتي»
+    show_grade_drafts = role in ("admin", "admin_main", "head_of_department")
     staff_quality = role in ("admin", "admin_main", "head_of_department")
     show_faculty_scorecards = staff_quality or role == "instructor"
 
@@ -111,21 +151,30 @@ def compute_capabilities(user_role: str | None, is_supervisor_val: int | None) -
         "nav_faculty_scorecards": show_faculty_scorecards,
         "nav_faculty_final_dossier": staff_quality,
         "is_supervisor_effective": bool(is_supervisor_effective),
+        # إخفاء عناصر إدارية عن فئة التدريس — لا يعتمد على وضع المشرف الفعّال
         "is_instructor_or_supervisor_nav": (role == "instructor")
         or (role == "supervisor")
-        or is_supervisor_effective,
+        or isv,
+        "can_switch_active_mode": (role == "instructor" and isv),
         "is_student": role == "student",
         "can_manage_schedule_edit": staff_planning,
         "can_manage_courses_edit": staff_planning,
         "can_manage_transcript_admin": staff_planning,
+        # واجهة التنقل: أستاذ عادي يرى من «شؤون الطلبة» الحضور والغياب فقط
+        "nav_student_affairs_attendance_only": (role == "instructor" and not is_supervisor_effective),
+        # كشف الدرجات في القائمة — مخفي عن الأستاذ العادي (يُسمح للطالب والمشرف والإدارة)
+        "nav_transcript_nav": staff_planning
+        or (role == "student")
+        or (role == "supervisor")
+        or is_supervisor_effective,
     }
 
 
 def _effective_roles(user_role: str) -> set:
     """
     إرجاع مجموعة الأدوار الفعلية للمستخدم (بدون خلط غير آمن).
-    - instructor + is_supervisor=1 => يضاف supervisor كدور إضافي
-    - supervisor (إن وُجدت في DB من إصدارات قديمة) تعتبر أيضاً instructor
+    - instructor + is_supervisor=1 => يُضاف supervisor فقط عند active_mode=supervisor
+    - supervisor (دور في DB) => تُضاف instructor للسماح بمسارات التدريس عند الحاجة
     """
     r = _normalize_role(user_role)
     roles = {r} if r else set()
@@ -133,8 +182,10 @@ def _effective_roles(user_role: str) -> set:
         is_sup = int(session.get("is_supervisor") or 0)
     except Exception:
         is_sup = 0
+    active = session.get(SESSION_ACTIVE_MODE)
     if r == "instructor" and is_sup == 1:
-        roles.add("supervisor")
+        if is_supervisor_effective_session(r, is_sup, active):
+            roles.add("supervisor")
     if r == "supervisor":
         roles.add("instructor")
     return roles
@@ -493,7 +544,10 @@ def init_auth(app):
                         with get_connection() as conn2:
                             cur2 = conn2.cursor()
                             cur2.execute(
-                                "INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, 'admin')",
+                                """
+                                INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')
+                                ON CONFLICT (username) DO NOTHING
+                                """,
                                 (ADMIN_USERNAME, hash_password(ADMIN_PASSWORD)),
                             )
                             conn2.commit()
@@ -513,6 +567,11 @@ def init_auth(app):
         session[SESSION_USER] = username
         session['user_role'] = role
         session['is_supervisor'] = 1 if int(is_supervisor_flag or 0) == 1 else 0
+        session.pop(SESSION_ACTIVE_MODE, None)
+        if role == "supervisor":
+            session[SESSION_ACTIVE_MODE] = "supervisor"
+        elif role == "instructor" and int(is_supervisor_flag or 0) == 1:
+            session[SESSION_ACTIVE_MODE] = "instructor"
         session[SESSION_LOGIN_TIME] = str(os.times())
         if student_id:
             session['student_id'] = student_id
@@ -626,6 +685,7 @@ def init_auth(app):
             "is_supervisor",
             "student_id",
             "instructor_id",
+            SESSION_ACTIVE_MODE,
         ):
             try:
                 session.pop(k, None)
@@ -656,9 +716,24 @@ def init_auth(app):
                     instructor_id_val = getattr(current_user, "instructor_id", instructor_id_val)
             except Exception:
                 pass
+        active_mode_val = session.get(SESSION_ACTIVE_MODE) if is_authenticated else None
+        # جلسات قديمة قبل إضافة active_mode: اضبط القيمة الافتراضية حتى تُحسب الصلاحيات بشكل صحيح
+        if is_authenticated:
+            r0 = (role or "").strip()
+            try:
+                isv0 = int(is_supervisor_val or 0)
+            except (TypeError, ValueError):
+                isv0 = 0
+            if active_mode_val is None:
+                if r0 == "supervisor":
+                    session[SESSION_ACTIVE_MODE] = "supervisor"
+                    active_mode_val = "supervisor"
+                elif r0 == "instructor" and isv0 == 1:
+                    session[SESSION_ACTIVE_MODE] = "instructor"
+                    active_mode_val = "instructor"
         caps = None
         if is_authenticated:
-            caps = compute_capabilities(role, int(is_supervisor_val or 0))
+            caps = compute_capabilities(role, int(is_supervisor_val or 0), active_mode_val)
 
         return jsonify({
             'status': 'ok',
@@ -666,11 +741,61 @@ def init_auth(app):
             'user': user if is_authenticated else None,
             'role': role if is_authenticated else None,
             'is_supervisor': int(is_supervisor_val or 0) if is_authenticated else 0,
+            'active_mode': active_mode_val if is_authenticated else None,
             'student_id': student_id_val if is_authenticated else None,
             'instructor_id': instructor_id_val if is_authenticated else None,
             'capabilities': caps,
         }), 200
-    
+
+    @auth_bp.route("/active_mode", methods=["POST"])
+    @login_required
+    def set_active_mode():
+        """تبديل وضع العمل (أستاذ / مشرف) لحساب أستاذ يملك صلاحية مشرف في قاعدة البيانات."""
+        data = request.get_json(force=True) or {}
+        mode = (data.get("mode") or "").strip().lower()
+        role = (session.get("user_role") or "").strip()
+        try:
+            isv = int(session.get("is_supervisor") or 0)
+        except (TypeError, ValueError):
+            isv = 0
+        if role != "instructor" or isv != 1:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "لا يمكن تبديل الوضع لهذا الحساب",
+                        "code": "NOT_ALLOWED",
+                    }
+                ),
+                400,
+            )
+        if mode not in ("instructor", "supervisor"):
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "وضع غير صالح",
+                        "code": "INVALID_MODE",
+                    }
+                ),
+                400,
+            )
+        prev = session.get(SESSION_ACTIVE_MODE)
+        session[SESSION_ACTIVE_MODE] = mode
+        user = session.get(SESSION_USER, "?")
+        logger.info("active_mode_switch user=%s from=%s to=%s", user, prev, mode)
+        caps = compute_capabilities(role, isv, mode)
+        return (
+            jsonify(
+                {
+                    "status": "ok",
+                    "active_mode": mode,
+                    "capabilities": caps,
+                }
+            ),
+            200,
+        )
+
     @auth_bp.route('/change_password', methods=['POST'])
     @login_required
     def change_password():
@@ -688,6 +813,7 @@ def init_auth(app):
         csrf = app.extensions.get("csrf")
         if csrf is not None:
             csrf.exempt(login)
+            csrf.exempt(set_active_mode)
     except Exception:
         logger.exception("csrf.exempt(auth.login) failed")
 

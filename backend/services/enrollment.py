@@ -7,7 +7,13 @@ import tempfile
 
 from flask import Blueprint, request, jsonify, session, send_file, abort, current_app, render_template
 
-from backend.core.auth import login_required, role_required, SUPERVISOR_USERNAME, ADMIN_USERNAME
+from backend.core.auth import (
+    login_required,
+    role_required,
+    SUPERVISOR_USERNAME,
+    ADMIN_USERNAME,
+    current_supervisor_effective,
+)
 from .utilities import get_connection, log_activity, create_notification
 from backend.services.grades import _load_transcript_data
 from backend.services.prereg_helpers import (
@@ -16,7 +22,7 @@ from backend.services.prereg_helpers import (
     planning_course_hints,
     prereq_validation_snapshot,
 )
-from backend.database.database import is_postgresql
+from backend.database.database import is_postgresql, fetch_table_columns
 
 DocxTemplate = None
 
@@ -57,7 +63,7 @@ enrollment_bp = Blueprint("enrollment", __name__)
 
 def _enrollment_plans_has_prereq_json_column(cur) -> bool:
     try:
-        cols = [x[1] for x in cur.execute("PRAGMA table_info(enrollment_plans)").fetchall()]
+        cols = fetch_table_columns(cur.connection, "enrollment_plans")
         return "prereq_validation_json" in cols
     except Exception:
         return False
@@ -117,16 +123,31 @@ def _create_registration_form_version(conn, student_id: str, semester: str, sour
     }
     generated_by = (session.get("user") or "") if "user" in session else ""
     now = datetime.datetime.utcnow().isoformat()
-    cur.execute(
-        """
-        INSERT INTO registration_form_versions
-        (student_id, semester, source, version_no, snapshot_json, generated_at, generated_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (sid, sem, src, next_ver, json.dumps(snap, ensure_ascii=False), now, generated_by),
-    )
+    new_id = None
+    if is_postgresql():
+        row_new = cur.execute(
+            """
+            INSERT INTO registration_form_versions
+            (student_id, semester, source, version_no, snapshot_json, generated_at, generated_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
+            """,
+            (sid, sem, src, next_ver, json.dumps(snap, ensure_ascii=False), now, generated_by),
+        ).fetchone()
+        if row_new:
+            new_id = int(row_new[0])
+    else:
+        cur.execute(
+            """
+            INSERT INTO registration_form_versions
+            (student_id, semester, source, version_no, snapshot_json, generated_at, generated_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (sid, sem, src, next_ver, json.dumps(snap, ensure_ascii=False), now, generated_by),
+        )
+        new_id = int(cur.lastrowid)
     conn.commit()
-    return {"id": int(cur.lastrowid), "version_no": int(next_ver), "generated_at": now, "semester": sem, "source": src}
+    return {"id": int(new_id or 0), "version_no": int(next_ver), "generated_at": now, "semester": sem, "source": src}
 
 
 def _is_instructor_or_supervisor_view_only() -> bool:
@@ -237,7 +258,7 @@ def _build_registration_form_context(student_id: str, semester_param: str, sourc
 
     with get_connection() as conn:
         cur = conn.cursor()
-        cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
+        cols = fetch_table_columns(conn, "students")
         has_uni = "university_number" in cols
 
         # بيانات الطالب الأساسية (university_number قد لا يكون موجوداً في بعض القواعد)
@@ -396,7 +417,7 @@ def list_plans():
         sid_session = session.get("student_id") or session.get("user")
         student_id = sid_session
     # المشرف لا يمكنه رؤية إلا خطط الطلبة المسندين إليه
-    is_supervisor = (user_role == "supervisor") or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    is_supervisor = current_supervisor_effective()
     if is_supervisor:
         instructor_id = session.get("instructor_id")
         if not instructor_id:
@@ -411,7 +432,7 @@ def list_plans():
             sel += ", prereq_validation_json"
         has_ack_cols = False
         try:
-            ep_cols = [x[1] for x in cur.execute("PRAGMA table_info(enrollment_plans)").fetchall()]
+            ep_cols = fetch_table_columns(conn, "enrollment_plans")
             has_ack_cols = ("prereq_ack_by_student" in ep_cols and "prereq_ack_reason" in ep_cols)
         except Exception:
             has_ack_cols = False
@@ -489,9 +510,7 @@ def validate_prereqs():
     if not isinstance(courses, list):
         return jsonify({"status": "error", "message": "courses يجب أن تكون قائمة"}), 400
 
-    is_supervisor_chk = (user_role == "supervisor") or (
-        user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1
-    )
+    is_supervisor_chk = current_supervisor_effective()
 
     old_set = None
     if isinstance(old_courses, list):
@@ -568,9 +587,7 @@ def prereq_planning_hints():
     if not student_id:
         return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
 
-    is_supervisor_chk = (user_role == "supervisor") or (
-        user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1
-    )
+    is_supervisor_chk = current_supervisor_effective()
     with get_connection() as conn:
         cur = conn.cursor()
         if is_supervisor_chk:
@@ -640,7 +657,7 @@ def create_or_update_plan():
     # منع إنشاء/تحديث خطة تسجيل لطالب غير فعّال (سحب ملف، موقوف قيده، خريج)
     with get_connection() as conn:
         cur = conn.cursor()
-        cols = [r[1] for r in cur.execute("PRAGMA table_info(students)").fetchall()]
+        cols = fetch_table_columns(conn, "students")
         if "enrollment_status" in cols:
             row = cur.execute(
                 "SELECT COALESCE(enrollment_status, 'active') FROM students WHERE student_id = ?",
@@ -760,14 +777,25 @@ def create_or_update_plan():
                 "DELETE FROM enrollment_plan_items WHERE plan_id = ?", (plan_id,)
             )
         else:
-            cur.execute(
-                """
-                INSERT INTO enrollment_plans (student_id, semester, status, rejection_reason, created_at, updated_at)
-                VALUES (?,?,?,?,?,?)
-                """,
-                (student_id, semester, "Draft", None, now, now),
-            )
-            plan_id = cur.lastrowid
+            if is_postgresql():
+                row_new = cur.execute(
+                    """
+                    INSERT INTO enrollment_plans (student_id, semester, status, rejection_reason, created_at, updated_at)
+                    VALUES (?,?,?,?,?,?)
+                    RETURNING id
+                    """,
+                    (student_id, semester, "Draft", None, now, now),
+                ).fetchone()
+                plan_id = int(row_new[0]) if row_new else 0
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO enrollment_plans (student_id, semester, status, rejection_reason, created_at, updated_at)
+                    VALUES (?,?,?,?,?,?)
+                    """,
+                    (student_id, semester, "Draft", None, now, now),
+                )
+                plan_id = int(cur.lastrowid or 0)
 
         for cname in courses:
             cur.execute(
@@ -883,7 +911,7 @@ def submit_plan(plan_id: int):
         ack_reason_val = ack_reason if ack_by_student else ""
         if _enrollment_plans_has_prereq_json_column(cur):
             try:
-                ep_cols = [x[1] for x in cur.execute("PRAGMA table_info(enrollment_plans)").fetchall()]
+                ep_cols = fetch_table_columns(conn, "enrollment_plans")
             except Exception:
                 ep_cols = []
             if "prereq_ack_by_student" in ep_cols and "prereq_ack_reason" in ep_cols:
@@ -1145,7 +1173,7 @@ def registration_form_html(student_id):
     عرض استمارة التسجيل كصفحة HTML للطباعة من المستعرض (لا يتطلب قالب Word).
     """
     user_role = session.get("user_role")
-    is_supervisor = (user_role == "supervisor") or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    is_supervisor = current_supervisor_effective()
     if is_supervisor:
         instructor_id = session.get("instructor_id")
         if not instructor_id:
@@ -1201,7 +1229,7 @@ def print_registration_form(student_id):
     """
     # تقييد المشرف: لا يطبع إلا لطلبته المسندين إليه
     user_role = session.get("user_role")
-    is_supervisor = (user_role == "supervisor") or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    is_supervisor = current_supervisor_effective()
     if is_supervisor:
         instructor_id = session.get("instructor_id")
         if not instructor_id:

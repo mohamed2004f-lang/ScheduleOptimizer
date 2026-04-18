@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify, session
 
-from backend.core.auth import admin_required, login_required
+from backend.core.auth import admin_required, login_required, current_supervisor_effective
+from backend.database.database import fetch_table_columns
 from .utilities import get_connection
 
 instructors_bp = Blueprint("instructors", __name__)
@@ -146,7 +147,7 @@ def supervised_students():
     user_role = session.get("user_role")
     instructor_id = None
 
-    if user_role == "supervisor" or (user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1):
+    if current_supervisor_effective():
         instructor_id = session.get("instructor_id")
     else:
         instructor_id = request.args.get("instructor_id", type=int)
@@ -158,7 +159,7 @@ def supervised_students():
 
     with get_connection() as conn:
         cur = conn.cursor()
-        cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
+        cols = fetch_table_columns(conn, "students")
         has_enrollment_status = "enrollment_status" in cols
         has_join = "join_term" in cols and "join_year" in cols
         extra_sel = ", COALESCE(s.join_term, '') AS join_term, COALESCE(s.join_year, '') AS join_year" if has_join else ""
@@ -302,8 +303,9 @@ def assign_students():
         for sid in cleaned_ids:
             cur.execute(
                 """
-                INSERT OR IGNORE INTO student_supervisor (student_id, instructor_id)
+                INSERT INTO student_supervisor (student_id, instructor_id)
                 VALUES (?, ?)
+                ON CONFLICT (student_id, instructor_id) DO NOTHING
                 """,
                 (sid, instructor_id),
             )

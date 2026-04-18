@@ -1,5 +1,4 @@
 import os
-import sqlite3
 import io
 import pandas as pd
 import shutil
@@ -92,7 +91,10 @@ def set_schedule_published_at(conn=None, db_file=DB_FILE):
     def _set(c):
         cur = c.cursor()
         cur.execute(
-            "INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)",
+            """
+            INSERT INTO system_settings (key, value) VALUES (?, ?)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """,
             (SCHEDULE_PUBLISHED_KEY, now)
         )
         c.commit()
@@ -123,7 +125,10 @@ def touch_schedule_updated_at(conn=None, db_file=DB_FILE):
     def _set(c):
         cur = c.cursor()
         cur.execute(
-            "INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)",
+            """
+            INSERT INTO system_settings (key, value) VALUES (?, ?)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """,
             (SCHEDULE_UPDATED_KEY, now),
         )
         c.commit()
@@ -172,7 +177,10 @@ def set_exam_schedule_published_at(exam_type: str, conn=None, db_file=DB_FILE):
     def _set(c):
         cur = c.cursor()
         cur.execute(
-            "INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)",
+            """
+            INSERT INTO system_settings (key, value) VALUES (?, ?)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """,
             (key, now),
         )
         c.commit()
@@ -213,7 +221,10 @@ def touch_exam_schedule_updated_at(exam_type: str, conn=None, db_file=DB_FILE):
     def _set(c):
         cur = c.cursor()
         cur.execute(
-            "INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)",
+            """
+            INSERT INTO system_settings (key, value) VALUES (?, ?)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """,
             (key, now),
         )
         c.commit()
@@ -267,15 +278,15 @@ def schedule_semester_matches_current_term(schedule_semester, term_label: str) -
 
 def df_from_query(query, params=(), db_file=DB_FILE):
     """إرجاع DataFrame من استعلام SQL"""
-    if is_postgresql():
-        from backend.database.pg_sql import adapt_sqlite_sql_to_postgres, qmarks_to_percent
-
-        q = qmarks_to_percent(adapt_sqlite_sql_to_postgres(query))
-        with get_connection(db_file) as conn:
-            raw = getattr(conn, "_conn", conn)
-            return pd.read_sql_query(q, raw, params=list(params))
-    with sqlite3.connect(db_file) as conn:
-        return pd.read_sql_query(query, conn, params=params)
+    if not is_postgresql():
+        raise RuntimeError("df_from_query supports PostgreSQL runtime only.")
+    q = query.replace("?", "%s")
+    with get_connection(db_file) as conn:
+        cur = conn.cursor()
+        cur.execute(q, tuple(params or ()))
+        rows = cur.fetchall()
+        cols = [d[0] for d in (cur.description or [])]
+        return pd.DataFrame(rows, columns=cols)
 
 def excel_response_from_df(df, filename_prefix="export"):
     """إرجاع ملف Excel للتحميل"""

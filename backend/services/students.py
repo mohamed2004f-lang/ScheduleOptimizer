@@ -3,9 +3,8 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from models.models import Student
 from flask import Blueprint, request, jsonify, render_template, current_app, send_file, session
-from backend.core.auth import login_required, role_required
+from backend.core.auth import login_required, role_required, current_supervisor_effective
 from collections import defaultdict
-import sqlite3
 import pandas as pd
 import datetime
 import hashlib
@@ -26,7 +25,7 @@ from .attendance_export_core import (
     course_rows_with_meta,
     fallback_distinct_attendance_courses,
 )
-from backend.database.database import is_postgresql
+from backend.database.database import is_postgresql, fetch_table_columns, table_exists
 
 students_bp = Blueprint("students", __name__)
 
@@ -299,7 +298,7 @@ def electives_report_pdf():
 def _course_registration_count_rows(conn):
     """صف واحد لكل مقرر: عدد الطلبة المسجّلين فعلياً في جدول التسجيلات."""
     cur = conn.cursor()
-    cols_stu = [r[1] for r in cur.execute("PRAGMA table_info(students)").fetchall()]
+    cols_stu = fetch_table_columns(conn, "students")
     active_only = "enrollment_status" in cols_stu
     if active_only:
         q = """
@@ -349,7 +348,7 @@ def course_registration_counts_api():
     distinct_students = 0
     with get_connection() as conn:
         cur = conn.cursor()
-        cols_stu = [r[1] for r in cur.execute("PRAGMA table_info(students)").fetchall()]
+        cols_stu = fetch_table_columns(conn, "students")
         active_only = "enrollment_status" in cols_stu
         if active_only:
             row = cur.execute(
@@ -1556,8 +1555,7 @@ def _get_allowed_student_ids_for_role(conn, user_role: str) -> set:
         sid_session = normalize_sid(session.get("student_id") or session.get("user"))
         return {sid_session} if sid_session else set()
 
-    is_supervisor = (role == "supervisor") or (role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
-    if is_supervisor:
+    if current_supervisor_effective():
         instructor_id = session.get("instructor_id")
         if not instructor_id:
             return set()
@@ -1682,7 +1680,7 @@ def list_graduates():
         from backend.services.grades import _load_transcript_data
         with get_connection() as conn:
             cur = conn.cursor()
-            cols = [row[1] for row in cur.execute("PRAGMA table_info(students)").fetchall()]
+            cols = fetch_table_columns(conn, "students")
             has_status = "enrollment_status" in cols
             has_phone = "phone" in cols
             if not has_status:
@@ -1871,7 +1869,7 @@ def save_registrations():
                 (sid,),
             ).fetchall()
             old_courses = {r[0] for r in old_rows}
-            cols = [r[1] for r in cur.execute("PRAGMA table_info(students)").fetchall()]
+            cols = fetch_table_columns(conn, "students")
             if "enrollment_status" in cols:
                 row = cur.execute(
                     "SELECT COALESCE(enrollment_status, 'active') FROM students WHERE student_id = ?",
@@ -2351,7 +2349,7 @@ def import_registrations():
     added = 0
     with get_connection() as conn:
         cur = conn.cursor()
-        cols = [r[1] for r in cur.execute("PRAGMA table_info(students)").fetchall()]
+        cols = fetch_table_columns(conn, "students")
         has_uni = 'university_number' in cols
 
         for it in items:
@@ -2372,9 +2370,21 @@ def import_registrations():
                 continue
             try:
                 if has_uni:
-                    cur.execute("INSERT OR IGNORE INTO students (student_id, student_name, university_number) VALUES (?,?,?)", (sid, name, uni))
+                    cur.execute(
+                        """
+                        INSERT INTO students (student_id, student_name, university_number) VALUES (?,?,?)
+                        ON CONFLICT (student_id) DO NOTHING
+                        """,
+                        (sid, name, uni),
+                    )
                 else:
-                    cur.execute("INSERT OR IGNORE INTO students (student_id, student_name) VALUES (?,?)", (sid, name))
+                    cur.execute(
+                        """
+                        INSERT INTO students (student_id, student_name) VALUES (?,?)
+                        ON CONFLICT (student_id) DO NOTHING
+                        """,
+                        (sid, name),
+                    )
                 cur.execute("DELETE FROM registrations WHERE student_id = ?", (sid,))
                 for c in regs:
                     cur.execute("INSERT INTO registrations (student_id, course_name) VALUES (?,?)", (sid, c))
@@ -2395,7 +2405,7 @@ def export_registrations_excel():
     try:
         with get_connection() as conn:
             cur = conn.cursor()
-            cols = [r[1] for r in cur.execute("PRAGMA table_info(students)").fetchall()]
+            cols = fetch_table_columns(conn, "students")
             has_uni = 'university_number' in cols
 
             # Scope: تقييد تصدير التسجيلات حسب الدور
@@ -2619,25 +2629,47 @@ def upload_registration_signature_file():
             _ensure_registration_signature_tables(cur)
             uploaded_by = (session.get("user") or "") if "user" in session else ""
             mime = (f.mimetype or "").strip()
-            cur.execute(
-                """
-                INSERT INTO registration_form_files
-                (student_id, term, original_name, stored_path, mime_type, file_size, sha256, uploaded_by, uploaded_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    sid,
-                    term,
-                    filename,
-                    stored_path,
-                    mime,
-                    len(raw),
-                    sha,
-                    uploaded_by,
-                    datetime.datetime.utcnow().isoformat(),
-                ),
-            )
-            file_id = cur.lastrowid
+            if is_postgresql():
+                row_new = cur.execute(
+                    """
+                    INSERT INTO registration_form_files
+                        (student_id, term, original_name, stored_path, mime_type, file_size, sha256, uploaded_by, uploaded_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    RETURNING id
+                    """,
+                    (
+                        sid,
+                        term,
+                        filename,
+                        stored_path,
+                        mime,
+                        len(raw),
+                        sha,
+                        uploaded_by,
+                        datetime.datetime.utcnow().isoformat(),
+                    ),
+                ).fetchone()
+                file_id = int(row_new[0]) if row_new else 0
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO registration_form_files
+                        (student_id, term, original_name, stored_path, mime_type, file_size, sha256, uploaded_by, uploaded_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        sid,
+                        term,
+                        filename,
+                        stored_path,
+                        mime,
+                        len(raw),
+                        sha,
+                        uploaded_by,
+                        datetime.datetime.utcnow().isoformat(),
+                    ),
+                )
+                file_id = int(cur.lastrowid or 0)
             conn.commit()
         return jsonify({"status": "ok", "file_id": file_id, "download_url": f"/students/registration_signature/file/{file_id}"})
     except Exception:
@@ -3099,9 +3131,7 @@ def attendance_allowed_courses():
         ]
         return jsonify({"status": "ok", "courses": courses})
 
-    effective_supervisor = user_role == "supervisor" or (
-        user_role == "instructor" and int(session.get("is_supervisor") or 0) == 1
-    )
+    effective_supervisor = current_supervisor_effective()
 
     with get_connection() as conn:
         cur = conn.cursor()
@@ -3352,17 +3382,13 @@ def timetable_conflicts():
     """
     try:
         with get_connection() as conn:
-            conn.row_factory = sqlite3.Row
             cur = conn.cursor()
 
             # --- First choice: use conflict_report (source of truth) ---
             # This prevents false positives caused by timetable/schedule tables
             # having different time formats or missing student identifiers.
             try:
-                has_cr = cur.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='conflict_report'",
-                ).fetchone()
-                if has_cr:
+                if table_exists(conn, "conflict_report"):
                     rows = cur.execute(
                         """
                         SELECT
@@ -3430,18 +3456,16 @@ def timetable_conflicts():
             # (kept to avoid breaking older installations)
 
             # detect table
-            tables = [r[0] for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
             table_name = None
             for t in ("timetable", "schedule", "sessions"):
-                if t in tables:
+                if table_exists(conn, t):
                     table_name = t
                     break
             if not table_name:
-                table_name = tables[0] if tables else "timetable"
+                table_name = "schedule" if table_exists(conn, "schedule") else "timetable"
 
             # inspect columns
-            cols_info = cur.execute(f"PRAGMA table_info({table_name})").fetchall()
-            col_names = [c[1] for c in cols_info]
+            col_names = fetch_table_columns(conn, table_name)
 
             # determine which time columns exist
             has_start = 'start_time' in col_names and 'end_time' in col_names
@@ -3687,7 +3711,11 @@ def students_import_excel():
                     )
                 else:
                     cur.execute(
-                        "INSERT OR REPLACE INTO students (student_id, student_name) VALUES (?,?)",
+                        """
+                        INSERT INTO students (student_id, student_name) VALUES (?,?)
+                        ON CONFLICT(student_id) DO UPDATE SET
+                          student_name=excluded.student_name
+                        """,
                         (sid, name),
                     )
             conn.commit()
@@ -3698,23 +3726,20 @@ def students_import_excel():
 
 
 def compute_timetable_conflicts(conn):
-    """Compute conflicts given an open sqlite3 connection.
+    """Compute conflicts given an open DB connection.
     Returns list of conflict dicts analogous to the /timetable/conflicts route (but without jsonify)."""
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     # detect table
-    tables = [r[0] for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
     table_name = None
     for t in ("timetable", "schedule", "sessions"):
-        if t in tables:
+        if table_exists(conn, t):
             table_name = t
             break
     if not table_name:
-        table_name = tables[0] if tables else "timetable"
+        table_name = "schedule" if table_exists(conn, "schedule") else "timetable"
 
-    cols_info = cur.execute(f"PRAGMA table_info({table_name})").fetchall()
-    col_names = [c[1] for c in cols_info]
+    col_names = fetch_table_columns(conn, table_name)
 
     has_start = 'start_time' in col_names and 'end_time' in col_names
 
@@ -3806,7 +3831,6 @@ def compute_per_student_conflicts(conn):
     Returns list of dicts: { student_id, day, time, conflicting_sections, conflict_id }.
     Uses optimized_schedule if it has rows (لمطابقة شبكة النتائج)، وإلا schedule.
     """
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
     # مصدر أوقات المقررات: optimized_schedule (المعروض في النتائج) إن وُجد، وإلا schedule
@@ -3991,7 +4015,6 @@ def compute_student_conflicts(conn):
     Uses registrations JOIN schedule to detect overlapping enrollments. Returns flat rows:
     [{ student_id, day, time, conflicting_sections }, ...]
     """
-    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     # Build a flexible day/time expression covering common column names
     day_expr = "COALESCE(s.day, s.weekday, '')"

@@ -1,5 +1,12 @@
 import sqlite3
 import os
+import sys
+
+if (os.environ.get("ALLOW_SQLITE_LEGACY") or "").strip().lower() not in ("1", "true", "yes"):
+    print("This legacy SQLite inspect tool is disabled by default.")
+    print("Set ALLOW_SQLITE_LEGACY=1 to run it intentionally.")
+    sys.exit(2)
+
 db='mechanical.db'
 print('DB file:', os.path.abspath(db))
 with sqlite3.connect(db) as conn:

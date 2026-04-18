@@ -24,7 +24,7 @@ from backend.api.students_api import students_api_bp
 # Core modules
 from backend.core.exceptions import register_error_handlers
 from backend.core.auth import init_auth
-from backend.core.auth import login_required, role_required
+from backend.core.auth import login_required, role_required, current_supervisor_effective, SESSION_ACTIVE_MODE
 from backend.core.logging_config import setup_logging
 from backend.core.monitoring import init_monitoring
 from backend.core.security import init_security_headers
@@ -61,6 +61,17 @@ if FLASK_ENV != "production":
             resp.headers["Pragma"] = "no-cache"
             resp.headers["Expires"] = "0"
         return resp
+
+
+@app.after_request
+def _no_cache_html_responses(resp):
+    """منع كاش صفحات HTML في كل البيئات حتى تظهر تحديثات القوالب فوراً (خاصة الإنتاج خلف CDN/بروكسي)."""
+    ct = resp.content_type or ""
+    if "text/html" in ct:
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.after_request
@@ -194,17 +205,16 @@ def logout_page():
 def index():
     # صفحة البوابة تحتوي "مدخلات الجدولة (JSON)" لذلك تُحجب عن الطالب
     role = session.get("user_role") or ""
-    is_supervisor = (role == "supervisor") or (role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
     if role == "student":
         sid = session.get("student_id") or session.get("user")
         return redirect(url_for("student_view", student_id=sid))
-    if is_supervisor:
+    if current_supervisor_effective():
         return redirect(url_for("supervisor_dashboard_page"))
     if role in ("admin", "admin_main", "head_of_department"):
         return redirect(url_for("dashboard_page"))
     if role == "instructor":
-        # الأستاذ غير المشرف لا يملك صلاحية dashboard؛ نوجّهه لصفحة السجل الأكاديمي
-        return redirect(url_for("transcript_page"))
+        # الأستاذ غير المشرف: نقطة الدخول «مقرراتي» (وليس كشف درجات الطلبة)
+        return redirect(url_for("my_courses_page"))
     return render_template("index.html")
 
 @app.route("/health")
@@ -330,7 +340,8 @@ def supervision_form():
 @app.route("/supervisor_dashboard")
 @login_required
 def supervisor_dashboard_page():
-    # لوحة للمشرفين لعرض طلبتهم وروابط سريعة
+    if not current_supervisor_effective():
+        return redirect(url_for("my_courses_page"))
     return render_template("supervisor_dashboard.html")
 
 @app.route("/schedule_form")
@@ -411,6 +422,10 @@ def academic_rules_page():
 @app.route("/transcript_page")
 @login_required
 def transcript_page():
+    role = (session.get("user_role") or "").strip()
+    if role == "instructor" and not current_supervisor_effective():
+        return redirect(url_for("my_courses_page"))
+
     # حل جذري: جهّز قائمة الطلبة + كشف أول طالب (أو المختار) من السيرفر
     from backend.services.utilities import get_connection
     from backend.services.grades import _load_transcript_data
@@ -447,9 +462,17 @@ def transcript_page():
 def grade_drafts_page():
     """واجهة مسودات الدرجات: أستاذ (غير مشرف) أو اعتماد من رئيس القسم / الإدارة الرئيسية."""
     role = (session.get("user_role") or "").strip()
-    is_sup = (role == "supervisor") or (role == "instructor" and int(session.get("is_supervisor") or 0) == 1)
+    try:
+        db_sup = int(session.get("is_supervisor") or 0) == 1
+    except (TypeError, ValueError):
+        db_sup = False
+    active_m = (session.get(SESSION_ACTIVE_MODE) or "instructor").strip().lower()
     has_instructor = bool(session.get("instructor_id"))
-    can_instructor_ui = has_instructor and not is_sup and role != "supervisor"
+    can_instructor_ui = (
+        has_instructor
+        and role == "instructor"
+        and (not db_sup or active_m == "instructor")
+    )
     can_approver_ui = role in ("admin", "admin_main", "head_of_department")
     if can_instructor_ui and can_approver_ui:
         return render_template("grade_drafts.html", page_mode="both", active_page="grade_drafts")
