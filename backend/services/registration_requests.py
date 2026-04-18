@@ -191,7 +191,7 @@ def _execute_registration_change(conn, student_id: str, course_name: str, action
     except Exception:
         total_units = 0
     if total_units and (total_units < 12 or total_units > 19):
-        if role != "admin":
+        if role not in ("admin", "admin_main"):
             raise ValueError(f"UNITS_LIMIT: إجمالي الوحدات ({total_units}) خارج 12-19 ولا يمكن تنفيذه بواسطة {role or 'user'}.")
 
     if action == "add":
@@ -332,7 +332,7 @@ def approve_request():
                 if msg.startswith("UNITS_LIMIT"):
                     # إذا الأدمن: نطلب note كسبب إلزامي
                     role = session.get("user_role") or ""
-                    if role == "admin":
+                    if role in ("admin", "admin_main"):
                         if not note:
                             return jsonify({"status": "error", "code": "UNITS_OVERRIDE_REQUIRED", "message": "يتطلب سبب/ملاحظة لاعتماد وتنفيذ طلب يؤدي لتجاوز حد الوحدات."}), 400
                         # نعيد التنفيذ بعد توفر note (التجاوز مسموح للأدمن)

@@ -38,7 +38,7 @@
       </div>
 
       <!-- نموذج إضافة طالب -->
-      <div class="card mb-3 chart-container">
+      <div class="card mb-3 chart-container" id="studentCreateCard">
         <div class="card-body">
           <form id="studentForm" onsubmit="return false;">
             <div class="row g-2 align-items-end">
@@ -228,6 +228,27 @@
   </main>
 
   <script>
+  let STUDENTS_VIEW_ONLY = false;
+
+  async function bootstrapStudentsRoleView() {
+    try {
+      const r = await fetch('/auth/check', { credentials: 'include', cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      const role = String(j.role || '').trim().toLowerCase();
+      const caps = j.capabilities || {};
+      const isSupervisorOnly = role === 'supervisor' || !!caps.is_supervisor_effective;
+      STUDENTS_VIEW_ONLY = isSupervisorOnly;
+      if (!STUDENTS_VIEW_ONLY) return;
+      const createCard = document.getElementById('studentCreateCard');
+      if (createCard) createCard.style.display = 'none';
+      const importForm = document.getElementById('students-import-form');
+      if (importForm) importForm.style.display = 'none';
+      const subtitle = document.querySelector('.page-subtitle');
+      if (subtitle) subtitle.textContent = 'عرض قائمة الطلبة فقط (بدون تعديل أو استيراد).';
+    } catch (_e) {
+      // ignore
+    }
+  }
   function buildStudentsQueryParams() {
     const scopeEl = document.getElementById('filter_list_scope');
     const scope = scopeEl ? scopeEl.value : 'all';
@@ -298,30 +319,30 @@
           joinBadge.textContent = [jTerm, jYear].filter(Boolean).join(' ');
           span.appendChild(joinBadge);
         }
-        // Buttons: Edit + Delete
         const btnGroup = document.createElement('div');
+        if (!STUDENTS_VIEW_ONLY) {
+          const editBtn = document.createElement('button');
+          editBtn.className = 'btn btn-sm btn-outline-primary me-1';
+          editBtn.type = 'button';
+          editBtn.textContent = 'تعديل';
+          editBtn.addEventListener('click', () => openEditStudent(s));
 
-        const editBtn = document.createElement('button');
-        editBtn.className = 'btn btn-sm btn-outline-primary me-1';
-        editBtn.type = 'button';
-        editBtn.textContent = 'تعديل';
-        editBtn.addEventListener('click', () => openEditStudent(s));
+          const delBtn = document.createElement('button');
+          delBtn.className = 'btn btn-sm btn-danger me-1';
+          delBtn.type = 'button';
+          delBtn.textContent = 'حذف';
+          delBtn.addEventListener('click', () => deleteStudent(s.student_id));
 
-        const delBtn = document.createElement('button');
-        delBtn.className = 'btn btn-sm btn-danger me-1';
-        delBtn.type = 'button';
-        delBtn.textContent = 'حذف';
-        delBtn.addEventListener('click', () => deleteStudent(s.student_id));
+          const statusBtn = document.createElement('button');
+          statusBtn.className = 'btn btn-sm btn-outline-secondary';
+          statusBtn.type = 'button';
+          statusBtn.textContent = 'حالة القيد';
+          statusBtn.addEventListener('click', () => openStatusStudent(s));
 
-        const statusBtn = document.createElement('button');
-        statusBtn.className = 'btn btn-sm btn-outline-secondary';
-        statusBtn.type = 'button';
-        statusBtn.textContent = 'حالة القيد';
-        statusBtn.addEventListener('click', () => openStatusStudent(s));
-
-        btnGroup.appendChild(editBtn);
-        btnGroup.appendChild(delBtn);
-        btnGroup.appendChild(statusBtn);
+          btnGroup.appendChild(editBtn);
+          btnGroup.appendChild(delBtn);
+          btnGroup.appendChild(statusBtn);
+        }
 
         li.appendChild(span);
         li.appendChild(btnGroup);
@@ -405,6 +426,7 @@
 
   /* حذف طالب */
   async function deleteStudent(sid){
+    if (STUDENTS_VIEW_ONLY) return;
     if(!confirm('هل تريد حذف الطالب ' + sid + ' ؟')) return;
     try {
       const resp = await fetch('/delete_student', {
@@ -423,6 +445,10 @@
 
   /* إضافة طالب */
   document.addEventListener('DOMContentLoaded', function(){
+    bootstrapStudentsRoleView().finally(() => {
+      updateExportLinks();
+      loadStudents();
+    });
     const addBtn = document.getElementById('btnAddStudent');
     if (addBtn) {
       addBtn.addEventListener('click', async () => {
@@ -570,13 +596,12 @@
       });
     }
 
-    updateExportLinks();
-    // استدعاء تحميل الطلبة عند التحميل
-    loadStudents();
+    // التحميل الأوّلي يتم بعد تحديد وضع العرض حسب الدور
   });
 
   /* استيراد الطلبة من Excel */
   async function importStudents(){
+    if (STUDENTS_VIEW_ONLY) return;
     const form = document.getElementById('students-import-form');
     const fileInput = form.querySelector('input[type="file"]');
     const msg = document.getElementById('import_msg');

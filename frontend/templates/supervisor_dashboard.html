@@ -57,6 +57,17 @@
   <script>
     let SUP_STUDENTS = [];
 
+    async function fetchAuthFresh() {
+      const u = '/auth/check?ts=' + encodeURIComponent(String(Date.now()));
+      const r = await fetch(u, {
+        credentials: 'include',
+        cache: 'no-store',
+        headers: { 'Accept': 'application/json' },
+      });
+      if (!r.ok) throw new Error('auth check failed: ' + r.status);
+      return await r.json();
+    }
+
     function showMsg(text, type = 'info') {
       const box = document.getElementById('msgBox');
       box.innerHTML = text
@@ -111,9 +122,12 @@
 
     document.addEventListener('DOMContentLoaded', async () => {
       try {
-        const auth = await apiGet('/auth/check');
+        const auth = await fetchAuthFresh();
         const role = auth.role || null;
-        const isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(auth.is_supervisor || 0) === 1);
+        const caps = auth.capabilities || {};
+        const isSupervisor = !!caps.is_supervisor_effective
+          || (role === 'supervisor')
+          || (role === 'instructor' && Number(auth.is_supervisor || 0) === 1);
         if (!isSupervisor) {
           const warn = document.getElementById('roleWarning');
           if (warn) warn.classList.remove('d-none');

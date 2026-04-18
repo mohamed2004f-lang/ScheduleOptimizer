@@ -3,7 +3,13 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from models.models import Student
 from flask import Blueprint, request, jsonify, render_template, current_app, send_file, session
-from backend.core.auth import login_required, role_required, current_supervisor_effective
+from backend.core.auth import (
+    login_required,
+    role_required,
+    current_supervisor_effective,
+    SESSION_ACTIVE_MODE,
+    _normalize_role,
+)
 from collections import defaultdict
 import pandas as pd
 import datetime
@@ -86,8 +92,37 @@ def _ensure_registration_signature_tables(cur):
 
 
 def _is_instructor_or_supervisor_view_only() -> bool:
-    role = (session.get("user_role") or "").strip()
-    return role in ("instructor", "supervisor")
+    role = _normalize_role((session.get("user_role") or "").strip())
+    return role in ("instructor", "supervisor") or current_supervisor_effective()
+
+
+def _session_instructor_id(conn):
+    """Resolve instructor_id from session, with DB fallback by username."""
+    sid = session.get("instructor_id")
+    try:
+        if sid not in (None, ""):
+            return int(sid)
+    except (TypeError, ValueError):
+        pass
+    uname = (session.get("user") or session.get("username") or "").strip()
+    if not uname:
+        return None
+    try:
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT instructor_id FROM users WHERE username = ? LIMIT 1",
+            (uname,),
+        ).fetchone()
+        if row and row[0] not in (None, ""):
+            iid = int(row[0])
+            try:
+                session["instructor_id"] = iid
+            except Exception:
+                pass
+            return iid
+    except Exception:
+        current_app.logger.exception("resolve session instructor_id fallback failed")
+    return None
 
 
 def _enrollment_label_ar(enrollment_status: str) -> str:
@@ -1545,9 +1580,19 @@ def _get_allowed_student_ids_for_role(conn, user_role: str) -> set:
     - supervisor: طلابه فقط عبر student_supervisor
     - instructor: طلاب مقررات الفصل الحالي عبر schedule + registrations
     """
-    role = (user_role or "").strip()
+    role = _normalize_role((user_role or "").strip())
     if role in ("admin_main", "admin"):
         return None
+
+    # رئيس القسم:
+    # - في وضع head: صلاحية غير مقيّدة (مثل إدارة القسم).
+    # - في وضع supervisor: مقيّدة بطلاب الإشراف.
+    # - في وضع instructor: مقيّدة بطلاب مقرراته في الفصل الحالي.
+    if role in ("head_of_department", "head", "hod", "head_of_dept", "department_head", "dept_head"):
+        mode = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
+        if mode in ("", "head", "hod", "department_head"):
+            return None
+        role = "supervisor" if mode == "supervisor" else "instructor"
 
     cur = conn.cursor()
 
@@ -1555,8 +1600,8 @@ def _get_allowed_student_ids_for_role(conn, user_role: str) -> set:
         sid_session = normalize_sid(session.get("student_id") or session.get("user"))
         return {sid_session} if sid_session else set()
 
-    if current_supervisor_effective():
-        instructor_id = session.get("instructor_id")
+    if role == "supervisor" or current_supervisor_effective():
+        instructor_id = _session_instructor_id(conn)
         if not instructor_id:
             return set()
         rows = cur.execute(
@@ -1566,7 +1611,7 @@ def _get_allowed_student_ids_for_role(conn, user_role: str) -> set:
         return {normalize_sid(r[0]) for r in rows if r and r[0]}
 
     if role == "instructor":
-        instructor_id = session.get("instructor_id")
+        instructor_id = _session_instructor_id(conn)
         if not instructor_id:
             return set()
         instr_row = cur.execute(
@@ -1728,6 +1773,8 @@ def list_graduates():
 def add_student():
     """إضافة طالب جديد - يستخدم Service Layer"""
     try:
+        if _is_instructor_or_supervisor_view_only():
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         from backend.core.services import StudentService
         from backend.core.exceptions import AppException
         
@@ -1791,6 +1838,8 @@ def update_student_status():
 def delete_student():
     """حذف طالب - يستخدم Service Layer"""
     try:
+        if _is_instructor_or_supervisor_view_only():
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         from backend.core.services import StudentService
         from backend.core.exceptions import AppException
         
@@ -2209,9 +2258,17 @@ def get_registrations():
                         return _json_no_cache([], 403)
                     student_id = sid_session
 
-                # منع إرجاع جميع التسجيلات لهذه الأدوار
+                # في الأدوار المقيّدة:
+                # - إذا لم يُحدد student_id: أرجع تسجيلات جميع الطلبة المسموحين فقط.
                 if not student_id:
-                    return _json_no_cache([])
+                    if not allowed_student_ids:
+                        return _json_no_cache([])
+                    placeholders = ",".join("?" for _ in allowed_student_ids)
+                    rows = cur.execute(
+                        f"SELECT student_id, course_name FROM registrations WHERE student_id IN ({placeholders})",
+                        list(allowed_student_ids),
+                    ).fetchall()
+                    return _json_no_cache([{"student_id": r[0], "course_name": r[1]} for r in rows])
 
                 if not allowed_student_ids or student_id not in allowed_student_ids:
                     return _json_no_cache([])
@@ -3087,12 +3144,22 @@ def attendance_allowed_courses():
     قائمة مقررات الحضور: مبنية على التسجيلات الفعلية (registrations) للفصل الحالي،
     مربوطة بصف الجدول schedule بنفس الفصل مع تطبيع اسم المقرر (ليس مساواة حرفية صارمة).
     """
-    user_role = session.get("user_role") or ""
+    user_role = (session.get("user_role") or "").strip()
+    mode = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower()
+    effective_supervisor = current_supervisor_effective()
+    role_for_scope = user_role
+    if user_role == "head_of_department":
+        if mode in ("", "head", "hod", "department_head"):
+            role_for_scope = "head_of_department"
+        elif effective_supervisor:
+            role_for_scope = "supervisor"
+        else:
+            role_for_scope = "instructor"
     if not user_role:
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
 
     # الإدارة: مقررات لها تسجيل فعلي للفصل الحالي، مربوطة بالجدول بعد تطبيع اسم المقرر (كما في التصدير)
-    if user_role in ("admin", "admin_main", "head_of_department"):
+    if role_for_scope in ("admin", "admin_main", "head_of_department"):
         with get_connection() as conn:
             cur = conn.cursor()
             term_name, term_year = get_current_term(conn=conn)
@@ -3130,8 +3197,6 @@ def attendance_allowed_courses():
             if r and r[0]
         ]
         return jsonify({"status": "ok", "courses": courses})
-
-    effective_supervisor = current_supervisor_effective()
 
     with get_connection() as conn:
         cur = conn.cursor()
@@ -3175,7 +3240,7 @@ def attendance_allowed_courses():
                 )
                 rows = course_rows_with_meta(cur, fb)
 
-        elif user_role == "instructor":
+        elif role_for_scope == "instructor":
             instructor_id = session.get("instructor_id")
             if not instructor_id:
                 return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
@@ -3682,6 +3747,8 @@ def students_export_pdf():
 @students_bp.route("/import/excel", methods=["POST"])
 @login_required
 def students_import_excel():
+    if _is_instructor_or_supervisor_view_only():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     f = request.files.get("file")
     if not f:
         return jsonify({"status":"error","message":"file required"}), 400

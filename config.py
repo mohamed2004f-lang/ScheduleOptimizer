@@ -12,8 +12,10 @@ try:
     # البحث عن ملف .env في المجلد الجذر للمشروع
     env_path = Path(__file__).parent / '.env'
     if env_path.exists():
-        # override=False: المتغيرات المعرّفة في البيئة (مثل pytest أو Docker) لا تُستبدل بصمت من .env
-        load_dotenv(env_path, override=False)
+        # افتراضياً في بيئة التطوير: .env هو مصدر الحقيقة لتجنّب متغيرات نظام قديمة/خاطئة
+        # (مثل DATABASE_URL قديم)؛ يمكن تعطيل ذلك عبر DOTENV_OVERRIDE=0.
+        _dotenv_override = (os.environ.get("DOTENV_OVERRIDE", "1") or "").strip().lower() in ("1", "true", "yes")
+        load_dotenv(env_path, override=_dotenv_override)
 except ImportError:
     # إذا لم تكن مكتبة python-dotenv مثبتة، نستمر بدونها
     pass

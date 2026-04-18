@@ -64,17 +64,18 @@ def setup_logging(app, log_dir='logs'):
 
     ctx_filter = FlaskContextFilter()
 
-    # معالج للـ Console (للتطوير)
-    if app.debug:
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.DEBUG)
-        console_handler.addFilter(ctx_filter)
-        console_formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - '
-            '[req=%(request_id)s %(http_method)s %(http_path)s] %(message)s'
-        )
-        console_handler.setFormatter(console_formatter)
-        app.logger.addHandler(console_handler)
+    # معالج Console دائماً:
+    # - في debug: مستوى DEBUG لسهولة التطوير
+    # - خارج debug: مستوى INFO حتى تظهر العمليات والأخطاء في الـ Terminal أيضاً
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG if app.debug else logging.INFO)
+    console_handler.addFilter(ctx_filter)
+    console_formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - '
+        '[req=%(request_id)s %(http_method)s %(http_path)s] %(message)s'
+    )
+    console_handler.setFormatter(console_formatter)
+    app.logger.addHandler(console_handler)
     
     # معالج للـ File (دوراني - Rotating)
     # delay=True يقلل مشاكل قفل الملفات على Windows (لا يفتح الملف إلا عند أول كتابة)

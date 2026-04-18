@@ -29,6 +29,7 @@
         </div>
         <div class="alert alert-info p-2 small">
           <strong>الطريقة الأساسية:</strong> أدخل اسم المستخدم وكلمة المرور والدور والربط (رقم طالب أو رقم مدرّس حسب الدور) ثم <strong>حفظ المستخدم</strong>.
+          <span class="d-block mt-1">لـ <strong>رئيس القسم</strong>: أدخل <strong>رقم عضو هيئة التدريس</strong> لنفس الشخص، وفعّل <strong>مشرف أكاديمي</strong> إن لزم — التفاصيل تظهر أسفل النموذج عند اختيار الدور.</span>
           قسم «ربط من القائمة» أدناه <strong>اختياري</strong> ويُكمّل عند رغبتك بإرسال رابط بالبريد (للمسؤول الرئيسي فقط).
         </div>
         <div class="row g-2 align-items-end">
@@ -57,8 +58,8 @@
             <datalist id="studentIdOptions"></datalist>
           </div>
           <div class="col-md-4">
-            <label class="form-label">رقم عضو هيئة التدريس (للأستاذ/رئيس القسم)</label>
-            <input id="instructorIdInput" list="instructorIdOptions" class="form-control form-control-sm">
+            <label class="form-label" id="instructorIdLabel">رقم عضو هيئة التدريس (مطلوب للأستاذ ورئيس القسم)</label>
+            <input id="instructorIdInput" list="instructorIdOptions" class="form-control form-control-sm" title="نفس السجل في «أعضاء هيئة التدريس» حتى يعمل وضع الأستاذ و«مقرراتي»">
             <datalist id="instructorIdOptions"></datalist>
           </div>
           <div class="col-md-4">
@@ -68,8 +69,8 @@
         <div class="row g-2 align-items-end mt-2">
           <div class="col-md-4">
             <div class="form-check mt-2">
-              <input class="form-check-input" type="checkbox" id="isSupervisor">
-              <label class="form-check-label" for="isSupervisor">مشرف أكاديمي</label>
+              <input class="form-check-input" type="checkbox" id="isSupervisor" title="للأستاذ: تبديل أستاذ/مشرف. لرئيس القسم: يُفعّل صلاحيات الإشراف في النظام ويُكمّل التبديل الثلاثي من الشريط العلوي بعد الدخول">
+              <label class="form-check-label" for="isSupervisor" id="isSupervisorLabel">مشرف أكاديمي <span class="text-muted small">(صلاحية الإشراف — اختياري لرئيس القسم)</span></label>
             </div>
           </div>
           <div class="col-md-4">
@@ -78,6 +79,14 @@
               <label class="form-check-label" for="isActive">الحساب نشط (is_active)</label>
             </div>
           </div>
+        </div>
+        <div id="headDeptRoleHint" class="alert alert-light border small mt-2 d-none" role="note">
+          <div class="fw-semibold mb-1">رئيس قسم: ربط دور «الأستاذ» و«المشرف الأكاديمي»</div>
+          <p class="mb-2 small">الدور في النظام <strong>واحد</strong> (<code>head_of_department</code>)، ولا يُنشَأ حساب أستاذ منفصل. لربط صلاحيات التدريس والإشراف:</p>
+          <ul class="mb-0 ps-3 small">
+            <li><strong>رقم عضو هيئة التدريس (إلزامي):</strong> اختر الرقم المطابق لنفس الشخص في جدول «أعضاء هيئة التدريس». عندها يستطيع بعد الدخول التبديل إلى <strong>وضع الأستاذ</strong> (مقرراتي) من الشريط العلوي.</li>
+            <li><strong>مشرف أكاديمي (اختياري):</strong> يفعّل صلاحيات الإشراف الأكاديمي في النظام (مثل مراجعة الإشراف). بعد الدخول يمكن أيضاً التبديل إلى <strong>وضع المشرف الأكاديمي</strong> من نفس الشريط (رئيس قسم / أستاذ / مشرف).</li>
+          </ul>
         </div>
         <div id="userMsg" class="mt-2"></div>
       </div>
@@ -278,6 +287,7 @@
         document.getElementById('isSupervisor').checked = !!u.is_supervisor;
         document.getElementById('isActive').checked = !(u.is_active === 0 || u.is_active === false);
         syncSupervisorAvailability();
+        syncRoleHeadHints();
       });
       return item;
     }
@@ -577,11 +587,21 @@
       const allowed = (role === 'instructor' || role === 'head_of_department' || role === 'admin_main');
       sup.disabled = !allowed;
       if(!allowed) sup.checked = false;
-      const label = document.querySelector('label[for=\"isSupervisor\"]');
+      const label = document.getElementById('isSupervisorLabel') || document.querySelector('label[for=\"isSupervisor\"]');
       if(label){
         label.classList.toggle('text-muted', !allowed);
-        label.title = allowed ? '' : 'متاح فقط للأستاذ/رئيس القسم/المسؤول الرئيسي';
+        label.title = allowed
+          ? (role === 'head_of_department'
+            ? 'يُنصح تفعيله إن كان رئيس القسم يمارس الإشراف الأكاديمي فعلياً'
+            : 'تبديل وضع الأستاذ / المشرف من الشريط العلوي بعد الدخول')
+          : 'متاح فقط للأستاذ/رئيس القسم/المسؤول الرئيسي';
       }
+    }
+
+    function syncRoleHeadHints(){
+      const role = document.getElementById('roleSelect')?.value || '';
+      const hint = document.getElementById('headDeptRoleHint');
+      if(hint) hint.classList.toggle('d-none', role !== 'head_of_department');
     }
 
     let CURRENT_ROLE = null;
@@ -694,12 +714,18 @@
         }
       });
       const roleEl = document.getElementById('roleSelect');
-      if(roleEl) roleEl.addEventListener('change', syncSupervisorAvailability);
+      if(roleEl){
+        roleEl.addEventListener('change', ()=>{
+          syncSupervisorAvailability();
+          syncRoleHeadHints();
+        });
+      }
       await loadUsers();
       await loadValidDirectLinkOptions();
       await loadLinkedEntities();
       await suggestLinked();
       syncSupervisorAvailability();
+      syncRoleHeadHints();
       applyPermissions();
       await loadUsersValidationReport();
       await loadUsersAuditLog();

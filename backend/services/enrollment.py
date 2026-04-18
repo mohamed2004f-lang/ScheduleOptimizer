@@ -155,6 +155,34 @@ def _is_instructor_or_supervisor_view_only() -> bool:
     return role in ("instructor", "supervisor")
 
 
+def _session_instructor_id(conn):
+    sid = session.get("instructor_id")
+    try:
+        if sid not in (None, ""):
+            return int(sid)
+    except (TypeError, ValueError):
+        pass
+    uname = (session.get("user") or session.get("username") or "").strip()
+    if not uname:
+        return None
+    try:
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT instructor_id FROM users WHERE username = ? LIMIT 1",
+            (uname,),
+        ).fetchone()
+        if row and row[0] not in (None, ""):
+            iid = int(row[0])
+            try:
+                session["instructor_id"] = iid
+            except Exception:
+                pass
+            return iid
+    except Exception:
+        current_app.logger.exception("resolve enrollment session instructor_id fallback failed")
+    return None
+
+
 def _now_iso() -> str:
     return datetime.datetime.utcnow().isoformat()
 
@@ -416,16 +444,14 @@ def list_plans():
     if user_role == "student":
         sid_session = session.get("student_id") or session.get("user")
         student_id = sid_session
-    # المشرف لا يمكنه رؤية إلا خطط الطلبة المسندين إليه
-    is_supervisor = current_supervisor_effective()
-    if is_supervisor:
-        instructor_id = session.get("instructor_id")
-        if not instructor_id:
-            return jsonify({"status": "error", "message": "لا يوجد ربط بين هذا الحساب وعضو هيئة تدريس", "code": "FORBIDDEN"}), 403
-
-
     with get_connection() as conn:
         cur = conn.cursor()
+        # المشرف لا يمكنه رؤية إلا خطط الطلبة المسندين إليه
+        is_supervisor = current_supervisor_effective()
+        instructor_id = _session_instructor_id(conn) if is_supervisor else None
+        if is_supervisor and not instructor_id:
+            return jsonify({"status": "error", "message": "لا يوجد ربط بين هذا الحساب وعضو هيئة تدريس", "code": "FORBIDDEN"}), 403
+
         has_pv = _enrollment_plans_has_prereq_json_column(cur)
         sel = "id, student_id, semester, status, rejection_reason, created_at, updated_at"
         if has_pv:
@@ -452,7 +478,7 @@ def list_plans():
             params.append(semester)
         if not include_archived:
             q += " AND status != 'Archived'"
-        q += " ORDER BY created_at DESC, id DESC"
+        q += " ORDER BY COALESCE(updated_at, created_at) DESC, id DESC"
         rows = cur.execute(q, params).fetchall()
 
         plans = []

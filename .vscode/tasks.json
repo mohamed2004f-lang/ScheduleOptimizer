@@ -43,6 +43,70 @@
         "clear": false
       },
       "problemMatcher": []
+    },
+    {
+      "label": "Run Clean Server + Head Probe",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts/run_server_clean.ps1"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run Clean Server + Head Probe (Keep Running)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts/run_server_clean.ps1",
+        "-KeepRunning"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Stop Server on Port 5000",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$ErrorActionPreference='SilentlyContinue'; $pids = @(netstat -ano | Select-String ':5000' | ForEach-Object { ($_ -split '\\s+')[-1] } | Where-Object { $_ -match '^\\d+$' } | Select-Object -Unique); foreach($procId in $pids){ if($procId -and $procId -ne 0){ Stop-Process -Id ([int]$procId) -Force; Write-Host \"Stopped PID $procId\" } }; if(-not $pids){ Write-Host 'No listener on port 5000' }"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
     }
   ]
 }

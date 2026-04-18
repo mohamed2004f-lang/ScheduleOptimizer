@@ -105,6 +105,14 @@ setup_logging(app)
 # تهيئة نظام المصادقة
 init_auth(app)
 
+# إعفاء تبديل وضع العمل (fetch JSON) من CSRF — يُكمّل csrf.exempt داخل init_auth إن وُجد
+try:
+    _am = app.view_functions.get("auth.set_active_mode")
+    if _am is not None:
+        csrf.exempt(_am)
+except Exception:
+    pass
+
 # تهيئة نظام Monitoring
 init_monitoring(app)
 
@@ -208,6 +216,10 @@ def index():
     if role == "student":
         sid = session.get("student_id") or session.get("user")
         return redirect(url_for("student_view", student_id=sid))
+    if role == "head_of_department":
+        am = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
+        if am == "instructor" and session.get("instructor_id"):
+            return redirect(url_for("my_courses_page"))
     if current_supervisor_effective():
         return redirect(url_for("supervisor_dashboard_page"))
     if role in ("admin", "admin_main", "head_of_department"):
@@ -423,7 +435,10 @@ def academic_rules_page():
 @login_required
 def transcript_page():
     role = (session.get("user_role") or "").strip()
-    if role == "instructor" and not current_supervisor_effective():
+    active_m = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower()
+    if (role == "instructor" and not current_supervisor_effective()) or (
+        role == "head_of_department" and active_m == "instructor"
+    ):
         return redirect(url_for("my_courses_page"))
 
     # حل جذري: جهّز قائمة الطلبة + كشف أول طالب (أو المختار) من السيرفر
@@ -466,14 +481,19 @@ def grade_drafts_page():
         db_sup = int(session.get("is_supervisor") or 0) == 1
     except (TypeError, ValueError):
         db_sup = False
-    active_m = (session.get(SESSION_ACTIVE_MODE) or "instructor").strip().lower()
+    if role == "head_of_department":
+        active_m = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
+    else:
+        active_m = (session.get(SESSION_ACTIVE_MODE) or "instructor").strip().lower()
     has_instructor = bool(session.get("instructor_id"))
-    can_instructor_ui = (
-        has_instructor
-        and role == "instructor"
-        and (not db_sup or active_m == "instructor")
+    can_instructor_ui = has_instructor and (
+        (role == "instructor" and (not db_sup or active_m == "instructor"))
+        or (role == "head_of_department" and active_m == "instructor")
     )
-    can_approver_ui = role in ("admin", "admin_main", "head_of_department")
+    can_approver_ui = role in ("admin", "admin_main") or (
+        role == "head_of_department"
+        and active_m in ("", "head", "hod", "department_head")
+    )
     if can_instructor_ui and can_approver_ui:
         return render_template("grade_drafts.html", page_mode="both", active_page="grade_drafts")
     if can_instructor_ui:
@@ -486,6 +506,12 @@ def grade_drafts_page():
 @app.route("/performance_report")
 @login_required
 def performance_report_page():
+    role = (session.get("user_role") or "").strip()
+    active_m = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower()
+    if role == "instructor" and not current_supervisor_effective():
+        return redirect(url_for("my_courses_page"))
+    if role == "head_of_department" and active_m == "instructor":
+        return redirect(url_for("my_courses_page"))
     return render_template("performance_report.html")
 
 

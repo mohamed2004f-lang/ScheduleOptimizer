@@ -87,6 +87,32 @@
       return d.innerHTML;
     }
 
+    function jsonPostHeaders() {
+      const headers = { 'Content-Type': 'application/json' };
+      const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+      if (csrf) headers['X-CSRFToken'] = csrf;
+      return headers;
+    }
+
+    async function deletePlanWeek(sectionId, weekNo) {
+      const r = await fetch('/schedule/my_course_plan/delete', {
+        method: 'POST',
+        credentials: 'include',
+        headers: jsonPostHeaders(),
+        body: JSON.stringify({ section_id: sectionId, week_no: weekNo }),
+      });
+      return r;
+    }
+
+    async function errorMessageFromResponse(resp, fallbackText) {
+      try {
+        const j = await resp.json();
+        return (j && (j.message || j.error)) ? String(j.message || j.error) : fallbackText;
+      } catch (_e) {
+        return fallbackText;
+      }
+    }
+
     function axisSelectHtml(sectionId, axisKey, labelAr, current) {
       const v = current || 'pending';
       const sel = (val) => (v === val ? ' selected' : '');
@@ -124,6 +150,8 @@
         '<input class="form-control form-control-sm mb-1 mc-week-res" data-section="' + sectionId + '" placeholder="مواد داعمة/روابط">' +
         '<button type="button" class="btn btn-sm btn-outline-success mc-save-plan" data-section="' + sectionId + '">حفظ أسبوع</button>' +
         '<div class="mc-plan-list mt-1 text-muted" data-section="' + sectionId + '"></div>' +
+        '<button type="button" class="btn btn-sm btn-link px-0 mc-toggle-plan d-none" data-section="' + sectionId + '">عرض كل الأسابيع</button>' +
+        '<div class="mc-plan-all mt-1 small d-none" data-section="' + sectionId + '"></div>' +
         '</div>' +
         '<div class="p-2 border rounded">' +
         '<div class="fw-semibold mb-1">إعلانات الشعبة</div>' +
@@ -225,6 +253,17 @@
         }).join('');
         tableWrap.classList.remove('d-none');
 
+        document.querySelectorAll('.mc-toggle-plan').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const sectionId = btn.getAttribute('data-section') || '';
+            const allEl = document.querySelector('.mc-plan-all[data-section="' + sectionId + '"]');
+            if (!allEl) return;
+            const nowHidden = allEl.classList.contains('d-none');
+            allEl.classList.toggle('d-none', !nowHidden);
+            btn.textContent = nowHidden ? 'إخفاء كل الأسابيع' : 'عرض كل الأسابيع';
+          });
+        });
+
         async function refreshCourseAdmin(sectionId) {
           const r = await fetch('/schedule/my_course_admin?section_id=' + encodeURIComponent(sectionId), { credentials: 'include' });
           if (!r.ok) return;
@@ -232,11 +271,52 @@
           const sy = document.querySelector('.mc-syllabus[data-section="' + sectionId + '"]');
           if (sy) sy.value = dataAdmin.syllabus_text || '';
           const planEl = document.querySelector('.mc-plan-list[data-section="' + sectionId + '"]');
+          const planAllEl = document.querySelector('.mc-plan-all[data-section="' + sectionId + '"]');
+          const planToggleBtn = document.querySelector('.mc-toggle-plan[data-section="' + sectionId + '"]');
           if (planEl) {
             const rowsPlan = dataAdmin.weekly_plan || [];
             planEl.innerHTML = rowsPlan.length
               ? rowsPlan.slice(0, 5).map((p) => ('<div>أسبوع ' + esc(p.week_no) + ': ' + esc(p.week_topic) + ' (' + esc(p.lecture_status) + ')</div>')).join('')
               : '<div>لا توجد خطة أسبوعية محفوظة بعد.</div>';
+            if (planAllEl) {
+              planAllEl.innerHTML = rowsPlan.length
+                ? rowsPlan.map((p) => (
+                  '<div class="d-flex justify-content-between align-items-center border-bottom py-1">' +
+                    '<span>أسبوع ' + esc(p.week_no) + ': ' + esc(p.week_topic) + ' (' + esc(p.lecture_status) + ')</span>' +
+                    '<button type="button" class="btn btn-sm btn-outline-danger mc-delete-plan-week" data-section="' + sectionId + '" data-week="' + esc(p.week_no) + '">حذف</button>' +
+                  '</div>'
+                )).join('')
+                : '';
+              planAllEl.classList.add('d-none');
+            }
+            if (planToggleBtn) {
+              const hasMoreThanPreview = rowsPlan.length > 5;
+              planToggleBtn.classList.toggle('d-none', !hasMoreThanPreview);
+              planToggleBtn.textContent = 'عرض كل الأسابيع';
+            }
+            if (planAllEl) {
+              planAllEl.querySelectorAll('.mc-delete-plan-week').forEach((btnDel) => {
+                btnDel.addEventListener('click', async () => {
+                  const sid = parseInt(btnDel.getAttribute('data-section') || '0', 10);
+                  const w = parseInt(btnDel.getAttribute('data-week') || '0', 10);
+                  if (!sid || !w) return;
+                  if (!confirm('هل تريد حذف الأسبوع ' + w + ' من الخطة؟')) return;
+                  const delResp = await deletePlanWeek(sid, w);
+                  if (!delResp.ok) {
+                    const msg = await errorMessageFromResponse(delResp, 'تعذر حذف الأسبوع');
+                    alert(msg);
+                    return;
+                  }
+                  await refreshCourseAdmin(sid);
+                  const allEl = document.querySelector('.mc-plan-all[data-section="' + sid + '"]');
+                  const toggleEl = document.querySelector('.mc-toggle-plan[data-section="' + sid + '"]');
+                  if (allEl && toggleEl && !toggleEl.classList.contains('d-none')) {
+                    allEl.classList.remove('d-none');
+                    toggleEl.textContent = 'إخفاء كل الأسابيع';
+                  }
+                });
+              });
+            }
           }
           const annEl = document.querySelector('.mc-ann-list[data-section="' + sectionId + '"]');
           if (annEl) {
@@ -315,7 +395,7 @@
             const r = await fetch('/schedule/my_course_syllabus', {
               method: 'POST',
               credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
+              headers: jsonPostHeaders(),
               body: JSON.stringify({ section_id: sectionId, syllabus_text: txt }),
             });
             if (!r.ok) alert('تعذر حفظ المفردات');
@@ -333,7 +413,7 @@
             const r = await fetch('/schedule/my_course_plan', {
               method: 'POST',
               credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
+              headers: jsonPostHeaders(),
               body: JSON.stringify({
                 section_id: sectionId,
                 week_no: weekNo,
@@ -357,7 +437,7 @@
             const r = await fetch('/schedule/my_course_announcement', {
               method: 'POST',
               credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
+              headers: jsonPostHeaders(),
               body: JSON.stringify({
                 section_id: sectionId,
                 title,
@@ -384,7 +464,7 @@
           const r = await fetch('/schedule/my_course_closure', {
             method: 'POST',
             credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
+            headers: jsonPostHeaders(),
             body: JSON.stringify({
               section_id: sectionId,
               implementation_summary: implementationSummary,

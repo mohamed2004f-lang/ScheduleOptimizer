@@ -144,6 +144,22 @@
 const examType = 'midterm';
 const FIXED_EXAM_TIME = '09:00-12:00';
 let IS_COMPACT = false;
+let EXAM_READONLY = false;
+
+async function initExamPermissions(){
+  try {
+    const auth = await fetch('/auth/check', { credentials: 'include', cache: 'no-store' }).then(r => r.json());
+    EXAM_READONLY = !(auth && auth.capabilities && auth.capabilities.can_manage_schedule_edit);
+  } catch (_e) {
+    EXAM_READONLY = true;
+  }
+  if (EXAM_READONLY) {
+    const modal = document.getElementById('manageCoursesModal');
+    if (modal) modal.classList.add('d-none');
+    const instr = document.querySelector('.instruction-text');
+    if (instr) instr.textContent = 'عرض فقط لجدول الامتحانات الجزئية.';
+  }
+}
 
 /* ---------- Helpers ---------- */
 function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
@@ -276,7 +292,9 @@ async function loadExamSchedule() {
       });
       
       html += `</div>`;
-      html += `<button class="manage-courses-btn" data-exam-date="${date}">إدارة الامتحانات</button>`;
+      if (!EXAM_READONLY) {
+        html += `<button class="manage-courses-btn" data-exam-date="${date}">إدارة الامتحانات</button>`;
+      }
       html += `</td></tr>`;
     });
     
@@ -284,15 +302,17 @@ async function loadExamSchedule() {
     el.innerHTML = html;
     
     // Attach delete handlers
-    el.querySelectorAll('.course-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const examId = btn.dataset.examId;
-        if(examId && confirm('هل تريد حذف هذا الامتحان من الجدول؟')){
-          deleteExamRow(Number(examId));
-        }
+    if (!EXAM_READONLY) {
+      el.querySelectorAll('.course-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const examId = btn.dataset.examId;
+          if(examId && confirm('هل تريد حذف هذا الامتحان من الجدول؟')){
+            deleteExamRow(Number(examId));
+          }
+        });
       });
-    });
+    }
     
     // Attach manage courses button handlers
     el.querySelectorAll('.manage-courses-btn').forEach(btn => {
@@ -317,6 +337,7 @@ async function loadExamSchedule() {
 
 /* ---------- Manage Courses Modal ---------- */
 function openManageCourses(date) {
+  if (EXAM_READONLY) return;
   currentModalDate = date;
   document.getElementById('modalDate').textContent = formatDateArabic(date) + ' (' + date + ')';
   document.getElementById('modalTime').textContent = FIXED_EXAM_TIME;
@@ -343,6 +364,7 @@ function openManageCourses(date) {
 }
 
 document.getElementById('addCourseForm').addEventListener('submit', async (e) => {
+  if (EXAM_READONLY) return;
   e.preventDefault();
   const course = document.getElementById('newCourseSelect').value;
   const room = document.getElementById('newRoom').value;
@@ -466,6 +488,7 @@ function showConflictsModal(conflicts, courseName, examDate) {
 
 /* ---------- CRUD actions ---------- */
 async function deleteExamRow(exam_id){
+  if (EXAM_READONLY) return;
   if(!confirm('هل تريد حذف هذا الامتحان من الجدول؟')) return;
   try {
     const resp = await fetch(`/exams/${examType}/delete_row`, {
@@ -489,7 +512,7 @@ async function deleteExamRow(exam_id){
 }
 
 // Set default dates (current week)
-window.addEventListener('load', () => {
+window.addEventListener('load', async () => {
   const today = new Date();
   const startOfWeek = new Date(today);
   startOfWeek.setDate(today.getDate() - today.getDay() + 6); // Saturday
@@ -499,7 +522,8 @@ window.addEventListener('load', () => {
   document.getElementById('startDate').value = startOfWeek.toISOString().split('T')[0];
   document.getElementById('endDate').value = endOfWeek.toISOString().split('T')[0];
   
-  loadCourses();
+  await initExamPermissions();
+  if (!EXAM_READONLY) loadCourses();
   loadExamSchedule();
 
   const btn = document.getElementById('btnToggleCompact');

@@ -7,12 +7,29 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from backend.core.auth import hash_password, verify_password, compute_capabilities, is_supervisor_effective_session
+from backend.core.auth import (
+    hash_password,
+    verify_password,
+    compute_capabilities,
+    is_supervisor_effective_session,
+    _normalize_role,
+)
 
 
 class TestAuth:
     """اختبارات المصادقة"""
-    
+
+    def test_normalize_role_head_case_insensitive(self):
+        assert _normalize_role("head_of_department") == "head_of_department"
+        assert _normalize_role("Head_of_department") == "head_of_department"
+        assert _normalize_role("HEAD_OF_DEPARTMENT") == "head_of_department"
+        assert _normalize_role("Instructor") == "instructor"
+        assert _normalize_role("head") == "head_of_department"
+        assert _normalize_role("HOD") == "head_of_department"
+        assert _normalize_role("head-of-department") == "head_of_department"
+        assert _normalize_role("head of department") == "head_of_department"
+        assert _normalize_role("رئيس قسم") == "head_of_department"
+
     def test_hash_password(self):
         """اختبار تشفير كلمة المرور"""
         password = "test123"
@@ -47,6 +64,27 @@ class TestAuth:
         assert caps.get("nav_course_closure_reports") is True
         assert caps.get("nav_faculty_scorecards") is True
         assert caps.get("nav_faculty_final_dossier") is True
+        assert caps.get("is_instructor_or_supervisor_nav") is False
+
+    def test_head_of_department_with_supervisor_flag_not_instructor_nav(self):
+        """حتى مع is_supervisor=1 في DB لا يُعامل رئيس القسم كأستاذ (شؤون الطلبة تبقى ظاهرة)."""
+        caps = compute_capabilities("head_of_department", 1)
+        assert caps.get("is_instructor_or_supervisor_nav") is False
+        assert caps.get("nav_student_affairs_attendance_only") is False
+
+    def test_head_triple_active_modes(self):
+        """رئيس القسم: أوضاع head / instructor / supervisor."""
+        c_head = compute_capabilities("head_of_department", 0, "head")
+        assert c_head.get("active_mode_switch_profile") == "triple"
+        assert c_head.get("can_switch_active_mode") is True
+        assert c_head.get("can_manage_schedule_edit") is True
+        c_ins = compute_capabilities("head_of_department", 0, "instructor")
+        assert c_ins.get("nav_student_affairs_attendance_only") is True
+        assert c_ins.get("can_manage_schedule_edit") is False
+        assert c_ins.get("is_instructor_or_supervisor_nav") is True
+        c_sup = compute_capabilities("head_of_department", 0, "supervisor")
+        assert c_sup.get("nav_transcript_nav") is True
+        assert c_sup.get("is_supervisor_effective") is True
 
     def test_compute_capabilities_student(self):
         caps = compute_capabilities("student", 0)
@@ -73,6 +111,7 @@ class TestAuth:
         assert caps.get("nav_student_affairs_attendance_only") is False
         assert caps.get("nav_transcript_nav") is True
         assert caps.get("can_switch_active_mode") is True
+        assert caps.get("active_mode_switch_profile") == "dual"
 
     def test_compute_capabilities_instructor_dual_teaching_mode(self):
         caps = compute_capabilities("instructor", 1, "instructor")
@@ -84,3 +123,6 @@ class TestAuth:
         assert is_supervisor_effective_session("instructor", 1, "instructor") is False
         assert is_supervisor_effective_session("instructor", 0, "supervisor") is False
         assert is_supervisor_effective_session("supervisor", 0, None) is True
+        assert is_supervisor_effective_session("head_of_department", 0, "supervisor") is True
+        assert is_supervisor_effective_session("head_of_department", 0, "head") is False
+        assert is_supervisor_effective_session("head_of_department", 0, "instructor") is False

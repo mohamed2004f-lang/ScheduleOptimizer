@@ -53,16 +53,21 @@
   </div>
 </header>
 
-<!-- تبديل وضع العمل: أستاذ / مشرف (يظهر فقط إذا كان الحساب instructor و is_supervisor=1 في قاعدة البيانات) -->
+<!-- تبديل وضع العمل: أستاذ/مشرف (حساب مُشرف) أو رئيس قسم/أستاذ/مشرف -->
 <div id="activeModeBanner" class="container-fluid py-2 mb-0 d-none alert alert-info rounded-0 border-0 border-bottom border-primary border-3" role="region" aria-label="تبديل وضع العمل" style="border-radius:0!important;">
   <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
     <div class="small fw-semibold">
       <i class="fa-solid fa-right-left ms-1" aria-hidden="true"></i>
       <span id="activeModeBannerLabel">وضع العمل</span>
     </div>
-    <div class="btn-group btn-group-sm" role="group" aria-label="تبديل وضع العمل">
+    <div class="btn-group btn-group-sm" role="group" aria-label="تبديل وضع العمل — أستاذ ومشرف" id="activeModeDualGroup" style="display:none;">
       <button type="button" class="btn btn-outline-primary" id="btnActiveModeInstructor">وضع الأستاذ</button>
       <button type="button" class="btn btn-outline-primary" id="btnActiveModeSupervisor">وضع المشرف الأكاديمي</button>
+    </div>
+    <div class="btn-group btn-group-sm flex-wrap" role="group" aria-label="تبديل وضع العمل — رئيس قسم" id="activeModeTripleGroup" style="display:none;">
+      <button type="button" class="btn btn-outline-primary" id="btnActiveModeHead">رئيس القسم</button>
+      <button type="button" class="btn btn-outline-primary" id="btnHodInstructor">وضع الأستاذ</button>
+      <button type="button" class="btn btn-outline-primary" id="btnHodSupervisor">وضع المشرف الأكاديمي</button>
     </div>
   </div>
 </div>
@@ -89,7 +94,7 @@
         </li>
 
         <!-- شؤون الطلبة -->
-        <li class="nav-item dropdown">
+        <li class="nav-item dropdown" id="navAcademicRecordsWrap">
           <a class="nav-link dropdown-toggle" href="#" id="studentAffairsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-user-graduate ms-1"></i> شؤون الطلبة
           </a>
@@ -225,7 +230,9 @@
   window.addEventListener('load', async function() {
     try {
       const response = await fetch('/auth/check', {
-        credentials: 'include'
+        credentials: 'include',
+        cache: 'no-store',
+        headers: { 'Accept': 'application/json' }
       });
       const data = await response.json();
       
@@ -236,7 +243,7 @@
         }
         return;
       }
-      const role = data.role;
+      const role = String(data.role || '').trim();
       const caps = data.capabilities;
       window.SO_AUTH = data;
       window.SO_CAPS = caps || null;
@@ -353,40 +360,121 @@
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
         });
+        const elPerf = document.getElementById('navPerformance');
+        if (elPerf) elPerf.style.display = 'none';
+        const elAcadWrap = document.getElementById('navAcademicRecordsWrap');
+        if (elAcadWrap) elAcadWrap.style.display = 'none';
+        const elExamConflicts = document.getElementById('navExamsConflicts');
+        if (elExamConflicts) elExamConflicts.style.display = 'none';
       }
 
       const modeBanner = document.getElementById('activeModeBanner');
       const dualInstructorSupervisor = role === 'instructor' && Number(data.is_supervisor || 0) === 1;
-      const canSwitchMode = (caps && caps.v >= 1)
-        ? !!caps.can_switch_active_mode
-        : dualInstructorSupervisor;
+      /* إظهار الشريط: لا تعتمد فقط على caps.v (قد تفشل جلسات قديمة أو استجابة ناقصة) */
+      const canSwitchMode =
+        !!(caps && caps.can_switch_active_mode)
+        || dualInstructorSupervisor
+        || role === 'head_of_department';
+      const switchProfile = (caps && caps.v >= 1)
+        ? (caps.active_mode_switch_profile || '')
+        : (role === 'head_of_department' ? 'triple' : '');
       if (modeBanner) {
         if (canSwitchMode) {
           modeBanner.classList.remove('d-none');
-          const am = (data.active_mode || 'instructor').toString().toLowerCase();
+          const am = (data.active_mode != null && data.active_mode !== '')
+            ? data.active_mode.toString().toLowerCase()
+            : (role === 'head_of_department' ? 'head' : 'instructor');
           const labelEl = document.getElementById('activeModeBannerLabel');
           if (labelEl) {
-            labelEl.textContent = am === 'supervisor'
-              ? 'الوضع الحالي: مشرف أكاديمي'
-              : 'الوضع الحالي: أستاذ (مقرراتي وتدريس)';
+            if (switchProfile === 'triple' || role === 'head_of_department') {
+              if (am === 'head' || am === 'hod' || am === 'department_head' || am === '')
+                labelEl.textContent = 'الوضع الحالي: رئيس القسم (صلاحيات القسم والإدارة التشغيلية)';
+              else if (am === 'supervisor')
+                labelEl.textContent = 'الوضع الحالي: مشرف أكاديمي';
+              else
+                labelEl.textContent = 'الوضع الحالي: أستاذ (مقرراتي وتدريس)';
+            } else {
+              labelEl.textContent = am === 'supervisor'
+                ? 'الوضع الحالي: مشرف أكاديمي'
+                : 'الوضع الحالي: أستاذ (مقرراتي وتدريس)';
+            }
           }
-          const bIns = document.getElementById('btnActiveModeInstructor');
-          const bSup = document.getElementById('btnActiveModeSupervisor');
+          const dualG = document.getElementById('activeModeDualGroup');
+          const tripleG = document.getElementById('activeModeTripleGroup');
+          const useTriple = switchProfile === 'triple' || role === 'head_of_department';
+          if (dualG) dualG.style.display = useTriple ? 'none' : '';
+          if (tripleG) tripleG.style.display = useTriple ? '' : 'none';
+          /** بعد تبديل الوضع: صفحة افتراضية مناسبة للدور الجديد (تجنّب بقاء صفحة رئيس القسم معلّقة مثل /dashboard) */
+          function redirectAfterActiveModeSwitch(userRole, profile, newMode) {
+            var m = String(newMode || '').toLowerCase().trim();
+            if (userRole === 'head_of_department' || profile === 'triple') {
+              if (m === 'head' || m === 'hod' || m === 'department_head') return '/dashboard';
+              if (m === 'supervisor') return '/supervisor_dashboard';
+              if (m === 'instructor') return '/my_courses';
+              return '/';
+            }
+            if (m === 'supervisor') return '/supervisor_dashboard';
+            if (m === 'instructor') return '/my_courses';
+            return '/';
+          }
           const switchMode = function(mode) {
+            const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+            const headers = {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+              'X-Requested-With': 'XMLHttpRequest'
+            };
+            if (csrf) headers['X-CSRFToken'] = csrf;
             fetch('/auth/active_mode', {
               method: 'POST',
               credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
+              cache: 'no-store',
+              headers: headers,
               body: JSON.stringify({ mode: mode })
-            }).then(function(r) { if (r.ok) window.location.reload(); });
+            }).then(function(r) {
+              if (r.ok) {
+                var next = redirectAfterActiveModeSwitch(role, switchProfile, mode);
+                window.location.assign(next);
+                return;
+              }
+              return r.json().catch(function() { return null; }).then(function(j) {
+                var msg = (j && j.message) ? j.message : ('HTTP ' + r.status);
+                console.error('active_mode failed', r.status, j);
+                alert('تعذّر تبديل الوضع: ' + msg);
+              });
+            }).catch(function(err) {
+              console.error('active_mode fetch', err);
+              alert('تعذّر تبديل الوضع: ' + (err && err.message ? err.message : String(err)));
+            });
           };
-          if (bIns) {
-            bIns.classList.toggle('active', am === 'instructor');
-            bIns.onclick = function() { switchMode('instructor'); };
-          }
-          if (bSup) {
-            bSup.classList.toggle('active', am === 'supervisor');
-            bSup.onclick = function() { switchMode('supervisor'); };
+          if (useTriple) {
+            const bHead = document.getElementById('btnActiveModeHead');
+            const bHodIns = document.getElementById('btnHodInstructor');
+            const bHodSup = document.getElementById('btnHodSupervisor');
+            const headActive = am === 'head' || am === 'hod' || am === 'department_head' || am === '';
+            if (bHead) {
+              bHead.classList.toggle('active', headActive);
+              bHead.onclick = function() { switchMode('head'); };
+            }
+            if (bHodIns) {
+              bHodIns.classList.toggle('active', am === 'instructor');
+              bHodIns.onclick = function() { switchMode('instructor'); };
+            }
+            if (bHodSup) {
+              bHodSup.classList.toggle('active', am === 'supervisor');
+              bHodSup.onclick = function() { switchMode('supervisor'); };
+            }
+          } else {
+            const bIns = document.getElementById('btnActiveModeInstructor');
+            const bSup = document.getElementById('btnActiveModeSupervisor');
+            if (bIns) {
+              bIns.classList.toggle('active', am === 'instructor');
+              bIns.onclick = function() { switchMode('instructor'); };
+            }
+            if (bSup) {
+              bSup.classList.toggle('active', am === 'supervisor');
+              bSup.onclick = function() { switchMode('supervisor'); };
+            }
           }
         } else {
           modeBanner.classList.add('d-none');

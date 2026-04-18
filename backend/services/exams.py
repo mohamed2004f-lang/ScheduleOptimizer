@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify, send_file, session, render_template
-from backend.core.auth import login_required, role_required
+from backend.core.auth import login_required, role_required, SESSION_ACTIVE_MODE
 from backend.database.database import is_postgresql, table_to_dicts
 from .utilities import (
     get_connection,
@@ -69,7 +69,13 @@ def _ensure_exam_schedule_version_tables(cur):
 
 
 def _role_may_edit_exam_schedule():
-    return (session.get("user_role") or "").strip() in ("admin", "admin_main", "head_of_department")
+    role = (session.get("user_role") or "").strip()
+    if role in ("admin", "admin_main"):
+        return True
+    if role == "head_of_department":
+        mode = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
+        return mode in ("", "head", "hod", "department_head")
+    return False
 
 
 def _user_can_view_exam_rows(exam_type: str) -> bool:
@@ -584,6 +590,8 @@ def check_exam_conflicts(exam_type):
 def add_exam_row(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"status":"error","message":"invalid exam type"}), 400
+    if not _role_may_edit_exam_schedule():
+        return jsonify({"status": "error", "message": "غير مصرح", "code": "FORBIDDEN"}), 403
     data = request.get_json(force=True) or {}
     course_name = data.get('course_name','')
     exam_date = data.get('exam_date','')
@@ -622,6 +630,8 @@ def add_exam_row(exam_type):
 def delete_exam_row(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"status":"error"}), 400
+    if not _role_may_edit_exam_schedule():
+        return jsonify({"status": "error", "message": "غير مصرح", "code": "FORBIDDEN"}), 403
     data = request.get_json(force=True) or {}
     exam_id = data.get('exam_id')
     if not exam_id:

@@ -36,7 +36,8 @@
     try {
       const auth = await fetch("/auth/check", { credentials: "include" }).then(function (r) { return r.json(); }).catch(function () { return {}; });
       const role = auth.role || "";
-      const mayPublish = ["admin", "admin_main", "head_of_department"].includes(role);
+      const mayPublish = !!(auth.capabilities && auth.capabilities.can_manage_schedule_edit)
+        || ["admin", "admin_main", "head_of_department"].includes(role);
       if (!mayPublish) {
         card.classList.add("d-none");
         if (banner) banner.classList.add("d-none");

@@ -1897,7 +1897,7 @@ def _instructor_display_name_for_session() -> tuple[str | None, int | None]:
     اسم العرض المطابق لحقل schedule.instructor من جدول instructors، ومعرف السجل.
     يُستخدم لربط حساب المستخدم (instructor_id) بالصفوف المكلَّف بها في الجدول.
     """
-    if session.get("user_role") != "instructor":
+    if not _is_instructor_effective_session():
         return None, None
     instructor_id = session.get("instructor_id")
     if not instructor_id:
@@ -1923,11 +1923,21 @@ def _is_privileged_assignment_viewer() -> bool:
     return role in ("admin", "admin_main", "head_of_department")
 
 
+def _is_instructor_effective_session() -> bool:
+    """وضع التدريس الفعّال: instructor أو رئيس قسم عندما active_mode=instructor."""
+    role = (session.get("user_role") or "").strip()
+    if role == "instructor":
+        return True
+    if role == "head_of_department":
+        mode = (session.get("active_mode") or "head").strip().lower()
+        return mode == "instructor"
+    return False
+
+
 def _can_access_assignment(instructor_id: int) -> bool:
     if _is_privileged_assignment_viewer():
         return True
-    role = (session.get("user_role") or "").strip()
-    if role != "instructor":
+    if not _is_instructor_effective_session():
         return False
     try:
         sid = int(session.get("instructor_id") or 0)
@@ -1943,8 +1953,7 @@ def my_assigned_sections():
     الشعب/الصفوف في الجدول الدراسي المكلَّف بها الأستاذ (حسب تطابق الاسم مع schedule.instructor).
     لا يشترط نشر الجدول — يظهر التكليف كما أعدّه رئيس القسم/الإدارة في الجدول الحالي.
     """
-    user_role = session.get("user_role")
-    if user_role != "instructor":
+    if not _is_instructor_effective_session():
         return jsonify({"status": "error", "message": "غير مصرح"}), 403
 
     inst_name, instructor_id = _instructor_display_name_for_session()
@@ -2269,7 +2278,7 @@ def create_faculty_assignment_log():
 @login_required
 def save_my_axis_status():
     """تحديث حالة محور واحد لشعبة مكلَّف بها الأستاذ."""
-    if session.get("user_role") != "instructor":
+    if not _is_instructor_effective_session():
         return jsonify({"status": "error", "message": "غير مصرح"}), 403
     data = request.get_json(force=True) or {}
     try:
@@ -2319,7 +2328,7 @@ def save_my_axis_status():
 @login_required
 def my_course_admin():
     """تفاصيل إدارة المقرر لشعبة مكلّف بها الأستاذ."""
-    if session.get("user_role") != "instructor":
+    if not _is_instructor_effective_session():
         return jsonify({"status": "error", "message": "غير مصرح"}), 403
     try:
         section_id = int((request.args.get("section_id") or "").strip())
@@ -2344,7 +2353,7 @@ def my_course_admin():
 @login_required
 def save_my_course_plan():
     """حفظ أو تحديث عنصر في الخطة الأسبوعية لشعبة مكلّف بها الأستاذ."""
-    if session.get("user_role") != "instructor":
+    if not _is_instructor_effective_session():
         return jsonify({"status": "error", "message": "غير مصرح"}), 403
     data = request.get_json(force=True) or {}
     try:
@@ -2394,11 +2403,64 @@ def save_my_course_plan():
     return jsonify({"status": "ok", "section_id": section_id, **payload})
 
 
+def _delete_my_course_plan_impl(data: dict):
+    """تنفيذ حذف عنصر من الخطة الأسبوعية لشعبة مكلّف بها الأستاذ."""
+    if not _is_instructor_effective_session():
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    try:
+        section_id = int(data.get("section_id"))
+        week_no = int(data.get("week_no"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "section_id/week_no غير صالح"}), 400
+    if week_no < 1 or week_no > 52:
+        return jsonify({"status": "error", "message": "week_no يجب أن يكون بين 1 و 52"}), 400
+
+    inst_name, instructor_id = _instructor_display_name_for_session()
+    if not instructor_id:
+        return jsonify({"status": "error", "message": "لا يوجد ربط بعضو هيئة التدريس"}), 400
+    iid = int(instructor_id)
+    with get_connection() as conn:
+        cur = conn.cursor()
+        term_label = _current_term_label_safe(conn)
+        if _is_faculty_cycle_locked(conn, term_label):
+            return jsonify({"status": "error", "message": "تم إغلاق دورة الفصل الحالي للتعديل"}), 423
+        tuples = _assigned_section_rows(cur, iid, inst_name or "")
+        allowed_ids = {int(t[0]) for t in tuples}
+        if section_id not in allowed_ids:
+            return jsonify({"status": "error", "message": "هذه الشعبة غير مكلَّفة لحسابك"}), 403
+        cur.execute(
+            """
+            DELETE FROM faculty_course_plans
+            WHERE section_id = ? AND instructor_id = ? AND week_no = ?
+            """,
+            (section_id, iid, week_no),
+        )
+        deleted = int(cur.rowcount or 0)
+        conn.commit()
+        payload = _course_admin_payload(cur, iid, section_id)
+    return jsonify({"status": "ok", "section_id": section_id, "deleted": deleted, **payload})
+
+
+@schedule_bp.route("/my_course_plan", methods=["DELETE"])
+@login_required
+def delete_my_course_plan():
+    data = request.get_json(force=True) or {}
+    return _delete_my_course_plan_impl(data)
+
+
+@schedule_bp.route("/my_course_plan/delete", methods=["POST"])
+@login_required
+def delete_my_course_plan_post():
+    """مسار بديل لحذف أسبوع من الخطة (للتوافق مع بيئات لا تدعم DELETE جيدًا)."""
+    data = request.get_json(force=True) or {}
+    return _delete_my_course_plan_impl(data)
+
+
 @schedule_bp.route("/my_course_syllabus", methods=["POST"])
 @login_required
 def save_my_course_syllabus():
     """حفظ مفردات المقرر (syllabus) لشعبة مكلّف بها الأستاذ."""
-    if session.get("user_role") != "instructor":
+    if not _is_instructor_effective_session():
         return jsonify({"status": "error", "message": "غير مصرح"}), 403
     data = request.get_json(force=True) or {}
     try:
@@ -2441,7 +2503,7 @@ def save_my_course_syllabus():
 @login_required
 def save_my_course_announcement():
     """إضافة إعلان لشعبة مكلّف بها الأستاذ."""
-    if session.get("user_role") != "instructor":
+    if not _is_instructor_effective_session():
         return jsonify({"status": "error", "message": "غير مصرح"}), 403
     data = request.get_json(force=True) or {}
     try:
@@ -2489,7 +2551,7 @@ def save_my_course_announcement():
 @login_required
 def save_my_course_closure():
     """حفظ/إرسال تقرير إقفال المقرر لشعبة مكلّف بها الأستاذ."""
-    if session.get("user_role") != "instructor":
+    if not _is_instructor_effective_session():
         return jsonify({"status": "error", "message": "غير مصرح"}), 403
     data = request.get_json(force=True) or {}
     try:
@@ -2967,8 +3029,7 @@ def instructor_timetable():
     if published_at is None:
         return jsonify({"rows": [], "published": False})
 
-    user_role = session.get("user_role")
-    if user_role != "instructor":
+    if not _is_instructor_effective_session():
         return jsonify({"rows": [], "published": True})
 
     instructor_id = session.get("instructor_id")
