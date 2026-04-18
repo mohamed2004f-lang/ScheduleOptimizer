@@ -188,7 +188,27 @@ def _effective_roles(user_role: str) -> set:
             roles.add("supervisor")
     if r == "supervisor":
         roles.add("instructor")
+    # توحيد رئيس القسم مع المسؤول الرئيسي على مستوى الصلاحيات العامة.
+    # الاستثناءات الخاصة بالإدارة/الإعدادات تُطبَّق بشكل صريح داخل role_required.
+    if r == "head_of_department":
+        roles.update({"admin_main", "admin"})
     return roles
+
+
+def _head_of_department_blocked_path(path: str) -> bool:
+    """مسارات الإدارة والإعدادات المحصورة على admin_main فقط."""
+    p = (path or "").strip().lower()
+    blocked_prefixes = (
+        "/users",
+        "/users_admin",
+        "/admin/project_status",
+        "/admin/backup_now",
+        "/admin/system_diagnostics",
+        "/admin/settings",
+        "/academic_rules",
+        "/academic_rules_page",
+    )
+    return any(p.startswith(prefix) for prefix in blocked_prefixes)
 
 # إعداد Flask-Login (username هو المعرّف لأن جدول users يستخدمه كمفتاح أساسي)
 login_manager = LoginManager() if LoginManager is not None else None
@@ -384,6 +404,25 @@ def role_required(*roles):
                 user_role = session.get('user_role')
             normalized_allowed = {_normalize_role(r) for r in roles}
             effective = _effective_roles(user_role)
+            if _normalize_role(user_role or "") == "head_of_department" and _head_of_department_blocked_path(request.path):
+                accept = (request.headers.get("Accept") or "").lower()
+                is_api_request = (
+                    request.is_json
+                    or "application/json" in accept
+                    or request.path.startswith("/api/")
+                    or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+                )
+                if is_api_request:
+                    return jsonify({
+                        'status': 'error',
+                        'message': 'صفحات الإدارة والإعدادات محصورة على المسؤول الرئيسي',
+                        'code': 'FORBIDDEN'
+                    }), 403
+                return (
+                    "<h3>403 Forbidden</h3><p>صفحات الإدارة والإعدادات محصورة على المسؤول الرئيسي.</p>",
+                    403,
+                    {"Content-Type": "text/html; charset=utf-8"},
+                )
             if not (effective & normalized_allowed):
                 accept = (request.headers.get("Accept") or "").lower()
                 is_api_request = (
