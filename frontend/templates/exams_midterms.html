@@ -42,6 +42,7 @@
             </div>
             <div class="col-md-3">
               <div class="d-flex gap-2">
+                <button type="button" class="btn btn-outline-secondary" id="btnSaveDates">حفظ التواريخ</button>
                 <button type="button" class="btn btn-outline-primary" id="btnToggleCompact">عرض مضغوط</button>
                 <button type="button" class="btn btn-primary" onclick="loadExamSchedule()">تحديث الجدول</button>
               </div>
@@ -123,7 +124,9 @@
               </div>
               <div class="col-md-3">
                 <label class="form-label">الأستاذ</label>
-                <input id="newInstructor" class="form-control" placeholder="د.علي">
+                <select id="newInstructor" class="form-select">
+                  <option value="">-- اختر أستاذ --</option>
+                </select>
               </div>
               <div class="col-12">
                 <button type="submit" class="btn btn-primary btn-sm">إضافة</button>
@@ -145,6 +148,8 @@ const examType = 'midterm';
 const FIXED_EXAM_TIME = '09:00-12:00';
 let IS_COMPACT = false;
 let EXAM_READONLY = false;
+let MANAGE_MODAL = null;
+const EXAM_DATES_STORAGE_KEY = 'exam_dates_midterm';
 
 async function initExamPermissions(){
   try {
@@ -187,6 +192,7 @@ function getCourseColor(courseName){
 
 /* ---------- Courses loading ---------- */
 let COURSES = [];
+let INSTRUCTORS = [];
 async function loadCourses(){
   try {
     const r = await fetch('/list_courses');
@@ -205,6 +211,58 @@ async function loadCourses(){
     }
   } catch (err) {
     console.error('loadCourses error', err);
+  }
+}
+
+function saveExamDatesPreference(){
+  const startDate = document.getElementById('startDate').value;
+  const endDate = document.getElementById('endDate').value;
+  if(!startDate || !endDate){
+    showMsg('يرجى تحديد تاريخ البداية والنهاية أولاً', 'warning', 2500, 'examScheduleList');
+    return;
+  }
+  try {
+    localStorage.setItem(EXAM_DATES_STORAGE_KEY, JSON.stringify({ startDate, endDate }));
+    showMsg('تم حفظ التواريخ بنجاح', 'success', 1800, 'examScheduleList');
+  } catch (err) {
+    console.error('saveExamDatesPreference error', err);
+    showMsg('تعذر حفظ التواريخ في المتصفح', 'danger', 2500, 'examScheduleList');
+  }
+}
+
+function loadExamDatesPreference(){
+  try {
+    const raw = localStorage.getItem(EXAM_DATES_STORAGE_KEY);
+    if(!raw) return false;
+    const parsed = JSON.parse(raw);
+    if(!parsed || !parsed.startDate || !parsed.endDate) return false;
+    document.getElementById('startDate').value = parsed.startDate;
+    document.getElementById('endDate').value = parsed.endDate;
+    return true;
+  } catch (err) {
+    console.error('loadExamDatesPreference error', err);
+    return false;
+  }
+}
+
+async function loadInstructors(){
+  try {
+    const r = await fetch('/instructors/list');
+    const data = r.ok ? await r.json() : {};
+    INSTRUCTORS = Array.isArray(data.instructors) ? data.instructors : [];
+    const sel = document.getElementById('newInstructor');
+    if(sel){
+      sel.innerHTML = '<option value="">-- اختر أستاذ --</option>';
+      INSTRUCTORS.forEach(inst => {
+        if (!inst || !inst.is_active) return;
+        const o = document.createElement('option');
+        o.value = inst.id != null ? String(inst.id) : '';
+        o.text = (inst.name || '').trim();
+        sel.appendChild(o);
+      });
+    }
+  } catch (err) {
+    console.error('loadInstructors error', err);
   }
 }
 
@@ -341,9 +399,15 @@ function openManageCourses(date) {
   currentModalDate = date;
   document.getElementById('modalDate').textContent = formatDateArabic(date) + ' (' + date + ')';
   document.getElementById('modalTime').textContent = FIXED_EXAM_TIME;
-  
-  // عرض الامتحانات الموجودة
-  const existingExams = currentExamData.filter(e => e.exam_date === date);
+  renderExistingExamsList();
+  if (!MANAGE_MODAL) {
+    MANAGE_MODAL = new bootstrap.Modal(document.getElementById('manageCoursesModal'));
+  }
+  MANAGE_MODAL.show();
+}
+
+function renderExistingExamsList() {
+  const existingExams = currentExamData.filter(e => e.exam_date === currentModalDate);
   const existingDiv = document.getElementById('existingCoursesList');
   if (existingExams.length > 0) {
     let html = '<h6>الامتحانات الموجودة:</h6><ul class="list-group">';
@@ -358,9 +422,6 @@ function openManageCourses(date) {
   } else {
     existingDiv.innerHTML = '<p class="text-muted">لا توجد امتحانات في هذا التاريخ</p>';
   }
-  
-  const modal = new bootstrap.Modal(document.getElementById('manageCoursesModal'));
-  modal.show();
 }
 
 document.getElementById('addCourseForm').addEventListener('submit', async (e) => {
@@ -368,7 +429,9 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
   e.preventDefault();
   const course = document.getElementById('newCourseSelect').value;
   const room = document.getElementById('newRoom').value;
-  const instructor = document.getElementById('newInstructor').value;
+  const instructorId = document.getElementById('newInstructor').value;
+  const instObj = INSTRUCTORS.find(x => String(x.id) === String(instructorId));
+  const instructor = instObj ? (instObj.name || '').trim() : '';
   
   if(!course){
     showMsg('اختر مقرراً', 'warning', 3000, 'modalMsg');
@@ -499,8 +562,8 @@ async function deleteExamRow(exam_id){
     const j = await resp.json().catch(()=>null);
     if (resp.ok && j && j.status === 'ok') {
       await loadExamSchedule();
-      if(currentModalDate){
-        openManageCourses(currentModalDate);
+      if (currentModalDate && MANAGE_MODAL) {
+        renderExistingExamsList();
       }
     } else {
       alert('خطأ: ' + (j?.message || resp.statusText));
@@ -513,17 +576,21 @@ async function deleteExamRow(exam_id){
 
 // Set default dates (current week)
 window.addEventListener('load', async () => {
-  const today = new Date();
-  const startOfWeek = new Date(today);
-  startOfWeek.setDate(today.getDate() - today.getDay() + 6); // Saturday
-  const endOfWeek = new Date(startOfWeek);
-  endOfWeek.setDate(startOfWeek.getDate() + 6); // Next Friday
-  
-  document.getElementById('startDate').value = startOfWeek.toISOString().split('T')[0];
-  document.getElementById('endDate').value = endOfWeek.toISOString().split('T')[0];
+  if(!loadExamDatesPreference()){
+    const today = new Date();
+    const startOfWeek = new Date(today);
+    startOfWeek.setDate(today.getDate() - today.getDay() + 6); // Saturday
+    const endOfWeek = new Date(startOfWeek);
+    endOfWeek.setDate(startOfWeek.getDate() + 6); // Next Friday
+    document.getElementById('startDate').value = startOfWeek.toISOString().split('T')[0];
+    document.getElementById('endDate').value = endOfWeek.toISOString().split('T')[0];
+  }
   
   await initExamPermissions();
-  if (!EXAM_READONLY) loadCourses();
+  if (!EXAM_READONLY) {
+    await loadCourses();
+    await loadInstructors();
+  }
   loadExamSchedule();
 
   const btn = document.getElementById('btnToggleCompact');
@@ -533,6 +600,10 @@ window.addEventListener('load', async () => {
       btn.textContent = IS_COMPACT ? 'عرض عادي' : 'عرض مضغوط';
       await loadExamSchedule();
     });
+  }
+  const saveBtn = document.getElementById('btnSaveDates');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', saveExamDatesPreference);
   }
 });
 

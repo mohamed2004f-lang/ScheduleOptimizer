@@ -575,7 +575,7 @@ def list_schedule_rows():
                     s.instructor_id,
                     COUNT(DISTINCT r.student_id) AS student_count
                 FROM schedule s
-                LEFT JOIN registrations r ON s.course_name = r.course_name
+                LEFT JOIN registrations r ON LOWER(TRIM(s.course_name)) = LOWER(TRIM(r.course_name))
                 GROUP BY s.{SCHEDULE_PK_COL}, s.course_name, s.day, s.time, s.room, s.instructor, s.semester, s.instructor_id
                 ORDER BY s.{SCHEDULE_PK_COL}
             """).fetchall()
@@ -756,7 +756,33 @@ def check_conflicts():
                         (data.get("semester") or "").strip() or semester_label
                     ),
                 ).fetchone()
-                temp_rowid = int(row_new[0]) if row_new else 0
+                try:
+                    temp_rowid = int(row_new[0]) if row_new and row_new[0] is not None else 0
+                except (TypeError, ValueError):
+                    temp_rowid = 0
+                if temp_rowid <= 0:
+                    row_last = cur.execute(
+                        f"""
+                        SELECT {SCHEDULE_PK_COL}
+                        FROM schedule
+                        WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))
+                          AND day = ?
+                          AND time = ?
+                          AND COALESCE(semester, '') = ?
+                        ORDER BY {SCHEDULE_PK_COL} DESC
+                        LIMIT 1
+                        """,
+                        (
+                            course_name,
+                            day,
+                            time,
+                            (data.get("semester") or "").strip() or semester_label,
+                        ),
+                    ).fetchone()
+                    try:
+                        temp_rowid = int(row_last[0]) if row_last and row_last[0] is not None else 0
+                    except (TypeError, ValueError):
+                        temp_rowid = 0
             else:
                 cur.execute(
                     """
@@ -779,7 +805,29 @@ def check_conflicts():
             conflicts = compute_per_student_conflicts(conn)
             
             # حذف الإضافة المؤقتة
-            cur.execute(f"DELETE FROM schedule WHERE {SCHEDULE_PK_COL} = ?", (temp_rowid,))
+            if temp_rowid > 0:
+                cur.execute(f"DELETE FROM schedule WHERE {SCHEDULE_PK_COL} = ?", (temp_rowid,))
+            else:
+                # احتياط: تنظيف الصف المؤقت بالحقول الممررة إذا تعذر تحديد المعرّف.
+                cur.execute(
+                    """
+                    DELETE FROM schedule
+                    WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))
+                      AND day = ?
+                      AND time = ?
+                      AND COALESCE(room, '') = ?
+                      AND COALESCE(instructor, '') = ?
+                      AND COALESCE(semester, '') = ?
+                    """,
+                    (
+                        course_name,
+                        day,
+                        time,
+                        data.get("room", ""),
+                        data.get("instructor", ""),
+                        (data.get("semester") or "").strip() or semester_label,
+                    ),
+                )
             conn.commit()
             
             # تصفية التعارضات المتعلقة بالمقرر الجديد
@@ -1720,7 +1768,7 @@ def student_timetable():
                s.instructor,
                s.semester
         FROM schedule s
-        JOIN registrations r ON r.course_name = s.course_name
+        JOIN registrations r ON LOWER(TRIM(r.course_name)) = LOWER(TRIM(s.course_name))
         WHERE r.student_id = ?
         ORDER BY s.day, s.time, s.course_name
         """
@@ -2993,7 +3041,7 @@ def student_my_announcements():
                    COALESCE(a.created_at,'') AS created_at
             FROM faculty_course_announcements a
             JOIN schedule s ON s.{SCHEDULE_PK_COL} = a.section_id
-            JOIN registrations r ON r.course_name = s.course_name
+            JOIN registrations r ON LOWER(TRIM(r.course_name)) = LOWER(TRIM(s.course_name))
             WHERE r.student_id = ?
               AND COALESCE(a.published_to_students, 1) = 1
             ORDER BY a.id DESC

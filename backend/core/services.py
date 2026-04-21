@@ -610,8 +610,8 @@ class CourseService:
             with get_connection() as conn:
                 cur = conn.cursor()
                 row = cur.execute(
-                    "SELECT course_name, course_code, units FROM courses WHERE course_name = ?",
-                    (name,)
+                    "SELECT course_name, course_code, units FROM courses WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
+                    (name,),
                 ).fetchone()
                 
                 if row:
@@ -670,22 +670,22 @@ class CourseService:
                 # تحديث المقرر
                 if course_code is not None and units is not None:
                     cur.execute(
-                        "UPDATE courses SET course_name=?, course_code=?, units=? WHERE course_name=?",
+                        "UPDATE courses SET course_name=?, course_code=?, units=? WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
                         (new, sanitize_input(course_code, 50), normalize_units(units), old)
                     )
                 elif course_code is not None:
                     cur.execute(
-                        "UPDATE courses SET course_name=?, course_code=? WHERE course_name=?",
+                        "UPDATE courses SET course_name=?, course_code=? WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
                         (new, sanitize_input(course_code, 50), old)
                     )
                 elif units is not None:
                     cur.execute(
-                        "UPDATE courses SET course_name=?, units=? WHERE course_name=?",
+                        "UPDATE courses SET course_name=?, units=? WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
                         (new, normalize_units(units), old)
                     )
                 else:
                     cur.execute(
-                        "UPDATE courses SET course_name=? WHERE course_name=?",
+                        "UPDATE courses SET course_name=? WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
                         (new, old)
                     )
                 
@@ -695,13 +695,16 @@ class CourseService:
                 # تحديث الجداول المرتبطة
                 for table in ('grades', 'schedule', 'registrations', 'prereqs'):
                     try:
-                        cur.execute(f"UPDATE {table} SET course_name=? WHERE course_name=?", (new, old))
+                        cur.execute(
+                            f"UPDATE {table} SET course_name=? WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
+                            (new, old),
+                        )
                     except Exception:
                         pass
                 
                 # تحديث المتطلبات
                 cur.execute(
-                    "UPDATE prereqs SET required_course_name=? WHERE required_course_name=?",
+                    "UPDATE prereqs SET required_course_name=? WHERE LOWER(TRIM(required_course_name)) = LOWER(TRIM(?))",
                     (new, old)
                 )
                 
@@ -738,15 +741,18 @@ class CourseService:
                 if cascade:
                     for table in ('schedule', 'registrations', 'grades'):
                         try:
-                            cur.execute(f"DELETE FROM {table} WHERE course_name = ?", (name,))
+                            cur.execute(
+                                f"DELETE FROM {table} WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
+                                (name,),
+                            )
                         except Exception:
                             pass
                     cur.execute(
-                        "DELETE FROM prereqs WHERE course_name = ? OR required_course_name = ?",
+                        "DELETE FROM prereqs WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?)) OR LOWER(TRIM(required_course_name)) = LOWER(TRIM(?))",
                         (name, name)
                     )
                 
-                cur.execute("DELETE FROM courses WHERE course_name = ?", (name,))
+                cur.execute("DELETE FROM courses WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))", (name,))
                 if cur.rowcount == 0:
                     raise NotFoundError("المقرر غير موجود")
 
@@ -796,7 +802,7 @@ class ScheduleService:
                         s.instructor_id,
                         COUNT(DISTINCT r.student_id) AS student_count
                     FROM schedule s
-                    LEFT JOIN registrations r ON s.course_name = r.course_name
+                    LEFT JOIN registrations r ON LOWER(TRIM(s.course_name)) = LOWER(TRIM(r.course_name))
                     GROUP BY s.{SCHEDULE_PK_COL}, s.course_name, s.day, s.time, s.room, s.instructor, s.semester, s.instructor_id
                     ORDER BY s.{SCHEDULE_PK_COL}
                 """).fetchall()
@@ -875,7 +881,28 @@ class ScheduleService:
                            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING {SCHEDULE_PK_COL}""",
                         (name, day_val, time_val, room_v, inst_text, iid, sem_v),
                     ).fetchone()
-                    section_id = int(row_new[0]) if row_new else 0
+                    try:
+                        section_id = int(row_new[0]) if row_new and row_new[0] is not None else 0
+                    except (TypeError, ValueError):
+                        section_id = 0
+                    if section_id <= 0:
+                        row_last = cur.execute(
+                            f"""
+                            SELECT {SCHEDULE_PK_COL}
+                            FROM schedule
+                            WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))
+                              AND day = ?
+                              AND time = ?
+                              AND COALESCE(semester, '') = ?
+                            ORDER BY {SCHEDULE_PK_COL} DESC
+                            LIMIT 1
+                            """,
+                            (name, day_val, time_val, sem_v),
+                        ).fetchone()
+                        try:
+                            section_id = int(row_last[0]) if row_last and row_last[0] is not None else 0
+                        except (TypeError, ValueError):
+                            section_id = 0
                 else:
                     cur.execute(
                         """INSERT INTO schedule (course_name, day, time, room, instructor, instructor_id, semester)

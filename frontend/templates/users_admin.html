@@ -157,7 +157,10 @@
         </div>
         <div id="usersValidationSummary" class="small text-muted mb-2"></div>
         <div id="usersValidationIssues" class="small"></div>
-        <div id="usersAuditSummary" class="small text-muted mb-1"></div>
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-1">
+          <div id="usersAuditSummary" class="small text-muted mb-0"></div>
+          <button type="button" id="btnUsersAuditExpand" class="btn btn-sm btn-outline-secondary d-none">توسيع السجل</button>
+        </div>
         <div id="usersAuditList" class="small"></div>
         <div id="usersList" class="list-group small"></div>
       </div>
@@ -700,7 +703,11 @@
       document.getElementById('btnSendInvite').addEventListener('click', sendInvite);
       document.getElementById('btnInviteCleanup').addEventListener('click', cleanupInvites);
       document.getElementById('btnUsersValidationReport').addEventListener('click', loadUsersValidationReport);
-      document.getElementById('btnUsersAuditLog').addEventListener('click', loadUsersAuditLog);
+      document.getElementById('btnUsersAuditLog').addEventListener('click', ()=> loadUsersAuditLog());
+      const btnAuditExpand = document.getElementById('btnUsersAuditExpand');
+      if(btnAuditExpand){
+        btnAuditExpand.addEventListener('click', ()=> loadUsersAuditLog({ expanded: !usersAuditExpanded }));
+      }
       document.getElementById('linkType').addEventListener('change', async ()=>{ await loadLinkedEntities(); await suggestLinked(); });
       document.getElementById('linkEntity').addEventListener('change', suggestLinked);
       document.getElementById('linkRole').addEventListener('change', ()=>{
@@ -759,24 +766,10 @@
       issuesBox.innerHTML = `<div class="alert alert-warning py-2 px-3 mb-2"><ul class="mb-0 ps-3">${lis}</ul>${more}</div>`;
     }
 
-    async function loadUsersAuditLog(){
-      const summary = document.getElementById('usersAuditSummary');
-      const listBox = document.getElementById('usersAuditList');
-      if(!summary || !listBox) return;
-      summary.textContent = 'جاري تحميل سجل التدقيق...';
-      listBox.innerHTML = '';
-      const res = await fetchJSON('/users/audit_log?limit=50');
-      if(!res.ok){
-        summary.textContent = `تعذر تحميل سجل التدقيق (HTTP ${res.status}).`;
-        return;
-      }
-      const items = Array.isArray(res.json?.items) ? res.json.items : [];
-      summary.textContent = `سجل التدقيق: آخر ${items.length} عملية على المستخدمين.`;
-      if(!items.length){
-        listBox.innerHTML = '<div class="alert alert-light py-2 px-3 mb-2">لا توجد سجلات تدقيق بعد.</div>';
-        return;
-      }
-      const rows = items.slice(0, 30).map((x)=>{
+    let usersAuditExpanded = false;
+
+    function renderUsersAuditRows(items){
+      return items.map((x)=>{
         const d = x.details || {};
         const target = d.username || d.after?.username || d.before?.username || '—';
         return `<tr>
@@ -787,7 +780,41 @@
           <td>${target}</td>
         </tr>`;
       }).join('');
-      const more = items.length > 30 ? `<div class="small text-muted mt-1">... ويوجد ${items.length - 30} سجل إضافي.</div>` : '';
+    }
+
+    async function loadUsersAuditLog(opts){
+      if(opts && Object.prototype.hasOwnProperty.call(opts, 'expanded')){
+        usersAuditExpanded = !!opts.expanded;
+      }
+      const summary = document.getElementById('usersAuditSummary');
+      const listBox = document.getElementById('usersAuditList');
+      const expandBtn = document.getElementById('btnUsersAuditExpand');
+      if(!summary || !listBox) return;
+      summary.textContent = 'جاري تحميل سجل التدقيق...';
+      listBox.innerHTML = '';
+      if(expandBtn){
+        expandBtn.classList.add('d-none');
+        expandBtn.disabled = true;
+      }
+      const limit = usersAuditExpanded ? 50 : 5;
+      const res = await fetchJSON('/users/audit_log?limit=' + encodeURIComponent(String(limit)));
+      if(!res.ok){
+        summary.textContent = `تعذر تحميل سجل التدقيق (HTTP ${res.status}).`;
+        if(expandBtn) expandBtn.disabled = false;
+        return;
+      }
+      const items = Array.isArray(res.json?.items) ? res.json.items : [];
+      if(usersAuditExpanded){
+        summary.textContent = `سجل التدقيق: عرض آخر ${items.length} عملية على المستخدمين (حد أقصى 50).`;
+      } else {
+        summary.textContent = `سجل التدقيق: عرض آخر ${Math.min(items.length, 5)} عملية على المستخدمين.`;
+      }
+      if(!items.length){
+        listBox.innerHTML = '<div class="alert alert-light py-2 px-3 mb-2">لا توجد سجلات تدقيق بعد.</div>';
+        if(expandBtn) expandBtn.disabled = false;
+        return;
+      }
+      const rows = renderUsersAuditRows(items);
       listBox.innerHTML = `
         <div class="table-responsive mb-2">
           <table class="table table-sm table-bordered align-middle mb-0">
@@ -797,8 +824,19 @@
             <tbody>${rows}</tbody>
           </table>
         </div>
-        ${more}
       `;
+      if(expandBtn){
+        expandBtn.disabled = false;
+        if(usersAuditExpanded){
+          expandBtn.classList.remove('d-none');
+          expandBtn.textContent = 'عرض آخر 5 فقط';
+        } else if(items.length >= 5){
+          expandBtn.classList.remove('d-none');
+          expandBtn.textContent = 'توسيع السجل (حتى 50)';
+        } else {
+          expandBtn.classList.add('d-none');
+        }
+      }
     }
 
     async function cleanupInvites(){

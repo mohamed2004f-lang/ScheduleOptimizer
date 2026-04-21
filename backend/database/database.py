@@ -407,6 +407,99 @@ def db_transaction(db_file=None):
 # ============================================
 
 TABLES_SCHEMA = {
+    # ------------------------------------------------------------
+    # Multi-department / programs (college-wide) — compatible add-on
+    # ------------------------------------------------------------
+    'departments': """
+        CREATE TABLE IF NOT EXISTS departments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL UNIQUE,
+            name_ar TEXT NOT NULL,
+            name_en TEXT DEFAULT '',
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """,
+
+    'programs': """
+        CREATE TABLE IF NOT EXISTS programs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            department_id INTEGER,
+            code TEXT NOT NULL,
+            name_ar TEXT NOT NULL,
+            name_en TEXT DEFAULT '',
+            phase TEXT NOT NULL DEFAULT 'major'
+                CHECK (phase IN ('general', 'major')),
+            track_group TEXT DEFAULT '',
+            min_total_units INTEGER DEFAULT 0 CHECK (min_total_units >= 0),
+            rules_json TEXT DEFAULT '',
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (department_id, code),
+            FOREIGN KEY (department_id) REFERENCES departments(id)
+                ON DELETE SET NULL ON UPDATE CASCADE
+        )
+    """,
+
+    'course_master': """
+        CREATE TABLE IF NOT EXISTS course_master (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title_ar TEXT NOT NULL,
+            title_en TEXT DEFAULT '',
+            description TEXT DEFAULT '',
+            default_units INTEGER DEFAULT 0 CHECK (default_units >= 0),
+            grading_mode TEXT NOT NULL DEFAULT 'partial_final'
+                CHECK (grading_mode IN ('partial_final','final_total_only')),
+            assessment_type TEXT NOT NULL DEFAULT 'theoretical',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """,
+
+    'program_courses': """
+        CREATE TABLE IF NOT EXISTS program_courses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            program_id INTEGER NOT NULL,
+            course_master_id INTEGER NOT NULL,
+            course_code TEXT NOT NULL,
+            course_name_override TEXT DEFAULT '',
+            level_no INTEGER DEFAULT 0 CHECK (level_no >= 0),
+            term_hint TEXT DEFAULT '',
+            units_override INTEGER,
+            category TEXT NOT NULL DEFAULT 'required',
+            is_required INTEGER NOT NULL DEFAULT 1 CHECK (is_required IN (0, 1)),
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (program_id, course_code),
+            FOREIGN KEY (program_id) REFERENCES programs(id)
+                ON DELETE CASCADE ON UPDATE CASCADE,
+            FOREIGN KEY (course_master_id) REFERENCES course_master(id)
+                ON DELETE CASCADE ON UPDATE CASCADE
+        )
+    """,
+
+    # prerequisites at the "program course" level (allows same master course to have different prereqs per program)
+    'program_course_prereqs': """
+        CREATE TABLE IF NOT EXISTS program_course_prereqs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            program_course_id INTEGER NOT NULL,
+            required_course_master_id INTEGER,
+            required_program_course_id INTEGER,
+            note TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            CHECK (
+                required_course_master_id IS NOT NULL
+                OR required_program_course_id IS NOT NULL
+            ),
+            UNIQUE (program_course_id, required_course_master_id, required_program_course_id),
+            FOREIGN KEY (program_course_id) REFERENCES program_courses(id)
+                ON DELETE CASCADE ON UPDATE CASCADE,
+            FOREIGN KEY (required_course_master_id) REFERENCES course_master(id)
+                ON DELETE CASCADE ON UPDATE CASCADE,
+            FOREIGN KEY (required_program_course_id) REFERENCES program_courses(id)
+                ON DELETE CASCADE ON UPDATE CASCADE
+        )
+    """,
+
     'students': """
         CREATE TABLE IF NOT EXISTS students (
             student_id TEXT PRIMARY KEY,
@@ -415,6 +508,11 @@ TABLES_SCHEMA = {
             email TEXT,
             phone TEXT,
             join_year TEXT,
+            department_id INTEGER,
+            admission_program_id INTEGER,
+            current_program_id INTEGER,
+            track_code TEXT DEFAULT '',
+            specialized_at_term TEXT DEFAULT '',
             enrollment_status TEXT NOT NULL DEFAULT 'active',
             status_changed_at TEXT,
             status_reason TEXT,
@@ -423,7 +521,13 @@ TABLES_SCHEMA = {
             graduation_plan TEXT DEFAULT '',
             join_term TEXT DEFAULT '',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (department_id) REFERENCES departments(id)
+                ON DELETE SET NULL ON UPDATE CASCADE,
+            FOREIGN KEY (admission_program_id) REFERENCES programs(id)
+                ON DELETE SET NULL ON UPDATE CASCADE,
+            FOREIGN KEY (current_program_id) REFERENCES programs(id)
+                ON DELETE SET NULL ON UPDATE CASCADE
         )
     """,
     
@@ -431,6 +535,8 @@ TABLES_SCHEMA = {
         CREATE TABLE IF NOT EXISTS courses (
             course_name TEXT PRIMARY KEY,
             course_code TEXT,
+            course_master_id INTEGER,
+            owning_department_id INTEGER,
             units INTEGER DEFAULT 0 CHECK (units >= 0),
             grading_mode TEXT NOT NULL DEFAULT 'partial_final' CHECK (grading_mode IN ('partial_final','final_total_only')),
             category TEXT NOT NULL DEFAULT 'required',
@@ -440,7 +546,11 @@ TABLES_SCHEMA = {
             final_exam_weight REAL,
             is_archived INTEGER NOT NULL DEFAULT 0 CHECK (is_archived IN (0, 1)),
             description TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (course_master_id) REFERENCES course_master(id)
+                ON DELETE SET NULL ON UPDATE CASCADE,
+            FOREIGN KEY (owning_department_id) REFERENCES departments(id)
+                ON DELETE SET NULL ON UPDATE CASCADE
         )
     """,
     
@@ -448,6 +558,7 @@ TABLES_SCHEMA = {
         CREATE TABLE IF NOT EXISTS schedule (
             rowid INTEGER PRIMARY KEY AUTOINCREMENT,
             course_name TEXT NOT NULL,
+            program_course_id INTEGER,
             day TEXT NOT NULL,
             time TEXT NOT NULL,
             room TEXT DEFAULT '',
@@ -456,7 +567,9 @@ TABLES_SCHEMA = {
             semester TEXT DEFAULT '',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (course_name) REFERENCES courses(course_name) 
-                ON DELETE CASCADE ON UPDATE CASCADE
+                ON DELETE CASCADE ON UPDATE CASCADE,
+            FOREIGN KEY (program_course_id) REFERENCES program_courses(id)
+                ON DELETE SET NULL ON UPDATE CASCADE
         )
     """,
     
@@ -465,12 +578,15 @@ TABLES_SCHEMA = {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             student_id TEXT NOT NULL,
             course_name TEXT NOT NULL,
+            program_course_id INTEGER,
             registered_at TEXT DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (student_id, course_name),
             FOREIGN KEY (student_id) REFERENCES students(student_id) 
                 ON DELETE CASCADE ON UPDATE CASCADE,
             FOREIGN KEY (course_name) REFERENCES courses(course_name) 
-                ON DELETE CASCADE ON UPDATE CASCADE
+                ON DELETE CASCADE ON UPDATE CASCADE,
+            FOREIGN KEY (program_course_id) REFERENCES program_courses(id)
+                ON DELETE SET NULL ON UPDATE CASCADE
         )
     """,
     
@@ -480,6 +596,8 @@ TABLES_SCHEMA = {
             student_id TEXT NOT NULL,
             semester TEXT NOT NULL,
             course_name TEXT NOT NULL,
+            program_course_id INTEGER,
+            course_master_id INTEGER,
             course_code TEXT DEFAULT '',
             units INTEGER DEFAULT 0,
             grade REAL CHECK (grade IS NULL OR (grade >= 0 AND grade <= 100)),
@@ -489,6 +607,10 @@ TABLES_SCHEMA = {
             FOREIGN KEY (student_id) REFERENCES students(student_id) 
                 ON DELETE CASCADE ON UPDATE CASCADE,
             FOREIGN KEY (course_name) REFERENCES courses(course_name) 
+                ON DELETE SET NULL ON UPDATE CASCADE,
+            FOREIGN KEY (program_course_id) REFERENCES program_courses(id)
+                ON DELETE SET NULL ON UPDATE CASCADE,
+            FOREIGN KEY (course_master_id) REFERENCES course_master(id)
                 ON DELETE SET NULL ON UPDATE CASCADE
         )
     """,
@@ -806,8 +928,11 @@ TABLES_SCHEMA = {
             role TEXT NOT NULL,
             student_id TEXT,
             instructor_id INTEGER,
+            department_id INTEGER,
             is_supervisor INTEGER NOT NULL DEFAULT 0,
-            is_active INTEGER NOT NULL DEFAULT 1
+            is_active INTEGER NOT NULL DEFAULT 1,
+            FOREIGN KEY (department_id) REFERENCES departments(id)
+                ON DELETE SET NULL ON UPDATE CASCADE
         )
     """,
 
@@ -860,7 +985,10 @@ TABLES_SCHEMA = {
             name TEXT NOT NULL,
             type TEXT NOT NULL DEFAULT 'internal',
             email TEXT,
-            is_active INTEGER NOT NULL DEFAULT 1
+            department_id INTEGER,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            FOREIGN KEY (department_id) REFERENCES departments(id)
+                ON DELETE SET NULL ON UPDATE CASCADE
         )
     """,
 
@@ -1173,6 +1301,17 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)",
     "CREATE INDEX IF NOT EXISTS idx_academic_calendar_year_term ON academic_calendar(academic_year, term)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_courses_code_unique ON courses(course_code) WHERE course_code IS NOT NULL AND course_code <> ''",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_departments_code_unique ON departments(code) WHERE code IS NOT NULL AND code <> ''",
+    "CREATE INDEX IF NOT EXISTS idx_programs_dept ON programs(department_id)",
+    "CREATE INDEX IF NOT EXISTS idx_program_courses_program ON program_courses(program_id)",
+    "CREATE INDEX IF NOT EXISTS idx_program_courses_master ON program_courses(course_master_id)",
+    "CREATE INDEX IF NOT EXISTS idx_students_department ON students(department_id)",
+    "CREATE INDEX IF NOT EXISTS idx_students_program ON students(current_program_id)",
+    "CREATE INDEX IF NOT EXISTS idx_users_department ON users(department_id)",
+    "CREATE INDEX IF NOT EXISTS idx_instructors_department ON instructors(department_id)",
+    "CREATE INDEX IF NOT EXISTS idx_schedule_program_course ON schedule(program_course_id)",
+    "CREATE INDEX IF NOT EXISTS idx_grades_program_course ON grades(program_course_id)",
+    "CREATE INDEX IF NOT EXISTS idx_regs_program_course ON registrations(program_course_id)",
     "CREATE INDEX IF NOT EXISTS idx_student_supervisor_instructor ON student_supervisor(instructor_id)",
     "CREATE INDEX IF NOT EXISTS idx_reg_requests_status_created ON registration_requests(status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_reg_requests_student ON registration_requests(student_id)",
@@ -1189,6 +1328,11 @@ def _ensure_tables_postgresql() -> None:
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS email TEXT",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS phone TEXT",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS updated_at TEXT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS department_id BIGINT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS admission_program_id BIGINT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS current_program_id BIGINT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS track_code TEXT",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS specialized_at_term TEXT",
         (
             "ALTER TABLE students ADD COLUMN IF NOT EXISTS enrollment_status TEXT "
             "NOT NULL DEFAULT 'active'"
@@ -1200,8 +1344,11 @@ def _ensure_tables_postgresql() -> None:
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS graduation_plan TEXT DEFAULT ''",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS join_term TEXT DEFAULT ''",
         "ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_archived INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_master_id BIGINT",
+        "ALTER TABLE courses ADD COLUMN IF NOT EXISTS owning_department_id BIGINT",
         "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS is_deleted INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS instructor_id INTEGER",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS department_id BIGINT",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_supervisor INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE courses ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'required'",
@@ -1217,6 +1364,11 @@ def _ensure_tables_postgresql() -> None:
         ),
         "ALTER TABLE enrollment_plans ADD COLUMN IF NOT EXISTS prereq_ack_reason TEXT DEFAULT ''",
         "ALTER TABLE schedule ADD COLUMN IF NOT EXISTS instructor_id INTEGER",
+        "ALTER TABLE schedule ADD COLUMN IF NOT EXISTS program_course_id BIGINT",
+        "ALTER TABLE registrations ADD COLUMN IF NOT EXISTS program_course_id BIGINT",
+        "ALTER TABLE grades ADD COLUMN IF NOT EXISTS program_course_id BIGINT",
+        "ALTER TABLE grades ADD COLUMN IF NOT EXISTS course_master_id BIGINT",
+        "ALTER TABLE instructors ADD COLUMN IF NOT EXISTS department_id BIGINT",
         "ALTER TABLE grade_drafts ADD COLUMN IF NOT EXISTS section_id INTEGER",
         "ALTER TABLE grade_draft_items ADD COLUMN IF NOT EXISTS coursework REAL",
         "ALTER TABLE grade_draft_items ADD COLUMN IF NOT EXISTS midterm REAL",
@@ -1324,6 +1476,146 @@ def _ensure_tables_postgresql() -> None:
                     pass
         else:
             logger.info("Skipping optional lower(username) unique index (ENABLE_USERS_LOWER_UNIQUE_IDX is off)")
+
+        # الجداول الجديدة (Multi-department / programs / course master)
+        # تُنشأ هنا كترقية توافقية لأن بعض البيئات لا تستخدم alembic بعد.
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS departments (
+                    id BIGSERIAL PRIMARY KEY,
+                    code TEXT NOT NULL UNIQUE,
+                    name_ar TEXT NOT NULL,
+                    name_en TEXT DEFAULT '',
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT departments_active_chk CHECK (is_active IN (0, 1))
+                )
+                """
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning("Could not ensure departments on PostgreSQL: %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS programs (
+                    id BIGSERIAL PRIMARY KEY,
+                    department_id BIGINT,
+                    code TEXT NOT NULL,
+                    name_ar TEXT NOT NULL,
+                    name_en TEXT DEFAULT '',
+                    phase TEXT NOT NULL DEFAULT 'major',
+                    track_group TEXT DEFAULT '',
+                    min_total_units INTEGER DEFAULT 0,
+                    rules_json TEXT DEFAULT '',
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (department_id, code),
+                    CONSTRAINT programs_phase_chk CHECK (phase IN ('general', 'major')),
+                    CONSTRAINT programs_active_chk CHECK (is_active IN (0, 1)),
+                    CONSTRAINT programs_dept_fk FOREIGN KEY (department_id)
+                        REFERENCES departments(id) ON DELETE SET NULL
+                )
+                """
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning("Could not ensure programs on PostgreSQL: %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS course_master (
+                    id BIGSERIAL PRIMARY KEY,
+                    title_ar TEXT NOT NULL,
+                    title_en TEXT DEFAULT '',
+                    description TEXT DEFAULT '',
+                    default_units INTEGER DEFAULT 0,
+                    grading_mode TEXT NOT NULL DEFAULT 'partial_final',
+                    assessment_type TEXT NOT NULL DEFAULT 'theoretical',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT course_master_grading_mode_chk
+                        CHECK (grading_mode IN ('partial_final', 'final_total_only'))
+                )
+                """
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning("Could not ensure course_master on PostgreSQL: %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS program_courses (
+                    id BIGSERIAL PRIMARY KEY,
+                    program_id BIGINT NOT NULL,
+                    course_master_id BIGINT NOT NULL,
+                    course_code TEXT NOT NULL,
+                    course_name_override TEXT DEFAULT '',
+                    level_no INTEGER DEFAULT 0,
+                    term_hint TEXT DEFAULT '',
+                    units_override INTEGER,
+                    category TEXT NOT NULL DEFAULT 'required',
+                    is_required INTEGER NOT NULL DEFAULT 1,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (program_id, course_code),
+                    CONSTRAINT program_courses_req_chk CHECK (is_required IN (0, 1)),
+                    CONSTRAINT program_courses_active_chk CHECK (is_active IN (0, 1)),
+                    CONSTRAINT program_courses_program_fk FOREIGN KEY (program_id)
+                        REFERENCES programs(id) ON DELETE CASCADE,
+                    CONSTRAINT program_courses_master_fk FOREIGN KEY (course_master_id)
+                        REFERENCES course_master(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning("Could not ensure program_courses on PostgreSQL: %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS program_course_prereqs (
+                    id BIGSERIAL PRIMARY KEY,
+                    program_course_id BIGINT NOT NULL,
+                    required_course_master_id BIGINT,
+                    required_program_course_id BIGINT,
+                    note TEXT DEFAULT '',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT program_course_prereqs_req_chk
+                        CHECK (required_course_master_id IS NOT NULL OR required_program_course_id IS NOT NULL),
+                    UNIQUE (program_course_id, required_course_master_id, required_program_course_id),
+                    CONSTRAINT program_course_prereqs_pc_fk FOREIGN KEY (program_course_id)
+                        REFERENCES program_courses(id) ON DELETE CASCADE,
+                    CONSTRAINT program_course_prereqs_master_fk FOREIGN KEY (required_course_master_id)
+                        REFERENCES course_master(id) ON DELETE CASCADE,
+                    CONSTRAINT program_course_prereqs_req_pc_fk FOREIGN KEY (required_program_course_id)
+                        REFERENCES program_courses(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning("Could not ensure program_course_prereqs on PostgreSQL: %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         try:
             cur.execute(
                 """
@@ -1628,6 +1920,11 @@ def ensure_tables(db_file=None):
                 ("email", "ALTER TABLE students ADD COLUMN email TEXT"),
                 ("phone", "ALTER TABLE students ADD COLUMN phone TEXT"),
                 ("updated_at", "ALTER TABLE students ADD COLUMN updated_at TEXT"),
+                ("department_id", "ALTER TABLE students ADD COLUMN department_id INTEGER"),
+                ("admission_program_id", "ALTER TABLE students ADD COLUMN admission_program_id INTEGER"),
+                ("current_program_id", "ALTER TABLE students ADD COLUMN current_program_id INTEGER"),
+                ("track_code", "ALTER TABLE students ADD COLUMN track_code TEXT DEFAULT ''"),
+                ("specialized_at_term", "ALTER TABLE students ADD COLUMN specialized_at_term TEXT DEFAULT ''"),
                 (
                     "enrollment_status",
                     "ALTER TABLE students ADD COLUMN enrollment_status TEXT NOT NULL DEFAULT 'active'",
@@ -1677,6 +1974,7 @@ def ensure_tables(db_file=None):
             "ALTER TABLE users ADD COLUMN instructor_id INTEGER",
             "ALTER TABLE users ADD COLUMN is_supervisor INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE users ADD COLUMN department_id INTEGER",
             "ALTER TABLE grade_drafts ADD COLUMN section_id INTEGER",
             "ALTER TABLE grade_draft_items ADD COLUMN coursework REAL",
             "ALTER TABLE grade_draft_items ADD COLUMN midterm REAL",
@@ -1696,6 +1994,8 @@ def ensure_tables(db_file=None):
             "ALTER TABLE courses ADD COLUMN coursework_weight REAL",
             "ALTER TABLE courses ADD COLUMN midterm_weight REAL",
             "ALTER TABLE courses ADD COLUMN final_exam_weight REAL",
+            "ALTER TABLE courses ADD COLUMN course_master_id INTEGER",
+            "ALTER TABLE courses ADD COLUMN owning_department_id INTEGER",
         ):
             try:
                 cur.execute(stmt)
@@ -1733,6 +2033,46 @@ def ensure_tables(db_file=None):
         if "instructor_id" not in scols:
             try:
                 cur.execute("ALTER TABLE schedule ADD COLUMN instructor_id INTEGER")
+            except Exception:
+                pass
+        if "program_course_id" not in scols:
+            try:
+                cur.execute("ALTER TABLE schedule ADD COLUMN program_course_id INTEGER")
+            except Exception:
+                pass
+
+        try:
+            rcols = [r[1] for r in cur.execute("PRAGMA table_info(registrations)").fetchall()]
+        except Exception:
+            rcols = []
+        if "program_course_id" not in rcols:
+            try:
+                cur.execute("ALTER TABLE registrations ADD COLUMN program_course_id INTEGER")
+            except Exception:
+                pass
+
+        try:
+            gcols = [r[1] for r in cur.execute("PRAGMA table_info(grades)").fetchall()]
+        except Exception:
+            gcols = []
+        if "program_course_id" not in gcols:
+            try:
+                cur.execute("ALTER TABLE grades ADD COLUMN program_course_id INTEGER")
+            except Exception:
+                pass
+        if "course_master_id" not in gcols:
+            try:
+                cur.execute("ALTER TABLE grades ADD COLUMN course_master_id INTEGER")
+            except Exception:
+                pass
+
+        try:
+            icols = [r[1] for r in cur.execute("PRAGMA table_info(instructors)").fetchall()]
+        except Exception:
+            icols = []
+        if "department_id" not in icols:
+            try:
+                cur.execute("ALTER TABLE instructors ADD COLUMN department_id INTEGER")
             except Exception:
                 pass
 

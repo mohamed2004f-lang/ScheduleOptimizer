@@ -24,6 +24,13 @@ logger = logging.getLogger(__name__)
 VALID_TYPES = {"midterm", "final"}
 
 
+def _course_names_agg_sql(expr: str = "e.course_name") -> str:
+    """Cross-db aggregation for comma-separated course names."""
+    if is_postgresql():
+        return f"STRING_AGG({expr}, ',')"
+    return f"GROUP_CONCAT({expr})"
+
+
 def _should_snapshot_exam_export():
     role = (session.get("user_role") or "").strip()
     return role in ("admin", "admin_main", "head_of_department")
@@ -545,24 +552,30 @@ def check_exam_conflicts(exam_type):
                 temp_rowid = int(cur.lastrowid or 0)
             
             # حساب التعارضات
-            q = '''
-            SELECT r.student_id as student_id, e.exam_date as exam_date, GROUP_CONCAT(e.course_name) as courses, COUNT(e.course_name) as ccount
+            q = f'''
+            SELECT r.student_id as student_id, e.exam_date as exam_date, {_course_names_agg_sql('e.course_name')} as courses, COUNT(e.course_name) as ccount
             FROM exams e
-            JOIN registrations r ON r.course_name = e.course_name
+            JOIN registrations r ON LOWER(TRIM(r.course_name)) = LOWER(TRIM(e.course_name))
             WHERE e.exam_type = ?
             GROUP BY r.student_id, e.exam_date
-            HAVING ccount > 1
+            HAVING COUNT(e.course_name) > 1
             '''
             rows = cur.execute(q, (exam_type,)).fetchall()
             
             # تصفية التعارضات المتعلقة بالامتحان الجديد
+            def _norm_name(v: str) -> str:
+                return (v or "").strip().lower()
+
             relevant_conflicts = []
+            target_course = _norm_name(course_name)
             for r in rows:
-                if r[1] == exam_date and course_name in (r[2] or ''):
+                courses_raw = r[2] or ""
+                parsed = [_norm_name(x) for x in str(courses_raw).split(",") if _norm_name(x)]
+                if r[1] == exam_date and target_course in parsed:
                     relevant_conflicts.append({
                         'student_id': r[0] or '',
                         'exam_date': r[1] or '',
-                        'conflicting_courses': r[2] or ''
+                        'conflicting_courses': courses_raw
                     })
             
             # حذف الإضافة المؤقتة
@@ -684,11 +697,27 @@ def distribute_exams(exam_type):
         cur = conn.cursor()
         # get list of distinct course names (prefer schedule table)
         try:
-            course_rows = cur.execute("SELECT DISTINCT course_name FROM schedule WHERE course_name IS NOT NULL AND course_name != '' ORDER BY course_name").fetchall()
+            course_rows = cur.execute(
+                """
+                SELECT MIN(TRIM(course_name)) AS course_name
+                FROM schedule
+                WHERE COALESCE(TRIM(course_name), '') <> ''
+                GROUP BY LOWER(TRIM(course_name))
+                ORDER BY MIN(TRIM(course_name))
+                """
+            ).fetchall()
             courses = [r[0] for r in course_rows]
             if not courses:
                 # fallback to courses table
-                course_rows = cur.execute("SELECT DISTINCT course_name FROM courses ORDER BY course_name").fetchall()
+                course_rows = cur.execute(
+                    """
+                    SELECT MIN(TRIM(course_name)) AS course_name
+                    FROM courses
+                    WHERE COALESCE(TRIM(course_name), '') <> ''
+                    GROUP BY LOWER(TRIM(course_name))
+                    ORDER BY MIN(TRIM(course_name))
+                    """
+                ).fetchall()
                 courses = [r[0] for r in course_rows]
         except Exception:
             courses = []
@@ -712,14 +741,19 @@ def distribute_exams(exam_type):
             # احسب عدد الطلبة في كل مقرر
             counts = {}
             try:
-                q = "SELECT course_name, COUNT(DISTINCT student_id) AS cnt FROM registrations GROUP BY course_name"
+                q = """
+                SELECT LOWER(TRIM(course_name)) AS course_key, COUNT(DISTINCT student_id) AS cnt
+                FROM registrations
+                WHERE COALESCE(TRIM(course_name), '') <> ''
+                GROUP BY LOWER(TRIM(course_name))
+                """
                 for cname, cnt in cur.execute(q).fetchall():
                     counts[cname] = cnt or 0
             except Exception:
                 counts = {}
             # رتب المقررات تنازلياً حسب عدد الطلبة
             sorted_courses = sorted(
-                courses, key=lambda c: counts.get(c, 0), reverse=True
+                courses, key=lambda c: counts.get((c or "").strip().lower(), 0), reverse=True
             )
             date_load = {d: 0 for d in dates}
             for c in sorted_courses:
@@ -770,10 +804,26 @@ def available_courses():
     with get_connection() as conn:
         cur = conn.cursor()
         try:
-            rows = cur.execute("SELECT DISTINCT course_name FROM schedule WHERE course_name IS NOT NULL AND course_name != '' ORDER BY course_name").fetchall()
+            rows = cur.execute(
+                """
+                SELECT MIN(TRIM(course_name)) AS course_name
+                FROM schedule
+                WHERE COALESCE(TRIM(course_name), '') <> ''
+                GROUP BY LOWER(TRIM(course_name))
+                ORDER BY MIN(TRIM(course_name))
+                """
+            ).fetchall()
             courses = [r[0] for r in rows]
         except Exception:
-            rows = cur.execute("SELECT DISTINCT course_name FROM courses ORDER BY course_name").fetchall()
+            rows = cur.execute(
+                """
+                SELECT MIN(TRIM(course_name)) AS course_name
+                FROM courses
+                WHERE COALESCE(TRIM(course_name), '') <> ''
+                GROUP BY LOWER(TRIM(course_name))
+                ORDER BY MIN(TRIM(course_name))
+                """
+            ).fetchall()
             courses = [r[0] for r in rows]
     return jsonify({"courses": courses})
 
@@ -838,13 +888,13 @@ def export_conflicts(exam_type):
     if not _user_can_view_exam_rows(exam_type):
         return jsonify({"status": "error", "message": "جدول الامتحانات غير معتمد/منشور بعد"}), 403
     # reuse the conflict SQL used above
-    q = '''
-    SELECT r.student_id as student_id, e.exam_date as exam_date, GROUP_CONCAT(e.course_name) as conflicting_courses, COUNT(e.course_name) as ccount
+    q = f'''
+    SELECT r.student_id as student_id, e.exam_date as exam_date, {_course_names_agg_sql('e.course_name')} as conflicting_courses, COUNT(e.course_name) as ccount
     FROM exams e
-    JOIN registrations r ON r.course_name = e.course_name
+    JOIN registrations r ON LOWER(TRIM(r.course_name)) = LOWER(TRIM(e.course_name))
     WHERE e.exam_type = ?
     GROUP BY r.student_id, e.exam_date
-    HAVING ccount > 1
+    HAVING COUNT(e.course_name) > 1
     '''
     import io
     rows = df_from_query(q, params=(exam_type,))
@@ -877,13 +927,13 @@ def exam_conflicts(exam_type):
     with get_connection() as conn:
         cur = conn.cursor()
         # Join exams with registrations to produce for each student the list of courses on each date
-        q = '''
-        SELECT r.student_id as student_id, e.exam_date as exam_date, GROUP_CONCAT(e.course_name) as courses, COUNT(e.course_name) as ccount
+        q = f'''
+        SELECT r.student_id as student_id, e.exam_date as exam_date, {_course_names_agg_sql('e.course_name')} as courses, COUNT(e.course_name) as ccount
         FROM exams e
-        JOIN registrations r ON r.course_name = e.course_name
+        JOIN registrations r ON LOWER(TRIM(r.course_name)) = LOWER(TRIM(e.course_name))
         WHERE e.exam_type = ?
         GROUP BY r.student_id, e.exam_date
-        HAVING ccount > 1
+        HAVING COUNT(e.course_name) > 1
         '''
         rows = cur.execute(q, (exam_type,)).fetchall()
         out = []
@@ -1042,7 +1092,7 @@ def student_exam_rows(exam_type):
                e.room,
                e.instructor
         FROM exams e
-        JOIN registrations r ON r.course_name = e.course_name
+        JOIN registrations r ON LOWER(TRIM(r.course_name)) = LOWER(TRIM(e.course_name))
         WHERE e.exam_type = ? AND r.student_id = ?
         ORDER BY e.exam_date, e.exam_time, e.course_name
         """
@@ -1068,13 +1118,13 @@ def persist_exam_conflicts(exam_type):
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute('DELETE FROM exam_conflicts WHERE exam_type = ?', (exam_type,))
-        q = '''
-        SELECT r.student_id as student_id, e.exam_date as exam_date, GROUP_CONCAT(e.course_name) as courses, COUNT(e.course_name) as ccount
+        q = f'''
+        SELECT r.student_id as student_id, e.exam_date as exam_date, {_course_names_agg_sql('e.course_name')} as courses, COUNT(e.course_name) as ccount
         FROM exams e
-        JOIN registrations r ON r.course_name = e.course_name
+        JOIN registrations r ON LOWER(TRIM(r.course_name)) = LOWER(TRIM(e.course_name))
         WHERE e.exam_type = ?
         GROUP BY r.student_id, e.exam_date
-        HAVING ccount > 1
+        HAVING COUNT(e.course_name) > 1
         '''
         rows = cur.execute(q, (exam_type,)).fetchall()
         for r in rows:

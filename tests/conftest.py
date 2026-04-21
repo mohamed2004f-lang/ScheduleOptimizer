@@ -52,6 +52,66 @@ else:
 # ---------------------------------------------------------------------------
 
 _MINIMAL_TABLES = """
+CREATE TABLE IF NOT EXISTS departments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    name_ar TEXT NOT NULL,
+    name_en TEXT DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS programs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    department_id INTEGER,
+    code TEXT NOT NULL,
+    name_ar TEXT NOT NULL,
+    name_en TEXT DEFAULT '',
+    phase TEXT NOT NULL DEFAULT 'major',
+    track_group TEXT DEFAULT '',
+    min_total_units INTEGER DEFAULT 0,
+    rules_json TEXT DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (department_id, code)
+);
+
+CREATE TABLE IF NOT EXISTS course_master (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title_ar TEXT NOT NULL,
+    title_en TEXT DEFAULT '',
+    description TEXT DEFAULT '',
+    default_units INTEGER DEFAULT 0,
+    grading_mode TEXT NOT NULL DEFAULT 'partial_final',
+    assessment_type TEXT NOT NULL DEFAULT 'theoretical',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS program_courses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_id INTEGER NOT NULL,
+    course_master_id INTEGER NOT NULL,
+    course_code TEXT NOT NULL,
+    course_name_override TEXT DEFAULT '',
+    level_no INTEGER DEFAULT 0,
+    term_hint TEXT DEFAULT '',
+    units_override INTEGER,
+    category TEXT NOT NULL DEFAULT 'required',
+    is_required INTEGER NOT NULL DEFAULT 1,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (program_id, course_code)
+);
+
+CREATE TABLE IF NOT EXISTS program_course_prereqs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_course_id INTEGER NOT NULL,
+    required_course_master_id INTEGER,
+    required_program_course_id INTEGER,
+    note TEXT DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS students (
     student_id TEXT PRIMARY KEY,
     student_name TEXT NOT NULL DEFAULT '',
@@ -59,6 +119,11 @@ CREATE TABLE IF NOT EXISTS students (
     email TEXT,
     phone TEXT,
     join_year TEXT,
+    department_id INTEGER,
+    admission_program_id INTEGER,
+    current_program_id INTEGER,
+    track_code TEXT DEFAULT '',
+    specialized_at_term TEXT DEFAULT '',
     enrollment_status TEXT NOT NULL DEFAULT 'active',
     status_changed_at TEXT,
     status_reason TEXT,
@@ -73,6 +138,8 @@ CREATE TABLE IF NOT EXISTS students (
 CREATE TABLE IF NOT EXISTS courses (
     course_name TEXT PRIMARY KEY,
     course_code TEXT,
+    course_master_id INTEGER,
+    owning_department_id INTEGER,
     units INTEGER DEFAULT 0 CHECK (units >= 0),
     grading_mode TEXT NOT NULL DEFAULT 'partial_final',
     category TEXT NOT NULL DEFAULT 'required',
@@ -86,6 +153,8 @@ CREATE TABLE IF NOT EXISTS grades (
     student_id TEXT NOT NULL,
     semester TEXT NOT NULL,
     course_name TEXT NOT NULL,
+    program_course_id INTEGER,
+    course_master_id INTEGER,
     course_code TEXT DEFAULT '',
     units INTEGER DEFAULT 0,
     grade REAL CHECK (grade IS NULL OR (grade >= 0 AND grade <= 100)),
@@ -150,6 +219,7 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL,
     student_id TEXT,
     instructor_id INTEGER,
+    department_id INTEGER,
     is_supervisor INTEGER NOT NULL DEFAULT 0,
     is_active INTEGER NOT NULL DEFAULT 1
 );
@@ -168,13 +238,16 @@ CREATE TABLE IF NOT EXISTS registrations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id TEXT NOT NULL,
     course_name TEXT NOT NULL,
+    program_course_id INTEGER,
     registered_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (student_id, course_name)
 );
 
 CREATE TABLE IF NOT EXISTS schedule (
+    id INTEGER,
     rowid INTEGER PRIMARY KEY AUTOINCREMENT,
     course_name TEXT NOT NULL,
+    program_course_id INTEGER,
     day TEXT NOT NULL,
     time TEXT NOT NULL,
     room TEXT DEFAULT '',
@@ -318,6 +391,7 @@ CREATE TABLE IF NOT EXISTS instructors (
     name TEXT NOT NULL,
     type TEXT NOT NULL DEFAULT 'internal',
     email TEXT,
+    department_id INTEGER,
     is_active INTEGER NOT NULL DEFAULT 1
 );
 
@@ -433,6 +507,12 @@ def _seed_sample_data(conn):
         """INSERT INTO schedule (course_name, day, time, room, instructor_id, semester)
            VALUES ('فيزياء 1', 'الاثنين', '10:00-11:30', 'قاعة 2', 1, 'خريف 44-45')"""
     )
+    # بعض استعلامات "مقرراتي" تعتمد على schedule.id كمعرف قسم (PostgreSQL style).
+    # في SQLite الاختباري نملؤه من rowid لضمان عدم ظهور None.
+    try:
+        cur.execute("UPDATE schedule SET id = rowid WHERE id IS NULL")
+    except Exception:
+        pass
     cur.execute(
         "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('current_term_name', 'خريف')"
     )
@@ -614,6 +694,9 @@ def _setup_shared_db():
     # Monkey-patch get_connection everywhere it is imported.
     import backend.database.database as db_mod
     db_mod.get_connection = _patched_get_connection
+    # Force SQLite mode for all tests, even when DB module read .env earlier.
+    db_mod.DATABASE_URL = "sqlite://"
+    db_mod.is_postgresql = lambda: False
 
     # Also patch db_transaction to use our patched get_connection.
     from contextlib import contextmanager as _cm

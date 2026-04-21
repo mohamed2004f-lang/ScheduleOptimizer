@@ -244,7 +244,12 @@ def update_course():
         cur = conn.cursor()
         # منع تكرار الاسم الجديد (باستثناء نفس المقرر)
         row = cur.execute(
-            "SELECT course_name FROM courses WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?)) AND course_name <> ?",
+            """
+            SELECT course_name
+            FROM courses
+            WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))
+              AND LOWER(TRIM(course_name)) <> LOWER(TRIM(?))
+            """,
             (new_name, old_name),
         ).fetchone()
         if row:
@@ -254,10 +259,11 @@ def update_course():
         if new_code:
             row = cur.execute(
                 """
-                SELECT course_name FROM courses
+                SELECT course_name
+                FROM courses
                 WHERE COALESCE(course_code,'') <> ''
                   AND LOWER(TRIM(course_code)) = LOWER(TRIM(?))
-                  AND course_name <> ?
+                  AND LOWER(TRIM(course_name)) <> LOWER(TRIM(?))
                 """,
                 (new_code, old_name),
             ).fetchone()
@@ -277,15 +283,16 @@ def update_course():
         has_cat = "category" in cols
         has_assessment_cols = all(k in cols for k in ("assessment_type", "coursework_weight", "midterm_weight", "final_exam_weight"))
         cat_value = category if category in ("required", "elective_major", "elective_free") else None
+        updated_rows = 0
         if has_cat:
             if cat_value is None:
                 if has_assessment_cols:
-                    cur.execute(
+                    res = cur.execute(
                         """
                         UPDATE courses
                         SET course_name=?, course_code=?, units=?,
                             assessment_type=?, coursework_weight=?, midterm_weight=?, final_exam_weight=?
-                        WHERE course_name=?
+                        WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))
                         """,
                         (
                             new_name, new_code or "", (int(new_units) if new_units is not None else None),
@@ -293,19 +300,21 @@ def update_course():
                             old_name,
                         ),
                     )
+                    updated_rows = int(res.rowcount or 0)
                 else:
-                    cur.execute(
-                        "UPDATE courses SET course_name=?, course_code=?, units=? WHERE course_name=?",
+                    res = cur.execute(
+                        "UPDATE courses SET course_name=?, course_code=?, units=? WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
                         (new_name, new_code or "", (int(new_units) if new_units is not None else None), old_name),
                     )
+                    updated_rows = int(res.rowcount or 0)
             else:
                 if has_assessment_cols:
-                    cur.execute(
+                    res = cur.execute(
                         """
                         UPDATE courses
                         SET course_name=?, course_code=?, units=?, category=?,
                             assessment_type=?, coursework_weight=?, midterm_weight=?, final_exam_weight=?
-                        WHERE course_name=?
+                        WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))
                         """,
                         (
                             new_name, new_code or "", (int(new_units) if new_units is not None else None), cat_value,
@@ -313,34 +322,52 @@ def update_course():
                             old_name,
                         ),
                     )
+                    updated_rows = int(res.rowcount or 0)
                 else:
-                    cur.execute(
-                        "UPDATE courses SET course_name=?, course_code=?, units=?, category=? WHERE course_name=?",
+                    res = cur.execute(
+                        "UPDATE courses SET course_name=?, course_code=?, units=?, category=? WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
                         (new_name, new_code or "", (int(new_units) if new_units is not None else None), cat_value, old_name),
                     )
+                    updated_rows = int(res.rowcount or 0)
         else:
-            cur.execute(
-                "UPDATE courses SET course_name=?, course_code=?, units=? WHERE course_name=?",
+            res = cur.execute(
+                "UPDATE courses SET course_name=?, course_code=?, units=? WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
                 (new_name, new_code or "", (int(new_units) if new_units is not None else None), old_name),
             )
+            updated_rows = int(res.rowcount or 0)
+
+        if updated_rows <= 0:
+            return jsonify({"status": "error", "message": "لم يتم العثور على المقرر المطلوب لتحديثه."}), 404
 
         # تحديث جميع الجداول التي تعتمد على اسم المقرر
         for tbl in ("grades", "schedule", "registrations", "enrollment_plan_items", "exams"):
             try:
-                cur.execute(f"UPDATE {tbl} SET course_name=? WHERE course_name=?", (new_name, old_name))
+                cur.execute(
+                    f"UPDATE {tbl} SET course_name=? WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
+                    (new_name, old_name),
+                )
             except Exception:
                 pass
 
-        cur.execute("UPDATE prereqs SET course_name=? WHERE course_name=?", (new_name, old_name))
-        cur.execute("UPDATE prereqs SET required_course_name=? WHERE required_course_name=?", (new_name, old_name))
+        cur.execute(
+            "UPDATE prereqs SET course_name=? WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
+            (new_name, old_name),
+        )
+        cur.execute(
+            "UPDATE prereqs SET required_course_name=? WHERE LOWER(TRIM(required_course_name)) = LOWER(TRIM(?))",
+            (new_name, old_name),
+        )
 
         if new_units is not None or new_code is not None:
             try:
                 if new_units is not None:
-                    cur.execute("UPDATE grades SET units=? WHERE course_name=?", (int(new_units), new_name))
+                    cur.execute(
+                        "UPDATE grades SET units=? WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
+                        (int(new_units), new_name),
+                    )
                 if new_code is not None:
                     cur.execute(
-                        "UPDATE grades SET course_code=? WHERE course_name=?",
+                        "UPDATE grades SET course_code=? WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
                         (new_code or "", new_name),
                     )
             except Exception:
