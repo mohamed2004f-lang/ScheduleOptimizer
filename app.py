@@ -365,13 +365,22 @@ def schedule_form():
 @app.route("/exams/midterms")
 @login_required
 def exams_midterms():
-    return render_template("exams_midterms.html")
+    return render_template("exams_schedule.html", initial_exam_type="midterm")
 
 
 @app.route("/exams/finals")
 @login_required
 def exams_finals():
-    return render_template("exams_finals.html")
+    return render_template("exams_schedule.html", initial_exam_type="final")
+
+
+@app.route("/exams/schedule")
+@login_required
+def exams_schedule_unified():
+    t = (request.args.get("type") or "midterm").strip().lower()
+    if t not in ("midterm", "final"):
+        t = "midterm"
+    return render_template("exams_schedule.html", initial_exam_type=t)
 
 
 @app.route("/exams/conflicts")

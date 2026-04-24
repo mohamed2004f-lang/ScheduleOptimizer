@@ -577,6 +577,24 @@ def check_exam_conflicts(exam_type):
                         'exam_date': r[1] or '',
                         'conflicting_courses': courses_raw
                     })
+
+            # إرفاق أسماء الطلبة لعرضها في نافذة التعارضات
+            try:
+                student_ids = sorted({(c.get("student_id") or "").strip() for c in relevant_conflicts if (c.get("student_id") or "").strip()})
+                name_map = {}
+                if student_ids:
+                    rows2 = cur.execute(
+                        "SELECT student_id, COALESCE(student_name,'') AS student_name FROM students WHERE student_id IN ({})".format(
+                            ",".join("?" for _ in student_ids)
+                        ),
+                        student_ids,
+                    ).fetchall()
+                    name_map = {r[0]: (r[1] or "") for r in rows2}
+                for c in relevant_conflicts:
+                    sid = (c.get("student_id") or "").strip()
+                    c["student_name"] = name_map.get(sid, "")
+            except Exception:
+                pass
             
             # حذف الإضافة المؤقتة
             cur.execute("DELETE FROM exams WHERE id = ?", (temp_rowid,))
