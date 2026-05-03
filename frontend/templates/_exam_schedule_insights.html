@@ -1,0 +1,89 @@
+<script>
+(function () {
+  function esc(s) {
+    return String(s || '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
+  }
+  window.examInsightNormKey = function (name) {
+    return String(name || '').trim().toLowerCase();
+  };
+  window.examInsightsBuildDupSets = function (cov) {
+    const dup = new Set();
+    const sameDay = new Set();
+    if (!cov || !Array.isArray(cov.duplicate_courses)) return { dup, sameDay };
+    cov.duplicate_courses.forEach(function (d) {
+      if (d && d.course_key) dup.add(d.course_key);
+      if (d && d.course_key && d.same_day_duplicate) sameDay.add(d.course_key);
+    });
+    return { dup, sameDay };
+  };
+  window.renderExamScheduleInsightsPanel = function (cov) {
+    const el = document.getElementById('examInsightsPanel');
+    if (!el) return;
+    if (!cov || cov.error || cov.denied) {
+      el.innerHTML = '';
+      el.classList.add('d-none');
+      return;
+    }
+    el.classList.remove('d-none');
+    const dups = cov.duplicate_courses || [];
+    const miss = cov.missing_from_exams || [];
+    const extras = cov.extras_in_exams_not_in_schedule || [];
+    const scope = esc(cov.schedule_scope_ar || '');
+    const term = esc(cov.term_label || '');
+    const parts = [];
+    parts.push('<div class="exam-insights-summary card border-secondary mb-3"><div class="card-body py-2 px-3">');
+    parts.push(
+      '<div class="small text-muted mb-2">' +
+        scope +
+        (term ? ' · <strong>الفصل:</strong> ' + term : '') +
+        '</div>'
+    );
+    if (dups.length) {
+      parts.push(
+        '<div class="alert alert-danger py-2 px-3 mb-2"><strong>مقررات مكررة</strong> (نفس المقرر في أكثر من سجل بجدول الامتحانات): '
+      );
+      parts.push('<ul class="mb-0 mt-1 small">');
+      dups.forEach(function (d) {
+        const dd = esc(d.display_name || d.course_key || '');
+        const ds = (d.dates || []).map(esc).join('، ');
+        const tag = d.same_day_duplicate
+          ? ' <span class="badge text-bg-warning text-dark">تكرار في يوم واحد</span>'
+          : '';
+        parts.push(
+          '<li>' +
+            dd +
+            ' — عدد السجلات: <strong>' +
+            Number(d.row_count || 0) +
+            '</strong>، التواريخ: ' +
+            ds +
+            tag +
+            '</li>'
+        );
+      });
+      parts.push('</ul></div>');
+    }
+    if (miss.length) {
+      parts.push(
+        '<div class="alert alert-warning py-2 px-3 mb-2"><strong>لا يوجد لها موعد في هذا الجدول</strong> (ظاهرة في الجدول الدراسي ضمن نطاق المقارنة): '
+      );
+      parts.push('<div class="small mt-1">' + miss.map(esc).join('، ') + '</div></div>');
+    }
+    if (extras.length) {
+      parts.push(
+        '<div class="alert alert-secondary py-2 px-3 mb-0"><strong>في جدول الامتحانات فقط</strong> (غير مدرجة ضمن مجموعة الجدول الدراسي المستخدمة للمقارنة): '
+      );
+      parts.push('<div class="small mt-1">' + extras.map(esc).join('، ') + '</div></div>');
+    }
+    if (!dups.length && !miss.length && !extras.length) {
+      parts.push(
+        '<div class="alert alert-success py-2 mb-0 small">لا توجد مقررات مكررة في جدول الامتحانات، وجميع مقررات الجدول الدراسي (ضمن النطاق) لها موعد هنا.</div>'
+      );
+    }
+    parts.push('</div></div>');
+    el.innerHTML = parts.join('');
+  };
+})();
+</script>

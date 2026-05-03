@@ -93,6 +93,7 @@
               <a href="/results" class="btn btn-outline-secondary btn-sm">عرض النتائج</a>
             </div>
           </div>
+          <div id="scheduleRegistrationInsights" class="mb-3"></div>
           <div id="scheduleList" class="timetable-wrapper"></div>
         </div>
       </div>
@@ -223,6 +224,31 @@ function showMsg(text, type='info', timeout=4000, targetId='sd_msg'){
   if(timeout>0){ setTimeout(()=> { box.innerHTML = ''; }, timeout); }
 }
 async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok, status:r.status, json:j}; }
+function renderScheduleRegistrationInsights(cov){
+  const el = document.getElementById('scheduleRegistrationInsights');
+  if(!el) return;
+  if(!cov || cov.error){
+    el.innerHTML = '';
+    return;
+  }
+  const missing = Array.isArray(cov.missing_in_schedule) ? cov.missing_in_schedule : [];
+  const extra = Array.isArray(cov.extra_in_schedule) ? cov.extra_in_schedule : [];
+  const counts = cov.counts || {};
+  let html = '<div class="card border-secondary"><div class="card-body py-2 px-3">';
+  html += `<div class="small text-muted mb-2"><strong>مقارنة الجدول الدراسي بالتسجيل الفعلي</strong> — الفصل: ${escapeHtml(cov.term_label || '')}</div>`;
+  html += `<div class="small mb-2">المقررات الفعلية: <strong>${Number(counts.registrations_distinct || 0)}</strong> | الموجودة في الجدول الدراسي: <strong>${Number(counts.schedule_distinct || 0)}</strong></div>`;
+  if(missing.length){
+    html += `<div class="alert alert-warning py-2 mb-2"><strong>مقررات مسجلة فعلياً وغير موجودة في الجدول الدراسي (${missing.length}):</strong><div class="small mt-1">${missing.map(escapeHtml).join('، ')}</div></div>`;
+  }
+  if(extra.length){
+    html += `<div class="alert alert-secondary py-2 mb-0"><strong>مقررات في الجدول الدراسي بلا تسجيل فعلي (${extra.length}):</strong><div class="small mt-1">${extra.map(escapeHtml).join('، ')}</div></div>`;
+  }
+  if(!missing.length && !extra.length){
+    html += '<div class="alert alert-success py-2 mb-0 small">لا توجد فروقات مع التسجيل الفعلي للمقررات.</div>';
+  }
+  html += '</div></div>';
+  el.innerHTML = html;
+}
 
 /* ---------- Color generation for courses ---------- */
 const courseColors = {};
@@ -406,8 +432,13 @@ function extractUniqueTimeSlots(scheduleRows){
 
 async function loadSchedule(){
   try {
-    const r = await fetch('/list_schedule_rows');
+    const [r, covResp] = await Promise.all([
+      fetch('/list_schedule_rows'),
+      fetch('/schedule/registration_coverage'),
+    ]);
     const list = r.ok ? await r.json() : [];
+    const covJson = covResp.ok ? await covResp.json() : null;
+    renderScheduleRegistrationInsights(covJson);
     currentScheduleData = Array.isArray(list) ? list : [];
     const el = document.getElementById('scheduleList');
     

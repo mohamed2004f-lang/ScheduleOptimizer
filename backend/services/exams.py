@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify, send_file, session, render_template
 from backend.core.auth import login_required, role_required, SESSION_ACTIVE_MODE
-from backend.database.database import is_postgresql, table_to_dicts
+from backend.database.database import is_postgresql, table_to_dicts, fetch_table_columns
 from .utilities import (
     get_connection,
     df_from_query,
@@ -493,6 +493,212 @@ def normalize_dates(dates):
             except Exception:
                 continue
     return sorted(list(dict.fromkeys(out)))
+
+
+def _norm_exam_course_key(name: str) -> str:
+    return (name or "").strip().lower()
+
+
+def _schedule_distinct_course_names_for_coverage(cur, term_label: str) -> tuple[list[str], str]:
+    """
+    أسماء المقررات الفريدة من جدول schedule لمقارنة التغطية مع جدول الامتحانات.
+    يفضّل صفوف الفصل الحالي أو ذات semester فارغ (بيانات قديمة بلا موسم).
+    """
+    tl = (term_label or "").strip()
+    rows: list = []
+    used_filter = ""
+    try:
+        if tl:
+            rows = cur.execute(
+                """
+                SELECT MIN(TRIM(course_name)) AS course_name
+                FROM schedule
+                WHERE COALESCE(TRIM(course_name), '') <> ''
+                  AND (
+                      COALESCE(TRIM(semester), '') = ''
+                      OR LOWER(TRIM(COALESCE(semester,''))) = LOWER(TRIM(?))
+                  )
+                GROUP BY LOWER(TRIM(course_name))
+                ORDER BY MIN(TRIM(course_name))
+                """,
+                (tl,),
+            ).fetchall()
+            used_filter = "current_semester_or_blank"
+    except Exception:
+        rows = []
+    names = [(r[0] or "").strip() for r in rows if r and (r[0] or "").strip()]
+    if not names:
+        try:
+            rows = cur.execute(
+                """
+                SELECT MIN(TRIM(course_name)) AS course_name
+                FROM schedule
+                WHERE COALESCE(TRIM(course_name), '') <> ''
+                GROUP BY LOWER(TRIM(course_name))
+                ORDER BY MIN(TRIM(course_name))
+                """
+            ).fetchall()
+            names = [(r[0] or "").strip() for r in rows if r and (r[0] or "").strip()]
+            used_filter = "all_schedule"
+        except Exception:
+            names = []
+            used_filter = "none"
+    return names, used_filter
+
+
+def _registered_distinct_course_names(cur, conn) -> list[str]:
+    """
+    المقررات الفعلية من registrations (عدد طلاب فعلي > 0) مع مراعاة الطلبة النشطين إن توفّر الحقل.
+    """
+    try:
+        cols_stu = fetch_table_columns(conn, "students")
+    except Exception:
+        cols_stu = []
+    active_only = "enrollment_status" in {str(c).strip().lower() for c in (cols_stu or [])}
+    if active_only:
+        rows = cur.execute(
+            """
+            SELECT MIN(TRIM(r.course_name)) AS course_name
+            FROM registrations r
+            LEFT JOIN students s ON s.student_id = r.student_id
+            WHERE COALESCE(TRIM(r.course_name), '') <> ''
+              AND COALESCE(s.enrollment_status, 'active') = 'active'
+            GROUP BY LOWER(TRIM(r.course_name))
+            ORDER BY MIN(TRIM(r.course_name))
+            """
+        ).fetchall()
+    else:
+        rows = cur.execute(
+            """
+            SELECT MIN(TRIM(r.course_name)) AS course_name
+            FROM registrations r
+            WHERE COALESCE(TRIM(r.course_name), '') <> ''
+            GROUP BY LOWER(TRIM(r.course_name))
+            ORDER BY MIN(TRIM(r.course_name))
+            """
+        ).fetchall()
+    return [(r[0] or "").strip() for r in (rows or []) if r and (r[0] or "").strip()]
+
+
+@exams_bp.route('/<exam_type>/schedule_coverage')
+@login_required
+def exam_schedule_coverage(exam_type):
+    """
+    لمطابقة جدول المقررات الدراسي مع جدول الامتحانات:
+    - مقررات مكررة (نفس الاسم أكثر من مرة؛ وتمييز التكرار في يوم واحد).
+    - مقررات في الجدول الدراسي ولا يوجد لها امتحان (جزئي/نهائي حسب النوع).
+    - مقررات مسجلة في الامتحانات ولا تظهر ضمن مجموعة الجدول الدراسي المستخدم للمقارنة.
+    """
+    if exam_type not in VALID_TYPES:
+        return jsonify({"error": "invalid exam type"}), 400
+    if not _user_can_view_exam_rows(exam_type):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        with get_connection() as conn:
+            tname, tyear = get_current_term(conn=conn)
+            term_label = f"{(tname or '').strip()} {(tyear or '').strip()}".strip() or SEMESTER_LABEL
+            cur = conn.cursor()
+            schedule_names, scope = _schedule_distinct_course_names_for_coverage(cur, term_label)
+            sched_keys = {_norm_exam_course_key(n) for n in schedule_names if _norm_exam_course_key(n)}
+            registered_names = _registered_distinct_course_names(cur, conn)
+            reg_keys = {_norm_exam_course_key(n) for n in registered_names if _norm_exam_course_key(n)}
+
+            rows = cur.execute(
+                """
+                SELECT id AS exam_id, COALESCE(course_name,'') AS course_name, COALESCE(exam_date,'') AS exam_date
+                FROM exams WHERE exam_type = ? ORDER BY exam_date, course_name, id
+                """,
+                (exam_type,),
+            ).fetchall()
+
+            by_key: dict[str, list[dict]] = {}
+            exam_keys: set[str] = set()
+            for r in rows:
+                cid, cname, ed = int(r[0]), r[1] or "", r[2] or ""
+                k = _norm_exam_course_key(cname)
+                if not k:
+                    continue
+                exam_keys.add(k)
+                by_key.setdefault(k, []).append(
+                    {"exam_id": cid, "course_name": cname.strip(), "exam_date": ed}
+                )
+
+            duplicate_courses: list[dict] = []
+            for k, items in sorted(by_key.items(), key=lambda x: x[0]):
+                if len(items) < 2:
+                    continue
+                dates = sorted({(it.get("exam_date") or "") for it in items})
+                seen_per_date: dict[str, int] = {}
+                for it in items:
+                    d = (it.get("exam_date") or "").strip()
+                    if d:
+                        seen_per_date[d] = seen_per_date.get(d, 0) + 1
+                same_day = any(v > 1 for v in seen_per_date.values())
+                display = items[0].get("course_name") or k
+                duplicate_courses.append(
+                    {
+                        "course_key": k,
+                        "display_name": display,
+                        "row_count": len(items),
+                        "dates": dates,
+                        "same_day_duplicate": same_day,
+                    }
+                )
+
+            missing_from_exams = sorted(
+                n for n in schedule_names if _norm_exam_course_key(n) and _norm_exam_course_key(n) not in exam_keys
+            )
+            extras_in_exams = sorted(
+                {
+                    v[0].get("course_name") or k
+                    for k, v in by_key.items()
+                    if k and k not in sched_keys
+                }
+            )
+            missing_from_exams_vs_registrations = sorted(
+                n
+                for n in registered_names
+                if _norm_exam_course_key(n) and _norm_exam_course_key(n) not in exam_keys
+            )
+            extras_in_exams_vs_registrations = sorted(
+                {
+                    v[0].get("course_name") or k
+                    for k, v in by_key.items()
+                    if k and k not in reg_keys
+                }
+            )
+
+            scope_ar = {
+                "current_semester_or_blank": "مقررات الجدول الدراسي للفصل الحالي (أو صفوف بلا حقل فصل)",
+                "all_schedule": "كل المقررات الظاهرة في جدول المقررات (لم يُعثر على بيانات للفصل الحالي)",
+                "none": "لا توجد مقررات في جدول schedule",
+            }.get(scope, scope)
+
+            return jsonify(
+                {
+                    "exam_type": exam_type,
+                    "term_label": term_label,
+                    "schedule_scope": scope,
+                    "schedule_scope_ar": scope_ar,
+                    "duplicate_courses": duplicate_courses,
+                    "missing_from_exams": missing_from_exams,
+                    "extras_in_exams_not_in_schedule": extras_in_exams,
+                    "registration_baseline": {
+                        "missing_in_exam": missing_from_exams_vs_registrations,
+                        "extra_in_exam": extras_in_exams_vs_registrations,
+                    },
+                    "counts": {
+                        "schedule_distinct": len(sched_keys),
+                        "registrations_distinct": len(reg_keys),
+                        "exam_distinct_courses": len(exam_keys),
+                        "exam_rows": sum(len(v) for v in by_key.values()),
+                    },
+                }
+            )
+    except Exception as e:
+        logger.error("exam_schedule_coverage failed: %s", e, exc_info=True)
+        return jsonify({"error": "internal"}), 500
+
 
 @exams_bp.route('/<exam_type>/rows')
 @login_required

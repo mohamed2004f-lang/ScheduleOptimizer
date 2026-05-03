@@ -9,7 +9,7 @@ import logging
 import json
 import datetime
 import base64
-from backend.database.database import is_postgresql, schedule_pk_column
+from backend.database.database import is_postgresql, schedule_pk_column, fetch_table_columns
 from backend.core.exceptions import ValidationError
 from backend.core.faculty_axes import (
     FACULTY_AXIS_KEYS,
@@ -59,6 +59,83 @@ def _current_term_label_safe(conn) -> str:
         return f"{(tname or '').strip()} {(tyear or '').strip()}".strip() or SEMESTER_LABEL
     except Exception:
         return SEMESTER_LABEL
+
+
+def _norm_course_key(name: str) -> str:
+    return (name or "").strip().lower()
+
+
+def _schedule_course_names_for_coverage(cur, term_label: str) -> tuple[list[str], str]:
+    tl = (term_label or "").strip()
+    rows = []
+    used_filter = ""
+    try:
+        if tl:
+            rows = cur.execute(
+                """
+                SELECT MIN(TRIM(course_name)) AS course_name
+                FROM schedule
+                WHERE COALESCE(TRIM(course_name), '') <> ''
+                  AND (
+                      COALESCE(TRIM(semester), '') = ''
+                      OR LOWER(TRIM(COALESCE(semester,''))) = LOWER(TRIM(?))
+                  )
+                GROUP BY LOWER(TRIM(course_name))
+                ORDER BY MIN(TRIM(course_name))
+                """,
+                (tl,),
+            ).fetchall()
+            used_filter = "current_semester_or_blank"
+    except Exception:
+        rows = []
+    names = [(r[0] or "").strip() for r in (rows or []) if r and (r[0] or "").strip()]
+    if names:
+        return names, used_filter
+    try:
+        rows = cur.execute(
+            """
+            SELECT MIN(TRIM(course_name)) AS course_name
+            FROM schedule
+            WHERE COALESCE(TRIM(course_name), '') <> ''
+            GROUP BY LOWER(TRIM(course_name))
+            ORDER BY MIN(TRIM(course_name))
+            """
+        ).fetchall()
+        names = [(r[0] or "").strip() for r in (rows or []) if r and (r[0] or "").strip()]
+        return names, "all_schedule"
+    except Exception:
+        return [], "none"
+
+
+def _registered_course_names_for_coverage(cur, conn) -> list[str]:
+    try:
+        cols_stu = fetch_table_columns(conn, "students")
+    except Exception:
+        cols_stu = []
+    active_only = "enrollment_status" in {str(c).strip().lower() for c in (cols_stu or [])}
+    if active_only:
+        rows = cur.execute(
+            """
+            SELECT MIN(TRIM(r.course_name)) AS course_name
+            FROM registrations r
+            LEFT JOIN students s ON s.student_id = r.student_id
+            WHERE COALESCE(TRIM(r.course_name), '') <> ''
+              AND COALESCE(s.enrollment_status, 'active') = 'active'
+            GROUP BY LOWER(TRIM(r.course_name))
+            ORDER BY MIN(TRIM(r.course_name))
+            """
+        ).fetchall()
+    else:
+        rows = cur.execute(
+            """
+            SELECT MIN(TRIM(r.course_name)) AS course_name
+            FROM registrations r
+            WHERE COALESCE(TRIM(r.course_name), '') <> ''
+            GROUP BY LOWER(TRIM(r.course_name))
+            ORDER BY MIN(TRIM(r.course_name))
+            """
+        ).fetchall()
+    return [(r[0] or "").strip() for r in (rows or []) if r and (r[0] or "").strip()]
 
 
 def _faculty_cycle_lock_key(term_label: str) -> str:
@@ -602,6 +679,50 @@ def list_schedule_rows():
 @login_required
 def list_schedule_rows_alias():
     return list_schedule_rows()
+
+
+@schedule_bp.route("/registration_coverage")
+@login_required
+def registration_coverage():
+    """
+    مقارنة الجدول الدراسي مقابل التسجيل الفعلي بالمقررات.
+    """
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            term_label = _current_term_label_safe(conn)
+            schedule_names, scope = _schedule_course_names_for_coverage(cur, term_label)
+            registered_names = _registered_course_names_for_coverage(cur, conn)
+            sched_keys = {_norm_course_key(n) for n in schedule_names if _norm_course_key(n)}
+            reg_keys = {_norm_course_key(n) for n in registered_names if _norm_course_key(n)}
+
+            missing_in_schedule = sorted(
+                n for n in registered_names if _norm_course_key(n) and _norm_course_key(n) not in sched_keys
+            )
+            extra_in_schedule = sorted(
+                n for n in schedule_names if _norm_course_key(n) and _norm_course_key(n) not in reg_keys
+            )
+            scope_ar = {
+                "current_semester_or_blank": "مقررات الجدول الدراسي للفصل الحالي (أو صفوف بلا حقل فصل)",
+                "all_schedule": "كل المقررات الظاهرة في جدول المقررات (لم يُعثر على بيانات للفصل الحالي)",
+                "none": "لا توجد مقررات في جدول schedule",
+            }.get(scope, scope)
+            return jsonify(
+                {
+                    "term_label": term_label,
+                    "schedule_scope": scope,
+                    "schedule_scope_ar": scope_ar,
+                    "missing_in_schedule": missing_in_schedule,
+                    "extra_in_schedule": extra_in_schedule,
+                    "counts": {
+                        "schedule_distinct": len(sched_keys),
+                        "registrations_distinct": len(reg_keys),
+                    },
+                }
+            )
+    except Exception as exc:
+        logger.error("registration_coverage failed: %s", exc, exc_info=True)
+        return jsonify({"error": "internal"}), 500
 
 
 @schedule_bp.route("/instructor_conflicts")

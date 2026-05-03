@@ -320,6 +320,17 @@ body{
   box-shadow: 0 8px 18px rgba(2,6,23,.10);
 }
 .course-btn:hover{ opacity:.92; transform: translateY(-1px); }
+/* تمييز المقررات المكررة في جداول الامتحانات (جزئي/نهائي) */
+.course-btn.course-btn--dup{
+  box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.9), 0 8px 18px rgba(2,6,23,.10);
+  outline: 2px dashed rgba(255,255,255,.85);
+  outline-offset: 1px;
+}
+.course-btn.course-btn--dup-sameday{
+  box-shadow: 0 0 0 4px rgba(111, 66, 193, 0.95), 0 8px 18px rgba(2,6,23,.12);
+  outline: 3px solid rgba(255, 193, 7, 0.95);
+  outline-offset: 2px;
+}
 
 /* جدول المحاضرات: رأس بثلاثة أعمدة لكل توقيت؛ الخلية تجمع بـ colspan=3 صفوف محاذاة (مقرر|أستاذ|قاعة) */
 .timetable.timetable--cols3 th.time-header{

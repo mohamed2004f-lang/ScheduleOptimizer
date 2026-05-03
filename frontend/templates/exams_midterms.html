@@ -70,6 +70,7 @@
           <div class="d-flex justify-content-between align-items-center mb-3">
             <h6 class="mb-0">الجدول الزمني للامتحانات</h6>
           </div>
+          <div id="examInsightsPanel" class="mb-3 d-none"></div>
           <div id="examScheduleList" class="timetable-wrapper"></div>
         </div>
       </div>
@@ -143,6 +144,7 @@
 
   </main>
 
+{% include '_exam_schedule_insights.html' %}
 <script>
 const examType = 'midterm';
 const FIXED_EXAM_TIME = '09:00-12:00';
@@ -319,10 +321,30 @@ async function loadExamSchedule() {
   }
   
   try {
-    const r = await fetch(`/exams/${examType}/rows`);
-    const list = r.ok ? await r.json() : [];
+    const [rRows, rCov] = await Promise.all([
+      fetch(`/exams/${examType}/rows`),
+      fetch(`/exams/${examType}/schedule_coverage`),
+    ]);
+    const list = rRows.ok ? await rRows.json() : [];
+    let cov = null;
+    if (rCov.ok) {
+      try {
+        cov = await rCov.json();
+      } catch (_e) {
+        cov = null;
+      }
+    }
     currentExamData = Array.isArray(list) ? list : [];
-    
+    if (typeof renderExamScheduleInsightsPanel === 'function') {
+      renderExamScheduleInsightsPanel(cov);
+    }
+    const dupInfo =
+      typeof examInsightsBuildDupSets === 'function'
+        ? examInsightsBuildDupSets(cov)
+        : { dup: new Set(), sameDay: new Set() };
+    const dupKeys = dupInfo.dup;
+    const sameDayDupKeys = dupInfo.sameDay;
+
     const dates = getDatesBetween(startDate, endDate);
     const examsByDate = groupExamsByDate(currentExamData);
     const el = document.getElementById('examScheduleList');
@@ -342,7 +364,16 @@ async function loadExamSchedule() {
         const color = getCourseColor(exam.course_name);
         const roomText = exam.room ? ` (${escapeHtml(exam.room)})` : '';
         const displayText = `${escapeHtml(exam.course_name)}${roomText}${exam.instructor ? ` - ${escapeHtml(exam.instructor)}` : ''}`;
-        html += `<button class="course-btn" style="background: ${color};" 
+        const nk =
+          typeof examInsightNormKey === 'function'
+            ? examInsightNormKey(exam.course_name)
+            : String(exam.course_name || '')
+                .trim()
+                .toLowerCase();
+        let dupClass = '';
+        if (sameDayDupKeys.has(nk)) dupClass = ' course-btn--dup-sameday';
+        else if (dupKeys.has(nk)) dupClass = ' course-btn--dup';
+        html += `<button class="course-btn${dupClass}" style="background: ${color};" 
                  data-exam-id="${exam.exam_id}" 
                  title="${escapeHtml(exam.room || '')} - ${escapeHtml(exam.instructor || '')}">
                  ${displayText}
