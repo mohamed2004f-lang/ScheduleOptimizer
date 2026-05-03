@@ -89,6 +89,7 @@
             <h6 class="mb-0">الجدول الزمني</h6>
             <div>
               <button id="btnToggleCompact" class="btn btn-outline-primary btn-sm" type="button">عرض مضغوط</button>
+              <button id="btnToggleScheduleSlotManage" class="btn btn-outline-info btn-sm" type="button" title="إظهار أو إخفاء أزرار التعديل في خلايا الجدول">إظهار أزرار إدارة المقررات</button>
               <button id="btnRun" class="btn btn-success btn-sm" type="button">انتاج الجداول وعرض التعارضات</button>
               <a href="/results" class="btn btn-outline-secondary btn-sm">عرض النتائج</a>
             </div>
@@ -368,6 +369,8 @@ let currentModalDay = '';
 let currentModalTime = '';
 let IS_ADMIN = false;
 let IS_VIEW_ONLY_ROLE = false;
+/** عند التعطيل: إخفاء أزرار «إدارة المقررات» وحذف المقرر من الخلية (عرض أنظف) */
+let SCHEDULE_SLOT_MANAGE_VISIBLE = false;
 let IS_COMPACT = false;
 let CUSTOM_TIME_SLOTS = [];
 
@@ -430,6 +433,22 @@ function extractUniqueTimeSlots(scheduleRows){
   return Array.from(times).sort((a, b) => getStartTime(a) - getStartTime(b));
 }
 
+function updateScheduleSlotManageToggleButton(){
+  const btn = document.getElementById('btnToggleScheduleSlotManage');
+  if (!btn) return;
+  btn.textContent = SCHEDULE_SLOT_MANAGE_VISIBLE ? 'إخفاء أزرار إدارة المقررات' : 'إظهار أزرار إدارة المقررات';
+}
+
+function hideScheduleManageModalIfOpen(){
+  try {
+    const mEl = document.getElementById('manageCoursesModal');
+    if (mEl && typeof bootstrap !== 'undefined') {
+      const inst = bootstrap.Modal.getInstance(mEl);
+      if (inst) inst.hide();
+    }
+  } catch (_e) {}
+}
+
 async function loadSchedule(){
   try {
     const [r, covResp] = await Promise.all([
@@ -445,6 +464,7 @@ async function loadSchedule(){
     // دائماً نعرض الجدول حتى لو لم تكن هناك بيانات
     const timeSlots = extractUniqueTimeSlots(currentScheduleData);
     const slotsMap = groupByTimeSlot(currentScheduleData);
+    const showSlotManage = IS_ADMIN && SCHEDULE_SLOT_MANAGE_VISIBLE;
 
     const compactClass = IS_COMPACT ? ' is-compact' : '';
     /* رأسان: صف التوقيتات (كل توقيت colspan=3) ثم صف عناوين الأعمدة الفرعية: مقرر | أستاذ | قاعة */
@@ -493,7 +513,7 @@ async function loadSchedule(){
             const cName = escapeHtml(course.course_name || '');
             html += `<div class="slot-course-record">`;
             html += `<div class="slot-cell slot-cell--course">`;
-            if (IS_ADMIN) {
+            if (showSlotManage) {
               html += `<button type="button" class="course-btn course-btn--col" style="background: ${color};" data-section-id="${course.section_id}" title="${titleTip}">${cName}</button>`;
             } else {
               html += `<span class="course-label-readonly" style="background: ${color};" title="${titleTip}">${cName}</span>`;
@@ -505,9 +525,9 @@ async function loadSchedule(){
           });
         }
         html += `</div>`;
-        if (IS_ADMIN) {
+        if (showSlotManage) {
           html += `<button type="button" class="manage-courses-btn" onclick="openManageCourses('${escapeHtml(day)}', '${escapeHtml(time)}')">إدارة المقررات</button>`;
-        } else {
+        } else if (!IS_ADMIN) {
           html += `<div class="small text-muted mt-1">عرض فقط</div>`;
         }
         html += `</td>`;
@@ -518,8 +538,8 @@ async function loadSchedule(){
     html += '</tbody></table>';
     el.innerHTML = html;
 
-    // Attach delete handlers only for admin
-    if (IS_ADMIN) {
+    // Attach delete handlers فقط عند إظهار وضع الإدارة
+    if (IS_ADMIN && SCHEDULE_SLOT_MANAGE_VISIBLE) {
       el.querySelectorAll('.course-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -1496,6 +1516,16 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  const btnToggleScheduleSlotManage = document.getElementById('btnToggleScheduleSlotManage');
+  if (btnToggleScheduleSlotManage) {
+    btnToggleScheduleSlotManage.addEventListener('click', async () => {
+      SCHEDULE_SLOT_MANAGE_VISIBLE = !SCHEDULE_SLOT_MANAGE_VISIBLE;
+      updateScheduleSlotManageToggleButton();
+      if (!SCHEDULE_SLOT_MANAGE_VISIBLE) hideScheduleManageModalIfOpen();
+      await loadSchedule();
+    });
+  }
+
   const btnPublish = document.getElementById('btnPublishSchedule');
   if(btnPublish) {
     btnPublish.addEventListener('click', async () => {
@@ -1539,6 +1569,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if(btnRun) btnRun.style.display = 'none';
       const btnCompact = document.getElementById('btnToggleCompact');
       if(btnCompact) btnCompact.style.display = 'none';
+      const btnToggleSchedManage = document.getElementById('btnToggleScheduleSlotManage');
+      if (btnToggleSchedManage) btnToggleSchedManage.style.display = 'none';
+    } else {
+      updateScheduleSlotManageToggleButton();
     }
     if (IS_VIEW_ONLY_ROLE) {
       const exportWrap = document.getElementById('scheduleExportWrap');
@@ -1552,6 +1586,8 @@ document.addEventListener('DOMContentLoaded', () => {
     loadSchedule();
   }).catch(()=>{
     IS_ADMIN = false;
+    const btnToggleSchedManage = document.getElementById('btnToggleScheduleSlotManage');
+    if (btnToggleSchedManage) btnToggleSchedManage.style.display = 'none';
     const btnSaveSlots = document.getElementById('btnSaveTimeSlots');
     const btnNormalize = document.getElementById('btnNormalizeTimes');
     const btnClear = document.getElementById('btnClearSchedule');
