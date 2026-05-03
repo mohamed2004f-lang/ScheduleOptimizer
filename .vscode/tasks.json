@@ -88,6 +88,47 @@
       "problemMatcher": []
     },
     {
+      "label": "Phase0: ترحيل كتلة الميكانيك (--me-monolith)",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": [
+        "${workspaceFolder}\\scripts\\phase0_apply.py",
+        "--legacy-dept",
+        "MECH",
+        "--me-monolith"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Phase0: معاينة ترحيل كتلة الميكانيك (--dry-run)",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": [
+        "${workspaceFolder}\\scripts\\phase0_apply.py",
+        "--legacy-dept",
+        "MECH",
+        "--me-monolith",
+        "--dry-run"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "Stop Server on Port 5000",
       "type": "shell",
       "command": "powershell",
@@ -95,8 +136,8 @@
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
-        "-Command",
-        "$ErrorActionPreference='SilentlyContinue'; $pids = @(netstat -ano | Select-String ':5000' | ForEach-Object { ($_ -split '\\s+')[-1] } | Where-Object { $_ -match '^\\d+$' } | Select-Object -Unique); foreach($procId in $pids){ if($procId -and $procId -ne 0){ Stop-Process -Id ([int]$procId) -Force; Write-Host \"Stopped PID $procId\" } }; if(-not $pids){ Write-Host 'No listener on port 5000' }"
+        "-File",
+        "scripts/stop_port_5000.ps1"
       ],
       "options": {
         "cwd": "${workspaceFolder}"

@@ -18,6 +18,7 @@ from backend.services.users import users_bp
 from backend.services.academic_calendar import academic_calendar_bp
 from backend.services.academic_rules import academic_rules_bp
 from backend.services.instructors import instructors_bp
+from backend.services.college_catalog import college_catalog_bp
 from backend.services.performance import performance_bp
 from backend.api.students_api import students_api_bp
 
@@ -110,6 +111,9 @@ try:
     _am = app.view_functions.get("auth.set_active_mode")
     if _am is not None:
         csrf.exempt(_am)
+    _ads = app.view_functions.get("auth.set_admin_department_scope")
+    if _ads is not None:
+        csrf.exempt(_ads)
 except Exception:
     pass
 
@@ -136,6 +140,7 @@ app.register_blueprint(users_bp, url_prefix="/users")
 app.register_blueprint(academic_calendar_bp, url_prefix="/academic_calendar")
 app.register_blueprint(academic_rules_bp, url_prefix="/academic_rules")
 app.register_blueprint(instructors_bp, url_prefix="/instructors")
+app.register_blueprint(college_catalog_bp)
 app.register_blueprint(performance_bp, url_prefix="/performance")
 app.register_blueprint(students_api_bp)
 
@@ -439,6 +444,13 @@ def academic_calendar_page():
 @login_required
 def academic_rules_page():
     return render_template("academic_rules.html")
+
+
+@app.route("/college_catalog_page")
+@login_required
+@role_required("admin", "admin_main")
+def college_catalog_page():
+    return render_template("college_catalog.html")
 
 @app.route("/transcript_page")
 @login_required

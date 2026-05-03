@@ -112,6 +112,18 @@ CREATE TABLE IF NOT EXISTS program_course_prereqs (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS program_course_sections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_course_id INTEGER NOT NULL,
+    section_code TEXT NOT NULL,
+    capacity_max INTEGER,
+    semester TEXT DEFAULT '',
+    note TEXT DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (program_course_id, section_code)
+);
+
 CREATE TABLE IF NOT EXISTS students (
     student_id TEXT PRIMARY KEY,
     student_name TEXT NOT NULL DEFAULT '',
@@ -248,6 +260,7 @@ CREATE TABLE IF NOT EXISTS schedule (
     rowid INTEGER PRIMARY KEY AUTOINCREMENT,
     course_name TEXT NOT NULL,
     program_course_id INTEGER,
+    department_id INTEGER,
     day TEXT NOT NULL,
     time TEXT NOT NULL,
     room TEXT DEFAULT '',

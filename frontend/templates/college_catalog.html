@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>كتالوج الأقسام والخطط — المرحلة 1</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100">
+    <div class="page-header mb-3">
+      <div>
+        <h1 class="page-title">كتالوج الأقسام والخطط</h1>
+        <p class="page-subtitle small text-muted mb-0">
+          إدارة الأقسام، البرامج (اتجاه عام / تخصص)، محتوى المقررات المشترك (<code>course_master</code>)، مقررات كل خطة بأرمزة مختلفة، وشُعَب تنفيذ المقرر في الاتجاه العام.
+        </p>
+      </div>
+    </div>
+    <div id="msgBox" class="mb-2"></div>
+
+    <!-- أقسام -->
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>الأقسام</strong>
+        <button type="button" class="btn btn-sm btn-outline-primary" id="btnDepRefresh">تحديث</button>
+      </div>
+      <div class="card-body">
+        <div class="table-responsive"><table class="table table-sm" id="tblDep"><thead><tr>
+          <th>id</th><th>code</th><th>اسم عربي</th><th>اسم إنجليزي</th><th>نشط</th><th></th>
+        </tr></thead><tbody></tbody></table></div>
+        <div class="row g-2 align-items-end border-top pt-2">
+          <div class="col-md-2"><label class="form-label small">id (تعديل)</label><input class="form-control form-control-sm" id="depId"></div>
+          <div class="col-md-2"><label class="form-label small">code</label><input class="form-control form-control-sm" id="depCode"></div>
+          <div class="col-md-4"><label class="form-label small">name_ar</label><input class="form-control form-control-sm" id="depNameAr"></div>
+          <div class="col-md-3"><label class="form-label small">name_en</label><input class="form-control form-control-sm" id="depNameEn"></div>
+          <div class="col-md-1"><label class="form-label small">نشط</label><select id="depActive" class="form-select form-select-sm"><option value="1">1</option><option value="0">0</option></select></div>
+          <div class="col-auto"><button class="btn btn-primary btn-sm" id="btnDepSave">حفظ القسم</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- برامج -->
+    <div class="card mb-3">
+      <div class="card-header d-flex flex-wrap gap-2 align-items-center justify-content-between">
+        <strong>البرامج</strong>
+        <div class="d-flex gap-2">
+          <select id="selProgDept" class="form-select form-select-sm" style="min-width:12rem;"></select>
+          <button type="button" class="btn btn-sm btn-outline-primary" id="btnProgRefresh">تحديث</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="table-responsive"><table class="table table-sm" id="tblProg"><thead><tr>
+          <th>id</th><th>dept</th><th>code</th><th>name_ar</th><th>phase</th><th>track_group</th><th>وحدات تخرج</th><th></th>
+        </tr></thead><tbody></tbody></table></div>
+        <div class="row g-2 align-items-end border-top pt-2 small">
+          <div class="col-md-2"><label class="form-label small">id</label><input class="form-control form-control-sm" id="progId"></div>
+          <div class="col-md-2"><label class="form-label small">department_id</label><input class="form-control form-control-sm" id="progDeptId"></div>
+          <div class="col-md-2"><label class="form-label small">code</label><input class="form-control form-control-sm" id="progCode"></div>
+          <div class="col-md-6"><label class="form-label small">name_ar</label><input class="form-control form-control-sm" id="progNameAr"></div>
+          <div class="col-md-3"><label class="form-label small">name_en</label><input class="form-control form-control-sm" id="progNameEn"></div>
+          <div class="col-md-2"><label class="form-label small">phase</label><select id="progPhase" class="form-select form-select-sm"><option value="general">general</option><option value="major">major</option></select></div>
+          <div class="col-md-3"><label class="form-label small">track_group</label><input class="form-control form-control-sm" id="progTrack" placeholder="شعبة/مسار"></div>
+          <div class="col-md-2"><label class="form-label small">min_total_units</label><input class="form-control form-control-sm" id="progUnits" type="number" value="160"></div>
+          <div class="col-md-2"><label class="form-label small">نشط</label><select id="progActive" class="form-select form-select-sm"><option value="1">1</option><option value="0">0</option></select></div>
+          <div class="col-12"><label class="form-label small">rules_json</label><input class="form-control form-control-sm" id="progRules" placeholder="JSON اختياري"></div>
+          <div class="col-auto"><button class="btn btn-primary btn-sm" id="btnProgSave">حفظ البرنامج</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- course_master -->
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>محتوى المقرر (<code>course_master</code>)</strong>
+        <button type="button" class="btn btn-sm btn-outline-primary" id="btnCmRefresh">تحديث</button>
+      </div>
+      <div class="card-body">
+        <div class="table-responsive"><table class="table table-sm" id="tblCm"><thead><tr>
+          <th>id</th><th>title_ar</th><th>وحدات</th><th>grading</th></tr></thead><tbody></tbody></table></div>
+        <div class="row g-2 align-items-end border-top pt-2">
+          <div class="col-md-2"><label class="form-label small">id</label><input class="form-control form-control-sm" id="cmId"></div>
+          <div class="col-md-5"><label class="form-label small">title_ar</label><input class="form-control form-control-sm" id="cmTitleAr"></div>
+          <div class="col-md-3"><label class="form-label small">title_en</label><input class="form-control form-control-sm" id="cmTitleEn"></div>
+          <div class="col-md-1"><label class="form-label small">units</label><input class="form-control form-control-sm" id="cmUnits" type="number" value="3"></div>
+          <div class="col-auto"><button class="btn btn-primary btn-sm" id="btnCmSave">حفظ المحتوى</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- program_courses -->
+    <div class="card mb-3">
+      <div class="card-header d-flex flex-wrap gap-2 align-items-center justify-content-between">
+        <strong>مقررات الخطة</strong>
+        <div class="d-flex gap-2">
+          <input type="number" class="form-control form-control-sm" id="pcProgFilter" placeholder="program_id" style="width:7rem;">
+          <button type="button" class="btn btn-sm btn-outline-primary" id="btnPcRefresh">تحديث بُنود الخطة</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <p class="small text-muted mb-2">استخدم الرقم الذي يظهر كـ <strong>id</strong> للبرنامج في الجدول أعلاه (مثل برنامج الاتجاه العام).</p>
+        <div class="table-responsive"><table class="table table-sm" id="tblPc"><thead><tr>
+          <th>id</th><th>رمز الخطة</th><th>عنوان أصلي</th><th>مستوى</th><th></th></tr></thead><tbody></tbody></table></div>
+        <div class="row g-2 align-items-end border-top pt-2 small">
+          <div class="col-md-1"><label class="form-label small">id</label><input class="form-control form-control-sm" id="pcId"></div>
+          <div class="col-md-2"><label class="form-label small">program_id</label><input class="form-control form-control-sm" id="pcProgId"></div>
+          <div class="col-md-2"><label class="form-label small">course_master_id</label><input class="form-control form-control-sm" id="pcMasterId"></div>
+          <div class="col-md-2"><label class="form-label small">course_code</label><input class="form-control form-control-sm" id="pcCode"></div>
+          <div class="col-md-1"><label class="form-label small">level</label><input class="form-control form-control-sm" id="pcLevel" type="number" value="0"></div>
+          <div class="col-md-2"><label class="form-label small">وحدات (اختياري)</label><input class="form-control form-control-sm" id="pcUnitsOv"></div>
+          <div class="col-md-4"><button class="btn btn-primary btn-sm mt-4" id="btnPcSave">حفظ بند الخطة</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- sections -->
+    <div class="card mb-5">
+      <div class="card-header d-flex flex-wrap gap-2 align-items-center justify-content-between">
+        <strong>شُعَب تنفيذ المقرر (برنامج عام — أعداد كبيرة)</strong>
+        <div class="d-flex gap-2 flex-wrap">
+          <input type="number" class="form-control form-control-sm" id="secPcId" placeholder="program_course_id" style="width:10rem;">
+          <button type="button" class="btn btn-sm btn-outline-primary" id="btnSecRefresh">تحديث الشعب</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="table-responsive"><table class="table table-sm" id="tblSec"><thead><tr>
+          <th>id</th><th>رمز الشعبة</th><th>سعة</th><th>فصل</th><th></th></tr></thead><tbody></tbody></table></div>
+        <div class="row g-2 align-items-end border-top pt-2 small">
+          <div class="col-md-2"><label class="form-label small">id</label><input class="form-control form-control-sm" id="secId"></div>
+          <div class="col-md-2"><label class="form-label small">program_course_id</label><input class="form-control form-control-sm" id="secProgramCourse"></div>
+          <div class="col-md-2"><label class="form-label small">section_code</label><input class="form-control form-control-sm" id="secCode" placeholder="A / B …"></div>
+          <div class="col-md-2"><label class="form-label small">capacity_max</label><input class="form-control form-control-sm" id="secCap" type="number"></div>
+          <div class="col-md-4"><label class="form-label small">semester</label><input class="form-control form-control-sm" id="secSem"></div>
+          <div class="col-md-12"><label class="form-label small">note</label><input class="form-control form-control-sm" id="secNote"></div>
+          <div class="col-auto"><button class="btn btn-primary btn-sm" id="btnSecSave">حفظ الشعبة</button></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/js/common.js"></script>
+  <script>
+    function msg(t, ty='info'){
+      document.getElementById('msgBox').innerHTML = t ? `<div class="alert alert-${ty} py-1 px-2 mb-0">${t}</div>` : '';
+    }
+
+    async function loadDepartments(){
+      const data = await apiGet('/college/catalog/departments');
+      const items = data.items||[];
+      const tbody = document.querySelector('#tblDep tbody');
+      tbody.innerHTML = '';
+      const sel = document.getElementById('selProgDept');
+      sel.innerHTML = '<option value="">كل الأقسام</option>';
+      items.forEach(d=>{
+        const enc = encodeURIComponent(JSON.stringify(d));
+        tbody.insertAdjacentHTML('beforeend', `<tr><td>${d.id}</td><td><code>${d.code}</code></td><td>${d.name_ar||''}</td><td>${d.name_en||''}</td><td>${d.is_active}</td>
+          <td><button type="button" class="btn btn-sm btn-link p-0 btn-edit-dep" data-payload="${enc}">تحرير</button></td></tr>`);
+        sel.insertAdjacentHTML('beforeend', `<option value="${d.id}">${d.code} — ${d.name_ar}</option>`);
+      });
+      document.querySelectorAll('.btn-edit-dep').forEach(btn=>{
+        btn.onclick = ()=>{
+          const ob = JSON.parse(decodeURIComponent(btn.getAttribute('data-payload')));
+          document.getElementById('depId').value = ob.id||'';
+          document.getElementById('depCode').value = ob.code||'';
+          document.getElementById('depNameAr').value = ob.name_ar||'';
+          document.getElementById('depNameEn').value = ob.name_en||'';
+          document.getElementById('depActive').value = String(ob.is_active!=null ? ob.is_active : 1);
+        };
+      });
+      msg('تم تحميل الأقسام: '+items.length, 'success');
+    }
+
+    async function loadPrograms(){
+      const dept = document.getElementById('selProgDept').value;
+      let url = '/college/catalog/programs';
+      if(dept) url += '?department_id='+encodeURIComponent(dept);
+      const data = await apiGet(url);
+      const tbody = document.querySelector('#tblProg tbody');
+      tbody.innerHTML='';
+      (data.items||[]).forEach(p=>{
+        const enc = encodeURIComponent(JSON.stringify(p));
+        tbody.insertAdjacentHTML('beforeend', `<tr><td>${p.id}</td><td>${p.department_code||''}</td><td>${p.code}</td><td>${p.name_ar}</td><td>${p.phase}</td><td>${p.track_group||''}</td><td>${p.min_total_units||0}</td>
+          <td><button type="button" class="btn btn-sm btn-link btn-edit-prog p-0" data-payload="${enc}">تحرير</button></td></tr>`);
+      });
+      document.querySelectorAll('.btn-edit-prog').forEach(btn=>{
+        btn.onclick=()=>{
+          const ob = JSON.parse(decodeURIComponent(btn.getAttribute('data-payload')));
+          document.getElementById('progId').value = ob.id||'';
+          document.getElementById('progDeptId').value = ob.department_id||'';
+          document.getElementById('progCode').value = ob.code||'';
+          document.getElementById('progNameAr').value = ob.name_ar||'';
+          document.getElementById('progNameEn').value = ob.name_en||'';
+          document.getElementById('progPhase').value = ob.phase||'major';
+          document.getElementById('progTrack').value = ob.track_group||'';
+          document.getElementById('progUnits').value = ob.min_total_units||0;
+          document.getElementById('progActive').value = String(ob.is_active!=null ? ob.is_active : 1);
+          document.getElementById('progRules').value = ob.rules_json||'';
+          document.getElementById('pcProgFilter').value = ob.id||'';
+          document.getElementById('pcProgId').value = ob.id||'';
+        };
+      });
+      msg('تم تحميل البرامج: '+(data.items||[]).length, 'success');
+    }
+
+    async function loadCm(){
+      const data = await apiGet('/college/catalog/course_masters');
+      const tbody = document.querySelector('#tblCm tbody');
+      tbody.innerHTML='';
+      (data.items||[]).forEach(m=>{
+        tbody.insertAdjacentHTML('beforeend', `<tr><td>${m.id}</td><td>${m.title_ar}</td><td>${m.default_units||0}</td><td>${m.grading_mode||''}</td></tr>`);
+      });
+      msg('تم تحميل محتوى المقررات: '+(data.items||[]).length, 'success');
+    }
+
+    async function loadPc(){
+      const pid = document.getElementById('pcProgFilter').value.trim();
+      if(!pid){ msg('حدد program_id لمقررات الخطة', 'warning'); return;}
+      const data = await apiGet('/college/catalog/program_courses?program_id='+encodeURIComponent(pid));
+      const tbody = document.querySelector('#tblPc tbody');
+      tbody.innerHTML='';
+      (data.items||[]).forEach(x=>{
+        const enc = encodeURIComponent(JSON.stringify(x));
+        tbody.insertAdjacentHTML('beforeend', `<tr><td>${x.id}</td><td><code>${x.course_code}</code></td><td>${x.master_title_ar||''}</td><td>${x.level_no}</td>
+          <td><button type="button" class="btn btn-sm btn-link p-0 btn-edit-pc" data-payload="${enc}">تحرير</button>
+           <button type="button" class="btn btn-sm btn-link text-danger p-0 btn-del-pc" data-id="${x.id}">حذف</button></td></tr>`);
+      });
+      document.querySelectorAll('.btn-edit-pc').forEach(btn=>{
+        btn.onclick = ()=>{
+          const ob = JSON.parse(decodeURIComponent(btn.getAttribute('data-payload')));
+          document.getElementById('pcId').value = ob.id||'';
+          document.getElementById('pcProgId').value = ob.program_id||'';
+          document.getElementById('pcMasterId').value = ob.course_master_id||'';
+          document.getElementById('pcCode').value = ob.course_code||'';
+          document.getElementById('pcLevel').value = ob.level_no||0;
+          document.getElementById('pcUnitsOv').value = ob.units_override!=null ? ob.units_override : '';
+          document.getElementById('secPcId').value = ob.id||'';
+        };
+      });
+      document.querySelectorAll('.btn-del-pc').forEach(btn=>{
+        btn.onclick = async ()=>{
+          if(!confirm('حذف بند الخطة وجميع شُعبه؟')) return;
+          await apiPost('/college/catalog/program_course/delete', {id:+btn.dataset.id});
+          msg('تم الحذف', 'success');
+          loadPc();
+        };
+      });
+      msg('مقررات الخطة: '+(data.items||[]).length, 'success');
+    }
+
+    async function loadSections(){
+      const pid = document.getElementById('secPcId').value.trim();
+      if(!pid){ msg('حدد program_course_id', 'warning'); return;}
+      const data = await apiGet('/college/catalog/sections?program_course_id='+encodeURIComponent(pid));
+      const tbody = document.querySelector('#tblSec tbody');
+      tbody.innerHTML='';
+      (data.items||[]).forEach(s=>{
+        const enc = encodeURIComponent(JSON.stringify(s));
+        tbody.insertAdjacentHTML('beforeend', `<tr><td>${s.id}</td><td>${s.section_code}</td><td>${s.capacity_max!=null?s.capacity_max:''}</td><td>${s.semester||''}</td>
+          <td><button type="button" class="btn btn-sm btn-link p-0 btn-edit-sec" data-payload="${enc}">تحرير</button>
+          <button type="button" class="btn btn-sm btn-link text-danger p-0 btn-del-sec" data-id="${s.id}">حذف</button></td></tr>`);
+      });
+      document.querySelectorAll('.btn-edit-sec').forEach(btn=>{
+        btn.onclick=()=>{
+          const ob = JSON.parse(decodeURIComponent(btn.getAttribute('data-payload')));
+          document.getElementById('secId').value = ob.id||'';
+          document.getElementById('secProgramCourse').value = ob.program_course_id||'';
+          document.getElementById('secCode').value = ob.section_code||'';
+          document.getElementById('secCap').value = ob.capacity_max!=null ? ob.capacity_max : '';
+          document.getElementById('secSem').value = ob.semester||'';
+          document.getElementById('secNote').value = ob.note||'';
+        };
+      });
+      document.querySelectorAll('.btn-del-sec').forEach(btn=>{
+        btn.onclick = async ()=>{
+          await apiPost('/college/catalog/section/delete', {id:+btn.dataset.id});
+          loadSections();
+        };
+      });
+      msg('الشعب: '+(data.items||[]).length, 'success');
+    }
+
+    document.getElementById('btnDepRefresh').onclick = loadDepartments;
+    document.getElementById('btnDepSave').onclick = async ()=>{
+      const payload = {
+        id: document.getElementById('depId').value ? +document.getElementById('depId').value : null,
+        code: document.getElementById('depCode').value.trim(),
+        name_ar: document.getElementById('depNameAr').value.trim(),
+        name_en: document.getElementById('depNameEn').value.trim(),
+        is_active:+document.getElementById('depActive').value
+      };
+      await apiPost('/college/catalog/department/save', payload);
+      msg('تم حفظ القسم', 'success');
+      loadDepartments();
+    };
+
+    document.getElementById('btnProgRefresh').onclick = loadPrograms;
+    document.getElementById('selProgDept').onchange = loadPrograms;
+
+    document.getElementById('btnProgSave').onclick = async ()=>{
+      await apiPost('/college/catalog/program/save', {
+        id: document.getElementById('progId').value ? +document.getElementById('progId').value : null,
+        department_id: +document.getElementById('progDeptId').value,
+        code: document.getElementById('progCode').value.trim(),
+        name_ar: document.getElementById('progNameAr').value.trim(),
+        name_en: document.getElementById('progNameEn').value.trim(),
+        phase: document.getElementById('progPhase').value,
+        track_group: document.getElementById('progTrack').value.trim(),
+        min_total_units: +document.getElementById('progUnits').value,
+        rules_json: document.getElementById('progRules').value.trim(),
+        is_active: +document.getElementById('progActive').value
+      });
+      msg('تم حفظ البرنامج', 'success');
+      loadPrograms();
+    };
+
+    document.getElementById('btnCmRefresh').onclick = loadCm;
+    document.getElementById('btnCmSave').onclick = async ()=>{
+      await apiPost('/college/catalog/course_master/save', {
+        id: document.getElementById('cmId').value ? +document.getElementById('cmId').value : null,
+        title_ar: document.getElementById('cmTitleAr').value.trim(),
+        title_en: document.getElementById('cmTitleEn').value.trim(),
+        default_units:+document.getElementById('cmUnits').value
+      });
+      msg('تم حفظ المحتوى', 'success');
+      loadCm();
+    };
+
+    document.getElementById('btnPcRefresh').onclick = loadPc;
+    document.getElementById('btnPcSave').onclick = async ()=>{
+      const u = document.getElementById('pcUnitsOv').value.trim();
+      await apiPost('/college/catalog/program_course/save', {
+        id: document.getElementById('pcId').value ? +document.getElementById('pcId').value : null,
+        program_id:+document.getElementById('pcProgId').value,
+        course_master_id:+document.getElementById('pcMasterId').value,
+        course_code:document.getElementById('pcCode').value.trim(),
+        level_no:+document.getElementById('pcLevel').value,
+        units_override: u === '' ? null : +u
+      });
+      msg('تم حفظ بند الخطة', 'success');
+      loadPc();
+    };
+
+    document.getElementById('btnSecRefresh').onclick = loadSections;
+    document.getElementById('btnSecSave').onclick = async ()=>{
+      const cap = document.getElementById('secCap').value.trim();
+      await apiPost('/college/catalog/section/save', {
+        id: document.getElementById('secId').value ? +document.getElementById('secId').value : null,
+        program_course_id:+document.getElementById('secProgramCourse').value,
+        section_code:document.getElementById('secCode').value.trim(),
+        capacity_max: cap === '' ? null : +cap,
+        semester: document.getElementById('secSem').value.trim(),
+        note: document.getElementById('secNote').value.trim(),
+        is_active:1
+      });
+      msg('تم حفظ الشعبة', 'success');
+      loadSections();
+    };
+
+    window.addEventListener('DOMContentLoaded', ()=>{
+      loadDepartments();
+      loadPrograms();
+      loadCm();
+    });
+  </script>
+</body>
+</html>

@@ -64,6 +64,8 @@ class TestAuth:
         assert caps.get("nav_course_closure_reports") is True
         assert caps.get("nav_faculty_scorecards") is True
         assert caps.get("nav_faculty_final_dossier") is True
+        assert caps.get("nav_college_catalog") is False
+        assert caps.get("can_switch_department_scope") is False
         assert caps.get("is_instructor_or_supervisor_nav") is False
 
     def test_head_of_department_with_supervisor_flag_not_instructor_nav(self):
@@ -91,6 +93,11 @@ class TestAuth:
         assert caps["is_student"] is True
         assert caps["can_manage_courses_edit"] is False
 
+    def test_compute_capabilities_admin_college_catalog_nav(self):
+        caps = compute_capabilities("admin", 0)
+        assert caps.get("nav_college_catalog") is True
+        assert caps.get("can_switch_department_scope") is True
+
     def test_compute_capabilities_instructor_my_courses_nav(self):
         caps = compute_capabilities("instructor", 0)
         assert caps.get("nav_my_assigned_courses") is True
@@ -105,6 +112,8 @@ class TestAuth:
         assert caps2.get("nav_course_closure_reports") is True
         assert caps2.get("nav_faculty_scorecards") is True
         assert caps2.get("nav_faculty_final_dossier") is True
+        assert caps2.get("nav_college_catalog") is True
+        assert caps2.get("can_switch_department_scope") is True
 
     def test_compute_capabilities_instructor_as_supervisor_sees_transcript_nav(self):
         caps = compute_capabilities("instructor", 1, "supervisor")

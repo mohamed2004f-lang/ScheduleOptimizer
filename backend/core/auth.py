@@ -72,6 +72,70 @@ SESSION_LOGIN_TIME = 'login_time'
 # - أستاذ + is_supervisor: instructor | supervisor
 # - رئيس قسم: head | instructor | supervisor
 SESSION_ACTIVE_MODE = "active_mode"
+# سياق عمل المسؤول الرئيسي: تصفية بيانات حسب قسم (لا يغيّر الدور)
+SESSION_ADMIN_DEPARTMENT_SCOPE_ID = "admin_department_scope_id"
+
+
+def get_admin_department_scope_id() -> int | None:
+    """معرّف القسم النشط في جلسة admin/admin_main لتصفية القوائم، أو None لكل الكلية."""
+    try:
+        from flask import has_request_context, session as flask_session
+
+        if not has_request_context():
+            return None
+        role = _normalize_role((flask_session.get("user_role") or "").strip())
+        if role not in ("admin", "admin_main"):
+            return None
+        raw = flask_session.get(SESSION_ADMIN_DEPARTMENT_SCOPE_ID)
+        if raw in (None, ""):
+            return None
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+    except Exception:
+        return None
+
+
+def resolve_admin_department_scope_api_dict() -> dict | None:
+    """
+    تمثيل JSON لسياق قسم المسؤول (id, code, name_ar).
+    يمسح مفتاح الجلسة إن لم يعد القسم موجوداً.
+    """
+    raw = session.get(SESSION_ADMIN_DEPARTMENT_SCOPE_ID)
+    if raw in (None, ""):
+        return None
+    role = _normalize_role((session.get("user_role") or "").strip())
+    if role not in ("admin", "admin_main"):
+        return None
+    try:
+        iid = int(raw)
+    except (TypeError, ValueError):
+        session.pop(SESSION_ADMIN_DEPARTMENT_SCOPE_ID, None)
+        session.modified = True
+        return None
+    if get_connection is None:
+        return None
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT id, code, name_ar FROM departments WHERE id = ? LIMIT 1",
+                (iid,),
+            ).fetchone()
+        if not row:
+            session.pop(SESSION_ADMIN_DEPARTMENT_SCOPE_ID, None)
+            session.modified = True
+            return None
+        if hasattr(row, "keys"):
+            return {
+                "id": int(row["id"]),
+                "code": row["code"],
+                "name_ar": row["name_ar"],
+            }
+        return {"id": int(row[0]), "code": row[1], "name_ar": row[2]}
+    except Exception:
+        logger.exception("resolve_admin_department_scope_api_dict failed")
+        return None
 
 
 def _session_has_instructor_id() -> bool:
@@ -285,6 +349,7 @@ def compute_capabilities(
             "v": 1,
             "nav_my_assigned_courses": nav_my,
             "nav_users_admin": False,
+            "nav_college_catalog": False,
             "nav_supervision": False,
             "nav_academic_rules": False,
             "nav_course_registration_report": staff_planning,
@@ -304,6 +369,7 @@ def compute_capabilities(
             "can_manage_transcript_admin": staff_planning,
             "nav_student_affairs_attendance_only": student_affairs_att_only,
             "nav_transcript_nav": nav_transcript,
+            "can_switch_department_scope": False,
         }
 
     staff_planning = role in ("admin", "admin_main", "head_of_department")
@@ -316,6 +382,7 @@ def compute_capabilities(
         "v": 1,
         "nav_my_assigned_courses": role == "instructor",
         "nav_users_admin": role in ("admin", "admin_main"),
+        "nav_college_catalog": role in ("admin", "admin_main"),
         "nav_supervision": role in ("admin", "admin_main"),
         "nav_academic_rules": role in ("admin", "admin_main"),
         "nav_course_registration_report": staff_planning,
@@ -338,6 +405,7 @@ def compute_capabilities(
         or (role == "student")
         or (role == "supervisor")
         or is_supervisor_effective,
+        "can_switch_department_scope": role in ("admin", "admin_main"),
     }
 
 
@@ -911,6 +979,7 @@ def init_auth(app):
             "student_id",
             "instructor_id",
             SESSION_ACTIVE_MODE,
+            SESSION_ADMIN_DEPARTMENT_SCOPE_ID,
         ):
             try:
                 session.pop(k, None)
@@ -972,8 +1041,10 @@ def init_auth(app):
                     session[SESSION_ACTIVE_MODE] = "head"
                     active_mode_val = "head"
         caps = None
+        admin_dept_scope = None
         if is_authenticated:
             caps = compute_capabilities(role, int(is_supervisor_val or 0), active_mode_val)
+            admin_dept_scope = resolve_admin_department_scope_api_dict()
 
         resp = jsonify({
             'status': 'ok',
@@ -985,6 +1056,7 @@ def init_auth(app):
             'student_id': student_id_val if is_authenticated else None,
             'instructor_id': instructor_id_val if is_authenticated else None,
             'capabilities': caps,
+            'admin_department_scope': admin_dept_scope,
         })
         # منع كاش الاستجابة — وإلا يبقى active_mode قديماً بعد التبديل ولا يتحدّث الشريط
         resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -1150,6 +1222,141 @@ def init_auth(app):
         out.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         return out, 200
 
+    @auth_bp.route("/admin_department_scope", methods=["POST"])
+    @login_required
+    def set_admin_department_scope():
+        """تعيين سياق قسم للمسؤول (تصفية بيانات) أو إلغاؤه ليشمل كل الكلية."""
+        data = request.get_json(force=True) or {}
+        raw_id = data.get("department_id")
+        _sync_user_session_from_db(session.get(SESSION_USER))
+        role = _normalize_role((session.get("user_role") or "").strip())
+        if role not in ("admin", "admin_main"):
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "غير مسموح",
+                        "code": "FORBIDDEN",
+                    }
+                ),
+                403,
+            )
+        try:
+            isv = int(session.get("is_supervisor") or 0)
+        except (TypeError, ValueError):
+            isv = 0
+        am = session.get(SESSION_ACTIVE_MODE)
+
+        if raw_id in (None, "", False, "all", "null"):
+            session.pop(SESSION_ADMIN_DEPARTMENT_SCOPE_ID, None)
+            session.modified = True
+            try:
+                caps = compute_capabilities(role, isv, am)
+            except Exception:
+                logger.exception("compute_capabilities failed (admin_department_scope clear)")
+                caps = None
+            out = jsonify(
+                {
+                    "status": "ok",
+                    "admin_department_scope": None,
+                    "capabilities": caps,
+                }
+            )
+            out.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            return out, 200
+
+        try:
+            iid = int(raw_id)
+        except (TypeError, ValueError):
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "department_id غير صالح",
+                        "code": "INVALID",
+                    }
+                ),
+                400,
+            )
+
+        if get_connection is None:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "قاعدة البيانات غير متاحة",
+                        "code": "DB",
+                    }
+                ),
+                500,
+            )
+
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                row = cur.execute(
+                    """
+                    SELECT id, code, name_ar FROM departments
+                    WHERE id = ? AND COALESCE(is_active, 1) = 1
+                    LIMIT 1
+                    """,
+                    (iid,),
+                ).fetchone()
+            if not row:
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "القسم غير موجود أو غير نشط",
+                            "code": "NOT_FOUND",
+                        }
+                    ),
+                    400,
+                )
+            session[SESSION_ADMIN_DEPARTMENT_SCOPE_ID] = iid
+            session.modified = True
+            if hasattr(row, "keys"):
+                payload = {
+                    "id": int(row["id"]),
+                    "code": row["code"],
+                    "name_ar": row["name_ar"],
+                }
+            else:
+                payload = {"id": int(row[0]), "code": row[1], "name_ar": row[2]}
+        except Exception:
+            logger.exception("set_admin_department_scope failed")
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "خطأ داخلي",
+                        "code": "ERROR",
+                    }
+                ),
+                500,
+            )
+
+        user = session.get(SESSION_USER, "?")
+        logger.info(
+            "admin_department_scope_set user=%s department_id=%s",
+            user,
+            payload.get("id"),
+        )
+        try:
+            caps = compute_capabilities(role, isv, am)
+        except Exception:
+            logger.exception("compute_capabilities failed (admin_department_scope set)")
+            caps = None
+        out = jsonify(
+            {
+                "status": "ok",
+                "admin_department_scope": payload,
+                "capabilities": caps,
+            }
+        )
+        out.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        return out, 200
+
     @auth_bp.route('/change_password', methods=['POST'])
     @login_required
     def change_password():
@@ -1168,6 +1375,7 @@ def init_auth(app):
         if csrf is not None:
             csrf.exempt(login)
             csrf.exempt(set_active_mode)
+            csrf.exempt(set_admin_department_scope)
     except Exception:
         logger.exception("csrf.exempt(auth.login) failed")
 

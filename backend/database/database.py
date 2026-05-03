@@ -500,6 +500,22 @@ TABLES_SCHEMA = {
         )
     """,
 
+    'program_course_sections': """
+        CREATE TABLE IF NOT EXISTS program_course_sections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            program_course_id INTEGER NOT NULL,
+            section_code TEXT NOT NULL,
+            capacity_max INTEGER,
+            semester TEXT DEFAULT '',
+            note TEXT DEFAULT '',
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (program_course_id, section_code),
+            FOREIGN KEY (program_course_id) REFERENCES program_courses(id)
+                ON DELETE CASCADE ON UPDATE CASCADE
+        )
+    """,
+
     'students': """
         CREATE TABLE IF NOT EXISTS students (
             student_id TEXT PRIMARY KEY,
@@ -559,6 +575,7 @@ TABLES_SCHEMA = {
             rowid INTEGER PRIMARY KEY AUTOINCREMENT,
             course_name TEXT NOT NULL,
             program_course_id INTEGER,
+            department_id INTEGER,
             day TEXT NOT NULL,
             time TEXT NOT NULL,
             room TEXT DEFAULT '',
@@ -569,6 +586,8 @@ TABLES_SCHEMA = {
             FOREIGN KEY (course_name) REFERENCES courses(course_name) 
                 ON DELETE CASCADE ON UPDATE CASCADE,
             FOREIGN KEY (program_course_id) REFERENCES program_courses(id)
+                ON DELETE SET NULL ON UPDATE CASCADE,
+            FOREIGN KEY (department_id) REFERENCES departments(id)
                 ON DELETE SET NULL ON UPDATE CASCADE
         )
     """,
@@ -1305,11 +1324,13 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_programs_dept ON programs(department_id)",
     "CREATE INDEX IF NOT EXISTS idx_program_courses_program ON program_courses(program_id)",
     "CREATE INDEX IF NOT EXISTS idx_program_courses_master ON program_courses(course_master_id)",
+    "CREATE INDEX IF NOT EXISTS idx_program_course_sections_pc ON program_course_sections(program_course_id)",
     "CREATE INDEX IF NOT EXISTS idx_students_department ON students(department_id)",
     "CREATE INDEX IF NOT EXISTS idx_students_program ON students(current_program_id)",
     "CREATE INDEX IF NOT EXISTS idx_users_department ON users(department_id)",
     "CREATE INDEX IF NOT EXISTS idx_instructors_department ON instructors(department_id)",
     "CREATE INDEX IF NOT EXISTS idx_schedule_program_course ON schedule(program_course_id)",
+    "CREATE INDEX IF NOT EXISTS idx_schedule_department ON schedule(department_id)",
     "CREATE INDEX IF NOT EXISTS idx_grades_program_course ON grades(program_course_id)",
     "CREATE INDEX IF NOT EXISTS idx_regs_program_course ON registrations(program_course_id)",
     "CREATE INDEX IF NOT EXISTS idx_student_supervisor_instructor ON student_supervisor(instructor_id)",
@@ -1365,6 +1386,7 @@ def _ensure_tables_postgresql() -> None:
         "ALTER TABLE enrollment_plans ADD COLUMN IF NOT EXISTS prereq_ack_reason TEXT DEFAULT ''",
         "ALTER TABLE schedule ADD COLUMN IF NOT EXISTS instructor_id INTEGER",
         "ALTER TABLE schedule ADD COLUMN IF NOT EXISTS program_course_id BIGINT",
+        "ALTER TABLE schedule ADD COLUMN IF NOT EXISTS department_id BIGINT",
         "ALTER TABLE registrations ADD COLUMN IF NOT EXISTS program_course_id BIGINT",
         "ALTER TABLE grades ADD COLUMN IF NOT EXISTS program_course_id BIGINT",
         "ALTER TABLE grades ADD COLUMN IF NOT EXISTS course_master_id BIGINT",
@@ -1612,6 +1634,32 @@ def _ensure_tables_postgresql() -> None:
             conn.commit()
         except Exception as e:
             logger.warning("Could not ensure program_course_prereqs on PostgreSQL: %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS program_course_sections (
+                    id BIGSERIAL PRIMARY KEY,
+                    program_course_id BIGINT NOT NULL,
+                    section_code TEXT NOT NULL,
+                    capacity_max INTEGER,
+                    semester TEXT DEFAULT '',
+                    note TEXT DEFAULT '',
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (program_course_id, section_code),
+                    CONSTRAINT program_course_sections_active_chk CHECK (is_active IN (0, 1)),
+                    CONSTRAINT program_course_sections_pc_fk FOREIGN KEY (program_course_id)
+                        REFERENCES program_courses(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.commit()
+        except Exception as e:
+            logger.warning("Could not ensure program_course_sections on PostgreSQL: %s", e)
             try:
                 conn.rollback()
             except Exception:
@@ -2038,6 +2086,11 @@ def ensure_tables(db_file=None):
         if "program_course_id" not in scols:
             try:
                 cur.execute("ALTER TABLE schedule ADD COLUMN program_course_id INTEGER")
+            except Exception:
+                pass
+        if "department_id" not in scols:
+            try:
+                cur.execute("ALTER TABLE schedule ADD COLUMN department_id INTEGER")
             except Exception:
                 pass
 

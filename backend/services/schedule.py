@@ -2,7 +2,13 @@ import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from flask import Blueprint, request, jsonify, render_template, session
-from backend.core.auth import login_required, role_required, current_supervisor_effective
+from backend.core.auth import (
+    login_required,
+    role_required,
+    current_supervisor_effective,
+    get_admin_department_scope_id,
+    _normalize_role,
+)
 from collections import defaultdict
 import pandas as pd
 import logging
@@ -543,8 +549,23 @@ def _build_schedule_matrix(rows: list, time_slots: list, include_empty: bool) ->
 
 def _load_schedule_rows_for_export(conn) -> list:
     cur = conn.cursor()
+    try:
+        scols = fetch_table_columns(conn, "schedule")
+    except Exception:
+        scols = []
+    scope = get_admin_department_scope_id()
+    role_n = _normalize_role((session.get("user_role") or "").strip())
+    dept_sql = ""
+    dept_params: tuple = ()
+    if (
+        scope is not None
+        and role_n in ("admin", "admin_main")
+        and "department_id" in scols
+    ):
+        dept_sql = " AND department_id = ? "
+        dept_params = (scope,)
     rows = cur.execute(
-        """
+        f"""
         SELECT COALESCE(course_name,'') AS course_name,
                COALESCE(day,'') AS day,
                COALESCE(time,'') AS time,
@@ -555,7 +576,9 @@ def _load_schedule_rows_for_export(conn) -> list:
         WHERE COALESCE(course_name,'') <> ''
           AND COALESCE(day,'') <> ''
           AND COALESCE(time,'') <> ''
-        """
+          {dept_sql}
+        """,
+        dept_params,
     ).fetchall()
     return [dict(r) for r in rows] if rows else []
 
@@ -639,8 +662,24 @@ def list_schedule_rows():
         _sync_schedule_pk_col(conn)
         cur = conn.cursor()
         try:
+            try:
+                scols = fetch_table_columns(conn, "schedule")
+            except Exception:
+                scols = []
+            scope = get_admin_department_scope_id()
+            role_n = _normalize_role((session.get("user_role") or "").strip())
+            dept_where = ""
+            dept_params: tuple = ()
+            if (
+                scope is not None
+                and role_n in ("admin", "admin_main")
+                and "department_id" in scols
+            ):
+                dept_where = " AND s.department_id = ? "
+                dept_params = (scope,)
             # استخدام JOIN لتحسين الأداء بدلاً من استعلامات منفصلة في loop
-            rows = cur.execute(f"""
+            rows = cur.execute(
+                f"""
                 SELECT 
                     s.{SCHEDULE_PK_COL} AS section_id, 
                     s.course_name, 
@@ -653,9 +692,12 @@ def list_schedule_rows():
                     COUNT(DISTINCT r.student_id) AS student_count
                 FROM schedule s
                 LEFT JOIN registrations r ON LOWER(TRIM(s.course_name)) = LOWER(TRIM(r.course_name))
+                WHERE 1=1 {dept_where}
                 GROUP BY s.{SCHEDULE_PK_COL}, s.course_name, s.day, s.time, s.room, s.instructor, s.semester, s.instructor_id
                 ORDER BY s.{SCHEDULE_PK_COL}
-            """).fetchall()
+                """,
+                dept_params,
+            ).fetchall()
             result = []
             for r in rows:
                 result.append({

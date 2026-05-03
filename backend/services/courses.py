@@ -3,7 +3,12 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from models.models import Course
 from flask import Blueprint, request, jsonify, Response, current_app, session, send_file
-from backend.core.auth import login_required, role_required
+from backend.core.auth import (
+    login_required,
+    role_required,
+    get_admin_department_scope_id,
+    _normalize_role,
+)
 from collections import defaultdict
 from .utilities import get_connection, df_from_query, excel_response_from_df, pdf_response_from_html
 from backend.database.database import fetch_table_columns, is_postgresql
@@ -48,6 +53,9 @@ def _safe_weight(raw, fallback: float | None = None):
 @login_required
 def list_courses():
     # يرجع جدول courses، وإذا غير موجود يرجع من schedule
+    scope_dep = get_admin_department_scope_id()
+    role_n = _normalize_role((session.get("user_role") or "").strip())
+    admin_scoped = scope_dep is not None and role_n in ("admin", "admin_main")
     with get_connection() as conn:
         cur = conn.cursor()
         try:
@@ -61,6 +69,7 @@ def list_courses():
             has_cw_weight = "coursework_weight" in cols
             has_mid_weight = "midterm_weight" in cols
             has_final_weight = "final_exam_weight" in cols
+            has_owning_dept = "owning_department_id" in cols
             sel = "SELECT DISTINCT course_name, course_code, units"
             if has_cat:
                 sel += ", COALESCE(category,'required') AS category"
@@ -74,8 +83,13 @@ def list_courses():
                 sel += ", midterm_weight"
             if has_final_weight:
                 sel += ", final_exam_weight"
-            sel += " FROM courses WHERE COALESCE(course_name,'') <> '' ORDER BY course_name"
-            rows = cur.execute(sel).fetchall()
+            sel += " FROM courses WHERE COALESCE(course_name,'') <> ''"
+            q_params: tuple = ()
+            if admin_scoped and has_owning_dept:
+                sel += " AND owning_department_id = ?"
+                q_params = (scope_dep,)
+            sel += " ORDER BY course_name"
+            rows = cur.execute(sel, q_params).fetchall()
             # إزالة التكرار البرمجيًا أيضًا (احتياطي)
             seen = set()
             courses = []
@@ -119,7 +133,8 @@ def list_courses():
                     setattr(c, "final_exam_weight", None)
                 courses.append(c)
             # إن كان جدول courses فارغاً لكن الجدول الدراسي يحوي مقررات، نعرضها (مثل بيئة بعد ترحيل أو بيانات جزئية)
-            if not courses:
+            # عند تصفية المسؤول حسب قسم: لا نستخدم schedule لأن المقررات هناك غالباً بلا قسم مالك فيزداد التداخل بين الأقسام
+            if not courses and not admin_scoped:
                 rows = cur.execute(
                     "SELECT DISTINCT course_name FROM schedule WHERE COALESCE(course_name,'') <> '' ORDER BY course_name"
                 ).fetchall()
@@ -139,7 +154,12 @@ def list_courses():
                     setattr(c, "final_exam_weight", None)
                     courses.append(c)
         except Exception:
-            rows = cur.execute("SELECT DISTINCT course_name FROM schedule WHERE COALESCE(course_name,'') <> '' ORDER BY course_name").fetchall()
+            if admin_scoped:
+                rows = []
+            else:
+                rows = cur.execute(
+                    "SELECT DISTINCT course_name FROM schedule WHERE COALESCE(course_name,'') <> '' ORDER BY course_name"
+                ).fetchall()
             seen = set()
             courses = []
             for r in rows:

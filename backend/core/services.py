@@ -124,9 +124,18 @@ class StudentService:
                 has_status = "enrollment_status" in cols
                 has_plan = "graduation_plan" in cols
                 has_join = "join_term" in cols and "join_year" in cols
+                has_dept = "department_id" in cols
+                has_curr_prog = "current_program_id" in cols
+                has_adm_prog = "admission_program_id" in cols
                 extra_cols = (", COALESCE(graduation_plan, '') AS graduation_plan" if has_plan else "")
                 if has_join:
                     extra_cols += ", COALESCE(join_term, '') AS join_term, COALESCE(join_year, '') AS join_year"
+                if has_dept:
+                    extra_cols += ", department_id"
+                if has_curr_prog:
+                    extra_cols += ", current_program_id"
+                if has_adm_prog:
+                    extra_cols += ", admission_program_id"
                 has_sterm = "status_changed_term" in cols
                 has_syear = "status_changed_year" in cols
                 status_extra_sel = ""
@@ -185,6 +194,15 @@ class StudentService:
                         else:
                             row_dict["join_term"] = ""
                             row_dict["join_year"] = ""
+                        if has_dept:
+                            did = r["department_id"]
+                            row_dict["department_id"] = int(did) if did not in (None, "") else None
+                        if has_curr_prog:
+                            pid = r["current_program_id"]
+                            row_dict["current_program_id"] = int(pid) if pid not in (None, "") else None
+                        if has_adm_prog:
+                            aid = r["admission_program_id"]
+                            row_dict["admission_program_id"] = int(aid) if aid not in (None, "") else None
                         result.append(row_dict)
                     return result
                 # قواعد قديمة بدون أعمدة حالة القيد
@@ -203,6 +221,9 @@ class StudentService:
                         "graduation_plan": "",
                         "join_term": "",
                         "join_year": "",
+                        "department_id": None,
+                        "current_program_id": None,
+                        "admission_program_id": None,
                     }
                     for r in rows
                 ]

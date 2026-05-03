@@ -9,6 +9,7 @@ from backend.core.auth import (
     current_supervisor_effective,
     SESSION_ACTIVE_MODE,
     _normalize_role,
+    get_admin_department_scope_id,
 )
 from collections import defaultdict
 import pandas as pd
@@ -1663,6 +1664,45 @@ def list_students():
         students = students_filtered_from_request(request)
         if allowed_student_ids is not None:
             students = [s for s in students if normalize_sid(s.get("student_id")) in allowed_student_ids]
+        role_n = _normalize_role((user_role or "").strip())
+        scope_dep = get_admin_department_scope_id()
+        if scope_dep is not None and role_n in ("admin", "admin_main"):
+            program_ids_for_scope = set()
+            with get_connection() as conn:
+                cur = conn.cursor()
+                for r in cur.execute(
+                    "SELECT id FROM programs WHERE department_id = ?", (scope_dep,)
+                ).fetchall() or []:
+                    if not r:
+                        continue
+                    try:
+                        pid = r["id"] if hasattr(r, "keys") else r[0]
+                        if pid not in (None, ""):
+                            program_ids_for_scope.add(int(pid))
+                    except (TypeError, ValueError, KeyError, IndexError):
+                        pass
+
+            def _admin_scope_student_row(s):
+                raw = s.get("department_id")
+                if raw not in (None, ""):
+                    try:
+                        if int(raw) == int(scope_dep):
+                            return True
+                    except (TypeError, ValueError):
+                        pass
+                if program_ids_for_scope:
+                    for key in ("current_program_id", "admission_program_id"):
+                        p = s.get(key)
+                        if p in (None, ""):
+                            continue
+                        try:
+                            if int(p) in program_ids_for_scope:
+                                return True
+                        except (TypeError, ValueError):
+                            pass
+                return False
+
+            students = [s for s in students if _admin_scope_student_row(s)]
         # تحويل إلى كائنات Student للتوافق مع الكود القديم مع إضافة حالة القيد كحقول إضافية
         students_objects = []
         for s in students:

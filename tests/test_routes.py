@@ -40,9 +40,11 @@ class TestPublicRoutes:
         assert data.get("status") == "ready"
         assert data.get("database_ok") is True
 
-    def test_system_diagnostics_requires_login(self, client):
-        resp = client.get("/admin/system_diagnostics")
-        assert resp.status_code in (401, 403, 302)
+    def test_system_diagnostics_requires_login(self, app):
+        # عميل نظيف فقط؛ client المشترك بالجلسة قد يكون مسجَّلاً دخوله من auth_client في ملفات أخرى.
+        with app.test_client() as c:
+            resp = c.get("/admin/system_diagnostics")
+            assert resp.status_code in (401, 403, 302)
 
     def test_login_page_accessible(self, client):
         """GET /login يجب أن يكون متاحاً (200 أو 500 إذا كان القالب غير موجود في بيئة الاختبار)."""
