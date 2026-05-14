@@ -99,6 +99,31 @@
         </div>
       </div>
 
+      <div class="card mb-3 d-none" id="instructorDeptStudentsCard">
+        <div class="card-body">
+          <h6 class="mb-2">طلاب الأستاذ حسب القسم</h6>
+          <p class="small text-muted mb-2">يعتمد على جدول schedule وregistrations ويمتد لتكافؤ المقررات عند تعريفه.</p>
+          <div class="row g-2 align-items-end">
+            <div class="col-md-3">
+              <label class="form-label small mb-0">الأستاذ</label>
+              <select id="isdInstructor" class="form-select form-select-sm"></select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small mb-0">القسم</label>
+              <select id="isdDepartment" class="form-select form-select-sm"></select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small mb-0">الفصل (اختياري)</label>
+              <input type="text" id="isdSemester" class="form-control form-control-sm" placeholder="مثال: خريف 44-45">
+            </div>
+            <div class="col-md-3">
+              <button type="button" class="btn btn-primary btn-sm" id="btnIsdLoad">عرض الطلاب</button>
+            </div>
+          </div>
+          <div id="isdOut" class="small mt-2"></div>
+        </div>
+      </div>
+
     <!-- Modal لعرض التعارضات -->
     <div class="modal fade" id="conflictsModal" tabindex="-1" aria-hidden="true">
       <div class="modal-dialog modal-lg">
@@ -332,7 +357,18 @@ async function loadInstructors(){
         o.value = inst.id != null ? String(inst.id) : '';
         o.setAttribute('data-inst-name', (inst.name || '').trim());
         const typeLabel = inst.type === 'external' ? ' (متعاون)' : '';
-        o.text = (inst.name || '') + typeLabel;
+        const primaryDept =
+          (inst.department_name_ar && String(inst.department_name_ar).trim()) ||
+          (inst.department_code && String(inst.department_code).trim()) ||
+          '';
+        const coopParts = Array.isArray(inst.departments)
+          ? inst.departments
+              .map((d) => (d.department_name_ar || d.department_code || '').toString().trim())
+              .filter(Boolean)
+          : [];
+        const coopLabel = coopParts.length ? ` | متعاون: ${coopParts.join('، ')}` : '';
+        const primaryLabel = primaryDept ? ` | رئيسي: ${primaryDept}` : '';
+        o.text = (inst.name || '') + typeLabel + primaryLabel + coopLabel;
         sel.appendChild(o);
       });
     }
@@ -1484,10 +1520,97 @@ async function printScheduleAsStudentStyle(){
   return openSchedulePrintPreview(true);
 }
 
+async function setupInstructorDeptStudentPanel() {
+  const card = document.getElementById('instructorDeptStudentsCard');
+  if (!card) return;
+  let auth = {};
+  try {
+    const r = await fetch('/auth/check');
+    if (r.ok) auth = await r.json();
+  } catch (e) {
+    return;
+  }
+  const role = auth?.role || '';
+  const ok = ['admin', 'admin_main', 'head_of_department'].includes(role);
+  if (!ok) return;
+  card.classList.remove('d-none');
+  const selI = document.getElementById('isdInstructor');
+  const selD = document.getElementById('isdDepartment');
+  const fillI = () => {
+    if (!selI) return;
+    selI.innerHTML = '<option value=\"\">—</option>';
+    (INSTRUCTORS || []).forEach((inst) => {
+      if (inst && inst.is_active === false) return;
+      const o = document.createElement('option');
+      o.value = String(inst.id);
+      o.textContent = (inst.name || '') + (inst.id != null ? '' : '');
+      selI.appendChild(o);
+    });
+  };
+  fillI();
+  if (selD) {
+    selD.innerHTML = '<option value=\"\">—</option>';
+    try {
+      const r = await fetch('/college/catalog/departments', {
+        headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+      });
+      if (r.ok) {
+        const data = await r.json();
+        (data.items || []).forEach((d) => {
+          const o = document.createElement('option');
+          o.value = String(d.id);
+          o.textContent = (d.name_ar || d.code || d.id);
+          selD.appendChild(o);
+        });
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+  const btn = document.getElementById('btnIsdLoad');
+  if (btn) {
+    btn.addEventListener('click', async () => {
+      const iid = selI && selI.value;
+      const did = selD && selD.value;
+      const semEl = document.getElementById('isdSemester');
+      const sem = semEl && semEl.value.trim();
+      const out = document.getElementById('isdOut');
+      if (!iid || !did) {
+        if (out) out.innerHTML = '<span class="text-danger">اختر الأستاذ والقسم</span>';
+        return;
+      }
+      let url = `/instructors/${encodeURIComponent(iid)}/students_by_department?department_id=${encodeURIComponent(did)}`;
+      if (sem) url += `&semester=${encodeURIComponent(sem)}`;
+      if (out) out.textContent = '…';
+      try {
+        const r = await fetch(url);
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          if (out) out.innerHTML = '<span class="text-danger">' + escapeHtml(j.message || r.status) + '</span>';
+          return;
+        }
+        const studs = j.students || [];
+        const crs = j.course_names_resolved || [];
+        if (out) {
+          out.innerHTML =
+            '<div class="mb-1"><strong>المقررات المستخدمة:</strong> ' +
+            (crs.length ? crs.map((c) => escapeHtml(c)).join('، ') : '—') +
+            '</div><ul class="mb-0">' +
+            studs.map((s) => '<li>' + escapeHtml(s.student_id) + ' — ' + escapeHtml(s.student_name) + '</li>').join('') +
+            '</ul>';
+        }
+      } catch (e) {
+        console.error(e);
+        if (out) out.innerHTML = '<span class="text-danger">خطأ في الطلب</span>';
+      }
+    });
+  }
+}
+
 /* ---------- Init ---------- */
 document.addEventListener('DOMContentLoaded', () => {
   loadCourses();
-  loadInstructors();
+  loadInstructors().then(() => setupInstructorDeptStudentPanel());
   loadSchedule();
 
   const btnRun = document.getElementById('btnRun');

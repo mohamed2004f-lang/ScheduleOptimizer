@@ -17,6 +17,7 @@ import datetime
 import base64
 from backend.database.database import is_postgresql, schedule_pk_column, fetch_table_columns
 from backend.core.exceptions import ValidationError
+from backend.core.department_scope_policy import student_matches_department, resolve_users_list_scope
 from backend.core.faculty_axes import (
     FACULTY_AXIS_KEYS,
     VALID_AXIS_STATUS,
@@ -69,79 +70,6 @@ def _current_term_label_safe(conn) -> str:
 
 def _norm_course_key(name: str) -> str:
     return (name or "").strip().lower()
-
-
-def _schedule_course_names_for_coverage(cur, term_label: str) -> tuple[list[str], str]:
-    tl = (term_label or "").strip()
-    rows = []
-    used_filter = ""
-    try:
-        if tl:
-            rows = cur.execute(
-                """
-                SELECT MIN(TRIM(course_name)) AS course_name
-                FROM schedule
-                WHERE COALESCE(TRIM(course_name), '') <> ''
-                  AND (
-                      COALESCE(TRIM(semester), '') = ''
-                      OR LOWER(TRIM(COALESCE(semester,''))) = LOWER(TRIM(?))
-                  )
-                GROUP BY LOWER(TRIM(course_name))
-                ORDER BY MIN(TRIM(course_name))
-                """,
-                (tl,),
-            ).fetchall()
-            used_filter = "current_semester_or_blank"
-    except Exception:
-        rows = []
-    names = [(r[0] or "").strip() for r in (rows or []) if r and (r[0] or "").strip()]
-    if names:
-        return names, used_filter
-    try:
-        rows = cur.execute(
-            """
-            SELECT MIN(TRIM(course_name)) AS course_name
-            FROM schedule
-            WHERE COALESCE(TRIM(course_name), '') <> ''
-            GROUP BY LOWER(TRIM(course_name))
-            ORDER BY MIN(TRIM(course_name))
-            """
-        ).fetchall()
-        names = [(r[0] or "").strip() for r in (rows or []) if r and (r[0] or "").strip()]
-        return names, "all_schedule"
-    except Exception:
-        return [], "none"
-
-
-def _registered_course_names_for_coverage(cur, conn) -> list[str]:
-    try:
-        cols_stu = fetch_table_columns(conn, "students")
-    except Exception:
-        cols_stu = []
-    active_only = "enrollment_status" in {str(c).strip().lower() for c in (cols_stu or [])}
-    if active_only:
-        rows = cur.execute(
-            """
-            SELECT MIN(TRIM(r.course_name)) AS course_name
-            FROM registrations r
-            LEFT JOIN students s ON s.student_id = r.student_id
-            WHERE COALESCE(TRIM(r.course_name), '') <> ''
-              AND COALESCE(s.enrollment_status, 'active') = 'active'
-            GROUP BY LOWER(TRIM(r.course_name))
-            ORDER BY MIN(TRIM(r.course_name))
-            """
-        ).fetchall()
-    else:
-        rows = cur.execute(
-            """
-            SELECT MIN(TRIM(r.course_name)) AS course_name
-            FROM registrations r
-            WHERE COALESCE(TRIM(r.course_name), '') <> ''
-            GROUP BY LOWER(TRIM(r.course_name))
-            ORDER BY MIN(TRIM(r.course_name))
-            """
-        ).fetchall()
-    return [(r[0] or "").strip() for r in (rows or []) if r and (r[0] or "").strip()]
 
 
 def _faculty_cycle_lock_key(term_label: str) -> str:
@@ -477,6 +405,47 @@ def _days_ar() -> list:
     return ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس']
 
 
+def _resolve_actor_department_id(conn) -> int | None:
+    cur = conn.cursor()
+    uname = (session.get("user") or session.get("username") or "").strip()
+    if uname:
+        try:
+            ru = cur.execute(
+                "SELECT department_id FROM users WHERE lower(username)=lower(?) LIMIT 1",
+                (uname,),
+            ).fetchone()
+            if ru and ru[0] not in (None, ""):
+                return int(ru[0])
+        except Exception:
+            pass
+    try:
+        inst_id = int(session.get("instructor_id") or 0)
+    except (TypeError, ValueError):
+        inst_id = 0
+    if inst_id:
+        try:
+            ri = cur.execute(
+                "SELECT department_id FROM instructors WHERE id = ? LIMIT 1",
+                (inst_id,),
+            ).fetchone()
+            if ri and ri[0] not in (None, ""):
+                return int(ri[0])
+        except Exception:
+            pass
+    return None
+
+
+def _effective_schedule_department_scope_id(conn) -> int | None:
+    role_n = _normalize_role((session.get("user_role") or "").strip())
+    if role_n in ("admin", "admin_main"):
+        return get_admin_department_scope_id()
+    if role_n == "head_of_department":
+        mode = (session.get("active_mode") or "head").strip().lower()
+        if mode in ("", "head", "hod", "department_head"):
+            return _resolve_actor_department_id(conn)
+    return None
+
+
 def _build_schedule_matrix(rows: list, time_slots: list, include_empty: bool) -> dict:
     """
     يبني مصفوفة {day -> {time -> [rows]}} مع تقرير ملحق عن الأوقات الفارغة/غير المطابقة.
@@ -553,13 +522,13 @@ def _load_schedule_rows_for_export(conn) -> list:
         scols = fetch_table_columns(conn, "schedule")
     except Exception:
         scols = []
-    scope = get_admin_department_scope_id()
+    scope = _effective_schedule_department_scope_id(conn)
     role_n = _normalize_role((session.get("user_role") or "").strip())
     dept_sql = ""
     dept_params: tuple = ()
     if (
         scope is not None
-        and role_n in ("admin", "admin_main")
+        and role_n in ("admin", "admin_main", "head_of_department")
         and "department_id" in scols
     ):
         dept_sql = " AND department_id = ? "
@@ -666,13 +635,13 @@ def list_schedule_rows():
                 scols = fetch_table_columns(conn, "schedule")
             except Exception:
                 scols = []
-            scope = get_admin_department_scope_id()
+            scope = _effective_schedule_department_scope_id(conn)
             role_n = _normalize_role((session.get("user_role") or "").strip())
             dept_where = ""
             dept_params: tuple = ()
             if (
                 scope is not None
-                and role_n in ("admin", "admin_main")
+                and role_n in ("admin", "admin_main", "head_of_department")
                 and "department_id" in scols
             ):
                 dept_where = " AND s.department_id = ? "
@@ -730,11 +699,27 @@ def registration_coverage():
     مقارنة الجدول الدراسي مقابل التسجيل الفعلي بالمقررات.
     """
     try:
+        from backend.services.coverage_insights import (
+            registered_distinct_course_names,
+            schedule_distinct_course_names_for_coverage,
+        )
+
         with get_connection() as conn:
             cur = conn.cursor()
             term_label = _current_term_label_safe(conn)
-            schedule_names, scope = _schedule_course_names_for_coverage(cur, term_label)
-            registered_names = _registered_course_names_for_coverage(cur, conn)
+            dep = _effective_schedule_department_scope_id(conn)
+            role_cov = _normalize_role((session.get("user_role") or "").strip())
+            dept_scoped = (
+                dep is not None and role_cov in ("admin", "admin_main", "head_of_department")
+            )
+            schedule_names, scope = schedule_distinct_course_names_for_coverage(
+                conn,
+                cur,
+                term_label,
+                dept_scope_id=int(dep) if dept_scoped else None,
+            )
+            actor_u = (session.get("user") or session.get("username") or "").strip()
+            registered_names = registered_distinct_course_names(cur, conn, actor_username=actor_u)
             sched_keys = {_norm_course_key(n) for n in schedule_names if _norm_course_key(n)}
             reg_keys = {_norm_course_key(n) for n in registered_names if _norm_course_key(n)}
 
@@ -744,11 +729,22 @@ def registration_coverage():
             extra_in_schedule = sorted(
                 n for n in schedule_names if _norm_course_key(n) and _norm_course_key(n) not in reg_keys
             )
-            scope_ar = {
+            scope_labels = {
                 "current_semester_or_blank": "مقررات الجدول الدراسي للفصل الحالي (أو صفوف بلا حقل فصل)",
                 "all_schedule": "كل المقررات الظاهرة في جدول المقررات (لم يُعثر على بيانات للفصل الحالي)",
+                "all_schedule_scoped": "كل مقررات الجدولة المطابقة للفصل (ضمن مقررات قسم نطاقك)",
                 "none": "لا توجد مقررات في جدول schedule",
-            }.get(scope, scope)
+                "scoped_no_schedule_course_department_columns": "لا يمكن حصر مقررات الجدولة حسب القسم (أعمدة القسم غير متوفرة في الجدولة/المقررات)",
+            }
+            scope_ar = scope_labels.get(scope, scope)
+            if dept_scoped:
+                if scope == "scoped_no_schedule_course_department_columns":
+                    scope_ar = (
+                        scope_labels["scoped_no_schedule_course_department_columns"]
+                        + " أضف department_id في الجدولة أو owning_department_id في المقررات لقياس الدقة داخل القسم."
+                    )
+                elif scope_ar:
+                    scope_ar = scope_ar + " — الأعداد والقوائم أعلاه تخص مقررات قسم عملك وفق هذا النطاق."
             return jsonify(
                 {
                     "term_label": term_label,
@@ -1920,6 +1916,21 @@ def student_timetable():
         return jsonify({"rows": [], "published": True})
 
     with get_connection() as conn:
+        # عزل الطالب حسب الدور/النطاق (قسم/مشرف/أستاذ) قبل أي قراءة للجدول.
+        from .students import _get_allowed_student_ids_for_role, normalize_sid
+
+        sid_norm = normalize_sid(sid)
+        allowed_ids = _get_allowed_student_ids_for_role(conn, user_role)
+        if allowed_ids is not None and sid_norm not in allowed_ids:
+            return jsonify({"rows": [], "published": True})
+
+        uname = (session.get("user") or session.get("username") or "").strip()
+        mode, dep_id = resolve_users_list_scope(conn, uname)
+        if mode == "empty" or (mode == "department" and dep_id is None):
+            return jsonify({"rows": [], "published": True})
+        if mode == "department" and not student_matches_department(conn, sid_norm, int(dep_id)):
+            return jsonify({"rows": [], "published": True})
+
         _sync_schedule_pk_col(conn)
         cur = conn.cursor()
         q = f"""

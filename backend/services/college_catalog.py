@@ -1,19 +1,23 @@
 """
 المرحلة 1 — إدارة الكتالوج: أقسام، برامج، محتوى مقررات، مقررات الخطة، شُعَب التنفيذ.
-الصلاحية: admin / admin_main فقط.
+الصلاحية:
+- admin / admin_main: إدارة كاملة.
+- head_of_department: مقررات الخطة فقط (مع قراءة برامج قسمه).
 """
 
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session
 
 from backend.core.auth import get_admin_department_scope_id, role_required
+from backend.core.department_scope_policy import head_home_department_id
 from backend.database.database import is_postgresql
 from backend.services.utilities import get_connection
 
 college_catalog_bp = Blueprint("college_catalog", __name__, url_prefix="/college/catalog")
 
-_ADMIN = ("admin", "admin_main")
+_ADMIN_FULL = ("admin", "admin_main")
+_PLAN_EDITOR = ("admin", "admin_main", "head_of_department")
 
 
 def _body() -> dict:
@@ -68,6 +72,36 @@ def _rows(cur, sql: str, params=()):
     return out
 
 
+def _catalog_scope_department_id(conn) -> int | None:
+    role = (session.get("user_role") or "").strip().lower()
+    if role == "head_of_department":
+        uname = (session.get("user") or session.get("username") or "").strip()
+        dep = head_home_department_id(conn, uname)
+        return int(dep) if dep is not None else None
+    scoped = get_admin_department_scope_id()
+    return int(scoped) if scoped is not None else None
+
+
+def _program_belongs_to_scope(conn, program_id: int | None) -> bool:
+    if program_id is None:
+        return False
+    scope_dep = _catalog_scope_department_id(conn)
+    if scope_dep is None:
+        return True
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT department_id FROM programs WHERE id = ? LIMIT 1",
+        (int(program_id),),
+    ).fetchone()
+    if not row:
+        return False
+    dep_id = row["department_id"] if hasattr(row, "keys") else row[0]
+    try:
+        return int(dep_id or 0) == int(scope_dep)
+    except Exception:
+        return False
+
+
 def _grading_mode(v: str) -> str:
     x = (v or "partial_final").strip().lower()
     return x if x in ("partial_final", "final_total_only") else "partial_final"
@@ -87,7 +121,7 @@ def _phase(v: str) -> str:
 
 # ---------------------------------------------------------------------------
 @college_catalog_bp.route("/departments", methods=["GET"])
-@role_required(*_ADMIN)
+@role_required(*_ADMIN_FULL)
 def list_departments():
     with get_connection() as conn:
         cur = conn.cursor()
@@ -99,7 +133,7 @@ def list_departments():
 
 
 @college_catalog_bp.route("/department/save", methods=["POST"])
-@role_required(*_ADMIN)
+@role_required(*_ADMIN_FULL)
 def save_department():
     b = _body()
     dept_id = _i(b.get("id"))
@@ -151,33 +185,33 @@ def save_department():
 
 # ---------------------------------------------------------------------------
 @college_catalog_bp.route("/programs", methods=["GET"])
-@role_required(*_ADMIN)
+@role_required(*_PLAN_EDITOR)
 def list_programs():
     dept_id = _i(request.args.get("department_id"))
-    if dept_id is None:
-        scoped = get_admin_department_scope_id()
-        if scoped is not None:
-            dept_id = scoped
-    base = """
-        SELECT p.*, d.code AS department_code
-        FROM programs p
-        LEFT JOIN departments d ON d.id = p.department_id
-    """
-    order = " ORDER BY COALESCE(d.code, ''), p.code "
-    params = ()
-    if dept_id:
-        sql = base + " WHERE p.department_id = ?" + order
-        params = (dept_id,)
-    else:
-        sql = base + order
     with get_connection() as conn:
+        if dept_id is None:
+            scoped = _catalog_scope_department_id(conn)
+            if scoped is not None:
+                dept_id = scoped
+        base = """
+            SELECT p.*, d.code AS department_code
+            FROM programs p
+            LEFT JOIN departments d ON d.id = p.department_id
+        """
+        order = " ORDER BY COALESCE(d.code, ''), p.code "
+        params = ()
+        if dept_id:
+            sql = base + " WHERE p.department_id = ?" + order
+            params = (dept_id,)
+        else:
+            sql = base + order
         cur = conn.cursor()
         rows = _rows(cur, sql, params)
     return jsonify({"status": "ok", "items": rows}), 200
 
 
 @college_catalog_bp.route("/program/save", methods=["POST"])
-@role_required(*_ADMIN)
+@role_required(*_ADMIN_FULL)
 def save_program():
     b = _body()
     pid = _i(b.get("id"))
@@ -284,7 +318,7 @@ def save_program():
 
 # ---------------------------------------------------------------------------
 @college_catalog_bp.route("/course_masters", methods=["GET"])
-@role_required(*_ADMIN)
+@role_required(*_PLAN_EDITOR)
 def list_course_masters():
     with get_connection() as conn:
         cur = conn.cursor()
@@ -296,7 +330,7 @@ def list_course_masters():
 
 
 @college_catalog_bp.route("/course_master/save", methods=["POST"])
-@role_required(*_ADMIN)
+@role_required(*_ADMIN_FULL)
 def save_course_master():
     b = _body()
     mid = _i(b.get("id"))
@@ -347,12 +381,14 @@ def save_course_master():
 
 # ---------------------------------------------------------------------------
 @college_catalog_bp.route("/program_courses", methods=["GET"])
-@role_required(*_ADMIN)
+@role_required(*_PLAN_EDITOR)
 def list_program_courses():
     program_id = _i(request.args.get("program_id"))
     if not program_id:
         return jsonify({"status": "error", "message": "program_id مطلوب"}), 400
     with get_connection() as conn:
+        if not _program_belongs_to_scope(conn, int(program_id)):
+            return jsonify({"status": "error", "message": "FORBIDDEN_PROGRAM_SCOPE"}), 403
         cur = conn.cursor()
         rows = _rows(
             cur,
@@ -369,10 +405,9 @@ def list_program_courses():
 
 
 @college_catalog_bp.route("/program_courses/browse", methods=["GET"])
-@role_required(*_ADMIN)
+@role_required(*_PLAN_EDITOR)
 def browse_program_courses():
     lim = max(1, min(_i(request.args.get("limit"), 400), 800))
-    scope = get_admin_department_scope_id()
     order_lim = """
             ORDER BY COALESCE(d.code, ''), p.code, pc.level_no, pc.course_code
             LIMIT ?
@@ -382,6 +417,7 @@ def browse_program_courses():
                    pc.program_id,
                    pc.course_master_id,
                    pc.course_code,
+                   COALESCE(pc.plan_applicability, 'both') AS plan_applicability,
                    pc.level_no,
                    d.code AS department_code,
                    p.code AS program_code,
@@ -393,6 +429,7 @@ def browse_program_courses():
             INNER JOIN course_master cm ON cm.id = pc.course_master_id
             """
     with get_connection() as conn:
+        scope = _catalog_scope_department_id(conn)
         cur = conn.cursor()
         if scope is not None:
             sql = base_sel + " WHERE p.department_id = ? " + order_lim
@@ -410,33 +447,78 @@ def browse_program_courses():
 
 
 @college_catalog_bp.route("/program_course/save", methods=["POST"])
-@role_required(*_ADMIN)
+@role_required(*_PLAN_EDITOR)
 def save_program_course():
     b = _body()
     pcid = _i(b.get("id"))
     program_id = _i(b.get("program_id"))
     course_master_id = _i(b.get("course_master_id"))
+    course_master_title_ar = str(b.get("course_master_title_ar") or "").strip()
     course_code = str(b.get("course_code") or "").strip()
     name_ov = str(b.get("course_name_override") or "").strip()
     level_no = max(0, _i(b.get("level_no"), 0) or 0)
     term_hint = str(b.get("term_hint") or "").strip()
     units_ov = b.get("units_override")
     units_ov_int = None if units_ov in (None, "") else _i(units_ov, 0)
+    plan_app = str(b.get("plan_applicability") or "both").strip().lower()
+    if plan_app not in ("150", "155", "both"):
+        plan_app = "both"
     category = str(b.get("category") or "required").strip() or "required"
     reqd = _ibool(b.get("is_required"), 1)
     is_act = _ibool(b.get("is_active"), 1)
-    if program_id is None or course_master_id is None or not course_code:
+    if program_id is None or not course_code:
         return jsonify(
-            {"status": "error", "message": "program_id و course_master_id ورمز المقرر في الخطة مطلوبة"}
+            {"status": "error", "message": "program_id ورمز المقرر في الخطة مطلوبة"}
         ), 400
     with get_connection() as conn:
+        if not _program_belongs_to_scope(conn, int(program_id)):
+            return jsonify({"status": "error", "message": "FORBIDDEN_PROGRAM_SCOPE"}), 403
         cur = conn.cursor()
+        if course_master_id is None:
+            if not course_master_title_ar:
+                return jsonify(
+                    {"status": "error", "message": "اختر مقررًا من القائمة أو أدخل اسم مقرر جديد"}
+                ), 400
+            existing = cur.execute(
+                """
+                SELECT id
+                FROM course_master
+                WHERE lower(trim(COALESCE(title_ar,''))) = lower(trim(?))
+                LIMIT 1
+                """,
+                (course_master_title_ar,),
+            ).fetchone()
+            if existing:
+                course_master_id = _row_id(existing)
+            else:
+                if is_postgresql():
+                    cur.execute(
+                        """
+                        INSERT INTO course_master (title_ar, default_units, grading_mode, assessment_type)
+                        VALUES (?, ?, 'partial_final', 'theoretical')
+                        RETURNING id
+                        """,
+                        (course_master_title_ar, int(units_ov_int or 0)),
+                    )
+                    course_master_id = _row_id(cur.fetchone())
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO course_master (title_ar, default_units, grading_mode, assessment_type)
+                        VALUES (?, ?, 'partial_final', 'theoretical')
+                        """,
+                        (course_master_title_ar, int(units_ov_int or 0)),
+                    )
+                    course_master_id = int(
+                        getattr(cur, "lastrowid", None)
+                        or cur.execute("SELECT last_insert_rowid()").fetchone()[0]
+                    )
         pg = is_postgresql()
         if pcid:
             cur.execute(
                 """
                 UPDATE program_courses SET program_id = ?, course_master_id = ?, course_code = ?,
-                  course_name_override = ?, level_no = ?, term_hint = ?, units_override = ?,
+                  course_name_override = ?, plan_applicability = ?, level_no = ?, term_hint = ?, units_override = ?,
                   category = ?, is_required = ?, is_active = ?
                 WHERE id = ?
                 """,
@@ -445,6 +527,7 @@ def save_program_course():
                     course_master_id,
                     course_code,
                     name_ov,
+                    plan_app,
                     level_no,
                     term_hint,
                     units_ov_int,
@@ -459,11 +542,12 @@ def save_program_course():
                 """
                 INSERT INTO program_courses
                 (program_id, course_master_id, course_code, course_name_override,
-                 level_no, term_hint, units_override, category, is_required, is_active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 plan_applicability, level_no, term_hint, units_override, category, is_required, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (program_id, course_code) DO UPDATE SET
                   course_master_id = EXCLUDED.course_master_id,
                   course_name_override = EXCLUDED.course_name_override,
+                  plan_applicability = EXCLUDED.plan_applicability,
                   level_no = EXCLUDED.level_no,
                   term_hint = EXCLUDED.term_hint,
                   units_override = EXCLUDED.units_override,
@@ -477,6 +561,7 @@ def save_program_course():
                     course_master_id,
                     course_code,
                     name_ov,
+                    plan_app,
                     level_no,
                     term_hint,
                     units_ov_int,
@@ -491,11 +576,12 @@ def save_program_course():
                 """
                 INSERT INTO program_courses
                 (program_id, course_master_id, course_code, course_name_override,
-                 level_no, term_hint, units_override, category, is_required, is_active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 plan_applicability, level_no, term_hint, units_override, category, is_required, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (program_id, course_code) DO UPDATE SET
                   course_master_id = excluded.course_master_id,
                   course_name_override = excluded.course_name_override,
+                  plan_applicability = excluded.plan_applicability,
                   level_no = excluded.level_no,
                   term_hint = excluded.term_hint,
                   units_override = excluded.units_override,
@@ -508,6 +594,7 @@ def save_program_course():
                     course_master_id,
                     course_code,
                     name_ov,
+                    plan_app,
                     level_no,
                     term_hint,
                     units_ov_int,
@@ -526,12 +613,19 @@ def save_program_course():
 
 
 @college_catalog_bp.route("/program_course/delete", methods=["POST"])
-@role_required(*_ADMIN)
+@role_required(*_PLAN_EDITOR)
 def delete_program_course():
     pcid = _i(_body().get("id"))
     if pcid is None:
         return jsonify({"status": "error", "message": "id مطلوب"}), 400
     with get_connection() as conn:
+        cur = conn.cursor()
+        row = cur.execute("SELECT program_id FROM program_courses WHERE id = ? LIMIT 1", (pcid,)).fetchone()
+        if not row:
+            return jsonify({"status": "error", "message": "غير موجود"}), 404
+        prog_id = row["program_id"] if hasattr(row, "keys") else row[0]
+        if not _program_belongs_to_scope(conn, _i(prog_id)):
+            return jsonify({"status": "error", "message": "FORBIDDEN_PROGRAM_SCOPE"}), 403
         cur = conn.cursor()
         cur.execute("DELETE FROM program_courses WHERE id = ?", (pcid,))
         conn.commit()
@@ -540,7 +634,7 @@ def delete_program_course():
 
 # ---------------------------------------------------------------------------
 @college_catalog_bp.route("/sections", methods=["GET"])
-@role_required(*_ADMIN)
+@role_required(*_ADMIN_FULL)
 def list_sections():
     program_course_id = _i(request.args.get("program_course_id"))
     if not program_course_id:
@@ -564,7 +658,7 @@ def list_sections():
 
 
 @college_catalog_bp.route("/section/save", methods=["POST"])
-@role_required(*_ADMIN)
+@role_required(*_ADMIN_FULL)
 def save_section():
     b = _body()
     sid = _i(b.get("id"))
@@ -632,7 +726,7 @@ def save_section():
 
 
 @college_catalog_bp.route("/section/delete", methods=["POST"])
-@role_required(*_ADMIN)
+@role_required(*_ADMIN_FULL)
 def delete_section():
     sid = _i(_body().get("id"))
     if sid is None:

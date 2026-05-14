@@ -1,9 +1,16 @@
 from flask import Blueprint, request, jsonify, send_file, session, render_template
-from backend.core.auth import login_required, role_required, SESSION_ACTIVE_MODE
-from backend.database.database import is_postgresql, table_to_dicts, fetch_table_columns
+from backend.core.auth import login_required, role_required, SESSION_ACTIVE_MODE, _normalize_role, get_admin_department_scope_id
+from backend.core import department_scope_policy as dept_scope_policy
+
+from backend.services.coverage_insights import (
+    normalize_coverage_course_key,
+    registered_distinct_course_names,
+    registration_course_student_counts,
+    schedule_distinct_course_names_for_coverage,
+)
+from backend.database.database import is_postgresql, fetch_table_columns
 from .utilities import (
     get_connection,
-    df_from_query,
     excel_response_from_df,
     pdf_response_from_html,
     log_activity,
@@ -83,6 +90,65 @@ def _role_may_edit_exam_schedule():
         mode = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
         return mode in ("", "head", "hod", "department_head")
     return False
+
+
+def _resolve_actor_department_id(conn) -> int | None:
+    cur = conn.cursor()
+    uname = (session.get("user") or session.get("username") or "").strip()
+    if uname:
+        try:
+            row = cur.execute(
+                "SELECT department_id FROM users WHERE lower(username)=lower(?) LIMIT 1",
+                (uname,),
+            ).fetchone()
+            if row and row[0] not in (None, ""):
+                return int(row[0])
+        except Exception:
+            pass
+    try:
+        iid = int(session.get("instructor_id") or 0)
+    except (TypeError, ValueError):
+        iid = 0
+    if iid:
+        try:
+            row = cur.execute(
+                "SELECT department_id FROM instructors WHERE id = ? LIMIT 1",
+                (iid,),
+            ).fetchone()
+            if row and row[0] not in (None, ""):
+                return int(row[0])
+        except Exception:
+            pass
+    return None
+
+
+def _effective_department_scope_id(conn) -> int | None:
+    role_n = _normalize_role((session.get("user_role") or "").strip())
+    if role_n in ("admin", "admin_main"):
+        return get_admin_department_scope_id()
+    if role_n == "head_of_department":
+        mode = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
+        if mode in ("", "head", "hod", "department_head"):
+            return _resolve_actor_department_id(conn)
+    return None
+
+
+def _course_in_scope(conn, course_name: str) -> bool:
+    dep = _effective_department_scope_id(conn)
+    if dep is None:
+        return True
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT 1
+        FROM courses
+        WHERE lower(trim(course_name)) = lower(trim(?))
+          AND COALESCE(owning_department_id,-1) = ?
+        LIMIT 1
+        """,
+        ((course_name or "").strip(), int(dep)),
+    ).fetchone()
+    return bool(row)
 
 
 def _user_can_view_exam_rows(exam_type: str) -> bool:
@@ -338,13 +404,22 @@ def exam_schedule_version_restore_draft(version_id: int):
             if not isinstance(rows, list):
                 rows = []
 
-            cur.execute("DELETE FROM exams WHERE exam_type = ?", (exam_type,))
+            dep_r = _effective_department_scope_id(conn)
+            role_r = _normalize_role((session.get("user_role") or "").strip())
+            dept_scoped_r = bool(
+                dep_r is not None and role_r in ("admin", "admin_main", "head_of_department")
+            )
+            _delete_exams_for_type_respecting_scope(
+                cur, exam_type, int(dep_r) if dept_scoped_r else None, dept_scoped_r
+            )
             restored = 0
             for it in rows:
                 if not isinstance(it, dict):
                     continue
                 course_name = (it.get("course_name") or "").strip()
                 if not course_name:
+                    continue
+                if not _course_in_scope(conn, course_name):
                     continue
                 exam_date = (it.get("exam_date") or "").strip()
                 exam_time = (it.get("exam_time") or "").strip()
@@ -496,88 +571,104 @@ def normalize_dates(dates):
 
 
 def _norm_exam_course_key(name: str) -> str:
-    return (name or "").strip().lower()
+    return normalize_coverage_course_key(name)
 
 
-def _schedule_distinct_course_names_for_coverage(cur, term_label: str) -> tuple[list[str], str]:
-    """
-    أسماء المقررات الفريدة من جدول schedule لمقارنة التغطية مع جدول الامتحانات.
-    يفضّل صفوف الفصل الحالي أو ذات semester فارغ (بيانات قديمة بلا موسم).
-    """
-    tl = (term_label or "").strip()
-    rows: list = []
-    used_filter = ""
-    try:
-        if tl:
-            rows = cur.execute(
-                """
-                SELECT MIN(TRIM(course_name)) AS course_name
-                FROM schedule
-                WHERE COALESCE(TRIM(course_name), '') <> ''
-                  AND (
-                      COALESCE(TRIM(semester), '') = ''
-                      OR LOWER(TRIM(COALESCE(semester,''))) = LOWER(TRIM(?))
-                  )
-                GROUP BY LOWER(TRIM(course_name))
-                ORDER BY MIN(TRIM(course_name))
-                """,
-                (tl,),
-            ).fetchall()
-            used_filter = "current_semester_or_blank"
-    except Exception:
-        rows = []
-    names = [(r[0] or "").strip() for r in rows if r and (r[0] or "").strip()]
-    if not names:
-        try:
-            rows = cur.execute(
-                """
-                SELECT MIN(TRIM(course_name)) AS course_name
-                FROM schedule
-                WHERE COALESCE(TRIM(course_name), '') <> ''
-                GROUP BY LOWER(TRIM(course_name))
-                ORDER BY MIN(TRIM(course_name))
-                """
-            ).fetchall()
-            names = [(r[0] or "").strip() for r in rows if r and (r[0] or "").strip()]
-            used_filter = "all_schedule"
-        except Exception:
-            names = []
-            used_filter = "none"
-    return names, used_filter
+def _delete_exams_for_type_respecting_scope(cur, exam_type: str, dep_id: int | None, dept_scoped: bool) -> None:
+    """يحذف صفوف الامتحانات: كلياً لغير المنطقي، أو مقررات القسم فقط عند نطاق القسم."""
+    if not dept_scoped or dep_id is None:
+        cur.execute("DELETE FROM exams WHERE exam_type = ?", (exam_type,))
+        return
+    cur.execute(
+        """
+        DELETE FROM exams
+        WHERE exam_type = ?
+          AND EXISTS (
+              SELECT 1 FROM courses c
+              WHERE lower(trim(c.course_name)) = lower(trim(exams.course_name))
+                AND COALESCE(c.owning_department_id, -1) = ?
+          )
+        """,
+        (exam_type, int(dep_id)),
+    )
 
 
-def _registered_distinct_course_names(cur, conn) -> list[str]:
+def _fetch_exam_conflict_aggregate_rows(conn, exam_type: str):
     """
-    المقررات الفعلية من registrations (عدد طلاب فعلي > 0) مع مراعاة الطلبة النشطين إن توفّر الحقل.
+    مجموعات تعارض (طالب يوم واحد أكثر من امتحان): ضمن مقررات قسم المنطقي وطلاب المنطقي.
     """
-    try:
-        cols_stu = fetch_table_columns(conn, "students")
-    except Exception:
-        cols_stu = []
-    active_only = "enrollment_status" in {str(c).strip().lower() for c in (cols_stu or [])}
-    if active_only:
-        rows = cur.execute(
-            """
-            SELECT MIN(TRIM(r.course_name)) AS course_name
-            FROM registrations r
-            LEFT JOIN students s ON s.student_id = r.student_id
-            WHERE COALESCE(TRIM(r.course_name), '') <> ''
-              AND COALESCE(s.enrollment_status, 'active') = 'active'
-            GROUP BY LOWER(TRIM(r.course_name))
-            ORDER BY MIN(TRIM(r.course_name))
-            """
-        ).fetchall()
+    cur = conn.cursor()
+    dep = _effective_department_scope_id(conn)
+    role_cov = _normalize_role((session.get("user_role") or "").strip())
+    dept_scoped = bool(dep is not None and role_cov in ("admin", "admin_main", "head_of_department"))
+    uname = (session.get("user") or session.get("username") or "").strip()
+    scope_sql, scope_params = dept_scope_policy.resolve_scope_sql_for_aliased_student(conn, uname, "st")
+    if scope_sql == "1=0":
+        return []
+
+    dept_join = ""
+    prefix_params: tuple = ()
+    if dept_scoped and dep is not None:
+        dept_join = """
+            INNER JOIN courses __c_dep
+              ON lower(trim(__c_dep.course_name)) = lower(trim(e.course_name))
+             AND COALESCE(__c_dep.owning_department_id, -1) = ?
+        """
+        prefix_params = (int(dep),)
+
+    stu_join = ""
+    scope_where = ""
+    scope_params_suffix: tuple = ()
+    if scope_sql:
+        stu_join = " INNER JOIN students st ON st.student_id = r.student_id "
+        scope_where = f" AND ({scope_sql}) "
+        scope_params_suffix = tuple(scope_params) if scope_params else ()
+
+    q = f"""
+        SELECT r.student_id AS student_id, e.exam_date AS exam_date,
+               {_course_names_agg_sql("e.course_name")} AS conflicting_courses,
+               COUNT(e.course_name) AS ccount
+        FROM exams e
+        {dept_join}
+        JOIN registrations r ON LOWER(TRIM(r.course_name)) = LOWER(TRIM(e.course_name))
+        {stu_join}
+        WHERE e.exam_type = ?
+        {scope_where}
+        GROUP BY r.student_id, e.exam_date
+        HAVING COUNT(e.course_name) > 1
+    """
+    params = prefix_params + (exam_type,) + scope_params_suffix
+    return cur.execute(q, params).fetchall()
+
+
+def _exam_dicts_for_export_or_results(conn, exam_type: str) -> list[dict]:
+    """صفوف جدول exams حسب نطاق القسم (يتوافق مع list_exam_rows)."""
+    cur = conn.cursor()
+    dep = _effective_department_scope_id(conn)
+    if dep is None:
+        cur.execute(
+            "SELECT * FROM exams WHERE exam_type = ? ORDER BY exam_date, exam_time, id",
+            (exam_type,),
+        )
     else:
-        rows = cur.execute(
+        cur.execute(
             """
-            SELECT MIN(TRIM(r.course_name)) AS course_name
-            FROM registrations r
-            WHERE COALESCE(TRIM(r.course_name), '') <> ''
-            GROUP BY LOWER(TRIM(r.course_name))
-            ORDER BY MIN(TRIM(r.course_name))
-            """
-        ).fetchall()
-    return [(r[0] or "").strip() for r in (rows or []) if r and (r[0] or "").strip()]
+            SELECT e.* FROM exams e
+            INNER JOIN courses c ON lower(trim(c.course_name)) = lower(trim(e.course_name))
+            WHERE e.exam_type = ? AND COALESCE(c.owning_department_id,-1) = ?
+            ORDER BY e.exam_date, e.exam_time, e.id
+            """,
+            (exam_type, int(dep)),
+        )
+    rows = cur.fetchall()
+    cols = [d[0] for d in (cur.description or [])]
+    out: list[dict] = []
+    for r in rows or []:
+        if hasattr(r, "keys"):
+            out.append(dict(r))
+        else:
+            out.append(dict(zip(cols, r)))
+    return out
 
 
 @exams_bp.route('/<exam_type>/schedule_coverage')
@@ -598,18 +689,45 @@ def exam_schedule_coverage(exam_type):
             tname, tyear = get_current_term(conn=conn)
             term_label = f"{(tname or '').strip()} {(tyear or '').strip()}".strip() or SEMESTER_LABEL
             cur = conn.cursor()
-            schedule_names, scope = _schedule_distinct_course_names_for_coverage(cur, term_label)
+            dep = _effective_department_scope_id(conn)
+            role_cov = _normalize_role((session.get("user_role") or "").strip())
+            dept_scoped_user = (
+                dep is not None and role_cov in ("admin", "admin_main", "head_of_department")
+            )
+
+            schedule_names, scope = schedule_distinct_course_names_for_coverage(
+                conn,
+                cur,
+                term_label,
+                dept_scope_id=int(dep) if dept_scoped_user else None,
+            )
+            actor_u = (session.get("user") or session.get("username") or "").strip()
             sched_keys = {_norm_exam_course_key(n) for n in schedule_names if _norm_exam_course_key(n)}
-            registered_names = _registered_distinct_course_names(cur, conn)
+            registered_names = registered_distinct_course_names(cur, conn, actor_username=actor_u)
             reg_keys = {_norm_exam_course_key(n) for n in registered_names if _norm_exam_course_key(n)}
 
-            rows = cur.execute(
-                """
-                SELECT id AS exam_id, COALESCE(course_name,'') AS course_name, COALESCE(exam_date,'') AS exam_date
-                FROM exams WHERE exam_type = ? ORDER BY exam_date, course_name, id
-                """,
-                (exam_type,),
-            ).fetchall()
+            if not dept_scoped_user:
+                rows = cur.execute(
+                    """
+                    SELECT id AS exam_id, COALESCE(course_name,'') AS course_name, COALESCE(exam_date,'') AS exam_date
+                    FROM exams WHERE exam_type = ? ORDER BY exam_date, course_name, id
+                    """,
+                    (exam_type,),
+                ).fetchall()
+            else:
+                rows = cur.execute(
+                    """
+                    SELECT e.id AS exam_id,
+                           COALESCE(e.course_name,'') AS course_name,
+                           COALESCE(e.exam_date,'') AS exam_date
+                    FROM exams e
+                    JOIN courses c ON lower(trim(c.course_name)) = lower(trim(e.course_name))
+                    WHERE e.exam_type = ?
+                      AND COALESCE(c.owning_department_id,-1) = ?
+                    ORDER BY e.exam_date, e.course_name, e.id
+                    """,
+                    (exam_type, int(dep)),
+                ).fetchall()
 
             by_key: dict[str, list[dict]] = {}
             exam_keys: set[str] = set()
@@ -668,11 +786,22 @@ def exam_schedule_coverage(exam_type):
                 }
             )
 
-            scope_ar = {
+            scope_labels = {
                 "current_semester_or_blank": "مقررات الجدول الدراسي للفصل الحالي (أو صفوف بلا حقل فصل)",
                 "all_schedule": "كل المقررات الظاهرة في جدول المقررات (لم يُعثر على بيانات للفصل الحالي)",
+                "all_schedule_scoped": "كل مقررات الجدولة المطابقة للفصل (ضمن مقررات قسم نطاقك)",
                 "none": "لا توجد مقررات في جدول schedule",
-            }.get(scope, scope)
+                "scoped_no_schedule_course_department_columns": "لا يمكن حصر مقررات الجدولة حسب القسم (أعمدة القسم غير متوفرة في الجدولة/المقررات)",
+            }
+            scope_ar = scope_labels.get(scope, scope)
+            if dept_scoped_user:
+                if scope == "scoped_no_schedule_course_department_columns":
+                    scope_ar = (
+                        scope_labels["scoped_no_schedule_course_department_columns"]
+                        + " أضف department_id في الجدولة أو owning_department_id في المقررات لقياس الدقة داخل القسم."
+                    )
+                elif scope_ar:
+                    scope_ar = scope_ar + " — الأعداد والقوائم أعلاه تخص مقررات قسم عملك وفق هذا النطاق."
 
             return jsonify(
                 {
@@ -709,7 +838,20 @@ def list_exam_rows(exam_type):
         return jsonify([])
     with get_connection() as conn:
         cur = conn.cursor()
-        rows = cur.execute("SELECT id AS exam_id, course_name, exam_date, exam_time, room, instructor FROM exams WHERE exam_type=? ORDER BY exam_date, exam_time", (exam_type,)).fetchall()
+        dep = _effective_department_scope_id(conn)
+        if dep is None:
+            rows = cur.execute("SELECT id AS exam_id, course_name, exam_date, exam_time, room, instructor FROM exams WHERE exam_type=? ORDER BY exam_date, exam_time", (exam_type,)).fetchall()
+        else:
+            rows = cur.execute(
+                """
+                SELECT e.id AS exam_id, e.course_name, e.exam_date, e.exam_time, e.room, e.instructor
+                FROM exams e
+                JOIN courses c ON lower(trim(c.course_name)) = lower(trim(e.course_name))
+                WHERE e.exam_type = ? AND COALESCE(c.owning_department_id,-1) = ?
+                ORDER BY e.exam_date, e.exam_time
+                """,
+                (exam_type, int(dep)),
+            ).fetchall()
         return jsonify([dict(r) for r in rows])
 
 @exams_bp.route('/<exam_type>/check_conflicts', methods=['POST'])
@@ -757,16 +899,7 @@ def check_exam_conflicts(exam_type):
                 )
                 temp_rowid = int(cur.lastrowid or 0)
             
-            # حساب التعارضات
-            q = f'''
-            SELECT r.student_id as student_id, e.exam_date as exam_date, {_course_names_agg_sql('e.course_name')} as courses, COUNT(e.course_name) as ccount
-            FROM exams e
-            JOIN registrations r ON LOWER(TRIM(r.course_name)) = LOWER(TRIM(e.course_name))
-            WHERE e.exam_type = ?
-            GROUP BY r.student_id, e.exam_date
-            HAVING COUNT(e.course_name) > 1
-            '''
-            rows = cur.execute(q, (exam_type,)).fetchall()
+            rows = _fetch_exam_conflict_aggregate_rows(conn, exam_type)
             
             # تصفية التعارضات المتعلقة بالامتحان الجديد
             def _norm_name(v: str) -> str:
@@ -843,6 +976,8 @@ def add_exam_row(exam_type):
         return jsonify({"status":"error","message":"invalid date format"}), 400
     exam_date = nd[0]
     with get_connection() as conn:
+        if not _course_in_scope(conn, course_name):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         cur = conn.cursor()
         cur.execute("INSERT INTO exams (exam_type, exam_id, course_name, exam_date, exam_time, room, instructor) VALUES (?,?,?,?,?,?,?)",
                     (exam_type, None, course_name, exam_date, exam_time, room, instructor))
@@ -875,6 +1010,9 @@ def delete_exam_row(exam_type):
         return jsonify({"status":"error","message":"exam_id required"}), 400
     with get_connection() as conn:
         cur = conn.cursor()
+        row_c = cur.execute("SELECT course_name FROM exams WHERE id = ? AND exam_type = ? LIMIT 1", (exam_id, exam_type)).fetchone()
+        if row_c and not _course_in_scope(conn, row_c[0]):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         cur.execute('DELETE FROM exams WHERE id = ? AND exam_type = ?', (exam_id, exam_type))
         conn.commit()
     try:
@@ -919,38 +1057,86 @@ def distribute_exams(exam_type):
 
     with get_connection() as conn:
         cur = conn.cursor()
-        # get list of distinct course names (prefer schedule table)
+        dep = _effective_department_scope_id(conn)
+        role_cov = _normalize_role((session.get("user_role") or "").strip())
+        dept_scoped_user = bool(
+            dep is not None and role_cov in ("admin", "admin_main", "head_of_department")
+        )
         try:
-            course_rows = cur.execute(
-                """
-                SELECT MIN(TRIM(course_name)) AS course_name
-                FROM schedule
-                WHERE COALESCE(TRIM(course_name), '') <> ''
-                GROUP BY LOWER(TRIM(course_name))
-                ORDER BY MIN(TRIM(course_name))
-                """
-            ).fetchall()
-            courses = [r[0] for r in course_rows]
-            if not courses:
-                # fallback to courses table
-                course_rows = cur.execute(
-                    """
-                    SELECT MIN(TRIM(course_name)) AS course_name
-                    FROM courses
-                    WHERE COALESCE(TRIM(course_name), '') <> ''
-                    GROUP BY LOWER(TRIM(course_name))
-                    ORDER BY MIN(TRIM(course_name))
-                    """
-                ).fetchall()
-                courses = [r[0] for r in course_rows]
+            tname, tyear = get_current_term(conn=conn)
+            term_label = f"{(tname or '').strip()} {(tyear or '').strip()}".strip() or SEMESTER_LABEL
         except Exception:
-            courses = []
+            term_label = SEMESTER_LABEL
+        courses, _cov = schedule_distinct_course_names_for_coverage(
+            conn,
+            cur,
+            term_label,
+            dept_scope_id=int(dep) if dept_scoped_user else None,
+        )
+        if not courses:
+            try:
+                join_owner = ""
+                dept_par: tuple = ()
+                if dept_scoped_user and dep is not None:
+                    try:
+                        ccols = fetch_table_columns(conn, "courses")
+                    except Exception:
+                        ccols = []
+                    if "owning_department_id" in ccols:
+                        join_owner = """
+                            INNER JOIN courses ccov_dep
+                              ON lower(trim(ccov_dep.course_name)) = lower(trim(s.course_name))
+                             AND COALESCE(ccov_dep.owning_department_id, -1) = ?
+                        """
+                        dept_par = (int(dep),)
+                rows_fb = cur.execute(
+                    f"""
+                    SELECT MIN(TRIM(s.course_name)) AS course_name
+                    FROM schedule s
+                    {join_owner}
+                    WHERE COALESCE(TRIM(s.course_name), '') <> ''
+                    GROUP BY LOWER(TRIM(s.course_name))
+                    ORDER BY MIN(TRIM(s.course_name))
+                    """,
+                    dept_par,
+                ).fetchall()
+                courses = [(r[0] or "").strip() for r in rows_fb if r and (r[0] or "").strip()]
+            except Exception:
+                courses = []
+        if not courses:
+            try:
+                if dept_scoped_user and dep is not None:
+                    rows_fb2 = cur.execute(
+                        """
+                        SELECT MIN(TRIM(course_name)) AS course_name
+                        FROM courses
+                        WHERE COALESCE(TRIM(course_name), '') <> ''
+                          AND COALESCE(owning_department_id, -1) = ?
+                        GROUP BY LOWER(TRIM(course_name))
+                        ORDER BY MIN(TRIM(course_name))
+                        """,
+                        (int(dep),),
+                    ).fetchall()
+                else:
+                    rows_fb2 = cur.execute(
+                        """
+                        SELECT MIN(TRIM(course_name)) AS course_name
+                        FROM courses
+                        WHERE COALESCE(TRIM(course_name), '') <> ''
+                        GROUP BY LOWER(TRIM(course_name))
+                        ORDER BY MIN(TRIM(course_name))
+                        """
+                    ).fetchall()
+                courses = [(r[0] or "").strip() for r in rows_fb2 if r and (r[0] or "").strip()]
+            except Exception:
+                courses = []
 
         if not courses:
             return jsonify({"status":"error","message":"no courses found to schedule"}), 400
 
-        # clear existing exams of this type
-        cur.execute('DELETE FROM exams WHERE exam_type = ?', (exam_type,))
+        _delete_exams_for_type_respecting_scope(
+            cur, exam_type, int(dep) if dept_scoped_user else None, dept_scoped_user
+        )
 
         # assign courses to dates
         if method == 'round_robin':
@@ -962,17 +1148,9 @@ def distribute_exams(exam_type):
                 di += 1
         elif method in ('balanced', 'smart'):
             # توزيع يعتمد على عدد الطلبة المسجلين لتقليل احتمال التعارض
-            # احسب عدد الطلبة في كل مقرر
-            counts = {}
+            actor_u = (session.get("user") or session.get("username") or "").strip()
             try:
-                q = """
-                SELECT LOWER(TRIM(course_name)) AS course_key, COUNT(DISTINCT student_id) AS cnt
-                FROM registrations
-                WHERE COALESCE(TRIM(course_name), '') <> ''
-                GROUP BY LOWER(TRIM(course_name))
-                """
-                for cname, cnt in cur.execute(q).fetchall():
-                    counts[cname] = cnt or 0
+                counts = registration_course_student_counts(cur, conn, actor_username=actor_u)
             except Exception:
                 counts = {}
             # رتب المقررات تنازلياً حسب عدد الطلبة
@@ -1027,28 +1205,79 @@ def available_courses():
     """Return distinct course names from schedule (for populating selects)."""
     with get_connection() as conn:
         cur = conn.cursor()
+        dep = _effective_department_scope_id(conn)
+        role_cov = _normalize_role((session.get("user_role") or "").strip())
+        dept_scoped_user = bool(
+            dep is not None and role_cov in ("admin", "admin_main", "head_of_department")
+        )
         try:
-            rows = cur.execute(
-                """
-                SELECT MIN(TRIM(course_name)) AS course_name
-                FROM schedule
-                WHERE COALESCE(TRIM(course_name), '') <> ''
-                GROUP BY LOWER(TRIM(course_name))
-                ORDER BY MIN(TRIM(course_name))
-                """
-            ).fetchall()
-            courses = [r[0] for r in rows]
+            tname, tyear = get_current_term(conn=conn)
+            term_label = f"{(tname or '').strip()} {(tyear or '').strip()}".strip() or SEMESTER_LABEL
         except Exception:
-            rows = cur.execute(
-                """
-                SELECT MIN(TRIM(course_name)) AS course_name
-                FROM courses
-                WHERE COALESCE(TRIM(course_name), '') <> ''
-                GROUP BY LOWER(TRIM(course_name))
-                ORDER BY MIN(TRIM(course_name))
-                """
-            ).fetchall()
-            courses = [r[0] for r in rows]
+            term_label = SEMESTER_LABEL
+        courses, _ = schedule_distinct_course_names_for_coverage(
+            conn,
+            cur,
+            term_label,
+            dept_scope_id=int(dep) if dept_scoped_user else None,
+        )
+        if not courses:
+            try:
+                join_owner = ""
+                dept_par: tuple = ()
+                if dept_scoped_user and dep is not None:
+                    try:
+                        ccols = fetch_table_columns(conn, "courses")
+                    except Exception:
+                        ccols = []
+                    if "owning_department_id" in ccols:
+                        join_owner = """
+                            INNER JOIN courses ccov_dep
+                              ON lower(trim(ccov_dep.course_name)) = lower(trim(s.course_name))
+                             AND COALESCE(ccov_dep.owning_department_id, -1) = ?
+                        """
+                        dept_par = (int(dep),)
+                rows = cur.execute(
+                    f"""
+                    SELECT MIN(TRIM(s.course_name)) AS course_name
+                    FROM schedule s
+                    {join_owner}
+                    WHERE COALESCE(TRIM(s.course_name), '') <> ''
+                    GROUP BY LOWER(TRIM(s.course_name))
+                    ORDER BY MIN(TRIM(s.course_name))
+                    """,
+                    dept_par,
+                ).fetchall()
+                courses = [r[0] for r in rows]
+            except Exception:
+                courses = []
+        if not courses:
+            try:
+                if dept_scoped_user and dep is not None:
+                    rows = cur.execute(
+                        """
+                        SELECT MIN(TRIM(course_name)) AS course_name
+                        FROM courses
+                        WHERE COALESCE(TRIM(course_name), '') <> ''
+                          AND COALESCE(owning_department_id, -1) = ?
+                        GROUP BY LOWER(TRIM(course_name))
+                        ORDER BY MIN(TRIM(course_name))
+                        """,
+                        (int(dep),),
+                    ).fetchall()
+                else:
+                    rows = cur.execute(
+                        """
+                        SELECT MIN(TRIM(course_name)) AS course_name
+                        FROM courses
+                        WHERE COALESCE(TRIM(course_name), '') <> ''
+                        GROUP BY LOWER(TRIM(course_name))
+                        ORDER BY MIN(TRIM(course_name))
+                        """
+                    ).fetchall()
+                courses = [r[0] for r in rows]
+            except Exception:
+                courses = []
     return jsonify({"courses": courses})
 
 
@@ -1072,11 +1301,11 @@ def export_exams(exam_type):
                 )
         except Exception:
             logger.exception("failed to create exam schedule version on export")
-    # load exams
-    exams = table_to_dicts('exams')
-    exams = [e for e in exams if e.get('exam_type') == exam_type]
     import io
     import pandas as pd
+
+    with get_connection() as conn:
+        exams = _exam_dicts_for_export_or_results(conn, exam_type)
     if fmt == 'txt':
         # tab-separated text
         df = pd.DataFrame(exams)
@@ -1111,20 +1340,20 @@ def export_conflicts(exam_type):
         return jsonify({"status": "error", "message": "invalid exam type"}), 400
     if not _user_can_view_exam_rows(exam_type):
         return jsonify({"status": "error", "message": "جدول الامتحانات غير معتمد/منشور بعد"}), 403
-    # reuse the conflict SQL used above
-    q = f'''
-    SELECT r.student_id as student_id, e.exam_date as exam_date, {_course_names_agg_sql('e.course_name')} as conflicting_courses, COUNT(e.course_name) as ccount
-    FROM exams e
-    JOIN registrations r ON LOWER(TRIM(r.course_name)) = LOWER(TRIM(e.course_name))
-    WHERE e.exam_type = ?
-    GROUP BY r.student_id, e.exam_date
-    HAVING COUNT(e.course_name) > 1
-    '''
     import io
-    rows = df_from_query(q, params=(exam_type,))
+    import pandas as pd
+
+    with get_connection() as conn:
+        agg_rows = _fetch_exam_conflict_aggregate_rows(conn, exam_type)
+        rows = pd.DataFrame(
+            [
+                {"student_id": r[0], "exam_date": r[1], "conflicting_courses": r[2], "ccount": r[3]}
+                for r in agg_rows
+            ]
+        )
     if fmt == 'txt':
         buf = io.BytesIO()
-        buf.write(rows.to_csv(index=False, sep='\t', encoding='utf-8').encode('utf-8'))
+        buf.write(rows.to_csv(index=False, sep="\t", encoding="utf-8").encode("utf-8"))
         buf.seek(0)
         fname = f"exam_conflicts_{exam_type}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.txt"
         return send_file(buf, mimetype='text/plain', as_attachment=True, download_name=fname)
@@ -1132,7 +1361,12 @@ def export_conflicts(exam_type):
         return excel_response_from_df(rows, filename_prefix=f"exam_conflicts_{exam_type}")
     elif fmt == 'pdf':
         # build html table
-        rows_html = ''.join([f"<tr><td>{r.student_id}</td><td>{r.exam_date}</td><td>{r.conflicting_courses}</td></tr>" for r in rows.itertuples()])
+        rows_html = "".join(
+            [
+                f"<tr><td>{r.student_id}</td><td>{r.exam_date}</td><td>{r.conflicting_courses}</td></tr>"
+                for r in rows.itertuples()
+            ]
+        )
         html = f"""
         <html><head><meta charset='utf-8'><style>table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #ccc;padding:6px}}</style></head>
         <body><h2>Exam Conflicts - {exam_type}</h2><table><thead><tr><th>student_id</th><th>date</th><th>conflicting_courses</th></tr></thead><tbody>{rows_html}</tbody></table></body></html>
@@ -1149,17 +1383,7 @@ def exam_conflicts(exam_type):
     if not _user_can_view_exam_rows(exam_type):
         return jsonify({"conflicts": []})
     with get_connection() as conn:
-        cur = conn.cursor()
-        # Join exams with registrations to produce for each student the list of courses on each date
-        q = f'''
-        SELECT r.student_id as student_id, e.exam_date as exam_date, {_course_names_agg_sql('e.course_name')} as courses, COUNT(e.course_name) as ccount
-        FROM exams e
-        JOIN registrations r ON LOWER(TRIM(r.course_name)) = LOWER(TRIM(e.course_name))
-        WHERE e.exam_type = ?
-        GROUP BY r.student_id, e.exam_date
-        HAVING COUNT(e.course_name) > 1
-        '''
-        rows = cur.execute(q, (exam_type,)).fetchall()
+        rows = _fetch_exam_conflict_aggregate_rows(conn, exam_type)
         out = []
         for r in rows:
             out.append({
@@ -1176,16 +1400,41 @@ def exam_results_data(exam_type):
         return jsonify({})
     if not _user_can_view_exam_rows(exam_type):
         return jsonify({"exams": [], "conflicts": []})
-    exams = table_to_dicts('exams')
-    exams = [e for e in exams if e.get('exam_type') == exam_type]
     with get_connection() as conn:
+        exams = _exam_dicts_for_export_or_results(conn, exam_type)
         cur = conn.cursor()
-        cur.execute('SELECT student_id, exam_date, conflicting_courses FROM exam_conflicts WHERE exam_type = ?', (exam_type,))
-        persisted = [dict(r) for r in cur.fetchall()]
+        uname = (session.get("user") or session.get("username") or "").strip()
+        stu_scope_sql, stu_scope_params = dept_scope_policy.resolve_scope_sql_for_students_table(
+            conn, uname
+        )
+        if stu_scope_sql and stu_scope_sql != "1=0":
+            cur.execute(
+                f"""
+                SELECT ec.student_id, ec.exam_date, ec.conflicting_courses
+                FROM exam_conflicts ec
+                WHERE ec.exam_type = ?
+                  AND EXISTS (
+                    SELECT 1 FROM students
+                    WHERE students.student_id = ec.student_id
+                      AND ({stu_scope_sql})
+                  )
+                """,
+                (exam_type,) + tuple(stu_scope_params),
+            )
+        elif stu_scope_sql == "1=0":
+            persisted = []
+        else:
+            cur.execute(
+                "SELECT student_id, exam_date, conflicting_courses FROM exam_conflicts WHERE exam_type = ?",
+                (exam_type,),
+            )
+        persisted = [dict(r) for r in cur.fetchall()] if stu_scope_sql != "1=0" else []
         if not persisted:
-            # compute on the fly
-            conflicts_resp = exam_conflicts(exam_type).get_json()
-            conflicts = conflicts_resp.get('conflicts', [])
+            agg = _fetch_exam_conflict_aggregate_rows(conn, exam_type)
+            conflicts = [
+                {"student_id": r[0] or "", "exam_date": r[1] or "", "conflicting_courses": r[2] or ""}
+                for r in agg
+            ]
         else:
             conflicts = persisted
     return jsonify({
@@ -1341,18 +1590,33 @@ def persist_exam_conflicts(exam_type):
         return 0
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute('DELETE FROM exam_conflicts WHERE exam_type = ?', (exam_type,))
-        q = f'''
-        SELECT r.student_id as student_id, e.exam_date as exam_date, {_course_names_agg_sql('e.course_name')} as courses, COUNT(e.course_name) as ccount
-        FROM exams e
-        JOIN registrations r ON LOWER(TRIM(r.course_name)) = LOWER(TRIM(e.course_name))
-        WHERE e.exam_type = ?
-        GROUP BY r.student_id, e.exam_date
-        HAVING COUNT(e.course_name) > 1
-        '''
-        rows = cur.execute(q, (exam_type,)).fetchall()
+        uname = (session.get("user") or session.get("username") or "").strip()
+        stu_scope_sql, stu_scope_params = dept_scope_policy.resolve_scope_sql_for_students_table(
+            conn, uname
+        )
+        if stu_scope_sql == "1=0":
+            conn.commit()
+            return 0
+        if stu_scope_sql:
+            cur.execute(
+                f"""
+                DELETE FROM exam_conflicts ec
+                WHERE ec.exam_type = ?
+                  AND EXISTS (
+                    SELECT 1 FROM students
+                    WHERE students.student_id = ec.student_id
+                      AND ({stu_scope_sql})
+                  )
+                """,
+                (exam_type,) + tuple(stu_scope_params),
+            )
+        else:
+            cur.execute("DELETE FROM exam_conflicts WHERE exam_type = ?", (exam_type,))
+        rows = _fetch_exam_conflict_aggregate_rows(conn, exam_type)
         for r in rows:
-            cur.execute('INSERT INTO exam_conflicts (exam_type, student_id, exam_date, conflicting_courses) VALUES (?,?,?,?)',
-                        (exam_type, r[0] or '', r[1] or '', r[2] or ''))
+            cur.execute(
+                "INSERT INTO exam_conflicts (exam_type, student_id, exam_date, conflicting_courses) VALUES (?,?,?,?)",
+                (exam_type, r[0] or "", r[1] or "", r[2] or ""),
+            )
         conn.commit()
         return len(rows)

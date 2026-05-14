@@ -23,6 +23,7 @@ from backend.services.prereg_helpers import (
     prereq_validation_snapshot,
 )
 from backend.database.database import is_postgresql, fetch_table_columns
+from backend.core.department_scope_policy import resolve_users_list_scope, student_matches_department
 
 DocxTemplate = None
 
@@ -153,6 +154,19 @@ def _create_registration_form_version(conn, student_id: str, semester: str, sour
 def _is_instructor_or_supervisor_view_only() -> bool:
     role = (session.get("user_role") or "").strip()
     return role in ("instructor", "supervisor")
+
+
+def _actor_username() -> str:
+    return (session.get("user") or session.get("username") or "").strip()
+
+
+def _student_in_effective_scope(conn, student_id: str) -> bool:
+    mode, dep_id = resolve_users_list_scope(conn, _actor_username())
+    if mode == "none":
+        return True
+    if mode == "empty" or dep_id is None:
+        return False
+    return student_matches_department(conn, student_id, int(dep_id))
 
 
 def _session_instructor_id(conn):
@@ -446,6 +460,7 @@ def list_plans():
         student_id = sid_session
     with get_connection() as conn:
         cur = conn.cursor()
+        mode_scope, dep_scope = resolve_users_list_scope(conn, _actor_username())
         # المشرف لا يمكنه رؤية إلا خطط الطلبة المسندين إليه
         is_supervisor = current_supervisor_effective()
         instructor_id = _session_instructor_id(conn) if is_supervisor else None
@@ -467,12 +482,27 @@ def list_plans():
         q = f"SELECT {sel} FROM enrollment_plans WHERE 1=1"
         params = []
         if student_id:
+            if not _student_in_effective_scope(conn, student_id):
+                return jsonify({"status": "ok", "plans": []}), 200
             q += " AND student_id = ?"
             params.append(student_id)
         elif is_supervisor:
             # تقييد الخطط على الطلبة المسندين لهذا المشرف
             q += " AND student_id IN (SELECT student_id FROM student_supervisor WHERE instructor_id = ?)"
             params.append(instructor_id)
+        elif mode_scope == "department" and dep_scope is not None:
+            q += """
+            AND student_id IN (
+                SELECT student_id
+                FROM students
+                WHERE department_id = ?
+                   OR current_program_id IN (SELECT id FROM programs WHERE department_id = ?)
+                   OR admission_program_id IN (SELECT id FROM programs WHERE department_id = ?)
+            )
+            """
+            params.extend([int(dep_scope), int(dep_scope), int(dep_scope)])
+        elif mode_scope == "empty":
+            return jsonify({"status": "ok", "plans": []}), 200
         if semester:
             q += " AND semester = ?"
             params.append(semester)
@@ -544,6 +574,8 @@ def validate_prereqs():
 
     with get_connection() as conn:
         cur = conn.cursor()
+        if not _student_in_effective_scope(conn, student_id):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         if is_supervisor_chk:
             instructor_id = session.get("instructor_id")
             if not instructor_id:
@@ -616,6 +648,8 @@ def prereq_planning_hints():
     is_supervisor_chk = current_supervisor_effective()
     with get_connection() as conn:
         cur = conn.cursor()
+        if not _student_in_effective_scope(conn, student_id):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         if is_supervisor_chk:
             instructor_id = session.get("instructor_id")
             if not instructor_id:
@@ -728,6 +762,8 @@ def create_or_update_plan():
 
     with get_connection() as conn:
         cur = conn.cursor()
+        if not _student_in_effective_scope(conn, student_id):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         # التحقق من حد الوحدات بناءً على المعدل التراكمي قبل الحفظ
         try:
             _enforce_units_limit(cur, student_id, courses)
@@ -879,6 +915,8 @@ def submit_plan(plan_id: int):
             )
         status = row[3]
         student_id = row[1]
+        if not _student_in_effective_scope(conn, student_id):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
 
         # الطالب لا يمكنه إرسال إلا خطته هو
         user_role = session.get("user_role")
@@ -1033,6 +1071,8 @@ def approve_plan(plan_id: int):
                 404,
             )
         _, student_id, semester, status = row
+        if not _student_in_effective_scope(conn, student_id):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         if status not in ("Pending", "Draft"):
             return (
                 jsonify(
@@ -1168,6 +1208,8 @@ def archive_plans_after_migration():
 
     now = _now_iso()
     with get_connection() as conn:
+        if not _student_in_effective_scope(conn, student_id):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         cur = conn.cursor()
         cur.execute(
             """
@@ -1212,6 +1254,9 @@ def registration_form_html(student_id):
             ).fetchone()
             if not row:
                 return jsonify({"status": "error", "message": "لا يمكنك عرض استمارة لطالب غير مُسند إليك", "code": "FORBIDDEN"}), 403
+    with get_connection() as conn:
+        if not _student_in_effective_scope(conn, student_id):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
 
     semester_param = (request.args.get("semester") or "").strip()
     source = (request.args.get("source") or "plan").strip().lower()
@@ -1268,6 +1313,9 @@ def print_registration_form(student_id):
             ).fetchone()
             if not row:
                 return jsonify({"status": "error", "message": "لا يمكنك طباعة استمارة لطالب غير مُسند إليك", "code": "FORBIDDEN"}), 403
+    with get_connection() as conn:
+        if not _student_in_effective_scope(conn, student_id):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
 
     if not _ensure_docxtpl():
         return (
@@ -1341,6 +1389,8 @@ def registration_form_versions():
         return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
     try:
         with get_connection() as conn:
+            if not _student_in_effective_scope(conn, sid):
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
             cur = conn.cursor()
             _ensure_registration_form_versions_table(cur)
             q = """
@@ -1398,6 +1448,8 @@ def reject_plan(plan_id: int):
                 404,
             )
         _, student_id, semester, status = row
+        if not _student_in_effective_scope(conn, student_id):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         if status not in ("Pending", "Draft"):
             return (
                 jsonify(

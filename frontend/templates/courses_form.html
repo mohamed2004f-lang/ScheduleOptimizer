@@ -187,10 +187,11 @@ function assessmentTypeLabel(t){
   return 'نظري';
 }
 
-function showAlert(elId, kind, text){
+function showAlert(elId, kind, text, timeoutMs){
   const el = document.getElementById(elId);
   el.innerHTML = `<div class="alert alert-${kind} p-2 mb-0">${text}</div>`;
-  setTimeout(()=>{ if(el) el.innerHTML=''; }, 3500);
+  const ttl = Number(timeoutMs || 3500);
+  setTimeout(()=>{ if(el) el.innerHTML=''; }, ttl > 0 ? ttl : 3500);
 }
 
 /* استيراد المقررات من Excel */
@@ -365,6 +366,17 @@ document.getElementById('btnAddCourse').addEventListener('click', async () => {
       })
     });
     const j = await resp.json().catch(()=>({}));
+    if (!resp.ok && (j.code || '') === 'USE_PROGRAM_COURSES') {
+      showAlert(
+        'cr_msg',
+        'warning',
+        (j.message || 'هذا المسار مخصص للمقررات العامة فقط.')
+        + ' استخدم إدارة دليل الكلية -> مقررات البرنامج لإضافة/تعديل مقررات خطط 150/155.'
+        + ' <a href="/college_catalog_page" class="alert-link">فتح دليل الكلية الآن</a>',
+        10000
+      );
+      return;
+    }
     showAlert('cr_msg', resp.ok ? 'success' : 'danger', j.message||j.status||'');
     if(resp.ok){
       document.getElementById('course_name').value='';

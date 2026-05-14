@@ -17,6 +17,8 @@
       </div>
     </div>
 
+    <div id="usersDeptScopeBanner" class="alert alert-info py-2 small d-none" role="status"></div>
+
     <div id="adminWarning" class="alert alert-warning p-2 d-none">
       هذه الصفحة مخصصة للمسؤول (admin) فقط. إذا لم تكن تملك صلاحيات كافية، ستظهر لك أخطاء عند حفظ البيانات.
     </div>
@@ -684,12 +686,30 @@
       });
     }
 
+    function syncUsersScopeBanner(authJson){
+      const el = document.getElementById('usersDeptScopeBanner');
+      if(!el) return;
+      const scope = authJson && authJson.admin_department_scope;
+      const role = authJson && authJson.role;
+      if(scope && scope.name_ar){
+        el.textContent = 'عرض المستخدمين مقيد بالقسم: ' + scope.name_ar + ' (' + (scope.code||'') + ').';
+        el.classList.remove('d-none');
+      } else if(role === 'head_of_department'){
+        el.textContent = 'عرض المستخدمين ضمن قسمك المرتبط بحسابك فقط.';
+        el.classList.remove('d-none');
+      } else {
+        el.textContent = '';
+        el.classList.add('d-none');
+      }
+    }
+
     document.addEventListener('DOMContentLoaded', async ()=>{
       // تحذير بسيط إن لم يكن الدور admin
       try {
         const auth = await fetchJSON('/auth/check');
         if(auth.ok){
           CURRENT_ROLE = auth.json?.role || null;
+          syncUsersScopeBanner(auth.json);
         }
         if(auth.ok && !['admin','admin_main','head_of_department'].includes(auth.json?.role)){
           document.getElementById('adminWarning').classList.remove('d-none');

@@ -14,6 +14,14 @@
       background: #fd7e14;
       color: #fff;
     }
+    /* قائمة التصدير تُقصّ داخل البطاقة بدون هذا */
+    .transcript-toolbar-card,
+    .transcript-toolbar-card .card-body {
+      overflow: visible;
+    }
+    .transcript-toolbar-card .transcript-toolbar-inner {
+      overflow: visible;
+    }
   </style>
 </head>
 <body>
@@ -91,7 +99,7 @@
       </div>
     </div>
 
-    <div class="card mb-3">
+    <div class="card mb-3 transcript-toolbar-card">
       <div class="card-body">
         <div class="page-header" style="margin:0 0 10px;">
           <div>
@@ -135,7 +143,7 @@
 
         <!-- شريط إدارة كشف الدرجات (يُظهر لـ admin / admin_main / head_of_department فقط عبر JS) -->
         <div id="toolbarAdmin" class="mt-4 pt-3 border-top border-secondary-subtle">
-          <div class="rounded-3 border bg-light p-3 shadow-sm">
+          <div class="rounded-3 border bg-light p-3 shadow-sm transcript-toolbar-inner">
             <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
               <span class="small fw-semibold text-secondary">إجراءات السجل والدرجات</span>
               <span class="small text-muted d-none d-md-inline">ترحيل التسجيلات واللائحة: من القائمة العلوية (التسجيلات / الإدارة)</span>
@@ -146,7 +154,7 @@
                 <button type="button" id="btnSaveGrades" class="btn btn-success btn-sm">حفظ درجات الفصل</button>
               </div>
               <div class="dropdown">
-                <button type="button" class="btn btn-outline-secondary btn-sm dropdown-toggle" id="btnExportPrintMenu" data-bs-toggle="dropdown" aria-expanded="false" aria-controls="exportPrintDropdown">
+                <button type="button" class="btn btn-outline-secondary btn-sm dropdown-toggle" id="btnExportPrintMenu" data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}' aria-expanded="false" aria-controls="exportPrintDropdown">
                   تصدير وطباعة
                 </button>
                 <ul class="dropdown-menu dropdown-menu-end" id="exportPrintDropdown" aria-labelledby="btnExportPrintMenu">
@@ -421,7 +429,18 @@ async function loadTranscript(studentId){
   const summaryEl = document.getElementById('summary'); if(summaryEl) summaryEl.textContent = 'جارٍ جلب السجل...';
   // استخدم المسار الحقيقي مباشرة لتفادي مشاكل إعادة التوجيه 302 مع fetch
   const r = await fetchJSON('/grades/transcript/'+encodeURIComponent(studentId));
-  if(!r.ok){ setMsg('فشل في جلب السجل','danger'); if(summaryEl) summaryEl.textContent=''; return; }
+  if(!r.ok){
+    let msg = 'فشل في جلب السجل';
+    try {
+      const m = r.json && (r.json.message || r.json.error);
+      if (m && String(m).trim()) msg = String(m).trim();
+      else if (r.status === 403) msg = 'لا يوجد لك صلاحية لعرض هذا السجل (الطالب قد يكون خارج نطاق قسمك).';
+      else if (r.status) msg += ' (خطأ ' + r.status + ')';
+    } catch (e) {}
+    setMsg(msg,'danger');
+    if(summaryEl) summaryEl.textContent='';
+    return;
+  }
   CURRENT_TRANSCRIPT = r.json;
   renderTranscript(CURRENT_TRANSCRIPT);
   // تحديث ملاحظة الحالة الأكاديمية (إنذارات/فرص استثنائية)
@@ -492,7 +511,11 @@ function renderTranscript(data){
     if(!b || !b.course_name) return;
     bestByCourse[b.course_name] = { passed: !!b.passed, best_grade: b.best_grade };
   });
-  const semesterNames = Object.keys(transcript).sort();
+  const rawKeySet = new Set(Object.keys(transcript));
+  let semesterNames = (Array.isArray(data.ordered_semesters) && data.ordered_semesters.length)
+    ? data.ordered_semesters.filter(s => rawKeySet.has(s))
+    : Array.from(rawKeySet);
+  rawKeySet.forEach(s => { if (!semesterNames.includes(s)) semesterNames.push(s); });
   const semFilterEl = document.getElementById('semesterFilter'); if(semFilterEl) semFilterEl.innerHTML = '<option value="">كل الفصول</option>';
   semesterNames.forEach(s=>{ if(semFilterEl){ const o=document.createElement('option'); o.value=s; o.text=s; semFilterEl.appendChild(o); } });
 

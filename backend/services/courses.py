@@ -25,6 +25,48 @@ def _is_instructor_or_supervisor_view_only() -> bool:
     return role in ("supervisor", "instructor")
 
 
+def _resolve_actor_department_id(conn) -> int | None:
+    cur = conn.cursor()
+    uname = (session.get("user") or session.get("username") or "").strip()
+    if uname:
+        try:
+            row = cur.execute(
+                "SELECT department_id FROM users WHERE lower(username)=lower(?) LIMIT 1",
+                (uname,),
+            ).fetchone()
+            if row and row[0] not in (None, ""):
+                return int(row[0])
+        except Exception:
+            pass
+    try:
+        iid = int(session.get("instructor_id") or 0)
+    except (TypeError, ValueError):
+        iid = 0
+    if iid:
+        try:
+            row = cur.execute(
+                "SELECT department_id FROM instructors WHERE id = ? LIMIT 1",
+                (iid,),
+            ).fetchone()
+            if row and row[0] not in (None, ""):
+                return int(row[0])
+        except Exception:
+            pass
+    return None
+
+
+def _effective_department_scope_id(conn) -> int | None:
+    role_n = _normalize_role((session.get("user_role") or "").strip())
+    scope_dep = get_admin_department_scope_id()
+    if role_n == "head_of_department":
+        mode = (session.get("active_mode") or "head").strip().lower()
+        if mode in ("", "head", "hod", "department_head"):
+            return _resolve_actor_department_id(conn)
+    if role_n in ("admin", "admin_main"):
+        return scope_dep
+    return None
+
+
 def _normalize_assessment_type(raw: str) -> str:
     v = (raw or "").strip().lower()
     if v in ("theoretical", "practical", "training"):
@@ -53,10 +95,10 @@ def _safe_weight(raw, fallback: float | None = None):
 @login_required
 def list_courses():
     # يرجع جدول courses، وإذا غير موجود يرجع من schedule
-    scope_dep = get_admin_department_scope_id()
     role_n = _normalize_role((session.get("user_role") or "").strip())
-    admin_scoped = scope_dep is not None and role_n in ("admin", "admin_main")
     with get_connection() as conn:
+        scope_dep = _effective_department_scope_id(conn)
+        admin_scoped = scope_dep is not None and role_n in ("admin", "admin_main", "head_of_department")
         cur = conn.cursor()
         try:
             try:
@@ -181,6 +223,16 @@ def list_courses():
 @role_required("admin", "admin_main", "head_of_department")
 def add_course():
     data = request.get_json(force=True)
+    # حماية: مقررات الخطة (150/155) يجب إدارتها عبر college_catalog/program_courses
+    # وليس عبر شاشة courses العامة، حتى لا تختلط نسخ الخطة بالمقرر العام.
+    if any(k in data for k in ("program_id", "current_program_id", "graduation_plan", "plan_code")):
+        return jsonify(
+            {
+                "status": "error",
+                "code": "USE_PROGRAM_COURSES",
+                "message": "إدارة مقررات الخطط (150/155) تتم من صفحة دليل الكلية/مقررات البرنامج، وليس من شاشة المقررات العامة.",
+            }
+        ), 400
     cname = (data.get("course_name") or "").strip()
     code = (data.get("course_code") or "").strip()
     try:
@@ -220,27 +272,61 @@ def add_course():
             cols = fetch_table_columns(conn, "courses")
         except Exception:
             cols = []
+        has_owning_dept = "owning_department_id" in cols
+        scope_dep = _effective_department_scope_id(conn)
         if "category" in cols:
             has_assessment_cols = all(k in cols for k in ("assessment_type", "coursework_weight", "midterm_weight", "final_exam_weight"))
             if has_assessment_cols:
+                if has_owning_dept:
+                    cur.execute(
+                        """
+                        INSERT INTO courses
+                        (course_name, course_code, units, category, assessment_type, coursework_weight, midterm_weight, final_exam_weight, owning_department_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            cname,
+                            code,
+                            units,
+                            category,
+                            assessment_type,
+                            coursework_weight,
+                            midterm_weight,
+                            final_exam_weight,
+                            (int(scope_dep) if scope_dep is not None else None),
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO courses
+                        (course_name, course_code, units, category, assessment_type, coursework_weight, midterm_weight, final_exam_weight)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (cname, code, units, category, assessment_type, coursework_weight, midterm_weight, final_exam_weight),
+                    )
+            else:
+                if has_owning_dept:
+                    cur.execute(
+                        "INSERT INTO courses (course_name, course_code, units, category, owning_department_id) VALUES (?, ?, ?, ?, ?)",
+                        (cname, code, units, category, (int(scope_dep) if scope_dep is not None else None)),
+                    )
+                else:
+                    cur.execute(
+                        "INSERT INTO courses (course_name, course_code, units, category) VALUES (?, ?, ?, ?)",
+                        (cname, code, units, category),
+                    )
+        else:
+            if has_owning_dept:
                 cur.execute(
-                    """
-                    INSERT INTO courses
-                    (course_name, course_code, units, category, assessment_type, coursework_weight, midterm_weight, final_exam_weight)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (cname, code, units, category, assessment_type, coursework_weight, midterm_weight, final_exam_weight),
+                    "INSERT INTO courses (course_name, course_code, units, owning_department_id) VALUES (?, ?, ?, ?)",
+                    (cname, code, units, (int(scope_dep) if scope_dep is not None else None)),
                 )
             else:
                 cur.execute(
-                    "INSERT INTO courses (course_name, course_code, units, category) VALUES (?, ?, ?, ?)",
-                    (cname, code, units, category),
+                    "INSERT INTO courses (course_name, course_code, units) VALUES (?, ?, ?)",
+                    (cname, code, units),
                 )
-        else:
-            cur.execute(
-                "INSERT INTO courses (course_name, course_code, units) VALUES (?, ?, ?)",
-                (cname, code, units),
-            )
         conn.commit()
     return jsonify({"status": "ok", "message": "تم إضافة المقرر"}), 200
 
@@ -617,7 +703,20 @@ def delete_prereq():
 def list_prereqs():
     with get_connection() as conn:
         cur = conn.cursor()
-        rows = cur.execute("SELECT course_name, required_course_name FROM prereqs ORDER BY course_name, required_course_name").fetchall()
+        scope_dep = _effective_department_scope_id(conn)
+        if scope_dep is None:
+            rows = cur.execute("SELECT course_name, required_course_name FROM prereqs ORDER BY course_name, required_course_name").fetchall()
+        else:
+            rows = cur.execute(
+                """
+                SELECT p.course_name, p.required_course_name
+                FROM prereqs p
+                JOIN courses c ON LOWER(TRIM(c.course_name)) = LOWER(TRIM(p.course_name))
+                WHERE COALESCE(c.owning_department_id,-1) = ?
+                ORDER BY p.course_name, p.required_course_name
+                """,
+                (int(scope_dep),),
+            ).fetchall()
         return jsonify([{"course_name": r[0], "required_course_name": r[1]} for r in rows])
 
 @courses_bp.route("/prereqs/status")
@@ -629,8 +728,15 @@ def prereq_status():
 
     with get_connection() as conn:
         cur = conn.cursor()
+        scope_dep = _effective_department_scope_id(conn)
         try:
-            rows_c = cur.execute("SELECT course_name FROM courses").fetchall()
+            if scope_dep is None:
+                rows_c = cur.execute("SELECT course_name FROM courses").fetchall()
+            else:
+                rows_c = cur.execute(
+                    "SELECT course_name FROM courses WHERE COALESCE(owning_department_id,-1) = ?",
+                    (int(scope_dep),),
+                ).fetchall()
             courses = [r[0] for r in rows_c]
         except Exception:
             try:
@@ -664,12 +770,68 @@ def prereq_status():
 
 def _load_courses_and_prereqs(conn):
     cur = conn.cursor()
+    role_n = _normalize_role((session.get("user_role") or "").strip())
+    scope_dep = _effective_department_scope_id(conn)
+    admin_scoped = scope_dep is not None and role_n in ("admin", "admin_main", "head_of_department")
+
+    courses = []
     try:
-        rows_c = cur.execute("SELECT course_name, COALESCE(course_code,'') AS course_code FROM courses").fetchall()
+        cols = fetch_table_columns(conn, "courses")
+        has_owning = "owning_department_id" in cols
+        q = (
+            "SELECT course_name, COALESCE(course_code,'') AS course_code FROM courses "
+            "WHERE COALESCE(course_name,'') <> ''"
+        )
+        qp: tuple = ()
+        if admin_scoped and has_owning:
+            q += " AND owning_department_id = ?"
+            qp = (int(scope_dep),)
+        rows_c = cur.execute(q, qp).fetchall()
         courses = [{"course_name": r[0], "course_code": (r[1] or "")} for r in (rows_c or []) if r and r[0]]
+        if admin_scoped and not courses and has_owning:
+            courses = []
+        elif admin_scoped and not has_owning:
+            cols_sch = fetch_table_columns(conn, "schedule")
+            if "department_id" in cols_sch:
+                rows_sch = cur.execute(
+                    """
+                    SELECT DISTINCT course_name FROM schedule
+                    WHERE COALESCE(course_name,'') <> '' AND COALESCE(department_id,-1) = ?
+                    ORDER BY course_name
+                    """,
+                    (int(scope_dep),),
+                ).fetchall()
+                courses = [{"course_name": r[0], "course_code": ""} for r in (rows_sch or []) if r and r[0]]
+            else:
+                courses = []
     except Exception:
-        rows_s = cur.execute("SELECT DISTINCT course_name FROM schedule").fetchall()
-        courses = [{"course_name": r[0], "course_code": ""} for r in (rows_s or []) if r and r[0]]
+        try:
+            if admin_scoped:
+                cols_sch = fetch_table_columns(conn, "schedule")
+                if "department_id" in cols_sch:
+                    rows_s = cur.execute(
+                        """
+                        SELECT DISTINCT course_name FROM schedule
+                        WHERE COALESCE(course_name,'') <> '' AND COALESCE(department_id,-1) = ?
+                        ORDER BY course_name
+                        """,
+                        (int(scope_dep),),
+                    ).fetchall()
+                else:
+                    rows_s = []
+            else:
+                rows_s = cur.execute(
+                    "SELECT DISTINCT course_name FROM schedule WHERE COALESCE(course_name,'') <> '' ORDER BY course_name"
+                ).fetchall()
+            courses = [{"course_name": r[0], "course_code": ""} for r in (rows_s or []) if r and r[0]]
+        except Exception:
+            if admin_scoped:
+                courses = []
+            else:
+                rows_s = cur.execute(
+                    "SELECT DISTINCT course_name FROM schedule WHERE COALESCE(course_name,'') <> '' ORDER BY course_name"
+                ).fetchall()
+                courses = [{"course_name": r[0], "course_code": ""} for r in (rows_s or []) if r and r[0]]
 
     try:
         rows_p = cur.execute("SELECT course_name, required_course_name FROM prereqs").fetchall()
@@ -686,6 +848,8 @@ def _load_courses_and_prereqs(conn):
             continue
         seen.add(key)
         out_courses.append(c)
+    allowed_lower = {(c.get("course_name") or "").strip().lower() for c in out_courses}
+
     seen_p = set()
     out_pr = []
     for p in prereqs:
@@ -693,6 +857,9 @@ def _load_courses_and_prereqs(conn):
         b = (p.get("course_name") or "").strip()
         if not a or not b:
             continue
+        if admin_scoped:
+            if b.lower() not in allowed_lower or a.lower() not in allowed_lower:
+                continue
         k = (b.lower(), a.lower())
         if k in seen_p:
             continue

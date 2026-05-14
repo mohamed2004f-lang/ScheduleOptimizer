@@ -139,6 +139,118 @@ def table_exists(conn, name: str) -> bool:
     return cur.fetchone() is not None
 
 
+# قيمة sentinel لصف «القسم الرئيسي» بدون صف في جدول schedule (SQLite / PostgreSQL)
+HOME_ASSIGNMENT_SECTION_ID = -1
+
+
+def backfill_instructor_cross_department_data(conn) -> None:
+    """
+    ترحيل توافقي لجدول instructor_department_assignments:
+    - من صفوف schedule ذات instructor_id و department_id.
+    - من instructors.department_id عندما لا توجد أي صفوف schedule لهذا الأستاذ.
+    يمكن استدعاؤه عدة مرات (idempotent).
+    """
+    if not table_exists(conn, "instructor_department_assignments"):
+        return
+    cur = conn.cursor()
+    scols = fetch_table_columns(conn, "schedule")
+    pk_col = "rowid"
+    try:
+        pk_col = schedule_pk_column(conn)
+    except Exception:
+        pass
+
+    # من الجدول الدراسي
+    if "instructor_id" in scols and "department_id" in scols:
+        try:
+            sem_sel = "COALESCE(NULLIF(TRIM(semester), ''), '')"
+            if is_postgresql():
+                sem_sel = "COALESCE(NULLIF(TRIM(semester::text), ''), '')"
+            rows = cur.execute(
+                f"""
+                SELECT {pk_col}, instructor_id, department_id, {sem_sel}
+                FROM schedule
+                WHERE instructor_id IS NOT NULL AND department_id IS NOT NULL
+                """
+            ).fetchall()
+            for r in rows:
+                sec_id = int(r[0])
+                iid = int(r[1])
+                did = int(r[2])
+                sem = str(r[3] or "")
+                if is_postgresql():
+                    cur.execute(
+                        """
+                        INSERT INTO instructor_department_assignments
+                        (instructor_id, department_id, schedule_section_id, semester,
+                         is_primary, is_active, migration_source)
+                        VALUES (%s, %s, %s, %s, 0, 1, 'schedule_backfill')
+                        ON CONFLICT (instructor_id, department_id, schedule_section_id, semester) DO NOTHING
+                        """,
+                        (iid, did, sec_id, sem),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT OR IGNORE INTO instructor_department_assignments
+                        (instructor_id, department_id, schedule_section_id, semester,
+                         is_primary, is_active, migration_source)
+                        VALUES (?, ?, ?, ?, 0, 1, 'schedule_backfill')
+                        """,
+                        (iid, did, sec_id, sem),
+                    )
+        except Exception as e:
+            logger.warning("backfill instructor_department_assignments from schedule: %s", e)
+
+    # قسم رئيسي من instructors عند غياب أي صف schedule للأستاذ
+    icols = fetch_table_columns(conn, "instructors")
+    if "department_id" in icols:
+        try:
+            rows = cur.execute(
+                """
+                SELECT i.id, i.department_id FROM instructors i
+                WHERE i.department_id IS NOT NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM schedule s WHERE s.instructor_id = i.id
+                )
+                """
+            ).fetchall()
+            for r in rows:
+                iid = int(r[0])
+                did = int(r[1])
+                if is_postgresql():
+                    cur.execute(
+                        """
+                        INSERT INTO instructor_department_assignments
+                        (instructor_id, department_id, schedule_section_id, semester,
+                         is_primary, is_active, migration_source)
+                        VALUES (%s, %s, %s, '', 1, 1, 'home_backfill')
+                        ON CONFLICT (instructor_id, department_id, schedule_section_id, semester) DO NOTHING
+                        """,
+                        (iid, did, HOME_ASSIGNMENT_SECTION_ID),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT OR IGNORE INTO instructor_department_assignments
+                        (instructor_id, department_id, schedule_section_id, semester,
+                         is_primary, is_active, migration_source)
+                        VALUES (?, ?, ?, '', 1, 1, 'home_backfill')
+                        """,
+                        (iid, did, HOME_ASSIGNMENT_SECTION_ID),
+                    )
+        except Exception as e:
+            logger.warning("backfill instructor_department_assignments from instructors home dept: %s", e)
+
+    try:
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+
 def _adapt_pg_execute_sql(sql: str) -> str:
     # Runtime is now PostgreSQL-native; keep only placeholder adaptation.
     return sql.replace("?", "%s")
@@ -462,6 +574,7 @@ TABLES_SCHEMA = {
             course_master_id INTEGER NOT NULL,
             course_code TEXT NOT NULL,
             course_name_override TEXT DEFAULT '',
+            plan_applicability TEXT NOT NULL DEFAULT 'both',
             level_no INTEGER DEFAULT 0 CHECK (level_no >= 0),
             term_hint TEXT DEFAULT '',
             units_override INTEGER,
@@ -1005,6 +1118,8 @@ TABLES_SCHEMA = {
             type TEXT NOT NULL DEFAULT 'internal',
             email TEXT,
             department_id INTEGER,
+            external_scope TEXT NOT NULL DEFAULT 'within_college'
+                CHECK (external_scope IN ('within_college','outside_college','outside_university')),
             is_active INTEGER NOT NULL DEFAULT 1,
             FOREIGN KEY (department_id) REFERENCES departments(id)
                 ON DELETE SET NULL ON UPDATE CASCADE
@@ -1277,6 +1392,75 @@ TABLES_SCHEMA = {
             reason TEXT DEFAULT ''
         )
     """,
+
+    # إسناد الأستاذ لأكثر من قسم + تكافؤ المقررات بين الأقسام (ترقية توافقية)
+    'instructor_department_assignments': """
+        CREATE TABLE IF NOT EXISTS instructor_department_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            instructor_id INTEGER NOT NULL,
+            department_id INTEGER NOT NULL,
+            schedule_section_id INTEGER NOT NULL DEFAULT -1,
+            semester TEXT NOT NULL DEFAULT '',
+            is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            migration_source TEXT DEFAULT 'manual',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (instructor_id) REFERENCES instructors(id) ON DELETE CASCADE,
+            FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE CASCADE,
+            UNIQUE (instructor_id, department_id, schedule_section_id, semester)
+        )
+    """,
+
+    'course_equivalence_groups': """
+        CREATE TABLE IF NOT EXISTS course_equivalence_groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_key TEXT NOT NULL UNIQUE,
+            title TEXT DEFAULT '',
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """,
+
+    'course_equivalence_items': """
+        CREATE TABLE IF NOT EXISTS course_equivalence_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            department_id INTEGER NOT NULL,
+            course_name TEXT NOT NULL,
+            course_code TEXT DEFAULT '',
+            program_course_id INTEGER,
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (group_id, department_id, course_name),
+            FOREIGN KEY (group_id) REFERENCES course_equivalence_groups(id) ON DELETE CASCADE,
+            FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE CASCADE
+        )
+    """,
+
+    # سياسات التخرج على مستوى القسم (اقتراح رئيس القسم + اعتماد admin_main)
+    'department_graduation_policies': """
+        CREATE TABLE IF NOT EXISTS department_graduation_policies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            department_id INTEGER NOT NULL,
+            plan_code TEXT NOT NULL CHECK (plan_code IN ('150', '155')),
+            min_total_units INTEGER NOT NULL DEFAULT 0 CHECK (min_total_units >= 0),
+            effective_from_term TEXT DEFAULT '',
+            effective_from_year TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'draft'
+                CHECK (status IN ('draft','pending_approval','approved','rejected')),
+            submitted_at TEXT,
+            approved_at TEXT,
+            rejected_at TEXT,
+            rejection_reason TEXT DEFAULT '',
+            created_by TEXT DEFAULT '',
+            approved_by TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE CASCADE
+        )
+    """,
 }
 
 # ============================================
@@ -1329,6 +1513,12 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_students_program ON students(current_program_id)",
     "CREATE INDEX IF NOT EXISTS idx_users_department ON users(department_id)",
     "CREATE INDEX IF NOT EXISTS idx_instructors_department ON instructors(department_id)",
+    "CREATE INDEX IF NOT EXISTS idx_ida_instructor_dept ON instructor_department_assignments(instructor_id, department_id)",
+    "CREATE INDEX IF NOT EXISTS idx_ida_department_sem ON instructor_department_assignments(department_id, semester)",
+    "CREATE INDEX IF NOT EXISTS idx_ida_schedule_section ON instructor_department_assignments(schedule_section_id)",
+    "CREATE INDEX IF NOT EXISTS idx_course_equiv_items_dept ON course_equivalence_items(department_id)",
+    "CREATE INDEX IF NOT EXISTS idx_course_equiv_items_course ON course_equivalence_items(course_name)",
+    "CREATE INDEX IF NOT EXISTS idx_dept_grad_policy_dept_status ON department_graduation_policies(department_id, status)",
     "CREATE INDEX IF NOT EXISTS idx_schedule_program_course ON schedule(program_course_id)",
     "CREATE INDEX IF NOT EXISTS idx_schedule_department ON schedule(department_id)",
     "CREATE INDEX IF NOT EXISTS idx_grades_program_course ON grades(program_course_id)",
@@ -1390,7 +1580,11 @@ def _ensure_tables_postgresql() -> None:
         "ALTER TABLE registrations ADD COLUMN IF NOT EXISTS program_course_id BIGINT",
         "ALTER TABLE grades ADD COLUMN IF NOT EXISTS program_course_id BIGINT",
         "ALTER TABLE grades ADD COLUMN IF NOT EXISTS course_master_id BIGINT",
+        "ALTER TABLE program_courses ADD COLUMN IF NOT EXISTS plan_applicability TEXT NOT NULL DEFAULT 'both'",
+        "ALTER TABLE department_graduation_policies ADD COLUMN IF NOT EXISTS effective_from_term TEXT DEFAULT ''",
+        "ALTER TABLE department_graduation_policies ADD COLUMN IF NOT EXISTS effective_from_year TEXT DEFAULT ''",
         "ALTER TABLE instructors ADD COLUMN IF NOT EXISTS department_id BIGINT",
+        "ALTER TABLE instructors ADD COLUMN IF NOT EXISTS external_scope TEXT NOT NULL DEFAULT 'within_college'",
         "ALTER TABLE grade_drafts ADD COLUMN IF NOT EXISTS section_id INTEGER",
         "ALTER TABLE grade_draft_items ADD COLUMN IF NOT EXISTS coursework REAL",
         "ALTER TABLE grade_draft_items ADD COLUMN IF NOT EXISTS midterm REAL",
@@ -1585,6 +1779,7 @@ def _ensure_tables_postgresql() -> None:
                     course_master_id BIGINT NOT NULL,
                     course_code TEXT NOT NULL,
                     course_name_override TEXT DEFAULT '',
+                    plan_applicability TEXT NOT NULL DEFAULT 'both',
                     level_no INTEGER DEFAULT 0,
                     term_hint TEXT DEFAULT '',
                     units_override INTEGER,
@@ -1936,6 +2131,113 @@ def _ensure_tables_postgresql() -> None:
                 conn.rollback()
             except Exception:
                 pass
+        # جداول إسناد الأستاذ لأكثر من قسم + تكافؤ المقررات
+        for ddl in (
+            """
+            CREATE TABLE IF NOT EXISTS instructor_department_assignments (
+                id BIGSERIAL PRIMARY KEY,
+                instructor_id BIGINT NOT NULL,
+                department_id BIGINT NOT NULL,
+                schedule_section_id BIGINT NOT NULL DEFAULT -1,
+                semester TEXT NOT NULL DEFAULT '',
+                is_primary INTEGER NOT NULL DEFAULT 0
+                    CHECK (is_primary IN (0, 1)),
+                is_active INTEGER NOT NULL DEFAULT 1
+                    CHECK (is_active IN (0, 1)),
+                migration_source TEXT DEFAULT 'manual',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (instructor_id, department_id, schedule_section_id, semester),
+                CONSTRAINT ida_instructor_fk FOREIGN KEY (instructor_id)
+                    REFERENCES instructors(id) ON DELETE CASCADE,
+                CONSTRAINT ida_department_fk FOREIGN KEY (department_id)
+                    REFERENCES departments(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS course_equivalence_groups (
+                id BIGSERIAL PRIMARY KEY,
+                group_key TEXT NOT NULL UNIQUE,
+                title TEXT DEFAULT '',
+                is_active INTEGER NOT NULL DEFAULT 1
+                    CHECK (is_active IN (0, 1)),
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS course_equivalence_items (
+                id BIGSERIAL PRIMARY KEY,
+                group_id BIGINT NOT NULL,
+                department_id BIGINT NOT NULL,
+                course_name TEXT NOT NULL,
+                course_code TEXT DEFAULT '',
+                program_course_id BIGINT,
+                is_active INTEGER NOT NULL DEFAULT 1
+                    CHECK (is_active IN (0, 1)),
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (group_id, department_id, course_name),
+                CONSTRAINT cei_group_fk FOREIGN KEY (group_id)
+                    REFERENCES course_equivalence_groups(id) ON DELETE CASCADE,
+                CONSTRAINT cei_department_fk FOREIGN KEY (department_id)
+                    REFERENCES departments(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS department_graduation_policies (
+                id BIGSERIAL PRIMARY KEY,
+                department_id BIGINT NOT NULL,
+                plan_code TEXT NOT NULL
+                    CHECK (plan_code IN ('150', '155')),
+                min_total_units INTEGER NOT NULL DEFAULT 0
+                    CHECK (min_total_units >= 0),
+                effective_from_term TEXT DEFAULT '',
+                effective_from_year TEXT DEFAULT '',
+                notes TEXT DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'draft'
+                    CHECK (status IN ('draft','pending_approval','approved','rejected')),
+                submitted_at TEXT,
+                approved_at TEXT,
+                rejected_at TEXT,
+                rejection_reason TEXT DEFAULT '',
+                created_by TEXT DEFAULT '',
+                approved_by TEXT DEFAULT '',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT dgp_department_fk FOREIGN KEY (department_id)
+                    REFERENCES departments(id) ON DELETE CASCADE
+            )
+            """,
+        ):
+            try:
+                cur.execute(ddl)
+                conn.commit()
+            except Exception as e:
+                logger.warning("Could not ensure cross-department tables on PostgreSQL: %s", e)
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+        for idx_stmt in (
+            "CREATE INDEX IF NOT EXISTS idx_ida_instructor_dept ON instructor_department_assignments(instructor_id, department_id)",
+            "CREATE INDEX IF NOT EXISTS idx_ida_department_sem ON instructor_department_assignments(department_id, semester)",
+            "CREATE INDEX IF NOT EXISTS idx_ida_schedule_section ON instructor_department_assignments(schedule_section_id)",
+            "CREATE INDEX IF NOT EXISTS idx_course_equiv_items_dept ON course_equivalence_items(department_id)",
+            "CREATE INDEX IF NOT EXISTS idx_course_equiv_items_course ON course_equivalence_items(course_name)",
+            "CREATE INDEX IF NOT EXISTS idx_dept_grad_policy_dept_status ON department_graduation_policies(department_id, status)",
+        ):
+            try:
+                cur.execute(idx_stmt)
+                conn.commit()
+            except Exception as e:
+                logger.warning("Could not create cross-department index on PostgreSQL: %s", e)
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+        try:
+            backfill_instructor_cross_department_data(conn)
+        except Exception as e:
+            logger.warning("backfill instructor cross-department (postgresql): %s", e)
     logger.info("PostgreSQL compatibility migrations applied")
 
 
@@ -2035,6 +2337,22 @@ def ensure_tables(db_file=None):
             except Exception:
                 pass
 
+        try:
+            dgp_cols = [r[1] for r in cur.execute("PRAGMA table_info(department_graduation_policies)").fetchall()]
+        except Exception:
+            dgp_cols = []
+        if dgp_cols:
+            if "effective_from_term" not in dgp_cols:
+                try:
+                    cur.execute("ALTER TABLE department_graduation_policies ADD COLUMN effective_from_term TEXT DEFAULT ''")
+                except Exception:
+                    pass
+            if "effective_from_year" not in dgp_cols:
+                try:
+                    cur.execute("ALTER TABLE department_graduation_policies ADD COLUMN effective_from_year TEXT DEFAULT ''")
+                except Exception:
+                    pass
+
         for stmt in (
             "ALTER TABLE courses ADD COLUMN category TEXT NOT NULL DEFAULT 'required'",
             "ALTER TABLE courses ADD COLUMN grading_mode TEXT NOT NULL DEFAULT 'partial_final'",
@@ -2118,6 +2436,17 @@ def ensure_tables(db_file=None):
                 cur.execute("ALTER TABLE grades ADD COLUMN course_master_id INTEGER")
             except Exception:
                 pass
+        try:
+            pccols = [r[1] for r in cur.execute("PRAGMA table_info(program_courses)").fetchall()]
+        except Exception:
+            pccols = []
+        if "plan_applicability" not in pccols:
+            try:
+                cur.execute(
+                    "ALTER TABLE program_courses ADD COLUMN plan_applicability TEXT NOT NULL DEFAULT 'both'"
+                )
+            except Exception:
+                pass
 
         try:
             icols = [r[1] for r in cur.execute("PRAGMA table_info(instructors)").fetchall()]
@@ -2128,6 +2457,16 @@ def ensure_tables(db_file=None):
                 cur.execute("ALTER TABLE instructors ADD COLUMN department_id INTEGER")
             except Exception:
                 pass
+        if "external_scope" not in icols:
+            try:
+                cur.execute("ALTER TABLE instructors ADD COLUMN external_scope TEXT NOT NULL DEFAULT 'within_college'")
+            except Exception:
+                pass
+
+        try:
+            backfill_instructor_cross_department_data(conn)
+        except Exception as e:
+            logger.warning("backfill instructor cross-department (sqlite): %s", e)
 
         conn.commit()
         logger.info("Database tables and indexes ensured")

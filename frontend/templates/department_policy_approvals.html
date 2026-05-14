@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>اعتماد سياسات الأقسام</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100">
+    <div class="page-header mb-3">
+      <div>
+        <h1 class="page-title">اعتماد سياسات نظم التخرج</h1>
+        <p class="page-subtitle">الأدمن الرئيسي: مراجعة واعتماد/رفض مقترحات رؤساء الأقسام</p>
+      </div>
+    </div>
+
+    <div id="msgBox" class="mb-2"></div>
+
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>الطلبات قيد المراجعة</strong>
+        <button id="btnReload" class="btn btn-sm btn-outline-primary">تحديث</button>
+      </div>
+      <div class="card-body">
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered">
+            <thead>
+              <tr>
+                <th>المعرف</th>
+                <th>القسم</th>
+                <th>النظام</th>
+                <th>الوحدات</th>
+                <th>السريان من</th>
+                <th>ملاحظة</th>
+                <th>الإجراءات</th>
+              </tr>
+            </thead>
+            <tbody id="rowsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+  <script>
+    function showMsg(text, kind='info'){
+      const box = document.getElementById('msgBox');
+      if(!box) return;
+      box.innerHTML = `<div class="alert alert-${kind} p-2 mb-0">${text}</div>`;
+      setTimeout(()=>{ box.innerHTML=''; }, 5000);
+    }
+
+    async function loadRows(){
+      const r = await fetch('/department_policies/admin/pending', { credentials:'include' });
+      const j = await r.json().catch(()=>null);
+      const body = document.getElementById('rowsBody');
+      if(!body) return;
+      body.innerHTML = '';
+      if(!r.ok){
+        showMsg((j && j.message) ? j.message : 'تعذر تحميل الطلبات', 'danger');
+        return;
+      }
+      const items = (j && j.items) || [];
+      items.forEach(it=>{
+        const effFrom = [it.effective_from_term || '', it.effective_from_year || ''].filter(Boolean).join(' ') || 'فوري';
+        body.insertAdjacentHTML(
+          'beforeend',
+          `<tr>
+            <td>${it.id}</td>
+            <td>${(it.department_code || '')} — ${(it.department_name_ar || '')}</td>
+            <td>${it.plan_code || ''}</td>
+            <td>${it.min_total_units || 0}</td>
+            <td>${effFrom}</td>
+            <td>${it.notes || ''}</td>
+            <td>
+              <button class="btn btn-sm btn-success btn-approve" data-id="${it.id}">اعتماد</button>
+              <button class="btn btn-sm btn-primary btn-approve-now" data-id="${it.id}">اعتماد وتفعيل الآن</button>
+              <button class="btn btn-sm btn-danger btn-reject" data-id="${it.id}">رفض</button>
+            </td>
+          </tr>`
+        );
+      });
+      body.querySelectorAll('.btn-approve').forEach(btn=>{
+        btn.addEventListener('click', async ()=>{
+          const id = btn.dataset.id;
+          const rr = await fetch(`/department_policies/admin/approve/${encodeURIComponent(id)}`, {
+            method:'POST',
+            credentials:'include',
+            headers:{ 'Content-Type':'application/json' },
+            body: JSON.stringify({ activate_now: false })
+          });
+          const jj = await rr.json().catch(()=>null);
+          if(rr.ok){
+            showMsg('تم اعتماد السياسة بنجاح', 'success');
+            loadRows();
+          }else{
+            showMsg((jj && jj.message) ? jj.message : 'فشل الاعتماد', 'danger');
+          }
+        });
+      });
+      body.querySelectorAll('.btn-approve-now').forEach(btn=>{
+        btn.addEventListener('click', async ()=>{
+          const id = btn.dataset.id;
+          const rr = await fetch(`/department_policies/admin/approve/${encodeURIComponent(id)}`, {
+            method:'POST',
+            credentials:'include',
+            headers:{ 'Content-Type':'application/json' },
+            body: JSON.stringify({ activate_now: true })
+          });
+          const jj = await rr.json().catch(()=>null);
+          if(rr.ok){
+            showMsg('تم اعتماد السياسة وتفعيلها على الفصل الحالي', 'success');
+            loadRows();
+          }else{
+            showMsg((jj && jj.message) ? jj.message : 'فشل الاعتماد الفوري', 'danger');
+          }
+        });
+      });
+      body.querySelectorAll('.btn-reject').forEach(btn=>{
+        btn.addEventListener('click', async ()=>{
+          const id = btn.dataset.id;
+          const reason = prompt('سبب الرفض (اختياري):', '') || '';
+          const rr = await fetch(`/department_policies/admin/reject/${encodeURIComponent(id)}`, {
+            method:'POST',
+            credentials:'include',
+            headers:{ 'Content-Type':'application/json' },
+            body: JSON.stringify({ reason: reason.trim() })
+          });
+          const jj = await rr.json().catch(()=>null);
+          if(rr.ok){
+            showMsg('تم رفض السياسة', 'warning');
+            loadRows();
+          }else{
+            showMsg((jj && jj.message) ? jj.message : 'فشل الرفض', 'danger');
+          }
+        });
+      });
+    }
+
+    document.getElementById('btnReload').addEventListener('click', loadRows);
+    window.addEventListener('DOMContentLoaded', loadRows);
+  </script>
+</body>
+</html>

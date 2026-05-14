@@ -17,6 +17,8 @@
       </div>
     </div>
 
+    <div id="instructorsDeptScopeBanner" class="alert alert-info py-2 d-none mb-3" role="status"></div>
+
     <div class="card mb-3">
       <div class="card-body">
         <form id="instructor-form" class="row g-3">
@@ -32,12 +34,26 @@
             <label for="inst-type" class="form-label">النوع</label>
             <select id="inst-type" class="form-select">
               <option value="internal">من داخل القسم</option>
-              <option value="external">متعاون من خارج القسم</option>
+              <option value="external">متعاون (خارجي)</option>
+            </select>
+          </div>
+          <div class="col-md-3 d-none" id="inst-external-scope-wrap">
+            <label for="inst-external-scope" class="form-label">نطاق التعاون الخارجي</label>
+            <select id="inst-external-scope" class="form-select">
+              <option value="within_college">داخل الكلية (خارج القسم)</option>
+              <option value="outside_college">خارج الكلية</option>
+              <option value="outside_university">خارج الجامعة</option>
             </select>
           </div>
           <div class="col-md-3">
             <label for="inst-email" class="form-label">البريد الإلكتروني (اختياري)</label>
             <input type="email" id="inst-email" class="form-control">
+          </div>
+          <div class="col-md-3 d-none" id="inst-dept-wrap">
+            <label for="inst-dept" class="form-label">القسم الرئيسي (إداري)</label>
+            <select id="inst-dept" class="form-select">
+              <option value="">— بدون تحديد —</option>
+            </select>
           </div>
           <div class="col-md-2 d-flex align-items-end">
             <div class="form-check">
@@ -55,9 +71,39 @@
       </div>
     </div>
 
+    <div id="extra-dept-assign-card" class="card mb-3 d-none">
+      <div class="card-body">
+        <h2 class="h6 mb-2">الأقسام المتعاونة للتدريس (غير القسم الرئيسي)</h2>
+        <p class="small text-muted mb-2">هذه القائمة للأقسام الإضافية فقط. عند الحفظ: يُحفظ «القسم الرئيسي» منفصلاً، وتُرسل هذه القائمة كـ <code>department_assignments</code> بدون تكرار القسم الرئيسي.</p>
+        <div class="row g-2 align-items-end">
+          <div class="col-md-6">
+            <label class="form-label" for="extra-dept-pick">إضافة قسم</label>
+            <select id="extra-dept-pick" class="form-select"></select>
+          </div>
+          <div class="col-md-6">
+            <button type="button" class="btn btn-outline-primary" id="btn-extra-dept-add">إضافة للقائمة</button>
+          </div>
+        </div>
+        <div id="extra-dept-hint" class="small text-muted mt-2"></div>
+        <ul class="list-group list-group-flush mt-2" id="extra-dept-list"></ul>
+      </div>
+    </div>
+
     <div class="card">
       <div class="card-body">
         <h2 class="h6 mb-3">قائمة أعضاء هيئة التدريس</h2>
+        <div class="row g-2 mb-2">
+          <div class="col-md-4">
+            <label class="form-label small mb-1" for="inst-filter-scope">فلترة نطاق التعاون</label>
+            <select id="inst-filter-scope" class="form-select form-select-sm">
+              <option value="">الكل</option>
+              <option value="within_college">داخل الكلية (خارج القسم)</option>
+              <option value="outside_college">خارج الكلية</option>
+              <option value="outside_university">خارج الجامعة</option>
+              <option value="internal_only">من داخل القسم فقط</option>
+            </select>
+          </div>
+        </div>
         <div class="table-responsive">
           <table class="table table-sm table-striped align-middle" id="instructors-table">
             <thead>
@@ -66,6 +112,7 @@
                 <th>الاسم</th>
                 <th>النوع</th>
                 <th>البريد الإلكتروني</th>
+                <th>القسم</th>
                 <th>الحالة</th>
                 <th style="width:15%;">إجراءات</th>
               </tr>
@@ -78,7 +125,356 @@
     </div>
   </main>
 
+  <div class="modal fade" id="manageCoopDeptModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">إدارة الأقسام المتعاونة للأستاذ</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+        </div>
+        <div class="modal-body">
+          <div id="mcdInstructorTitle" class="fw-semibold mb-2"></div>
+          <div id="mcdPrimaryDept" class="small text-muted mb-3"></div>
+          <div class="row g-2 align-items-end">
+            <div class="col-md-8">
+              <label class="form-label" for="mcdDeptPick">إضافة قسم متعاون</label>
+              <select id="mcdDeptPick" class="form-select"></select>
+            </div>
+            <div class="col-md-4">
+              <button type="button" class="btn btn-outline-primary w-100" id="btnMcdAdd">إضافة</button>
+            </div>
+          </div>
+          <div id="mcdHint" class="small text-muted mt-2"></div>
+          <ul class="list-group list-group-flush mt-2" id="mcdList"></ul>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">إغلاق</button>
+          <button type="button" class="btn btn-primary" id="btnMcdSave">حفظ الأقسام المتعاونة</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
+    let INSTRUCTORS_AUTH = null;
+    /** إسنادات أقسام إضافية للحفظ: { department_id, label } */
+    let EXTRA_DEPT_ROWS = [];
+    let MANAGE_MODAL = null;
+    let MANAGE_MODAL_BACKDROP = null;
+    let MCD_STATE = {
+      instructorId: null,
+      primaryDeptId: null,
+      rows: [], // {department_id, label}
+    };
+
+    function escapeHtml(s) {
+      const d = document.createElement("div");
+      d.textContent = s == null ? "" : String(s);
+      return d.innerHTML;
+    }
+
+    function externalScopeLabel(v) {
+      const k = String(v || "").trim();
+      if (k === "outside_university") return "خارج الجامعة";
+      if (k === "outside_college") return "خارج الكلية";
+      return "داخل الكلية (خارج القسم)";
+    }
+
+    function syncExternalScopeField() {
+      const typeEl = document.getElementById("inst-type");
+      const wrap = document.getElementById("inst-external-scope-wrap");
+      if (!typeEl || !wrap) return;
+      const isExternal = (typeEl.value || "internal") === "external";
+      if (isExternal) wrap.classList.remove("d-none");
+      else wrap.classList.add("d-none");
+    }
+
+    function showManageModalElement() {
+      const el = document.getElementById("manageCoopDeptModal");
+      if (!el) return;
+      if (MANAGE_MODAL) {
+        MANAGE_MODAL.show();
+        return;
+      }
+      // Fallback إذا لم تُحمّل مكتبة Bootstrap JS
+      el.style.display = "block";
+      el.classList.add("show");
+      el.removeAttribute("aria-hidden");
+      el.setAttribute("aria-modal", "true");
+      document.body.classList.add("modal-open");
+      document.body.style.overflow = "hidden";
+      if (!MANAGE_MODAL_BACKDROP) {
+        const bd = document.createElement("div");
+        bd.className = "modal-backdrop fade show";
+        document.body.appendChild(bd);
+        MANAGE_MODAL_BACKDROP = bd;
+      }
+    }
+
+    function hideManageModalElement() {
+      const el = document.getElementById("manageCoopDeptModal");
+      if (!el) return;
+      if (MANAGE_MODAL) {
+        MANAGE_MODAL.hide();
+        return;
+      }
+      el.classList.remove("show");
+      el.style.display = "none";
+      el.setAttribute("aria-hidden", "true");
+      el.removeAttribute("aria-modal");
+      document.body.classList.remove("modal-open");
+      document.body.style.overflow = "";
+      if (MANAGE_MODAL_BACKDROP) {
+        MANAGE_MODAL_BACKDROP.remove();
+        MANAGE_MODAL_BACKDROP = null;
+      }
+    }
+
+    function syncInstructorsScopeBanner(authJson) {
+      const el = document.getElementById("instructorsDeptScopeBanner");
+      if (!el) return;
+      const scope = authJson && authJson.admin_department_scope;
+      const role = authJson && authJson.role;
+      if (scope && scope.name_ar) {
+        el.textContent = "عرض أعضاء هيئة التدريس مقيد بالقسم: " + scope.name_ar + " (" + (scope.code || "") + ").";
+        el.classList.remove("d-none");
+      } else if (role === "head_of_department") {
+        el.textContent = "عرض أعضاء هيئة التدريس ضمن قسمك المرتبط بحسابك فقط.";
+        el.classList.remove("d-none");
+      } else {
+        el.textContent = "";
+        el.classList.add("d-none");
+      }
+    }
+
+    async function maybeLoadDepartmentCatalog(authJson) {
+      const wrap = document.getElementById("inst-dept-wrap");
+      const sel = document.getElementById("inst-dept");
+      if (!wrap || !sel) return;
+      const role = (authJson && authJson.role) || "";
+      const show = (role === "admin_main" || role === "admin");
+      if (!show) {
+        wrap.classList.add("d-none");
+        return;
+      }
+      wrap.classList.remove("d-none");
+      try {
+        const resp = await fetch("/college/catalog/departments", {
+          headers: { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" },
+        });
+        if (!resp.ok) {
+          wrap.classList.add("d-none");
+          return;
+        }
+        const data = await resp.json();
+        const items = (data && data.items) || [];
+        sel.innerHTML = '<option value="">— بدون تحديد —</option>';
+        items.forEach((d) => {
+          const id = d.id;
+          const label = (d.name_ar || d.code || "").trim() || String(id);
+          const opt = document.createElement("option");
+          opt.value = String(id);
+          opt.textContent = label;
+          sel.appendChild(opt);
+        });
+        const scoped = authJson && authJson.admin_department_scope;
+        if (scoped && scoped.id != null) {
+          const sid = String(scoped.id);
+          const hasScopeOption = Array.from(sel.options).some((o) => o.value === sid);
+          if (hasScopeOption && !sel.value) sel.value = sid;
+        }
+      } catch (e) {
+        console.error(e);
+        wrap.classList.add("d-none");
+      }
+    }
+
+    async function loadExtraDeptPickOptions() {
+      const pick = document.getElementById("extra-dept-pick");
+      if (!pick) return;
+      try {
+        const resp = await fetch("/college/catalog/departments", {
+          headers: { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" },
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        pick.innerHTML = '<option value="">— اختر قسم —</option>';
+        (data.items || []).forEach((d) => {
+          const opt = document.createElement("option");
+          opt.value = String(d.id);
+          opt.textContent = (d.name_ar || d.code || "").trim() || String(d.id);
+          pick.appendChild(opt);
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function loadModalDeptPickOptions() {
+      const pick = document.getElementById("mcdDeptPick");
+      if (!pick) return;
+      try {
+        const resp = await fetch("/college/catalog/departments", {
+          headers: { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" },
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        pick.innerHTML = '<option value="">— اختر قسم —</option>';
+        (data.items || []).forEach((d) => {
+          const opt = document.createElement("option");
+          opt.value = String(d.id);
+          opt.textContent = (d.name_ar || d.code || "").trim() || String(d.id);
+          pick.appendChild(opt);
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function syncExtraDeptAssignCard(authJson) {
+      const card = document.getElementById("extra-dept-assign-card");
+      if (!card) return;
+      const role = authJson && authJson.role;
+      const show = role === "admin_main" || role === "admin";
+      if (!show) {
+        card.classList.add("d-none");
+        return;
+      }
+      card.classList.remove("d-none");
+      await loadExtraDeptPickOptions();
+    }
+
+    function renderExtraDeptList() {
+      const ul = document.getElementById("extra-dept-list");
+      if (!ul) return;
+      ul.innerHTML = "";
+      EXTRA_DEPT_ROWS.forEach((row, idx) => {
+        const li = document.createElement("li");
+        li.className = "list-group-item d-flex justify-content-between align-items-center";
+        li.innerHTML =
+          `<span>${escapeHtml(row.label)} <small class="text-muted">(#${row.department_id})</small></span>` +
+          `<button type="button" class="btn btn-sm btn-outline-danger" data-xidx="${idx}">إزالة</button>`;
+        ul.appendChild(li);
+      });
+      ul.querySelectorAll("button[data-xidx]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const i = parseInt(btn.getAttribute("data-xidx"), 10);
+          EXTRA_DEPT_ROWS.splice(i, 1);
+          renderExtraDeptList();
+        });
+      });
+    }
+
+    function renderModalDeptList() {
+      const ul = document.getElementById("mcdList");
+      if (!ul) return;
+      ul.innerHTML = "";
+      MCD_STATE.rows.forEach((row, idx) => {
+        const li = document.createElement("li");
+        li.className = "list-group-item d-flex justify-content-between align-items-center";
+        li.innerHTML =
+          `<span>${escapeHtml(row.label)} <small class="text-muted">(#${row.department_id})</small></span>` +
+          `<button type="button" class="btn btn-sm btn-outline-danger" data-midx="${idx}">إزالة</button>`;
+        ul.appendChild(li);
+      });
+      ul.querySelectorAll("button[data-midx]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const i = parseInt(btn.getAttribute("data-midx"), 10);
+          MCD_STATE.rows.splice(i, 1);
+          renderModalDeptList();
+        });
+      });
+    }
+
+    async function openManageCoopModalForInstructor(inst) {
+      if (!inst || !inst.id) return;
+      MCD_STATE = {
+        instructorId: parseInt(inst.id, 10),
+        primaryDeptId:
+          inst.departmentId && String(inst.departmentId).trim()
+            ? parseInt(inst.departmentId, 10)
+            : null,
+        rows: [],
+      };
+
+      const titleEl = document.getElementById("mcdInstructorTitle");
+      if (titleEl) titleEl.textContent = `الأستاذ: ${inst.name || ""} (ID: ${inst.id})`;
+      const primaryEl = document.getElementById("mcdPrimaryDept");
+      if (primaryEl) {
+        if (inst.departmentLabel && String(inst.departmentLabel).trim()) {
+          primaryEl.textContent = `القسم الرئيسي: ${inst.departmentLabel}`;
+        } else {
+          primaryEl.textContent = "القسم الرئيسي: غير محدد";
+        }
+      }
+      const hintEl = document.getElementById("mcdHint");
+      if (hintEl) {
+        hintEl.textContent = "لا يمكن إضافة القسم الرئيسي ضمن الأقسام المتعاونة.";
+      }
+
+      await loadModalDeptPickOptions();
+      try {
+        const r = await fetch(`/instructors/${inst.id}/department_assignments`);
+        if (r.ok) {
+          const data = await r.json();
+          const rows = (data.assignments || []).filter((a) => a.migration_source === "user_ui");
+          MCD_STATE.rows = rows
+            .map((a) => ({
+              department_id: parseInt(a.department_id, 10),
+              label:
+                (a.department_name_ar && String(a.department_name_ar).trim()) ||
+                (a.department_code && String(a.department_code).trim()) ||
+                String(a.department_id),
+            }))
+            .filter((a) => !Number.isNaN(a.department_id));
+        }
+      } catch (e) {
+        console.error(e);
+      }
+      if (MCD_STATE.primaryDeptId !== null) {
+        MCD_STATE.rows = MCD_STATE.rows.filter((r) => r.department_id !== MCD_STATE.primaryDeptId);
+      }
+      renderModalDeptList();
+
+      if (!MANAGE_MODAL && window.bootstrap && window.bootstrap.Modal) {
+        MANAGE_MODAL = new bootstrap.Modal(document.getElementById("manageCoopDeptModal"));
+      }
+      showManageModalElement();
+    }
+
+    function getPrimaryDepartmentId() {
+      const wrap = document.getElementById("inst-dept-wrap");
+      const sel = document.getElementById("inst-dept");
+      if (!wrap || !sel || wrap.classList.contains("d-none")) return null;
+      const raw = (sel.value || "").trim();
+      if (!raw) return null;
+      const id = parseInt(raw, 10);
+      return Number.isNaN(id) ? null : id;
+    }
+
+    async function loadExtraAssignmentsForEdit(instId) {
+      EXTRA_DEPT_ROWS = [];
+      try {
+        const r = await fetch(`/instructors/${instId}/department_assignments`);
+        if (!r.ok) return;
+        const data = await r.json();
+        const rows = (data.assignments || []).filter((a) => a.migration_source === "user_ui");
+        rows.forEach((a) => {
+          const label =
+            (a.department_name_ar && String(a.department_name_ar).trim()) ||
+            (a.department_code && String(a.department_code).trim()) ||
+            String(a.department_id);
+          EXTRA_DEPT_ROWS.push({
+            department_id: a.department_id,
+            label,
+          });
+        });
+        renderExtraDeptList();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
     async function loadInstructors() {
       try {
         const resp = await fetch("/instructors/list");
@@ -89,24 +485,77 @@
         const data = await resp.json();
         const tbody = document.querySelector("#instructors-table tbody");
         tbody.innerHTML = "";
+        const scopeFilter = (document.getElementById("inst-filter-scope")?.value || "").trim();
         (data.instructors || []).forEach((inst) => {
+          if (scopeFilter === "internal_only" && inst.type !== "internal") return;
+          if (
+            scopeFilter &&
+            scopeFilter !== "internal_only" &&
+            inst.type === "external" &&
+            String(inst.external_scope || "within_college") !== scopeFilter
+          ) {
+            return;
+          }
+          if (scopeFilter && scopeFilter !== "internal_only" && inst.type !== "external") {
+            return;
+          }
+          const deptLabel =
+            (inst.department_name_ar && String(inst.department_name_ar).trim()) ||
+            (inst.department_code && String(inst.department_code).trim()) ||
+            "—";
+          let extraLn = "";
+          let primaryBadge = "";
+          if (deptLabel && deptLabel !== "—") {
+            primaryBadge =
+              '<div class="small mt-1"><span class="badge text-bg-primary">قسم رئيسي</span></div>';
+          }
+          if (Array.isArray(inst.departments) && inst.departments.length) {
+            const parts = inst.departments
+              .filter((d) => String(d.department_id || "") !== String(inst.department_id || ""))
+              .map((d) =>
+                (d.department_name_ar || d.department_code || d.department_id || "").toString()
+              );
+            const coopBadges = parts
+              .filter(Boolean)
+              .map((p) => `<span class="badge text-bg-secondary me-1">${escapeHtml(p)}</span>`)
+              .join("");
+            if (coopBadges) {
+              extraLn =
+                '<div class="small text-muted mt-1">' +
+                '<span class="me-1">أقسام متعاونة:</span>' +
+                coopBadges +
+                "</div>";
+            }
+          }
           const tr = document.createElement("tr");
+          const typeText =
+            inst.type === "external"
+              ? "متعاون خارجي — " + externalScopeLabel(inst.external_scope)
+              : "من داخل القسم";
           tr.innerHTML = `
             <td>${inst.id ?? ""}</td>
-            <td>${inst.name || ""}</td>
-            <td>${inst.type === "external" ? "متعاون من خارج القسم" : "من داخل القسم"}</td>
-            <td>${inst.email || ""}</td>
+            <td>${escapeHtml(inst.name || "")}</td>
+            <td>${escapeHtml(typeText)}</td>
+            <td>${escapeHtml(inst.email || "")}</td>
+            <td>${escapeHtml(deptLabel)}${primaryBadge}${extraLn}</td>
             <td>${inst.is_active ? "نشط" : "موقوف"}</td>
             <td>
               <button type="button" class="btn btn-sm btn-outline-primary me-1" data-action="edit">تعديل</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary me-1" data-action="manage-depts">الأقسام المتعاونة</button>
               <button type="button" class="btn btn-sm btn-outline-danger" data-action="delete">حذف</button>
             </td>
           `;
           tr.dataset.id = inst.id;
           tr.dataset.name = inst.name || "";
           tr.dataset.type = inst.type || "internal";
+          tr.dataset.externalScope = inst.external_scope || "within_college";
           tr.dataset.email = inst.email || "";
           tr.dataset.active = inst.is_active ? "1" : "0";
+          tr.dataset.departmentId =
+            inst.department_id != null && inst.department_id !== ""
+              ? String(inst.department_id)
+              : "";
+          tr.dataset.departmentLabel = deptLabel || "";
           tbody.appendChild(tr);
         });
       } catch (e) {
@@ -118,8 +567,15 @@
       document.getElementById("inst-id").value = "";
       document.getElementById("inst-name").value = "";
       document.getElementById("inst-type").value = "internal";
+      const es = document.getElementById("inst-external-scope");
+      if (es) es.value = "within_college";
       document.getElementById("inst-email").value = "";
       document.getElementById("inst-active").checked = true;
+      const sel = document.getElementById("inst-dept");
+      if (sel) sel.value = "";
+      EXTRA_DEPT_ROWS = [];
+      renderExtraDeptList();
+      syncExternalScopeField();
     }
 
     document.getElementById("btn-reset").addEventListener("click", () => {
@@ -131,6 +587,7 @@
       const id = document.getElementById("inst-id").value || null;
       const name = document.getElementById("inst-name").value.trim();
       const type = document.getElementById("inst-type").value;
+      const external_scope = (document.getElementById("inst-external-scope")?.value || "within_college").trim();
       const email = document.getElementById("inst-email").value.trim();
       const is_active = document.getElementById("inst-active").checked;
 
@@ -139,11 +596,34 @@
         return;
       }
 
+      const deptWrap = document.getElementById("inst-dept-wrap");
+      const deptSel = document.getElementById("inst-dept");
+      const payload = { id, name, type, email, is_active };
+      if (type === "external") {
+        payload.external_scope = external_scope;
+      }
+      if (deptWrap && !deptWrap.classList.contains("d-none") && deptSel) {
+        const v = (deptSel.value || "").trim();
+        payload.department_id = v === "" ? null : parseInt(v, 10);
+      }
+
+      const extraCard = document.getElementById("extra-dept-assign-card");
+      if (extraCard && !extraCard.classList.contains("d-none") && EXTRA_DEPT_ROWS.length) {
+        const primaryId = getPrimaryDepartmentId();
+        const cleaned = EXTRA_DEPT_ROWS.filter((r) => r.department_id !== primaryId);
+        payload.department_assignments = cleaned.map((r) => ({
+          department_id: r.department_id,
+          schedule_section_id: -1,
+          semester: "",
+          is_primary: false,
+        }));
+      }
+
       try {
         const resp = await fetch("/instructors/save", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({ id, name, type, email, is_active })
+          body: JSON.stringify(payload)
         });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) {
@@ -170,9 +650,25 @@
         document.getElementById("inst-id").value = id || "";
         document.getElementById("inst-name").value = tr.dataset.name || "";
         document.getElementById("inst-type").value = tr.dataset.type || "internal";
+        const extScopeEl = document.getElementById("inst-external-scope");
+        if (extScopeEl) extScopeEl.value = tr.dataset.externalScope || "within_college";
+        syncExternalScopeField();
         document.getElementById("inst-email").value = tr.dataset.email || "";
         document.getElementById("inst-active").checked = tr.dataset.active !== "0";
+        const deptSel = document.getElementById("inst-dept");
+        const deptWrap = document.getElementById("inst-dept-wrap");
+        if (deptSel && deptWrap && !deptWrap.classList.contains("d-none")) {
+          deptSel.value = tr.dataset.departmentId || "";
+        }
+        loadExtraAssignmentsForEdit(id);
         window.scrollTo({ top: 0, behavior: "smooth" });
+      } else if (action === "manage-depts") {
+        await openManageCoopModalForInstructor({
+          id,
+          name: tr.dataset.name || "",
+          departmentId: tr.dataset.departmentId || "",
+          departmentLabel: tr.dataset.departmentLabel || "",
+        });
       } else if (action === "delete") {
         if (!confirm("هل تريد بالتأكيد حذف هذا العضو؟")) return;
         try {
@@ -194,8 +690,111 @@
       }
     });
 
-    document.addEventListener("DOMContentLoaded", () => {
-      loadInstructors();
+    document.getElementById("btn-extra-dept-add")?.addEventListener("click", () => {
+      const pick = document.getElementById("extra-dept-pick");
+      if (!pick || !pick.value) {
+        alert("اختر قسماً من القائمة");
+        return;
+      }
+      const did = parseInt(pick.value, 10);
+      const primaryId = getPrimaryDepartmentId();
+      if (primaryId !== null && did === primaryId) {
+        alert("هذا هو القسم الرئيسي بالفعل. اختر قسماً متعاوناً مختلفاً.");
+        return;
+      }
+      const label = (pick.selectedOptions[0] && pick.selectedOptions[0].textContent) || "";
+      if (EXTRA_DEPT_ROWS.some((r) => r.department_id === did)) {
+        alert("القسم موجود مسبقاً ضمن الأقسام المتعاونة.");
+        return;
+      }
+      EXTRA_DEPT_ROWS.push({ department_id: did, label });
+      renderExtraDeptList();
+    });
+
+    document.getElementById("btnMcdAdd")?.addEventListener("click", () => {
+      const pick = document.getElementById("mcdDeptPick");
+      if (!pick || !pick.value) {
+        alert("اختر قسماً من القائمة");
+        return;
+      }
+      const did = parseInt(pick.value, 10);
+      if (MCD_STATE.primaryDeptId !== null && did === MCD_STATE.primaryDeptId) {
+        alert("لا يمكن إضافة القسم الرئيسي ضمن الأقسام المتعاونة.");
+        return;
+      }
+      if (MCD_STATE.rows.some((r) => r.department_id === did)) {
+        alert("هذا القسم موجود مسبقاً.");
+        return;
+      }
+      const label = (pick.selectedOptions[0] && pick.selectedOptions[0].textContent) || "";
+      MCD_STATE.rows.push({ department_id: did, label });
+      renderModalDeptList();
+    });
+
+    document.getElementById("btnMcdSave")?.addEventListener("click", async () => {
+      if (!MCD_STATE.instructorId) return;
+      const payload = {
+        assignments: MCD_STATE.rows.map((r) => ({
+          department_id: r.department_id,
+          schedule_section_id: -1,
+          semester: "",
+          is_primary: false,
+        })),
+      };
+      try {
+        const r = await fetch(`/instructors/${MCD_STATE.instructorId}/department_assignments/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          alert(data.message || "فشل حفظ الأقسام المتعاونة");
+          return;
+        }
+        hideManageModalElement();
+        await loadInstructors();
+      } catch (e) {
+        console.error(e);
+        alert("حدث خطأ غير متوقع أثناء الحفظ");
+      }
+    });
+
+    document.addEventListener("DOMContentLoaded", async () => {
+      const scopeFilterEl = document.getElementById("inst-filter-scope");
+      if (scopeFilterEl) {
+        scopeFilterEl.addEventListener("change", async () => {
+          await loadInstructors();
+        });
+      }
+      const typeEl = document.getElementById("inst-type");
+      if (typeEl) typeEl.addEventListener("change", syncExternalScopeField);
+      syncExternalScopeField();
+      try {
+        const r = await fetch("/auth/check");
+        if (r.ok) {
+          INSTRUCTORS_AUTH = await r.json();
+          syncInstructorsScopeBanner(INSTRUCTORS_AUTH);
+          await syncExtraDeptAssignCard(INSTRUCTORS_AUTH);
+          await maybeLoadDepartmentCatalog(INSTRUCTORS_AUTH);
+          const hint = document.getElementById("extra-dept-hint");
+          if (hint) {
+            hint.textContent = "ملاحظة: لا تضف القسم الرئيسي هنا؛ هذه القائمة للتعاون مع أقسام أخرى فقط.";
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+      await loadInstructors();
+
+      const m = document.getElementById("manageCoopDeptModal");
+      if (m) {
+        m.querySelectorAll("[data-bs-dismiss='modal']").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            hideManageModalElement();
+          });
+        });
+      }
     });
   </script>
 </body>

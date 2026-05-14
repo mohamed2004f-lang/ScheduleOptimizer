@@ -5,7 +5,8 @@ from typing import Optional
 
 from flask import Blueprint, jsonify, render_template, request, session, current_app, abort
 from backend.core.auth import login_required, role_required
-from backend.database.database import is_postgresql, table_exists
+from backend.core import department_scope_policy as dept_scope_policy
+from backend.database.database import is_postgresql, table_exists, fetch_table_columns
 
 from .utilities import DB_FILE, get_connection, get_current_term, log_activity
 
@@ -104,47 +105,147 @@ def admin_summary():
         cur = conn.cursor()
 
         try:
+            username = (session.get("user") or session.get("username") or "").strip()
+            scope_mode, scope_dept_id = dept_scope_policy.resolve_users_list_scope(conn, username)
+            dept_scoped = scope_mode == "department" and scope_dept_id is not None
+
+            cols_courses = fetch_table_columns(conn, "courses") if table_exists(conn, "courses") else []
+            has_owning_course = "owning_department_id" in cols_courses
+
+            st_where, st_params = dept_scope_policy.resolve_scope_sql_for_students_table(conn, username)
+            reg_join_where, reg_join_params = dept_scope_policy.resolve_scope_sql_for_aliased_student(
+                conn, username, "st"
+            )
+
             if table_exists(conn, "students"):
-                data["students"] = cur.execute(
-                    "SELECT COUNT(*) FROM students"
-                ).fetchone()[0]
+                if st_where:
+                    data["students"] = cur.execute(
+                        f"SELECT COUNT(*) FROM students WHERE {st_where}",
+                        st_params,
+                    ).fetchone()[0]
+                else:
+                    data["students"] = cur.execute("SELECT COUNT(*) FROM students").fetchone()[0]
+
             if table_exists(conn, "courses"):
-                data["courses"] = cur.execute(
-                    "SELECT COUNT(*) FROM courses"
-                ).fetchone()[0]
+                if dept_scoped and has_owning_course:
+                    data["courses"] = cur.execute(
+                        "SELECT COUNT(*) FROM courses WHERE owning_department_id = ?",
+                        (int(scope_dept_id),),
+                    ).fetchone()[0]
+                else:
+                    data["courses"] = cur.execute("SELECT COUNT(*) FROM courses").fetchone()[0]
+
             if table_exists(conn, "schedule"):
-                data["schedule_rows"] = cur.execute(
-                    "SELECT COUNT(*) FROM schedule"
-                ).fetchone()[0]
+                if dept_scoped and has_owning_course:
+                    data["schedule_rows"] = cur.execute(
+                        """
+                        SELECT COUNT(*) FROM schedule sch
+                        INNER JOIN courses crs ON crs.course_name = sch.course_name
+                        WHERE crs.owning_department_id = ?
+                        """,
+                        (int(scope_dept_id),),
+                    ).fetchone()[0]
+                else:
+                    data["schedule_rows"] = cur.execute("SELECT COUNT(*) FROM schedule").fetchone()[0]
+
             if table_exists(conn, "registrations"):
-                data["registrations"] = cur.execute(
-                    "SELECT COUNT(*) FROM registrations"
-                ).fetchone()[0]
+                if reg_join_where:
+                    data["registrations"] = cur.execute(
+                        f"""
+                        SELECT COUNT(*) FROM registrations r
+                        INNER JOIN students st ON st.student_id = r.student_id
+                        WHERE {reg_join_where}
+                        """,
+                        reg_join_params,
+                    ).fetchone()[0]
+                else:
+                    data["registrations"] = cur.execute("SELECT COUNT(*) FROM registrations").fetchone()[0]
+
             if table_exists(conn, "grades"):
-                data["grades"] = cur.execute(
-                    "SELECT COUNT(*) FROM grades"
-                ).fetchone()[0]
+                if reg_join_where:
+                    data["grades"] = cur.execute(
+                        f"""
+                        SELECT COUNT(*) FROM grades g
+                        INNER JOIN students st ON st.student_id = g.student_id
+                        WHERE {reg_join_where}
+                        """,
+                        reg_join_params,
+                    ).fetchone()[0]
+                else:
+                    data["grades"] = cur.execute("SELECT COUNT(*) FROM grades").fetchone()[0]
+
             if table_exists(conn, "exams"):
-                row = cur.execute(
-                    "SELECT COUNT(*) FROM exams"
-                ).fetchone()
-                data["exams_total"] = row[0] if row else 0
-                row_m = cur.execute(
-                    "SELECT COUNT(*) FROM exams WHERE exam_type = 'midterm'"
-                ).fetchone()
-                data["exams_midterm"] = row_m[0] if row_m else 0
-                row_f = cur.execute(
-                    "SELECT COUNT(*) FROM exams WHERE exam_type = 'final'"
-                ).fetchone()
-                data["exams_final"] = row_f[0] if row_f else 0
+                if dept_scoped and has_owning_course:
+                    row = cur.execute(
+                        """
+                        SELECT COUNT(*) FROM exams e
+                        INNER JOIN courses crs ON crs.course_name = e.course_name
+                        WHERE crs.owning_department_id = ?
+                        """,
+                        (int(scope_dept_id),),
+                    ).fetchone()
+                    data["exams_total"] = row[0] if row else 0
+                    row_m = cur.execute(
+                        """
+                        SELECT COUNT(*) FROM exams e
+                        INNER JOIN courses crs ON crs.course_name = e.course_name
+                        WHERE crs.owning_department_id = ?
+                          AND e.exam_type = 'midterm'
+                        """,
+                        (int(scope_dept_id),),
+                    ).fetchone()
+                    data["exams_midterm"] = row_m[0] if row_m else 0
+                    row_f = cur.execute(
+                        """
+                        SELECT COUNT(*) FROM exams e
+                        INNER JOIN courses crs ON crs.course_name = e.course_name
+                        WHERE crs.owning_department_id = ?
+                          AND e.exam_type = 'final'
+                        """,
+                        (int(scope_dept_id),),
+                    ).fetchone()
+                    data["exams_final"] = row_f[0] if row_f else 0
+                else:
+                    row = cur.execute("SELECT COUNT(*) FROM exams").fetchone()
+                    data["exams_total"] = row[0] if row else 0
+                    row_m = cur.execute(
+                        "SELECT COUNT(*) FROM exams WHERE exam_type = 'midterm'"
+                    ).fetchone()
+                    data["exams_midterm"] = row_m[0] if row_m else 0
+                    row_f = cur.execute(
+                        "SELECT COUNT(*) FROM exams WHERE exam_type = 'final'"
+                    ).fetchone()
+                    data["exams_final"] = row_f[0] if row_f else 0
+
             if table_exists(conn, "conflict_report"):
-                data["conflict_report_rows"] = cur.execute(
-                    "SELECT COUNT(*) FROM conflict_report"
-                ).fetchone()[0]
+                if reg_join_where:
+                    data["conflict_report_rows"] = cur.execute(
+                        f"""
+                        SELECT COUNT(*) FROM conflict_report cr
+                        INNER JOIN students st ON st.student_id = cr.student_id
+                        WHERE {reg_join_where}
+                        """,
+                        reg_join_params,
+                    ).fetchone()[0]
+                else:
+                    data["conflict_report_rows"] = cur.execute(
+                        "SELECT COUNT(*) FROM conflict_report"
+                    ).fetchone()[0]
+
             if table_exists(conn, "exam_conflicts"):
-                data["exam_conflicts_rows"] = cur.execute(
-                    "SELECT COUNT(*) FROM exam_conflicts"
-                ).fetchone()[0]
+                if reg_join_where:
+                    data["exam_conflicts_rows"] = cur.execute(
+                        f"""
+                        SELECT COUNT(*) FROM exam_conflicts ec
+                        INNER JOIN students st ON st.student_id = ec.student_id
+                        WHERE {reg_join_where}
+                        """,
+                        reg_join_params,
+                    ).fetchone()[0]
+                else:
+                    data["exam_conflicts_rows"] = cur.execute(
+                        "SELECT COUNT(*) FROM exam_conflicts"
+                    ).fetchone()[0]
         except Exception:
             # في حال فشل أي استعلام، نرجع ما تم حسابه بدون كسر الواجهة
             pass

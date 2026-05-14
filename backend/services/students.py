@@ -26,10 +26,19 @@ from .utilities import (
     get_current_term,
 )
 from .prereg_helpers import evaluate_courses_prereqs
+from backend.core.feature_flags import registration_program_course_mode
+from backend.core.department_scope_policy import resolve_scope_sql_for_aliased_student
+from backend.services.registration_policy import (
+    check_general_sections_capacity,
+    check_program_prereqs,
+    map_courses_to_program_courses,
+)
 from .attendance_export_core import (
+    attendance_eligible_course_rows,
     build_schedule_semester_match,
     collect_attendance_export_state as _collect_attendance_export_state,
     course_rows_with_meta,
+    effective_attendance_department_scope as _effective_attendance_department_scope,
     fallback_distinct_attendance_courses,
 )
 from backend.database.database import is_postgresql, fetch_table_columns, table_exists
@@ -336,8 +345,11 @@ def _course_registration_count_rows(conn):
     cur = conn.cursor()
     cols_stu = fetch_table_columns(conn, "students")
     active_only = "enrollment_status" in cols_stu
+    actor = (session.get("user") or session.get("username") or "").strip()
+    scope_sql, scope_params = resolve_scope_sql_for_aliased_student(conn, actor, "s")
+    scope_and = f" AND ({scope_sql})" if scope_sql else ""
     if active_only:
-        q = """
+        q = f"""
         SELECT r.course_name,
                COALESCE(c.course_code, '') AS course_code,
                COALESCE(c.units, 0) AS units,
@@ -346,21 +358,25 @@ def _course_registration_count_rows(conn):
         LEFT JOIN courses c ON c.course_name = r.course_name
         LEFT JOIN students s ON s.student_id = r.student_id
         WHERE COALESCE(s.enrollment_status, 'active') = 'active'
+          {scope_and}
         GROUP BY r.course_name, c.course_code, c.units
         ORDER BY r.course_name
         """
     else:
-        q = """
+        q = f"""
         SELECT r.course_name,
                COALESCE(c.course_code, '') AS course_code,
                COALESCE(c.units, 0) AS units,
                COUNT(DISTINCT r.student_id) AS student_count
         FROM registrations r
         LEFT JOIN courses c ON c.course_name = r.course_name
+        LEFT JOIN students s ON s.student_id = r.student_id
+        WHERE COALESCE(r.student_id, '') <> ''
+          {scope_and}
         GROUP BY r.course_name, c.course_code, c.units
         ORDER BY r.course_name
         """
-    rows = cur.execute(q).fetchall()
+    rows = cur.execute(q, scope_params if scope_params else ()).fetchall()
     items = []
     for row in rows or []:
         d = dict(row)
@@ -386,17 +402,31 @@ def course_registration_counts_api():
         cur = conn.cursor()
         cols_stu = fetch_table_columns(conn, "students")
         active_only = "enrollment_status" in cols_stu
+        actor = (session.get("user") or session.get("username") or "").strip()
+        scope_sql, scope_params = resolve_scope_sql_for_aliased_student(conn, actor, "s")
+        scope_and = f" AND ({scope_sql})" if scope_sql else ""
         if active_only:
             row = cur.execute(
-                """
+                f"""
                 SELECT COUNT(DISTINCT r.student_id)
                 FROM registrations r
                 LEFT JOIN students s ON s.student_id = r.student_id
                 WHERE COALESCE(s.enrollment_status, 'active') = 'active'
-                """
+                  {scope_and}
+                """,
+                scope_params if scope_params else (),
             ).fetchone()
         else:
-            row = cur.execute("SELECT COUNT(DISTINCT student_id) FROM registrations").fetchone()
+            row = cur.execute(
+                f"""
+                SELECT COUNT(DISTINCT r.student_id)
+                FROM registrations r
+                LEFT JOIN students s ON s.student_id = r.student_id
+                WHERE COALESCE(r.student_id, '') <> ''
+                  {scope_and}
+                """,
+                scope_params if scope_params else (),
+            ).fetchone()
         if row:
             distinct_students = int(row[0] or 0)
     return jsonify({
@@ -1573,6 +1603,41 @@ def normalize_sid(sid):
     return str(sid).strip()
 
 
+def _resolve_actor_department_id(conn) -> int | None:
+    """استنتاج قسم المستخدم الحالي (users.department_id ثم instructors.department_id)."""
+    cur = conn.cursor()
+    uname = (session.get("user") or session.get("username") or "").strip()
+    if uname:
+        try:
+            row_u = cur.execute(
+                "SELECT department_id FROM users WHERE lower(username)=lower(?) LIMIT 1",
+                (uname,),
+            ).fetchone()
+            if row_u:
+                dep = row_u[0] if not hasattr(row_u, "keys") else row_u["department_id"]
+                if dep not in (None, ""):
+                    return int(dep)
+        except Exception:
+            pass
+    try:
+        inst_id = int(session.get("instructor_id") or 0)
+    except (TypeError, ValueError):
+        inst_id = 0
+    if inst_id:
+        try:
+            row_i = cur.execute(
+                "SELECT department_id FROM instructors WHERE id = ? LIMIT 1",
+                (inst_id,),
+            ).fetchone()
+            if row_i:
+                dep = row_i[0] if not hasattr(row_i, "keys") else row_i["department_id"]
+                if dep not in (None, ""):
+                    return int(dep)
+        except Exception:
+            pass
+    return None
+
+
 def _get_allowed_student_ids_for_role(conn, user_role: str) -> set:
     """
     تُرجع set بأرقام الطلاب المسموح عرضهم/تصديرهم حسب role الحالي.
@@ -1586,13 +1651,47 @@ def _get_allowed_student_ids_for_role(conn, user_role: str) -> set:
         return None
 
     # رئيس القسم:
-    # - في وضع head: صلاحية غير مقيّدة (مثل إدارة القسم).
+    # - في وضع head: مقيّدة بقسم الحساب (department_id) لحماية العزل بين الأقسام.
     # - في وضع supervisor: مقيّدة بطلاب الإشراف.
     # - في وضع instructor: مقيّدة بطلاب مقرراته في الفصل الحالي.
     if role in ("head_of_department", "head", "hod", "head_of_dept", "department_head", "dept_head"):
         mode = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
         if mode in ("", "head", "hod", "department_head"):
-            return None
+            dept_id = _resolve_actor_department_id(conn)
+            if not dept_id:
+                # Fail-closed: لا نسمح بعرض عابر للأقسام عندما لا يوجد ربط قسم صالح.
+                return set()
+            cur_h = conn.cursor()
+            p_rows = cur_h.execute(
+                "SELECT id FROM programs WHERE department_id = ?",
+                (int(dept_id),),
+            ).fetchall()
+            program_ids = set()
+            for pr in p_rows or []:
+                try:
+                    v = pr[0] if not hasattr(pr, "keys") else pr["id"]
+                    if v not in (None, ""):
+                        program_ids.add(int(v))
+                except Exception:
+                    continue
+            if program_ids:
+                ph = ",".join("?" for _ in program_ids)
+                rows = cur_h.execute(
+                    f"""
+                    SELECT student_id
+                    FROM students
+                    WHERE department_id = ?
+                       OR current_program_id IN ({ph})
+                       OR admission_program_id IN ({ph})
+                    """,
+                    (int(dept_id), *tuple(program_ids), *tuple(program_ids)),
+                ).fetchall()
+            else:
+                rows = cur_h.execute(
+                    "SELECT student_id FROM students WHERE department_id = ?",
+                    (int(dept_id),),
+                ).fetchall()
+            return {normalize_sid(r[0]) for r in rows if r and r[0]}
         role = "supervisor" if mode == "supervisor" else "instructor"
 
     cur = conn.cursor()
@@ -1873,6 +1972,164 @@ def update_student_status():
         from backend.core.exceptions import DatabaseError
         raise DatabaseError(f"فشل تحديث حالة قيد الطالب: {str(e)}")
 
+
+@students_bp.route("/specialization/update", methods=["POST"])
+@role_required("admin", "admin_main", "head_of_department")
+def update_student_specialization():
+    """
+    Sprint C:
+    تحديث برنامج/مسار الطالب بعد التخصص (current_program_id, track_code, specialized_at_term)
+    مع تسجيل تدقيق في activity_log.
+    """
+    data = request.get_json(force=True) or {}
+    sid = normalize_sid(data.get("student_id"))
+    if not sid:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
+
+    prog_id_raw = data.get("current_program_id")
+    if prog_id_raw in (None, ""):
+        prog_id = None
+    else:
+        try:
+            prog_id = int(prog_id_raw)
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "current_program_id غير صالح"}), 400
+
+    track_code = (data.get("track_code") or "").strip()
+    specialized_at_term = (data.get("specialized_at_term") or "").strip()
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        if allowed_student_ids is not None and sid not in allowed_student_ids:
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+        old_row = cur.execute(
+            """
+            SELECT student_id, COALESCE(student_name,''), current_program_id, COALESCE(track_code,''), COALESCE(specialized_at_term,'')
+            FROM students
+            WHERE student_id = ?
+            LIMIT 1
+            """,
+            (sid,),
+        ).fetchone()
+        if not old_row:
+            return jsonify({"status": "error", "message": "الطالب غير موجود"}), 404
+
+        if prog_id is not None:
+            p_exists = cur.execute(
+                "SELECT 1 FROM programs WHERE id = ? LIMIT 1",
+                (prog_id,),
+            ).fetchone()
+            if not p_exists:
+                return jsonify({"status": "error", "message": "البرنامج المطلوب غير موجود"}), 400
+
+        cur.execute(
+            """
+            UPDATE students
+            SET current_program_id = ?,
+                track_code = ?,
+                specialized_at_term = ?
+            WHERE student_id = ?
+            """,
+            (prog_id, track_code, specialized_at_term, sid),
+        )
+        conn.commit()
+
+        actor = (session.get("user") or session.get("username") or "").strip()
+        try:
+            log_activity(
+                action="student_specialization_update",
+                actor=actor,
+                details=(
+                    f"student_id={sid}; "
+                    f"old_program_id={old_row[2] if old_row else None}; new_program_id={prog_id}; "
+                    f"old_track={old_row[3] if old_row else ''}; new_track={track_code}; "
+                    f"old_specialized_at={old_row[4] if old_row else ''}; new_specialized_at={specialized_at_term}"
+                ),
+            )
+        except Exception:
+            pass
+
+    return jsonify(
+        {
+            "status": "ok",
+            "student_id": sid,
+            "current_program_id": prog_id,
+            "track_code": track_code,
+            "specialized_at_term": specialized_at_term,
+        }
+    ), 200
+
+
+@students_bp.route("/specialization/summary", methods=["GET"])
+@role_required("admin", "admin_main", "head_of_department")
+def specialization_summary():
+    """
+    Sprint C: لوحة تجميعية سريعة للتخصص/المسارات داخل القسم.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        params = []
+        where_parts = []
+        if allowed_student_ids is not None:
+            if not allowed_student_ids:
+                return jsonify({"status": "ok", "totals": {"students": 0}, "by_program_track": []}), 200
+            where_parts.append(
+                f"s.student_id IN ({','.join('?' for _ in allowed_student_ids)})"
+            )
+            params.extend(list(allowed_student_ids))
+        where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+        rows = cur.execute(
+            f"""
+            SELECT
+              COALESCE(d.code, '') AS department_code,
+              COALESCE(p.code, '') AS program_code,
+              COALESCE(p.name_ar, '') AS program_name_ar,
+              COALESCE(s.track_code, '') AS track_code,
+              COUNT(*) AS students_count
+            FROM students s
+            LEFT JOIN programs p ON p.id = s.current_program_id
+            LEFT JOIN departments d ON d.id = s.department_id
+            {where_sql}
+            GROUP BY COALESCE(d.code, ''), COALESCE(p.code, ''), COALESCE(p.name_ar, ''), COALESCE(s.track_code, '')
+            ORDER BY department_code, program_code, track_code
+            """,
+            tuple(params),
+        ).fetchall()
+        out = []
+        total = 0
+        specialized = 0
+        for r in rows:
+            c = int(r[4] or 0)
+            total += c
+            if (r[1] or "").strip():
+                specialized += c
+            out.append(
+                {
+                    "department_code": r[0] or "",
+                    "program_code": r[1] or "",
+                    "program_name_ar": r[2] or "",
+                    "track_code": r[3] or "",
+                    "students_count": c,
+                }
+            )
+
+    return jsonify(
+        {
+            "status": "ok",
+            "totals": {
+                "students": total,
+                "specialized_students": specialized,
+                "unspecialized_students": max(0, total - specialized),
+            },
+            "by_program_track": out,
+        }
+    ), 200
+
+
 @students_bp.route("/delete", methods=["POST"])
 @login_required
 def delete_student():
@@ -2043,13 +2300,61 @@ def save_registrations():
                 out_of_range = False
                 total_units = 0
 
+            # Sprint B: ربط التسجيلات بالخطة + متطلبات الخطة + سعات الشُّعب (تحذير/منع بحسب الوضع)
+            plan_mode = registration_program_course_mode()  # off|warn|enforce
+            plan_warnings: list[str] = []
+            course_pc_map: dict[str, int] = {}
+            if plan_mode != "off":
+                try:
+                    course_pc_map, bind_warnings = map_courses_to_program_courses(cur, sid, courses)
+                    if bind_warnings:
+                        plan_warnings.extend(bind_warnings)
+                    prereq_blocked = check_program_prereqs(cur, sid, course_pc_map)
+                    if prereq_blocked:
+                        plan_warnings.extend(prereq_blocked)
+                    try:
+                        old_pc_map, _ = map_courses_to_program_courses(cur, sid, list(old_courses))
+                        old_pc_ids = set(int(v) for v in old_pc_map.values())
+                    except Exception:
+                        old_pc_ids = set()
+                    try:
+                        term_name, term_year = get_current_term(conn=conn)
+                        term_label_for_cap = f"{term_name} {term_year}".strip()
+                    except Exception:
+                        term_label_for_cap = ""
+                    cap_blocked = check_general_sections_capacity(
+                        cur,
+                        selected_pc_map=course_pc_map,
+                        old_pc_ids=old_pc_ids,
+                        term_label=term_label_for_cap,
+                    )
+                    if cap_blocked:
+                        plan_warnings.extend(cap_blocked)
+                except Exception:
+                    current_app.logger.exception("program-course policy check failed")
+                if plan_mode == "enforce" and plan_warnings:
+                    return jsonify(
+                        {
+                            "status": "error",
+                            "code": "PROGRAM_COURSE_POLICY",
+                            "message": "تعذر حفظ التسجيلات بسبب سياسة ربط الخطة/الشُّعب.",
+                            "plan_warnings": plan_warnings,
+                        }
+                    ), 400
+
             try:
                 cur.execute("DELETE FROM registrations WHERE student_id = ?", (sid,))
                 if courses:
-                    cur.executemany(
-                        "INSERT INTO registrations (student_id, course_name) VALUES (?,?)",
-                        [(sid, c) for c in courses]
-                    )
+                    if course_pc_map:
+                        cur.executemany(
+                            "INSERT INTO registrations (student_id, course_name, program_course_id) VALUES (?,?,?)",
+                            [(sid, c, course_pc_map.get(c)) for c in courses],
+                        )
+                    else:
+                        cur.executemany(
+                            "INSERT INTO registrations (student_id, course_name) VALUES (?,?)",
+                            [(sid, c) for c in courses]
+                        )
 
                 # حساب الفرق بين القديم والجديد لتسجيل سجل الإضافة/الإسقاط
                 new_courses = set(courses)
@@ -2252,6 +2557,8 @@ def save_registrations():
                     {
                         "status": "ok",
                         "message": "تم حفظ التسجيلات",
+                        "program_course_mode": plan_mode,
+                        "plan_warnings": plan_warnings,
                         "prereq_warnings": prereq_eval.get("warnings") or [],
                         "prereq_coregister_pairs": prereq_eval.get("coregister_pairs") or [],
                         "prereq_validation": prereq_eval,
@@ -3208,28 +3515,14 @@ def attendance_allowed_courses():
                 return jsonify(
                     {"status": "error", "message": "لا يمكن تحديد الفصل الحالي", "code": "FORBIDDEN"}
                 ), 403
-            sem_sql, sem_bind = build_schedule_semester_match("s.semester", term_name, term_year)
-            sched_sem_and = f" AND ({sem_sql})"
-            rows = cur.execute(
-                f"""
-                SELECT DISTINCT r.course_name,
-                       COALESCE(c.course_code,'') AS course_code,
-                       COALESCE(c.units,0) AS units
-                FROM registrations r
-                INNER JOIN students st ON st.student_id = r.student_id
-                    AND COALESCE(st.enrollment_status, 'active') = 'active'
-                INNER JOIN schedule s
-                  ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
-                {sched_sem_and}
-                LEFT JOIN courses c
-                  ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(c.course_name, '')))
-                WHERE COALESCE(r.course_name, '') <> ''
-                ORDER BY r.course_name
-                """,
-                tuple(sem_bind),
-            ).fetchall()
+            dep_scope = _effective_attendance_department_scope(conn)
+            rows = attendance_eligible_course_rows(
+                conn, cur, term_name, term_year, dept_scope_id=dep_scope
+            )
             if not rows:
-                fb = fallback_distinct_attendance_courses(cur, term_name, term_year)
+                fb = fallback_distinct_attendance_courses(
+                    cur, term_name, term_year, conn=conn, dept_scope_id=dep_scope
+                )
                 rows = course_rows_with_meta(cur, fb)
         courses = [
             {"course_name": r[0], "course_code": r[1], "units": int(r[2] or 0)}

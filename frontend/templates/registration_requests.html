@@ -83,7 +83,22 @@ async function fetchJSON(url, opts){
 }
 function setReqMsg(kind, text){
   const m=document.getElementById('reqMsg');
-  m.innerHTML = text ? `<div class="alert alert-${kind} p-2 mb-0">${text}</div>` : '';
+  const normalized = String(text || '').replaceAll('\n','<br>');
+  m.innerHTML = text ? `<div class="alert alert-${kind} p-2 mb-0">${normalized}</div>` : '';
+}
+
+function formatApprovalError(msg){
+  const raw = String(msg || '').trim();
+  if (!raw) return 'فشل الاعتماد';
+  const marker = 'PROGRAM_COURSE_POLICY:';
+  if (!raw.includes(marker)) return raw;
+  const details = raw.split(marker)[1] || '';
+  const parts = details
+    .split('|')
+    .map(x => String(x || '').trim())
+    .filter(Boolean);
+  if (!parts.length) return 'تعذر التنفيذ بسبب سياسة ربط الخطة/الشُعب.';
+  return 'تعذر التنفيذ بسبب سياسة ربط الخطة/الشُعب:\n' + parts.map(x => `- ${x}`).join('\n');
 }
 
 async function loadRequests(){
@@ -152,7 +167,7 @@ async function approveRequest(id, executeNow){
     setReqMsg('success', r.json?.message || 'تم الاعتماد');
     loadRequests();
   } else {
-    setReqMsg('danger', r.json?.message || 'فشل الاعتماد');
+    setReqMsg('danger', formatApprovalError(r.json?.message || 'فشل الاعتماد'));
   }
 }
 

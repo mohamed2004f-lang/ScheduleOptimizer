@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 from collections import defaultdict, OrderedDict
 import datetime
 import io
@@ -12,6 +13,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from flask import Blueprint, request, jsonify, Response, send_file, session, current_app
 from backend.core.auth import login_required, role_required, current_supervisor_effective
 from backend.database.database import is_postgresql, schedule_pk_column, fetch_table_columns
+from backend.core.department_scope_policy import resolve_users_list_scope, student_matches_department
 from .utilities import (
     get_connection,
     get_current_term,
@@ -45,6 +47,15 @@ def _now_iso_z() -> str:
 
 def _current_user_name() -> str:
     return (session.get("user") or session.get("username") or "").strip()
+
+
+def _student_in_effective_scope(conn, student_id: str) -> bool:
+    mode, dep_id = resolve_users_list_scope(conn, _current_user_name())
+    if mode == "none":
+        return True
+    if mode == "empty" or dep_id is None:
+        return False
+    return student_matches_department(conn, student_id, int(dep_id))
 
 
 def _is_supervisor_role() -> bool:
@@ -304,6 +315,14 @@ def _validate_component_value(label: str, value, max_value: float):
     return True, v
 
 
+def _norm_course_code(s: str) -> str:
+    """تطبيع رمز المقرر لمقارنة تتجاهل المسافات (مثل ME 301 مقابل ME301)."""
+    t = "".join(str(s or "").strip().upper().split())
+    for ch in ("\u00a0", "\u2009", "\u2007", "\u202f"):
+        t = t.replace(ch, "")
+    return t
+
+
 def _resolve_catalog_course(cur, course_name: str = "", course_code: str = ""):
     """
     Resolve course by code/name from catalog with strict consistency.
@@ -319,6 +338,48 @@ def _resolve_catalog_course(cur, course_name: str = "", course_code: str = ""):
             "SELECT course_name, COALESCE(course_code,'') AS course_code, COALESCE(units,0) AS units FROM courses WHERE course_code = ? LIMIT 1",
             (ccode,),
         ).fetchone()
+        if not row_by_code:
+            target_c = _norm_course_code(ccode)
+            if target_c:
+                all_crows = cur.execute(
+                    "SELECT course_name, COALESCE(course_code,'') AS course_code, COALESCE(units,0) AS units FROM courses"
+                ).fetchall()
+                code_matches = []
+                for rr in all_crows or []:
+                    db_code = (rr[1] if isinstance(rr, (list, tuple)) else rr["course_code"]) or ""
+                    if _norm_course_code(db_code) == target_c:
+                        code_matches.append(rr)
+                if code_matches:
+                    if len(code_matches) == 1:
+                        row_by_code = code_matches[0]
+                    elif cname:
+                        tn = _norm_name(cname)
+                        named_hits = []
+                        for rr in code_matches:
+                            rn = (rr[0] if isinstance(rr, (list, tuple)) else rr["course_name"]) or ""
+                            if _norm_name(rn) == tn and tn:
+                                named_hits.append(rr)
+                        if len(named_hits) == 1:
+                            row_by_code = named_hits[0]
+                        elif len(named_hits) > 1:
+                            row_by_code = sorted(
+                                named_hits,
+                                key=lambda rr: str(
+                                    (rr[0] if isinstance(rr, (list, tuple)) else rr["course_name"]) or ""
+                                ),
+                            )[0]
+                        else:
+                            raise ValueError(
+                                f"الرمز {ccode} يطابق أكثر من مقرر في الدليل، والاسم «{cname}» "
+                                f"لا يطابق أيًا منها بعد التطبيع. وحّد الرموز في دليل المقررات أو اختر الاسم المسجّل حرفياً."
+                            )
+                    else:
+                        row_by_code = sorted(
+                            code_matches,
+                            key=lambda rr: str(
+                                (rr[0] if isinstance(rr, (list, tuple)) else rr["course_name"]) or ""
+                            ),
+                        )[0]
         if not row_by_code:
             raise ValueError(f"رمز المقرر غير موجود في دليل المقررات: {ccode}")
     def _norm_name(s: str) -> str:
@@ -366,7 +427,51 @@ def _resolve_catalog_course(cur, course_name: str = "", course_code: str = ""):
     out_units = (row[2] if isinstance(row, (list, tuple)) else row["units"]) or 0
     if not str(out_code).strip():
         raise ValueError(f"المقرر '{out_name}' لا يملك رمزاً معتمداً في دليل المقررات")
-    return {"course_name": str(out_name).strip(), "course_code": str(out_code).strip(), "units": int(out_units or 0)}
+    # إعادة قراءة الاسم من الدليل كما هو مخزّن (بدون strip على الاسم) — قيد FK يطابق course_name حرفياً
+    # قد يختلف المخزّن عن المعروض بمسافات طرفية أو أحرف Unicode شبه متطابقة؛ نطابق بـ trim ثم نعيد القيمة الأصلية من العمود
+    name_key = str(out_name).strip()
+    canon = cur.execute(
+        """
+        SELECT course_name, COALESCE(course_code,'') AS course_code, COALESCE(units,0) AS units
+        FROM courses c
+        WHERE c.course_name = ? OR trim(c.course_name) = trim(?)
+        LIMIT 1
+        """,
+        (name_key, name_key),
+    ).fetchone()
+    if not canon and str(out_code).strip():
+        code_key = str(out_code).strip()
+        canon = cur.execute(
+            """
+            SELECT course_name, COALESCE(course_code,'') AS course_code, COALESCE(units,0) AS units
+            FROM courses c
+            WHERE c.course_code = ? OR trim(c.course_code) = trim(?)
+            LIMIT 1
+            """,
+            (code_key, code_key),
+        ).fetchone()
+    if not canon and str(out_code).strip():
+        tc = _norm_course_code(out_code)
+        if tc:
+            for rr in (
+                cur.execute(
+                    "SELECT course_name, COALESCE(course_code,'') AS course_code, COALESCE(units,0) AS units FROM courses"
+                ).fetchall()
+                or []
+            ):
+                dbc = (rr[1] if isinstance(rr, (list, tuple)) else rr["course_code"]) or ""
+                if _norm_course_code(dbc) == tc:
+                    canon = rr
+                    break
+    if not canon:
+        raise ValueError(
+            f"تعذر التحقق من المقرر في الدليل بعد التحليل (اسم='{out_name}' رمز='{out_code}')."
+        )
+    out_name = (canon[0] if isinstance(canon, (list, tuple)) else canon["course_name"]) or ""
+    out_code = (canon[1] if isinstance(canon, (list, tuple)) else canon["course_code"]) or ""
+    out_units = (canon[2] if isinstance(canon, (list, tuple)) else canon["units"]) or 0
+    # لا نستخدم strip() على course_name: يجب أن يطابق courses.course_name للقيد الأجنبي
+    return {"course_name": str(out_name), "course_code": str(out_code).strip(), "units": int(out_units or 0)}
 
 
 _GRADE_DRAFT_SELF_SERVICE_ROLES = ("instructor", "head_of_department", "admin_main", "admin")
@@ -1257,18 +1362,27 @@ def save_grades():
                      changed_by, datetime.datetime.utcnow().isoformat())
                 )
 
+                gval = float(new_grade) if new_grade is not None else None
+                uunits = int(resolved["units"] or 0)
+                ccd = resolved["course_code"]
+                now_ts = datetime.datetime.utcnow().isoformat()
+                # تحديث ثم إدراج: يتجنب فشل PostgreSQL عند غياب قيد UNIQUE يطابق ON CONFLICT
                 cur.execute(
                     """
-                    INSERT INTO grades (student_id, semester, course_name, course_code, units, grade)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (student_id, semester, course_name) DO UPDATE SET
-                        course_code = EXCLUDED.course_code,
-                        units = EXCLUDED.units,
-                        grade = EXCLUDED.grade
+                    UPDATE grades SET course_code = ?, units = ?, grade = ?, updated_at = ?
+                    WHERE student_id = ? AND semester = ? AND course_name = ?
                     """,
-                    (sid, semester, course, resolved["course_code"], int(resolved["units"] or 0),
-                     (float(new_grade) if new_grade is not None else None))
+                    (ccd, uunits, gval, now_ts, sid, semester, course),
                 )
+                rc = getattr(cur, "rowcount", -1) or 0
+                if rc == 0:
+                    cur.execute(
+                        """
+                        INSERT INTO grades (student_id, semester, course_name, course_code, units, grade, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (sid, semester, course, ccd, uunits, gval, now_ts),
+                    )
             conn.commit()
             # تسجيل النشاط (عدد الدرجات التي تم تعديلها)
             try:
@@ -1279,8 +1393,21 @@ def save_grades():
             except Exception:
                 pass
             return jsonify({"status": "ok", "message": "تم حفظ الدرجات وتسجيل التعديلات"}), 200
+        except ValueError as e:
+            conn.rollback()
+            # أخطاء التحقق (مقرر غير موجود في الدليل، عدم تطابق الاسم/الرمز، درجة غير رقمية، …)
+            return jsonify({"status": "error", "message": str(e)}), 400
         except Exception as e:
             conn.rollback()
+            try:
+                current_app.logger.exception(
+                    "grades/save failed student_id=%s semester=%s count=%s",
+                    sid,
+                    semester,
+                    len(grades) if grades is not None else 0,
+                )
+            except Exception:
+                pass
             return jsonify({"status": "error", "message": str(e)}), 500
 
 @grades_bp.route("/template/transcript", methods=["GET"])
@@ -1736,6 +1863,99 @@ def migrate_registrations_to_transcript():
     return jsonify({"status": "ok", "message": f"تم ترحيل {inserted} مقرر للفصل {semester_label}", "semester": semester_label, "inserted": inserted}), 200
 
 
+# تسميات مثل «خريف 21-22» ثم «ربيع 21-22»: ترتيب زمني وليس أبجدياً.
+_SEM_YEAR_TAIL_RE = re.compile(
+    r"(?P<y1>\d{2,4})\s*[-/]\s*(?P<y2>\d{2,4})\s*$",
+    re.UNICODE,
+)
+_SEM_YEAR_LEAD_RE = re.compile(
+    r"^\s*(?P<y1>\d{2,4})\s*[-/]\s*(?P<y2>\d{2,4})\s+(?P<term>.+)$",
+    re.UNICODE,
+)
+
+
+def _widen_two_digit_year(n: int) -> int:
+    """للمقارنة فقط: 21 -> 2021، 79 -> 1979."""
+    if n >= 100:
+        return n
+    return 2000 + n if n < 80 else 1900 + n
+
+
+def _term_rank_for_transcript_sort(term_fragment: str) -> int:
+    """
+    ترتيب الفصل داخل السنة الدراسية: خريف ثم ربيع ثم صيف ثم شتاء.
+    تسميات «فصل أول/ثاني» تُعامل كخريف/ربيع تقريباً.
+    """
+    t = (term_fragment or "").strip()
+    if not t:
+        return 99
+    if "خريف" in t:
+        return 0
+    if "ربيع" in t:
+        return 1
+    if "صيف" in t:
+        return 2
+    if "شت" in t or "شتا" in t:
+        return 3
+    compact = re.sub(r"\s+", "", t)
+    if "الفصلالاول" in compact or "فصلأول" in compact or "فصلاول" in compact:
+        return 0
+    if "الفصلالثاني" in compact or "فصلثان" in compact:
+        return 1
+    if "الفصلالثالث" in compact or "فصلثالث" in compact:
+        return 2
+    return 50
+
+
+def _transcript_semester_sort_key(label: str) -> tuple:
+    """
+    مفتاح ترتيب: (0 ثابت للمطابقة)، سنة البداية، سنة النهاية، رتبة الفصل، النص الأصلي للاستقرار.
+    غير المطابقين يُرتبون في النهاية (بادئة 1).
+    """
+    raw = (label or "").strip()
+    if not raw:
+        return (1, 10**9, 10**9, 99, raw)
+
+    y1 = y2 = None
+    term_part = ""
+
+    m_tail = _SEM_YEAR_TAIL_RE.search(raw)
+    if m_tail:
+        term_part = raw[: m_tail.start()].strip()
+        try:
+            y1 = int(m_tail.group("y1"))
+            y2 = int(m_tail.group("y2"))
+        except ValueError:
+            y1 = y2 = None
+
+    if y1 is None:
+        m_lead = _SEM_YEAR_LEAD_RE.match(raw)
+        if m_lead:
+            try:
+                y1 = int(m_lead.group("y1"))
+                y2 = int(m_lead.group("y2"))
+                term_part = (m_lead.group("term") or "").strip()
+            except ValueError:
+                y1 = y2 = None
+
+    if y1 is None or y2 is None:
+        return (1, 10**9, 10**9, 99, raw)
+
+    y1w = _widen_two_digit_year(y1)
+    y2w = _widen_two_digit_year(y2) if y2 < 100 else y2
+    rank = _term_rank_for_transcript_sort(term_part)
+    return (0, y1w, y2w, rank, raw)
+
+
+def _sort_transcript_semester_labels(semesters: list[str]) -> list[str]:
+    return sorted(semesters, key=_transcript_semester_sort_key)
+
+
+def _reorder_transcript_dict(transcript: OrderedDict | dict) -> OrderedDict:
+    keys = _sort_transcript_semester_labels(list(transcript.keys()))
+    return OrderedDict((k, transcript[k]) for k in keys)
+
+
 def _load_transcript_data(student_id: str):
     with get_connection() as conn:
         cur = conn.cursor()
@@ -1782,7 +2002,7 @@ def _load_transcript_data(student_id: str):
         except Exception:
             electives_status = {"active": False, "ok": True, "waived": False}
 
-    transcript = OrderedDict()
+    transcript: OrderedDict = OrderedDict()
     gpa_by_semester = defaultdict(list)
     best_map = {}
 
@@ -1873,6 +2093,7 @@ def _load_transcript_data(student_id: str):
     cumulative_gpa = round(total_points / total_units, 2) if total_units else 0.0
     completed_units = int(completed_units)
 
+    transcript = _reorder_transcript_dict(transcript)
     ordered_semesters = list(transcript.keys())
 
     return {
@@ -2050,6 +2271,7 @@ def _load_all_transcripts_bulk(student_ids: list[str] | None = None) -> dict:
             cumulative_gpa = round(total_points / total_units, 2) if total_units else 0.0
             completed_units = int(completed_units)
 
+            transcript = _reorder_transcript_dict(transcript)
             ordered_semesters = list(transcript.keys())
 
             result[sid] = {
@@ -2767,6 +2989,13 @@ def get_transcript(student_id):
                 "message": "لا يمكنك عرض سجل طالب آخر",
                 "code": "FORBIDDEN"
             }), 403
+    with get_connection() as conn:
+        if not _student_in_effective_scope(conn, str(student_id or "").strip()):
+            return jsonify({
+                "status": "error",
+                "message": "لا يمكن عرض هذا السجل: الطالب خارج نطاق قسمك أو نطاق العمل المعتمد.",
+                "code": "FORBIDDEN",
+            }), 403
     # المشرف يمكنه عرض سجلات الطلبة المسندين إليه فقط
     sup_eff = current_supervisor_effective()
     if sup_eff:
@@ -3065,6 +3294,13 @@ def export_transcript(student_id):
                 "status": "error",
                 "message": "لا يمكنك تصدير سجل طالب آخر",
                 "code": "FORBIDDEN"
+            }), 403
+    with get_connection() as conn:
+        if not _student_in_effective_scope(conn, str(student_id or "").strip()):
+            return jsonify({
+                "status": "error",
+                "message": "لا يمكن تصدير هذا السجل: الطالب خارج نطاق قسمك أو نطاق العمل المعتمد.",
+                "code": "FORBIDDEN",
             }), 403
 
     sup_eff = current_supervisor_effective()

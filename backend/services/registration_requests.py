@@ -4,6 +4,8 @@ from flask import Blueprint, request, jsonify, session
 from backend.database.database import is_postgresql
 from backend.services.utilities import get_connection
 from backend.core.auth import login_required, role_required, current_supervisor_effective
+from backend.core.feature_flags import registration_program_course_mode
+from backend.services.registration_policy import map_courses_to_program_courses, check_program_prereqs, check_general_sections_capacity
 
 
 registration_requests_bp = Blueprint("registration_requests", __name__)
@@ -155,6 +157,11 @@ def _execute_registration_change(conn, student_id: str, course_name: str, action
         (sid,),
     ).fetchall()
     current = {r[0] for r in rows}
+    old_pc_rows = cur.execute(
+        "SELECT program_course_id FROM registrations WHERE student_id = ? AND program_course_id IS NOT NULL",
+        (sid,),
+    ).fetchall()
+    old_pc_ids = {int(r[0]) for r in old_pc_rows if r and r[0] not in (None, "")}
 
     # حد الوحدات 12-19 (إلزامي). المشرف لا يمكنه التجاوز، الأدمن يمكنه بشرط ملاحظة الموافقة.
     role = session.get("user_role") or ""
@@ -194,13 +201,49 @@ def _execute_registration_change(conn, student_id: str, course_name: str, action
         if role not in ("admin", "admin_main"):
             raise ValueError(f"UNITS_LIMIT: إجمالي الوحدات ({total_units}) خارج 12-19 ولا يمكن تنفيذه بواسطة {role or 'user'}.")
 
+    # Sprint B checks (warn/enforce)
+    plan_mode = registration_program_course_mode()
+    if plan_mode != "off":
+        proposed_list = sorted([c for c in proposed if c])
+        pc_map, bind_warn = map_courses_to_program_courses(cur, sid, proposed_list)
+        plan_warns = list(bind_warn or [])
+        plan_warns.extend(check_program_prereqs(cur, sid, pc_map))
+        try:
+            from backend.services.utilities import get_current_term
+
+            term_name, term_year = get_current_term(conn=conn)
+            term_label = f"{term_name} {term_year}".strip()
+        except Exception:
+            term_label = ""
+        plan_warns.extend(
+            check_general_sections_capacity(
+                cur,
+                selected_pc_map=pc_map,
+                old_pc_ids=old_pc_ids,
+                term_label=term_label,
+            )
+        )
+        if plan_mode == "enforce" and plan_warns:
+            raise ValueError("PROGRAM_COURSE_POLICY: " + " | ".join(plan_warns[:3]))
+
     if action == "add":
         if course_name in current:
             return
-        cur.execute(
-            "INSERT INTO registrations (student_id, course_name) VALUES (?,?) ON CONFLICT (student_id, course_name) DO NOTHING",
-            (sid, course_name),
-        )
+        if plan_mode != "off":
+            pc_map_one, _ = map_courses_to_program_courses(cur, sid, [course_name])
+            pcid = pc_map_one.get(course_name)
+        else:
+            pcid = None
+        if pcid is not None:
+            cur.execute(
+                "INSERT INTO registrations (student_id, course_name, program_course_id) VALUES (?,?,?) ON CONFLICT (student_id, course_name) DO NOTHING",
+                (sid, course_name, int(pcid)),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO registrations (student_id, course_name) VALUES (?,?) ON CONFLICT (student_id, course_name) DO NOTHING",
+                (sid, course_name),
+            )
     elif action == "drop":
         if course_name not in current:
             return

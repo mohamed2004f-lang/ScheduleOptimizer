@@ -15,13 +15,14 @@
         <h1 class="page-title">كتالوج الأقسام والخطط</h1>
         <p class="page-subtitle small text-muted mb-0">
           إدارة الأقسام، البرامج (اتجاه عام / تخصص)، محتوى المقررات المشترك (<code>course_master</code>)، مقررات كل خطة بأرمزة مختلفة، وشُعَب تنفيذ المقرر في الاتجاه العام.
+          — <a href="/course_equivalences_page">تكافؤ المقررات بين الأقسام</a>
         </p>
       </div>
     </div>
     <div id="msgBox" class="mb-2"></div>
 
     <!-- أقسام -->
-    <div class="card mb-3">
+    <div class="card mb-3" id="cardDepartments">
       <div class="card-header d-flex justify-content-between align-items-center">
         <strong>الأقسام</strong>
         <button type="button" class="btn btn-sm btn-outline-primary" id="btnDepRefresh">تحديث</button>
@@ -42,7 +43,7 @@
     </div>
 
     <!-- برامج -->
-    <div class="card mb-3">
+    <div class="card mb-3" id="cardPrograms">
       <div class="card-header d-flex flex-wrap gap-2 align-items-center justify-content-between">
         <strong>البرامج</strong>
         <div class="d-flex gap-2">
@@ -71,7 +72,7 @@
     </div>
 
     <!-- course_master -->
-    <div class="card mb-3">
+    <div class="card mb-3" id="cardCourseMaster">
       <div class="card-header d-flex justify-content-between align-items-center">
         <strong>محتوى المقرر (<code>course_master</code>)</strong>
         <button type="button" class="btn btn-sm btn-outline-primary" id="btnCmRefresh">تحديث</button>
@@ -90,32 +91,61 @@
     </div>
 
     <!-- program_courses -->
-    <div class="card mb-3">
+    <div class="card mb-3" id="cardProgramCourses">
       <div class="card-header d-flex flex-wrap gap-2 align-items-center justify-content-between">
         <strong>مقررات الخطة</strong>
         <div class="d-flex gap-2">
+          <select class="form-select form-select-sm" id="pcProgSelect" style="min-width:16rem; display:none;"></select>
           <input type="number" class="form-control form-control-sm" id="pcProgFilter" placeholder="program_id" style="width:7rem;">
           <button type="button" class="btn btn-sm btn-outline-primary" id="btnPcRefresh">تحديث بُنود الخطة</button>
         </div>
       </div>
       <div class="card-body">
-        <p class="small text-muted mb-2">استخدم الرقم الذي يظهر كـ <strong>id</strong> للبرنامج في الجدول أعلاه (مثل برنامج الاتجاه العام).</p>
+        <p class="small text-muted mb-2">
+          هذه البطاقة خاصة بخطة القسم (150/155). إذا كان المقرر موجودًا اختره من القائمة، أو اختر "مقرر جديد خاص بهذه الخطة" لإدخال اسم جديد.
+        </p>
         <div class="table-responsive"><table class="table table-sm" id="tblPc"><thead><tr>
-          <th>id</th><th>رمز الخطة</th><th>عنوان أصلي</th><th>مستوى</th><th></th></tr></thead><tbody></tbody></table></div>
+          <th>id</th><th>رمز الخطة</th><th>عنوان أصلي</th><th>المعمول به</th><th>مستوى</th><th></th></tr></thead><tbody></tbody></table></div>
         <div class="row g-2 align-items-end border-top pt-2 small">
-          <div class="col-md-1"><label class="form-label small">id</label><input class="form-control form-control-sm" id="pcId"></div>
-          <div class="col-md-2"><label class="form-label small">program_id</label><input class="form-control form-control-sm" id="pcProgId"></div>
-          <div class="col-md-2"><label class="form-label small">course_master_id</label><input class="form-control form-control-sm" id="pcMasterId"></div>
+          <input type="hidden" id="pcId">
+          <input type="hidden" id="pcProgId">
+          <input type="hidden" id="pcMasterId">
+          <div class="col-md-3">
+            <label class="form-label small">المقرر</label>
+            <select class="form-select form-select-sm" id="pcMasterSelect"></select>
+          </div>
+          <div class="col-md-3" id="pcNewCourseWrap" style="display:none;">
+            <label class="form-label small">اسم مقرر جديد (خاص بالخطة)</label>
+            <input class="form-control form-control-sm" id="pcNewCourseTitleAr" placeholder="مثال: مشاريع ميكانيكية متقدمة">
+          </div>
           <div class="col-md-2"><label class="form-label small">course_code</label><input class="form-control form-control-sm" id="pcCode"></div>
-          <div class="col-md-1"><label class="form-label small">level</label><input class="form-control form-control-sm" id="pcLevel" type="number" value="0"></div>
+          <div class="col-md-2"><label class="form-label small">المعمول به</label>
+            <select class="form-select form-select-sm" id="pcPlanApplicability">
+              <option value="both">مشترك بين نظامي 150/155 (داخل القسم)</option>
+              <option value="150">150 فقط</option>
+              <option value="155">155 فقط</option>
+            </select>
+          </div>
+          <div class="col-md-1">
+            <label class="form-label small">level</label>
+            <select class="form-select form-select-sm" id="pcLevel">
+              <option value="0">0</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+            </select>
+          </div>
           <div class="col-md-2"><label class="form-label small">وحدات (اختياري)</label><input class="form-control form-control-sm" id="pcUnitsOv"></div>
-          <div class="col-md-4"><button class="btn btn-primary btn-sm mt-4" id="btnPcSave">حفظ بند الخطة</button></div>
+          <div class="col-md-2"><button class="btn btn-outline-secondary btn-sm mt-4" id="btnPcAutoCode" type="button">توليد الرمز</button></div>
+          <div class="col-md-2"><button class="btn btn-primary btn-sm mt-4" id="btnPcSave">حفظ بند الخطة</button></div>
         </div>
       </div>
     </div>
 
     <!-- sections -->
-    <div class="card mb-5">
+    <div class="card mb-5" id="cardSections">
       <div class="card-header d-flex flex-wrap gap-2 align-items-center justify-content-between">
         <strong>شُعَب تنفيذ المقرر (برنامج عام — أعداد كبيرة)</strong>
         <div class="d-flex gap-2 flex-wrap">
@@ -141,6 +171,8 @@
 
   <script src="/static/js/common.js"></script>
   <script>
+    let IS_HEAD_ONLY = false;
+    let MASTER_ITEMS = [];
     function msg(t, ty='info'){
       document.getElementById('msgBox').innerHTML = t ? `<div class="alert alert-${ty} py-1 px-2 mb-0">${t}</div>` : '';
     }
@@ -213,6 +245,39 @@
       msg('تم تحميل محتوى المقررات: '+(data.items||[]).length, 'success');
     }
 
+    async function loadMasterChoices(){
+      try {
+        const data = await apiGet('/college/catalog/course_masters');
+        MASTER_ITEMS = data.items || [];
+      } catch(e) {
+        MASTER_ITEMS = [];
+      }
+      const sel = document.getElementById('pcMasterSelect');
+      if (!sel) return;
+      sel.innerHTML = '<option value="">— اختر مقررًا —</option><option value="__new__">+ مقرر جديد خاص بهذه الخطة</option>';
+      MASTER_ITEMS.forEach(m=>{
+        const id = Number(m.id || 0);
+        const title = (m.title_ar || '').trim();
+        if(!id || !title) return;
+        sel.insertAdjacentHTML('beforeend', `<option value="${id}">${title} — (#${id})</option>`);
+      });
+    }
+
+    function resolveMasterById(masterId){
+      const id = Number(masterId || 0);
+      if(!id) return null;
+      const hit = MASTER_ITEMS.find(m => Number(m.id || 0) === id);
+      return hit || null;
+    }
+
+    function generateCourseCode(){
+      const level = Number(document.getElementById('pcLevel').value || 0);
+      const mid = Number(document.getElementById('pcMasterId').value || 0);
+      if(!mid) return '';
+      const lev = Number.isFinite(level) ? Math.max(0, level) : 0;
+      return `ME${lev}${String(mid).padStart(2, '0')}`;
+    }
+
     async function loadPc(){
       const pid = document.getElementById('pcProgFilter').value.trim();
       if(!pid){ msg('حدد program_id لمقررات الخطة', 'warning'); return;}
@@ -221,7 +286,10 @@
       tbody.innerHTML='';
       (data.items||[]).forEach(x=>{
         const enc = encodeURIComponent(JSON.stringify(x));
-        tbody.insertAdjacentHTML('beforeend', `<tr><td>${x.id}</td><td><code>${x.course_code}</code></td><td>${x.master_title_ar||''}</td><td>${x.level_no}</td>
+        const planLabel = (x.plan_applicability === '150'
+          ? '150 فقط'
+          : (x.plan_applicability === '155' ? '155 فقط' : 'مشترك 150/155'));
+        tbody.insertAdjacentHTML('beforeend', `<tr><td>${x.id}</td><td><code>${x.course_code}</code></td><td>${x.master_title_ar||''}</td><td>${planLabel}</td><td>${x.level_no}</td>
           <td><button type="button" class="btn btn-sm btn-link p-0 btn-edit-pc" data-payload="${enc}">تحرير</button>
            <button type="button" class="btn btn-sm btn-link text-danger p-0 btn-del-pc" data-id="${x.id}">حذف</button></td></tr>`);
       });
@@ -231,10 +299,16 @@
           document.getElementById('pcId').value = ob.id||'';
           document.getElementById('pcProgId').value = ob.program_id||'';
           document.getElementById('pcMasterId').value = ob.course_master_id||'';
+          document.getElementById('pcMasterSelect').value = String(ob.course_master_id||'');
+          document.getElementById('pcNewCourseTitleAr').value = '';
+          const newWrap = document.getElementById('pcNewCourseWrap');
+          if(newWrap) newWrap.style.display = 'none';
           document.getElementById('pcCode').value = ob.course_code||'';
+          document.getElementById('pcPlanApplicability').value = (ob.plan_applicability||'both');
           document.getElementById('pcLevel').value = ob.level_no||0;
           document.getElementById('pcUnitsOv').value = ob.units_override!=null ? ob.units_override : '';
           document.getElementById('secPcId').value = ob.id||'';
+          msg(`وضع تعديل البند #${ob.id} — يمكنك تعديل الحقول ثم الحفظ`, 'info');
         };
       });
       document.querySelectorAll('.btn-del-pc').forEach(btn=>{
@@ -246,6 +320,46 @@
         };
       });
       msg('مقررات الخطة: '+(data.items||[]).length, 'success');
+    }
+
+    function bindProgramSelect(items){
+      const sel = document.getElementById('pcProgSelect');
+      const inpFilter = document.getElementById('pcProgFilter');
+      const inpEdit = document.getElementById('pcProgId');
+      if(!sel || !inpFilter || !inpEdit) return;
+      sel.innerHTML = '';
+      if(!Array.isArray(items) || !items.length){
+        sel.style.display = 'none';
+        inpFilter.style.display = '';
+        return;
+      }
+      items.forEach(p=>{
+        const id = p.id || '';
+        const label = `${p.code || ''} — ${p.name_ar || ''}`.trim();
+        sel.insertAdjacentHTML('beforeend', `<option value="${id}">${label}</option>`);
+      });
+      sel.style.display = '';
+      inpFilter.style.display = 'none';
+      const first = items[0];
+      if(first){
+        inpFilter.value = first.id || '';
+        inpEdit.value = first.id || '';
+      }
+      if (IS_HEAD_ONLY) {
+        // رئيس القسم يعمل داخل نطاق قسمه فقط: تثبيت البرنامج الافتراضي وعدم السماح بتبديله من الواجهة.
+        sel.disabled = true;
+        sel.style.pointerEvents = 'none';
+        sel.title = 'تم التحديد تلقائياً حسب نطاق رئيس القسم';
+      } else {
+        sel.disabled = false;
+        sel.style.pointerEvents = '';
+        sel.title = '';
+        sel.addEventListener('change', ()=>{
+          const v = sel.value || '';
+          inpFilter.value = v;
+          inpEdit.value = v;
+        });
+      }
     }
 
     async function loadSections(){
@@ -327,18 +441,105 @@
     };
 
     document.getElementById('btnPcRefresh').onclick = loadPc;
+    document.getElementById('pcMasterSelect').addEventListener('change', ()=>{
+      const v = document.getElementById('pcMasterSelect').value || '';
+      const newWrap = document.getElementById('pcNewCourseWrap');
+      if(v === '__new__'){
+        if(newWrap) newWrap.style.display = '';
+        document.getElementById('pcMasterId').value = '';
+        return;
+      }
+      if(newWrap) newWrap.style.display = 'none';
+      const mid = Number(v || 0);
+      if(mid > 0){
+        document.getElementById('pcMasterId').value = String(mid);
+        if(!(document.getElementById('pcCode').value || '').trim()){
+          const c = generateCourseCode();
+          if(c) document.getElementById('pcCode').value = c;
+        }
+      } else {
+        document.getElementById('pcMasterId').value = '';
+      }
+    });
+    document.getElementById('pcLevel').addEventListener('change', ()=>{
+      if(!(document.getElementById('pcCode').value || '').trim()){
+        const c = generateCourseCode();
+        if(c) document.getElementById('pcCode').value = c;
+      }
+    });
+    document.getElementById('btnPcAutoCode').onclick = ()=>{
+      const code = generateCourseCode();
+      if(!code){
+        msg('اختر مقررًا أولاً حتى يمكن توليد الرمز تلقائيًا.', 'warning');
+        return;
+      }
+      document.getElementById('pcCode').value = code;
+      msg(`تم توليد الرمز: ${code}`, 'success');
+    };
     document.getElementById('btnPcSave').onclick = async ()=>{
-      const u = document.getElementById('pcUnitsOv').value.trim();
-      await apiPost('/college/catalog/program_course/save', {
-        id: document.getElementById('pcId').value ? +document.getElementById('pcId').value : null,
-        program_id:+document.getElementById('pcProgId').value,
-        course_master_id:+document.getElementById('pcMasterId').value,
-        course_code:document.getElementById('pcCode').value.trim(),
-        level_no:+document.getElementById('pcLevel').value,
-        units_override: u === '' ? null : +u
-      });
-      msg('تم حفظ بند الخطة', 'success');
-      loadPc();
+      try {
+        const u = document.getElementById('pcUnitsOv').value.trim();
+        const selectedMasterRaw = document.getElementById('pcMasterSelect').value || '';
+        let selectedMasterId = Number(selectedMasterRaw || 0);
+        let selectedMaster = resolveMasterById(selectedMasterId);
+        const newTitleAr = (document.getElementById('pcNewCourseTitleAr').value || '').trim();
+        if(selectedMasterRaw === '__new__'){
+          selectedMasterId = 0;
+          selectedMaster = null;
+          if(!newTitleAr){
+            msg('أدخل اسم المقرر الجديد الخاص بالخطة.', 'warning');
+            return;
+          }
+        } else if(!selectedMaster){
+          msg('يرجى اختيار مقرر من القائمة المنسدلة.', 'warning');
+          return;
+        }
+        document.getElementById('pcMasterId').value = selectedMasterId > 0 ? String(selectedMasterId) : '';
+        const levelRaw = String(document.getElementById('pcLevel').value || '0').trim();
+        const level = Number(levelRaw);
+        if(!Number.isFinite(level) || level < 0){
+          msg('المستوى غير صالح.', 'warning');
+          return;
+        }
+        if(u !== '' && (!Number.isFinite(Number(u)) || Number(u) < 0)){
+          msg('الوحدات الاختيارية يجب أن تكون رقمًا صحيحًا موجبًا.', 'warning');
+          return;
+        }
+        let code = (document.getElementById('pcCode').value || '').trim();
+        if(!code){
+          code = generateCourseCode();
+          document.getElementById('pcCode').value = code;
+        }
+        if(!code){
+          msg('تعذر تحديد رمز المقرر. أدخل رمزًا يدويًا أو استخدم توليد الرمز.', 'warning');
+          return;
+        }
+        await apiPost('/college/catalog/program_course/save', {
+          id: document.getElementById('pcId').value ? +document.getElementById('pcId').value : null,
+          program_id:+document.getElementById('pcProgId').value,
+          course_master_id: document.getElementById('pcMasterId').value ? +document.getElementById('pcMasterId').value : null,
+          course_master_title_ar: newTitleAr || '',
+          course_code: code,
+          plan_applicability: document.getElementById('pcPlanApplicability').value || 'both',
+          level_no: level,
+          units_override: u === '' ? null : +u
+        });
+        msg('تم حفظ بند الخطة', 'success');
+        document.getElementById('pcId').value = '';
+        document.getElementById('pcMasterId').value = '';
+        document.getElementById('pcMasterSelect').value = '';
+        document.getElementById('pcNewCourseTitleAr').value = '';
+        const newWrap = document.getElementById('pcNewCourseWrap');
+        if(newWrap) newWrap.style.display = 'none';
+        document.getElementById('pcCode').value = '';
+        document.getElementById('pcPlanApplicability').value = 'both';
+        document.getElementById('pcLevel').value = '0';
+        document.getElementById('pcUnitsOv').value = '';
+        loadPc();
+      } catch (e) {
+        const em = (e && e.message) ? String(e.message) : 'فشل حفظ بند الخطة';
+        msg(`تعذر الحفظ: ${em}`, 'danger');
+      }
     };
 
     document.getElementById('btnSecRefresh').onclick = loadSections;
@@ -358,9 +559,56 @@
     };
 
     window.addEventListener('DOMContentLoaded', ()=>{
-      loadDepartments();
-      loadPrograms();
-      loadCm();
+      (async function initPage(){
+        try {
+          const r = await fetch('/auth/check', { credentials:'include', cache:'no-store' });
+          const a = await r.json().catch(()=>null);
+          const role = String((a && a.role) || '').trim().toLowerCase();
+          IS_HEAD_ONLY = role === 'head_of_department';
+        } catch(e) {
+          IS_HEAD_ONLY = false;
+        }
+
+        if (IS_HEAD_ONLY) {
+          const h = document.querySelector('.page-subtitle');
+          if (h) h.textContent = 'عرض مخصص لرئيس القسم: إدارة مقررات الخطة فقط.';
+          const ids = ['cardDepartments','cardPrograms','cardCourseMaster','cardSections'];
+          ids.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
+
+          // اجلب برامج القسم لاختيار program_id بشكل مريح دون كشف بقية وحدات الكتالوج.
+          try {
+            const data = await apiGet('/college/catalog/programs');
+            const items = data.items || [];
+            bindProgramSelect(items);
+            if (items.length) {
+              const preferred = items[0];
+              document.getElementById('pcProgFilter').value = preferred.id || '';
+              document.getElementById('pcProgId').value = preferred.id || '';
+              const pIn = document.getElementById('pcProgId');
+              if (pIn) {
+                pIn.readOnly = true;
+                pIn.title = 'program_id محدد تلقائياً حسب رئيس القسم';
+              }
+              await loadPc();
+            } else {
+              msg('لا توجد برامج ضمن نطاق قسمك حالياً.', 'warning');
+            }
+            await loadMasterChoices();
+          } catch(e) {
+            msg('تعذر تحميل برامج القسم.', 'danger');
+          }
+          return;
+        }
+
+        loadDepartments();
+        loadPrograms();
+        loadCm();
+        await loadMasterChoices();
+        try {
+          const data = await apiGet('/college/catalog/programs');
+          bindProgramSelect(data.items || []);
+        } catch(e) {}
+      })();
     });
   </script>
 </body>

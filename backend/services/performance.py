@@ -2,10 +2,15 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, render_template, request, send_file, session
 
-from backend.core.auth import role_required, current_supervisor_effective
+from backend.core.auth import role_required, current_supervisor_effective, _normalize_role
+from backend.core.department_scope_policy import resolve_users_list_scope, resolve_scope_sql_for_students_table
 from backend.database.database import fetch_table_columns
 from .utilities import get_connection, excel_response_from_df, pdf_response_from_html, get_current_term
-from backend.services.grades import _load_transcript_data, _load_all_transcripts_bulk
+from backend.services.grades import (
+    _load_transcript_data,
+    _load_all_transcripts_bulk,
+    _student_in_effective_scope,
+)
 
 
 performance_bp = Blueprint("performance", __name__)
@@ -174,7 +179,9 @@ def _format_status_action_period(term: str, year: str) -> str:
     return t or y
 
 
-def _fetch_students_performance_meta(cur) -> list[dict]:
+def _fetch_students_performance_meta(
+    cur, *, extra_where: str = "", extra_params: tuple = ()
+) -> list[dict]:
     cols = fetch_table_columns(cur.connection, "students")
     has_es = "enrollment_status" in cols
     parts = [
@@ -192,9 +199,13 @@ def _fetch_students_performance_meta(cur) -> list[dict]:
             parts.append("COALESCE(status_changed_term,'') AS status_changed_term")
         if "status_changed_year" in cols:
             parts.append("COALESCE(status_changed_year,'') AS status_changed_year")
-    sql = "SELECT " + ", ".join(parts) + " FROM students ORDER BY student_id"
+    sql = "SELECT " + ", ".join(parts) + " FROM students"
+    if extra_where.strip():
+        sql += " WHERE " + extra_where.strip()
+    sql += " ORDER BY student_id"
     out: list[dict] = []
-    for r in cur.execute(sql):
+    qp = tuple(extra_params) if extra_params else ()
+    for r in cur.execute(sql, qp):
         d = {
             "student_id": r["student_id"],
             "student_name": r["student_name"] or "",
@@ -271,7 +282,12 @@ def _prepare_rows_for_print(rows: list[dict]) -> list[dict]:
 
 def _build_performance_export_rows(conn) -> list[dict]:
     cur = conn.cursor()
-    meta_rows = _fetch_students_performance_meta(cur)
+    uname = (session.get("user") or session.get("username") or "").strip()
+    mode_blank, _ = resolve_users_list_scope(conn, uname)
+    if mode_blank == "empty":
+        return []
+    st_where, st_params = resolve_scope_sql_for_students_table(conn, uname)
+    meta_rows = _fetch_students_performance_meta(cur, extra_where=st_where, extra_params=st_params)
 
     # --- Bulk load: جلب جميع بيانات الدرجات دفعة واحدة بدلاً من N+1 ---
     all_sids = [r["student_id"] for r in meta_rows]
@@ -499,7 +515,13 @@ def performance_report():
 
     with get_connection() as conn:
         cur = conn.cursor()
-        meta_rows = _fetch_students_performance_meta(cur)
+
+        uname = (session.get("user") or session.get("username") or "").strip()
+        dept_mode, _dep = resolve_users_list_scope(conn, uname)
+        if dept_mode == "empty":
+            return jsonify({"students": []})
+        st_where, st_params = resolve_scope_sql_for_students_table(conn, uname)
+        meta_rows = _fetch_students_performance_meta(cur, extra_where=st_where, extra_params=st_params)
 
         # Scope enforcement:
         # supervisor يرى فقط طلابه المسندين، بينما admin يرى الجميع
@@ -711,6 +733,11 @@ def performance_status(student_id: str):
                 (semester_label, instructor_name, sid),
             ).fetchone()
             if not allowed:
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+        nr = _normalize_role(user_role or "")
+        if nr in ("admin", "admin_main", "head_of_department"):
+            if not _student_in_effective_scope(conn, sid):
                 return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
 
         cols = fetch_table_columns(conn, "students")

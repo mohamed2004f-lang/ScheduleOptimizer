@@ -9,7 +9,7 @@
 <meta name="csrf-token" content="{{ csrf_token() }}">
 <script src="/static/js/common.js?v=20260418"></script>
 
-<!-- Loading Overlay (ثيم قسم الهندسة الميكانيكية) -->
+<!-- Loading Overlay -->
 <div class="loading-overlay" id="loadingOverlay" aria-hidden="true">
   <div class="spinner-border" role="status" style="width: 3rem; height: 3rem;">
     <span class="visually-hidden">جاري التحميل...</span>
@@ -39,9 +39,9 @@
           alt="شعار كلية الهندسة — جامعة درنة"
           class="app-logo">
         <div class="app-brand-title">
-          <p class="t1">جامعة درنة</p>
-          <p class="t2">كلية الهندسة</p>
-          <p class="t3">قسم الهندسة الميكانيكية</p>
+          <p class="t1">{{ (ui_context.university_name_ar if ui_context else 'جامعة درنة') }}</p>
+          <p class="t2">{{ (ui_context.college_name_ar if ui_context else 'كلية الهندسة') }}</p>
+          <p class="t3">{{ (ui_context.department_name_ar if ui_context else 'كل الأقسام') }}</p>
         </div>
       </a>
 
@@ -52,6 +52,15 @@
     </div>
   </div>
 </header>
+
+{% if ui_context and ui_context.actor_display_ar %}
+<div class="container-fluid py-1 border-bottom border-secondary border-opacity-10 bg-light">
+  <p class="small mb-0 text-body-secondary">
+    <i class="fa-regular fa-id-badge ms-1" aria-hidden="true"></i>
+    {{ ui_context.actor_display_ar }}
+  </p>
+</div>
+{% endif %}
 
 <!-- تبديل وضع العمل: أستاذ/مشرف (حساب مُشرف) أو رئيس قسم/أستاذ/مشرف -->
 <div id="activeModeBanner" class="container-fluid py-2 mb-0 d-none alert alert-info rounded-0 border-0 border-bottom border-primary border-3" role="region" aria-label="تبديل وضع العمل" style="border-radius:0!important;">
@@ -86,6 +95,11 @@
     <p class="small text-muted mb-0 mt-1 w-100">يُعرض الطلاب إن وُجد تطابق في <strong>قسم الطالب</strong> أو في <strong>برنامجه الحالي/الالتحاق</strong> ضمن هذا القسم. إن بقي القائمة فارغة شغّل ترحيل phase0 أو راجع أعمدة department_id و current_program_id في قاعدة البيانات.</p>
   </div>
 </div>
+{% if ui_context %}
+<div class="container-fluid py-1 border-bottom border-secondary border-opacity-10 bg-light-subtle">
+  <p class="small text-muted mb-0">{{ ui_context.department_scope_label_ar }}</p>
+</div>
+{% endif %}
 
 <!-- primary navigation (Bootstrap) -->
 <nav class="app-navbar navbar navbar-expand-lg navbar-light">
@@ -164,7 +178,7 @@
         </li>
 
         <!-- المقررات الدراسية ومتطلباتها -->
-        <li class="nav-item dropdown">
+        <li class="nav-item dropdown" id="navCatalogWrap">
           <a class="nav-link dropdown-toggle" href="#" id="catalogMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-book ms-1"></i> المقررات الدراسية ومتطلباتها
           </a>
@@ -178,7 +192,7 @@
         </li>
 
         <!-- الأساتذة والإشراف -->
-        <li class="nav-item dropdown">
+        <li class="nav-item dropdown" id="navFacultySupervisionWrap">
           <a class="nav-link dropdown-toggle" href="#" id="facultySupervisionMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-user-tie ms-1"></i> الأساتذة والإشراف
           </a>
@@ -199,12 +213,14 @@
             <i class="fa-regular fa-bell ms-1"></i> الإشعارات
           </a>
         </li>
-        <li class="nav-item dropdown">
+        <li class="nav-item dropdown" id="navAdminSettingsWrap">
           <a class="nav-link dropdown-toggle" href="#" id="adminSettingsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-gear ms-1"></i> الإدارة والإعدادات
           </a>
           <ul class="dropdown-menu" aria-labelledby="adminSettingsMenu">
             <li><a class="dropdown-item" id="navUsersAdmin" href="/users_admin">المستخدمون</a></li>
+            <li><a class="dropdown-item" id="navDepartmentPolicyHead" href="/department_policy_head_page" style="display:none;">اقتراح سياسة نظام التخرج (رئيس القسم)</a></li>
+            <li><a class="dropdown-item" id="navDepartmentPolicyApprovals" href="/department_policy_approvals_page" style="display:none;">اعتماد سياسات الأقسام (admin_main)</a></li>
             <li><a class="dropdown-item" id="navProjectStatus" href="/admin/project_status">إصدار المشروع وآخر تحديث</a></li>
             <li><a class="dropdown-item" id="navAcademicRules" href="/academic_rules_page">لائحة الإنذارات والفصل</a></li>
             <li><a class="dropdown-item" id="navCollegeCatalog" href="/college_catalog_page">كتالوج الأقسام والخطط</a></li>
@@ -308,6 +324,12 @@
         const elUsers = document.getElementById('navUsersAdmin');
         if (elUsers) elUsers.style.display = 'none';
       }
+      {
+        const elHeadPolicy = document.getElementById('navDepartmentPolicyHead');
+        if (elHeadPolicy) elHeadPolicy.style.display = (role === 'head_of_department') ? '' : 'none';
+        const elMainPolicy = document.getElementById('navDepartmentPolicyApprovals');
+        if (elMainPolicy) elMainPolicy.style.display = (role === 'admin_main') ? '' : 'none';
+      }
       if (!navSup) {
         const elSup = document.getElementById('navSupervision');
         if (elSup) elSup.style.display = 'none';
@@ -320,7 +342,7 @@
         const elCc = document.getElementById('navCollegeCatalog');
         const elCcCourses = document.getElementById('navCollegeCatalogCourses');
         const elCcDiv = document.getElementById('navCollegeCatalogCoursesDivider');
-        const showCc = !!navCollegeCatalog;
+        const showCc = !!navCollegeCatalog || role === 'head_of_department';
         if (elCc) elCc.style.display = showCc ? '' : 'none';
         if (elCcCourses) elCcCourses.style.display = showCc ? '' : 'none';
         if (elCcDiv) elCcDiv.style.display = showCc ? '' : 'none';
@@ -356,6 +378,8 @@
           'navAnalytics',
           'navInstructors',
           'navSupervision',
+          'navPrereqs',
+          'navPrereqsFlowchart',
           'navElectivesReport',
           'navRegistrationChangesReport',
           'navFailedCoursesReport',
@@ -370,6 +394,9 @@
           'navAcademicRules',
           'navCollegeCatalog',
           'navCollegeCatalogCourses',
+          'navCatalogWrap',
+          'navFacultySupervisionWrap',
+          'navAdminSettingsWrap',
         ];
         hideIds.forEach(id => {
           const el = document.getElementById(id);
@@ -394,12 +421,16 @@
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
         });
+        const elAttendance = document.getElementById('navAttendance');
+        if (elAttendance) elAttendance.style.display = '';
         const elPerf = document.getElementById('navPerformance');
         if (elPerf) elPerf.style.display = 'none';
-        const elAcadWrap = document.getElementById('navAcademicRecordsWrap');
-        if (elAcadWrap) elAcadWrap.style.display = 'none';
         const elExamConflicts = document.getElementById('navExamsConflicts');
         if (elExamConflicts) elExamConflicts.style.display = 'none';
+      }
+      if (isSupervisor) {
+        const elAttendance = document.getElementById('navAttendance');
+        if (elAttendance) elAttendance.style.display = 'none';
       }
 
       const modeBanner = document.getElementById('activeModeBanner');
@@ -660,6 +691,8 @@
         ['/results','navResults'],
         ['/notifications_center','navNotifications'],
         ['/users_admin','navUsersAdmin'],
+        ['/department_policy_head_page','navDepartmentPolicyHead'],
+        ['/department_policy_approvals_page','navDepartmentPolicyApprovals'],
         ['/admin/project_status','navProjectStatus'],
         ['/academic_rules_page','navAcademicRules'],
         ['/college_catalog_page','navCollegeCatalog'],

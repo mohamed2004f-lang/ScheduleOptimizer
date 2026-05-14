@@ -9,7 +9,14 @@ from typing import Any, Callable
 
 from flask import jsonify, request, session
 
-from backend.core.auth import current_supervisor_effective
+from backend.core import department_scope_policy as dept_scope_policy
+from backend.core.auth import (
+    SESSION_ACTIVE_MODE,
+    _normalize_role,
+    current_supervisor_effective,
+    get_admin_department_scope_id,
+)
+from backend.database.database import fetch_table_columns
 
 
 def _attendance_course_key(name: str) -> str:
@@ -128,6 +135,160 @@ def _collapse_ws_equal(a: str, b: str) -> bool:
     return _collapse_ws(a) == _collapse_ws(b)
 
 
+# طالب نشط فقط — لا تُعرض مقررات من تسجيلات قديمة لطلبة غير مسجّلين أو منسحبين
+_SQL_REG_ACTIVE_STUDENT = (
+    "INNER JOIN students st ON st.student_id = r.student_id "
+    "AND COALESCE(st.enrollment_status, 'active') = 'active'"
+)
+
+
+def attendance_export_role_bucket() -> str:
+    """يتوافق مع منطق /attendance_allowed_courses (أدوار رئيس القسم بحسب الوضع النشط)."""
+    user_role = (session.get("user_role") or "").strip()
+    rn = _normalize_role(user_role)
+    mode = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower()
+    eff_sup = current_supervisor_effective()
+    if rn == "student":
+        return "student"
+    if rn == "head_of_department":
+        if mode in ("", "head", "hod", "department_head"):
+            return "head_of_department"
+        if eff_sup:
+            return "supervisor"
+        return "instructor"
+    if eff_sup:
+        return "supervisor"
+    if rn == "instructor":
+        return "instructor"
+    if rn in ("admin", "admin_main"):
+        return rn
+    return rn
+
+
+def _resolve_actor_department_id(conn) -> int | None:
+    cur = conn.cursor()
+    uname = (session.get("user") or session.get("username") or "").strip()
+    if uname:
+        try:
+            row = cur.execute(
+                "SELECT department_id FROM users WHERE lower(username)=lower(?) LIMIT 1",
+                (uname,),
+            ).fetchone()
+            if row and row[0] not in (None, ""):
+                return int(row[0])
+        except Exception:
+            pass
+    try:
+        iid = int(session.get("instructor_id") or 0)
+    except (TypeError, ValueError):
+        iid = 0
+    if iid:
+        try:
+            row = cur.execute(
+                "SELECT department_id FROM instructors WHERE id = ? LIMIT 1",
+                (iid,),
+            ).fetchone()
+            if row and row[0] not in (None, ""):
+                return int(row[0])
+        except Exception:
+            pass
+    return None
+
+
+def effective_attendance_department_scope(conn) -> int | None:
+    """نفس نطاق جداول الامتحانات: مسؤول بقسم + رئيس قسم في وضع القسم."""
+    role_n = _normalize_role((session.get("user_role") or "").strip())
+    if role_n in ("admin", "admin_main"):
+        return get_admin_department_scope_id()
+    if role_n == "head_of_department":
+        mode = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
+        if mode in ("", "head", "hod", "department_head"):
+            return _resolve_actor_department_id(conn)
+    return None
+
+
+def _schedule_dept_join_and_params(conn, dept_id: int | None) -> tuple[str, str, tuple]:
+    """تقييد صفوف schedule (_ALIAS s) بمقررات القسم أو عدم الإرجاع عند نقص الأعمدة."""
+    if dept_id is None:
+        return "", "", ()
+    try:
+        scols = fetch_table_columns(conn, "schedule")
+        ccols = fetch_table_columns(conn, "courses")
+    except Exception:
+        return "", " AND 1=0 ", ()
+    sched_has_dept = "department_id" in scols
+    courses_have_owning = "owning_department_id" in (ccols or [])
+    if sched_has_dept:
+        return "", " AND COALESCE(s.department_id, -987654321) = ? ", (int(dept_id),)
+    if courses_have_owning:
+        join_owner = """
+            INNER JOIN courses __att_cov_dep
+              ON lower(trim(__att_cov_dep.course_name)) = lower(trim(s.course_name))
+             AND COALESCE(__att_cov_dep.owning_department_id, -1) = ?
+        """
+        return join_owner, "", (int(dept_id),)
+    return "", " AND 1=0 ", ()
+
+
+def attendance_student_scope_and_params(conn) -> tuple[str | None, tuple]:
+    """
+    (Suffix, bind) لإضافة AND على جدول students كـ «st».
+    يُرجع (None, ()) إن لم يطبّق نطاق؛ ('EMPTY', ()) إذا النطاق فارغ؛ وإلا ' AND (...)'.
+    """
+    uname = (session.get("user") or session.get("username") or "").strip()
+    sql_fr, pars = dept_scope_policy.resolve_scope_sql_for_aliased_student(conn, uname, "st")
+    if sql_fr == "1=0":
+        return ("EMPTY", ())
+    if not sql_fr:
+        return ("", ())
+    return (f" AND ({sql_fr})", tuple(pars) if pars else ())
+
+
+def attendance_eligible_course_rows(
+    conn,
+    cur,
+    term_name: str | None,
+    term_year: str | None,
+    *,
+    dept_scope_id: int | None,
+) -> list[tuple]:
+    """
+    صفوف (course_name, course_code, units) لمقررات لها طلاب نشطون + مطابقة جدول الفصل؛
+    مع عزل القسم على schedule/courses وطلاب المنطقي عند تفعيله.
+    """
+    sem_sql, sem_bind = build_schedule_semester_match("s.semester", term_name, term_year)
+    sched_sem_and = f" AND ({sem_sql})"
+    dept_join, dept_and, dept_p = _schedule_dept_join_and_params(conn, dept_scope_id)
+
+    suff, spar = attendance_student_scope_and_params(conn)
+    if suff == "EMPTY":
+        return []
+
+    qs = f"""
+        SELECT DISTINCT r.course_name,
+               COALESCE(c.course_code,'') AS course_code,
+               COALESCE(c.units,0) AS units
+        FROM registrations r
+        {_SQL_REG_ACTIVE_STUDENT}
+        INNER JOIN schedule s
+          ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
+        {dept_join}
+        LEFT JOIN courses c
+          ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(c.course_name, '')))
+        WHERE COALESCE(r.course_name, '') <> ''
+          {sched_sem_and}
+          {dept_and}
+          {suff or ''}
+        ORDER BY r.course_name
+    """
+    params = tuple(sem_bind) + tuple(dept_p) + tuple(spar)
+    try:
+        rows = cur.execute(qs, params).fetchall()
+    except Exception:
+        rows = []
+    return [r for r in rows if r and r[0]]
+
+
 def fallback_distinct_attendance_courses(
     cur,
     term_name: str | None,
@@ -136,6 +297,8 @@ def fallback_distinct_attendance_courses(
     student_id: str | None = None,
     supervisor_instructor_id: int | None = None,
     instructor_name: str | None = None,
+    conn=None,
+    dept_scope_id: int | None = None,
 ) -> list[str]:
     """
     عند فشل JOIN SQL بين التسجيل والجدول (اختلاف صيغة الفصل/الاسم): مطابقة المقرر بمفتاح موحّد + فصل مرن + اختياري مدرّس الجدول.
@@ -202,6 +365,23 @@ def fallback_distinct_attendance_courses(
                 matched.append(rname)
             break
 
+    if dept_scope_id is not None and conn is not None:
+        try:
+            from backend.services.coverage_insights import schedule_distinct_course_names_for_coverage
+
+            tcur = conn.cursor()
+            tl = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
+            dept_names, _cov = schedule_distinct_course_names_for_coverage(
+                conn, tcur, tl or " ", dept_scope_id=int(dept_scope_id)
+            )
+            allowed_k = {_attendance_course_key(n) for n in dept_names if n}
+            if allowed_k:
+                matched = [m for m in matched if _attendance_course_key(m) in allowed_k]
+            else:
+                matched = []
+        except Exception:
+            matched = []
+
     return sorted(matched, key=lambda x: (x or "").lower())
 
 
@@ -226,13 +406,6 @@ def course_rows_with_meta(cur, course_names: list[str]) -> list[tuple]:
         else:
             rows.append((name, "", 0))
     return rows
-
-
-# طالب نشط فقط — لا تُعرض مقررات من تسجيلات قديمة لطلبة غير مسجّلين أو منسحبين
-_SQL_REG_ACTIVE_STUDENT = (
-    "INNER JOIN students st ON st.student_id = r.student_id "
-    "AND COALESCE(st.enrollment_status, 'active') = 'active'"
-)
 
 
 def collect_attendance_export_state(
@@ -292,7 +465,12 @@ def collect_attendance_export_state(
     with get_connection() as conn:
         cur = conn.cursor()
 
-        user_role = session.get("user_role")
+        role_bucket = attendance_export_role_bucket()
+        dep_scope_joint = (
+            effective_attendance_department_scope(conn)
+            if role_bucket in ("admin", "admin_main", "head_of_department")
+            else None
+        )
         term_name, term_year = get_current_term(conn=conn)
         semester_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
         sem_match_sql, sem_match_params = build_schedule_semester_match("s.semester", term_name, term_year)
@@ -302,7 +480,23 @@ def collect_attendance_export_state(
         allowed_student_filter_sql = None
         allowed_student_filter_params: list = []
 
-        if user_role in ("student", "supervisor", "instructor"):
+        if role_bucket in ("admin", "admin_main", "head_of_department"):
+            if not (semester_label or "").strip():
+                return {
+                    "kind": "http",
+                    "response": (
+                        jsonify(
+                            {
+                                "status": "error",
+                                "message": "لا يمكن تحديد الفصل الحالي",
+                                "code": "FORBIDDEN",
+                            }
+                        ),
+                        403,
+                    ),
+                }
+
+        if role_bucket in ("student", "supervisor", "instructor"):
             if not semester_label:
                 return {
                     "kind": "http",
@@ -318,7 +512,7 @@ def collect_attendance_export_state(
                     ),
                 }
 
-        if user_role == "student":
+        if role_bucket == "student":
             sid_session = normalize_sid(session.get("student_id") or session.get("user"))
             if not sid_session:
                 return {
@@ -361,7 +555,7 @@ def collect_attendance_export_state(
                     )
                 )
 
-        elif current_supervisor_effective():
+        elif role_bucket == "supervisor":
             instructor_id = session.get("instructor_id")
             if not instructor_id:
                 return {
@@ -406,7 +600,7 @@ def collect_attendance_export_state(
                     )
                 )
 
-        elif user_role == "instructor":
+        elif role_bucket == "instructor":
             instructor_id = session.get("instructor_id")
             if not instructor_id:
                 return {
@@ -472,6 +666,17 @@ def collect_attendance_export_state(
             sem = (semester_label or "").strip()
             if sem:
                 names: list = []
+                if role_bucket in ("admin", "admin_main", "head_of_department"):
+                    er = attendance_eligible_course_rows(
+                        conn, cur, term_name, term_year, dept_scope_id=dep_scope_joint
+                    )
+                    names = [r[0] for r in er if r and r[0]]
+                    if not names:
+                        names = fallback_distinct_attendance_courses(
+                            cur, term_name, term_year,
+                            conn=conn, dept_scope_id=dep_scope_joint,
+                        )
+                    return _dedupe_course_list(names)
                 try:
                     rows = cur.execute(
                         f"""
@@ -526,33 +731,42 @@ def collect_attendance_export_state(
                 normalized_map[k] = c
 
         # تقييد الإدارة بمجموعة المقررات المستخرجة من التسجيلات + الجدول (all_courses)
-        if user_role in ("admin", "admin_main", "head_of_department") and (semester_label or "").strip():
+        if role_bucket in ("admin", "admin_main", "head_of_department") and (semester_label or "").strip():
             allowed_course_set = set(all_courses)
 
         if not selected_courses:
             sem = (semester_label or "").strip()
             if sem:
-                try:
-                    reg_rows = cur.execute(
-                        f"""
-                        SELECT DISTINCT r.course_name
-                        FROM registrations r
-                        {_SQL_REG_ACTIVE_STUDENT}
-                        INNER JOIN schedule s
-                          ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
-                        {sched_sem_and}
-                        WHERE COALESCE(r.course_name, '') <> ''
-                        ORDER BY r.course_name
-                        """,
-                        tuple(sem_match_params),
-                    ).fetchall()
-                except Exception:
-                    reg_rows = []
+                if role_bucket in ("admin", "admin_main", "head_of_department"):
+                    er2 = attendance_eligible_course_rows(
+                        conn, cur, term_name, term_year, dept_scope_id=dep_scope_joint
+                    )
+                    auto_courses = [r[0] for r in er2 if r and r[0]]
+                else:
+                    try:
+                        reg_rows = cur.execute(
+                            f"""
+                            SELECT DISTINCT r.course_name
+                            FROM registrations r
+                            {_SQL_REG_ACTIVE_STUDENT}
+                            INNER JOIN schedule s
+                              ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
+                            {sched_sem_and}
+                            WHERE COALESCE(r.course_name, '') <> ''
+                            ORDER BY r.course_name
+                            """,
+                            tuple(sem_match_params),
+                        ).fetchall()
+                    except Exception:
+                        reg_rows = []
+                    auto_courses = [r[0] for r in reg_rows if r[0]]
             else:
-                reg_rows = []
-            auto_courses = [r[0] for r in reg_rows if r[0]]
+                auto_courses = []
             if not auto_courses and sem:
-                auto_courses = fallback_distinct_attendance_courses(cur, term_name, term_year)
+                fb_kw = {}
+                if role_bucket in ("admin", "admin_main", "head_of_department"):
+                    fb_kw = {"conn": conn, "dept_scope_id": dep_scope_joint}
+                auto_courses = fallback_distinct_attendance_courses(cur, term_name, term_year, **fb_kw)
             if not auto_courses:
                 auto_courses = all_courses
             selected_courses = auto_courses
@@ -603,6 +817,20 @@ def collect_attendance_export_state(
         course_students = {c: [] for c in selected_courses}
         course_seen = {c: set() for c in selected_courses}
 
+        joint_scope_suffix, joint_scope_params = ("", ())
+        if role_bucket in ("admin", "admin_main", "head_of_department"):
+            joint_scope_suffix, joint_scope_params = attendance_student_scope_and_params(conn)
+            if joint_scope_suffix == "EMPTY":
+                summaries.append(
+                    {
+                        "المقرر": "لا توجد مقررات",
+                        "عدد الطلبة": 0,
+                        "عدد الأسابيع": weeks,
+                        "ملاحظات": "لا يوجد طلاب ضمن النطاق المسموح لتصدير الحضور",
+                    }
+                )
+                return {"kind": "empty_excel", "summaries": summaries, "weeks": weeks}
+
         where_clauses = []
         params = []
         if selected_courses:
@@ -612,6 +840,16 @@ def collect_attendance_export_state(
         if allowed_student_filter_sql:
             where_clauses.append(allowed_student_filter_sql)
             params.extend(allowed_student_filter_params)
+        if (
+            role_bucket in ("admin", "admin_main", "head_of_department")
+            and joint_scope_suffix
+            and joint_scope_suffix != "EMPTY"
+        ):
+            frag = joint_scope_suffix.strip()
+            if frag.upper().startswith("AND "):
+                frag = frag[4:].strip()
+            where_clauses.append(frag)
+            params.extend(list(joint_scope_params))
 
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         reg_query = f"""

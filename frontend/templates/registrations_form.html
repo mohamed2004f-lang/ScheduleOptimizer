@@ -107,6 +107,17 @@ const WITHDRAWN_MODE = {{ 'true' if withdrawn_mode else 'false' }};
       </div>
     </div>
 
+    <div class="card mb-3" id="specializationSummaryCard" style="display:none;">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <h6 class="mb-0">ملخص التخصص/المسارات</h6>
+          <button id="btnReloadSpecializationSummary" type="button" class="btn btn-outline-secondary btn-sm">تحديث</button>
+        </div>
+        <div id="specializationSummaryStats" class="small text-muted mb-2"></div>
+        <div id="specializationSummaryRows" class="small"></div>
+      </div>
+    </div>
+
     <div class="card chart-container">
       <div class="card-body">
         <div class="mb-2 d-flex align-items-center gap-2 flex-wrap">
@@ -189,6 +200,27 @@ const WITHDRAWN_MODE = {{ 'true' if withdrawn_mode else 'false' }};
       <div class="modal-body">
         <div id="editStudentInfo" class="mb-2 small text-muted"></div>
         <div id="electivesStatusInModal" class="mb-2 small"></div>
+        <div class="card mb-3">
+          <div class="card-body">
+            <h6 class="mb-2">بيانات التخصص/المسار</h6>
+            <div class="row g-2">
+              <div class="col-md-5">
+                <label class="form-label small mb-1">البرنامج الحالي</label>
+                <select id="specProgramId" class="form-select form-select-sm">
+                  <option value="">— بدون —</option>
+                </select>
+              </div>
+              <div class="col-md-3">
+                <label class="form-label small mb-1">رمز المسار</label>
+                <input id="specTrackCode" class="form-control form-control-sm" placeholder="مثال: AI">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label small mb-1">فصل التخصص</label>
+                <input id="specAtTerm" class="form-control form-control-sm" placeholder="مثال: خريف 25-26">
+              </div>
+            </div>
+          </div>
+        </div>
         <div id="regPrereqBanner" class="alert alert-warning d-none py-2 mb-2" role="alert"></div>
         <button type="button" id="btnRegPrereqDetails" class="btn btn-outline-warning btn-sm d-none mb-2">تفاصيل المتطلبات</button>
 
@@ -279,6 +311,7 @@ const WITHDRAWN_MODE = {{ 'true' if withdrawn_mode else 'false' }};
 /* state */
 let STUDENTS = []; // {student_id, student_name, university_number, enrollment_status, registrations: [...]}
 let COURSES = [];  // cached courses metadata
+let PROGRAMS = []; // cached programs list
 let editing = null; // current student object
 let regEditBaseline = [];
 let lastRegPrereqValidation = null;
@@ -400,7 +433,77 @@ async function fetchJSON(url, opts){
   return { ok: r.ok, status: r.status, json: j };
 }
 function el(tag, cls, html){ const e=document.createElement(tag); if(cls) e.className=cls; if(html!==undefined) e.innerHTML=html; return e; }
-function setEditMsg(kind, text){ document.getElementById('editMsg').innerHTML = `<div class="alert alert-${kind} p-2 mb-0">${text}</div>`; setTimeout(()=>document.getElementById('editMsg').innerHTML='',3000);}
+function setEditMsg(kind, text){
+  const normalized = String(text || '').replaceAll('\n', '<br>');
+  document.getElementById('editMsg').innerHTML = `<div class="alert alert-${kind} p-2 mb-0">${normalized}</div>`;
+  setTimeout(()=>document.getElementById('editMsg').innerHTML='',3000);
+}
+function buildPlanWarningsText(planWarnings){
+  const arr = Array.isArray(planWarnings) ? planWarnings : [];
+  if (!arr.length) return '';
+  return arr
+    .map(x => String(x || '').trim())
+    .filter(Boolean)
+    .map(x => `- ${x}`)
+    .join('\n');
+}
+
+function programLabelById(programId){
+  const pid = String(programId == null ? '' : programId).trim();
+  if (!pid) return '—';
+  const p = (PROGRAMS || []).find(x => String(x.id || '').trim() === pid);
+  if (!p) return pid;
+  const d = (p.department_code || '').trim();
+  const c = (p.code || '').trim();
+  const n = (p.name_ar || '').trim();
+  return [d, c, n].filter(Boolean).join(' / ') || pid;
+}
+
+async function loadProgramsForSpecialization(){
+  const r = await fetchJSON('/college/catalog/programs');
+  PROGRAMS = Array.isArray(r.json?.items) ? r.json.items : [];
+  const sel = document.getElementById('specProgramId');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">— بدون —</option>';
+  PROGRAMS.forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.id;
+    const dcode = (p.department_code || '').trim();
+    const pcode = (p.code || '').trim();
+    const pname = (p.name_ar || '').trim();
+    o.textContent = [dcode, pcode, pname].filter(Boolean).join(' — ');
+    sel.appendChild(o);
+  });
+}
+
+async function loadSpecializationSummary(){
+  const card = document.getElementById('specializationSummaryCard');
+  const stats = document.getElementById('specializationSummaryStats');
+  const rows = document.getElementById('specializationSummaryRows');
+  if (!card || !stats || !rows || CURRENT_ROLE === 'student') return;
+  const r = await fetchJSON('/students/specialization/summary');
+  if (!r.ok || r.json?.status !== 'ok'){
+    card.style.display = '';
+    stats.textContent = 'تعذر تحميل ملخص التخصص.';
+    rows.innerHTML = '';
+    return;
+  }
+  const t = r.json?.totals || {};
+  stats.textContent = `الطلاب: ${Number(t.students || 0)} — متخصّص: ${Number(t.specialized_students || 0)} — غير متخصّص: ${Number(t.unspecialized_students || 0)}`;
+  const list = Array.isArray(r.json?.by_program_track) ? r.json.by_program_track : [];
+  if (!list.length){
+    rows.innerHTML = '<div class="text-muted">لا توجد بيانات.</div>';
+  } else {
+    rows.innerHTML = list.slice(0, 12).map(x => {
+      const d = escapeHtml(x.department_code || '—');
+      const p = escapeHtml(x.program_code || '—');
+      const tr = escapeHtml(x.track_code || '—');
+      const c = Number(x.students_count || 0);
+      return `<div class="d-flex justify-content-between border rounded px-2 py-1 mb-1"><span>${d} / ${p} / ${tr}</span><strong>${c}</strong></div>`;
+    }).join('');
+  }
+  card.style.display = '';
+}
 function studentTotalUnits(s){
   let u = 0;
   (s.registrations || []).forEach(cn=>{
@@ -600,6 +703,9 @@ async function loadData(){
       student_name: s.student_name || s.name || s.full_name || '',
       university_number: s.university_number || s.university || s.student_number || '',
       enrollment_status: enrollmentStatusNorm({ enrollment_status: s.enrollment_status || 'active' }),
+      current_program_id: s.current_program_id || null,
+      track_code: s.track_code || '',
+      specialized_at_term: s.specialized_at_term || '',
       student_signed: false,
       signed_at: '',
       signature_note: '',
@@ -694,6 +800,10 @@ function renderStudents(list){
       ? ` <span class="badge bg-success-subtle text-success-emphasis ms-2">موقّع</span>`
       : ` <span class="badge bg-danger-subtle text-danger-emphasis ms-2">غير موقّع</span>`;
     left.innerHTML = `<div><strong>${displayName}</strong> <small class="text-muted">(${displayNum})</small>${enrollBadge}${unitsBadge}${signBadge}</div>`;
+    if (CURRENT_ROLE !== 'student' && (s.track_code || s.current_program_id || s.specialized_at_term)) {
+      const specInfo = `البرنامج: ${escapeHtml(programLabelById(s.current_program_id))} — المسار: ${escapeHtml(s.track_code || '—')} — فصل التخصص: ${escapeHtml(s.specialized_at_term || '—')}`;
+      left.innerHTML += `<div class="small text-muted mt-1">${specInfo}</div>`;
+    }
     if (s.student_signed) {
       const when = (s.signed_at || '').toString().replace('T', ' ').slice(0, 16);
       const note = (s.signature_note || '').toString().trim();
@@ -815,10 +925,21 @@ async function openEditModal(student){
   const currentDiv = document.getElementById('currentRegistrationsList');
   const eligibleDiv = document.getElementById('eligibleCoursesList');
   const completedDiv = document.getElementById('completedList');
+  const specProgramSel = document.getElementById('specProgramId');
+  const specTrackEl = document.getElementById('specTrackCode');
+  const specAtTermEl = document.getElementById('specAtTerm');
   const verSel = document.getElementById('regFormVersionSelect');
   currentDiv.innerHTML = '';
   eligibleDiv.innerHTML = '';
   completedDiv.innerHTML = '';
+  if (specProgramSel){
+    if (!PROGRAMS.length) {
+      try { await loadProgramsForSpecialization(); } catch(e) {}
+    }
+    specProgramSel.value = (student.current_program_id == null ? '' : String(student.current_program_id));
+  }
+  if (specTrackEl) specTrackEl.value = student.track_code || '';
+  if (specAtTermEl) specAtTermEl.value = student.specialized_at_term || '';
 
   // تحميل نسخ الاستمارة التاريخية لهذا الطالب/الفصل
   try {
@@ -1036,6 +1157,17 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
   const oldText = saveBtn ? saveBtn.textContent : '';
   if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'جارٍ الحفظ...'; }
   const regs = editing.registrations || [];
+  const sidEdit = editing.student_id || editing.id || editing.studentId;
+  const specProgramSel = document.getElementById('specProgramId');
+  const specTrackEl = document.getElementById('specTrackCode');
+  const specAtTermEl = document.getElementById('specAtTerm');
+  const specPayload = {
+    student_id: sidEdit,
+    current_program_id: (specProgramSel?.value || '').trim(),
+    track_code: (specTrackEl?.value || '').trim(),
+    specialized_at_term: (specAtTermEl?.value || '').trim(),
+  };
+  if (specPayload.current_program_id === '') specPayload.current_program_id = null;
 
   // التحقق من حدود الوحدات (اختياري مع تأكيد)
   let totalUnits = 0;
@@ -1099,6 +1231,18 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
     }
   };
   try{
+    // حفظ بيانات التخصص/المسار أولاً
+    const specRes = await fetchJSON('/students/specialization/update', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(specPayload)
+    });
+    if (!specRes.ok || specRes.json?.status !== 'ok'){
+      setEditMsg('danger', specRes.json?.message || `تعذر حفظ بيانات التخصص (${specRes.status})`);
+      return;
+    }
+    editing.current_program_id = specPayload.current_program_id;
+    editing.track_code = specPayload.track_code;
+    editing.specialized_at_term = specPayload.specialized_at_term;
+
     // ملاحظة: الإرسال المباشر للمسار النهائي يتجنب أي التباس في إعادة التوجيه 307.
     let res = await fetchJSON('/students/save_registrations', {
       method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
@@ -1144,6 +1288,13 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
       if (res.json?.prereq_overridden) {
         saveMsg += ' — تم الحفظ مع تجاوز المتطلبات بموافقة إدارية.';
       }
+      const planMode = String(res.json?.program_course_mode || '').trim();
+      const planWarnings = res.json?.plan_warnings || [];
+      const planTxt = buildPlanWarningsText(planWarnings);
+      if (planTxt){
+        const modeLabel = (planMode === 'warn') ? 'تحذير' : (planMode === 'enforce' ? 'إلزامي' : '—');
+        saveMsg += `\n\nملاحظات ربط الخطة/الشُعب (${modeLabel}):\n${planTxt}`;
+      }
       const pw = res.json?.prereq_warnings || [];
       const pcp = res.json?.prereq_coregister_pairs || [];
       if (pw.length || pcp.length){
@@ -1161,6 +1312,7 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
       } else {
         setEditMsg('success', saveMsg);
       }
+      try { await loadSpecializationSummary(); } catch(e) {}
       const modal = bootstrap.Modal.getInstance(document.getElementById('editModal'));
       modal.hide();
     } else {
@@ -1440,7 +1592,18 @@ if (fileImport){
   }
 
   await loadData();
+  if (CURRENT_ROLE !== 'student') {
+    try { await loadProgramsForSpecialization(); } catch(e) {}
+    try { await loadSpecializationSummary(); } catch(e) {}
+  }
   if (CURRENT_ROLE !== 'student') await loadCurrentTerm();
+
+  const btnReloadSpec = document.getElementById('btnReloadSpecializationSummary');
+  if (btnReloadSpec){
+    btnReloadSpec.addEventListener('click', async ()=>{
+      await loadSpecializationSummary();
+    });
+  }
 
   const btnSaveTerm = document.getElementById('btnSaveRegistrationTerm');
   if (btnSaveTerm) {

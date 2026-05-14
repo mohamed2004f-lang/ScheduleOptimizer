@@ -405,7 +405,42 @@ CREATE TABLE IF NOT EXISTS instructors (
     type TEXT NOT NULL DEFAULT 'internal',
     email TEXT,
     department_id INTEGER,
+    external_scope TEXT NOT NULL DEFAULT 'within_college',
     is_active INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS instructor_department_assignments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instructor_id INTEGER NOT NULL,
+    department_id INTEGER NOT NULL,
+    schedule_section_id INTEGER NOT NULL DEFAULT -1,
+    semester TEXT NOT NULL DEFAULT '',
+    is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    migration_source TEXT DEFAULT 'manual',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (instructor_id, department_id, schedule_section_id, semester)
+);
+
+CREATE TABLE IF NOT EXISTS course_equivalence_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_key TEXT NOT NULL UNIQUE,
+    title TEXT DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS course_equivalence_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
+    department_id INTEGER NOT NULL,
+    course_name TEXT NOT NULL,
+    course_code TEXT DEFAULT '',
+    program_course_id INTEGER,
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (group_id, department_id, course_name)
 );
 
 CREATE TABLE IF NOT EXISTS prereqs (
@@ -704,6 +739,13 @@ def _setup_shared_db():
     _seed_sample_data(_shared_conn)
     _seed_student_user(_shared_conn)
 
+    try:
+        from backend.database.database import backfill_instructor_cross_department_data
+
+        backfill_instructor_cross_department_data(_shared_conn)
+    except Exception:
+        pass
+
     # Monkey-patch get_connection everywhere it is imported.
     import backend.database.database as db_mod
     db_mod.get_connection = _patched_get_connection
@@ -741,6 +783,7 @@ def _setup_shared_db():
         "backend.services.academic_calendar",
         "backend.services.academic_rules",
         "backend.services.instructors",
+        "backend.services.course_equivalences",
         "backend.core.monitoring",
         "backend.core.auth",
     ]

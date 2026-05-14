@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>تكافؤ المقررات بين الأقسام</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main">
+    <div class="page-header mb-3">
+      <h1 class="page-title">تكافؤ المقررات بين الأقسام</h1>
+      <p class="page-subtitle">ربط مقررات تحمل رموزاً مختلفة في أقسام مختلفة ضمن مجموعة واحدة.</p>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h2 class="h6">مجموعة جديدة</h2>
+        <div class="row g-2">
+          <div class="col-md-4">
+            <label class="form-label">مفتاح المجموعة</label>
+            <input type="text" id="g-key" class="form-control" placeholder="مثال: shared_math_101">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">عنوان</label>
+            <input type="text" id="g-title" class="form-control" placeholder="وصف مختصر">
+          </div>
+          <div class="col-md-2 d-flex align-items-end">
+            <button type="button" class="btn btn-primary w-100" id="btn-save-group">حفظ المجموعة</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h2 class="h6">عنصر في مجموعة</h2>
+        <div class="row g-2">
+          <div class="col-md-2">
+            <label class="form-label">معرّف المجموعة</label>
+            <input type="number" id="i-gid" class="form-control" min="1">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">قسم</label>
+            <input type="number" id="i-did" class="form-control" min="1">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">اسم المقرر</label>
+            <input type="text" id="i-name" class="form-control">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">رمز</label>
+            <input type="text" id="i-code" class="form-control">
+          </div>
+          <div class="col-md-3 d-flex align-items-end">
+            <button type="button" class="btn btn-outline-primary w-100" id="btn-save-item">حفظ العنصر</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <h2 class="h6 mb-2">المجموعات</h2>
+        <pre id="out" class="small bg-light p-2" style="max-height:320px;overflow:auto;"></pre>
+      </div>
+    </div>
+  </main>
+  <script>
+    async function refresh() {
+      const r = await fetch("/course_equivalences/groups");
+      const j = await r.json();
+      document.getElementById("out").textContent = JSON.stringify(j.groups || [], null, 2);
+    }
+    document.getElementById("btn-save-group").addEventListener("click", async () => {
+      const body = {
+        group_key: document.getElementById("g-key").value.trim(),
+        title: document.getElementById("g-title").value.trim(),
+        is_active: true
+      };
+      const r = await fetch("/course_equivalences/group/save", {
+        method: "POST",
+        headers: {"Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest"},
+        body: JSON.stringify(body)
+      });
+      alert(r.ok ? "تم" : (await r.json().catch(()=>({}))).message || r.status);
+      await refresh();
+    });
+    document.getElementById("btn-save-item").addEventListener("click", async () => {
+      const body = {
+        group_id: parseInt(document.getElementById("i-gid").value, 10),
+        department_id: parseInt(document.getElementById("i-did").value, 10),
+        course_name: document.getElementById("i-name").value.trim(),
+        course_code: document.getElementById("i-code").value.trim(),
+        is_active: true
+      };
+      const r = await fetch("/course_equivalences/item/save", {
+        method: "POST",
+        headers: {"Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest"},
+        body: JSON.stringify(body)
+      });
+      alert(r.ok ? "تم" : (await r.json().catch(()=>({}))).message || r.status);
+      await refresh();
+    });
+    refresh();
+  </script>
+</body>
+</html>

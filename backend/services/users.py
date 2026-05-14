@@ -13,6 +13,12 @@ from flask import Blueprint, request, jsonify, session
 from backend.core.auth import role_required, hash_password
 from backend.database.database import DB_FILE, is_postgresql
 from backend.repositories import instructors_repo, students_repo, users_repo
+from backend.core.department_scope_policy import (
+    assert_actor_may_manage_user_links,
+    derive_users_department_id_for_storage,
+    resolve_users_list_scope,
+    target_username_allowed_for_actor,
+)
 from .utilities import get_connection
 from .mailer import send_email
 
@@ -72,6 +78,14 @@ def _admin_storage_meta(*, verbose_storage_hint: bool = False) -> dict:
 def _user_dict_from_row(row) -> Optional[dict]:
     if not row:
         return None
+    dept_out = None
+    if len(row) > 6:
+        dr = row["department_id"] if hasattr(row, "keys") and "department_id" in row.keys() else row[6]
+        if dr not in (None, ""):
+            try:
+                dept_out = int(dr)
+            except (TypeError, ValueError):
+                dept_out = None
     return {
         "username": row[0],
         "role": row[1],
@@ -79,6 +93,7 @@ def _user_dict_from_row(row) -> Optional[dict]:
         "instructor_id": row[3],
         "is_supervisor": int(row[4] or 0),
         "is_active": int(row[5] or 1),
+        "department_id": dept_out,
     }
 
 
@@ -263,6 +278,22 @@ def invite_user():
             username = _unique_username(conn, base)
 
         # أنشئ/حدّث المستخدم بكلمة مرور عشوائية غير معروفة (سيتم تعيينها عبر الدعوة)
+        ok_inv, msg_inv = assert_actor_may_manage_user_links(
+            conn,
+            actor_username=_current_actor(),
+            target_role=role,
+            student_id=student_id,
+            instructor_id=instructor_id,
+            users_department_id=None,
+        )
+        if not ok_inv:
+            return jsonify({"status": "error", "message": msg_inv}), 403
+        dept_store = derive_users_department_id_for_storage(
+            conn,
+            role=role,
+            student_id=student_id,
+            instructor_id=instructor_id,
+        )
         pw_hash = hash_password(secrets.token_urlsafe(24))
         try:
             existing = cur.execute(
@@ -274,19 +305,19 @@ def invite_user():
                 cur.execute(
                     """
                     UPDATE users
-                    SET password_hash = ?, role = ?, student_id = ?, instructor_id = ?, is_supervisor = COALESCE(is_supervisor,0), is_active = 1
+                    SET password_hash = ?, role = ?, student_id = ?, instructor_id = ?, is_supervisor = COALESCE(is_supervisor,0), is_active = 1, department_id = ?
                     WHERE username = ?
                     """,
-                    (pw_hash, role, student_id, instructor_id, existing_username),
+                    (pw_hash, role, student_id, instructor_id, dept_store, existing_username),
                 )
                 username = existing_username
             else:
                 cur.execute(
                     """
-                    INSERT INTO users (username, password_hash, role, student_id, instructor_id, is_supervisor, is_active)
-                    VALUES (?,?,?,?,?,0,1)
+                    INSERT INTO users (username, password_hash, role, student_id, instructor_id, is_supervisor, is_active, department_id)
+                    VALUES (?,?,?,?,?,0,1,?)
                     """,
-                    (username, pw_hash, role, student_id, instructor_id),
+                    (username, pw_hash, role, student_id, instructor_id, dept_store),
                 )
         except Exception as write_err:
             conn.rollback()
@@ -370,6 +401,8 @@ def resend_invite():
         ).fetchone()
         if not row:
             return jsonify({"status": "error", "message": "المستخدم غير موجود"}), 404
+        if not target_username_allowed_for_actor(conn, _current_actor(), username):
+            return jsonify({"status": "error", "message": "غير مسموح بإعادة إرسال الدعوة لهذا المستخدم."}), 403
 
         role = (row["role"] if hasattr(row, "keys") and "role" in row.keys() else row[1]) or ""
         student_id = (row["student_id"] if hasattr(row, "keys") and "student_id" in row.keys() else row[2]) or None
@@ -450,6 +483,8 @@ def invite_status():
         ).fetchone()
         if not user_row:
             return jsonify({"status": "error", "message": "المستخدم غير موجود"}), 404
+        if not target_username_allowed_for_actor(conn, _current_actor(), username):
+            return jsonify({"status": "error", "message": "غير مسموح بعرض حالة الدعوة لهذا المستخدم."}), 403
 
         inv_rows = cur.execute(
             """
@@ -656,8 +691,17 @@ def list_users():
     """
     إرجاع قائمة المستخدمين (بدون كلمات المرور الصريحة).
     """
+    actor = _current_actor()
     with get_connection() as conn:
-        items = users_repo.fetch_all_users_ordered(conn)
+        mode, dep_id = resolve_users_list_scope(conn, actor)
+        if mode == "none":
+            items = users_repo.fetch_all_users_ordered(conn)
+        elif mode == "empty":
+            items = []
+        else:
+            items = users_repo.fetch_all_users_ordered(
+                conn, scope_mode="department", scope_department_id=dep_id
+            )
     role_norm = _normalize_role(_current_role())
     _diag_env = (os.environ.get("SHOW_USER_LIST_STORAGE_DIAGNOSTICS") or "").strip().lower()
     verbose_meta = _diag_env in ("1", "true", "yes") and role_norm == "admin_main"
@@ -680,8 +724,17 @@ def list_users():
 @role_required("admin_main", "head_of_department")
 def users_validation_report():
     """تقرير فحص سلامة ربط المستخدمين حسب الدور (للتحقق اليدوي)."""
+    actor = _current_actor()
     with get_connection() as conn:
-        rows = users_repo.fetch_all_users_ordered(conn)
+        mode, dep_id = resolve_users_list_scope(conn, actor)
+        if mode == "none":
+            rows = users_repo.fetch_all_users_ordered(conn)
+        elif mode == "empty":
+            rows = []
+        else:
+            rows = users_repo.fetch_all_users_ordered(
+                conn, scope_mode="department", scope_department_id=dep_id
+            )
 
     issues = []
     for u in rows:
@@ -823,6 +876,27 @@ def add_user():
                         return jsonify({"status": "error", "message": "رئيس القسم يمكنه تعديل الأساتذة فقط"}), 403
                     if role not in ("instructor", "head_of_department"):
                         return jsonify({"status": "error", "message": "لا يمكن تغيير دور الأستاذ إلى هذا الدور من قبل رئيس القسم"}), 403
+            ud_existing = (before_user.get("department_id") if before_user else None)
+            ok_manage, msg_manage = assert_actor_may_manage_user_links(
+                conn,
+                actor_username=actor,
+                target_role=role,
+                student_id=student_id,
+                instructor_id=instructor_id,
+                users_department_id=ud_existing,
+            )
+            if not ok_manage:
+                return jsonify({"status": "error", "message": msg_manage}), 403
+            if existing and not target_username_allowed_for_actor(conn, actor, username):
+                return jsonify(
+                    {"status": "error", "message": "لا يمكن تعديل هذا المستخدم خارج نطاق القسم الحالي."}
+                ), 403
+            dept_store = derive_users_department_id_for_storage(
+                conn,
+                role=role,
+                student_id=student_id,
+                instructor_id=instructor_id,
+            )
             try:
                 if existing:
                     # تحديث مستخدم موجود
@@ -832,20 +906,20 @@ def add_user():
                             cur.execute(
                                 """
                                 UPDATE users
-                                SET password_hash = ?, role = ?, student_id = ?, instructor_id = ?, is_supervisor = ?, is_active = ?
+                                SET password_hash = ?, role = ?, student_id = ?, instructor_id = ?, is_supervisor = ?, is_active = ?, department_id = ?
                                 WHERE username = ?
                                 """,
-                                (pw_hash, role, student_id, instructor_id, is_supervisor, is_active, username),
+                                (pw_hash, role, student_id, instructor_id, is_supervisor, is_active, dept_store, username),
                             )
                             affected_rows = cur.rowcount if cur.rowcount is not None else affected_rows
                         else:
                             cur.execute(
                                 """
                                 UPDATE users
-                                SET role = ?, student_id = ?, instructor_id = ?, is_supervisor = ?, is_active = ?
+                                SET role = ?, student_id = ?, instructor_id = ?, is_supervisor = ?, is_active = ?, department_id = ?
                                 WHERE username = ?
                                 """,
-                                (role, student_id, instructor_id, is_supervisor, is_active, username),
+                                (role, student_id, instructor_id, is_supervisor, is_active, dept_store, username),
                             )
                             affected_rows = cur.rowcount if cur.rowcount is not None else affected_rows
                     else:
@@ -853,10 +927,10 @@ def add_user():
                         cur.execute(
                             """
                             UPDATE users
-                            SET role = ?, instructor_id = ?, is_supervisor = ?
+                            SET role = ?, instructor_id = ?, is_supervisor = ?, department_id = ?
                             WHERE username = ?
                             """,
-                            (role, instructor_id, is_supervisor, username),
+                            (role, instructor_id, is_supervisor, dept_store, username),
                         )
                         affected_rows = cur.rowcount if cur.rowcount is not None else affected_rows
                 else:
@@ -876,10 +950,10 @@ def add_user():
                     pw_hash = hash_password(password)
                     cur.execute(
                         """
-                        INSERT INTO users (username, password_hash, role, student_id, instructor_id, is_supervisor, is_active)
-                        VALUES (?,?,?,?,?,?,?)
+                        INSERT INTO users (username, password_hash, role, student_id, instructor_id, is_supervisor, is_active, department_id)
+                        VALUES (?,?,?,?,?,?,?,?)
                         """,
-                        (username, pw_hash, role, student_id, instructor_id, is_supervisor, is_active),
+                        (username, pw_hash, role, student_id, instructor_id, is_supervisor, is_active, dept_store),
                     )
                     affected_rows = cur.rowcount if cur.rowcount is not None else affected_rows
             except Exception as write_err:
@@ -972,6 +1046,8 @@ def delete_user():
         )
     actor = _current_actor()
     with get_connection() as conn:
+        if not target_username_allowed_for_actor(conn, actor, username):
+            return jsonify({"status": "error", "message": "غير مسموح بحذف هذا المستخدم خارج نطاق القسم الحالي."}), 403
         cur = conn.cursor()
         before = cur.execute(
             "SELECT username, role, student_id, instructor_id, "
@@ -1009,6 +1085,8 @@ def toggle_active():
     actor_role = _normalize_role(_current_role())
     actor = _current_actor()
     with get_connection() as conn:
+        if not target_username_allowed_for_actor(conn, actor, username):
+            return jsonify({"status": "error", "message": "غير مسموح بتعديل هذا المستخدم خارج نطاق القسم الحالي."}), 403
         cur = conn.cursor()
         row = cur.execute(
             "SELECT username, role, student_id, instructor_id, COALESCE(is_supervisor,0), COALESCE(is_active,1) "
@@ -1061,6 +1139,8 @@ def set_supervisor():
         ).fetchone()
         if not row:
             return jsonify({"status": "error", "message": "المستخدم غير موجود"}), 404
+        if not target_username_allowed_for_actor(conn, actor, username):
+            return jsonify({"status": "error", "message": "غير مسموح بتعديل الإشراف لهذا المستخدم خارج نطاق القسم."}), 403
         before_user = _user_dict_from_row(row)
         role = _normalize_role(row[1])
         if role not in ("instructor", "head_of_department"):

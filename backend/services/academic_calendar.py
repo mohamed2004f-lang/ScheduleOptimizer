@@ -1,8 +1,8 @@
 import datetime
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, session
 
-from backend.core.auth import login_required, role_required
+from backend.core.auth import login_required, role_required, _normalize_role
 from .utilities import get_connection
 
 academic_calendar_bp = Blueprint("academic_calendar", __name__)
@@ -130,7 +130,7 @@ def get_items():
 
 @academic_calendar_bp.route("/items", methods=["POST"])
 @login_required
-@role_required("admin")
+@role_required("admin_main")
 def upsert_items():
     """
     Save dates for items. Admin only.
@@ -141,6 +141,9 @@ def upsert_items():
         - item_no: إذا كان 0 أو غير موجود -> يُنشأ عنصر جديد (عنوان مخصص)
     """
     data = request.get_json(force=True) or {}
+    role_n = _normalize_role((session.get("user_role") or "").strip())
+    if role_n != "admin_main":
+        return jsonify({"status": "error", "message": "FORBIDDEN", "code": "FORBIDDEN"}), 403
     academic_year = (data.get("academic_year") or "").strip()
     term_raw = (data.get("term") or "").strip()
     term, titles = _term_titles(term_raw)
