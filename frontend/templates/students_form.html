@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8">
@@ -85,6 +85,7 @@
       <div class="card chart-container">
         <div class="card-body">
           <h6>قائمة الطلبة</h6>
+          <input type="search" id="studentsListSearch" class="form-control form-control-sm mb-2" placeholder="بحث بالرقم أو الاسم…" style="max-width:320px;">
           <div class="row g-2 align-items-end mb-2">
             <div class="col-md-3">
               <label class="form-label small mb-0">من يُعرض في القائمة</label>
@@ -114,6 +115,7 @@
             </div>
           </div>
           <div id="studentsList" class="small mono"></div>
+          <div id="studentsPagination" class="list-pagination-bar"></div>
           <div class="mt-3">
             <a href="/" class="btn btn-outline-secondary btn-sm">العودة</a>
             <a href="/registrations_form" class="btn btn-primary btn-sm ms-2">تسجيل مواد الطلبة</a>
@@ -229,6 +231,106 @@
 
   <script>
   let STUDENTS_VIEW_ONLY = false;
+  let STUDENTS_ALL = [];
+  let STUDENTS_PAGE = 1;
+  const STUDENTS_PAGE_SIZE = 25;
+
+  function renderStudentsPagination(total, pages) {
+    const bar = document.getElementById('studentsPagination');
+    if (!bar) return;
+    bar.innerHTML = `
+      <span class="text-muted">عرض ${total ? ((STUDENTS_PAGE-1)*STUDENTS_PAGE_SIZE+1) : 0}–${Math.min(STUDENTS_PAGE*STUDENTS_PAGE_SIZE, total)} من ${total}</span>
+      <div class="page-btns">
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-pg="prev" ${STUDENTS_PAGE<=1?'disabled':''}>السابق</button>
+        <span class="align-self-center px-1">${STUDENTS_PAGE} / ${pages}</span>
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-pg="next" ${STUDENTS_PAGE>=pages?'disabled':''}>التالي</button>
+      </div>`;
+    bar.querySelector('[data-pg="prev"]')?.addEventListener('click', () => { if (STUDENTS_PAGE>1) { STUDENTS_PAGE--; renderStudentsPage(); } });
+    bar.querySelector('[data-pg="next"]')?.addEventListener('click', () => { if (STUDENTS_PAGE<pages) { STUDENTS_PAGE++; renderStudentsPage(); } });
+  }
+
+  function renderStudentsPage() {
+    const el = document.getElementById('studentsList');
+    const q = (document.getElementById('studentsListSearch')?.value || '').trim().toLowerCase();
+    let filtered = STUDENTS_ALL;
+    if (q) {
+      filtered = STUDENTS_ALL.filter(s =>
+        `${s.student_id} ${s.student_name || ''}`.toLowerCase().includes(q)
+      );
+    }
+    const total = filtered.length;
+    const pages = Math.max(1, Math.ceil(total / STUDENTS_PAGE_SIZE) || 1);
+    if (STUDENTS_PAGE > pages) STUDENTS_PAGE = pages;
+    const slice = filtered.slice((STUDENTS_PAGE - 1) * STUDENTS_PAGE_SIZE, STUDENTS_PAGE * STUDENTS_PAGE_SIZE);
+    if (!total) {
+      el.textContent = 'لا يوجد طلاب مطابقون للفلتر.';
+      renderStudentsPagination(0, 1);
+      return;
+    }
+    el.innerHTML = '';
+    const ul = document.createElement('ul');
+    ul.className = 'mb-0 list-unstyled';
+    slice.forEach(s => {
+      const li = document.createElement('li');
+      li.className = 'py-1 d-flex align-items-center';
+      const span = document.createElement('span');
+      span.className = 'flex-grow-1';
+      const status = s.enrollment_status || 'active';
+      const statusMap = {
+        'active': { label: 'مسجَّل', cls: 'bg-success-subtle text-success' },
+        'withdrawn': { label: 'سحب الملف', cls: 'bg-secondary text-white' },
+        'suspended': { label: 'موقوف قيده', cls: 'bg-warning text-dark' },
+        'graduated': { label: 'خريج', cls: 'bg-info text-dark' },
+      };
+      const stInfo = statusMap[status] || statusMap['active'];
+      span.textContent = `${s.student_id} — ${s.student_name || ''} `;
+      const badge = document.createElement('span');
+      badge.className = `badge rounded-pill ms-1 ${stInfo.cls}`;
+      badge.textContent = stInfo.label;
+      span.appendChild(badge);
+      const plan = (s.graduation_plan || '').trim();
+      if (plan) {
+        const planBadge = document.createElement('span');
+        planBadge.className = 'badge rounded-pill ms-1 bg-secondary';
+        planBadge.textContent = plan === '150' ? '150 وحدة' : plan === '155' ? '155 وحدة' : plan;
+        span.appendChild(planBadge);
+      }
+      const jTerm = (s.join_term || '').trim();
+      const jYear = (s.join_year || '').trim();
+      if (jTerm || jYear) {
+        const joinBadge = document.createElement('span');
+        joinBadge.className = 'badge rounded-pill ms-1 bg-info text-dark';
+        joinBadge.textContent = [jTerm, jYear].filter(Boolean).join(' ');
+        span.appendChild(joinBadge);
+      }
+      const btnGroup = document.createElement('div');
+      if (!STUDENTS_VIEW_ONLY) {
+        const editBtn = document.createElement('button');
+        editBtn.className = 'btn btn-sm btn-outline-primary me-1';
+        editBtn.type = 'button';
+        editBtn.textContent = 'تعديل';
+        editBtn.addEventListener('click', () => openEditStudent(s));
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn btn-sm btn-danger me-1';
+        delBtn.type = 'button';
+        delBtn.textContent = 'حذف';
+        delBtn.addEventListener('click', () => deleteStudent(s.student_id));
+        const statusBtn = document.createElement('button');
+        statusBtn.className = 'btn btn-sm btn-outline-secondary';
+        statusBtn.type = 'button';
+        statusBtn.textContent = 'حالة القيد';
+        statusBtn.addEventListener('click', () => openStatusStudent(s));
+        btnGroup.appendChild(editBtn);
+        btnGroup.appendChild(delBtn);
+        btnGroup.appendChild(statusBtn);
+      }
+      li.appendChild(span);
+      li.appendChild(btnGroup);
+      ul.appendChild(li);
+    });
+    el.appendChild(ul);
+    renderStudentsPagination(total, pages);
+  }
 
   async function bootstrapStudentsRoleView() {
     try {
@@ -280,78 +382,13 @@
       const q = params.toString();
       if (q) url += '?' + q;
       const r = await fetch(url);
-      const arr = r.ok ? await r.json() : [];
-      const el = document.getElementById('studentsList');
-      if(!arr.length){ el.textContent = 'لا يوجد طلاب مطابقون للفلتر.'; return; }
-      el.innerHTML = '';
-      const ul = document.createElement('ul');
-      ul.className = 'mb-0 list-unstyled';
-      arr.forEach(s => {
-        const li = document.createElement('li');
-        li.className = 'py-1 d-flex align-items-center';
-        const span = document.createElement('span');
-        span.className = 'flex-grow-1';
-        const status = s.enrollment_status || 'active';
-        const statusMap = {
-          'active': { label: 'مسجَّل', cls: 'bg-success-subtle text-success' },
-          'withdrawn': { label: 'سحب الملف', cls: 'bg-secondary text-white' },
-          'suspended': { label: 'موقوف قيده', cls: 'bg-warning text-dark' },
-          'graduated': { label: 'خريج', cls: 'bg-info text-dark' },
-        };
-        const stInfo = statusMap[status] || statusMap['active'];
-        span.textContent = `${s.student_id} — ${s.student_name || ''} `;
-        const badge = document.createElement('span');
-        badge.className = `badge rounded-pill ms-1 ${stInfo.cls}`;
-        badge.textContent = stInfo.label;
-        span.appendChild(badge);
-        const plan = (s.graduation_plan || '').trim();
-        if (plan) {
-          const planBadge = document.createElement('span');
-          planBadge.className = 'badge rounded-pill ms-1 bg-secondary';
-          planBadge.textContent = plan === '150' ? '150 وحدة' : plan === '155' ? '155 وحدة' : plan;
-          span.appendChild(planBadge);
-        }
-        const jTerm = (s.join_term || '').trim();
-        const jYear = (s.join_year || '').trim();
-        if (jTerm || jYear) {
-          const joinBadge = document.createElement('span');
-          joinBadge.className = 'badge rounded-pill ms-1 bg-info text-dark';
-          joinBadge.textContent = [jTerm, jYear].filter(Boolean).join(' ');
-          span.appendChild(joinBadge);
-        }
-        const btnGroup = document.createElement('div');
-        if (!STUDENTS_VIEW_ONLY) {
-          const editBtn = document.createElement('button');
-          editBtn.className = 'btn btn-sm btn-outline-primary me-1';
-          editBtn.type = 'button';
-          editBtn.textContent = 'تعديل';
-          editBtn.addEventListener('click', () => openEditStudent(s));
-
-          const delBtn = document.createElement('button');
-          delBtn.className = 'btn btn-sm btn-danger me-1';
-          delBtn.type = 'button';
-          delBtn.textContent = 'حذف';
-          delBtn.addEventListener('click', () => deleteStudent(s.student_id));
-
-          const statusBtn = document.createElement('button');
-          statusBtn.className = 'btn btn-sm btn-outline-secondary';
-          statusBtn.type = 'button';
-          statusBtn.textContent = 'حالة القيد';
-          statusBtn.addEventListener('click', () => openStatusStudent(s));
-
-          btnGroup.appendChild(editBtn);
-          btnGroup.appendChild(delBtn);
-          btnGroup.appendChild(statusBtn);
-        }
-
-        li.appendChild(span);
-        li.appendChild(btnGroup);
-        ul.appendChild(li);
-      });
-      el.appendChild(ul);
+      STUDENTS_ALL = r.ok ? await r.json() : [];
+      STUDENTS_PAGE = 1;
+      renderStudentsPage();
     } catch (err) {
       console.error(err);
       document.getElementById('studentsList').textContent = 'حدث خطأ أثناء جلب الطلبة.';
+      window.showToast?.('حدث خطأ أثناء جلب الطلبة', 'danger');
     }
   }
 
@@ -435,11 +472,11 @@
         body: JSON.stringify({student_id: sid})
       });
       const j = await resp.json().catch(()=>null);
-      alert(j?.message || (resp.ok ? 'تم' : 'خطأ'));
+      window.showToast?.(j?.message || (resp.ok ? 'تم الحذف' : 'خطأ'), resp.ok ? 'success' : 'danger');
       await loadStudents();
     } catch (err) {
       console.error(err);
-      alert('خطأ بالاتصال بالخادم.');
+      window.showToast?.('خطأ بالاتصال بالخادم', 'danger');
     }
   }
 
@@ -455,7 +492,7 @@
         const sid = document.getElementById('student_id').value.trim();
         const name = document.getElementById('student_name').value.trim();
         if(!sid){
-          document.getElementById('st_msg').innerHTML = '<div class="alert alert-warning p-1">أدخل الرقم الدراسي</div>';
+          window.showToast?.('أدخل الرقم الدراسي', 'warning');
           return;
         }
         const plan = (document.getElementById('student_graduation_plan')||{}).value || '';
@@ -464,18 +501,20 @@
         try {
           const resp = await fetch('/add_student',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({student_id:sid,student_name:name,graduation_plan:plan,join_term:joinTerm,join_year:joinYear})});
           const j = await resp.json();
-          document.getElementById('st_msg').innerHTML = `<div class="alert ${resp.ok? 'alert-success':'alert-danger'} p-1">${j.message||j.status}</div>`;
           if(resp.ok){
+            window.showToast?.(j.message || 'تمت إضافة الطالب', 'success');
             document.getElementById('student_id').value='';
             document.getElementById('student_name').value='';
             const planEl = document.getElementById('student_graduation_plan'); if(planEl) planEl.value='';
             const jt = document.getElementById('student_join_term'); if(jt) jt.value='';
             const jy = document.getElementById('student_join_year'); if(jy) jy.value='';
             await loadStudents();
+          } else {
+            window.showToast?.(j.message || j.status || 'خطأ', 'danger');
           }
         } catch (err) {
           console.error(err);
-          document.getElementById('st_msg').innerHTML = '<div class="alert alert-danger p-1">خطأ في الاتصال بالخادم.</div>';
+          window.showToast?.('خطأ في الاتصال بالخادم', 'danger');
         }
       });
     }
@@ -519,6 +558,15 @@
 
     const btnApplyFilter = document.getElementById('btnApplyFilter');
     if (btnApplyFilter) btnApplyFilter.addEventListener('click', () => loadStudents());
+
+    const stSearch = document.getElementById('studentsListSearch');
+    if (stSearch && !stSearch.dataset.pgBound) {
+      stSearch.dataset.pgBound = '1';
+      stSearch.addEventListener('input', () => {
+        STUDENTS_PAGE = 1;
+        renderStudentsPage();
+      });
+    }
 
     const filterScope = document.getElementById('filter_list_scope');
     if (filterScope) filterScope.addEventListener('change', () => { updateExportLinks(); loadStudents(); });
@@ -615,11 +663,11 @@
       const res = await fetch('/students/import/excel', { method:'POST', body: data });
       const j = await res.json();
       if(res.ok){
-        msg.innerHTML = `<div class="alert alert-success p-1">تم استيراد ${j.imported} سجل</div>`;
+        window.showToast?.(`تم استيراد ${j.imported} سجل`, 'success');
         await loadStudents();
         form.reset();
       } else {
-        msg.innerHTML = `<div class="alert alert-danger p-1">خطأ: ${j.message || 'فشل الاستيراد'}</div>`;
+        window.showToast?.(j.message || 'فشل الاستيراد', 'danger');
       }
     } catch (err) {
       console.error(err);
@@ -629,6 +677,5 @@
   </script>
 
   <!-- Bootstrap JS for modal -->
-  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
 </body>
 </html>

@@ -270,6 +270,46 @@ CREATE TABLE IF NOT EXISTS schedule (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS conflict_report (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id TEXT NOT NULL,
+    day TEXT,
+    time TEXT,
+    conflicting_sections TEXT,
+    detected_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS optimized_schedule (
+    section_id INTEGER PRIMARY KEY,
+    course_name TEXT,
+    day TEXT,
+    time TEXT,
+    room TEXT,
+    instructor TEXT,
+    semester TEXT
+);
+
+CREATE TABLE IF NOT EXISTS proposed_moves (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    section_id INTEGER,
+    orig_day TEXT,
+    orig_time TEXT,
+    new_day TEXT,
+    new_time TEXT,
+    move_cost REAL
+);
+
+CREATE TABLE IF NOT EXISTS optimize_jobs (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'pending',
+    params_json TEXT,
+    result_json TEXT,
+    error_message TEXT,
+    created_at TEXT,
+    started_at TEXT,
+    finished_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS faculty_section_axis_status (
     section_id INTEGER NOT NULL,
     instructor_id INTEGER NOT NULL,
@@ -731,7 +771,7 @@ def _setup_shared_db():
         return
 
     global _shared_conn
-    _shared_conn = sqlite3.connect(":memory:")
+    _shared_conn = sqlite3.connect(":memory:", check_same_thread=False)
     _shared_conn.row_factory = sqlite3.Row
     _shared_conn.execute("PRAGMA foreign_keys = ON")
     _shared_conn.executescript(_MINIMAL_TABLES)
@@ -774,6 +814,7 @@ def _setup_shared_db():
         "backend.services.students",
         "backend.services.courses",
         "backend.services.schedule",
+        "backend.jobs.optimize_jobs",
         "backend.services.exams",
         "backend.services.admin",
         "backend.services.enrollment",

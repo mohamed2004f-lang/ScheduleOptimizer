@@ -313,7 +313,7 @@
 </div>
 
 <!-- Charts Section -->
-<div class="row">
+<div class="row" id="analyticsChartsSection">
     <!-- Student Distribution Chart -->
     <div class="col-lg-6">
         <div class="chart-container">
@@ -415,7 +415,12 @@
     }
   }
 
+  let _analyticsChartsDone = false;
+  let _analyticsStudentsCache = [];
+
   function setupChartsFromPerformance(students) {
+    if (_analyticsChartsDone) return;
+    _analyticsChartsDone = true;
     const ctxDist = document.getElementById('studentDistributionChart').getContext('2d');
     const ctxGpa = document.getElementById('gpaDistributionChart').getContext('2d');
     const ctxTrend = document.getElementById('performanceTrendChart').getContext('2d');
@@ -607,7 +612,24 @@
         hour: '2-digit', minute: '2-digit'
       });
 
-      setupChartsFromPerformance(students);
+      _analyticsStudentsCache = students;
+
+      const chartSection = document.getElementById('analyticsChartsSection');
+      const renderCharts = () => setupChartsFromPerformance(_analyticsStudentsCache);
+
+      if (chartSection && typeof IntersectionObserver !== 'undefined') {
+        const obs = new IntersectionObserver((entries) => {
+          if (entries[0] && entries[0].isIntersecting) {
+            renderCharts();
+            obs.disconnect();
+          }
+        }, { rootMargin: '120px' });
+        obs.observe(chartSection);
+      } else if (typeof requestIdleCallback !== 'undefined') {
+        requestIdleCallback(renderCharts, { timeout: 1500 });
+      } else {
+        setTimeout(renderCharts, 100);
+      }
     } catch (e) {
       console.error('Analytics load error', e);
       if (typeof showToast === 'function') {

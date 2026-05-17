@@ -23,22 +23,22 @@
     <section class="kpi-grid">
       <div class="kpi-card">
         <div class="kpi-title">الطلبة النشطون</div>
-        <div id="studentCount" class="kpi-value">—</div>
+        <div id="studentCount" class="kpi-value skeleton">—</div>
         <p class="kpi-desc">عدد الطلبة بحالة قيد فعالة</p>
       </div>
       <div class="kpi-card">
         <div class="kpi-title">خطط قيد المراجعة</div>
-        <div id="pendingPlansCount" class="kpi-value">—</div>
+        <div id="pendingPlansCount" class="kpi-value skeleton">—</div>
         <p class="kpi-desc">خطط Pending تحتاج قراراً</p>
       </div>
       <div class="kpi-card">
         <div class="kpi-title">مقررات عالية المخاطرة</div>
-        <div id="highRiskCoursesCount" class="kpi-value">—</div>
+        <div id="highRiskCoursesCount" class="kpi-value skeleton">—</div>
         <p class="kpi-desc">مقررات بعدد غير منجزة مرتفع</p>
       </div>
       <div class="kpi-card kpi-danger">
         <div class="kpi-title">مشاكل التعارض الحالية</div>
-        <div id="conflictCount" class="kpi-value">—</div>
+        <div id="conflictCount" class="kpi-value skeleton">—</div>
         <p class="kpi-desc">تعارضات الجدول والامتحانات</p>
       </div>
     </section>
@@ -192,7 +192,8 @@ async function approvePlanFromDashboard(id){
     window.showToast ? window.showToast(okMsg, 'success') : alert(okMsg);
   } else {
     const detail = formatEnrollmentApproveError(r.json);
-    alert(detail);
+    if (window.showToast) window.showToast(detail.split('\n')[0], 'danger', 8000);
+    else alert(detail);
   }
 }
 
@@ -245,32 +246,51 @@ async function loadRiskCourses(){
   return summary;
 }
 
+function setKpiValue(id, value) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.remove('skeleton');
+  el.textContent = value;
+}
+
 async function loadDashboard(){
-  // استخدم /admin/summary كمصدر أساسي للإحصائيات
-  const summary = await fetchJSON('/admin/summary');
+  const [summaryRes, conflictsRes, pendingRes, riskRes] = await Promise.all([
+    fetchJSON('/admin/summary'),
+    fetchJSON('/results_data'),
+    fetchJSON('/enrollment/plans'),
+    fetchJSON('/students/failed_courses_report?min_failed=1'),
+  ]);
+
   let recent = [];
-  if (summary.ok && summary.json && summary.json.data) {
-    const d = summary.json.data;
-    // عدد الطلبة
-    document.getElementById('studentCount').textContent = d.students ?? '0';
-    // عدد مشاكل التعارض الحالية
-    const totalConflicts = (d.conflict_report_rows || 0) + (d.exam_conflicts_rows || 0);
-    document.getElementById('conflictCount').textContent = totalConflicts;
-    if (Array.isArray(summary.json.recent)) {
-      recent = summary.json.recent;
-    }
+  let summaryData = {};
+  if (summaryRes.ok && summaryRes.json && summaryRes.json.data) {
+    summaryData = summaryRes.json.data;
+    setKpiValue('studentCount', summaryData.students ?? '0');
+    const totalConflicts = (summaryData.conflict_report_rows || 0) + (summaryData.exam_conflicts_rows || 0);
+    setKpiValue('conflictCount', totalConflicts);
+    if (Array.isArray(summaryRes.json.recent)) recent = summaryRes.json.recent;
   } else {
-    document.getElementById('studentCount').textContent = '0';
-    document.getElementById('pendingPlansCount').textContent = '0';
-    document.getElementById('highRiskCoursesCount').textContent = '0';
-    document.getElementById('conflictCount').textContent = '0';
+    setKpiValue('studentCount', '0');
+    setKpiValue('conflictCount', '0');
   }
 
-  // conflict_report القديم (إن وُجد) لعرض قائمة تفصيلية بسيطة
-  const c = await fetchJSON('/results_data');
   let conflicts = [];
-  if(c.ok && c.json && c.json.conflict_report) conflicts = c.json.conflict_report;
-  document.getElementById('conflictCount').textContent = conflicts.length || document.getElementById('conflictCount').textContent;
+  if (conflictsRes.ok && conflictsRes.json && conflictsRes.json.conflict_report) {
+    conflicts = conflictsRes.json.conflict_report;
+  }
+  if (conflicts.length) {
+    setKpiValue('conflictCount', conflicts.length);
+  }
+
+  const plans = (pendingRes.ok && Array.isArray(pendingRes.json?.plans))
+    ? pendingRes.json.plans.filter(p => p.status === 'Pending') : [];
+  setKpiValue('pendingPlansCount', plans.length);
+  renderPendingPlans(plans);
+
+  const riskSummary = (riskRes.ok && Array.isArray(riskRes.json?.summary)) ? riskRes.json.summary : [];
+  setKpiValue('highRiskCoursesCount', riskSummary.length);
+  renderRiskCourses(riskSummary);
+
   const confList = document.getElementById('conflictList');
   confList.innerHTML = '';
   conflicts.slice(0,10).forEach(row=>{
@@ -279,7 +299,6 @@ async function loadDashboard(){
     confList.appendChild(item);
   });
 
-  // recent changes: استخدم activity_log القادم من /admin/summary
   const rec = [];
   if (recent.length) {
     recent.forEach(r => {
@@ -295,13 +314,11 @@ async function loadDashboard(){
   if(rec.length===0) rc.innerHTML = '<li class="text-muted">لا توجد تعديلات حديثة</li>';
   else rec.forEach(x=>{ const li=document.createElement('li'); li.textContent = x; rc.appendChild(li); });
 
-  // حمّل القوائم التنفيذية
-  await loadPendingPlans();
-  const riskSummary = await loadRiskCourses();
+  requestAnimationFrame(() => renderDashboardCharts(summaryData, riskSummary, plans.length));
+}
 
-  // إنشاء الرسوم البيانية باستخدام Chart.js
+function renderDashboardCharts(d, riskSummary, pendingCount) {
   try {
-    const d = summary.ok && summary.json && summary.json.data ? summary.json.data : {};
     const countCtx = document.getElementById('countChart').getContext('2d');
     new Chart(countCtx, {
       type: 'bar',
@@ -315,7 +332,7 @@ async function loadDashboard(){
             d.schedule_rows || 0,
             d.registrations || 0,
             d.grades || 0,
-            Number(document.getElementById('pendingPlansCount').textContent || 0)
+            pendingCount || 0
           ],
           backgroundColor: 'rgba(30, 111, 184, 0.5)',
           borderColor: 'rgba(7, 47, 95, 0.9)',

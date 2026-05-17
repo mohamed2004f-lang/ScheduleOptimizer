@@ -167,6 +167,11 @@
       rows: [], // {department_id, label}
     };
 
+    function uiToast(msg, type = "info") {
+      if (typeof window.showToast === "function") window.showToast(msg, type);
+      else alert(msg);
+    }
+
     function escapeHtml(s) {
       const d = document.createElement("div");
       d.textContent = s == null ? "" : String(s);
@@ -592,7 +597,7 @@
       const is_active = document.getElementById("inst-active").checked;
 
       if (!name) {
-        alert("الاسم مطلوب");
+        uiToast("الاسم مطلوب", "warning");
         return;
       }
 
@@ -627,14 +632,15 @@
         });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) {
-          alert(data.message || "فشل الحفظ");
+          uiToast(data.message || "فشل الحفظ", "danger");
           return;
         }
+        uiToast("تم حفظ بيانات العضو", "success");
         resetForm();
         await loadInstructors();
       } catch (e) {
         console.error(e);
-        alert("حدث خطأ غير متوقع أثناء الحفظ");
+        uiToast("حدث خطأ غير متوقع أثناء الحفظ", "danger");
       }
     });
 
@@ -679,13 +685,14 @@
           });
           const data = await resp.json().catch(() => ({}));
           if (!resp.ok) {
-            alert(data.message || "فشل الحذف");
+            uiToast(data.message || "فشل الحذف", "danger");
             return;
           }
+          uiToast("تم حذف العضو", "success");
           await loadInstructors();
         } catch (e) {
           console.error(e);
-          alert("حدث خطأ غير متوقع أثناء الحذف");
+          uiToast("حدث خطأ غير متوقع أثناء الحذف", "danger");
         }
       }
     });
@@ -693,18 +700,18 @@
     document.getElementById("btn-extra-dept-add")?.addEventListener("click", () => {
       const pick = document.getElementById("extra-dept-pick");
       if (!pick || !pick.value) {
-        alert("اختر قسماً من القائمة");
+        uiToast("اختر قسماً من القائمة", "warning");
         return;
       }
       const did = parseInt(pick.value, 10);
       const primaryId = getPrimaryDepartmentId();
       if (primaryId !== null && did === primaryId) {
-        alert("هذا هو القسم الرئيسي بالفعل. اختر قسماً متعاوناً مختلفاً.");
+        uiToast("هذا هو القسم الرئيسي بالفعل. اختر قسماً متعاوناً مختلفاً.", "warning");
         return;
       }
       const label = (pick.selectedOptions[0] && pick.selectedOptions[0].textContent) || "";
       if (EXTRA_DEPT_ROWS.some((r) => r.department_id === did)) {
-        alert("القسم موجود مسبقاً ضمن الأقسام المتعاونة.");
+        uiToast("القسم موجود مسبقاً ضمن الأقسام المتعاونة.", "warning");
         return;
       }
       EXTRA_DEPT_ROWS.push({ department_id: did, label });
@@ -714,16 +721,16 @@
     document.getElementById("btnMcdAdd")?.addEventListener("click", () => {
       const pick = document.getElementById("mcdDeptPick");
       if (!pick || !pick.value) {
-        alert("اختر قسماً من القائمة");
+        uiToast("اختر قسماً من القائمة", "warning");
         return;
       }
       const did = parseInt(pick.value, 10);
       if (MCD_STATE.primaryDeptId !== null && did === MCD_STATE.primaryDeptId) {
-        alert("لا يمكن إضافة القسم الرئيسي ضمن الأقسام المتعاونة.");
+        uiToast("لا يمكن إضافة القسم الرئيسي ضمن الأقسام المتعاونة.", "warning");
         return;
       }
       if (MCD_STATE.rows.some((r) => r.department_id === did)) {
-        alert("هذا القسم موجود مسبقاً.");
+        uiToast("هذا القسم موجود مسبقاً.", "warning");
         return;
       }
       const label = (pick.selectedOptions[0] && pick.selectedOptions[0].textContent) || "";
@@ -749,14 +756,15 @@
         });
         const data = await r.json().catch(() => ({}));
         if (!r.ok) {
-          alert(data.message || "فشل حفظ الأقسام المتعاونة");
+          uiToast(data.message || "فشل حفظ الأقسام المتعاونة", "danger");
           return;
         }
+        uiToast("تم حفظ الأقسام المتعاونة", "success");
         hideManageModalElement();
         await loadInstructors();
       } catch (e) {
         console.error(e);
-        alert("حدث خطأ غير متوقع أثناء الحفظ");
+        uiToast("حدث خطأ غير متوقع أثناء الحفظ", "danger");
       }
     });
 
@@ -786,6 +794,9 @@
         console.error(e);
       }
       await loadInstructors();
+      if (window.initInteractiveTable) {
+        initInteractiveTable("instructors-table", { placeholder: "بحث في قائمة الأساتذة…" });
+      }
 
       const m = document.getElementById("manageCoopDeptModal");
       if (m) {

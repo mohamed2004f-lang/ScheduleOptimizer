@@ -12,6 +12,8 @@
   --text:#0f172a;
   --muted:#64748b;
   --border:rgba(15,23,42,0.10);
+  --topbar-bg: linear-gradient(90deg, #072f5f, #0e4a8a);
+  --card-shadow: 0 4px 15px rgba(0, 51, 102, 0.06);
 
   --radius-lg:14px;
   --radius-md:12px;
@@ -19,11 +21,59 @@
   --shadow-md:0 10px 30px rgba(2,6,23,.10);
 }
 
+html[data-theme="dark"]{
+  --bg:#0f1419;
+  --surface:#1a2332;
+  --text:#e8edf4;
+  --muted:#94a3b8;
+  --border:rgba(148,163,184,0.18);
+  --topbar-bg: linear-gradient(90deg, #0a1628, #152a45);
+  --card-shadow: 0 4px 15px rgba(0, 0, 0, 0.35);
+  color-scheme: dark;
+}
+
 html, body { height:100%; }
 body{
-  font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+  font-family: 'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif;
   background: var(--bg);
   color: var(--text);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+html[data-theme="dark"] .card,
+html[data-theme="dark"] .filter-section,
+html[data-theme="dark"] .chart-container{
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--card-shadow);
+}
+
+html[data-theme="dark"] .table-light{
+  --bs-table-bg: #243044;
+  --bs-table-color: var(--text);
+}
+
+html[data-theme="dark"] .form-control,
+html[data-theme="dark"] .form-select{
+  background-color: #243044;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+html[data-theme="dark"] .text-muted,
+html[data-theme="dark"] .small-muted{
+  color: var(--muted) !important;
+}
+
+html[data-theme="dark"] .app-navbar,
+html[data-theme="dark"] .main-nav{
+  background: var(--surface) !important;
+}
+
+html[data-theme="dark"] .bg-light,
+html[data-theme="dark"] .bg-light-subtle,
+html[data-theme="dark"] .bg-body-tertiary{
+  background-color: var(--surface) !important;
 }
 
 /* utility */
@@ -60,6 +110,8 @@ body{
   color:#fff;
   padding: 12px 16px;
   box-shadow: 0 12px 24px rgba(2,6,23,.12);
+  position: relative;
+  z-index: 1040;
 }
 .app-topbar-inner{
   position: relative;
@@ -109,6 +161,8 @@ body{
 .app-navbar{
   background: var(--surface);
   border-bottom: 1px solid var(--border);
+  position: relative;
+  z-index: 1035;
 }
 .app-navbar .nav-link{
   color: var(--brand-900) !important;
@@ -124,6 +178,9 @@ body{
 .app-navbar .nav-link.active{
   background: rgba(214,161,42,.18);
   color: var(--brand-900) !important;
+}
+.app-navbar .dropdown-menu{
+  z-index: 1050;
 }
 
 /* ============================================
@@ -717,6 +774,67 @@ body{
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
 }
 
+#toastContainer .toast{
+  min-width: 280px;
+  max-width: 420px;
+}
+
+.btn-theme-toggle{
+  border: 1px solid rgba(255,255,255,0.35);
+  color: #fff;
+  background: rgba(255,255,255,0.08);
+  padding: 0.25rem 0.65rem;
+  font-size: 0.85rem;
+  border-radius: 8px;
+}
+.btn-theme-toggle:hover{
+  background: rgba(255,255,255,0.18);
+  color: #fff;
+}
+
+/* Skeleton loaders */
+.skeleton{
+  display: inline-block;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #e8ecf1 25%, #f4f6f9 50%, #e8ecf1 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.2s ease-in-out infinite;
+}
+html[data-theme="dark"] .skeleton{
+  background: linear-gradient(90deg, #243044 25%, #2d3d54 50%, #243044 75%);
+  background-size: 200% 100%;
+}
+.kpi-value.skeleton{ width: 3.5rem; height: 2rem; vertical-align: middle; }
+@keyframes skeleton-shimmer{
+  0%{ background-position: 200% 0; }
+  100%{ background-position: -200% 0; }
+}
+
+.table-toolbar{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+.table-toolbar .table-search{
+  max-width: 280px;
+}
+.table-sortable th[data-sort-col]{
+  cursor: pointer;
+  user-select: none;
+}
+.table-sortable th[data-sort-col]:hover{
+  background: rgba(13, 110, 253, 0.08);
+}
+.table-sortable th[data-sort-dir]::after{
+  content: attr(data-sort-dir);
+  opacity: 0.5;
+  font-size: 0.7em;
+  margin-inline-start: 4px;
+}
+
 /* ============================================
    تحسينات البحث والفلترة
    ============================================ */
@@ -920,18 +1038,14 @@ body{
     width: 100%;
     height: 100%;
     background: rgba(255, 255, 255, 0.9);
-    display: flex;
+    display: none;
     justify-content: center;
     align-items: center;
     z-index: 9999;
-    visibility: hidden;
-    opacity: 0;
     pointer-events: none;
-    transition: opacity 0.2s ease, visibility 0.2s ease;
 }
 .loading-overlay.active {
-    visibility: visible;
-    opacity: 1;
+    display: flex;
     pointer-events: auto;
 }
 
@@ -947,6 +1061,124 @@ body{
 @keyframes spin {
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
+}
+
+/* ============================================
+   Wizard + معاينة (index)
+   ============================================ */
+.wizard-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.wizard-step {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.wizard-step.active {
+  border-color: var(--brand-600);
+  color: var(--brand-900);
+  font-weight: 700;
+  background: rgba(30, 111, 184, 0.08);
+}
+.wizard-step.done {
+  border-color: var(--accent);
+  color: var(--brand-700);
+}
+.wizard-num {
+  display: inline-flex;
+  width: 1.35rem;
+  height: 1.35rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--brand-900);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.preview-badge {
+  padding: 0.25rem 0.65rem;
+  border-radius: 8px;
+  background: rgba(30, 111, 184, 0.1);
+  font-size: 0.9rem;
+}
+.data-preview-panel {
+  border-right: 4px solid var(--brand-600);
+}
+
+/* ============================================
+   جدول الجدولة — موبايل
+   ============================================ */
+.timetable-scroll-hint {
+  position: relative;
+}
+.timetable-scroll-hint::after {
+  content: '← اسحب لعرض الجدول';
+  display: none;
+  position: absolute;
+  bottom: 4px;
+  left: 8px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  pointer-events: none;
+}
+@media (max-width: 767.98px) {
+  .timetable-scroll-hint::after { display: block; }
+  .timetable-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+  }
+  .timetable-wrapper .timetable {
+    min-width: 720px;
+  }
+}
+.schedule-day-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 0.75rem;
+  overflow: hidden;
+}
+.schedule-day-card .day-title {
+  background: var(--brand-900);
+  color: #fff;
+  padding: 0.4rem 0.75rem;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+.schedule-slot-item {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+.schedule-slot-item:last-child { border-bottom: none; }
+
+/* ============================================
+   ترقيم القوائم
+   ============================================ */
+.list-pagination-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+}
+.list-pagination-bar .page-btns {
+  display: flex;
+  gap: 0.25rem;
 }
 
 /* ============================================

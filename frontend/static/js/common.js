@@ -47,60 +47,129 @@
 })();
 
 // ============================================
-// Toast Notifications
+// Theme (Dark Mode)
 // ============================================
+const THEME_STORAGE_KEY = 'scheduleOptimizerTheme';
+
+function normalizeToastType(type) {
+    const t = String(type || 'info').toLowerCase();
+    if (t === 'error' || t === 'err') return 'danger';
+    if (t === 'warn') return 'warning';
+    if (['success', 'danger', 'warning', 'info', 'primary'].includes(t)) return t;
+    return 'info';
+}
+
+function getThemePreference() {
+    try {
+        return localStorage.getItem(THEME_STORAGE_KEY) || 'light';
+    } catch (_e) {
+        return 'light';
+    }
+}
+
+function applyTheme(theme) {
+    const t = theme === 'dark' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', t);
+    try { localStorage.setItem(THEME_STORAGE_KEY, t); } catch (_e) { /* ignore */ }
+    const btn = document.getElementById('themeToggleBtn');
+    if (btn) {
+        const isDark = t === 'dark';
+        btn.setAttribute('aria-pressed', isDark ? 'true' : 'false');
+        btn.title = isDark ? 'الوضع الفاتح' : 'الوضع الليلي';
+        btn.innerHTML = isDark
+            ? '<i class="fa-solid fa-sun" aria-hidden="true"></i>'
+            : '<i class="fa-solid fa-moon" aria-hidden="true"></i>';
+    }
+}
+
+function toggleTheme() {
+    applyTheme(getThemePreference() === 'dark' ? 'light' : 'dark');
+}
+
+function initTheme() {
+    let theme = getThemePreference();
+    if (theme !== 'dark' && theme !== 'light' && window.matchMedia) {
+        theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    applyTheme(theme);
+    const btn = document.getElementById('themeToggleBtn');
+    if (btn && !btn.dataset.bound) {
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', toggleTheme);
+    }
+}
+
+// ============================================
+// Toast Notifications (موحّد — Bootstrap)
+// ============================================
+function getToastContainer() {
+    return document.getElementById('toastContainer')
+        || document.getElementById('toast-container');
+}
+
 function showToast(message, type = 'info', duration = 5000) {
-    const toastContainer = getOrCreateToastContainer();
-    
+    const kind = normalizeToastType(type);
+    const container = getToastContainer();
+    if (!container) {
+        console.warn('toastContainer missing', message);
+        return null;
+    }
+
+    const icons = {
+        success: 'check-circle',
+        danger: 'exclamation-circle',
+        warning: 'exclamation-triangle',
+        info: 'info-circle',
+        primary: 'bell'
+    };
+    const titles = {
+        success: 'نجح',
+        danger: 'خطأ',
+        warning: 'تحذير',
+        info: 'معلومة',
+        primary: 'تنبيه'
+    };
+    const bgClass = {
+        success: 'text-bg-success',
+        danger: 'text-bg-danger',
+        warning: 'text-bg-warning',
+        info: 'text-bg-primary',
+        primary: 'text-bg-primary'
+    }[kind] || 'text-bg-primary';
+
     const toast = document.createElement('div');
-    toast.className = `alert alert-${type} alert-dismissible fade show toast-notification`;
+    toast.className = `toast align-items-center border-0 ${bgClass}`;
     toast.setAttribute('role', 'alert');
-    toast.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        z-index: 9999;
-        min-width: 300px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        animation: slideInRight 0.3s ease-out;
-    `;
-    
+    toast.setAttribute('aria-live', 'assertive');
+    toast.setAttribute('aria-atomic', 'true');
+    const safeMsg = String(message == null ? '' : message)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
     toast.innerHTML = `
-        <strong>${getToastTitle(type)}</strong> ${message}
-        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-    `;
-    
-    toastContainer.appendChild(toast);
-    
-    // إزالة تلقائية بعد المدة المحددة
-    setTimeout(() => {
-        toast.classList.remove('show');
-        setTimeout(() => toast.remove(), 300);
-    }, duration);
-    
+        <div class="d-flex">
+            <div class="toast-body">
+                <i class="fa-solid fa-${icons[kind] || 'info-circle'} me-2" aria-hidden="true"></i>
+                <strong class="me-1">${titles[kind] || 'معلومة'}:</strong>${safeMsg}
+            </div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="إغلاق"></button>
+        </div>`;
+    container.appendChild(toast);
+
+    if (window.bootstrap && typeof window.bootstrap.Toast !== 'undefined') {
+        const bsToast = window.bootstrap.Toast.getOrCreateInstance(toast, { delay: duration });
+        bsToast.show();
+        toast.addEventListener('hidden.bs.toast', () => toast.remove());
+    } else {
+        toast.classList.add('show');
+        setTimeout(() => toast.remove(), duration);
+    }
     return toast;
 }
 
-function getOrCreateToastContainer() {
-    let container = document.getElementById('toast-container');
-    if (!container) {
-        container = document.createElement('div');
-        container.id = 'toast-container';
-        container.style.cssText = 'position: fixed; top: 20px; right: 20px; z-index: 9999;';
-        document.body.appendChild(container);
-    }
-    return container;
-}
-
-function getToastTitle(type) {
-    const titles = {
-        'success': '✅ نجح:',
-        'error': '❌ خطأ:',
-        'warning': '⚠️ تحذير:',
-        'info': 'ℹ️ معلومات:'
-    };
-    return titles[type] || '';
-}
+window.showToast = showToast;
+window.initTheme = initTheme;
+window.toggleTheme = toggleTheme;
 
 // ============================================
 // Loading States
@@ -323,6 +392,117 @@ function filterTable(tableId, searchInputId) {
         row.style.display = text.includes(filter) ? '' : 'none';
     });
 }
+
+function getCsrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? (meta.getAttribute('content') || '') : '';
+}
+
+/** رؤوس JSON + CSRF لطلبات fetch الصريحة */
+function jsonApiHeaders(extra = {}) {
+    const headers = { 'Content-Type': 'application/json', ...extra };
+    const token = getCsrfToken();
+    if (token) headers['X-CSRFToken'] = token;
+    return headers;
+}
+
+/** بحث فوري في جدول HTML مع ترتيب بالنقر على رأس العمود */
+function initInteractiveTable(tableId, options = {}) {
+    const table = document.getElementById(tableId);
+    if (!table) return;
+    const enableSearch = options.search !== false;
+    const placeholder = options.placeholder || 'بحث في الجدول…';
+    const toolbarId = options.toolbarId || `${tableId}-toolbar`;
+
+    let toolbar = document.getElementById(toolbarId);
+    if (enableSearch && !toolbar) {
+        toolbar = document.createElement('div');
+        toolbar.id = toolbarId;
+        toolbar.className = 'table-toolbar';
+        toolbar.innerHTML = `
+            <input type="search" class="form-control form-control-sm table-search" id="${tableId}-search"
+                   placeholder="${placeholder}" autocomplete="off" aria-label="بحث">`;
+        table.parentNode.insertBefore(toolbar, table);
+    }
+
+    table.classList.add('table-sortable');
+    if (enableSearch) {
+        const searchInput = document.getElementById(`${tableId}-search`);
+        const filterRows = () => {
+            const q = (searchInput && searchInput.value || '').trim().toLowerCase();
+            table.querySelectorAll('tbody tr').forEach(row => {
+                const text = (row.textContent || '').toLowerCase();
+                row.style.display = !q || text.includes(q) ? '' : 'none';
+            });
+        };
+        if (searchInput && !searchInput.dataset.bound) {
+            searchInput.dataset.bound = '1';
+            searchInput.addEventListener('input', debounce(filterRows, 200));
+        }
+    }
+
+    table.querySelectorAll('thead th').forEach((th, colIndex) => {
+        if (th.dataset.sortCol != null) return;
+        th.dataset.sortCol = String(colIndex);
+        th.addEventListener('click', () => {
+            const tbody = table.querySelector('tbody');
+            if (!tbody) return;
+            const rows = Array.from(tbody.querySelectorAll('tr')).filter(r => r.style.display !== 'none');
+            const asc = th.dataset.sortDir !== 'asc';
+            const numeric = th.dataset.sortNumeric === '1';
+            rows.sort((a, b) => {
+                const aText = (a.cells[colIndex] && a.cells[colIndex].textContent || '').trim();
+                const bText = (b.cells[colIndex] && b.cells[colIndex].textContent || '').trim();
+                if (numeric) {
+                    return asc ? (parseFloat(aText) || 0) - (parseFloat(bText) || 0)
+                        : (parseFloat(bText) || 0) - (parseFloat(aText) || 0);
+                }
+                return asc ? aText.localeCompare(bText, 'ar') : bText.localeCompare(aText, 'ar');
+            });
+            rows.forEach(r => tbody.appendChild(r));
+            table.querySelectorAll('thead th[data-sort-dir]').forEach(h => {
+                if (h !== th) delete h.dataset.sortDir;
+            });
+            th.dataset.sortDir = asc ? '▲' : '▼';
+        });
+    });
+}
+
+/** بحث في قائمة (ul/li أو عناصر مخصّصة) */
+function initListSearch(containerId, options = {}) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    const itemSelector = options.itemSelector || 'li';
+    const inputId = options.inputId || `${containerId}-search`;
+    let input = document.getElementById(inputId);
+    if (!input) {
+        input = document.createElement('input');
+        input.type = 'search';
+        input.id = inputId;
+        input.className = 'form-control form-control-sm mb-2';
+        input.placeholder = options.placeholder || 'بحث…';
+        input.style.maxWidth = options.maxWidth || '320px';
+        container.parentNode.insertBefore(input, container);
+    }
+    if (input.dataset.bound) return;
+    input.dataset.bound = '1';
+    input.addEventListener('input', debounce(() => {
+        const q = input.value.trim().toLowerCase();
+        container.querySelectorAll(itemSelector).forEach(item => {
+            const text = (item.textContent || '').toLowerCase();
+            item.style.display = !q || text.includes(q) ? '' : 'none';
+        });
+    }, 200));
+}
+
+window.getCsrfToken = getCsrfToken;
+window.jsonApiHeaders = jsonApiHeaders;
+window.initInteractiveTable = initInteractiveTable;
+window.initListSearch = initListSearch;
+
+document.addEventListener('DOMContentLoaded', () => {
+    initTheme();
+});
 
 // ============================================
 // Auto-save

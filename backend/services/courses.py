@@ -95,6 +95,17 @@ def _safe_weight(raw, fallback: float | None = None):
 @login_required
 def list_courses():
     # يرجع جدول courses، وإذا غير موجود يرجع من schedule
+    try:
+        from backend.core.cache_setup import cache, list_cache_key
+
+        if cache:
+            _ck = list_cache_key("courses")
+            _hit = cache.get(_ck)
+            if _hit is not None:
+                return _hit
+    except Exception:
+        pass
+
     role_n = _normalize_role((session.get("user_role") or "").strip())
     with get_connection() as conn:
         scope_dep = _effective_department_scope_id(conn)
@@ -217,7 +228,15 @@ def list_courses():
                 setattr(c, "midterm_weight", None)
                 setattr(c, "final_exam_weight", None)
                 courses.append(c)
-    return jsonify([c.__dict__ for c in courses])
+    resp = jsonify([c.__dict__ for c in courses])
+    try:
+        from backend.core.cache_setup import cache, list_cache_key
+
+        if cache:
+            cache.set(list_cache_key("courses"), resp)
+    except Exception:
+        pass
+    return resp
 
 @courses_bp.route("/add", methods=["POST"])
 @role_required("admin", "admin_main", "head_of_department")
@@ -328,6 +347,12 @@ def add_course():
                     (cname, code, units),
                 )
         conn.commit()
+    try:
+        from backend.core.cache_setup import invalidate_list_prefix
+
+        invalidate_list_prefix("courses")
+    except Exception:
+        pass
     return jsonify({"status": "ok", "message": "تم إضافة المقرر"}), 200
 
 @courses_bp.route("/update", methods=["POST"])

@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/static/css/ui-consistency.css">
 <link rel="stylesheet" href="/static/vendor/fontawesome/all.min.css">
 <meta name="csrf-token" content="{{ csrf_token() }}">
-<script src="/static/js/common.js?v=20260418"></script>
+<script src="/static/js/common.js?v=20260520"></script>
 
 <!-- Loading Overlay -->
 <div class="loading-overlay" id="loadingOverlay" aria-hidden="true">
@@ -46,7 +46,10 @@
       </a>
 
       <!-- compact logout control on the right -->
-      <div class="app-actions">
+      <div class="app-actions d-flex align-items-center gap-2">
+        <button type="button" class="btn-theme-toggle" id="themeToggleBtn" aria-label="تبديل الوضع الليلي" title="الوضع الليلي">
+          <i class="fa-solid fa-moon" aria-hidden="true"></i>
+        </button>
         <button class="btn btn-logout" type="button" id="logoutBtn" onclick="handleLogout()">خروج</button>
       </div>
     </div>
@@ -236,6 +239,45 @@
     </div>
   </div>
 </nav>
+
+<script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+<script>
+  (function initNavShell() {
+    function cleanupUiBlockers() {
+      var lo = document.getElementById('loadingOverlay');
+      if (lo) {
+        lo.classList.remove('active');
+        lo.setAttribute('aria-hidden', 'true');
+      }
+      document.querySelectorAll('.modal-backdrop').forEach(function (el) { el.remove(); });
+      document.body.classList.remove('modal-open');
+      document.body.style.removeProperty('overflow');
+      document.body.style.removeProperty('padding-right');
+    }
+    function initNavDropdowns() {
+      if (!window.bootstrap || typeof window.bootstrap.Dropdown === 'undefined') return;
+      document.querySelectorAll('.app-navbar [data-bs-toggle="dropdown"]').forEach(function (el) {
+        try { bootstrap.Dropdown.getOrCreateInstance(el); } catch (_e) { /* ignore */ }
+      });
+    }
+    window.cleanupUiBlockers = cleanupUiBlockers;
+    window.initNavDropdowns = initNavDropdowns;
+    function onReady() {
+      cleanupUiBlockers();
+      initNavDropdowns();
+      if (typeof window.initTheme === 'function') window.initTheme();
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', onReady);
+    } else {
+      onReady();
+    }
+    window.addEventListener('pageshow', function () {
+      cleanupUiBlockers();
+      initNavDropdowns();
+    });
+  })();
+</script>
 
 <script>
   // دالة تسجيل الخروج
@@ -728,51 +770,33 @@
         var el = document.getElementById('loadingOverlay');
         if (el) { el.classList.remove('active'); el.setAttribute('aria-hidden', 'true'); }
       };
-      window.showToast = function(message, type) {
-        type = type || 'info';
-        var container = document.getElementById('toastContainer');
-        if (!container) return;
-        var id = 'toast-' + Date.now();
-        var icon = type === 'success' ? 'check-circle' : (type === 'danger' ? 'exclamation-circle' : 'info-circle');
-        var title = type === 'success' ? 'نجح' : (type === 'danger' ? 'خطأ' : 'معلومة');
-        var toast = document.createElement('div');
-        toast.id = id;
-        toast.className = 'toast show';
-        toast.setAttribute('role', 'alert');
-        toast.innerHTML = '<div class="toast-header"><strong class="me-auto"><i class="fa-solid fa-' + icon + ' me-2"></i>' + title + '</strong><button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Close"></button></div><div class="toast-body">' + (message || '') + '</div>';
-        container.appendChild(toast);
-        var bsToast = bootstrap.Toast.getOrCreateInstance(toast, { delay: 5000 });
-        bsToast.show();
-        toast.addEventListener('hidden.bs.toast', function() { toast.remove(); });
-      };
+      if (typeof window.cleanupUiBlockers === 'function') window.cleanupUiBlockers();
+      if (typeof window.initNavDropdowns === 'function') window.initNavDropdowns();
 
-      // Fallback: ensure dropdown menus work only when Bootstrap dropdown is unavailable
+      // Fallback: قوائم منسدلة يدوياً فقط إذا Bootstrap غير متاح
       try {
-        // إذا Bootstrap متاح، لا نطبّق fallback حتى لا يتعارض مع سلوكه الطبيعي
-        if (window.bootstrap && typeof window.bootstrap.Dropdown !== 'undefined') {
-          return;
-        }
-        const toggles = document.querySelectorAll('.navbar .dropdown-toggle');
-        const closeAll = () => {
-          document.querySelectorAll('.navbar .dropdown-menu.show').forEach(m => m.classList.remove('show'));
-          document.querySelectorAll('.navbar .dropdown-toggle[aria-expanded="true"]').forEach(t => t.setAttribute('aria-expanded', 'false'));
-        };
-        toggles.forEach(toggle => {
-          toggle.addEventListener('click', function(ev){
-            // If Bootstrap handled it, this is harmless; otherwise we provide manual toggle.
-            ev.preventDefault();
-            ev.stopPropagation();
-            const menu = this.parentElement ? this.parentElement.querySelector('.dropdown-menu') : null;
-            if(!menu) return;
-            const isOpen = menu.classList.contains('show');
-            closeAll();
-            if(!isOpen){
-              menu.classList.add('show');
-              this.setAttribute('aria-expanded', 'true');
-            }
+        if (!(window.bootstrap && typeof window.bootstrap.Dropdown !== 'undefined')) {
+          const toggles = document.querySelectorAll('.navbar .dropdown-toggle');
+          const closeAll = () => {
+            document.querySelectorAll('.navbar .dropdown-menu.show').forEach(m => m.classList.remove('show'));
+            document.querySelectorAll('.navbar .dropdown-toggle[aria-expanded="true"]').forEach(t => t.setAttribute('aria-expanded', 'false'));
+          };
+          toggles.forEach(toggle => {
+            toggle.addEventListener('click', function(ev){
+              ev.preventDefault();
+              ev.stopPropagation();
+              const menu = this.parentElement ? this.parentElement.querySelector('.dropdown-menu') : null;
+              if(!menu) return;
+              const isOpen = menu.classList.contains('show');
+              closeAll();
+              if(!isOpen){
+                menu.classList.add('show');
+                this.setAttribute('aria-expanded', 'true');
+              }
+            });
           });
-        });
-        document.addEventListener('click', function(){ closeAll(); });
+          document.addEventListener('click', function(){ closeAll(); });
+        }
       } catch(e) {
         // ignore dropdown fallback errors
       }

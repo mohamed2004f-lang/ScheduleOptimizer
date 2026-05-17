@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8" />
@@ -335,7 +335,17 @@ async function fetchJSON(url, opts){
   const j = await r.json().catch(()=>null);
   return { ok: r.ok, status: r.status, json: j };
 }
-function setMsg(html, kind="info"){ const el = document.getElementById('msg'); if(!el) return; el.innerHTML = `<div class="alert alert-${kind} p-2 mb-0">${html}</div>`; setTimeout(()=>{ if(el) el.innerHTML=''; }, 4000); }
+function setMsg(html, kind="info"){
+  const el = document.getElementById('msg');
+  if (el) {
+    el.innerHTML = `<div class="alert alert-${kind} p-2 mb-0">${html}</div>`;
+    setTimeout(() => { if (el) el.innerHTML = ''; }, 4000);
+  }
+  if (window.showToast && kind !== 'info') {
+    const plain = String(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (plain) window.showToast(plain, kind === 'danger' ? 'danger' : kind);
+  }
+}
 function escape(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
 
 function syncImportFields(){
@@ -1108,8 +1118,6 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
 })();
 </script>
 
-<!-- Bootstrap JS for modal -->
-<script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 

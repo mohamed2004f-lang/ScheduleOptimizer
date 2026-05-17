@@ -2622,94 +2622,35 @@ def update_grade():
         # اسم المقرر الذي سنحفظ به بعد التصحيح (قد يختلف عن الاسم القادم من الواجهة)
         course_name_final = course
 
-        # إذا اختار المستخدم مقرراً جديداً من قائمة المقررات، نعتمد الاسم والرمز والوحدات من جدول المقررات
         if new_course_name:
             course_name_final = new_course_name
-            course_row = cur.execute(
-                "SELECT course_code, units FROM courses WHERE course_name = ? LIMIT 1",
-                (new_course_name,),
-            ).fetchone()
-            if course_row:
-                try:
-                    code_val = course_row["course_code"] if "course_code" in course_row.keys() else (course_row[0] if len(course_row) > 0 else "")
-                    course_code_to_use = (code_val or "") or course_code_to_use
-                except Exception:
-                    try:
-                        course_code_to_use = (course_row[0] or "") or course_code_to_use
-                    except Exception:
-                        pass
-                try:
-                    u_val = course_row["units"] if "units" in course_row.keys() else (course_row[1] if len(course_row) > 1 else None)
-                    if u_val is not None:
-                        units_to_use = int(u_val)
-                except Exception:
-                    try:
-                        if len(course_row) > 1 and course_row[1] is not None:
-                            units_to_use = int(course_row[1])
-                    except Exception:
-                        pass
 
-        # في حال أدخل المستخدم رمزاً جديداً، نبحث عنه في جدول المقررات ونصحح الاسم/الوحدات
-        if new_course_code:
-            # أولاً نحاول المطابقة على رمز المقرر
-            course_row = cur.execute(
-                "SELECT course_name, course_code, units FROM courses WHERE course_code = ? LIMIT 1",
-                (new_course_code,),
-            ).fetchone()
-            if course_row:
-                # اعتماد الاسم والرمز والوحدات الرسمية من جدول المقررات
-                try:
-                    course_name_final = course_row[0]
-                except Exception:
-                    course_name_final = course_row["course_name"]
-                try:
-                    course_code_to_use = course_row[1]
-                except Exception:
-                    course_code_to_use = course_row["course_code"]
-                try:
-                    units_to_use = int(course_row[2]) if course_row[2] is not None else units_to_use
-                except Exception:
-                    units_to_use = units_to_use
-            else:
-                # تشديد الربط: لا نقبل رمزاً غير موجود في الدليل
-                return jsonify({"status": "error", "message": f"رمز المقرر غير موجود في دليل المقررات: {new_course_code}"}), 400
-
-        # إذا لم يوجد لدينا رمز حتى الآن، نحاول جلبه بالاعتماد على اسم المقرر (كما في السابق)
-        if not course_code_to_use:
-            course_row = cur.execute(
-                "SELECT course_code, units FROM courses WHERE course_name = ? LIMIT 1",
-                (course_name_final,),
-            ).fetchone()
-            if course_row:
-                try:
-                    course_code_to_use = (
-                        course_row[0]
-                        if len(course_row) > 0
-                        else (course_row["course_code"] if "course_code" in course_row.keys() else "")
-                    )
-                except Exception:
-                    course_code_to_use = (
-                        course_row["course_code"] if "course_code" in course_row.keys() else ""
-                    )
-                try:
-                    units_to_use = (
-                        int(course_row[1])
-                        if len(course_row) > 1 and course_row[1] is not None
-                        else (
-                            int(course_row["units"])
-                            if "units" in course_row.keys() and course_row["units"] is not None
-                            else units_to_use
-                        )
-                    )
-                except Exception:
+        # ربط الاسم/الرمز بدليل المقررات (تطبيع GE 102 ≡ GE102؛ لا مطابقة حرفية فقط)
+        catalog_name = (course_name_final or "").strip()
+        catalog_code = (new_course_code or course_code_to_use or "").strip()
+        if catalog_name or catalog_code:
+            try:
+                resolved = _resolve_catalog_course(
+                    cur,
+                    course_name=catalog_name,
+                    course_code=catalog_code,
+                )
+            except ValueError as first_err:
+                if catalog_code and catalog_name:
                     try:
-                        units_to_use = (
-                            int(course_row["units"])
-                            if "units" in course_row.keys() and course_row["units"] is not None
-                            else units_to_use
+                        resolved = _resolve_catalog_course(
+                            cur,
+                            course_name=catalog_name,
+                            course_code="",
                         )
-                    except Exception:
-                        pass
+                    except ValueError:
+                        return jsonify({"status": "error", "message": str(first_err)}), 400
+                else:
+                    return jsonify({"status": "error", "message": str(first_err)}), 400
+            course_name_final = resolved["course_name"]
+            course_code_to_use = resolved["course_code"]
+            if resolved.get("units"):
+                units_to_use = int(resolved["units"])
 
         # إذا تغير اسم المقرر النهائي عن الاسم المسجل حالياً، نحذف السطر القديم لتفادي ازدواجية (اسم قديم + اسم صحيح)
         if course_name_final != course:

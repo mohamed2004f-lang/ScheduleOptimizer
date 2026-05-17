@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8"/>
@@ -319,6 +319,11 @@ let regPrereqTimer = null;
 
 const REG_FILTERS_LS = 'registrations_form_filters_v2';
 
+function uiToast(msg, type = 'info') {
+  if (typeof window.showToast === 'function') window.showToast(msg, type);
+  else alert(msg);
+}
+
 function buildRegPrereqTableHtml(coursesObj){
   if(!coursesObj || typeof coursesObj !== 'object'){
     return '<p class="text-muted small mb-0">لا توجد بيانات.</p>';
@@ -559,9 +564,9 @@ async function updateEnrollmentStatus(student, newStatus){
   });
   if (res.ok) {
     await loadData();
-    alert('تم تحديث الحالة بنجاح.');
+    uiToast('تم تحديث الحالة بنجاح.', 'success');
   } else {
-    alert(res.json?.message || `فشل تحديث الحالة (${res.status})`);
+    uiToast(res.json?.message || `فشل تحديث الحالة (${res.status})`, 'danger');
   }
 }
 
@@ -1150,7 +1155,7 @@ async function openEditModal(student){
 document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
   if(!editing) return;
   if (CURRENT_ROLE === 'student'){
-    alert('حفظ التغييرات من هذه النافذة متاح للإدارة فقط.');
+    uiToast('حفظ التغييرات من هذه النافذة متاح للإدارة فقط.', 'warning');
     return;
   }
   const saveBtn = document.getElementById('btnSaveEdit');
@@ -1183,11 +1188,11 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
   let prereqOverrideReason = '';
   if (out){
     if (!(String(CURRENT_ROLE || '').trim().toLowerCase() === 'admin' || String(CURRENT_ROLE || '').trim().toLowerCase() === 'admin_main' || String(CURRENT_ROLE || '').trim().toLowerCase() === 'head_of_department')){
-      alert(`لا يمكن الحفظ لأن إجمالي الوحدات (${totalUnits}) خارج 12-19.`);
+      uiToast(`لا يمكن الحفظ لأن إجمالي الوحدات (${totalUnits}) خارج 12-19.`, 'warning');
       return;
     }
     if (!overrideReason){
-      alert('أدخل سبب التجاوز للحفظ كأدمن.');
+      uiToast('أدخل سبب التجاوز للحفظ كأدمن.', 'warning');
       if (reasonWrap) reasonWrap.style.display = '';
       if (reasonEl) reasonEl.focus();
       return;
@@ -1200,7 +1205,7 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
   const hasBlocked = Object.keys(blockedNow).length > 0;
   if (hasBlocked){
     if (!canOverridePrereqRegistrations()){
-      alert('لا يمكن الحفظ لأن بعض المتطلبات غير مستوفاة.');
+      uiToast('لا يمكن الحفظ لأن بعض المتطلبات غير مستوفاة.', 'warning');
       return;
     }
     const c1 = confirm('تنبيه: توجد متطلبات غير مستوفاة. هل تريد متابعة الحفظ كتجاوز إداري؟');
@@ -1209,7 +1214,7 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
     if (!c2) return;
     const rsn = prompt('أدخل سبب تجاوز المتطلبات (إلزامي):', '') || '';
     if (!rsn.trim()){
-      alert('سبب التجاوز مطلوب.');
+      uiToast('سبب التجاوز مطلوب.', 'warning');
       return;
     }
     prereqOverride = true;
@@ -1337,9 +1342,9 @@ async function deleteAllRegistrations(student){
   });
   if(res.ok){
     try { await loadData(); } catch(e) { student.registrations = []; renderStudents(STUDENTS); }
-    alert('تم حذف التسجيلات وتحديث القائمة.');
+    uiToast('تم حذف التسجيلات وتحديث القائمة.', 'success');
   } else {
-    alert(res.json?.message || `فشل الحذف (${res.status})`);
+    uiToast(res.json?.message || `فشل الحذف (${res.status})`, 'danger');
   }
 }
 
@@ -1347,7 +1352,7 @@ async function deleteAllRegistrations(student){
 async function migrateStudentRegistrations(student){
   const sid = student.student_id || student.id || student.studentId;
   if(!sid){
-    alert('لا يوجد رقم طالب صالح لهذا السطر.');
+    uiToast('لا يوجد رقم طالب صالح لهذا السطر.', 'warning');
     return;
   }
   if(!(student.registrations||[]).length){
@@ -1370,19 +1375,19 @@ async function migrateStudentRegistrations(student){
     body: JSON.stringify({ student_id: sid, semester: (semester||'').trim(), year: (year||'').trim(), changed_by: 'registrations-ui' })
   });
   if(res.ok){
-    alert(res.json?.message || 'تم ترحيل المقررات إلى كشف الدرجات وتم حذف التسجيلات الفعلية لهذا الطالب.');
+    uiToast(res.json?.message || 'تم ترحيل المقررات إلى كشف الدرجات وتم حذف التسجيلات الفعلية لهذا الطالب.', 'success');
     // بعد الترحيل، نعيد تحميل البيانات حتى تُزال التسجيلات من القائمة
     await loadData();
   } else {
-    alert(res.json?.message || `فشل الترحيل (${res.status})`);
+    uiToast(res.json?.message || `فشل الترحيل (${res.status})`, 'danger');
   }
 }
 
 // طلب إضافة مقرر من الطالب (لا يعدل التسجيل مباشرة)
 async function requestAddCourseForStudent(student){
   const sid = student.student_id || student.id || student.studentId;
-  if (!sid){ alert('لا يوجد رقم طالب صالح.'); return; }
-  if (!COURSES.length){ alert('لا توجد مقررات متاحة حالياً.'); return; }
+  if (!sid){ uiToast('لا يوجد رقم طالب صالح.', 'warning'); return; }
+  if (!COURSES.length){ uiToast('لا توجد مقررات متاحة حالياً.', 'warning'); return; }
 
   const names = COURSES.map(c=>c.course_name).filter(Boolean);
   const courseName = prompt('أدخل اسم المقرر المطلوب إضافته تماماً كما هو في قائمة المقررات:\n' + names.join('\n'));
@@ -1395,16 +1400,16 @@ async function requestAddCourseForStudent(student){
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
   });
   if (r.ok){
-    alert((r.json && r.json.message) ? r.json.message : 'تم إرسال طلب الإضافة للمراجعة.');
+    uiToast((r.json && r.json.message) ? r.json.message : 'تم إرسال طلب الإضافة للمراجعة.', 'success');
   } else {
-    alert((r.json && r.json.message) ? r.json.message : 'فشل إرسال طلب الإضافة.');
+    uiToast((r.json && r.json.message) ? r.json.message : 'فشل إرسال طلب الإضافة.', 'danger');
   }
 }
 
 // طلب إسقاط مقرر من الطالب
 async function requestDropCourseForStudent(student, courseName){
   const sid = student.student_id || student.id || student.studentId;
-  if (!sid){ alert('لا يوجد رقم طالب صالح.'); return; }
+  if (!sid){ uiToast('لا يوجد رقم طالب صالح.', 'warning'); return; }
   if (!confirm(`إرسال طلب إسقاط للمقرر "${courseName}"؟`)) return;
 
   const reason = prompt('أدخل سبب طلب الإسقاط (اختياري):','') || '';
@@ -1414,9 +1419,9 @@ async function requestDropCourseForStudent(student, courseName){
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
   });
   if (r.ok){
-    alert((r.json && r.json.message) ? r.json.message : 'تم إرسال طلب الإسقاط للمراجعة.');
+    uiToast((r.json && r.json.message) ? r.json.message : 'تم إرسال طلب الإسقاط للمراجعة.', 'success');
   } else {
-    alert((r.json && r.json.message) ? r.json.message : 'فشل إرسال طلب الإسقاط.');
+    uiToast((r.json && r.json.message) ? r.json.message : 'فشل إرسال طلب الإسقاط.', 'danger');
   }
 }
 
@@ -1494,14 +1499,15 @@ document.getElementById('btnExportExcel').addEventListener('click', async ()=>{
     if (!res.ok) {
       let j = null;
       try { j = await res.json(); } catch(e){/* ignore */ }
-      alert(j?.message || `فشل التصدير (HTTP ${res.status})`);
+      uiToast(j?.message || `فشل التصدير (HTTP ${res.status})`, 'danger');
       return;
     }
     const blob = await res.blob();
     downloadBlob(blob, 'registrations.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    uiToast('تم تنزيل ملف Excel', 'success');
   } catch (err) {
     console.error('export excel failed', err);
-    alert('فشل الاتصال بالخادم أثناء التصدير');
+    uiToast('فشل الاتصال بالخادم أثناء التصدير', 'danger');
   }
 });
 
@@ -1514,14 +1520,15 @@ if (btnExportSignedExcel){
       if (!res.ok) {
         let j = null;
         try { j = await res.json(); } catch(e){/* ignore */ }
-        alert(j?.message || `فشل التصدير (HTTP ${res.status})`);
+        uiToast(j?.message || `فشل التصدير (HTTP ${res.status})`, 'danger');
         return;
       }
       const blob = await res.blob();
       downloadBlob(blob, 'registration_signatures_signed.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      uiToast('تم تنزيل ملف الموقّعين', 'success');
     } catch (err) {
       console.error('export signed excel failed', err);
-      alert('فشل الاتصال بالخادم أثناء تصدير الموقّعين');
+      uiToast('فشل الاتصال بالخادم أثناء تصدير الموقّعين', 'danger');
     }
   });
 }
@@ -1555,9 +1562,9 @@ if (fileImport){
     });
     if(res.ok){
       await loadData();
-      alert('تم الاستيراد');
+      uiToast('تم الاستيراد', 'success');
     } else {
-      alert(res.json?.message || 'فشل الاستيراد');
+      uiToast(res.json?.message || 'فشل الاستيراد', 'danger');
     }
   });
 }
@@ -1592,6 +1599,13 @@ if (fileImport){
   }
 
   await loadData();
+  if (CURRENT_ROLE !== 'student' && window.initListSearch) {
+    initListSearch('studentsList', {
+      itemSelector: '.list-group-item',
+      placeholder: 'بحث بالاسم أو الرقم…',
+      maxWidth: '360px'
+    });
+  }
   if (CURRENT_ROLE !== 'student') {
     try { await loadProgramsForSpecialization(); } catch(e) {}
     try { await loadSpecializationSummary(); } catch(e) {}
@@ -1610,7 +1624,7 @@ if (fileImport){
     btnSaveTerm.addEventListener('click', async function(){
       const termName = (document.getElementById('currentRegistrationTerm')||{}).value.trim();
       const termYear = (document.getElementById('currentRegistrationYear')||{}).value.trim();
-      if (!termName) { alert('اسم الفصل مطلوب'); return; }
+      if (!termName) { uiToast('اسم الفصل مطلوب', 'warning'); return; }
       const msgEl = document.getElementById('currentTermMsg');
       const r = await fetchJSON('/admin/settings/current_term', {
         method: 'POST',
@@ -1628,6 +1642,5 @@ if (fileImport){
 })();
 </script>
 
-<script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
 </body>
 </html>

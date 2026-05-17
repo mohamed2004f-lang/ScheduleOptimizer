@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 {% set _exam_entry = (initial_exam_type | default('midterm') | string | lower) %}
 <html lang="ar" dir="rtl">
 <head>
@@ -168,7 +168,6 @@
     </div>
   </div>
 
-<script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
 <script>
 const initialExamType = {{ (initial_exam_type or 'midterm')|tojson }};
 let EXAM_READONLY = false;

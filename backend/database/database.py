@@ -120,7 +120,7 @@ def schedule_pk_column(conn) -> str:
     except Exception:
         if is_postgresql():
             raise
-    return "id"
+    return "rowid" if not is_postgresql() else "id"
 
 
 def table_exists(conn, name: str) -> bool:

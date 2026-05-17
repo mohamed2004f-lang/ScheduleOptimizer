@@ -214,6 +214,21 @@ class TestProtectedRoutesAuthenticated:
         assert "proposed_moves" in data
         assert "optimized_schedule" in data
 
+    def test_run_optimize_returns_ok(self, auth_client):
+        """POST /run-optimize يُزامن الجدول ويُعيد حساب التعارضات."""
+        resp = auth_client.post(
+            "/run-optimize",
+            json={"max_alternatives_per_section": 3, "move_cost": 1.0},
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get("status") == "ok"
+        assert "schedule_rows" in data
+        assert "conflict_count" in data
+        assert "proposed_moves_count" in data
+        assert data.get("optimizer") in ("rule_based_slots", "cp_sat")
+
     def test_system_diagnostics_returns_json(self, auth_client):
         """GET /admin/system_diagnostics يعيد ملخصاً آمناً للمسؤول."""
         resp = auth_client.get("/admin/system_diagnostics")

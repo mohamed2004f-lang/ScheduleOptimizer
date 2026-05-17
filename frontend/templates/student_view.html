@@ -1,4 +1,4 @@
-<!-- frontend/templates/student_view.html -->
+﻿<!-- frontend/templates/student_view.html -->
 <!doctype html>
 <html lang="ar" dir="rtl">
 <head>
@@ -127,6 +127,5 @@ else {
   (async ()=>{ const s = await fetchJSON('/list_students'); if(s.ok && Array.isArray(s.json) && s.json.length){ loadStudentPage(s.json[0].student_id); } else { const w=document.getElementById('weeklyScheduleWrapSv'); if(w) w.innerHTML='<p class="text-muted small mb-0">لا يمكن عرض الجدول.</p>'; } })();
 }
 </script>
-<script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
 </body>
 </html>

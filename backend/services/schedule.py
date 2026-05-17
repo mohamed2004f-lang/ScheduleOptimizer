@@ -15,7 +15,7 @@ import logging
 import json
 import datetime
 import base64
-from backend.database.database import is_postgresql, schedule_pk_column, fetch_table_columns
+from backend.database.database import is_postgresql, schedule_pk_column, fetch_table_columns, table_exists
 from backend.core.exceptions import ValidationError
 from backend.core.department_scope_policy import student_matches_department, resolve_users_list_scope
 from backend.core.faculty_axes import (
@@ -627,6 +627,17 @@ def _build_schedule_triple_export_matrix(rows: list, time_slots: list, include_e
 @schedule_bp.route("/rows")
 @login_required
 def list_schedule_rows():
+    try:
+        from backend.core.cache_setup import cache, list_cache_key
+
+        if cache:
+            _ck = list_cache_key("schedule_rows")
+            _hit = cache.get(_ck)
+            if _hit is not None:
+                return _hit
+    except Exception:
+        pass
+
     with get_connection() as conn:
         _sync_schedule_pk_col(conn)
         cur = conn.cursor()
@@ -680,7 +691,15 @@ def list_schedule_rows():
                     'instructor_id': r[7],
                     'student_count': r[8] or 0
                 })
-            return jsonify(result)
+            resp = jsonify(result)
+            try:
+                from backend.core.cache_setup import cache, list_cache_key
+
+                if cache:
+                    cache.set(list_cache_key("schedule_rows"), resp)
+            except Exception:
+                pass
+            return resp
         except Exception as e:
             logger.error(f"Error in list_schedule_rows: {e}")
             return jsonify([])
@@ -1609,6 +1628,153 @@ def export_schedule_excel():
     return excel_response_from_df(df, filename_prefix="schedule")
 
 
+def _sync_optimized_schedule_from_current(conn) -> int:
+    """نسخ صفوف schedule الصالحة إلى optimized_schedule. يُرجع عدد الصفوف بعد المزامنة."""
+    if not table_exists(conn, "optimized_schedule"):
+        raise ValidationError("جدول optimized_schedule غير موجود. شغّل ترحيل قاعدة البيانات.")
+    _sync_schedule_pk_col(conn)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM optimized_schedule")
+    cols = {str(c).strip().lower() for c in fetch_table_columns(conn, "schedule")}
+    if SCHEDULE_PK_COL == "id" and "id" in cols:
+        sid_sel = "COALESCE(id, rowid)"
+    elif SCHEDULE_PK_COL == "id":
+        sid_sel = "rowid"
+    else:
+        sid_sel = SCHEDULE_PK_COL
+    cur.execute(
+        f"""
+        INSERT INTO optimized_schedule (section_id, course_name, day, time, room, instructor, semester)
+        SELECT {sid_sel}, course_name, day, time, COALESCE(room,''), COALESCE(instructor,''), COALESCE(semester,'')
+        FROM schedule
+        WHERE course_name IS NOT NULL AND course_name != '' AND day IS NOT NULL AND day != '' AND time IS NOT NULL AND time != ''
+        """
+    )
+    row = cur.execute("SELECT COUNT(*) FROM optimized_schedule").fetchone()
+    return int(row[0] if row else 0)
+
+
+@schedule_bp.route("/run_optimize", methods=["POST"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def run_optimize():
+    """إنتاج الجدول، اقتراحات نقل المقررات، وحساب تعارضات التسجيل."""
+    data = request.get_json(silent=True) or {}
+    try:
+        from backend.core.validators import validate_optimize_params
+        from backend.jobs.optimize_jobs import create_optimize_job, get_optimize_job, should_run_async
+        from backend.services.schedule_optimizer import OptimizeParams, _load_sections, optimize_with_move_suggestions
+
+        ok, err, _cleaned = validate_optimize_params(data)
+        if not ok:
+            return jsonify({"status": "error", "message": err}), 400
+        params = OptimizeParams.from_dict(data)
+
+        with get_connection() as conn:
+            section_count = len(_load_sections(conn))
+
+        if should_run_async(data, section_count):
+            job_id = create_optimize_job(data)
+            return jsonify(
+                {
+                    "status": "accepted",
+                    "message": "تم إرسال التحسين للمعالجة في الخلفية",
+                    "job_id": job_id,
+                    "poll_url": f"/schedule/optimize_job/{job_id}",
+                    "async": True,
+                }
+            ), 202
+
+        with get_connection() as conn:
+            stats = optimize_with_move_suggestions(conn, params, sync_optimized=True)
+            try:
+                touch_schedule_updated_at(conn)
+            except Exception:
+                pass
+        log_activity(
+            action="schedule_run_optimize",
+            details=(
+                f"rows={stats.get('schedule_rows')}, moves={stats.get('proposed_moves_count')}, "
+                f"conflicts={stats.get('conflict_count')}, engine={stats.get('optimizer')}"
+            ),
+        )
+        msg = "تم إنتاج الجداول وحساب التعارضات"
+        if stats.get("proposed_moves_count"):
+            msg += f" ({stats['proposed_moves_count']} اقتراح نقل)"
+        if stats.get("optimizer") == "cp_sat":
+            msg += " — محرك CP-SAT"
+        return jsonify(
+            {
+                "status": "ok",
+                "message": msg,
+                **stats,
+            }
+        ), 200
+    except Exception as e:
+        logger.error("run_optimize failed: %s", e, exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@schedule_bp.route("/optimize_job/<job_id>", methods=["GET"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def optimize_job_status(job_id: str):
+    from backend.jobs.optimize_jobs import get_optimize_job
+
+    job = get_optimize_job(job_id)
+    if not job:
+        return jsonify({"status": "error", "message": "مهمة غير موجودة"}), 404
+    return jsonify({"status": "ok", **job}), 200
+
+
+@schedule_bp.route("/proposed_moves", methods=["GET"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def list_proposed_moves_route():
+    try:
+        from backend.services.schedule_optimizer import list_proposed_moves
+
+        with get_connection() as conn:
+            moves = list_proposed_moves(conn)
+        return jsonify({"status": "ok", "moves": moves, "count": len(moves)}), 200
+    except Exception as e:
+        logger.error("list_proposed_moves failed: %s", e, exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@schedule_bp.route("/proposed_move/<int:section_id>", methods=["POST"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def proposed_move_action(section_id: int):
+    """تطبيق اقتراح نقل لمقطع جدول (أرخص اقتراح أو move_id في الجسم)."""
+    data = request.get_json(silent=True) or {}
+    move_id = data.get("move_id")
+    if move_id is not None:
+        try:
+            move_id = int(move_id)
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "move_id غير صالح"}), 400
+    try:
+        from backend.services.schedule_optimizer import apply_proposed_move
+        from backend.services.students import recompute_conflict_report
+
+        with get_connection() as conn:
+            result = apply_proposed_move(conn, section_id, move_id=move_id)
+            recompute_conflict_report(conn)
+            conn.commit()
+            try:
+                touch_schedule_updated_at(conn)
+            except Exception:
+                pass
+        log_activity(action="proposed_move_apply", details=f"section_id={section_id}, move_id={result.get('move_id')}")
+        return jsonify(result), 200
+    except ValueError as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+    except Exception as e:
+        logger.error("proposed_move_action failed: %s", e, exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @schedule_bp.route("/publish_status")
 @login_required
 def publish_status():
@@ -1628,16 +1794,7 @@ def publish_schedule():
     """اعتماد/نشر الجدول من الأدمن الرئيسي. بعدها يراه الطالب والمشرف وتُستمد منه المقررات المتاحة في خطط التسجيل."""
     try:
         with get_connection() as conn:
-            _sync_schedule_pk_col(conn)
-            cur = conn.cursor()
-            # نسخ الجدول الحالي (schedule) إلى الجدول النهائي (optimized_schedule) لظهوره في صفحة النتائج
-            cur.execute("DELETE FROM optimized_schedule")
-            cur.execute(f"""
-                INSERT INTO optimized_schedule (section_id, course_name, day, time, room, instructor, semester)
-                SELECT {SCHEDULE_PK_COL}, course_name, day, time, COALESCE(room,''), COALESCE(instructor,''), COALESCE(semester,'')
-                FROM schedule
-                WHERE course_name IS NOT NULL AND course_name != '' AND day IS NOT NULL AND day != '' AND time IS NOT NULL AND time != ''
-            """)
+            _sync_optimized_schedule_from_current(conn)
             conn.commit()
             published_at = set_schedule_published_at(conn)
             # عند النشر، نضبط أيضاً updated_at حتى لا يظهر تحذير فوراً
@@ -1647,8 +1804,8 @@ def publish_schedule():
                 pass
             try:
                 recompute_conflict_report(conn)
-            except Exception as e:
-                logger.exception("فشل إعادة حساب التعارضات عند نشر الجدول: %s", e)
+            except Exception as exc:
+                logger.exception("فشل إعادة حساب التعارضات عند نشر الجدول: %s", exc)
             try:
                 ver = _create_schedule_version(conn, event_type="publish", note="schedule published", is_published=True)
             except Exception:

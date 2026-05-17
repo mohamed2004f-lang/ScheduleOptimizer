@@ -245,18 +245,20 @@ def electives_report_api():
             check_electives_requirement = None
         if allowed_student_ids is None:
             rows = cur.execute(
-                "SELECT student_id, COALESCE(student_name,'') FROM students ORDER BY student_name, student_id"
+                "SELECT student_id, COALESCE(student_name,'') AS student_name "
+                "FROM students ORDER BY student_name, student_id"
             ).fetchall()
         else:
             placeholders = ",".join("?" for _ in allowed_student_ids)
             rows = cur.execute(
-                f"SELECT student_id, COALESCE(student_name,'') FROM students WHERE student_id IN ({placeholders}) "
+                f"SELECT student_id, COALESCE(student_name,'') AS student_name "
+                f"FROM students WHERE student_id IN ({placeholders}) "
                 "ORDER BY student_name, student_id",
                 list(allowed_student_ids),
             ).fetchall()
         for r in rows:
             sid = r[0] if isinstance(r, (list, tuple)) else r["student_id"]
-            name = r[1] if isinstance(r, (list, tuple)) else (r["COALESCE(student_name,'')"] if "COALESCE(student_name,'')" in r.keys() else r.get("student_name",""))
+            name = r[1] if isinstance(r, (list, tuple)) else (r.get("student_name", "") if hasattr(r, "get") else r["student_name"])
             if not check_electives_requirement:
                 continue
             st = check_electives_requirement(cur, sid, required_electives=3)
@@ -1751,7 +1753,14 @@ def _get_allowed_student_ids_for_role(conn, user_role: str) -> set:
 def list_students():
     """جلب قائمة الطلاب. معاملات: active_only=1، enrollment_status=active|withdrawn|suspended|graduated، join_term، join_year."""
     try:
+        from backend.core.cache_setup import cache, list_cache_key
         from backend.core.exceptions import AppException
+
+        if cache:
+            _ck = list_cache_key("students")
+            _hit = cache.get(_ck)
+            if _hit is not None:
+                return _hit
 
         user_role = session.get("user_role")
         with get_connection() as conn:
@@ -1816,7 +1825,15 @@ def list_students():
             setattr(obj, "join_term", s.get("join_term", ""))
             setattr(obj, "join_year", s.get("join_year", ""))
             students_objects.append(obj)
-        return jsonify([s.__dict__ for s in students_objects])
+        resp = jsonify([s.__dict__ for s in students_objects])
+        try:
+            from backend.core.cache_setup import cache, list_cache_key
+
+            if cache:
+                cache.set(list_cache_key("students"), resp)
+        except Exception:
+            pass
+        return resp
     except AppException:
         # fallback مباشر من قاعدة البيانات إذا فشل Service Layer
         try:

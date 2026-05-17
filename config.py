@@ -106,6 +106,16 @@ LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
 LOG_FILE = os.environ.get('LOG_FILE', 'logs/app.log')
 
 # ============================================
+# التخزين المؤقت والمهام الخلفية والتحسين
+# ============================================
+CACHE_TIMEOUT = int(os.environ.get('CACHE_TIMEOUT', '60'))
+CACHE_TYPE = os.environ.get('CACHE_TYPE', 'SimpleCache')
+CACHE_REDIS_URL = os.environ.get('CACHE_REDIS_URL', '')
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', '')
+OPTIMIZER_USE_CPSAT = os.environ.get('OPTIMIZER_USE_CPSAT', '1')
+OPTIMIZE_ASYNC_THRESHOLD = int(os.environ.get('OPTIMIZE_ASYNC_THRESHOLD', '50'))
+
+# ============================================
 # فئة الإعدادات للاستخدام مع Flask
 # ============================================
 class Config:

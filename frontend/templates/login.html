@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>تسجيل الدخول - Schedule Optimizer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
@@ -14,18 +17,21 @@
       <img src="/static/images/mech_logo_small.png" alt="شعار كلية الهندسة">
     </div>
     <h1 class="auth-title">تسجيل الدخول</h1>
-    <p class="auth-subtitle">نظام إدارة الجدول الدراسي</p>
+    <p class="auth-subtitle">نظام إدارة الجدول الدراسي — جامعة درنة</p>
 
     <form id="loginForm">
       <div class="mb-3">
         <label for="username" class="form-label">اسم المستخدم أو الرقم</label>
-        <input type="text" class="form-control" id="username" name="username" required autocomplete="username" placeholder="مثال: ahmed أو 20201234 أو رقم الأستاذ">
-        <div class="form-text">يمكنك إدخال اسم المستخدم أو الرقم الدراسي للطالب أو الرقم الأكاديمي للأستاذ.</div>
+        <input type="text" class="form-control" id="username" name="username" required autocomplete="username" placeholder="مثال: ahmed أو 20201234">
+        <div class="form-text">الطالب: الرقم الدراسي — الأستاذ: الرقم الأكاديمي</div>
       </div>
 
       <div class="mb-3">
         <label for="password" class="form-label">كلمة المرور</label>
-        <input type="password" class="form-control" id="password" name="password" required autocomplete="current-password" placeholder="أدخل كلمة المرور">
+        <div class="input-group">
+          <input type="password" class="form-control" id="password" name="password" required autocomplete="current-password" placeholder="أدخل كلمة المرور">
+          <button class="btn btn-outline-secondary" type="button" id="togglePassword" aria-label="إظهار كلمة المرور">👁</button>
+        </div>
       </div>
 
       <div class="mb-3 form-check">
@@ -43,30 +49,40 @@
 
     <div class="mt-4 text-center">
       <small class="text-muted">
-        إذا كان حسابك جديداً: ستصلك رسالة تفعيل على البريد لتعيين كلمة المرور.
+        حساب جديد؟ ستصلك رسالة تفعيل على البريد لتعيين كلمة المرور.
       </small>
     </div>
   </div>
 
   <script>
+    document.getElementById('togglePassword')?.addEventListener('click', function() {
+      const inp = document.getElementById('password');
+      if (!inp) return;
+      const show = inp.type === 'password';
+      inp.type = show ? 'text' : 'password';
+      this.textContent = show ? '🙈' : '👁';
+    });
+
+    function loginErrorMessage(data, status) {
+      const code = (data && data.code) ? String(data.code) : '';
+      if (code === 'ACCOUNT_LOCKED') return 'الحساب موقوف مؤقتاً. تواصل مع الإدارة.';
+      if (code === 'PASSWORD_EXPIRED') return 'انتهت صلاحية كلمة المرور. يرجى تعيين كلمة جديدة.';
+      if (status === 429) return 'محاولات كثيرة. انتظر قليلاً ثم أعد المحاولة.';
+      return (data && data.message) ? data.message : 'فشل تسجيل الدخول. تحقق من البيانات.';
+    }
+
     document.getElementById('loginForm').addEventListener('submit', async function(e) {
       e.preventDefault();
-      
       const username = document.getElementById('username').value.trim();
       const password = document.getElementById('password').value;
       const alertDiv = document.getElementById('alertMessage');
       const loginBtn = document.getElementById('loginBtn');
       const loginBtnText = document.getElementById('loginBtnText');
       const loginBtnSpinner = document.getElementById('loginBtnSpinner');
-
-      // إخفاء أي رسائل سابقة
       alertDiv.innerHTML = '';
-      
-      // تعطيل الزر وإظهار spinner
       loginBtn.disabled = true;
       loginBtnText.textContent = 'جاري تسجيل الدخول...';
       loginBtnSpinner.style.display = 'inline-block';
-
       try {
         const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
         const remember = !!document.getElementById('rememberMe')?.checked;
@@ -77,24 +93,14 @@
             ...(csrfToken ? {'X-CSRFToken': csrfToken} : {}),
           },
           body: JSON.stringify({ username, password, remember }),
-          credentials: 'include' // مهم للجلسات
+          credentials: 'include'
         });
-
-        const data = await response.json();
-
+        const data = await response.json().catch(() => ({}));
         if (response.ok && data.status === 'ok') {
-          // نجح تسجيل الدخول
           alertDiv.innerHTML = '<div class="alert alert-success">تم تسجيل الدخول بنجاح! جاري التوجيه...</div>';
-          
-          // الانتظار قليلاً ثم التوجيه
-          setTimeout(() => {
-            window.location.href = '/';
-          }, 1000);
+          setTimeout(() => { window.location.href = '/dashboard'; }, 800);
         } else {
-          // فشل تسجيل الدخول
-          alertDiv.innerHTML = `<div class="alert alert-danger">${data.message || 'فشل تسجيل الدخول. تحقق من اسم المستخدم وكلمة المرور.'}</div>`;
-          
-          // إعادة تفعيل الزر
+          alertDiv.innerHTML = `<div class="alert alert-danger">${loginErrorMessage(data, response.status)}</div>`;
           loginBtn.disabled = false;
           loginBtnText.textContent = 'تسجيل الدخول';
           loginBtnSpinner.style.display = 'none';
@@ -102,26 +108,17 @@
       } catch (error) {
         console.error('Login error:', error);
         alertDiv.innerHTML = '<div class="alert alert-danger">حدث خطأ في الاتصال. يرجى المحاولة مرة أخرى.</div>';
-        
-        // إعادة تفعيل الزر
         loginBtn.disabled = false;
         loginBtnText.textContent = 'تسجيل الدخول';
         loginBtnSpinner.style.display = 'none';
       }
     });
 
-    // التحقق من حالة تسجيل الدخول عند تحميل الصفحة
     window.addEventListener('load', async function() {
       try {
-        const response = await fetch('/auth/check', {
-          credentials: 'include'
-        });
+        const response = await fetch('/auth/check', { credentials: 'include' });
         const data = await response.json();
-        
-        if (data.authenticated) {
-          // المستخدم مسجل دخول بالفعل، توجيهه للصفحة الرئيسية
-          window.location.href = '/';
-        }
+        if (data.authenticated) window.location.href = '/dashboard';
       } catch (error) {
         console.error('Auth check error:', error);
       }
@@ -129,4 +126,3 @@
   </script>
 </body>
 </html>
-

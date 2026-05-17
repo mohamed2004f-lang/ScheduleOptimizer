@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8">
@@ -101,6 +101,7 @@
             </div>
           </div>
           <div id="coursesList" class="small mono"></div>
+          <div id="coursesPagination" class="list-pagination-bar"></div>
           <div class="mt-3">
             <a href="/" class="btn btn-outline-secondary btn-sm">العودة</a>
             <a href="/schedule_form" class="btn btn-primary btn-sm ms-2">إضافة الجدول الدراسي</a>
@@ -170,6 +171,8 @@
 
 <script>
 let ALL_COURSES = [];
+let COURSES_PAGE = 1;
+const COURSES_PAGE_SIZE = 30;
 let editModal;
 let editCourseName = '';
 let IS_ADMIN = false;
@@ -188,6 +191,10 @@ function assessmentTypeLabel(t){
 }
 
 function showAlert(elId, kind, text, timeoutMs){
+  if (window.showToast && elId !== 'ecMsg') {
+    window.showToast(text, kind === 'danger' ? 'danger' : kind, Number(timeoutMs || 5000));
+    return;
+  }
   const el = document.getElementById(elId);
   el.innerHTML = `<div class="alert alert-${kind} p-2 mb-0">${text}</div>`;
   const ttl = Number(timeoutMs || 3500);
@@ -209,11 +216,11 @@ async function importCourses(){
     const res = await fetch('/courses/import/excel', { method:'POST', body: data });
     const j = await res.json().catch(()=>({}));
     if(res.ok){
-      msg.innerHTML = `<div class="alert alert-success p-1">تم استيراد ${j.imported ?? 'عدد'} مقرر</div>`;
+      window.showToast?.(`تم استيراد ${j.imported ?? 'عدد'} مقرر`, 'success');
       await loadCourses();
       form.reset();
     } else {
-      msg.innerHTML = `<div class="alert alert-danger p-1">خطأ: ${j.message || 'فشل الاستيراد'}</div>`;
+      window.showToast?.(j.message || 'فشل الاستيراد', 'danger');
     }
   } catch (err) {
     console.error(err);
@@ -227,7 +234,8 @@ async function loadCourses(){
     const r = await fetch('/list_courses'); // wrapper -> /courses/list
     const arr = r.ok ? await r.json() : [];
     ALL_COURSES = Array.isArray(arr) ? arr : [];
-    renderCourses(ALL_COURSES);
+    COURSES_PAGE = 1;
+    renderCoursesPage();
     await loadCoursePrereqs();
   } catch (err) {
     console.error(err);
@@ -235,11 +243,46 @@ async function loadCourses(){
   }
 }
 
-function renderCourses(list){
+function renderCoursesPagination(total, pages) {
+  const bar = document.getElementById('coursesPagination');
+  if (!bar) return;
+  bar.innerHTML = `
+    <span class="text-muted">عرض ${total ? ((COURSES_PAGE-1)*COURSES_PAGE_SIZE+1) : 0}–${Math.min(COURSES_PAGE*COURSES_PAGE_SIZE, total)} من ${total}</span>
+    <div class="page-btns">
+      <button type="button" class="btn btn-sm btn-outline-secondary" data-pg="prev" ${COURSES_PAGE<=1?'disabled':''}>السابق</button>
+      <span class="align-self-center px-1">${COURSES_PAGE} / ${pages}</span>
+      <button type="button" class="btn btn-sm btn-outline-secondary" data-pg="next" ${COURSES_PAGE>=pages?'disabled':''}>التالي</button>
+    </div>`;
+  bar.querySelector('[data-pg="prev"]')?.addEventListener('click', () => { if (COURSES_PAGE>1) { COURSES_PAGE--; renderCoursesPage(); } });
+  bar.querySelector('[data-pg="next"]')?.addEventListener('click', () => { if (COURSES_PAGE<pages) { COURSES_PAGE++; renderCoursesPage(); } });
+}
+
+function renderCoursesPage() {
+  const q = (document.getElementById('filterInput')?.value || '').trim().toLowerCase();
+  let filtered = ALL_COURSES.filter(c => Number(c.is_archived || 0) !== 1);
+  if (q) {
+    filtered = filtered.filter(c =>
+      (c.course_name||'').toLowerCase().includes(q) ||
+      (c.course_code||'').toLowerCase().includes(q)
+    );
+  }
+  const total = filtered.length;
+  const pages = Math.max(1, Math.ceil(total / COURSES_PAGE_SIZE) || 1);
+  if (COURSES_PAGE > pages) COURSES_PAGE = pages;
+  const slice = filtered.slice((COURSES_PAGE - 1) * COURSES_PAGE_SIZE, COURSES_PAGE * COURSES_PAGE_SIZE);
+  renderCoursesTable(slice);
+  renderCoursesPagination(total, pages);
+}
+
+function renderCoursesTable(list){
   const el = document.getElementById('coursesList');
-  if(!list.length){ el.textContent = 'لا يوجد مقررات.'; return; }
+  if(!list.length){
+    el.textContent = ALL_COURSES.length ? 'لا يوجد مقررات مطابقة للفلتر.' : 'لا يوجد مقررات.';
+    return;
+  }
   el.innerHTML = '';
   const table = document.createElement('table');
+  table.id = 'coursesTable';
   table.className = 'table table-sm table-bordered mb-0';
   table.innerHTML = `
     <thead class="table-light">
@@ -257,7 +300,7 @@ function renderCourses(list){
   `;
   const tbody = table.querySelector('tbody');
 
-  list.filter(c => Number(c.is_archived || 0) !== 1).forEach(c=>{
+  list.forEach(c=>{
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${escapeHtml(c.course_name)}</td>
@@ -277,6 +320,9 @@ function renderCourses(list){
   });
 
   el.appendChild(table);
+  if (window.initInteractiveTable) {
+    initInteractiveTable('coursesTable', { search: false });
+  }
 
   tbody.querySelectorAll('button').forEach(btn=>{
     btn.addEventListener('click', (e)=>{
@@ -301,14 +347,14 @@ async function deleteCourse(course_name){
     });
     const j = await resp.json().catch(()=>null);
     if (resp.ok && j?.archived) {
-      alert((j?.message || 'تمت الأرشفة') + '\n\nتنبيه: لم يتم حذف السجل الأكاديمي، وتمت حماية البيانات التاريخية.');
+      window.showToast?.((j?.message || 'تمت الأرشفة') + ' — البيانات التاريخية محمية', 'success');
     } else {
-      alert(j?.message || (resp.ok ? 'تم' : 'خطأ'));
+      window.showToast?.(j?.message || (resp.ok ? 'تم' : 'خطأ'), resp.ok ? 'success' : 'danger');
     }
     await loadCourses();
   } catch (err) {
     console.error(err);
-    alert('خطأ في الاتصال بالخادم.');
+    window.showToast?.('خطأ في الاتصال بالخادم', 'danger');
   }
 }
 
@@ -476,13 +522,9 @@ function showInModal(elId, kind, text){
 }
 
 /* filter */
-document.getElementById('filterInput').addEventListener('input', (e)=>{
-  const q = e.target.value.trim().toLowerCase();
-  const filtered = !q ? ALL_COURSES : ALL_COURSES.filter(c=>{
-    return (c.course_name||'').toLowerCase().includes(q)
-        || (c.course_code||'').toLowerCase().includes(q);
-  });
-  renderCourses(filtered);
+document.getElementById('filterInput').addEventListener('input', ()=>{
+  COURSES_PAGE = 1;
+  renderCoursesPage();
 });
 
 /* export CSV (client-side) */
@@ -572,6 +614,5 @@ window.addEventListener('load', async ()=>{
 </script>
 
 <!-- Bootstrap JS for modal -->
-<script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
 </body>
 </html>

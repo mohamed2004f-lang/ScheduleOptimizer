@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8" />
@@ -69,7 +69,34 @@
       </div>
     </div>
 
-    <!-- proposed_moves section removed as requested -->
+    <section class="mb-4" id="proposedMovesSection">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+            <h2 class="h6 mb-0">اقتراحات نقل المقررات</h2>
+            <button type="button" class="btn btn-sm btn-outline-primary" id="btnRefreshMoves">تحديث الاقتراحات</button>
+          </div>
+          <p class="small text-muted mb-2">تظهر بعد تشغيل المحسّن. انقر «تطبيق» لتعديل موعد القسم في الجدول.</p>
+          <div class="table-responsive">
+            <table class="table table-sm table-bordered mb-0" id="proposedMovesTable">
+              <thead class="table-light">
+                <tr>
+                  <th>المقرر</th>
+                  <th>من</th>
+                  <th>إلى</th>
+                  <th>قاعة / أستاذ</th>
+                  <th>تكلفة</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="proposedMovesBody">
+                <tr><td colspan="6" class="text-muted small">لا توجد اقتراحات — شغّل المحسّن أولاً.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <div id="msg" class="mt-3"></div>
 
@@ -105,7 +132,12 @@
   }
 
   function setMsg(html, kind="info") {
-    document.getElementById("msg").innerHTML = `<div class="alert alert-${kind} p-2">${html}</div>`;
+    const el = document.getElementById("msg");
+    if (el) el.innerHTML = `<div class="alert alert-${kind} p-2">${html}</div>`;
+    if (window.showToast && kind !== "info") {
+      const plain = String(html).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+      if (plain) window.showToast(plain, kind === "danger" ? "danger" : kind);
+    }
   }
 
   // render optimized_schedule as a timetable grid (days as rows, times as columns) - matching schedule_form.html
@@ -282,6 +314,9 @@
     if(conflictDetailsModal){
       conflictDetailsModal.show();
     }
+    if (window.initInteractiveTable) {
+      initInteractiveTable("conflictDetailsTable", { placeholder: "بحث في التعارضات…" });
+    }
   }
 
   async function fetchResults() {
@@ -301,7 +336,70 @@
     }
   }
 
-  // proposed_moves UI removed from results page
+  async function loadProposedMoves() {
+    const tbody = document.getElementById("proposedMovesBody");
+    if (!tbody) return;
+    try {
+      const r = await fetch("/schedule/proposed_moves", { credentials: "include" });
+      const j = await r.json().catch(() => ({}));
+      const moves = (r.ok && j.moves) ? j.moves : [];
+      tbody.innerHTML = "";
+      if (!moves.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-muted small">لا توجد اقتراحات حالياً.</td></tr>';
+        return;
+      }
+      moves.forEach(m => {
+        const tr = document.createElement("tr");
+        const fromTxt = `${escapeHtml(m.orig_day || "")} · ${escapeHtml(m.orig_time || "")}`;
+        const toTxt = `${escapeHtml(m.new_day || "")} · ${escapeHtml(m.new_time || "")}`;
+        const meta = `${escapeHtml(m.room || "")} / ${escapeHtml(m.instructor || "")}`;
+        tr.innerHTML = `
+          <td>${escapeHtml(m.course_name || "")}</td>
+          <td class="small">${fromTxt}</td>
+          <td class="small">${toTxt}</td>
+          <td class="small text-muted">${meta}</td>
+          <td>${escapeHtml(String(m.move_cost ?? ""))}</td>
+          <td><button type="button" class="btn btn-sm btn-success btn-apply-move" data-section-id="${m.section_id}" data-move-id="${m.id}">تطبيق</button></td>`;
+        tbody.appendChild(tr);
+      });
+      if (window.initInteractiveTable) {
+        initInteractiveTable("proposedMovesTable", { placeholder: "بحث في الاقتراحات…" });
+      }
+    } catch (e) {
+      console.error("loadProposedMoves", e);
+      tbody.innerHTML = '<tr><td colspan="6" class="text-danger small">فشل تحميل الاقتراحات.</td></tr>';
+    }
+  }
+
+  async function applyProposedMove(sectionId, moveId) {
+    try {
+      const r = await fetch(`/proposed_move/${sectionId}`, {
+        method: "POST",
+        headers: (typeof jsonApiHeaders === "function") ? jsonApiHeaders() : { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ move_id: moveId })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && (j.status === "ok" || j.message)) {
+        setMsg(j.message || "تم تطبيق النقل.", "success");
+        await loadProposedMoves();
+        await fetchResults();
+      } else {
+        setMsg(j.message || "فشل تطبيق الاقتراح.", "danger");
+      }
+    } catch (e) {
+      setMsg("خطأ في الاتصال بالخادم.", "danger");
+    }
+  }
+
+  document.getElementById("proposedMovesBody")?.addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".btn-apply-move");
+    if (!btn) return;
+    const sid = btn.getAttribute("data-section-id");
+    const mid = btn.getAttribute("data-move-id");
+    if (sid) applyProposedMove(sid, mid ? Number(mid) : null);
+  });
+  document.getElementById("btnRefreshMoves")?.addEventListener("click", () => loadProposedMoves());
 
   async function downloadCSV(table) {
     try {
@@ -349,11 +447,11 @@
   (async function initResultsPage(){
     await loadStudentsForNames();
     await fetchResults();
+    await loadProposedMoves();
     setInterval(fetchResults, 5000);
   })();
 </script>
 <!-- Bootstrap JS for modal support -->
-<script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
   </main>
 </body>
 </html>

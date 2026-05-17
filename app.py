@@ -23,6 +23,7 @@ from backend.services.department_policies import department_policies_bp
 from backend.services.college_catalog import college_catalog_bp
 from backend.services.performance import performance_bp
 from backend.api.students_api import students_api_bp
+from backend.services.index_portal import index_portal_bp
 
 # Core modules
 from backend.core.exceptions import register_error_handlers
@@ -112,6 +113,14 @@ atexit.register(close_pool)
 # تهيئة نظام Logging المحسّن
 setup_logging(app)
 
+# تخزين مؤقت للقوائم (Flask-Caching — SimpleCache أو Redis)
+try:
+    from backend.core.cache_setup import init_app_cache
+
+    init_app_cache(app)
+except Exception as _cache_exc:
+    logging.getLogger(__name__).warning("Flask-Caching init skipped: %s", _cache_exc)
+
 # تهيئة نظام المصادقة
 init_auth(app)
 
@@ -154,6 +163,7 @@ app.register_blueprint(department_policies_bp)
 app.register_blueprint(college_catalog_bp)
 app.register_blueprint(performance_bp, url_prefix="/performance")
 app.register_blueprint(students_api_bp)
+app.register_blueprint(index_portal_bp, url_prefix="/index")
 
 
 def _startup_verify_critical_symbols() -> None:
@@ -1108,16 +1118,113 @@ def compat_delete_student():
 def compat_delete_course():
     return redirect(url_for("courses.delete_course"), code=307)
 
+@app.route("/submit-data", methods=["POST"])
+@login_required
+def submit_data():
+    """حفظ دفعة بيانات الجدولة من صفحة index (JSON)."""
+    from backend.core.services import StudentService, ScheduleService
+    from backend.core.exceptions import ValidationError, AppException
+    from backend.core.validators import (
+        validate_course_name,
+        validate_schedule_row_dict,
+        validate_student_id,
+    )
+    from collections import defaultdict
+
+    data = request.get_json(force=True) or {}
+    students = data.get("students") or []
+    schedule = data.get("schedule") or []
+    registrations = data.get("registrations") or []
+    stats = {"students": 0, "schedule": 0, "registrations": 0}
+    errors = []
+
+    for row in students:
+        try:
+            sid = (row.get("student_id") or "").strip()
+            if not sid:
+                continue
+            ok_sid, sid_err = validate_student_id(sid)
+            if not ok_sid:
+                errors.append(f"طالب {sid}: {sid_err}")
+                continue
+            StudentService.add_student(
+                sid,
+                (row.get("student_name") or "").strip(),
+            )
+            stats["students"] += 1
+        except (ValidationError, AppException) as e:
+            errors.append(f"طالب {row.get('student_id')}: {e}")
+        except Exception as e:
+            errors.append(f"طالب {row.get('student_id')}: {e}")
+
+    for row in schedule:
+        try:
+            if not row.get("course_name") or not row.get("day") or not row.get("time"):
+                continue
+            ok_row, row_err = validate_schedule_row_dict(row)
+            if not ok_row:
+                errors.append(f"جدول {row.get('course_name')}: {row_err}")
+                continue
+            ScheduleService.add_schedule_row(
+                row.get("course_name"),
+                row.get("day"),
+                row.get("time"),
+                room=row.get("room", ""),
+                instructor=row.get("instructor", ""),
+                semester=(row.get("semester") or "").strip(),
+            )
+            stats["schedule"] += 1
+        except (ValidationError, AppException) as e:
+            errors.append(f"جدول {row.get('course_name')}: {e}")
+        except Exception as e:
+            errors.append(f"جدول {row.get('course_name')}: {e}")
+
+    by_student = defaultdict(list)
+    for row in registrations:
+        sid = (row.get("student_id") or "").strip()
+        cname = (row.get("course_name") or "").strip()
+        if sid and cname:
+            ok_sid, _ = validate_student_id(sid)
+            ok_c, _ = validate_course_name(cname)
+            if ok_sid and ok_c:
+                by_student[sid].append(cname)
+            else:
+                errors.append(f"تسجيل {sid}/{cname}: بيانات غير صالحة")
+
+    for sid, courses in by_student.items():
+        try:
+            from backend.core.services import StudentService as _SS
+
+            _SS.save_registrations(sid, courses)
+            stats["registrations"] += len(courses)
+        except (ValidationError, AppException) as e:
+            errors.append(f"تسجيل {sid}: {e}")
+        except Exception as e:
+            errors.append(f"تسجيل {sid}: {e}")
+
+    if errors and not any(stats.values()):
+        return jsonify({"status": "error", "message": errors[0], "errors": errors[:5]}), 400
+    return jsonify({
+        "status": "ok",
+        "message": "تم حفظ البيانات",
+        "stats": stats,
+        "errors": errors[:10] if errors else [],
+    }), 200
+
+
 @app.route("/run-optimize", methods=["POST"])
 @login_required
 def compat_run_optimize():
-    # No schedule.run_optimize endpoint exists; return a message or handle here
-    return jsonify({"error": "Endpoint not implemented. Please implement schedule.run_optimize or use another endpoint."}), 501
+    from backend.services.schedule import run_optimize
+
+    return run_optimize()
 
 @app.route("/proposed_move/<int:section_id>", methods=["POST"])
 @login_required
 def compat_proposed_move(section_id):
-    return redirect(url_for("schedule.proposed_move_action", section_id=section_id), code=307)
+    from backend.services.schedule import proposed_move_action
+
+    return proposed_move_action(section_id)
 
 # -----------------------------
 # توافقية خاصة لمسار إضافة المتطلب القديم

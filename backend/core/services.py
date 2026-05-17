@@ -451,6 +451,50 @@ class StudentService:
             raise DatabaseError(f"فشل تحديث بيانات الطالب: {str(e)}")
 
     @staticmethod
+    def _clear_registration_state_for_suspend(conn, cur, student_id: str) -> Dict[str, Any]:
+        """
+        سياسة إيقاف القيد: الطالب يُعامل كغير مسجّل في المقررات (لا يبقى له تسجيل فعلي)،
+        مع بقائه في سجل الكلية. تُفرَّغ جدول التسجيلات الفعلية ويُزال توقيع الفصل الحالي إن وُجد.
+        """
+        row = cur.execute(
+            "SELECT COUNT(*) AS c FROM registrations WHERE student_id = ?",
+            (student_id,),
+        ).fetchone()
+        n_before = int((row["c"] if hasattr(row, "keys") else row[0]) or 0)
+        cur.execute("DELETE FROM registrations WHERE student_id = ?", (student_id,))
+        term_label = ""
+        try:
+            tname, tyear = get_current_term(conn=conn)
+            term_label = f"{(tname or '').strip()} {(tyear or '').strip()}".strip()
+        except Exception:
+            term_label = ""
+        sig_events = 0
+        sig_rows = 0
+        if term_label:
+            try:
+                cur.execute(
+                    "DELETE FROM registration_signature_events WHERE student_id = ? AND term = ?",
+                    (student_id, term_label),
+                )
+                sig_events = int(cur.rowcount or 0)
+            except Exception:
+                pass
+            try:
+                cur.execute(
+                    "DELETE FROM registration_signatures WHERE student_id = ? AND term = ?",
+                    (student_id, term_label),
+                )
+                sig_rows = int(cur.rowcount or 0)
+            except Exception:
+                pass
+        return {
+            "suspension_cleared_registration_rows": n_before,
+            "suspension_cleared_signature_term": term_label or None,
+            "suspension_cleared_signature_events": sig_events,
+            "suspension_cleared_signature_rows": sig_rows,
+        }
+
+    @staticmethod
     def update_enrollment_status(
         student_id: str,
         status: str,
@@ -459,7 +503,10 @@ class StudentService:
         **kwargs,
     ) -> Dict:
         """
-        تحديث حالة قيد الطالب (مسجَّل، سحب الملف، موقوف قيده، خريج)
+        تحديث حالة قيد الطالب (مسجَّل، سحب الملف، موقوف قيده، خريج).
+
+        عند ``suspended`` تُزال تلقائياً كل التسجيلات الفعلية (جدول registrations)
+        وتُحذف سجلات التوقيع للفصل الحالي إن وُجدت، بما يتوافق مع اعتبار الطالب غير مسجّل بالمقررات.
         """
         sid = normalize_student_id(student_id)
         if not sid:
@@ -533,12 +580,20 @@ class StudentService:
                 )
                 if cur.rowcount == 0:
                     raise NotFoundError("الطالب غير موجود")
-                return {
+                result: Dict[str, Any] = {
                     "status": "ok",
                     "message": f"تم تحديث حالة القيد إلى «{allowed_statuses[status]}»",
                     "student_id": sid,
                     "enrollment_status": status,
                 }
+                if status == "suspended":
+                    extra = StudentService._clear_registration_state_for_suspend(conn, cur, sid)
+                    result.update(extra)
+                    result["message"] += (
+                        " — أُلغيت التسجيلات الفعلية للمقررات (يُعامل الطالب كغير مسجّل بها)؛ "
+                        "يمكنه التسجيل من جديد بعد إعادة تنشيط القيد."
+                    )
+                return result
         except NotFoundError:
             raise
         except Exception as e:
