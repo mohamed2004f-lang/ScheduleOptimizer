@@ -99,7 +99,7 @@
       </div>
     </div>
 
-    <div class="card mb-3 transcript-toolbar-card">
+    <div class="card mb-3 transcript-toolbar-card" id="studentPickerCard">
       <div class="card-body">
         <div class="page-header" style="margin:0 0 10px;">
           <div>
@@ -1050,7 +1050,8 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
 
   // الطالب فقط: حجب اختيار الطلبة/الخطة وإجباره على سجله
   if (CURRENT_ROLE === 'student'){
-    // حجب اختيار الطلبة/الخطة للطالب (يعرض سجله فقط)
+    const pickerCard = document.getElementById('studentPickerCard');
+    if (pickerCard) pickerCard.style.display = 'none';
     const sel = document.getElementById('studentSelect');
     const planSel = document.getElementById('planSelect');
     if (planSel && planSel.parentElement) {

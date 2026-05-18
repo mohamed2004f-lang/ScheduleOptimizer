@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>تقرير الإرشاد الأكاديمي</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-800">
+    <h1 class="page-title mb-3">تقرير الإرشاد الأكاديمي (الفصل)</h1>
+    <div class="card shadow-sm"><div class="card-body">
+      <p class="text-muted small">الفصل: <span id="semLabel">—</span></p>
+      <div class="mb-3"><label class="form-label">عدد الطلاب المتعثرين</label>
+      <input type="number" class="form-control" id="atRisk" min="0"></div>
+      <div class="mb-3"><label class="form-label">الإجراءات المتخذة</label>
+      <textarea class="form-control" id="interventions" rows="4"></textarea></div>
+      <div class="mb-3"><label class="form-label">نسبة نجاح الإجراءات (%)</label>
+      <input type="number" class="form-control" id="successRate" min="0" max="100" step="0.1"></div>
+      <button class="btn btn-primary" id="btnSave">حفظ وإرسال</button>
+      <span id="msg" class="ms-2 small text-muted"></span>
+    </div></div>
+  </main>
+  <script>
+    function hdr(){const c=document.querySelector('meta[name=csrf-token]')?.content||'';const h={'Content-Type':'application/json'};if(c)h['X-CSRFToken']=c;return h;}
+    (async()=>{
+      const r=await fetch('/academic_quality/supervisor_report',{credentials:'include'});
+      const j=await r.json();
+      if(!r.ok){document.getElementById('msg').textContent=j.message||'خطأ';return;}
+      document.getElementById('semLabel').textContent=j.semester||'';
+      const rep=j.report||{};
+      document.getElementById('atRisk').value=rep.at_risk_students_count??'';
+      document.getElementById('interventions').value=rep.intervention_actions||'';
+      document.getElementById('successRate').value=rep.success_rate??'';
+    })();
+    document.getElementById('btnSave').onclick=async()=>{
+      const body={
+        at_risk_students_count:parseInt(document.getElementById('atRisk').value||'0',10),
+        intervention_actions:document.getElementById('interventions').value,
+        success_rate:document.getElementById('successRate').value
+      };
+      const r=await fetch('/academic_quality/supervisor_report',{method:'POST',credentials:'include',headers:hdr(),body:JSON.stringify(body)});
+      document.getElementById('msg').textContent=r.ok?'تم الحفظ':'فشل الحفظ';
+    };
+  </script>
+</body>
+</html>

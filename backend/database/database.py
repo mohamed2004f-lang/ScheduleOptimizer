@@ -1393,6 +1393,156 @@ TABLES_SCHEMA = {
         )
     """,
 
+    'course_evaluations': """
+        CREATE TABLE IF NOT EXISTS course_evaluations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT NOT NULL,
+            section_id INTEGER,
+            course_name TEXT NOT NULL,
+            instructor_id INTEGER NOT NULL,
+            semester TEXT NOT NULL,
+            instructor_punctuality INTEGER CHECK (instructor_punctuality BETWEEN 1 AND 5),
+            course_clarity INTEGER CHECK (course_clarity BETWEEN 1 AND 5),
+            assessment_fairness INTEGER CHECK (assessment_fairness BETWEEN 1 AND 5),
+            material_relevance INTEGER CHECK (material_relevance BETWEEN 1 AND 5),
+            communication_quality INTEGER CHECK (communication_quality BETWEEN 1 AND 5),
+            comments TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (student_id, section_id, semester),
+            FOREIGN KEY (student_id) REFERENCES students(student_id)
+                ON DELETE CASCADE ON UPDATE CASCADE
+        )
+    """,
+
+    'evaluation_survey_questions': """
+        CREATE TABLE IF NOT EXISTS evaluation_survey_questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            legacy_key TEXT,
+            label_ar TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            question_type TEXT NOT NULL DEFAULT 'likert_5',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """,
+
+    'evaluation_survey_answers': """
+        CREATE TABLE IF NOT EXISTS evaluation_survey_answers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            evaluation_id INTEGER NOT NULL,
+            question_id INTEGER NOT NULL,
+            rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+            UNIQUE (evaluation_id, question_id),
+            FOREIGN KEY (evaluation_id) REFERENCES course_evaluations(id)
+                ON DELETE CASCADE ON UPDATE CASCADE,
+            FOREIGN KEY (question_id) REFERENCES evaluation_survey_questions(id)
+                ON DELETE RESTRICT ON UPDATE CASCADE
+        )
+    """,
+
+    'supervisor_quality_reports': """
+        CREATE TABLE IF NOT EXISTS supervisor_quality_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            supervisor_instructor_id INTEGER NOT NULL,
+            semester TEXT NOT NULL,
+            at_risk_students_count INTEGER DEFAULT 0,
+            intervention_actions TEXT DEFAULT '',
+            success_rate REAL,
+            submitted_by TEXT DEFAULT '',
+            submitted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (supervisor_instructor_id, semester)
+        )
+    """,
+
+    'quality_metrics_snapshots': """
+        CREATE TABLE IF NOT EXISTS quality_metrics_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            semester TEXT NOT NULL,
+            department_id INTEGER,
+            program_student_satisfaction REAL,
+            program_course_reports_completion REAL,
+            program_ilo_achievement REAL,
+            program_graduation_rate REAL,
+            institutional_faculty_qualifications REAL,
+            institutional_student_to_faculty_ratio REAL,
+            institutional_infrastructure_rating REAL,
+            overall_accreditation_score REAL,
+            accreditation_status TEXT DEFAULT '',
+            metrics_json TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            created_by TEXT DEFAULT ''
+        )
+    """,
+
+    'quality_institutional_inputs': """
+        CREATE TABLE IF NOT EXISTS quality_institutional_inputs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            semester TEXT NOT NULL,
+            department_id INTEGER,
+            faculty_qualifications_percent REAL,
+            infrastructure_rating REAL,
+            notes TEXT DEFAULT '',
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_by TEXT DEFAULT '',
+            UNIQUE (semester, department_id)
+        )
+    """,
+
+    'program_learning_outcomes': """
+        CREATE TABLE IF NOT EXISTS program_learning_outcomes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            program_id INTEGER NOT NULL,
+            code TEXT NOT NULL,
+            title_ar TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (program_id, code),
+            FOREIGN KEY (program_id) REFERENCES programs(id) ON DELETE CASCADE
+        )
+    """,
+
+    'program_course_learning_outcomes': """
+        CREATE TABLE IF NOT EXISTS program_course_learning_outcomes (
+            program_course_id INTEGER NOT NULL,
+            outcome_id INTEGER NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (program_course_id, outcome_id),
+            FOREIGN KEY (program_course_id) REFERENCES program_courses(id) ON DELETE CASCADE,
+            FOREIGN KEY (outcome_id) REFERENCES program_learning_outcomes(id) ON DELETE CASCADE
+        )
+    """,
+
+    'plo_course_master_links': """
+        CREATE TABLE IF NOT EXISTS plo_course_master_links (
+            program_id INTEGER NOT NULL,
+            outcome_id INTEGER NOT NULL,
+            course_master_id INTEGER NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (program_id, outcome_id, course_master_id),
+            FOREIGN KEY (program_id) REFERENCES programs(id) ON DELETE CASCADE,
+            FOREIGN KEY (outcome_id) REFERENCES program_learning_outcomes(id) ON DELETE CASCADE,
+            FOREIGN KEY (course_master_id) REFERENCES course_master(id) ON DELETE CASCADE
+        )
+    """,
+
+    'section_ilo_assessments': """
+        CREATE TABLE IF NOT EXISTS section_ilo_assessments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            section_id INTEGER NOT NULL,
+            instructor_id INTEGER NOT NULL,
+            semester TEXT NOT NULL,
+            outcome_id INTEGER NOT NULL,
+            achievement_percent INTEGER CHECK (achievement_percent BETWEEN 0 AND 100),
+            notes TEXT DEFAULT '',
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (section_id, instructor_id, semester, outcome_id),
+            FOREIGN KEY (outcome_id) REFERENCES program_learning_outcomes(id) ON DELETE CASCADE
+        )
+    """,
+
     # إسناد الأستاذ لأكثر من قسم + تكافؤ المقررات بين الأقسام (ترقية توافقية)
     'instructor_department_assignments': """
         CREATE TABLE IF NOT EXISTS instructor_department_assignments (
@@ -1483,6 +1633,18 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_faculty_logs_instructor ON faculty_assignment_logs(instructor_id)",
     "CREATE INDEX IF NOT EXISTS idx_course_closure_status ON course_closure_reports(status, semester)",
     "CREATE INDEX IF NOT EXISTS idx_course_closure_section_inst ON course_closure_reports(section_id, instructor_id)",
+    "CREATE INDEX IF NOT EXISTS idx_course_eval_student_sem ON course_evaluations(student_id, semester)",
+    "CREATE INDEX IF NOT EXISTS idx_course_eval_section_sem ON course_evaluations(section_id, semester)",
+    "CREATE INDEX IF NOT EXISTS idx_course_eval_instructor_sem ON course_evaluations(instructor_id, semester)",
+    "CREATE INDEX IF NOT EXISTS idx_eval_survey_q_sort ON evaluation_survey_questions(sort_order, is_active)",
+    "CREATE INDEX IF NOT EXISTS idx_eval_survey_ans_eval ON evaluation_survey_answers(evaluation_id)",
+    "CREATE INDEX IF NOT EXISTS idx_eval_survey_ans_q ON evaluation_survey_answers(question_id)",
+    "CREATE INDEX IF NOT EXISTS idx_supervisor_quality_sem ON supervisor_quality_reports(supervisor_instructor_id, semester)",
+    "CREATE INDEX IF NOT EXISTS idx_quality_metrics_sem_dept ON quality_metrics_snapshots(semester, department_id)",
+    "CREATE INDEX IF NOT EXISTS idx_plo_program ON program_learning_outcomes(program_id, is_active)",
+    "CREATE INDEX IF NOT EXISTS idx_pclo_course ON program_course_learning_outcomes(program_course_id)",
+    "CREATE INDEX IF NOT EXISTS idx_plo_cm_master ON plo_course_master_links(program_id, course_master_id)",
+    "CREATE INDEX IF NOT EXISTS idx_silo_section_sem ON section_ilo_assessments(section_id, semester)",
     "CREATE INDEX IF NOT EXISTS idx_governance_audit_ts ON governance_audit_logs(ts)",
     "CREATE INDEX IF NOT EXISTS idx_governance_audit_actor ON governance_audit_logs(actor)",
     "CREATE INDEX IF NOT EXISTS idx_grades_student_semester ON grades(student_id, semester)",
@@ -1591,6 +1753,13 @@ def _ensure_tables_postgresql() -> None:
         "ALTER TABLE grade_draft_items ADD COLUMN IF NOT EXISTS final_exam REAL",
         "ALTER TABLE grade_draft_items ADD COLUMN IF NOT EXISTS absent_midterm INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE grade_draft_items ADD COLUMN IF NOT EXISTS absent_final_exam INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE course_closure_reports ADD COLUMN IF NOT EXISTS curriculum_coverage_percent INTEGER",
+        "ALTER TABLE course_closure_reports ADD COLUMN IF NOT EXISTS student_success_rate REAL",
+        "ALTER TABLE course_closure_reports ADD COLUMN IF NOT EXISTS student_failure_rate REAL",
+        "ALTER TABLE course_closure_reports ADD COLUMN IF NOT EXISTS results_analysis TEXT DEFAULT ''",
+        "ALTER TABLE course_closure_reports ADD COLUMN IF NOT EXISTS challenges TEXT DEFAULT ''",
+        "ALTER TABLE course_closure_reports ADD COLUMN IF NOT EXISTS action_plan TEXT DEFAULT ''",
+        "ALTER TABLE course_closure_reports ADD COLUMN IF NOT EXISTS ilo_achievement_percent INTEGER",
         # أرقام معرفات طويلة (وطني/داخلي) تتجاوز INTEGER في PostgreSQL
         "ALTER TABLE users ALTER COLUMN instructor_id TYPE BIGINT USING instructor_id::bigint",
     ]
@@ -2131,6 +2300,192 @@ def _ensure_tables_postgresql() -> None:
                 conn.rollback()
             except Exception:
                 pass
+        for _tbl, _ddl in (
+            (
+                "course_evaluations",
+                """
+                CREATE TABLE IF NOT EXISTS course_evaluations (
+                    id BIGSERIAL PRIMARY KEY,
+                    student_id TEXT NOT NULL,
+                    section_id BIGINT,
+                    course_name TEXT NOT NULL,
+                    instructor_id BIGINT NOT NULL,
+                    semester TEXT NOT NULL,
+                    instructor_punctuality INTEGER,
+                    course_clarity INTEGER,
+                    assessment_fairness INTEGER,
+                    material_relevance INTEGER,
+                    communication_quality INTEGER,
+                    comments TEXT DEFAULT '',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (student_id, section_id, semester)
+                )
+                """,
+            ),
+            (
+                "supervisor_quality_reports",
+                """
+                CREATE TABLE IF NOT EXISTS supervisor_quality_reports (
+                    id BIGSERIAL PRIMARY KEY,
+                    supervisor_instructor_id BIGINT NOT NULL,
+                    semester TEXT NOT NULL,
+                    at_risk_students_count INTEGER DEFAULT 0,
+                    intervention_actions TEXT DEFAULT '',
+                    success_rate REAL,
+                    submitted_by TEXT DEFAULT '',
+                    submitted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (supervisor_instructor_id, semester)
+                )
+                """,
+            ),
+            (
+                "evaluation_survey_questions",
+                """
+                CREATE TABLE IF NOT EXISTS evaluation_survey_questions (
+                    id BIGSERIAL PRIMARY KEY,
+                    legacy_key TEXT,
+                    label_ar TEXT NOT NULL,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+                    question_type TEXT NOT NULL DEFAULT 'likert_5',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
+            ),
+            (
+                "evaluation_survey_answers",
+                """
+                CREATE TABLE IF NOT EXISTS evaluation_survey_answers (
+                    id BIGSERIAL PRIMARY KEY,
+                    evaluation_id BIGINT NOT NULL,
+                    question_id BIGINT NOT NULL,
+                    rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+                    UNIQUE (evaluation_id, question_id),
+                    CONSTRAINT esa_eval_fk FOREIGN KEY (evaluation_id)
+                        REFERENCES course_evaluations(id) ON DELETE CASCADE,
+                    CONSTRAINT esa_question_fk FOREIGN KEY (question_id)
+                        REFERENCES evaluation_survey_questions(id) ON DELETE RESTRICT
+                )
+                """,
+            ),
+            (
+                "quality_metrics_snapshots",
+                """
+                CREATE TABLE IF NOT EXISTS quality_metrics_snapshots (
+                    id BIGSERIAL PRIMARY KEY,
+                    semester TEXT NOT NULL,
+                    department_id BIGINT,
+                    program_student_satisfaction REAL,
+                    program_course_reports_completion REAL,
+                    program_ilo_achievement REAL,
+                    program_graduation_rate REAL,
+                    institutional_faculty_qualifications REAL,
+                    institutional_student_to_faculty_ratio REAL,
+                    institutional_infrastructure_rating REAL,
+                    overall_accreditation_score REAL,
+                    accreditation_status TEXT DEFAULT '',
+                    metrics_json TEXT DEFAULT '',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    created_by TEXT DEFAULT ''
+                )
+                """,
+            ),
+            (
+                "quality_institutional_inputs",
+                """
+                CREATE TABLE IF NOT EXISTS quality_institutional_inputs (
+                    id BIGSERIAL PRIMARY KEY,
+                    semester TEXT NOT NULL,
+                    department_id BIGINT,
+                    faculty_qualifications_percent REAL,
+                    infrastructure_rating REAL,
+                    notes TEXT DEFAULT '',
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_by TEXT DEFAULT '',
+                    UNIQUE (semester, department_id)
+                )
+                """,
+            ),
+            (
+                "program_learning_outcomes",
+                """
+                CREATE TABLE IF NOT EXISTS program_learning_outcomes (
+                    id BIGSERIAL PRIMARY KEY,
+                    program_id BIGINT NOT NULL,
+                    code TEXT NOT NULL,
+                    title_ar TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (program_id, code),
+                    CONSTRAINT plo_program_fk FOREIGN KEY (program_id)
+                        REFERENCES programs(id) ON DELETE CASCADE
+                )
+                """,
+            ),
+            (
+                "program_course_learning_outcomes",
+                """
+                CREATE TABLE IF NOT EXISTS program_course_learning_outcomes (
+                    program_course_id BIGINT NOT NULL,
+                    outcome_id BIGINT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (program_course_id, outcome_id),
+                    CONSTRAINT pclo_course_fk FOREIGN KEY (program_course_id)
+                        REFERENCES program_courses(id) ON DELETE CASCADE,
+                    CONSTRAINT pclo_outcome_fk FOREIGN KEY (outcome_id)
+                        REFERENCES program_learning_outcomes(id) ON DELETE CASCADE
+                )
+                """,
+            ),
+            (
+                "plo_course_master_links",
+                """
+                CREATE TABLE IF NOT EXISTS plo_course_master_links (
+                    program_id BIGINT NOT NULL,
+                    outcome_id BIGINT NOT NULL,
+                    course_master_id BIGINT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (program_id, outcome_id, course_master_id),
+                    CONSTRAINT plocm_program_fk FOREIGN KEY (program_id)
+                        REFERENCES programs(id) ON DELETE CASCADE,
+                    CONSTRAINT plocm_outcome_fk FOREIGN KEY (outcome_id)
+                        REFERENCES program_learning_outcomes(id) ON DELETE CASCADE,
+                    CONSTRAINT plocm_master_fk FOREIGN KEY (course_master_id)
+                        REFERENCES course_master(id) ON DELETE CASCADE
+                )
+                """,
+            ),
+            (
+                "section_ilo_assessments",
+                """
+                CREATE TABLE IF NOT EXISTS section_ilo_assessments (
+                    id BIGSERIAL PRIMARY KEY,
+                    section_id BIGINT NOT NULL,
+                    instructor_id BIGINT NOT NULL,
+                    semester TEXT NOT NULL,
+                    outcome_id BIGINT NOT NULL,
+                    achievement_percent INTEGER,
+                    notes TEXT DEFAULT '',
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (section_id, instructor_id, semester, outcome_id),
+                    CONSTRAINT silo_outcome_fk FOREIGN KEY (outcome_id)
+                        REFERENCES program_learning_outcomes(id) ON DELETE CASCADE
+                )
+                """,
+            ),
+        ):
+            try:
+                cur.execute(_ddl)
+                conn.commit()
+            except Exception as e:
+                logger.warning("Could not ensure %s on PostgreSQL: %s", _tbl, e)
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
         # جداول إسناد الأستاذ لأكثر من قسم + تكافؤ المقررات
         for ddl in (
             """
@@ -2462,6 +2817,25 @@ def ensure_tables(db_file=None):
                 cur.execute("ALTER TABLE instructors ADD COLUMN external_scope TEXT NOT NULL DEFAULT 'within_college'")
             except Exception:
                 pass
+
+        try:
+            ccr_cols = [r[1] for r in cur.execute("PRAGMA table_info(course_closure_reports)").fetchall()]
+            for col, stmt in (
+                ("curriculum_coverage_percent", "ALTER TABLE course_closure_reports ADD COLUMN curriculum_coverage_percent INTEGER"),
+                ("student_success_rate", "ALTER TABLE course_closure_reports ADD COLUMN student_success_rate REAL"),
+                ("student_failure_rate", "ALTER TABLE course_closure_reports ADD COLUMN student_failure_rate REAL"),
+                ("results_analysis", "ALTER TABLE course_closure_reports ADD COLUMN results_analysis TEXT DEFAULT ''"),
+                ("challenges", "ALTER TABLE course_closure_reports ADD COLUMN challenges TEXT DEFAULT ''"),
+                ("action_plan", "ALTER TABLE course_closure_reports ADD COLUMN action_plan TEXT DEFAULT ''"),
+                ("ilo_achievement_percent", "ALTER TABLE course_closure_reports ADD COLUMN ilo_achievement_percent INTEGER"),
+            ):
+                if col not in ccr_cols:
+                    try:
+                        cur.execute(stmt)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning("Could not migrate course_closure_reports columns: %s", e)
 
         try:
             backfill_instructor_cross_department_data(conn)

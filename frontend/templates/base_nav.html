@@ -47,6 +47,9 @@
 
       <!-- compact logout control on the right -->
       <div class="app-actions d-flex align-items-center gap-2">
+        <a class="btn-topbar-notify" id="navNotificationsTop" href="/notifications_center" title="الإشعارات" aria-label="الإشعارات">
+          <i class="fa-regular fa-bell" aria-hidden="true"></i>
+        </a>
         <button type="button" class="btn-theme-toggle" id="themeToggleBtn" aria-label="تبديل الوضع الليلي" title="الوضع الليلي">
           <i class="fa-solid fa-moon" aria-hidden="true"></i>
         </button>
@@ -124,9 +127,14 @@
             <i class="fa-solid fa-chalkboard-user ms-1"></i> مقرراتي
           </a>
         </li>
+        <li class="nav-item" id="navStudentEvaluationsWrap" style="display:none;">
+          <a class="nav-link" id="navStudentEvaluations" href="/students/evaluations/">
+            <i class="fa-solid fa-star ms-1"></i> تقييم المقررات
+          </a>
+        </li>
 
         <!-- شؤون الطلبة -->
-        <li class="nav-item dropdown" id="navAcademicRecordsWrap">
+        <li class="nav-item dropdown" id="navStudentAffairsWrap">
           <a class="nav-link dropdown-toggle" href="#" id="studentAffairsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-user-graduate ms-1"></i> شؤون الطلبة
           </a>
@@ -142,7 +150,7 @@
         </li>
 
         <!-- السجل الأكاديمي والتقارير -->
-        <li class="nav-item dropdown">
+        <li class="nav-item dropdown" id="navAcademicRecordsMenuWrap">
           <a class="nav-link dropdown-toggle" href="#" id="academicRecordsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-regular fa-file-lines ms-1"></i> السجل الأكاديمي
           </a>
@@ -163,7 +171,7 @@
         </li>
 
         <!-- التخطيط والجدولة -->
-        <li class="nav-item dropdown">
+        <li class="nav-item dropdown" id="navPlanningMenuWrap">
           <a class="nav-link dropdown-toggle" href="#" id="planningMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-calendar-check ms-1"></i> التخطيط والجدولة
           </a>
@@ -203,6 +211,7 @@
             <li><a class="dropdown-item" id="navInstructors" href="/instructors_form">أعضاء هيئة التدريس</a></li>
             <li><a class="dropdown-item" id="navSupervision" href="/supervision_form">الإشراف الأكاديمي</a></li>
             <li><a class="dropdown-item" id="navSupervisorDashboard" href="/supervisor_dashboard">لوحة المشرف</a></li>
+            <li><a class="dropdown-item" id="navSupervisorQualityReport" href="/supervisor_quality_report_page" style="display:none;">تقرير الإرشاد (جودة)</a></li>
             <li><hr class="dropdown-divider" id="navFacultyQualityDivider" style="display:none;"></li>
             <li><a class="dropdown-item" id="navCourseClosureReports" href="/course_closure_reports_page" style="display:none;">تقارير إقفال المقررات</a></li>
             <li><a class="dropdown-item" id="navFacultyScorecards" href="/faculty_scorecards_page" style="display:none;">مؤشرات إنجاز الشعب</a></li>
@@ -210,11 +219,16 @@
           </ul>
         </li>
 
-        <!-- أدوار خاصة وإدارة -->
-        <li class="nav-item">
-          <a class="nav-link" id="navNotifications" href="/notifications_center">
-            <i class="fa-regular fa-bell ms-1"></i> الإشعارات
+        <!-- ضمان الجودة والاعتماد (إدارة) -->
+        <li class="nav-item dropdown d-none" id="navQualityAccreditationWrap" style="display:none;">
+          <a class="nav-link dropdown-toggle" href="#" id="qualityAccreditationMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="fa-solid fa-award ms-1"></i> ضمان الجودة والاعتماد
           </a>
+          <ul class="dropdown-menu" aria-labelledby="qualityAccreditationMenu">
+            <li><a class="dropdown-item" id="navAcademicQuality" href="/academic_quality/dashboard" style="display:none;">لوحة الجودة</a></li>
+            <li><a class="dropdown-item" id="navEvaluationSurveyAdmin" href="/academic_quality/survey_admin" style="display:none;">إدارة استبيان التقييم</a></li>
+            <li><a class="dropdown-item" id="navIloCatalog" href="/ilo_catalog_page" style="display:none;">كتالوج مخرجات التعلم</a></li>
+          </ul>
         </li>
         <li class="nav-item dropdown" id="navAdminSettingsWrap">
           <a class="nav-link dropdown-toggle" href="#" id="adminSettingsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
@@ -327,9 +341,10 @@
       // إخفاء بعض الروابط — يُفضّل capabilities من الخادم؛ احتياطياً منطق الأدوار القديم
       let navUsers = false, navSup = false, navRules = false, navCollegeCatalog = false;
       let showCourseReg = false, showScheduleVersions = false, showExamArch = false, showGradeDrafts = false;
-      let showClosureReports = false, showFacultyScorecards = false, showFacultyDossier = false;
+      let showClosureReports = false, showFacultyScorecards = false, showFacultyDossier = false, showQualityDash = false, showSurveyAdmin = false, showIloCatalog = false, showSupQuality = false, showStudentEvals = false;
       let canDeptScope = false;
       let isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(data.is_supervisor || 0) === 1);
+      const isStudentUi = (caps && caps.v >= 1) ? !!caps.is_student : (role === 'student');
       if (caps && caps.v >= 1) {
         navUsers = !!caps.nav_users_admin;
         navCollegeCatalog = !!caps.nav_college_catalog;
@@ -342,6 +357,11 @@
         showClosureReports = !!caps.nav_course_closure_reports;
         showFacultyScorecards = !!caps.nav_faculty_scorecards;
         showFacultyDossier = !!caps.nav_faculty_final_dossier;
+        showQualityDash = !!caps.nav_academic_quality_dashboard;
+        showSurveyAdmin = !!caps.nav_evaluation_survey_admin;
+        showIloCatalog = !!caps.nav_ilo_catalog;
+        showSupQuality = !!caps.nav_supervisor_quality_report;
+        showStudentEvals = !!caps.nav_student_course_evaluations;
         isSupervisor = !!caps.is_supervisor_effective;
         canDeptScope = !!caps.can_switch_department_scope;
       } else {
@@ -356,11 +376,18 @@
         showClosureReports = showCourseReg;
         showFacultyScorecards = showCourseReg || role === 'instructor';
         showFacultyDossier = showCourseReg;
+        showQualityDash = showCourseReg;
+        showSurveyAdmin = showCourseReg;
+        showIloCatalog = showCourseReg;
+        showSupQuality = isSupervisor;
+        showStudentEvals = role === 'student';
         canDeptScope = (role === 'admin' || role === 'admin_main');
       }
       const showMyCourses = (caps && caps.v >= 1 && caps.nav_my_assigned_courses) || role === 'instructor';
       const wrapMy = document.getElementById('navMyCoursesWrap');
       if (wrapMy) wrapMy.style.display = showMyCourses ? '' : 'none';
+      const wrapEvals = document.getElementById('navStudentEvaluationsWrap');
+      if (wrapEvals) wrapEvals.style.display = showStudentEvals ? '' : 'none';
 
       if (!navUsers) {
         const elUsers = document.getElementById('navUsersAdmin');
@@ -397,7 +424,7 @@
       if (elExamScheduleVersions) elExamScheduleVersions.style.display = showExamArch ? '' : 'none';
       const elGradeDrafts = document.getElementById('navGradeDrafts');
       if (elGradeDrafts) elGradeDrafts.style.display = showGradeDrafts ? '' : 'none';
-      const anyFacultyQuality = showClosureReports || showFacultyScorecards || showFacultyDossier;
+      const anyFacultyQuality = showClosureReports || showFacultyScorecards || showFacultyDossier || showSupQuality;
       const elFacultyQualityDivider = document.getElementById('navFacultyQualityDivider');
       if (elFacultyQualityDivider) elFacultyQualityDivider.style.display = anyFacultyQuality ? '' : 'none';
       const elClosure = document.getElementById('navCourseClosureReports');
@@ -406,6 +433,14 @@
       if (elScorecards) elScorecards.style.display = showFacultyScorecards ? '' : 'none';
       const elDossier = document.getElementById('navFacultyFinalDossier');
       if (elDossier) elDossier.style.display = showFacultyDossier ? '' : 'none';
+      const elQuality = document.getElementById('navAcademicQuality');
+      if (elQuality) elQuality.style.display = showQualityDash ? '' : 'none';
+      const elSurveyAdmin = document.getElementById('navEvaluationSurveyAdmin');
+      if (elSurveyAdmin) elSurveyAdmin.style.display = showSurveyAdmin ? '' : 'none';
+      const elIlo = document.getElementById('navIloCatalog');
+      if (elIlo) elIlo.style.display = showIloCatalog ? '' : 'none';
+      const elSupQ = document.getElementById('navSupervisorQualityReport');
+      if (elSupQ) elSupQ.style.display = showSupQuality ? '' : 'none';
       if (!isSupervisor) {
         const elSD = document.getElementById('navSupervisorDashboard');
         if (elSD) elSD.style.display = 'none';
@@ -438,6 +473,7 @@
           'navCollegeCatalogCourses',
           'navCatalogWrap',
           'navFacultySupervisionWrap',
+          'navQualityAccreditationWrap',
           'navAdminSettingsWrap',
         ];
         hideIds.forEach(id => {
@@ -590,7 +626,7 @@
 
       const deptBanner = document.getElementById('adminDeptScopeBanner');
       const deptSel = document.getElementById('adminDeptScopeSelect');
-      if (deptBanner && deptSel && canDeptScope) {
+      if (deptBanner && deptSel && canDeptScope && !isStudentUi) {
         deptBanner.classList.remove('d-none');
         try {
           const dResp = await fetch('/college/catalog/departments', {
@@ -648,52 +684,85 @@
         }
       }
 
-      const isStudentUi = (caps && caps.v >= 1) ? !!caps.is_student : (role === 'student');
       if (isStudentUi) {
-        // الطالب لا يحتاج لرؤية بعض الروابط الإدارية
-        const hideIds = [
-          'navStudents',
-          'navGraduates',
-          'navCourses',
-          'navInstructors',
-          'navPrereqs',
-          'navRegistrations',
-          'navWithdrawnFiles',
-          'navScheduleForm',
-          'navAttendance',
-          'navResults',
-          'navInstructors',
-          'navSupervision',
-          'navSupervisorDashboard',
-          'navPerformance',
-          'navGradeDrafts',
-          'navNotRegisteredCoursesReport',
-          'navGradeCourseAudit',
-          'navCourseRegistrationReport',
-          'navScheduleVersions',
-          'navExamScheduleVersions',
-          'navAcademicRules',
-          'navAnalytics',
-          'navExamsMidterms',
-          'navExamsFinals',
-          'navExamsConflicts',
-          'navFacultyQualityDivider',
-          'navCourseClosureReports',
-          'navFacultyScorecards',
-          'navFacultyFinalDossier',
+        // واجهة الطالب: كشف درجات + تقويم + جداول (عرض فقط) + تقييم المقررات
+        const hideWholeMenus = [
+          'navDashboard',
+          'navStudentAffairsWrap',
+          'navCatalogWrap',
+          'navFacultySupervisionWrap',
+          'navAdminSettingsWrap',
         ];
-        hideIds.forEach(id => {
+        hideWholeMenus.forEach(id => {
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
         });
+        const hideAcademicRecords = [
+          'navPerformance',
+          'navElectivesReport',
+          'navRegistrationChangesReport',
+          'navFailedCoursesReport',
+          'navNotRegisteredCoursesReport',
+          'navUncompletedCoursesReport',
+          'navGradeCourseAudit',
+          'navCourseRegistrationReport',
+          'navGradeDrafts',
+          'navAnalytics',
+        ];
+        hideAcademicRecords.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = 'none';
+        });
+        const hidePlanning = [
+          'navResults',
+          'navScheduleVersions',
+          'navExamScheduleVersions',
+          'navExamsConflicts',
+        ];
+        hidePlanning.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = 'none';
+        });
+        // إبقاء: navTranscript, navAcademicCalendar, navScheduleForm, navExamsMidterms, navExamsFinals
+        const elTranscript = document.getElementById('navTranscript');
+        if (elTranscript) elTranscript.style.display = '';
+        ['navAcademicCalendar', 'navScheduleForm', 'navExamsMidterms', 'navExamsFinals'].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = '';
+        });
+      }
+
+      // ضمان الجودة والاعتماد (بعد فلاتر الأدوار — لا يُخفى بـ d-none فقط)
+      let showQualityMenu = showQualityDash || showSurveyAdmin || showIloCatalog;
+      if (!showQualityMenu) {
+        const amQ = (data.active_mode || '').trim().toLowerCase();
+        const hodHeadMode = role === 'head_of_department'
+          && (amQ === '' || amQ === 'head' || amQ === 'hod' || amQ === 'department_head');
+        showQualityMenu = (role === 'admin' || role === 'admin_main') || hodHeadMode;
+      }
+      const wrapQuality = document.getElementById('navQualityAccreditationWrap');
+      if (wrapQuality) {
+        if (showQualityMenu) {
+          wrapQuality.classList.remove('d-none');
+          wrapQuality.style.removeProperty('display');
+        } else {
+          wrapQuality.classList.add('d-none');
+          wrapQuality.style.display = 'none';
+        }
       }
 
       // إخفاء قائمة Dropdown بالكامل إذا صارت كل عناصرها مخفية
       document.querySelectorAll('.nav-item.dropdown').forEach(dd => {
+        if (dd.id === 'navQualityAccreditationWrap') return;
         const items = dd.querySelectorAll('.dropdown-item');
         if (!items.length) return;
         const hasVisible = Array.from(items).some(it => it.style.display !== 'none');
-        if (!hasVisible) dd.style.display = 'none';
+        if (!hasVisible) {
+          dd.style.display = 'none';
+        } else {
+          dd.style.removeProperty('display');
+          dd.classList.remove('d-none');
+        }
       });
 
       // تفعيل الرابط الحالي (Active state) حسب المسار
@@ -730,8 +799,14 @@
         ['/course_closure_reports_page','navCourseClosureReports'],
         ['/faculty_scorecards_page','navFacultyScorecards'],
         ['/faculty_final_dossier_page','navFacultyFinalDossier'],
+        ['/academic_quality/dashboard','navAcademicQuality'],
+        ['/academic_quality/survey_admin','navEvaluationSurveyAdmin'],
+        ['/students/evaluations','navStudentEvaluations'],
+        ['/ilo_catalog_page','navIloCatalog'],
+        ['/academic_quality/ilo/catalog','navIloCatalog'],
+        ['/supervisor_quality_report_page','navSupervisorQualityReport'],
         ['/results','navResults'],
-        ['/notifications_center','navNotifications'],
+        ['/notifications_center','navNotificationsTop'],
         ['/users_admin','navUsersAdmin'],
         ['/department_policy_head_page','navDepartmentPolicyHead'],
         ['/department_policy_approvals_page','navDepartmentPolicyApprovals'],
@@ -743,7 +818,14 @@
       map.forEach(([prefix, id])=>{
         if (path === prefix || (prefix !== '/' && path.startsWith(prefix))) {
           const el = document.getElementById(id);
-          if (el) el.classList.add('active');
+          if (el) {
+            el.classList.add('active');
+            const qWrap = document.getElementById('navQualityAccreditationWrap');
+            if (qWrap && qWrap.contains(el)) {
+              const qToggle = qWrap.querySelector('.dropdown-toggle');
+              if (qToggle) qToggle.classList.add('active');
+            }
+          }
         }
       });
 

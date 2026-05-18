@@ -391,6 +391,13 @@ CREATE TABLE IF NOT EXISTS course_closure_reports (
     improvement_notes TEXT DEFAULT '',
     reflection_text TEXT DEFAULT '',
     status TEXT NOT NULL DEFAULT 'draft',
+    curriculum_coverage_percent INTEGER,
+    student_success_rate REAL,
+    student_failure_rate REAL,
+    results_analysis TEXT DEFAULT '',
+    challenges TEXT DEFAULT '',
+    action_plan TEXT DEFAULT '',
+    ilo_achievement_percent INTEGER,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     created_by TEXT DEFAULT '',
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -398,6 +405,123 @@ CREATE TABLE IF NOT EXISTS course_closure_reports (
     approved_at TEXT,
     approved_by TEXT,
     review_note TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS course_evaluations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id TEXT NOT NULL,
+    section_id INTEGER,
+    course_name TEXT NOT NULL,
+    instructor_id INTEGER NOT NULL,
+    semester TEXT NOT NULL,
+    instructor_punctuality INTEGER,
+    course_clarity INTEGER,
+    assessment_fairness INTEGER,
+    material_relevance INTEGER,
+    communication_quality INTEGER,
+    comments TEXT DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (student_id, section_id, semester)
+);
+
+CREATE TABLE IF NOT EXISTS evaluation_survey_questions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    legacy_key TEXT,
+    label_ar TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    question_type TEXT NOT NULL DEFAULT 'likert_5',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS evaluation_survey_answers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    evaluation_id INTEGER NOT NULL,
+    question_id INTEGER NOT NULL,
+    rating INTEGER NOT NULL,
+    UNIQUE (evaluation_id, question_id)
+);
+
+CREATE TABLE IF NOT EXISTS supervisor_quality_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supervisor_instructor_id INTEGER NOT NULL,
+    semester TEXT NOT NULL,
+    at_risk_students_count INTEGER DEFAULT 0,
+    intervention_actions TEXT DEFAULT '',
+    success_rate REAL,
+    submitted_by TEXT DEFAULT '',
+    submitted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (supervisor_instructor_id, semester)
+);
+
+CREATE TABLE IF NOT EXISTS quality_metrics_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    semester TEXT NOT NULL,
+    department_id INTEGER,
+    program_student_satisfaction REAL,
+    program_course_reports_completion REAL,
+    program_ilo_achievement REAL,
+    program_graduation_rate REAL,
+    institutional_faculty_qualifications REAL,
+    institutional_student_to_faculty_ratio REAL,
+    institutional_infrastructure_rating REAL,
+    overall_accreditation_score REAL,
+    accreditation_status TEXT DEFAULT '',
+    metrics_json TEXT DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    created_by TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS quality_institutional_inputs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    semester TEXT NOT NULL,
+    department_id INTEGER,
+    faculty_qualifications_percent REAL,
+    infrastructure_rating REAL,
+    notes TEXT DEFAULT '',
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT DEFAULT '',
+    UNIQUE (semester, department_id)
+);
+
+CREATE TABLE IF NOT EXISTS program_learning_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_id INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    title_ar TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (program_id, code)
+);
+
+CREATE TABLE IF NOT EXISTS program_course_learning_outcomes (
+    program_course_id INTEGER NOT NULL,
+    outcome_id INTEGER NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (program_course_id, outcome_id)
+);
+
+CREATE TABLE IF NOT EXISTS plo_course_master_links (
+    program_id INTEGER NOT NULL,
+    outcome_id INTEGER NOT NULL,
+    course_master_id INTEGER NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (program_id, outcome_id, course_master_id)
+);
+
+CREATE TABLE IF NOT EXISTS section_ilo_assessments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    section_id INTEGER NOT NULL,
+    instructor_id INTEGER NOT NULL,
+    semester TEXT NOT NULL,
+    outcome_id INTEGER NOT NULL,
+    achievement_percent INTEGER,
+    notes TEXT DEFAULT '',
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (section_id, instructor_id, semester, outcome_id)
 );
 
 CREATE TABLE IF NOT EXISTS system_settings (

@@ -24,6 +24,9 @@ from backend.services.college_catalog import college_catalog_bp
 from backend.services.performance import performance_bp
 from backend.api.students_api import students_api_bp
 from backend.services.index_portal import index_portal_bp
+from backend.services.academic_quality import academic_quality_bp
+from backend.services.course_evaluations import course_evaluations_bp
+from backend.services.learning_outcomes import learning_outcomes_bp
 
 # Core modules
 from backend.core.exceptions import register_error_handlers
@@ -164,6 +167,9 @@ app.register_blueprint(college_catalog_bp)
 app.register_blueprint(performance_bp, url_prefix="/performance")
 app.register_blueprint(students_api_bp)
 app.register_blueprint(index_portal_bp, url_prefix="/index")
+app.register_blueprint(academic_quality_bp, url_prefix="/academic_quality")
+app.register_blueprint(learning_outcomes_bp, url_prefix="/academic_quality/ilo")
+app.register_blueprint(course_evaluations_bp, url_prefix="/students/evaluations")
 
 
 def _startup_verify_critical_symbols() -> None:
@@ -260,9 +266,16 @@ def inject_ui_context():
         from backend.services.utilities import get_connection
 
         dep_id = None
+        student_identity_label = False
         with get_connection() as conn:
             cur = conn.cursor()
-            if role_n in ("admin", "admin_main"):
+            if role_n == "student":
+                from backend.core.department_scope_policy import resolve_student_department_id
+
+                sid_for_dept = (session.get("student_id") or uname or "").strip()
+                dep_id = resolve_student_department_id(conn, sid_for_dept)
+                student_identity_label = dep_id is not None
+            elif role_n in ("admin", "admin_main"):
                 dep_id = get_admin_department_scope_id()
             elif role_n == "head_of_department":
                 if active_mode in ("", "head", "hod", "department_head"):
@@ -280,7 +293,10 @@ def inject_ui_context():
                     name_ar = (row[1] or "").strip() or "قسم غير معرّف"
                     display = f"{name_ar}" + (f" ({code})" if code else "")
                     ctx["department_name_ar"] = display
-                    ctx["department_scope_label_ar"] = f"نطاق العرض: {display}"
+                    if student_identity_label:
+                        ctx["department_scope_label_ar"] = f"القسم: {display}"
+                    else:
+                        ctx["department_scope_label_ar"] = f"نطاق العرض: {display}"
 
             # سطر تعريف واضح بالمستخدم الداخل (حسب الدور/الوضع)
             display_actor = ""
@@ -536,7 +552,7 @@ def supervisor_dashboard_page():
     return render_template("supervisor_dashboard.html")
 
 @app.route("/schedule_form")
-@role_required("admin", "supervisor", "admin_main", "head_of_department", "instructor")
+@role_required("admin", "supervisor", "admin_main", "head_of_department", "instructor", "student")
 def schedule_form():
     return render_template("schedule_form.html")
 
@@ -861,6 +877,27 @@ def faculty_scorecards_page():
 def faculty_final_dossier_page():
     """واجهة الملف النهائي الموحّد للشعب."""
     return render_template("faculty_final_dossier.html")
+
+
+@app.route("/academic_quality_dashboard_page")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def academic_quality_dashboard_page():
+    """لوحة ضمان الجودة والاعتماد الأكاديمي."""
+    return redirect(url_for("academic_quality.quality_dashboard"))
+
+
+@app.route("/ilo_catalog_page")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def ilo_catalog_page_redirect():
+    return redirect(url_for("learning_outcomes.ilo_catalog_page"))
+
+
+@app.route("/supervisor_quality_report_page")
+@login_required
+def supervisor_quality_report_page_redirect():
+    return redirect(url_for("academic_quality.supervisor_report_page"))
 
 
 def _read_text_doc(path: str) -> str:

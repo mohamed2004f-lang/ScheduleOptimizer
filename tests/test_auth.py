@@ -92,6 +92,12 @@ class TestAuth:
         caps = compute_capabilities("student", 0)
         assert caps["is_student"] is True
         assert caps["can_manage_courses_edit"] is False
+        assert caps.get("nav_dashboard") is False
+        assert caps.get("nav_admin_settings") is False
+        assert caps.get("nav_student_affairs_menu") is False
+        assert caps.get("nav_planning_student_view") is True
+        assert caps.get("can_manage_schedule_edit") is False
+        assert caps.get("nav_transcript_nav") is True
 
     def test_compute_capabilities_admin_college_catalog_nav(self):
         caps = compute_capabilities("admin", 0)

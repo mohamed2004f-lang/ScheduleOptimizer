@@ -1,0 +1,772 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>كتالوج مخرجات التعلم (PLO)</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal mt-4">
+    <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+      <div>
+        <h1 class="page-title h4 mb-1"><i class="fa-solid fa-award text-primary"></i> كتالوج مخرجات التعلم (PLO)</h1>
+        <p class="text-muted small mb-0">تعريف مخرجات البرنامج (Program Learning Outcomes) وربطها بمقررات الخطة الدراسية.</p>
+      </div>
+      <a href="/academic_quality/dashboard" class="btn btn-outline-secondary btn-sm">لوحة الجودة</a>
+    </div>
+
+    <div id="iloMsg" class="mb-2" aria-live="polite"></div>
+
+    <div class="card shadow-sm mb-3">
+      <div class="card-body">
+        <div class="row g-2 align-items-end">
+          <div class="col-md-8">
+            <label class="form-label small mb-1">البرنامج الأكاديمي</label>
+            <select id="programSelect" class="form-select"></select>
+          </div>
+          <div class="col-md-4">
+            <button type="button" class="btn btn-primary w-100" id="btnLoadOutcomes">
+              <i class="fa-solid fa-rotate"></i> تحميل البيانات
+            </button>
+          </div>
+        </div>
+        <div id="summaryRow" class="row g-2 mt-3 d-none">
+          <div class="col-6 col-md-3">
+            <div class="border rounded p-2 text-center bg-light">
+              <div class="small text-muted">المخرجات</div>
+              <div class="fw-bold fs-5" id="statOutcomes">0</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="border rounded p-2 text-center bg-light">
+              <div class="small text-muted">مقررات الخطة</div>
+              <div class="fw-bold fs-5" id="statCourses">0</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="border rounded p-2 text-center bg-light">
+              <div class="small text-muted">روابط مُعرَّفة</div>
+              <div class="fw-bold fs-5" id="statLinks">0</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="border rounded p-2 text-center bg-light">
+              <div class="small text-muted">مقررات بلا ربط</div>
+              <div class="fw-bold fs-5 text-danger" id="statUnlinked">0</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <ul class="nav nav-tabs mb-3 d-none" id="iloMainTabs" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link active" type="button" data-ilo-tab="manage" id="tabBtnManage">المخرجات والربط</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" type="button" data-ilo-tab="matrix" id="tabBtnMatrix">مصفوفة التغطية</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" type="button" data-ilo-tab="unplanned" id="tabBtnUnplanned">
+          مقررات بلا خطة <span class="badge bg-warning text-dark d-none" id="unplannedBadge">0</span>
+        </button>
+      </li>
+    </ul>
+
+    <div id="tabPaneManage" class="ilo-tab-pane d-none">
+    <div id="mainPanels" class="row g-3">
+      <div class="col-lg-7">
+        <div class="card shadow-sm">
+          <div class="card-header bg-light d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <span class="fw-semibold">مخرجات البرنامج</span>
+            <button type="button" class="btn btn-sm btn-success" id="btnAddOutcome">
+              <i class="fa-solid fa-plus"></i> إضافة مخرج
+            </button>
+          </div>
+          <div class="card-body p-0">
+            <div class="table-responsive">
+              <table class="table table-sm table-hover mb-0 align-middle">
+                <thead class="table-light">
+                  <tr>
+                    <th style="width:5rem">الرمز</th>
+                    <th>العنوان والوصف</th>
+                    <th style="width:4rem">ترتيب</th>
+                    <th style="width:7rem"></th>
+                  </tr>
+                </thead>
+                <tbody id="outcomesBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-5">
+        <div class="card shadow-sm">
+          <div class="card-header bg-light fw-semibold">ربط مقرر بالمخرجات</div>
+          <div class="card-body">
+            <label class="form-label small mb-1">المقرر</label>
+            <select id="courseSelect" class="form-select mb-2"></select>
+            <div id="operationalHint" class="alert alert-warning py-2 small d-none mb-2"></div>
+            <div id="courseLinkMeta" class="small text-muted mb-2"></div>
+            <div class="d-flex flex-wrap gap-1 mb-2">
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="btnLinkAll">تحديد الكل</button>
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="btnLinkNone">إلغاء الكل</button>
+            </div>
+            <div id="linkChecks" class="border rounded p-2 small ilo-link-box"></div>
+            <button type="button" class="btn btn-primary btn-sm mt-2 w-100" id="btnSaveLinks">
+              <i class="fa-solid fa-floppy-disk"></i> حفظ ربط المقرر
+            </button>
+          </div>
+        </div>
+        <div class="alert alert-info small mt-3 mb-0">
+          <strong>ملاحظة:</strong> القائمة تشمل خطة البرنامج، خطط أخرى في القسم، ومقررات تشغيلية. للمقررات غير المدرجة في الخطة استخدم «ربط مباشر» أو تبويب «مقررات بلا خطة».
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <div id="tabPaneMatrix" class="ilo-tab-pane d-none">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <span class="fw-semibold">مصفوفة التغطية (مقررات × مخرجات)</span>
+          <button type="button" class="btn btn-sm btn-outline-primary" id="btnRefreshMatrix">
+            <i class="fa-solid fa-rotate"></i> تحديث
+          </button>
+        </div>
+        <div class="card-body">
+          <div class="small text-muted mb-2">
+            انقر خلية للتبديل.
+            <span class="ilo-legend ilo-cell-pc">خطة</span>
+            <span class="ilo-legend ilo-cell-master">كتالوج</span>
+            <span class="ilo-legend ilo-cell-both">كلاهما</span>
+            <span class="ilo-legend ilo-col-op">عمود تشغيلي</span>
+          </div>
+          <div id="matrixWrap" class="table-responsive ilo-matrix-wrap">
+            <p class="text-muted small p-3 mb-0">حمّل بيانات البرنامج أولاً.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tabPaneUnplanned" class="ilo-tab-pane d-none">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">مقررات تشغيلية غير مدرجة في خطة البرنامج</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0 align-middle">
+              <thead class="table-light">
+                <tr>
+                  <th>المقرر</th>
+                  <th style="width:8rem">الرمز</th>
+                  <th style="width:14rem"></th>
+                </tr>
+              </thead>
+              <tbody id="unplannedBody">
+                <tr><td colspan="3" class="text-muted text-center py-4">لا بيانات — حمّل البرنامج.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div class="modal fade" id="addPlanModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">إضافة مقرر إلى خطة البرنامج</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="addPlanCourseMasterId" value="">
+          <input type="hidden" id="addPlanCourseName" value="">
+          <p class="small mb-2" id="addPlanCourseLabel"></p>
+          <div class="mb-2">
+            <label class="form-label small">رمز المقرر في الخطة</label>
+            <input type="text" class="form-control" id="addPlanCourseCode" maxlength="32">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">المستوى (اختياري)</label>
+            <input type="number" class="form-control" id="addPlanLevel" value="0" min="0" max="10">
+          </div>
+          <label class="form-label small">ربط مخرجات عند الإضافة (اختياري)</label>
+          <div id="addPlanOutcomeChecks" class="border rounded p-2 small ilo-link-box"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+          <button type="button" class="btn btn-primary" id="btnConfirmAddPlan">إضافة للخطة</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="outcomeModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="outcomeModalTitle">مخرج تعلم</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="outcomeEditId" value="">
+          <div class="mb-2">
+            <label class="form-label small">الرمز (مثل PLO1)</label>
+            <input type="text" class="form-control" id="outcomeCode" maxlength="32" placeholder="PLO1">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">العنوان بالعربية</label>
+            <input type="text" class="form-control" id="outcomeTitle" maxlength="300">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">الوصف (اختياري)</label>
+            <textarea class="form-control" id="outcomeDesc" rows="3" maxlength="2000"></textarea>
+          </div>
+          <div class="row g-2">
+            <div class="col-6">
+              <label class="form-label small">ترتيب العرض</label>
+              <input type="number" class="form-control" id="outcomeSort" value="0" min="0" max="999">
+            </div>
+            <div class="col-6 d-flex align-items-end">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="outcomeActive" checked>
+                <label class="form-check-label small" for="outcomeActive">نشط</label>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+          <button type="button" class="btn btn-primary" id="btnSaveOutcome">حفظ</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    .ilo-link-box { max-height: 220px; overflow-y: auto; }
+    .ilo-link-box label { cursor: pointer; padding: 0.15rem 0; }
+    .plo-desc { font-size: 0.8rem; color: var(--bs-secondary-color); }
+    .plo-inactive { opacity: 0.55; }
+    .ilo-matrix-wrap { max-height: 70vh; overflow: auto; }
+    .ilo-matrix-wrap table { font-size: 0.78rem; border-collapse: separate; border-spacing: 0; }
+    .ilo-matrix-wrap th { position: sticky; top: 0; z-index: 2; background: var(--bs-light); white-space: nowrap; }
+    .ilo-matrix-wrap th.ilo-sticky-col, .ilo-matrix-wrap td.ilo-sticky-col {
+      position: sticky; right: 0; z-index: 1; background: #fff; min-width: 5.5rem;
+    }
+    .ilo-matrix-wrap th.ilo-sticky-col { z-index: 3; }
+    .ilo-matrix-cell {
+      width: 2rem; height: 2rem; min-width: 2rem; padding: 0; cursor: pointer; text-align: center;
+      vertical-align: middle; border: 1px solid #dee2e6;
+    }
+    .ilo-matrix-cell:hover { filter: brightness(0.95); }
+    .ilo-matrix-cell.off { background: #f8f9fa; color: #adb5bd; }
+    .ilo-matrix-cell.on-pc { background: #cfe2ff; }
+    .ilo-matrix-cell.on-master { background: #fff3cd; }
+    .ilo-matrix-cell.on-both { background: #d1e7dd; }
+    .ilo-col-op-h { font-style: italic; color: #856404; }
+    .ilo-legend { display: inline-block; padding: 0.1rem 0.45rem; border-radius: 0.25rem; margin-inline-start: 0.35rem; font-size: 0.75rem; }
+    .ilo-legend.ilo-cell-pc { background: #cfe2ff; }
+    .ilo-legend.ilo-cell-master { background: #fff3cd; }
+    .ilo-legend.ilo-cell-both { background: #d1e7dd; }
+    .ilo-legend.ilo-col-op { background: #f8f9fa; border: 1px dashed #adb5bd; }
+  </style>
+
+  <script>
+    let currentProgramId = null;
+    let outcomesCache = [];
+    let courseGroupsCache = null;
+    let matrixCache = null;
+    let unplannedCache = [];
+
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    function hdr() {
+      const c = document.querySelector('meta[name=csrf-token]')?.content || '';
+      const h = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+      if (c) h['X-CSRFToken'] = c;
+      return h;
+    }
+    function showMsg(text, type) {
+      const el = document.getElementById('iloMsg');
+      if (!el) return;
+      el.innerHTML = '<div class="alert alert-' + (type || 'info') + ' py-2 small mb-0">' + escapeHtml(text) + '</div>';
+      if (type === 'success') setTimeout(() => { if (el) el.innerHTML = ''; }, 4000);
+    }
+
+    async function loadPrograms() {
+      const r = await fetch('/academic_quality/ilo/api/programs', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      const sel = document.getElementById('programSelect');
+      const items = j.items || [];
+      sel.innerHTML = '<option value="">— اختر برنامجاً —</option>' +
+        items.map(p => `<option value="${p.id}">${escapeHtml(p.department_name)} / ${escapeHtml(p.code)} — ${escapeHtml(p.name_ar)}</option>`).join('');
+      if (items.length === 1) {
+        sel.value = String(items[0].id);
+        loadOutcomes();
+      }
+    }
+
+    async function loadSummary(pid) {
+      const r = await fetch('/academic_quality/ilo/api/programs/' + pid + '/summary', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) return;
+      document.getElementById('statOutcomes').textContent = j.outcomes_count ?? 0;
+      document.getElementById('statCourses').textContent = j.courses_count ?? 0;
+      document.getElementById('statLinks').textContent = j.links_count ?? 0;
+      document.getElementById('statUnlinked').textContent = j.courses_unlinked_count ?? 0;
+      document.getElementById('summaryRow').classList.remove('d-none');
+    }
+
+    function renderOutcomes(items) {
+      outcomesCache = items || [];
+      const tbody = document.getElementById('outcomesBody');
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center py-4">لا توجد مخرجات — أضف أول مخرج للبرنامج.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = items.map(x => {
+        const inactive = Number(x.is_active) === 0;
+        const desc = (x.description || '').trim();
+        return `<tr class="${inactive ? 'plo-inactive' : ''}" data-id="${x.id}">
+          <td><code>${escapeHtml(x.code)}</code></td>
+          <td>
+            <div class="fw-semibold">${escapeHtml(x.title_ar)}</div>
+            ${desc ? `<div class="plo-desc">${escapeHtml(desc)}</div>` : ''}
+          </td>
+          <td class="text-muted">${x.sort_order ?? 0}</td>
+          <td class="text-nowrap">
+            <button type="button" class="btn btn-sm btn-outline-primary btn-edit-outcome" data-id="${x.id}">تعديل</button>
+            <button type="button" class="btn btn-sm btn-outline-danger btn-del-outcome" data-id="${x.id}">حذف</button>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+
+    async function loadOutcomes() {
+      const pid = document.getElementById('programSelect').value;
+      if (!pid) {
+        showMsg('اختر برنامجاً أولاً.', 'warning');
+        return;
+      }
+      currentProgramId = pid;
+      showMsg('جاري التحميل…', 'info');
+      try {
+        const [oR, cR, sR] = await Promise.all([
+          fetch('/academic_quality/ilo/api/programs/' + pid + '/outcomes', { credentials: 'include' }),
+          fetch('/academic_quality/ilo/api/programs/' + pid + '/courses', { credentials: 'include' }),
+          fetch('/academic_quality/ilo/api/programs/' + pid + '/summary', { credentials: 'include' }),
+        ]);
+        const oJ = await oR.json().catch(() => ({}));
+        const cJ = await cR.json().catch(() => ({}));
+        const sJ = await sR.json().catch(() => ({}));
+        if (!oR.ok) {
+          showMsg(oJ.message || 'تعذّر تحميل المخرجات', 'danger');
+          return;
+        }
+        renderOutcomes(oJ.items || []);
+        courseGroupsCache = cJ.groups || null;
+        renderCourseSelect(cJ);
+        if (sR.ok) {
+          document.getElementById('statOutcomes').textContent = sJ.outcomes_count ?? 0;
+          document.getElementById('statCourses').textContent = sJ.courses_count ?? 0;
+          document.getElementById('statLinks').textContent = sJ.links_count ?? 0;
+          document.getElementById('statUnlinked').textContent = sJ.courses_unlinked_count ?? 0;
+          document.getElementById('summaryRow').classList.remove('d-none');
+        }
+        document.getElementById('mainPanels').classList.remove('d-none');
+        document.getElementById('iloMainTabs').classList.remove('d-none');
+        document.getElementById('tabPaneManage').classList.remove('d-none');
+        document.getElementById('linkChecks').innerHTML = '';
+        document.getElementById('courseLinkMeta').textContent = '';
+        await loadCoverageMatrix();
+        showMsg('تم تحميل بيانات البرنامج.', 'success');
+        const cs = document.getElementById('courseSelect');
+        if (cs.options.length === 2) {
+          cs.selectedIndex = 1;
+          loadCourseLinks();
+        }
+      } catch (e) {
+        console.error(e);
+        showMsg('خطأ في الاتصال بالخادم.', 'danger');
+      }
+    }
+
+    function renderCourseSelect(cJ) {
+      const cs = document.getElementById('courseSelect');
+      const g = cJ.groups || {};
+      const cur = g.current_program || [];
+      const dept = g.department_plans || [];
+      const op = g.operational || [];
+      let html = '<option value="">— اختر مقرراً —</option>';
+      const opt = (list, label) => {
+        if (!list.length) return '';
+        return '<optgroup label="' + escapeHtml(label) + '">' +
+          list.map(c => {
+            if (c.id) {
+              const prog = c.program_code ? ' [' + c.program_code + ']' : '';
+              return `<option value="${c.id}" data-group="${escapeHtml(c.course_group || '')}">${escapeHtml(c.course_code)} — ${escapeHtml(c.course_name)}${escapeHtml(prog)}</option>`;
+            }
+            return '';
+          }).filter(Boolean).join('') + '</optgroup>';
+      };
+      html += opt(cur, 'خطة البرنامج المحدد');
+      html += opt(dept, 'خطط أخرى في القسم');
+      const opLinkable = op.filter(o => o.id).map(o => ({
+        id: o.id,
+        course_code: o.course_code || '—',
+        course_name: o.display_name || o.course_name,
+        course_group: 'operational',
+        program_code: (o.program_course_options && o.program_course_options[0]) ? o.program_course_options[0].program_code : '',
+      }));
+      html += opt(opLinkable, 'مقررات القسم (تشغيلية — عبر خطة أخرى)');
+      const opBlocked = op.filter(o => !o.id && o.course_master_id);
+      if (opBlocked.length) {
+        html += '<optgroup label="مقررات تشغيلية — ربط مباشر (كتالوج)">';
+        opBlocked.forEach(o => {
+          html += `<option value="cm:${o.course_master_id}" data-group="master_direct">` +
+            escapeHtml(o.display_name || o.course_name) + ' [ربط مباشر]</option>';
+        });
+        html += '</optgroup>';
+      }
+      const opNoMaster = op.filter(o => !o.id && !o.course_master_id);
+      if (opNoMaster.length) {
+        html += '<optgroup label="مقررات تشغيلية — أضف للخطة أولاً">';
+        opNoMaster.forEach(o => {
+          html += '<option disabled value="">' + escapeHtml(o.display_name || o.course_name) + '</option>';
+        });
+        html += '</optgroup>';
+      }
+      cs.innerHTML = html;
+      cs.dataset.operationalJson = JSON.stringify(op);
+    }
+
+    function updateOperationalHint() {
+      const cs = document.getElementById('courseSelect');
+      const hint = document.getElementById('operationalHint');
+      const selOpt = cs.selectedOptions && cs.selectedOptions[0];
+      const grp = selOpt ? selOpt.dataset.group : '';
+      hint.classList.add('d-none');
+      if (grp !== 'operational') return;
+      let opList = [];
+      try { opList = JSON.parse(cs.dataset.operationalJson || '[]'); } catch (e) { opList = []; }
+      const cid = cs.value;
+      const match = opList.find(o => String(o.id) === String(cid));
+      if (match && (match.program_course_options || []).length > 1) {
+        hint.textContent = 'هذا المقرر التشغيلي مرتبط بعدة خطط؛ تم اختيار أحد بنود الخطة للربط.';
+        hint.classList.remove('d-none');
+      }
+    }
+
+    async function loadCourseLinks() {
+      const cid = document.getElementById('courseSelect').value;
+      const box = document.getElementById('linkChecks');
+      const meta = document.getElementById('courseLinkMeta');
+      updateOperationalHint();
+      if (!cid) {
+        box.innerHTML = '';
+        meta.textContent = '';
+        return;
+      }
+      let url;
+      if (String(cid).startsWith('cm:')) {
+        const cmid = cid.split(':')[1];
+        url = '/academic_quality/ilo/api/programs/' + currentProgramId + '/course_master/' + cmid + '/outcomes';
+      } else {
+        const q = currentProgramId ? ('?for_program_id=' + encodeURIComponent(currentProgramId)) : '';
+        url = '/academic_quality/ilo/api/program_courses/' + cid + '/outcomes' + q;
+      }
+      const r = await fetch(url, { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        box.innerHTML = '<span class="text-danger">' + escapeHtml(j.message || 'خطأ') + '</span>';
+        return;
+      }
+      const linked = new Set((j.linked || []).map(x => x.id));
+      const all = j.all_outcomes || [];
+      const selOpt = document.getElementById('courseSelect').selectedOptions[0];
+      const grp = selOpt ? selOpt.dataset.group : '';
+      const grpLabel = grp === 'department_plan'
+        ? ' (مقرر من خطة برنامج آخر)'
+        : (grp === 'master_direct' ? ' (ربط مباشر على كتالوج المقرر)' : '');
+      meta.textContent = 'مربوط حالياً: ' + linked.size + ' من ' + all.length + ' مخرج' + grpLabel;
+      if (!all.length) {
+        box.innerHTML = '<span class="text-muted">عرّف مخرجات للبرنامج أولاً من الجدول على اليسار.</span>';
+        return;
+      }
+      box.innerHTML = all.map(o =>
+        `<label class="d-block"><input type="checkbox" class="form-check-input me-1 link-outcome-cb" value="${o.id}" ${linked.has(o.id) ? 'checked' : ''}> ` +
+        `<strong>${escapeHtml(o.code)}</strong> — ${escapeHtml(o.title_ar)}</label>`
+      ).join('');
+    }
+
+    function openOutcomeModal(editRow) {
+      document.getElementById('outcomeEditId').value = editRow ? editRow.id : '';
+      document.getElementById('outcomeCode').value = editRow ? editRow.code : '';
+      document.getElementById('outcomeCode').disabled = !!editRow;
+      document.getElementById('outcomeTitle').value = editRow ? editRow.title_ar : '';
+      document.getElementById('outcomeDesc').value = editRow ? (editRow.description || '') : '';
+      document.getElementById('outcomeSort').value = editRow ? (editRow.sort_order ?? 0) : 0;
+      document.getElementById('outcomeActive').checked = editRow ? Number(editRow.is_active) !== 0 : true;
+      document.getElementById('outcomeModalTitle').textContent = editRow ? 'تعديل مخرج' : 'إضافة مخرج جديد';
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('outcomeModal')).show();
+    }
+
+    document.getElementById('programSelect').addEventListener('change', () => {
+      if (document.getElementById('programSelect').value) loadOutcomes();
+    });
+    document.getElementById('btnLoadOutcomes').addEventListener('click', loadOutcomes);
+    document.getElementById('btnAddOutcome').addEventListener('click', () => {
+      if (!currentProgramId) { showMsg('اختر برنامجاً وحمّل البيانات.', 'warning'); return; }
+      openOutcomeModal(null);
+    });
+    document.getElementById('outcomesBody').addEventListener('click', async e => {
+      const editBtn = e.target.closest('.btn-edit-outcome');
+      if (editBtn) {
+        const row = outcomesCache.find(x => String(x.id) === editBtn.dataset.id);
+        if (row) openOutcomeModal(row);
+        return;
+      }
+      const delBtn = e.target.closest('.btn-del-outcome');
+      if (!delBtn) return;
+      if (!confirm('حذف هذا المخرج؟ سيُزال ربطه بكل المقررات.')) return;
+      const r = await fetch('/academic_quality/ilo/api/outcomes/' + delBtn.dataset.id, {
+        method: 'DELETE', credentials: 'include', headers: hdr(),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { showMsg(j.message || 'فشل الحذف', 'danger'); return; }
+      showMsg('تم الحذف.', 'success');
+      loadOutcomes();
+    });
+    document.getElementById('btnSaveOutcome').addEventListener('click', async () => {
+      const id = document.getElementById('outcomeEditId').value;
+      const code = document.getElementById('outcomeCode').value.trim();
+      const title_ar = document.getElementById('outcomeTitle').value.trim();
+      const description = document.getElementById('outcomeDesc').value.trim();
+      const sort_order = parseInt(document.getElementById('outcomeSort').value, 10) || 0;
+      const is_active = document.getElementById('outcomeActive').checked;
+      if (!title_ar) { showMsg('العنوان مطلوب.', 'warning'); return; }
+      if (!id && !code) { showMsg('الرمز مطلوب.', 'warning'); return; }
+      if (!currentProgramId && !id) return;
+      const url = id
+        ? '/academic_quality/ilo/api/outcomes/' + id
+        : '/academic_quality/ilo/api/programs/' + currentProgramId + '/outcomes';
+      const body = id
+        ? { title_ar, description, sort_order, is_active, code }
+        : { code, title_ar, description, sort_order };
+      const r = await fetch(url, { method: id ? 'PUT' : 'POST', credentials: 'include', headers: hdr(), body: JSON.stringify(body) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { showMsg(j.message || 'فشل الحفظ', 'danger'); return; }
+      bootstrap.Modal.getInstance(document.getElementById('outcomeModal'))?.hide();
+      showMsg('تم الحفظ.', 'success');
+      loadOutcomes();
+    });
+    document.getElementById('courseSelect').addEventListener('change', loadCourseLinks);
+    document.getElementById('btnLinkAll').addEventListener('click', () => {
+      document.querySelectorAll('#linkChecks .link-outcome-cb').forEach(cb => { cb.checked = true; });
+    });
+    document.getElementById('btnLinkNone').addEventListener('click', () => {
+      document.querySelectorAll('#linkChecks .link-outcome-cb').forEach(cb => { cb.checked = false; });
+    });
+    document.getElementById('btnSaveLinks').addEventListener('click', async () => {
+      const cid = document.getElementById('courseSelect').value;
+      if (!cid) { showMsg('اختر مقرراً.', 'warning'); return; }
+      const ids = [...document.querySelectorAll('#linkChecks .link-outcome-cb:checked')].map(x => parseInt(x.value, 10));
+      let url, body;
+      if (String(cid).startsWith('cm:')) {
+        const cmid = cid.split(':')[1];
+        url = '/academic_quality/ilo/api/programs/' + currentProgramId + '/course_master/' + cmid + '/outcomes';
+        body = { outcome_ids: ids };
+      } else {
+        url = '/academic_quality/ilo/api/program_courses/' + cid + '/outcomes';
+        body = { outcome_ids: ids, for_program_id: currentProgramId ? parseInt(currentProgramId, 10) : null };
+      }
+      const r = await fetch(url, { method: 'PUT', credentials: 'include', headers: hdr(), body: JSON.stringify(body) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { showMsg(j.message || 'فشل الحفظ', 'danger'); return; }
+      showMsg('تم حفظ الربط (' + ids.length + ' مخرج).', 'success');
+      if (currentProgramId) loadSummary(currentProgramId);
+      loadCourseLinks();
+      loadCoverageMatrix();
+    });
+
+    function switchIloTab(name) {
+      document.querySelectorAll('#iloMainTabs .nav-link').forEach(b => {
+        b.classList.toggle('active', b.dataset.iloTab === name);
+      });
+      document.querySelectorAll('.ilo-tab-pane').forEach(p => p.classList.add('d-none'));
+      const pane = document.getElementById('tabPane' + (name === 'manage' ? 'Manage' : name === 'matrix' ? 'Matrix' : 'Unplanned'));
+      if (pane) pane.classList.remove('d-none');
+      if (name === 'matrix' && currentProgramId) loadCoverageMatrix();
+      if (name === 'unplanned' && currentProgramId) renderUnplannedTable();
+    }
+
+    document.querySelectorAll('#iloMainTabs [data-ilo-tab]').forEach(btn => {
+      btn.addEventListener('click', () => switchIloTab(btn.dataset.iloTab));
+    });
+    document.getElementById('btnRefreshMatrix').addEventListener('click', () => loadCoverageMatrix());
+
+    function matrixCellClass(linked, src) {
+      if (!linked) return 'off';
+      if (src === 'both') return 'on-both';
+      if (src === 'master') return 'on-master';
+      return 'on-pc';
+    }
+
+    function renderCoverageMatrix(data) {
+      matrixCache = data;
+      const wrap = document.getElementById('matrixWrap');
+      const outcomes = data.outcomes || [];
+      const columns = data.columns || [];
+      if (!outcomes.length) {
+        wrap.innerHTML = '<p class="text-muted small p-3">لا مخرجات — أضف مخرجات للبرنامج أولاً.</p>';
+        return;
+      }
+      if (!columns.length) {
+        wrap.innerHTML = '<p class="text-muted small p-3">لا مقررات في الخطة أو القسم.</p>';
+        return;
+      }
+      const cellMap = {};
+      (data.cells || []).forEach(c => {
+        cellMap[c.outcome_id + '|' + c.col_key] = c;
+      });
+      let html = '<table class="table table-bordered table-sm mb-0"><thead><tr><th class="ilo-sticky-col">مخرج</th>';
+      columns.forEach(col => {
+        const op = !col.in_current_program;
+        const title = escapeHtml(col.course_code) + ' — ' + escapeHtml(col.course_name);
+        html += '<th class="' + (op ? 'ilo-col-op-h' : '') + '" title="' + title + '">' +
+          escapeHtml(col.course_code || col.course_name).slice(0, 12) + (op ? '*' : '') + '</th>';
+      });
+      html += '</tr></thead><tbody>';
+      outcomes.forEach(o => {
+        html += '<tr><th class="ilo-sticky-col" title="' + escapeHtml(o.title_ar) + '"><code>' + escapeHtml(o.code) + '</code></th>';
+        columns.forEach(col => {
+          const key = o.id + '|' + col.col_key;
+          const cell = cellMap[key] || { linked: false, link_source: '' };
+          const cls = matrixCellClass(cell.linked, cell.link_source);
+          const sym = cell.linked ? (cell.link_source === 'both' ? '●' : (cell.link_source === 'master' ? '◆' : '■')) : '·';
+          html += '<td class="ilo-matrix-cell ' + cls + '" data-oid="' + o.id + '" data-col="' + escapeHtml(col.col_key) + '" data-linked="' + (cell.linked ? '1' : '0') + '">' + sym + '</td>';
+        });
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+      wrap.innerHTML = html;
+      unplannedCache = data.operational_unplanned || [];
+      const badge = document.getElementById('unplannedBadge');
+      if (unplannedCache.length) {
+        badge.textContent = String(unplannedCache.length);
+        badge.classList.remove('d-none');
+      } else {
+        badge.classList.add('d-none');
+      }
+      renderUnplannedTable();
+    }
+
+    async function loadCoverageMatrix() {
+      if (!currentProgramId) return;
+      const wrap = document.getElementById('matrixWrap');
+      wrap.innerHTML = '<p class="text-muted small p-3">جاري التحميل…</p>';
+      const r = await fetch('/academic_quality/ilo/api/programs/' + currentProgramId + '/coverage_matrix', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        wrap.innerHTML = '<p class="text-danger small p-3">' + escapeHtml(j.message || 'خطأ') + '</p>';
+        return;
+      }
+      renderCoverageMatrix(j);
+    }
+
+    document.getElementById('matrixWrap').addEventListener('click', async e => {
+      const td = e.target.closest('.ilo-matrix-cell');
+      if (!td || !currentProgramId) return;
+      const outcomeId = parseInt(td.dataset.oid, 10);
+      const colKey = td.dataset.col;
+      const wasLinked = td.dataset.linked === '1';
+      td.style.opacity = '0.5';
+      const r = await fetch('/academic_quality/ilo/api/programs/' + currentProgramId + '/coverage_matrix/toggle', {
+        method: 'POST', credentials: 'include', headers: hdr(),
+        body: JSON.stringify({ outcome_id: outcomeId, col_key: colKey, linked: !wasLinked }),
+      });
+      const j = await r.json().catch(() => ({}));
+      td.style.opacity = '';
+      if (!r.ok) { showMsg(j.message || 'فشل التبديل', 'danger'); return; }
+      const cls = matrixCellClass(j.linked, j.link_source || '');
+      td.className = 'ilo-matrix-cell ' + cls;
+      td.dataset.linked = j.linked ? '1' : '0';
+      const sym = j.linked ? (j.link_source === 'both' ? '●' : (j.link_source === 'master' ? '◆' : '■')) : '·';
+      td.textContent = sym;
+      if (currentProgramId) loadSummary(currentProgramId);
+    });
+
+    function renderUnplannedTable() {
+      const tbody = document.getElementById('unplannedBody');
+      const list = unplannedCache.length ? unplannedCache : [];
+      if (!currentProgramId) {
+        tbody.innerHTML = '<tr><td colspan="3" class="text-muted text-center py-4">حمّل البرنامج أولاً.</td></tr>';
+        return;
+      }
+      if (!list.length) {
+        tbody.innerHTML = '<tr><td colspan="3" class="text-muted text-center py-4">كل مقررات القسم التشغيلية مدرجة في الخطة أو لا توجد مقررات إضافية.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = list.map((row, idx) => {
+        const name = escapeHtml(row.display_name || row.course_name);
+        const code = escapeHtml(row.course_code || '—');
+        return `<tr>
+          <td>${name}</td>
+          <td><code>${code}</code></td>
+          <td class="text-nowrap">
+            <button type="button" class="btn btn-sm btn-success btn-add-plan" data-idx="${idx}">
+              <i class="fa-solid fa-plus"></i> إضافة للخطة
+            </button>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+
+    document.getElementById('unplannedBody').addEventListener('click', e => {
+      const btn = e.target.closest('.btn-add-plan');
+      if (!btn) return;
+      const row = unplannedCache[parseInt(btn.dataset.idx, 10)];
+      if (!row) return;
+      document.getElementById('addPlanCourseMasterId').value = row.course_master_id || '';
+      document.getElementById('addPlanCourseName').value = row.course_name || row.display_name || '';
+      document.getElementById('addPlanCourseLabel').textContent = row.display_name || row.course_name || '';
+      document.getElementById('addPlanCourseCode').value = row.course_code || '';
+      document.getElementById('addPlanLevel').value = '0';
+      const checks = document.getElementById('addPlanOutcomeChecks');
+      checks.innerHTML = (outcomesCache || []).map(o =>
+        `<label class="d-block"><input type="checkbox" class="form-check-input me-1 add-plan-outcome" value="${o.id}"> ` +
+        `<strong>${escapeHtml(o.code)}</strong> — ${escapeHtml(o.title_ar)}</label>`
+      ).join('') || '<span class="text-muted">لا مخرجات معرّفة.</span>';
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('addPlanModal')).show();
+    });
+
+    document.getElementById('btnConfirmAddPlan').addEventListener('click', async () => {
+      if (!currentProgramId) return;
+      const outcome_ids = [...document.querySelectorAll('.add-plan-outcome:checked')].map(x => parseInt(x.value, 10));
+      const body = {
+        course_name: document.getElementById('addPlanCourseName').value.trim(),
+        course_code: document.getElementById('addPlanCourseCode').value.trim(),
+        course_master_id: document.getElementById('addPlanCourseMasterId').value || null,
+        level_no: parseInt(document.getElementById('addPlanLevel').value, 10) || 0,
+        outcome_ids,
+      };
+      const r = await fetch('/academic_quality/ilo/api/programs/' + currentProgramId + '/add_to_plan', {
+        method: 'POST', credentials: 'include', headers: hdr(), body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { showMsg(j.message || 'فشل الإضافة', 'danger'); return; }
+      bootstrap.Modal.getInstance(document.getElementById('addPlanModal'))?.hide();
+      showMsg('تمت إضافة المقرر للخطة.', 'success');
+      loadOutcomes();
+    });
+
+    loadPrograms();
+  </script>
+</body>
+</html>

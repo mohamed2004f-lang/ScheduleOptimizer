@@ -779,17 +779,28 @@ html[data-theme="dark"] .bg-body-tertiary{
   max-width: 420px;
 }
 
-.btn-theme-toggle{
+.btn-theme-toggle,
+.btn-topbar-notify{
   border: 1px solid rgba(255,255,255,0.35);
   color: #fff;
   background: rgba(255,255,255,0.08);
   padding: 0.25rem 0.65rem;
   font-size: 0.85rem;
   border-radius: 8px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
 }
-.btn-theme-toggle:hover{
+.btn-theme-toggle:hover,
+.btn-topbar-notify:hover{
   background: rgba(255,255,255,0.18);
   color: #fff;
+}
+.btn-topbar-notify.active{
+  background: rgba(214,161,42,0.35);
+  border-color: rgba(255,255,255,0.55);
 }
 
 /* Skeleton loaders */

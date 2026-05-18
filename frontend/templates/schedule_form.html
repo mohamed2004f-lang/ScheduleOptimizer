@@ -14,11 +14,34 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">محرر جدول المقررات</h1>
-        <p class="page-subtitle">إدارة جلسات المقررات ثم اعتماد/نشر الجدول ليظهر للطلبة والمشرفين</p>
+        <p class="page-subtitle" id="schedulePageSubtitle">إدارة جلسات المقررات ثم اعتماد/نشر الجدول ليظهر للطلبة والمشرفين</p>
       </div>
     </div>
+    <div id="schedulePublishBanner" class="alert alert-warning py-2 small d-none mb-2" role="status"></div>
     <div id="sd_msg" class="mb-2" aria-live="polite"></div>
 
+      <div class="card mb-3 filter-section d-none" id="scheduleReadonlyToolbar">
+        <div class="card-body d-flex flex-wrap align-items-center gap-2">
+          <a class="btn btn-outline-success btn-sm" href="/schedule/export/excel" target="_blank">تصدير Excel</a>
+          <a class="btn btn-outline-danger btn-sm" href="/schedule/export/pdf" target="_blank">تصدير PDF</a>
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="btnSchedulePreviewRo">عرض</button>
+          <button type="button" class="btn btn-outline-dark btn-sm" id="btnSchedulePrintRo">طباعة</button>
+        </div>
+      </div>
+
+      <div id="schedulePreviewArea" class="d-none mt-2 mb-3">
+        <div class="card">
+          <div class="card-body p-2">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <div class="small text-muted fw-semibold">معاينة طباعة الجدول</div>
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="btnSchedulePreviewClose">إخفاء</button>
+            </div>
+            <div id="schedulePreviewContainer"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="scheduleAdminPanel">
       <div class="instruction-text">
         <strong>تعليمات:</strong> انقر على زر <strong>إدارة المقررات</strong> في أي خانة لتحديد محاضرات متعددة. <strong>الأيام عموديًا، التوقيت أفقيًا</strong>
       </div>
@@ -33,17 +56,6 @@
               <a class="btn btn-outline-danger btn-sm" id="btnScheduleExportPdfTpl" href="/schedule/export/pdf?include_empty=1" target="_blank">قالب PDF</a>
               <button type="button" class="btn btn-outline-secondary btn-sm" id="btnSchedulePreview">👁️ عرض</button>
               <button type="button" class="btn btn-outline-dark btn-sm" id="btnSchedulePrintStudentStyle">🖨️ طباعة</button>
-            </div>
-            <div id="schedulePreviewArea" class="d-none mt-2">
-              <div class="card">
-                <div class="card-body p-2">
-                  <div class="d-flex justify-content-between align-items-center mb-2">
-                    <div class="small text-muted fw-semibold">معاينة طباعة الجدول</div>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" id="btnSchedulePreviewClose">إخفاء</button>
-                  </div>
-                  <div id="schedulePreviewContainer"></div>
-                </div>
-              </div>
             </div>
             <div id="publishScheduleWrap" class="d-none align-items-center gap-2">
               <span id="publishStatusText" class="small text-muted"></span>
@@ -82,32 +94,10 @@
           </div>
         </div>
       </div>
-
-      <div class="card mb-3 chart-container">
-        <div class="card-body">
-          <div class="d-flex justify-content-between align-items-center mb-3">
-            <h6 class="mb-0">الجدول الزمني</h6>
-            <div class="d-flex flex-wrap gap-1">
-              <button id="btnScheduleViewTable" class="btn btn-outline-secondary btn-sm active" type="button">جدول</button>
-              <button id="btnScheduleViewCards" class="btn btn-outline-secondary btn-sm" type="button">بطاقات (موبايل)</button>
-              <button id="btnToggleCompact" class="btn btn-outline-primary btn-sm" type="button">عرض مضغوط</button>
-              <button id="btnToggleScheduleSlotManage" class="btn btn-outline-info btn-sm" type="button" title="إظهار أو إخفاء أزرار التعديل في خلايا الجدول">إظهار أزرار إدارة المقررات</button>
-              <button id="btnRun" class="btn btn-success btn-sm" type="button">انتاج الجداول وعرض التعارضات</button>
-              <a href="/results" class="btn btn-outline-secondary btn-sm">عرض النتائج</a>
-            </div>
-          </div>
-          <div id="scheduleRegistrationInsights" class="mb-3"></div>
-          <div class="timetable-scroll-hint">
-            <div id="scheduleList" class="timetable-wrapper"></div>
-            <div id="scheduleMobileList" class="d-none"></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="card mb-3 d-none" id="instructorDeptStudentsCard">
+      <div class="card mb-3 filter-section" id="instructorDeptStudentsCard">
         <div class="card-body">
           <h6 class="mb-2">طلاب الأستاذ حسب القسم</h6>
-          <p class="small text-muted mb-2">يعتمد على جدول schedule وregistrations ويمتد لتكافؤ المقررات عند تعريفه.</p>
+          <p class="small text-muted mb-2">أداة إدارية: عرض الطلاب المسجّلين في مقررات الأستاذ المختار ضمن القسم والفصل الدراسي.</p>
           <div class="row g-2 align-items-end">
             <div class="col-md-3">
               <label class="form-label small mb-0">الأستاذ</label>
@@ -126,6 +116,29 @@
             </div>
           </div>
           <div id="isdOut" class="small mt-2"></div>
+        </div>
+      </div>
+      </div>
+      </div>
+
+      <div class="card mb-3 chart-container">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h6 class="mb-0">الجدول الزمني</h6>
+            <div class="d-flex flex-wrap gap-1">
+              <button id="btnScheduleViewTable" class="btn btn-outline-secondary btn-sm active" type="button">جدول</button>
+              <button id="btnScheduleViewCards" class="btn btn-outline-secondary btn-sm" type="button">بطاقات (موبايل)</button>
+              <span id="scheduleChartAdminBtns" class="d-inline-flex flex-wrap gap-1"><button id="btnToggleCompact" class="btn btn-outline-primary btn-sm" type="button">عرض مضغوط</button>
+              <button id="btnToggleScheduleSlotManage" class="btn btn-outline-info btn-sm" type="button" title="إظهار أو إخفاء أزرار التعديل في خلايا الجدول">إظهار أزرار إدارة المقررات</button>
+              <button id="btnRun" class="btn btn-success btn-sm" type="button">انتاج الجداول وعرض التعارضات</button>
+              <a href="/results" class="btn btn-outline-secondary btn-sm">عرض النتائج</a></span>
+            </div>
+          </div>
+          <div id="scheduleRegistrationInsights" class="mb-3"></div>
+          <div class="timetable-scroll-hint">
+            <div id="scheduleList" class="timetable-wrapper"></div>
+            <div id="scheduleMobileList" class="d-none"></div>
+          </div>
         </div>
       </div>
 
@@ -1590,20 +1603,29 @@ async function printScheduleAsStudentStyle(){
   return openSchedulePrintPreview(true);
 }
 
-async function setupInstructorDeptStudentPanel() {
+function canManageScheduleFromAuth(auth) {
+  const caps = auth?.capabilities;
+  const role = (auth?.role || '').trim();
+  if (caps && caps.v >= 1) return !!caps.can_manage_schedule_edit;
+  const am = (auth?.active_mode || '').trim().toLowerCase();
+  if (['admin', 'admin_main'].includes(role)) return true;
+  if (role === 'head_of_department') return am !== 'instructor' && am !== 'supervisor';
+  return false;
+}
+
+async function setupInstructorDeptStudentPanel(auth) {
   const card = document.getElementById('instructorDeptStudentsCard');
-  if (!card) return;
-  let auth = {};
-  try {
-    const r = await fetch('/auth/check');
-    if (r.ok) auth = await r.json();
-  } catch (e) {
-    return;
+  if (!card || card.dataset.isdReady === '1') return;
+  if (!auth) {
+    try {
+      const r = await fetch('/auth/check', { credentials: 'include', cache: 'no-store' });
+      if (r.ok) auth = await r.json();
+    } catch (e) {
+      return;
+    }
   }
-  const role = auth?.role || '';
-  const ok = ['admin', 'admin_main', 'head_of_department'].includes(role);
-  if (!ok) return;
-  card.classList.remove('d-none');
+  if (!canManageScheduleFromAuth(auth)) return;
+  card.dataset.isdReady = '1';
   const selI = document.getElementById('isdInstructor');
   const selD = document.getElementById('isdDepartment');
   const fillI = () => {
@@ -1680,8 +1702,7 @@ async function setupInstructorDeptStudentPanel() {
 /* ---------- Init ---------- */
 document.addEventListener('DOMContentLoaded', () => {
   loadCourses();
-  loadInstructors().then(() => setupInstructorDeptStudentPanel());
-  loadSchedule();
+  loadInstructors();
 
   const btnRun = document.getElementById('btnRun');
   if(btnRun) btnRun.addEventListener('click', runOptimize);
@@ -1753,55 +1774,99 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Determine role once and apply view-only rules
-  fetch('/auth/check').then(r=>r.json()).then(auth=>{
-    const role = auth?.role || '';
+
+  function applyScheduleRoleUi(auth) {
+    const role = (auth?.role || '').trim();
     const caps = auth?.capabilities;
+    const activeMode = (auth?.active_mode || '').trim().toLowerCase();
     const isSupervisor = (caps && caps.v >= 1)
       ? !!caps.is_supervisor_effective
-      : ((role === 'supervisor') || (role === 'instructor' && Number(auth?.is_supervisor || 0) === 1));
-    IS_VIEW_ONLY_ROLE = (role === 'instructor') || isSupervisor;
-    IS_ADMIN = (caps && caps.v >= 1)
-      ? !!caps.can_manage_schedule_edit
-      : ['admin', 'admin_main', 'head_of_department'].includes(role);
+      : ((role === 'supervisor') || (role === 'instructor' && Number(auth?.is_supervisor || 0) === 1 && activeMode !== 'instructor'));
+    const isStudent = (role === 'student') || !!(caps && caps.is_student);
+    const hodTeachingMode = role === 'head_of_department' && (activeMode === 'instructor' || activeMode === 'supervisor');
+    // مصدر الحقيقة: can_manage_schedule_edit (يغطي أستاذاً، مشرفاً، طالباً، ورئيس قسم في وضع التدريس/الإشراف)
+    if (caps && caps.v >= 1) {
+      IS_VIEW_ONLY_ROLE = !caps.can_manage_schedule_edit;
+      IS_ADMIN = !!caps.can_manage_schedule_edit;
+    } else {
+      IS_VIEW_ONLY_ROLE = (role === 'instructor') || isSupervisor || isStudent || hodTeachingMode;
+      IS_ADMIN = ['admin', 'admin_main', 'head_of_department'].includes(role) && !hodTeachingMode;
+    }
+
+    const adminPanel = document.getElementById('scheduleAdminPanel');
+    const readonlyToolbar = document.getElementById('scheduleReadonlyToolbar');
+    const chartAdminBtns = document.getElementById('scheduleChartAdminBtns');
+    const insights = document.getElementById('scheduleRegistrationInsights');
+    const subtitle = document.getElementById('schedulePageSubtitle');
+
+    if (IS_VIEW_ONLY_ROLE) {
+      if (adminPanel) adminPanel.style.display = 'none';
+      if (readonlyToolbar) readonlyToolbar.classList.remove('d-none');
+      if (chartAdminBtns) chartAdminBtns.style.display = 'none';
+      if (insights) insights.style.display = 'none';
+      if (subtitle) subtitle.textContent = 'عرض الجدول الدراسي للفصل الحالي (قراءة فقط)';
+    } else {
+      if (adminPanel) adminPanel.style.display = '';
+      if (readonlyToolbar) readonlyToolbar.classList.add('d-none');
+      if (chartAdminBtns) chartAdminBtns.style.display = '';
+      if (insights) insights.style.display = '';
+    }
+
     const btnSaveSlots = document.getElementById('btnSaveTimeSlots');
     const btnNormalize = document.getElementById('btnNormalizeTimes');
     const btnClear = document.getElementById('btnClearSchedule');
     if (btnSaveSlots) btnSaveSlots.disabled = !IS_ADMIN;
     if (btnNormalize) btnNormalize.disabled = !IS_ADMIN;
     if (btnClear) btnClear.disabled = !IS_ADMIN;
-    if(!IS_ADMIN){
+
+    if (!IS_ADMIN) {
       const importForm = document.getElementById('schedule-import-form');
-      if(importForm) importForm.style.display = 'none';
-      const btnRun = document.getElementById('btnRun');
-      if(btnRun) btnRun.style.display = 'none';
-      const btnCompact = document.getElementById('btnToggleCompact');
-      if(btnCompact) btnCompact.style.display = 'none';
-      const btnToggleSchedManage = document.getElementById('btnToggleScheduleSlotManage');
-      if (btnToggleSchedManage) btnToggleSchedManage.style.display = 'none';
+      if (importForm) importForm.style.display = 'none';
     } else {
       updateScheduleSlotManageToggleButton();
     }
-    if (IS_VIEW_ONLY_ROLE) {
-      const exportWrap = document.getElementById('scheduleExportWrap');
-      if (exportWrap) exportWrap.style.display = 'none';
-      const importForm = document.getElementById('schedule-import-form');
-      if (importForm) importForm.style.display = 'none';
-      const btnRun = document.getElementById('btnRun');
-      if (btnRun) btnRun.style.display = 'none';
+
+    const btnPreviewRo = document.getElementById('btnSchedulePreviewRo');
+    const btnPrintRo = document.getElementById('btnSchedulePrintRo');
+    if (btnPreviewRo && !btnPreviewRo.dataset.bound) {
+      btnPreviewRo.dataset.bound = '1';
+      btnPreviewRo.addEventListener('click', () => document.getElementById('btnSchedulePreview')?.click());
+    }
+    if (btnPrintRo && !btnPrintRo.dataset.bound) {
+      btnPrintRo.dataset.bound = '1';
+      btnPrintRo.addEventListener('click', () => document.getElementById('btnSchedulePrintStudentStyle')?.click());
+    }
+
+    const pubBanner = document.getElementById('schedulePublishBanner');
+    if (pubBanner && IS_VIEW_ONLY_ROLE) {
+      fetch('/schedule/publish_status', { credentials: 'include' })
+        .then(r => r.json())
+        .then(st => {
+          if (st && st.published) {
+            pubBanner.classList.add('d-none');
+          } else {
+            pubBanner.textContent = 'الجدول الدراسي لم يُعتمد/ينشر بعد من الإدارة. قد يظهر فارغاً أو قديماً حتى يتم النشر.';
+            pubBanner.classList.remove('d-none');
+          }
+        })
+        .catch(() => pubBanner.classList.add('d-none'));
+    } else if (pubBanner) {
+      pubBanner.classList.add('d-none');
+    }
+  }
+
+  // Determine role once and apply view-only rules
+  fetch('/auth/check').then(r=>r.json()).then(auth=>{
+    applyScheduleRoleUi(auth);
+    if (IS_ADMIN) {
+      loadInstructors().then(() => setupInstructorDeptStudentPanel(auth));
     }
     refreshPublishStatus();
     loadSchedule();
   }).catch(()=>{
     IS_ADMIN = false;
-    const btnToggleSchedManage = document.getElementById('btnToggleScheduleSlotManage');
-    if (btnToggleSchedManage) btnToggleSchedManage.style.display = 'none';
-    const btnSaveSlots = document.getElementById('btnSaveTimeSlots');
-    const btnNormalize = document.getElementById('btnNormalizeTimes');
-    const btnClear = document.getElementById('btnClearSchedule');
-    if (btnSaveSlots) btnSaveSlots.disabled = true;
-    if (btnNormalize) btnNormalize.disabled = true;
-    if (btnClear) btnClear.disabled = true;
+    IS_VIEW_ONLY_ROLE = true;
+    applyScheduleRoleUi({});
     refreshPublishStatus();
     loadSchedule();
   });

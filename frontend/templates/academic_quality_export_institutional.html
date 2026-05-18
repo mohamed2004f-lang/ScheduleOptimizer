@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }}</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <style>body{font-family:Cairo,sans-serif;padding:24px}</style>
+</head>
+<body>
+  <h1>{{ title }}</h1>
+  <p>الفصل: {{ metrics.semester }}</p>
+  <table class="table table-bordered"><tbody>
+    <tr><td>مؤهلات هيئة التدريس</td><td>{{ metrics.institutional_faculty_qualifications }}%</td></tr>
+    <tr><td>نسبة طالب:أستاذ</td><td>{% if metrics.institutional_student_to_faculty_ratio %}1:{{ metrics.institutional_student_to_faculty_ratio }}{% else %}—{% endif %}</td></tr>
+    <tr><td>البنية التحتية</td><td>{{ metrics.institutional_infrastructure_rating }}%</td></tr>
+    <tr><td>الدرجة الكلية</td><td>{{ metrics.overall_accreditation_score }} — {{ metrics.accreditation_status_ar }}</td></tr>
+  </tbody></table>
+  {% if not for_pdf %}<button onclick="window.print()">طباعة</button>{% endif %}
+</body>
+</html>

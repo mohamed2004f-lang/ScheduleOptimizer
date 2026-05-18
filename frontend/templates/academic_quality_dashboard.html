@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>جودة الإجازة والاعتماد</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-fluid mt-4 px-3">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
+      <div>
+        <h2><i class="fa-solid fa-award text-warning"></i> نظام ضمان الجودة والاعتماد</h2>
+        <small class="text-muted">الفصل: {{ metrics.semester }}</small>
+      </div>
+      <div class="d-flex gap-2 flex-wrap">
+        <a class="btn btn-outline-danger" href="/academic_quality/export/program.pdf">تقرير برامجي PDF</a>
+        <a class="btn btn-outline-danger" href="/academic_quality/export/program" target="_blank">معاينة HTML</a>
+        <a class="btn btn-outline-primary" href="/academic_quality/export/institutional.pdf">تقرير مؤسسي PDF</a>
+        <a class="btn btn-outline-secondary" href="/ilo_catalog_page">كتالوج المخرجات</a>
+        <a class="btn btn-outline-secondary" href="/academic_quality/survey_admin">إدارة استبيان التقييم</a>
+        <button type="button" class="btn btn-outline-primary" id="btnSnapshot">حفظ لقطة</button>
+        <button type="button" class="btn btn-outline-secondary" id="btnInstInputs">إدخالات مؤسسية</button>
+      </div>
+    </div>
+
+    <div class="card shadow-sm mb-4 border-start border-success border-4">
+      <div class="card-body">
+        <h6 class="text-muted">مؤشر التقدم الكلي</h6>
+        <div class="progress" style="height:30px;">
+          <div class="progress-bar bg-success" style="width:{{ metrics.overall_accreditation_score }}%;">
+            <strong>{{ metrics.overall_accreditation_score }}/100</strong> — {{ metrics.accreditation_status_ar }}
+          </div>
+        </div>
+        <small class="text-muted d-block mt-2">الحد الأدنى: 70/100</small>
+      </div>
+    </div>
+
+    <ul class="nav nav-tabs mb-3">
+      <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tabProgram">برامجي</button></li>
+      <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabInst">مؤسسي</button></li>
+    </ul>
+    <div class="tab-content">
+      <div class="tab-pane fade show active" id="tabProgram">
+        <div class="row g-3 mb-4">
+          <div class="col-md-3"><div class="card"><div class="card-body"><small>رضا الطلاب</small><h3>{{ metrics.program_student_satisfaction }}%</h3><small>{{ metrics.evaluation_count }} استبيان</small></div></div></div>
+          <div class="col-md-3"><div class="card"><div class="card-body"><small>تقارير الإقفال</small><h3>{{ metrics.program_course_reports_completion }}%</h3></div></div></div>
+          <div class="col-md-3"><div class="card"><div class="card-body"><small>مخرجات التعلم</small><h3>{{ metrics.program_ilo_achievement }}%</h3></div></div></div>
+          <div class="col-md-3"><div class="card"><div class="card-body"><small>التخرج (تقريبي)</small><h3>{{ metrics.program_graduation_rate }}%</h3></div></div></div>
+        </div>
+        <div class="card"><div class="card-header bg-danger text-white">مقررات حرجة</div>
+        <table class="table mb-0"><thead><tr><th>المقرر</th><th>الأستاذ</th><th>رسوب %</th><th>الحالة</th></tr></thead>
+        <tbody>{% for c in critical_courses %}<tr><td>{{ c.course_name }}</td><td>{{ c.instructor_name }}</td><td class="text-danger">{{ c.student_failure_rate }}%</td><td>{{ c.status }}</td></tr>{% else %}<tr><td colspan="4" class="text-muted text-center">لا يوجد</td></tr>{% endfor %}</tbody></table></div>
+      </div>
+      <div class="tab-pane fade" id="tabInst">
+        <div class="row g-3">
+          <div class="col-md-4"><div class="card"><div class="card-body"><small>مؤهلات التدريس</small><h3>{{ metrics.institutional_faculty_qualifications }}%</h3></div></div></div>
+          <div class="col-md-4"><div class="card"><div class="card-body"><small>طالب:أستاذ</small><h3>{% if metrics.institutional_student_to_faculty_ratio %}1:{{ metrics.institutional_student_to_faculty_ratio }}{% else %}—{% endif %}</h3></div></div></div>
+          <div class="col-md-4"><div class="card"><div class="card-body"><small>بنية تحتية</small><h3>{{ metrics.institutional_infrastructure_rating }}%</h3></div></div></div>
+        </div>
+      </div>
+    </div>
+  </main>
+  <div class="modal fade" id="instModal"><div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><h5>إدخالات مؤسسية</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <label class="form-label">مؤهلات (%)</label><input class="form-control mb-2" id="inpFaculty" type="number">
+      <label class="form-label">بنية تحتية (%)</label><input class="form-control mb-2" id="inpInfra" type="number">
+      <textarea class="form-control" id="inpNotes" rows="2"></textarea>
+    </div>
+    <div class="modal-footer"><button class="btn btn-primary" id="btnSaveInst">حفظ</button></div>
+  </div></div></div>
+  <script>
+    const sem = {{ metrics.semester | tojson }};
+    function hdr(){const c=document.querySelector('meta[name=csrf-token]')?.content||'';const h={'Content-Type':'application/json'};if(c)h['X-CSRFToken']=c;return h;}
+    document.getElementById('btnSnapshot')?.addEventListener('click',async()=>{const r=await fetch('/academic_quality/api/snapshot',{method:'POST',credentials:'include',headers:hdr(),body:JSON.stringify({semester:sem})});alert(r.ok?'تم':'فشل');if(r.ok)location.reload();});
+    document.getElementById('btnInstInputs')?.addEventListener('click',async()=>{const r=await fetch('/academic_quality/api/institutional_inputs?semester='+encodeURIComponent(sem),{credentials:'include'});const j=await r.json();const i=j.inputs||{};document.getElementById('inpFaculty').value=i.faculty_qualifications_percent??'';document.getElementById('inpInfra').value=i.infrastructure_rating??'';document.getElementById('inpNotes').value=i.notes||'';bootstrap.Modal.getOrCreateInstance(document.getElementById('instModal')).show();});
+    document.getElementById('btnSaveInst')?.addEventListener('click',async()=>{const body={semester:sem,faculty_qualifications_percent:parseFloat(document.getElementById('inpFaculty').value)||null,infrastructure_rating:parseFloat(document.getElementById('inpInfra').value)||null,notes:document.getElementById('inpNotes').value};const r=await fetch('/academic_quality/api/institutional_inputs',{method:'POST',credentials:'include',headers:hdr(),body:JSON.stringify(body)});alert(r.ok?'تم':'فشل');if(r.ok)location.reload();});
+  </script>
+</body>
+</html>

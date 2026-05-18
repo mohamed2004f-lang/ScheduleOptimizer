@@ -2229,7 +2229,10 @@ def _course_admin_payload(cur, instructor_id: int, section_id: int) -> dict:
     closure_row = cur.execute(
         """
         SELECT id, COALESCE(implementation_summary,''), COALESCE(improvement_notes,''),
-               COALESCE(reflection_text,''), COALESCE(status,'draft'), COALESCE(updated_at,'')
+               COALESCE(reflection_text,''), COALESCE(status,'draft'), COALESCE(updated_at,''),
+               curriculum_coverage_percent, student_success_rate, student_failure_rate,
+               COALESCE(results_analysis,''), COALESCE(challenges,''), COALESCE(action_plan,''),
+               ilo_achievement_percent
         FROM course_closure_reports
         WHERE section_id = ? AND instructor_id = ?
         ORDER BY id DESC
@@ -2267,6 +2270,13 @@ def _course_admin_payload(cur, instructor_id: int, section_id: int) -> dict:
             "reflection_text": (closure_row[3] if closure_row else "") or "",
             "status": (closure_row[4] if closure_row else "draft") or "draft",
             "updated_at": (closure_row[5] if closure_row else "") or "",
+            "curriculum_coverage_percent": closure_row[6] if closure_row else None,
+            "student_success_rate": closure_row[7] if closure_row else None,
+            "student_failure_rate": closure_row[8] if closure_row else None,
+            "results_analysis": (closure_row[9] if closure_row else "") or "",
+            "challenges": (closure_row[10] if closure_row else "") or "",
+            "action_plan": (closure_row[11] if closure_row else "") or "",
+            "ilo_achievement_percent": closure_row[12] if closure_row else None,
         },
     }
 
@@ -2943,6 +2953,32 @@ def save_my_course_closure():
     implementation_summary = (data.get("implementation_summary") or "").strip()
     improvement_notes = (data.get("improvement_notes") or "").strip()
     reflection_text = (data.get("reflection_text") or "").strip()
+    results_analysis = (data.get("results_analysis") or "").strip()
+    challenges = (data.get("challenges") or "").strip()
+    action_plan = (data.get("action_plan") or improvement_notes or "").strip()
+
+    def _opt_int(key):
+        v = data.get(key)
+        if v in (None, ""):
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    def _opt_float(key):
+        v = data.get(key)
+        if v in (None, ""):
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    curriculum_coverage_percent = _opt_int("curriculum_coverage_percent")
+    ilo_achievement_percent = _opt_int("ilo_achievement_percent")
+    student_success_rate = _opt_float("student_success_rate")
+    student_failure_rate = _opt_float("student_failure_rate")
 
     inst_name, instructor_id = _instructor_display_name_for_session()
     if not instructor_id:
@@ -2961,22 +2997,51 @@ def save_my_course_closure():
             return jsonify({"status": "error", "message": "هذه الشعبة غير مكلَّفة لحسابك"}), 403
         sem_row = next((t for t in tuples if int(t[0]) == section_id), None)
         semester = (sem_row[6] if sem_row else "") or "UNKNOWN_TERM"
+        _closure_vals = (
+            section_id,
+            iid,
+            semester,
+            implementation_summary,
+            improvement_notes,
+            reflection_text,
+            status,
+            curriculum_coverage_percent,
+            student_success_rate,
+            student_failure_rate,
+            results_analysis,
+            challenges,
+            action_plan,
+            ilo_achievement_percent,
+            now,
+            actor,
+            now,
+            actor,
+        )
         if is_postgresql():
             cur.execute(
                 """
                 INSERT INTO course_closure_reports
                     (section_id, instructor_id, semester, implementation_summary, improvement_notes, reflection_text,
-                     status, created_at, created_by, updated_at, updated_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     status, curriculum_coverage_percent, student_success_rate, student_failure_rate,
+                     results_analysis, challenges, action_plan, ilo_achievement_percent,
+                     created_at, created_by, updated_at, updated_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (section_id, instructor_id, semester)
                 DO UPDATE SET implementation_summary = EXCLUDED.implementation_summary,
                               improvement_notes = EXCLUDED.improvement_notes,
                               reflection_text = EXCLUDED.reflection_text,
                               status = EXCLUDED.status,
+                              curriculum_coverage_percent = EXCLUDED.curriculum_coverage_percent,
+                              student_success_rate = EXCLUDED.student_success_rate,
+                              student_failure_rate = EXCLUDED.student_failure_rate,
+                              results_analysis = EXCLUDED.results_analysis,
+                              challenges = EXCLUDED.challenges,
+                              action_plan = EXCLUDED.action_plan,
+                              ilo_achievement_percent = EXCLUDED.ilo_achievement_percent,
                               updated_at = EXCLUDED.updated_at,
                               updated_by = EXCLUDED.updated_by
                 """,
-                (section_id, iid, semester, implementation_summary, improvement_notes, reflection_text, status, now, actor, now, actor),
+                _closure_vals,
             )
         else:
             row = cur.execute(
@@ -2987,21 +3052,47 @@ def save_my_course_closure():
                 cur.execute(
                     """
                     UPDATE course_closure_reports
-                    SET implementation_summary=?, improvement_notes=?, reflection_text=?, status=?, updated_at=?, updated_by=?
+                    SET implementation_summary=?, improvement_notes=?, reflection_text=?, status=?,
+                        curriculum_coverage_percent=?, student_success_rate=?, student_failure_rate=?,
+                        results_analysis=?, challenges=?, action_plan=?, ilo_achievement_percent=?,
+                        updated_at=?, updated_by=?
                     WHERE id=?
                     """,
-                    (implementation_summary, improvement_notes, reflection_text, status, now, actor, int(row[0])),
+                    (
+                        implementation_summary,
+                        improvement_notes,
+                        reflection_text,
+                        status,
+                        curriculum_coverage_percent,
+                        student_success_rate,
+                        student_failure_rate,
+                        results_analysis,
+                        challenges,
+                        action_plan,
+                        ilo_achievement_percent,
+                        now,
+                        actor,
+                        int(row[0]),
+                    ),
                 )
             else:
                 cur.execute(
                     """
                     INSERT INTO course_closure_reports
                         (section_id, instructor_id, semester, implementation_summary, improvement_notes, reflection_text,
-                         status, created_at, created_by, updated_at, updated_by)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         status, curriculum_coverage_percent, student_success_rate, student_failure_rate,
+                         results_analysis, challenges, action_plan, ilo_achievement_percent,
+                         created_at, created_by, updated_at, updated_by)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (section_id, iid, semester, implementation_summary, improvement_notes, reflection_text, status, now, actor, now, actor),
+                    _closure_vals,
                 )
+        try:
+            from backend.services.learning_outcomes import sync_closure_ilo_from_assessments
+
+            sync_closure_ilo_from_assessments(conn, section_id, iid, semester)
+        except Exception:
+            pass
         conn.commit()
         payload = _course_admin_payload(cur, iid, section_id)
     return jsonify({"status": "ok", "section_id": section_id, **payload})

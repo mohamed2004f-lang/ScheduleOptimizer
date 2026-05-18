@@ -13,7 +13,7 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">التقويم الأكاديمي</h1>
-        <p class="page-subtitle">تحديد تواريخ الخطة الدراسية للفصل الحالي والفصول الماضية حسب العام الجامعي</p>
+        <p class="page-subtitle" id="pageSubtitle">تحديد تواريخ الخطة الدراسية للفصل الحالي والفصول الماضية حسب العام الجامعي</p>
       </div>
       <div class="d-flex gap-2">
         <a href="/" class="btn btn-outline-secondary btn-sm">العودة</a>
@@ -177,23 +177,58 @@
       await loadCalendar();
     }
 
+    function mapTermNameToCalendar(termName){
+      const t = (termName || '').trim();
+      if (/ربيع/i.test(t)) return 'spring';
+      if (/خريف/i.test(t)) return 'fall';
+      return 'fall';
+    }
+
+    function mapTermYearToAcademicYear(termYear){
+      const y = (termYear || '').trim();
+      const m = y.match(/(\d{2})\s*[-–]\s*(\d{2})/);
+      if (m) return `20${m[1]}/20${m[2]}`;
+      return guessAcademicYear();
+    }
+
+    async function applyCurrentTermDefaults(){
+      try {
+        const r = await fetchJSON('/admin/settings/current_term');
+        if (!r.ok || !r.json) return;
+        const tn = r.json.term_name || '';
+        const ty = r.json.term_year || '';
+        if (ty) document.getElementById('academicYear').value = mapTermYearToAcademicYear(ty);
+        if (tn) document.getElementById('termSelect').value = mapTermNameToCalendar(tn);
+      } catch (_e) { /* ignore */ }
+    }
+
     document.addEventListener('DOMContentLoaded', async ()=>{
-      // معرفة الدور
+      let isStudent = false;
       try {
         const auth = await fetchJSON('/auth/check');
         CURRENT_ROLE = auth.ok ? auth.json?.role : null;
+        isStudent = CURRENT_ROLE === 'student' || !!(auth.json?.capabilities?.is_student);
       } catch(e) {
         CURRENT_ROLE = null;
       }
 
-      document.getElementById('academicYear').value = guessAcademicYear();
+      if (isStudent) {
+        const sub = document.getElementById('pageSubtitle');
+        if (sub) sub.textContent = 'عرض التقويم الأكاديمي للفصل الحالي (قراءة فقط)';
+        document.getElementById('btnAddTitle').style.display = 'none';
+        document.getElementById('btnSave').style.display = 'none';
+        document.getElementById('academicYear').readOnly = true;
+        document.getElementById('termSelect').disabled = true;
+      } else {
+        document.getElementById('academicYear').value = guessAcademicYear();
+      }
+
       document.getElementById('btnLoad').addEventListener('click', loadCalendar);
       document.getElementById('btnSave').addEventListener('click', saveCalendar);
       const btnAdd = document.getElementById('btnAddTitle');
       if (btnAdd) {
         btnAdd.addEventListener('click', ()=>{
           if (CURRENT_ROLE !== 'admin') return;
-          // item_no=0 يعني عنصر جديد وسيتم ترقيمه عند الحفظ
           CURRENT.items = Array.isArray(CURRENT.items) ? CURRENT.items : [];
           CURRENT.items.push({ item_no: 0, title: '', event_date: null, is_custom: true, is_deleted: 0 });
           render(CURRENT.items.filter(x=>!x.is_deleted));
@@ -201,9 +236,9 @@
         });
       }
 
-      // تحميل مبدئي
+      if (isStudent) await applyCurrentTermDefaults();
       await loadCalendar();
-      if (CURRENT_ROLE !== 'admin'){
+      if (CURRENT_ROLE !== 'admin' && !isStudent){
         document.getElementById('btnSave').disabled = true;
         document.getElementById('btnSave').title = 'متاح للأدمن فقط';
       }

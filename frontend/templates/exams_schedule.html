@@ -244,7 +244,7 @@ function openManageExamModal(dateStr, timeStr){
 function renderExamRegistrationInsights(cov){
   const el = document.getElementById('examRegistrationInsights');
   if(!el) return;
-  if(!cov || cov.error){
+  if(!cov || cov.error || cov.coverage_available === false){
     el.innerHTML = '';
     return;
   }
@@ -454,12 +454,14 @@ async function loadExamSchedule(){
   if(!start||!end){ showToolbarMsg('يرجى تحديد فترة التاريخ','warning'); return; }
   updateExportLinks();
 
-  const [rowsResp, confResp, covResp] = await Promise.all([
-    fetch(`/exams/${t}/rows`),
-    fetch(`/exams/${t}/conflicts`),
-    fetch(`/exams/${t}/schedule_coverage`)
+  const [rowsResp, confResp, covResp, pubResp] = await Promise.all([
+    fetch(`/exams/${t}/rows`, { credentials: 'include' }),
+    fetch(`/exams/${t}/conflicts`, { credentials: 'include' }),
+    fetch(`/exams/${t}/schedule_coverage`, { credentials: 'include' }),
+    fetch(`/exams/${t}/publish_status`, { credentials: 'include' }),
   ]);
   currentExamData = rowsResp.ok ? await rowsResp.json() : [];
+  const pubJson = pubResp.ok ? await pubResp.json() : null;
   const confJson = confResp.ok ? await confResp.json() : {conflicts:[]};
   const covJson = covResp.ok ? await covResp.json() : null;
   renderExamRegistrationInsights(covJson);
@@ -479,7 +481,18 @@ async function loadExamSchedule(){
   }
 
   const el=document.getElementById('examScheduleList');
-  if(!dates.length){ el.innerHTML='<div class="text-muted p-2">لا توجد أيام بها امتحانات ضمن الفترة المحددة.</div>'; return; }
+  if(!dates.length){
+    let msg = 'لا توجد أيام بها امتحانات ضمن الفترة المحددة.';
+    if (!currentExamData.length) {
+      if (pubJson && pubJson.published === false) {
+        msg = 'جدول الامتحانات غير منشور بعد. اطلب من الإدارة اعتماد/نشر الجدول، أو تأكد من إدخال مواعيد الامتحانات.';
+      } else {
+        msg = 'لا توجد مواعيد امتحانات في النظام لهذا النوع. جرّب توسيع فترة التاريخ أو راجع الإدارة.';
+      }
+    }
+    el.innerHTML = `<div class="text-muted p-2">${esc(msg)}</div>`;
+    return;
+  }
   let html='<table class="timetable"><thead><tr>';
   html += '<th class="date-header">التاريخ / الفترة</th>';
   times.forEach(ti=>{ html += `<th class="time-header">${esc(ti)}</th>`; });

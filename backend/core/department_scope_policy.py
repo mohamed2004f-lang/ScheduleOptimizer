@@ -120,6 +120,62 @@ def student_matches_department(conn, student_id: str | None, dept_id: int) -> bo
     return False
 
 
+def resolve_student_department_id(conn, student_id: str | None) -> int | None:
+    """قسم الطالب: من students.department_id أو من برنامجه الحالي/الالتحاق."""
+    sid = (student_id or "").strip()
+    if not sid:
+        return None
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT department_id, current_program_id, admission_program_id
+        FROM students
+        WHERE student_id = ?
+        LIMIT 1
+        """,
+        (sid,),
+    ).fetchone()
+    if not row:
+        return None
+
+    def _col(name: str, idx: int):
+        try:
+            if hasattr(row, "keys") and name in row.keys():
+                return row[name]
+        except Exception:
+            pass
+        return row[idx]
+
+    d_raw = _col("department_id", 0)
+    if d_raw not in (None, ""):
+        try:
+            return int(d_raw)
+        except (TypeError, ValueError):
+            pass
+
+    for key, idx in (("current_program_id", 1), ("admission_program_id", 2)):
+        p_raw = _col(key, idx)
+        if p_raw in (None, ""):
+            continue
+        try:
+            pid = int(p_raw)
+        except (TypeError, ValueError):
+            continue
+        pr = cur.execute(
+            "SELECT department_id FROM programs WHERE id = ? LIMIT 1",
+            (pid,),
+        ).fetchone()
+        if not pr:
+            continue
+        pd = pr["department_id"] if hasattr(pr, "keys") else pr[0]
+        if pd not in (None, ""):
+            try:
+                return int(pd)
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
 def sql_student_row_belongs_to_department(dept_id: int) -> tuple[str, tuple[int, int, int]]:
     """
     Predicate matching student_matches_department for one row of students (no table alias).

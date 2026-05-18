@@ -1,0 +1,50 @@
+﻿<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>تقييم المقررات</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-900 theme-formal">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title"><i class="fa-solid fa-star text-warning"></i> تقييم المقررات والأساتذة</h1>
+        <p class="page-subtitle">الفصل: {{ semester }} — تقييمك سري ولا يؤثر على درجتك</p>
+      </div>
+    </div>
+
+    <div class="alert alert-info">
+      <i class="fa-solid fa-shield-halved"></i>
+      تقييمك يساهم في تحسين جودة التعليم. لن يظهر اسمك للأستاذ.
+    </div>
+
+    {% if not sections and not error %}
+    <div class="card mt-3"><div class="card-body text-muted">لا توجد مقررات مسجّلة للفصل الحالي.</div></div>
+    {% else %}
+    <div class="card mt-3 shadow-sm">
+      <div class="card-body p-0">
+        <div class="list-group list-group-flush">
+          {% for s in sections %}
+          <div class="list-group-item d-flex justify-content-between align-items-center">
+            <div>
+              <h6 class="mb-1">{{ s.course_name }}</h6>
+              <small class="text-muted">الأستاذ: {{ s.instructor_name or '—' }}</small>
+            </div>
+            {% if s.evaluated %}
+            <span class="badge bg-success">تم التقييم</span>
+            {% else %}
+            <a href="/students/evaluations/form/{{ s.section_id }}" class="btn btn-sm btn-primary">تقييم الآن</a>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </main>
+</body>
+</html>

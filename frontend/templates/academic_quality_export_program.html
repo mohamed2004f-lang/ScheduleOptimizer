@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }}</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <style>body{font-family:Cairo,sans-serif;padding:24px} @media print{.no-print{display:none}}</style>
+</head>
+<body>
+  <h1>{{ title }}</h1>
+  <p>الفصل الدراسي: <strong>{{ metrics.semester }}</strong></p>
+  <p>الدرجة الكلية: <strong>{{ metrics.overall_accreditation_score }}/100</strong> — {{ metrics.accreditation_status_ar }}</p>
+  <h2>مؤشرات الاعتماد البرامجي</h2>
+  <table class="table table-bordered"><tbody>
+    <tr><td>رضا الطلاب</td><td>{{ metrics.program_student_satisfaction }}%</td></tr>
+    <tr><td>إنجاز تقارير الإقفال</td><td>{{ metrics.program_course_reports_completion }}%</td></tr>
+    <tr><td>تحقيق مخرجات التعلم</td><td>{{ metrics.program_ilo_achievement }}%</td></tr>
+    <tr><td>معدل التخرج (تقريبي)</td><td>{{ metrics.program_graduation_rate }}%</td></tr>
+  </tbody></table>
+  {% if critical_courses %}
+  <h2>مقررات حرجة</h2>
+  <table class="table table-sm table-bordered"><thead><tr><th>المقرر</th><th>الأستاذ</th><th>رسوب %</th></tr></thead>
+  <tbody>{% for c in critical_courses %}<tr><td>{{ c.course_name }}</td><td>{{ c.instructor_name }}</td><td>{{ c.student_failure_rate }}</td></tr>{% endfor %}</tbody></table>
+  {% endif %}
+  <p class="text-muted small">أُنشئ من نظام ScheduleOptimizer — ضمان الجودة</p>
+  {% if not for_pdf %}<button class="btn btn-primary no-print" onclick="window.print()">طباعة</button>{% endif %}
+</body>
+</html>

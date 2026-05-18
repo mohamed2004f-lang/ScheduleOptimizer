@@ -169,10 +169,20 @@
         '<button type="button" class="btn btn-sm btn-outline-dark mc-save-ann" data-section="' + sectionId + '">نشر إعلان</button>' +
         '<div class="mc-ann-list mt-1 text-muted" data-section="' + sectionId + '"></div>' +
         '</div>' +
+        '<div class="mt-2 p-2 border rounded">' +
+        '<div class="fw-semibold mb-1">تقييم مخرجات التعلم (ILO)</div>' +
+        '<div class="mc-ilo-list small" data-section="' + sectionId + '"></div>' +
+        '<button type="button" class="btn btn-sm btn-outline-success mc-save-ilo" data-section="' + sectionId + '">حفظ تقييم المخرجات</button>' +
+        '</div>' +
+
         '<div class="mt-2 p-2 border rounded bg-light-subtle">' +
-        '<div class="fw-semibold mb-1">تقرير إقفال المقرر</div>' +
+        '<div class="fw-semibold mb-1">تقرير إقفال المقرر (جودة)</div>' +
+        '<div class="row g-1 mb-1"><div class="col-4"><input type="number" class="form-control form-control-sm mc-close-coverage" data-section="' + sectionId + '" min="0" max="100" placeholder="تغطية %"></div><div class="col-4"><input type="number" class="form-control form-control-sm mc-close-success" data-section="' + sectionId + '" min="0" max="100" step="0.1" placeholder="نجاح %"></div><div class="col-4"><input type="number" class="form-control form-control-sm mc-close-failure" data-section="' + sectionId + '" min="0" max="100" step="0.1" placeholder="رسوب %"></div></div>' +
+        '<input type="number" class="form-control form-control-sm mb-1 mc-close-ilo" data-section="' + sectionId + '" min="0" max="100" placeholder="مخرجات %">' +
         '<textarea class="form-control form-control-sm mb-1 mc-close-impl" data-section="' + sectionId + '" rows="2" placeholder="ملخص تنفيذ المقرر"></textarea>' +
-        '<textarea class="form-control form-control-sm mb-1 mc-close-improve" data-section="' + sectionId + '" rows="2" placeholder="ملاحظات التحسين"></textarea>' +
+        '<textarea class="form-control form-control-sm mb-1 mc-close-results" data-section="' + sectionId + '" rows="2" placeholder="تحليل النتائج"></textarea>' +
+        '<textarea class="form-control form-control-sm mb-1 mc-close-challenges" data-section="' + sectionId + '" rows="2" placeholder="التحديات"></textarea>' +
+        '<textarea class="form-control form-control-sm mb-1 mc-close-improve" data-section="' + sectionId + '" rows="2" placeholder="خطة التحسين"></textarea>' +
         '<textarea class="form-control form-control-sm mb-1 mc-close-reflect" data-section="' + sectionId + '" rows="2" placeholder="انعكاس الأستاذ"></textarea>' +
         '<div class="d-flex gap-1">' +
           '<button type="button" class="btn btn-sm btn-outline-primary mc-save-close-draft" data-section="' + sectionId + '">حفظ مسودة</button>' +
@@ -330,10 +340,41 @@
           const imp = document.querySelector('.mc-close-improve[data-section="' + sectionId + '"]');
           const ref = document.querySelector('.mc-close-reflect[data-section="' + sectionId + '"]');
           const st = document.querySelector('.mc-close-status[data-section="' + sectionId + '"]');
+          const cov = document.querySelector('.mc-close-coverage[data-section="' + sectionId + '"]');
+          const succ = document.querySelector('.mc-close-success[data-section="' + sectionId + '"]');
+          const fail = document.querySelector('.mc-close-failure[data-section="' + sectionId + '"]');
+          const ilo = document.querySelector('.mc-close-ilo[data-section="' + sectionId + '"]');
+          const res = document.querySelector('.mc-close-results[data-section="' + sectionId + '"]');
+          const ch = document.querySelector('.mc-close-challenges[data-section="' + sectionId + '"]');
+          if (cov) cov.value = cr.curriculum_coverage_percent ?? '';
+          if (succ) succ.value = cr.student_success_rate ?? '';
+          if (fail) fail.value = cr.student_failure_rate ?? '';
+          if (ilo) ilo.value = cr.ilo_achievement_percent ?? '';
           if (impl) impl.value = cr.implementation_summary || '';
-          if (imp) imp.value = cr.improvement_notes || '';
+          if (res) res.value = cr.results_analysis || '';
+          if (ch) ch.value = cr.challenges || '';
+          if (imp) imp.value = cr.improvement_notes || cr.action_plan || '';
           if (ref) ref.value = cr.reflection_text || '';
           if (st) st.textContent = cr.status ? ('حالة التقرير: ' + cr.status) : 'حالة التقرير: draft';
+          loadSectionIlo(sectionId).catch(() => {});
+        }
+
+        async function loadSectionIlo(sectionId) {
+          const box = document.querySelector('.mc-ilo-list[data-section="' + sectionId + '"]');
+          if (!box) return;
+          const r = await fetch('/academic_quality/ilo/api/sections/' + sectionId + '/ilo', { credentials: 'include' });
+          const j = await r.json().catch(() => ({}));
+          const items = j.outcomes || [];
+          if (!items.length) {
+            box.innerHTML = '<span class="text-muted">لا مخرجات مرتبطة — يعرّفها رئيس القسم في كتالوج المخرجات.</span>';
+            return;
+          }
+          box.innerHTML = items.map((o) => (
+            '<div class="mb-1 border-bottom pb-1">' +
+            '<label class="fw-semibold">' + (o.code || '') + ' — ' + (o.title_ar || '') + '</label>' +
+            '<input type="number" class="form-control form-control-sm mc-ilo-pct" data-section="' + sectionId + '" data-oid="' + o.id + '" min="0" max="100" value="' + (o.achievement_percent ?? '') + '" placeholder="% تحقيق">' +
+            '</div>'
+          )).join('');
         }
 
         rows.forEach((r) => { refreshCourseAdmin(r.section_id).catch(() => {}); });
@@ -458,6 +499,7 @@
         });
 
         async function saveClosure(sectionId, reportStatus) {
+          const num = (sel) => { const v = document.querySelector(sel)?.value; return v === '' || v == null ? null : Number(v); };
           const implementationSummary = document.querySelector('.mc-close-impl[data-section="' + sectionId + '"]')?.value || '';
           const improvementNotes = document.querySelector('.mc-close-improve[data-section="' + sectionId + '"]')?.value || '';
           const reflectionText = document.querySelector('.mc-close-reflect[data-section="' + sectionId + '"]')?.value || '';
@@ -470,6 +512,13 @@
               implementation_summary: implementationSummary,
               improvement_notes: improvementNotes,
               reflection_text: reflectionText,
+              curriculum_coverage_percent: num('.mc-close-coverage[data-section="' + sectionId + '"]'),
+              student_success_rate: num('.mc-close-success[data-section="' + sectionId + '"]'),
+              student_failure_rate: num('.mc-close-failure[data-section="' + sectionId + '"]'),
+              ilo_achievement_percent: num('.mc-close-ilo[data-section="' + sectionId + '"]'),
+              results_analysis: document.querySelector('.mc-close-results[data-section="' + sectionId + '"]')?.value || '',
+              challenges: document.querySelector('.mc-close-challenges[data-section="' + sectionId + '"]')?.value || '',
+              action_plan: improvementNotes,
               status: reportStatus,
             }),
           });

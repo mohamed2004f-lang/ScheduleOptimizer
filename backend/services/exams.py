@@ -151,12 +151,60 @@ def _course_in_scope(conn, course_name: str) -> bool:
     return bool(row)
 
 
+def _exam_has_any_rows(conn, exam_type: str) -> bool:
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT 1 FROM exams WHERE exam_type = ? LIMIT 1",
+        (exam_type,),
+    ).fetchone()
+    return bool(row)
+
+
+def _is_educational_viewer_role() -> bool:
+    """طالب / أستاذ / مشرف / رئيس قسم في وضع التدريس أو الإشراف."""
+    role = _normalize_role((session.get("user_role") or "").strip())
+    if role in ("student", "instructor", "supervisor"):
+        return True
+    if role == "head_of_department":
+        mode = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
+        return mode in ("instructor", "supervisor")
+    return False
+
+
 def _user_can_view_exam_rows(exam_type: str) -> bool:
-    """الإدارة ترى المسودة؛ غير الإدارة يرى الجدول فقط بعد الاعتماد والنشر."""
+    """
+    من يمكنه رؤية جدول الامتحانات:
+    - محرّرو الجدول (إدارة / رئيس قسم في وضع الرئيس) دائماً.
+    - باقي الأدوار: بعد «اعتماد/نشر»، أو (للأدوار التعليمية) عند وجود صفوف فعلية.
+    """
     if _role_may_edit_exam_schedule():
         return True
     with get_connection() as conn:
-        return get_exam_schedule_published_at(exam_type, conn=conn) is not None
+        if get_exam_schedule_published_at(exam_type, conn=conn) is not None:
+            return True
+        if _is_educational_viewer_role() and _exam_has_any_rows(conn, exam_type):
+            return True
+    return False
+
+
+def _user_can_view_exam_coverage(exam_type: str) -> bool:
+    """مقارنة التسجيل/الجدولة الدراسية — للإدارة ورئيس القسم (وضع الرئيس) فقط."""
+    return _role_may_edit_exam_schedule()
+
+
+def _empty_schedule_coverage_payload(exam_type: str, *, coverage_available: bool = False) -> dict:
+    return {
+        "exam_type": exam_type,
+        "coverage_available": coverage_available,
+        "term_label": "",
+        "schedule_scope": "",
+        "schedule_scope_ar": "",
+        "duplicate_courses": [],
+        "missing_from_exams": [],
+        "extras_in_exams_not_in_schedule": [],
+        "registration_baseline": {"missing_in_exam": [], "extra_in_exam": []},
+        "counts": {},
+    }
 
 
 def _create_exam_schedule_version(
@@ -682,8 +730,15 @@ def exam_schedule_coverage(exam_type):
     """
     if exam_type not in VALID_TYPES:
         return jsonify({"error": "invalid exam type"}), 400
+    if not _user_can_view_exam_coverage(exam_type):
+        with get_connection() as conn:
+            tname, tyear = get_current_term(conn=conn)
+            term_label = f"{(tname or '').strip()} {(tyear or '').strip()}".strip() or SEMESTER_LABEL
+        payload = _empty_schedule_coverage_payload(exam_type, coverage_available=False)
+        payload["term_label"] = term_label
+        return jsonify(payload)
     if not _user_can_view_exam_rows(exam_type):
-        return jsonify({"error": "forbidden"}), 403
+        return jsonify(_empty_schedule_coverage_payload(exam_type, coverage_available=False))
     try:
         with get_connection() as conn:
             tname, tyear = get_current_term(conn=conn)
@@ -806,6 +861,7 @@ def exam_schedule_coverage(exam_type):
             return jsonify(
                 {
                     "exam_type": exam_type,
+                    "coverage_available": True,
                     "term_label": term_label,
                     "schedule_scope": scope,
                     "schedule_scope_ar": scope_ar,
@@ -836,11 +892,31 @@ def list_exam_rows(exam_type):
         return jsonify([])
     if not _user_can_view_exam_rows(exam_type):
         return jsonify([])
+    role = _normalize_role((session.get("user_role") or "").strip())
     with get_connection() as conn:
         cur = conn.cursor()
+        if role == "student":
+            sid = (session.get("student_id") or session.get("user") or "").strip()
+            if not sid:
+                return jsonify([])
+            rows = cur.execute(
+                """
+                SELECT e.id AS exam_id, e.course_name, e.exam_date, e.exam_time, e.room, e.instructor
+                FROM exams e
+                INNER JOIN registrations r
+                    ON lower(trim(r.course_name)) = lower(trim(e.course_name))
+                WHERE e.exam_type = ? AND r.student_id = ?
+                ORDER BY e.exam_date, e.exam_time, e.course_name
+                """,
+                (exam_type, sid),
+            ).fetchall()
+            return jsonify([dict(r) for r in rows])
         dep = _effective_department_scope_id(conn)
         if dep is None:
-            rows = cur.execute("SELECT id AS exam_id, course_name, exam_date, exam_time, room, instructor FROM exams WHERE exam_type=? ORDER BY exam_date, exam_time", (exam_type,)).fetchall()
+            rows = cur.execute(
+                "SELECT id AS exam_id, course_name, exam_date, exam_time, room, instructor FROM exams WHERE exam_type=? ORDER BY exam_date, exam_time",
+                (exam_type,),
+            ).fetchall()
         else:
             rows = cur.execute(
                 """
@@ -1382,6 +1458,7 @@ def exam_conflicts(exam_type):
         return jsonify({"conflicts": []})
     if not _user_can_view_exam_rows(exam_type):
         return jsonify({"conflicts": []})
+    role = _normalize_role((session.get("user_role") or "").strip())
     with get_connection() as conn:
         rows = _fetch_exam_conflict_aggregate_rows(conn, exam_type)
         out = []
@@ -1391,6 +1468,9 @@ def exam_conflicts(exam_type):
                 'exam_date': r[1] or '',
                 'conflicting_courses': r[2] or ''
             })
+        if role == "student":
+            sid = (session.get("student_id") or session.get("user") or "").strip()
+            out = [c for c in out if (c.get("student_id") or "").strip() == sid]
         return jsonify({'conflicts': out})
 
 @exams_bp.route('/<exam_type>/results_data')

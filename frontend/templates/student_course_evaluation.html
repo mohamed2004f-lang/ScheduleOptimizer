@@ -1,0 +1,77 @@
+﻿<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>تقييم المقرر</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container mt-4" style="max-width:720px;">
+    {% if error %}
+    <div class="alert alert-warning">{{ error }}</div>
+    <a href="/students/evaluations/" class="btn btn-outline-secondary mt-2">العودة للقائمة</a>
+    {% elif already_done %}
+    <div class="alert alert-success">تم إرسال تقييمك. شكراً لمشاركتك.</div>
+    <a href="/students/evaluations/" class="btn btn-outline-secondary mt-2">العودة</a>
+    {% else %}
+    <div class="card shadow-sm border-start border-primary border-4">
+      <div class="card-header bg-primary text-white">
+        <h5 class="mb-0"><i class="fa-solid fa-star"></i> استبيان: {{ course.course_name }}</h5>
+        <small>تقييم سري — لن يؤثر على درجتك</small>
+      </div>
+      <div class="card-body">
+        <form id="evaluationForm">
+          <input type="hidden" name="section_id" value="{{ section_id }}">
+          <input type="hidden" name="instructor_id" value="{{ course.instructor_id }}">
+          <input type="hidden" name="semester" value="{{ semester }}">
+          {% for q in questions %}
+          <div class="mb-4">
+            <label class="form-label fw-bold">{{ loop.index }}. {{ q.label_ar }}</label>
+            <div class="btn-group w-100 flex-wrap" role="group">
+              {% for v, t in likert_options %}
+              <input type="radio" class="btn-check" name="q_{{ q.id }}" value="{{ v }}" id="q{{ q.id }}_{{ v }}" required>
+              <label class="btn btn-outline-secondary btn-sm" for="q{{ q.id }}_{{ v }}">{{ t }} ({{ v }})</label>
+              {% endfor %}
+            </div>
+          </div>
+          {% endfor %}
+          <div class="mb-3">
+            <label class="form-label">ملاحظات (اختياري)</label>
+            <textarea class="form-control" name="comments" rows="3"></textarea>
+          </div>
+          <button type="submit" class="btn btn-success btn-lg w-100">إرسال التقييم</button>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+  </main>
+  <script>
+    const form = document.getElementById('evaluationForm');
+    if (form) {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = new FormData(form);
+        const body = Object.fromEntries(fd.entries());
+        const answers = {};
+        for (const [k, v] of Object.entries(body)) {
+          if (k.startsWith('q_')) answers[k.slice(2)] = v;
+        }
+        body.answers = answers;
+        const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+        const headers = { 'Content-Type': 'application/json' };
+        if (csrf) headers['X-CSRFToken'] = csrf;
+        const r = await fetch('/students/evaluations/submit', {
+          method: 'POST', credentials: 'include', headers,
+          body: JSON.stringify(body)
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { alert(j.message || 'تعذر الإرسال'); return; }
+        window.location.href = '/students/evaluations/';
+      });
+    }
+  </script>
+</body>
+</html>
