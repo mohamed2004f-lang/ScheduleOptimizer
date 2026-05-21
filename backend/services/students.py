@@ -166,6 +166,7 @@ def students_filtered_from_request(request):
     enrollment_status = (request.args.get("enrollment_status") or "").strip().lower()
     join_term = (request.args.get("join_term") or "").strip()
     join_year = (request.args.get("join_year") or "").strip()
+    pathway_stage = (request.args.get("pathway_stage") or "").strip().lower()
     allowed_es = {"active", "withdrawn", "suspended", "graduated"}
     if enrollment_status in allowed_es:
         students = StudentService.get_all_students(active_only=False)
@@ -180,6 +181,16 @@ def students_filtered_from_request(request):
         students = [s for s in students if (s.get("join_term") or "").strip() == join_term]
     if join_year:
         students = [s for s in students if (s.get("join_year") or "").strip() == join_year]
+    if pathway_stage:
+        from backend.core.academic_pathway import PATHWAY_STAGES, normalize_pathway_stage
+
+        ps = normalize_pathway_stage(pathway_stage)
+        if ps in PATHWAY_STAGES:
+            students = [
+                s
+                for s in students
+                if normalize_pathway_stage(s.get("pathway_stage")) == ps
+            ]
     return students
 
 
@@ -1824,6 +1835,8 @@ def list_students():
             setattr(obj, "graduation_plan", s.get("graduation_plan", ""))
             setattr(obj, "join_term", s.get("join_term", ""))
             setattr(obj, "join_year", s.get("join_year", ""))
+            setattr(obj, "pathway_stage", s.get("pathway_stage", "dept_admitted"))
+            setattr(obj, "track_code", s.get("track_code", ""))
             students_objects.append(obj)
         resp = jsonify([s.__dict__ for s in students_objects])
         try:
@@ -1988,6 +2001,199 @@ def update_student_status():
     except Exception as e:
         from backend.core.exceptions import DatabaseError
         raise DatabaseError(f"فشل تحديث حالة قيد الطالب: {str(e)}")
+
+
+@students_bp.route("/pathway_stage/update", methods=["POST"])
+@role_required("admin", "admin_main", "head_of_department")
+def update_student_pathway_stage():
+    """تحديث مرحلة مسار الطالب (داخل القسم / ما قبل الشعبة / متخصص …)."""
+    from backend.core.academic_pathway import (
+        PATHWAY_STAGE_LABELS,
+        normalize_pathway_stage,
+    )
+
+    data = request.get_json(force=True) or {}
+    sid = normalize_sid(data.get("student_id"))
+    if not sid:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
+    stage = normalize_pathway_stage(data.get("pathway_stage"))
+    track_code = (data.get("track_code") or "").strip().upper() or None
+    if track_code == "":
+        track_code = None
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        if allowed_student_ids is not None and sid not in allowed_student_ids:
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        from backend.database.database import fetch_table_columns
+
+        cols = fetch_table_columns(conn, "students")
+        if "pathway_stage" not in cols:
+            return jsonify({"status": "error", "message": "عمود pathway_stage غير متوفر"}), 400
+        old = cur.execute(
+            """
+            SELECT COALESCE(pathway_stage, ''), COALESCE(track_code, '')
+            FROM students WHERE student_id = ? LIMIT 1
+            """,
+            (sid,),
+        ).fetchone()
+        if not old:
+            return jsonify({"status": "error", "message": "الطالب غير موجود"}), 404
+        old_stage = str(old[0] or "").strip()
+        old_track = str(old[1] or "").strip()
+        if stage == "specialized" and not track_code and not (old_track or "").strip():
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "أدخل رمز الشعبة (track_code) عند اختيار «متخصص»",
+                    }
+                ),
+                400,
+            )
+        if stage == "specialized":
+            tc = track_code or (old_track or "").strip() or None
+            cur.execute(
+                """
+                UPDATE students SET pathway_stage = ?, track_code = ?
+                WHERE student_id = ?
+                """,
+                (stage, tc, sid),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE students SET pathway_stage = ?, track_code = NULL
+                WHERE student_id = ?
+                """,
+                (stage, sid),
+            )
+            track_code = None
+        conn.commit()
+    try:
+        log_activity(
+            action="student_pathway_stage_update",
+            actor=(session.get("user") or session.get("username") or "").strip(),
+            details=(
+                f"student_id={sid}; old={old_stage}; new={stage}; "
+                f"track={track_code or old_track or ''}"
+            ),
+        )
+    except Exception:
+        pass
+    return jsonify(
+        {
+            "status": "ok",
+            "student_id": sid,
+            "pathway_stage": stage,
+            "pathway_stage_label": PATHWAY_STAGE_LABELS.get(stage, stage),
+            "track_code": track_code or old_track or "",
+        }
+    ), 200
+
+
+@students_bp.route("/pathway_progress", methods=["GET"])
+@role_required("admin", "admin_main", "head_of_department", "supervisor")
+def student_pathway_progress():
+    """حاسبة منجز/متبقي حسب نطاق المتطلب (المرحلة ج)."""
+    from backend.core.pathway_progress import compute_pathway_progress
+
+    sid = normalize_sid(request.args.get("student_id"))
+    if not sid:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
+    with get_connection() as conn:
+        cur = conn.cursor()
+        allowed = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        if allowed is not None and sid not in allowed:
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        result = compute_pathway_progress(cur, sid)
+    if result.get("status") == "error":
+        return jsonify(result), 404
+    return jsonify(result), 200
+
+
+@students_bp.route("/pathway_progress/export", methods=["GET"])
+@role_required("admin", "admin_main", "head_of_department", "supervisor")
+def student_pathway_progress_export():
+    from backend.core.pathway_export import frames_for_pathway_progress_export
+    from backend.core.pathway_progress import compute_pathway_progress
+
+    sid = normalize_sid(request.args.get("student_id"))
+    if not sid:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
+    with get_connection() as conn:
+        cur = conn.cursor()
+        allowed = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        if allowed is not None and sid not in allowed:
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        result = compute_pathway_progress(cur, sid)
+    if result.get("status") == "error":
+        return jsonify(result), 404
+    from backend.services.utilities import excel_response_from_frames
+
+    frames = frames_for_pathway_progress_export(result)
+    return excel_response_from_frames(frames, filename_prefix=f"pathway_{sid}")
+
+
+@students_bp.route("/pathway_progress/bulk_export", methods=["GET"])
+@role_required("admin", "admin_main", "head_of_department", "supervisor")
+def student_pathway_progress_bulk_export():
+    """ملخص مسار لعدة طلاب (حسب فلاتر القائمة، حد 150)."""
+    import pandas as pd
+
+    from backend.core.pathway_progress import compute_pathway_progress
+    from backend.services.utilities import excel_response_from_df
+
+    user_role = session.get("user_role")
+    with get_connection() as conn:
+        allowed = _get_allowed_student_ids_for_role(conn, user_role)
+    students = students_filtered_from_request(request)
+    if allowed is not None:
+        students = [s for s in students if normalize_sid(s.get("student_id")) in allowed]
+    students = students[:150]
+    rows_out = []
+    with get_connection() as conn:
+        cur = conn.cursor()
+        for s in students:
+            sid = normalize_sid(s.get("student_id"))
+            if not sid:
+                continue
+            data = compute_pathway_progress(cur, sid)
+            if data.get("status") != "ok":
+                continue
+            t = data.get("totals") or {}
+            rows_out.append(
+                {
+                    "الرقم الدراسي": sid,
+                    "الاسم": data.get("student_name") or s.get("student_name"),
+                    "سنة الالتحاق": (s.get("join_year") or "").strip(),
+                    "مرحلة المسار": data.get("pathway_stage"),
+                    "الشعبة": data.get("track_code"),
+                    "وضع التشغيل": data.get("operating_mode"),
+                    "منجز الخطة": t.get("plan_completed_units"),
+                    "متبقي التخرج": t.get("graduation_remaining"),
+                    "اتجاه عام منجز": t.get("college_general_completed"),
+                }
+            )
+    df = pd.DataFrame(rows_out) if rows_out else pd.DataFrame()
+    return excel_response_from_df(df, filename_prefix="pathway_bulk")
+
+
+@students_bp.route("/pathway_stages/meta", methods=["GET"])
+@login_required
+def pathway_stages_meta():
+    from backend.core.academic_pathway import PATHWAY_STAGE_LABELS, PATHWAY_STAGES
+
+    return jsonify(
+        {
+            "status": "ok",
+            "items": [
+                {"value": k, "label": PATHWAY_STAGE_LABELS.get(k, k)}
+                for k in PATHWAY_STAGES
+            ],
+        }
+    ), 200
 
 
 @students_bp.route("/specialization/update", methods=["POST"])
@@ -3993,6 +4199,8 @@ def students_export_excel():
                     "فصل الالتحاق",
                     "سنة الالتحاق",
                     "خطة التخرج",
+                    "مرحلة المسار",
+                    "رمز الشعبة",
                     "حالة القيد",
                     "فصل وسنة الإجراء",
                     "ملاحظة القيد",
@@ -4013,6 +4221,8 @@ def students_export_excel():
                     "فصل الالتحاق": (s.get("join_term") or "").strip(),
                     "سنة الالتحاق": (s.get("join_year") or "").strip(),
                     "خطة التخرج": (s.get("graduation_plan") or "").strip(),
+                    "مرحلة المسار": (s.get("pathway_stage") or "").strip(),
+                    "رمز الشعبة": (s.get("track_code") or "").strip(),
                     "حالة القيد": _enrollment_label_ar(s.get("enrollment_status")),
                     "فصل وسنة الإجراء": _format_status_action_period(
                         s.get("status_changed_term"), s.get("status_changed_year")
@@ -4028,6 +4238,8 @@ def students_export_excel():
             "فصل الالتحاق",
             "سنة الالتحاق",
             "خطة التخرج",
+            "مرحلة المسار",
+            "رمز الشعبة",
             "حالة القيد",
             "فصل وسنة الإجراء",
             "ملاحظة القيد",

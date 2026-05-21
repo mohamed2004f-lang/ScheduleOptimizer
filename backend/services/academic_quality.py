@@ -372,3 +372,10 @@ def survey_questions_reorder_api():
         except ValueError as e:
             return jsonify({"status": "error", "message": str(e)}), 400
     return jsonify({"status": "ok", "questions": questions})
+
+
+from backend.services.institutional_accreditation import (  # noqa: E402
+    register_institutional_accreditation_routes,
+)
+
+register_institutional_accreditation_routes(academic_quality_bp)

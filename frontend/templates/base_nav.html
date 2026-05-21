@@ -226,6 +226,7 @@
           </a>
           <ul class="dropdown-menu" aria-labelledby="qualityAccreditationMenu">
             <li><a class="dropdown-item" id="navAcademicQuality" href="/academic_quality/dashboard" style="display:none;">لوحة الجودة</a></li>
+            <li><a class="dropdown-item" id="navAccreditationMap" href="/academic_quality/accreditation/map" style="display:none;">خريطة الامتثال المؤسسي</a></li>
             <li><a class="dropdown-item" id="navEvaluationSurveyAdmin" href="/academic_quality/survey_admin" style="display:none;">إدارة استبيان التقييم</a></li>
             <li><a class="dropdown-item" id="navIloCatalog" href="/ilo_catalog_page" style="display:none;">كتالوج مخرجات التعلم</a></li>
           </ul>
@@ -435,6 +436,8 @@
       if (elDossier) elDossier.style.display = showFacultyDossier ? '' : 'none';
       const elQuality = document.getElementById('navAcademicQuality');
       if (elQuality) elQuality.style.display = showQualityDash ? '' : 'none';
+      const elAccredMap = document.getElementById('navAccreditationMap');
+      if (elAccredMap) elAccredMap.style.display = showQualityDash ? '' : 'none';
       const elSurveyAdmin = document.getElementById('navEvaluationSurveyAdmin');
       if (elSurveyAdmin) elSurveyAdmin.style.display = showSurveyAdmin ? '' : 'none';
       const elIlo = document.getElementById('navIloCatalog');
@@ -800,6 +803,7 @@
         ['/faculty_scorecards_page','navFacultyScorecards'],
         ['/faculty_final_dossier_page','navFacultyFinalDossier'],
         ['/academic_quality/dashboard','navAcademicQuality'],
+        ['/academic_quality/accreditation/map','navAccreditationMap'],
         ['/academic_quality/survey_admin','navEvaluationSurveyAdmin'],
         ['/students/evaluations','navStudentEvaluations'],
         ['/ilo_catalog_page','navIloCatalog'],

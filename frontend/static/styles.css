@@ -93,6 +93,14 @@ html[data-theme="dark"] .bg-body-tertiary{
   padding: 16px;
 }
 
+/* كتالوج الأقسام: تبويبات بعرض كامل */
+#catalogTabContent > .tab-pane {
+  width: 100%;
+}
+#pcClassifySummary .border.rounded {
+  min-width: 5.5rem;
+}
+
 /* schedule page: wider + more horizontal workspace */
 .schedule-wide{
   max-width: none;

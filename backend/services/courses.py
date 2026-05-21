@@ -346,6 +346,14 @@ def add_course():
                     "INSERT INTO courses (course_name, course_code, units) VALUES (?, ?, ?)",
                     (cname, code, units),
                 )
+        try:
+            from backend.services.college_catalog import _link_operational_course_to_master
+
+            _link_operational_course_to_master(
+                conn, cur, cname, int(scope_dep) if scope_dep is not None else None
+            )
+        except Exception:
+            pass
         conn.commit()
     try:
         from backend.core.cache_setup import invalidate_list_prefix

@@ -25,6 +25,7 @@
           <div class="d-flex flex-wrap align-items-center justify-content-between">
             <div class="btn-group-gap">
               <a class="btn btn-outline-success btn-sm" id="stExportExcel" href="/students/export/excel">⬇️ تصدير Excel</a>
+              <a class="btn btn-outline-success btn-sm" id="stExportPathwayBulk" href="/students/pathway_progress/bulk_export">ملخص مسار Excel</a>
               <a class="btn btn-outline-danger btn-sm" id="stExportPdf" href="/students/export/pdf" target="_blank">⬇️ تصدير PDF (رسمي)</a>
             </div>
             <form id="students-import-form" class="d-flex align-items-center" enctype="multipart/form-data" onsubmit="return false;">
@@ -109,6 +110,12 @@
             </div>
             <div class="col-md-2">
               <input id="filter_join_year" class="form-control form-control-sm" type="text" placeholder="سنة الالتحاق">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small mb-0">مرحلة المسار</label>
+              <select id="filter_pathway_stage" class="form-select form-select-sm">
+                <option value="">كل المراحل</option>
+              </select>
             </div>
             <div class="col-auto">
               <button type="button" class="btn btn-outline-secondary btn-sm" id="btnApplyFilter">تطبيق</button>
@@ -227,13 +234,110 @@
       </div>
     </div>
 
+    <!-- ملخص منجز/متبقي (المرحلة ج) -->
+    <div class="modal fade" id="pathwayProgressModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h6 class="modal-title">ملخص المسار — منجز / متبقي</h6>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-2 small text-muted" id="ppStudentHdr"></div>
+            <div id="ppLoading" class="text-center text-muted py-3 d-none">جاري الحساب…</div>
+            <div id="ppError" class="alert alert-danger py-2 small d-none"></div>
+            <div id="ppContent" class="d-none">
+              <p class="small text-muted mb-2" id="ppTargetsNote"></p>
+              <div class="row g-2 mb-3" id="ppTotalsCards"></div>
+              <h6 class="small fw-bold">حسب نطاق المتطلب</h6>
+              <div class="table-responsive">
+                <table class="table table-sm table-bordered mb-2">
+                  <thead><tr><th>النطاق</th><th>منجز</th><th>مطلوب</th><th>متبقي</th></tr></thead>
+                  <tbody id="ppScopeBody"></tbody>
+                </table>
+              </div>
+              <div id="ppFlags" class="small mb-2"></div>
+              <details class="small">
+                <summary>فجوات الخطة (أول 20)</summary>
+                <ul id="ppGapsList" class="mb-0 ps-3 text-muted"></ul>
+              </details>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <a class="btn btn-outline-success btn-sm d-none" id="ppExportExcel" target="_blank" rel="noopener">تصدير Excel</a>
+            <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">إغلاق</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- مرحلة مسار الطالب -->
+    <div class="modal fade" id="pathwayStudentModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h6 class="modal-title">مرحلة مسار الطالب</h6>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-2">
+              <label class="form-label">الطالب</label>
+              <input id="pw_student_id" class="form-control mb-1" disabled>
+              <input id="pw_student_name" class="form-control" disabled>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">مرحلة المسار</label>
+              <select id="pw_stage_select" class="form-select"></select>
+              <div class="form-text small">الوضع الحالي: طلاب ميكانيك بعد الاتجاه العام.</div>
+            </div>
+            <div class="mb-2" id="pw_track_wrap" style="display:none;">
+              <label class="form-label">رمز الشعبة (track_code)</label>
+              <input id="pw_track_code" class="form-control" placeholder="مثل PWR أو MFG" maxlength="16">
+            </div>
+            <div id="pw_msg" class="mt-2"></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">إلغاء</button>
+            <button class="btn btn-primary btn-sm" id="pwSaveBtn">حفظ المرحلة</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </main>
 
   <script>
   let STUDENTS_VIEW_ONLY = false;
+  let PATHWAY_STAGE_META = {};
   let STUDENTS_ALL = [];
   let STUDENTS_PAGE = 1;
   const STUDENTS_PAGE_SIZE = 25;
+
+  const PATHWAY_STAGE_BADGE = {
+    dept_admitted: { label: 'داخل القسم', cls: 'bg-primary-subtle text-primary' },
+    dept_pre_track: { label: 'قبل الشعبة', cls: 'bg-warning-subtle text-dark' },
+    specialized: { label: 'متخصص', cls: 'bg-success-subtle text-success' },
+    graduation_pending: { label: 'قرب التخرج', cls: 'bg-info-subtle text-dark' },
+  };
+
+  async function loadPathwayStageMeta() {
+    try {
+      const r = await fetch('/students/pathway_stages/meta', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      (j.items || []).forEach(it => { PATHWAY_STAGE_META[it.value] = it.label; });
+      const sel = document.getElementById('filter_pathway_stage');
+      const pwSel = document.getElementById('pw_stage_select');
+      const opts = '<option value="">—</option>' +
+        (j.items || []).map(it => `<option value="${it.value}">${it.label}</option>`).join('');
+      if (sel) sel.innerHTML = '<option value="">كل المراحل</option>' +
+        (j.items || []).map(it => `<option value="${it.value}">${it.label}</option>`).join('');
+      if (pwSel) pwSel.innerHTML = opts;
+    } catch (e) { /* ignore */ }
+  }
+
+  function pathwayStageLabel(stage) {
+    return PATHWAY_STAGE_META[stage] || PATHWAY_STAGE_BADGE[stage]?.label || stage || '—';
+  }
 
   function renderStudentsPagination(total, pages) {
     const bar = document.getElementById('studentsPagination');
@@ -303,7 +407,26 @@
         joinBadge.textContent = [jTerm, jYear].filter(Boolean).join(' ');
         span.appendChild(joinBadge);
       }
+      const pw = (s.pathway_stage || 'dept_admitted').trim();
+      const pwInfo = PATHWAY_STAGE_BADGE[pw] || { label: pathwayStageLabel(pw), cls: 'bg-secondary' };
+      const pwBadge = document.createElement('span');
+      pwBadge.className = 'badge rounded-pill ms-1 ' + pwInfo.cls;
+      pwBadge.textContent = pwInfo.label;
+      span.appendChild(pwBadge);
+      const tc = (s.track_code || '').trim();
+      if (tc) {
+        const tgBadge = document.createElement('span');
+        tgBadge.className = 'badge rounded-pill ms-1 bg-light text-dark border';
+        tgBadge.textContent = tc;
+        span.appendChild(tgBadge);
+      }
       const btnGroup = document.createElement('div');
+      const progressBtn = document.createElement('button');
+      progressBtn.className = 'btn btn-sm btn-outline-success me-1';
+      progressBtn.type = 'button';
+      progressBtn.textContent = 'ملخص المسار';
+      progressBtn.addEventListener('click', () => openPathwayProgressStudent(s));
+      btnGroup.appendChild(progressBtn);
       if (!STUDENTS_VIEW_ONLY) {
         const editBtn = document.createElement('button');
         editBtn.className = 'btn btn-sm btn-outline-primary me-1';
@@ -320,7 +443,13 @@
         statusBtn.type = 'button';
         statusBtn.textContent = 'حالة القيد';
         statusBtn.addEventListener('click', () => openStatusStudent(s));
+        const pathwayBtn = document.createElement('button');
+        pathwayBtn.className = 'btn btn-sm btn-outline-info me-1';
+        pathwayBtn.type = 'button';
+        pathwayBtn.textContent = 'المسار';
+        pathwayBtn.addEventListener('click', () => openPathwayStudent(s));
         btnGroup.appendChild(editBtn);
+        btnGroup.appendChild(pathwayBtn);
         btnGroup.appendChild(delBtn);
         btnGroup.appendChild(statusBtn);
       }
@@ -361,6 +490,8 @@
     else if (['suspended', 'withdrawn', 'graduated'].includes(scope)) params.set('enrollment_status', scope);
     if (joinTerm) params.set('join_term', joinTerm);
     if (joinYear) params.set('join_year', joinYear);
+    const pw = (document.getElementById('filter_pathway_stage') || {}).value || '';
+    if (pw) params.set('pathway_stage', pw);
     return params;
   }
 
@@ -369,8 +500,10 @@
     const suf = q ? ('?' + q) : '';
     const ex = document.getElementById('stExportExcel');
     const pdf = document.getElementById('stExportPdf');
+    const pwb = document.getElementById('stExportPathwayBulk');
     if (ex) ex.href = '/students/export/excel' + suf;
     if (pdf) pdf.href = '/students/export/pdf' + suf;
+    if (pwb) pwb.href = '/students/pathway_progress/bulk_export' + suf;
   }
 
   /* تحميل وعرض الطلبة */
@@ -425,6 +558,130 @@
     if(!wrap || !statusSelect) return;
     const v = statusSelect.value;
     wrap.style.display = (v === 'withdrawn' || v === 'suspended') ? 'block' : 'none';
+  }
+
+  function syncPathwayTrackVisibility() {
+    const v = (document.getElementById('pw_stage_select') || {}).value;
+    const wrap = document.getElementById('pw_track_wrap');
+    if (wrap) wrap.style.display = (v === 'specialized') ? 'block' : 'none';
+  }
+
+  function renderPathwayProgress(data) {
+    const err = document.getElementById('ppError');
+    const content = document.getElementById('ppContent');
+    const loading = document.getElementById('ppLoading');
+    if (loading) loading.classList.add('d-none');
+    if (!data || data.status !== 'ok') {
+      if (content) content.classList.add('d-none');
+      if (err) {
+        err.textContent = (data && data.message) || 'تعذّر حساب المسار';
+        err.classList.remove('d-none');
+      }
+      return;
+    }
+    if (err) err.classList.add('d-none');
+    if (content) content.classList.remove('d-none');
+    const hdr = document.getElementById('ppStudentHdr');
+    if (hdr) {
+      hdr.textContent = (data.student_id || '') + ' — ' + (data.student_name || '') +
+        ' | مرحلة: ' + (data.pathway_stage || '') +
+        ((data.track_code || '') ? (' | شعبة: ' + data.track_code) : '');
+    }
+    const note = document.getElementById('ppTargetsNote');
+    if (note && data.targets) {
+      note.textContent = data.targets.note_ar || '';
+    }
+    const totals = data.totals || {};
+    const cards = document.getElementById('ppTotalsCards');
+    if (cards) {
+      const items = [
+        { t: 'منجز في الخطة', v: totals.plan_completed_units, sub: '/ ' + (totals.graduation_target || 155) },
+        { t: 'متبقي للتخرج', v: totals.graduation_remaining, sub: 'وحدة' },
+        { t: 'اتجاه عام', v: totals.college_general_completed, sub: '/ ' + (totals.college_general_target || 36) },
+        { t: 'متبقي اتجاه عام', v: totals.college_general_remaining, sub: 'وحدة' },
+      ];
+      cards.innerHTML = items.map(it => (
+        '<div class="col-6 col-md-3"><div class="border rounded p-2 text-center bg-light">' +
+        '<span class="text-muted d-block small">' + it.t + '</span>' +
+        '<span class="fw-bold fs-6">' + (it.v ?? 0) + '</span> ' +
+        '<span class="text-muted small">' + (it.sub || '') + '</span></div></div>'
+      )).join('');
+    }
+    const tbody = document.getElementById('ppScopeBody');
+    const order = ['college_general', 'pre_track', 'dept_common', 'track', 'elective'];
+    const byScope = data.by_scope || {};
+    if (tbody) {
+      tbody.innerHTML = order.filter(sc => byScope[sc]).map(sc => {
+        const b = byScope[sc];
+        return '<tr><td>' + (b.label || sc) + '</td><td>' + (b.completed_units || 0) +
+          '</td><td>' + (b.required_units || 0) + '</td><td>' + (b.remaining_units || 0) + '</td></tr>';
+      }).join('');
+      const pre = data.summary_pre_track;
+      if (pre) {
+        tbody.innerHTML += '<tr class="table-secondary"><td>' + (pre.label || 'قبل الشعبة') +
+          '</td><td>' + (pre.completed_units || 0) + '</td><td>' + (pre.required_units || 0) +
+          '</td><td>' + (pre.remaining_units || 0) + '</td></tr>';
+      }
+    }
+    const flags = document.getElementById('ppFlags');
+    const fl = data.flags || {};
+    if (flags) {
+      const bits = [];
+      if (fl.college_general_met) bits.push('<span class="badge bg-success">اتجاه عام مكتمل</span>');
+      else bits.push('<span class="badge bg-warning text-dark">اتجاه عام غير مكتمل</span>');
+      if (fl.transfer_gate_met) bits.push('<span class="badge bg-info text-dark">بوابة 22 وحدة</span>');
+      if (fl.plan_units_match_graduation) bits.push('<span class="badge bg-secondary">خطة = 155</span>');
+      flags.innerHTML = bits.join(' ');
+    }
+    const gaps = document.getElementById('ppGapsList');
+    if (gaps) {
+      const list = data.plan_gaps || [];
+      gaps.innerHTML = list.length
+        ? list.map(c => '<li>' + (c.course_code || '') + ' — ' + (c.title_ar || '') +
+            ' <span class="text-muted">(' + (c.requirement_scope_label || '') + ')</span></li>').join('')
+        : '<li class="text-muted">لا فجوات أو السجل فارغ</li>';
+    }
+  }
+
+  async function openPathwayProgressStudent(student) {
+    const sid = (student && student.student_id) || '';
+    if (!sid) return;
+    const exp = document.getElementById('ppExportExcel');
+    if (exp) {
+      exp.href = '/students/pathway_progress/export?student_id=' + encodeURIComponent(sid);
+      exp.classList.remove('d-none');
+    }
+    const modalEl = document.getElementById('pathwayProgressModal');
+    const loading = document.getElementById('ppLoading');
+    const content = document.getElementById('ppContent');
+    const err = document.getElementById('ppError');
+    if (err) err.classList.add('d-none');
+    if (content) content.classList.add('d-none');
+    if (loading) loading.classList.remove('d-none');
+    bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    try {
+      const resp = await fetch('/students/pathway_progress?student_id=' + encodeURIComponent(sid), {
+        credentials: 'include',
+      });
+      const j = await resp.json().catch(() => ({}));
+      renderPathwayProgress(resp.ok ? j : { status: 'error', message: j.message || 'خطأ' });
+    } catch (_e) {
+      renderPathwayProgress({ status: 'error', message: 'خطأ في الاتصال' });
+    }
+  }
+
+  function openPathwayStudent(student) {
+    try {
+      document.getElementById('pw_student_id').value = student.student_id || '';
+      document.getElementById('pw_student_name').value = student.student_name || '';
+      document.getElementById('pw_stage_select').value = student.pathway_stage || 'dept_admitted';
+      document.getElementById('pw_track_code').value = student.track_code || '';
+      document.getElementById('pw_msg').innerHTML = '';
+      syncPathwayTrackVisibility();
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('pathwayStudentModal')).show();
+    } catch (e) {
+      alert('تعذّر فتح نافذة مرحلة المسار.');
+    }
   }
 
   /* فتح نافذة حالة القيد لطالب */
@@ -482,6 +739,43 @@
 
   /* إضافة طالب */
   document.addEventListener('DOMContentLoaded', function(){
+    loadPathwayStageMeta();
+    const pwStageSel = document.getElementById('pw_stage_select');
+    if (pwStageSel) pwStageSel.addEventListener('change', syncPathwayTrackVisibility);
+    const pwSaveBtn = document.getElementById('pwSaveBtn');
+    if (pwSaveBtn) {
+      pwSaveBtn.addEventListener('click', async () => {
+        const sid = document.getElementById('pw_student_id').value.trim();
+        const stage = document.getElementById('pw_stage_select').value;
+        const track = document.getElementById('pw_track_code').value.trim().toUpperCase();
+        const msgEl = document.getElementById('pw_msg');
+        if (!sid) return;
+        try {
+          const resp = await fetch('/students/pathway_stage/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              student_id: sid,
+              pathway_stage: stage,
+              track_code: track || null,
+            }),
+          });
+          const j = await resp.json().catch(() => ({}));
+          if (resp.ok) {
+            if (msgEl) msgEl.innerHTML = '<div class="alert alert-success p-1">تم حفظ مرحلة المسار.</div>';
+            setTimeout(async () => {
+              bootstrap.Modal.getInstance(document.getElementById('pathwayStudentModal'))?.hide();
+              await loadStudents();
+            }, 600);
+          } else {
+            if (msgEl) msgEl.innerHTML = '<div class="alert alert-danger p-1">' + (j.message || 'فشل الحفظ') + '</div>';
+          }
+        } catch (e) {
+          if (msgEl) msgEl.innerHTML = '<div class="alert alert-danger p-1">خطأ في الاتصال.</div>';
+        }
+      });
+    }
     bootstrapStudentsRoleView().finally(() => {
       updateExportLinks();
       loadStudents();

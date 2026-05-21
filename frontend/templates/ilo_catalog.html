@@ -306,9 +306,47 @@
       const items = j.items || [];
       sel.innerHTML = '<option value="">— اختر برنامجاً —</option>' +
         items.map(p => `<option value="${p.id}">${escapeHtml(p.department_name)} / ${escapeHtml(p.code)} — ${escapeHtml(p.name_ar)}</option>`).join('');
-      if (items.length === 1) {
+      const usp = new URLSearchParams(location.search);
+      const deepPid = usp.get('program_id');
+      const deepCm = usp.get('course_master_id');
+      const deepPc = usp.get('program_course_id');
+      const deepTab = (usp.get('tab') || '').toLowerCase();
+      if (deepPid) {
+        sel.value = String(deepPid);
+        await loadOutcomes();
+        selectCourseFromDeepLink(deepCm, deepPc);
+        if (deepTab === 'matrix') {
+          document.getElementById('tabBtnMatrix')?.click();
+        }
+      } else if (items.length === 1) {
         sel.value = String(items[0].id);
         loadOutcomes();
+      }
+    }
+
+    function selectCourseFromDeepLink(courseMasterId, programCourseId) {
+      const cs = document.getElementById('courseSelect');
+      if (!cs || !cs.options.length) return;
+      const targets = [];
+      if (programCourseId) targets.push(String(programCourseId));
+      if (courseMasterId) {
+        targets.push('cm:' + courseMasterId);
+        targets.push(String(courseMasterId));
+      }
+      for (const t of targets) {
+        for (const opt of cs.options) {
+          if (opt.value === t) {
+            cs.value = t;
+            loadCourseLinks();
+            document.getElementById('tabBtnManage')?.click();
+            cs.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            showMsg('تم فتح المقرر من كتالوج الخطة.', 'success');
+            return;
+          }
+        }
+      }
+      if (courseMasterId || programCourseId) {
+        showMsg('المقرر غير موجود في قائمة الربط — اختره يدوياً.', 'warning');
       }
     }
 

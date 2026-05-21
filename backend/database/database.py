@@ -242,6 +242,53 @@ def backfill_instructor_cross_department_data(conn) -> None:
         except Exception as e:
             logger.warning("backfill instructor_department_assignments from instructors home dept: %s", e)
 
+
+def backfill_academic_pathway_defaults(conn) -> None:
+    """
+    ترحيل افتراضي: مقررات الخطة → dept_common؛ طلاب بلا مرحلة → dept_admitted
+    (من لديهم track_code → specialized). مناسب لوضع ميكانيك: الجميع داخل القسم بعد العام.
+    """
+    cur = conn.cursor()
+    try:
+        pccols = fetch_table_columns(conn, "program_courses")
+    except Exception:
+        pccols = []
+    if "requirement_scope" in pccols:
+        try:
+            cur.execute(
+                """
+                UPDATE program_courses
+                SET requirement_scope = 'dept_common'
+                WHERE requirement_scope IS NULL OR TRIM(COALESCE(requirement_scope, '')) = ''
+                """
+            )
+        except Exception as e:
+            logger.warning("backfill program_courses.requirement_scope: %s", e)
+    try:
+        scols = fetch_table_columns(conn, "students")
+    except Exception:
+        scols = []
+    if "pathway_stage" not in scols:
+        return
+    try:
+        cur.execute(
+            """
+            UPDATE students
+            SET pathway_stage = 'specialized'
+            WHERE (pathway_stage IS NULL OR TRIM(COALESCE(pathway_stage, '')) = '')
+              AND TRIM(COALESCE(track_code, '')) <> ''
+            """
+        )
+        cur.execute(
+            """
+            UPDATE students
+            SET pathway_stage = 'dept_admitted'
+            WHERE pathway_stage IS NULL OR TRIM(COALESCE(pathway_stage, '')) = ''
+            """
+        )
+    except Exception as e:
+        logger.warning("backfill students.pathway_stage: %s", e)
+
     try:
         conn.commit()
     except Exception:
@@ -575,6 +622,7 @@ TABLES_SCHEMA = {
             course_code TEXT NOT NULL,
             course_name_override TEXT DEFAULT '',
             plan_applicability TEXT NOT NULL DEFAULT 'both',
+            requirement_scope TEXT NOT NULL DEFAULT 'dept_common',
             level_no INTEGER DEFAULT 0 CHECK (level_no >= 0),
             term_hint TEXT DEFAULT '',
             units_override INTEGER,
@@ -648,6 +696,7 @@ TABLES_SCHEMA = {
             status_changed_term TEXT,
             status_changed_year TEXT,
             graduation_plan TEXT DEFAULT '',
+            pathway_stage TEXT NOT NULL DEFAULT 'dept_admitted',
             join_term TEXT DEFAULT '',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -1161,6 +1210,25 @@ TABLES_SCHEMA = {
         )
     """,
 
+    'pathway_regulation_items': """
+        CREATE TABLE IF NOT EXISTS pathway_regulation_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            department_id INTEGER NOT NULL,
+            rule_key TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            category TEXT NOT NULL DEFAULT 'other',
+            value_number REAL,
+            value_text TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (department_id, rule_key),
+            FOREIGN KEY (department_id) REFERENCES departments(id)
+                ON DELETE CASCADE ON UPDATE CASCADE
+        )
+    """,
+
     'registration_requests': """
         CREATE TABLE IF NOT EXISTS registration_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1489,6 +1557,125 @@ TABLES_SCHEMA = {
         )
     """,
 
+    'accreditation_standards': """
+        CREATE TABLE IF NOT EXISTS accreditation_standards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            catalog_version TEXT NOT NULL DEFAULT '2026.1',
+            domain_code TEXT NOT NULL,
+            code TEXT NOT NULL,
+            title_ar TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            weight_percent REAL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (catalog_version, code)
+        )
+    """,
+
+    'accreditation_indicators': """
+        CREATE TABLE IF NOT EXISTS accreditation_indicators (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            standard_id INTEGER NOT NULL,
+            code TEXT NOT NULL,
+            title_ar TEXT NOT NULL,
+            source_type TEXT NOT NULL DEFAULT 'manual',
+            target_hint_ar TEXT DEFAULT '',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (standard_id, code),
+            FOREIGN KEY (standard_id) REFERENCES accreditation_standards(id) ON DELETE CASCADE
+        )
+    """,
+
+    'accreditation_assessments': """
+        CREATE TABLE IF NOT EXISTS accreditation_assessments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            semester TEXT NOT NULL,
+            department_id INTEGER,
+            indicator_id INTEGER NOT NULL,
+            score_percent REAL,
+            compliance_status TEXT NOT NULL DEFAULT 'not_started',
+            notes TEXT DEFAULT '',
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_by TEXT DEFAULT '',
+            UNIQUE (semester, department_id, indicator_id),
+            FOREIGN KEY (indicator_id) REFERENCES accreditation_indicators(id) ON DELETE CASCADE
+        )
+    """,
+
+    'accreditation_evidence': """
+        CREATE TABLE IF NOT EXISTS accreditation_evidence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            semester TEXT NOT NULL,
+            department_id INTEGER,
+            indicator_id INTEGER,
+            standard_id INTEGER,
+            checklist_key TEXT,
+            title_ar TEXT NOT NULL DEFAULT '',
+            description TEXT DEFAULT '',
+            evidence_type TEXT NOT NULL DEFAULT 'file',
+            external_url TEXT DEFAULT '',
+            original_name TEXT DEFAULT '',
+            stored_path TEXT DEFAULT '',
+            mime_type TEXT DEFAULT '',
+            file_size INTEGER DEFAULT 0,
+            sha256 TEXT DEFAULT '',
+            uploaded_by TEXT DEFAULT '',
+            uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            FOREIGN KEY (indicator_id) REFERENCES accreditation_indicators(id) ON DELETE SET NULL,
+            FOREIGN KEY (standard_id) REFERENCES accreditation_standards(id) ON DELETE SET NULL
+        )
+    """,
+
+    'accreditation_manual_inputs': """
+        CREATE TABLE IF NOT EXISTS accreditation_manual_inputs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            semester TEXT NOT NULL,
+            department_id INTEGER,
+            classrooms_count INTEGER,
+            labs_count INTEGER,
+            facilities_rating REAL,
+            facilities_notes TEXT DEFAULT '',
+            annual_budget_million REAL,
+            budget_execution_percent REAL,
+            finance_notes TEXT DEFAULT '',
+            governance_meetings_count INTEGER,
+            policies_active_count INTEGER,
+            governance_notes TEXT DEFAULT '',
+            community_events_count INTEGER,
+            community_beneficiaries_count INTEGER,
+            research_outputs_count INTEGER,
+            community_notes TEXT DEFAULT '',
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_by TEXT DEFAULT '',
+            UNIQUE (semester, department_id)
+        )
+    """,
+
+    'accreditation_improvement_plans': """
+        CREATE TABLE IF NOT EXISTS accreditation_improvement_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            semester TEXT NOT NULL,
+            department_id INTEGER,
+            indicator_id INTEGER,
+            title_ar TEXT NOT NULL,
+            action_ar TEXT DEFAULT '',
+            target_date TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'planned',
+            priority TEXT DEFAULT 'medium',
+            owner_ar TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_by TEXT DEFAULT '',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            FOREIGN KEY (indicator_id) REFERENCES accreditation_indicators(id) ON DELETE SET NULL
+        )
+    """,
+
     'program_learning_outcomes': """
         CREATE TABLE IF NOT EXISTS program_learning_outcomes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1641,6 +1828,12 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_eval_survey_ans_q ON evaluation_survey_answers(question_id)",
     "CREATE INDEX IF NOT EXISTS idx_supervisor_quality_sem ON supervisor_quality_reports(supervisor_instructor_id, semester)",
     "CREATE INDEX IF NOT EXISTS idx_quality_metrics_sem_dept ON quality_metrics_snapshots(semester, department_id)",
+    "CREATE INDEX IF NOT EXISTS idx_accred_std_domain ON accreditation_standards(domain_code, catalog_version)",
+    "CREATE INDEX IF NOT EXISTS idx_accred_ind_standard ON accreditation_indicators(standard_id)",
+    "CREATE INDEX IF NOT EXISTS idx_accred_asm_sem ON accreditation_assessments(semester, department_id)",
+    "CREATE INDEX IF NOT EXISTS idx_accred_ev_sem ON accreditation_evidence(semester, department_id, indicator_id)",
+    "CREATE INDEX IF NOT EXISTS idx_accred_manual_sem ON accreditation_manual_inputs(semester, department_id)",
+    "CREATE INDEX IF NOT EXISTS idx_accred_plan_sem ON accreditation_improvement_plans(semester, department_id, status)",
     "CREATE INDEX IF NOT EXISTS idx_plo_program ON program_learning_outcomes(program_id, is_active)",
     "CREATE INDEX IF NOT EXISTS idx_pclo_course ON program_course_learning_outcomes(program_course_id)",
     "CREATE INDEX IF NOT EXISTS idx_plo_cm_master ON plo_course_master_links(program_id, course_master_id)",
@@ -1743,6 +1936,24 @@ def _ensure_tables_postgresql() -> None:
         "ALTER TABLE grades ADD COLUMN IF NOT EXISTS program_course_id BIGINT",
         "ALTER TABLE grades ADD COLUMN IF NOT EXISTS course_master_id BIGINT",
         "ALTER TABLE program_courses ADD COLUMN IF NOT EXISTS plan_applicability TEXT NOT NULL DEFAULT 'both'",
+        "ALTER TABLE program_courses ADD COLUMN IF NOT EXISTS requirement_scope TEXT NOT NULL DEFAULT 'dept_common'",
+        "ALTER TABLE students ADD COLUMN IF NOT EXISTS pathway_stage TEXT NOT NULL DEFAULT 'dept_admitted'",
+        """
+        CREATE TABLE IF NOT EXISTS pathway_regulation_items (
+            id BIGSERIAL PRIMARY KEY,
+            department_id BIGINT NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+            rule_key TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            category TEXT NOT NULL DEFAULT 'other',
+            value_number DOUBLE PRECISION,
+            value_text TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (department_id, rule_key)
+        )
+        """,
         "ALTER TABLE department_graduation_policies ADD COLUMN IF NOT EXISTS effective_from_term TEXT DEFAULT ''",
         "ALTER TABLE department_graduation_policies ADD COLUMN IF NOT EXISTS effective_from_year TEXT DEFAULT ''",
         "ALTER TABLE instructors ADD COLUMN IF NOT EXISTS department_id BIGINT",
@@ -2408,6 +2619,142 @@ def _ensure_tables_postgresql() -> None:
                 """,
             ),
             (
+                "accreditation_standards",
+                """
+                CREATE TABLE IF NOT EXISTS accreditation_standards (
+                    id BIGSERIAL PRIMARY KEY,
+                    catalog_version TEXT NOT NULL DEFAULT '2026.1',
+                    domain_code TEXT NOT NULL,
+                    code TEXT NOT NULL,
+                    title_ar TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    weight_percent REAL DEFAULT 0,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (catalog_version, code)
+                )
+                """,
+            ),
+            (
+                "accreditation_indicators",
+                """
+                CREATE TABLE IF NOT EXISTS accreditation_indicators (
+                    id BIGSERIAL PRIMARY KEY,
+                    standard_id BIGINT NOT NULL,
+                    code TEXT NOT NULL,
+                    title_ar TEXT NOT NULL,
+                    source_type TEXT NOT NULL DEFAULT 'manual',
+                    target_hint_ar TEXT DEFAULT '',
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (standard_id, code),
+                    CONSTRAINT accred_ind_std_fk FOREIGN KEY (standard_id)
+                        REFERENCES accreditation_standards(id) ON DELETE CASCADE
+                )
+                """,
+            ),
+            (
+                "accreditation_assessments",
+                """
+                CREATE TABLE IF NOT EXISTS accreditation_assessments (
+                    id BIGSERIAL PRIMARY KEY,
+                    semester TEXT NOT NULL,
+                    department_id BIGINT,
+                    indicator_id BIGINT NOT NULL,
+                    score_percent REAL,
+                    compliance_status TEXT NOT NULL DEFAULT 'not_started',
+                    notes TEXT DEFAULT '',
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_by TEXT DEFAULT '',
+                    UNIQUE (semester, department_id, indicator_id),
+                    CONSTRAINT accred_asm_ind_fk FOREIGN KEY (indicator_id)
+                        REFERENCES accreditation_indicators(id) ON DELETE CASCADE
+                )
+                """,
+            ),
+            (
+                "accreditation_evidence",
+                """
+                CREATE TABLE IF NOT EXISTS accreditation_evidence (
+                    id BIGSERIAL PRIMARY KEY,
+                    semester TEXT NOT NULL,
+                    department_id BIGINT,
+                    indicator_id BIGINT,
+                    standard_id BIGINT,
+                    checklist_key TEXT,
+                    title_ar TEXT NOT NULL DEFAULT '',
+                    description TEXT DEFAULT '',
+                    evidence_type TEXT NOT NULL DEFAULT 'file',
+                    external_url TEXT DEFAULT '',
+                    original_name TEXT DEFAULT '',
+                    stored_path TEXT DEFAULT '',
+                    mime_type TEXT DEFAULT '',
+                    file_size BIGINT DEFAULT 0,
+                    sha256 TEXT DEFAULT '',
+                    uploaded_by TEXT DEFAULT '',
+                    uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    CONSTRAINT accred_ev_ind_fk FOREIGN KEY (indicator_id)
+                        REFERENCES accreditation_indicators(id) ON DELETE SET NULL,
+                    CONSTRAINT accred_ev_std_fk FOREIGN KEY (standard_id)
+                        REFERENCES accreditation_standards(id) ON DELETE SET NULL
+                )
+                """,
+            ),
+            (
+                "accreditation_manual_inputs",
+                """
+                CREATE TABLE IF NOT EXISTS accreditation_manual_inputs (
+                    id BIGSERIAL PRIMARY KEY,
+                    semester TEXT NOT NULL,
+                    department_id BIGINT,
+                    classrooms_count INTEGER,
+                    labs_count INTEGER,
+                    facilities_rating REAL,
+                    facilities_notes TEXT DEFAULT '',
+                    annual_budget_million REAL,
+                    budget_execution_percent REAL,
+                    finance_notes TEXT DEFAULT '',
+                    governance_meetings_count INTEGER,
+                    policies_active_count INTEGER,
+                    governance_notes TEXT DEFAULT '',
+                    community_events_count INTEGER,
+                    community_beneficiaries_count INTEGER,
+                    research_outputs_count INTEGER,
+                    community_notes TEXT DEFAULT '',
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_by TEXT DEFAULT '',
+                    UNIQUE (semester, department_id)
+                )
+                """,
+            ),
+            (
+                "accreditation_improvement_plans",
+                """
+                CREATE TABLE IF NOT EXISTS accreditation_improvement_plans (
+                    id BIGSERIAL PRIMARY KEY,
+                    semester TEXT NOT NULL,
+                    department_id BIGINT,
+                    indicator_id BIGINT,
+                    title_ar TEXT NOT NULL,
+                    action_ar TEXT DEFAULT '',
+                    target_date TEXT DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'planned',
+                    priority TEXT DEFAULT 'medium',
+                    owner_ar TEXT DEFAULT '',
+                    notes TEXT DEFAULT '',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_by TEXT DEFAULT '',
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    CONSTRAINT accred_plan_ind_fk FOREIGN KEY (indicator_id)
+                        REFERENCES accreditation_indicators(id) ON DELETE SET NULL
+                )
+                """,
+            ),
+            (
                 "program_learning_outcomes",
                 """
                 CREATE TABLE IF NOT EXISTS program_learning_outcomes (
@@ -2593,6 +2940,17 @@ def _ensure_tables_postgresql() -> None:
             backfill_instructor_cross_department_data(conn)
         except Exception as e:
             logger.warning("backfill instructor cross-department (postgresql): %s", e)
+        try:
+            backfill_academic_pathway_defaults(conn)
+            from backend.services.pathway_regulations import ensure_pathway_regulation_defaults
+
+            ensure_pathway_regulation_defaults(conn)
+        except Exception as e:
+            logger.warning("backfill academic pathway (postgresql): %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
     logger.info("PostgreSQL compatibility migrations applied")
 
 
@@ -2639,6 +2997,7 @@ def ensure_tables(db_file=None):
                 ("status_changed_term", "ALTER TABLE students ADD COLUMN status_changed_term TEXT"),
                 ("status_changed_year", "ALTER TABLE students ADD COLUMN status_changed_year TEXT"),
                 ("graduation_plan", "ALTER TABLE students ADD COLUMN graduation_plan TEXT DEFAULT ''"),
+                ("pathway_stage", "ALTER TABLE students ADD COLUMN pathway_stage TEXT NOT NULL DEFAULT 'dept_admitted'"),
                 ("join_term", "ALTER TABLE students ADD COLUMN join_term TEXT DEFAULT ''"),
             ]
             for col, stmt in migrations:
@@ -2802,6 +3161,13 @@ def ensure_tables(db_file=None):
                 )
             except Exception:
                 pass
+        if "requirement_scope" not in pccols:
+            try:
+                cur.execute(
+                    "ALTER TABLE program_courses ADD COLUMN requirement_scope TEXT NOT NULL DEFAULT 'dept_common'"
+                )
+            except Exception:
+                pass
 
         try:
             icols = [r[1] for r in cur.execute("PRAGMA table_info(instructors)").fetchall()]
@@ -2841,6 +3207,16 @@ def ensure_tables(db_file=None):
             backfill_instructor_cross_department_data(conn)
         except Exception as e:
             logger.warning("backfill instructor cross-department (sqlite): %s", e)
+        try:
+            backfill_academic_pathway_defaults(conn)
+        except Exception as e:
+            logger.warning("backfill academic pathway (sqlite): %s", e)
+        try:
+            from backend.services.pathway_regulations import ensure_pathway_regulation_defaults
+
+            ensure_pathway_regulation_defaults(conn)
+        except Exception as e:
+            logger.warning("ensure pathway regulations (sqlite): %s", e)
 
         conn.commit()
         logger.info("Database tables and indexes ensured")

@@ -53,7 +53,7 @@ PHASE0_PROGRAMS = [
         0,
         '{"note_ar":"تهيئة مرحلة 0: قبل التنسيب من الاتجاه العام إلى الأقسام العلمية."}',
     ),
-    ("MECH", "PROG_MAJOR", "بكالوريوس الهندسة الميكانيكية", "major", 160, ""),
+    ("MECH", "PROG_MAJOR", "هندسة ميكانيكية — خطة القسم (بدون شعبة)", "major", 155, ""),
     ("CIVIL", "PROG_MAJOR", "بكالوريوس الهندسة المدنية", "major", 160, ""),
     ("ELEC", "PROG_MAJOR", "بكالوريوس الهندسة الكهربائية", "major", 160, ""),
     ("RENEW", "PROG_MAJOR", "بكالوريوس هندسة الطاقات المتجددة", "major", 160, ""),
@@ -190,27 +190,59 @@ def backfill_legacy_students(
             "updated_rows": 0,
         }
 
-    cur.execute(
-        """
-        UPDATE students SET
-          department_id = COALESCE(
-            department_id,
-            (SELECT id FROM departments WHERE code = ? LIMIT 1)
-          ),
-          current_program_id = COALESCE(
-            current_program_id,
-            (
-              SELECT p.id FROM programs p
-              INNER JOIN departments d ON d.id = p.department_id
-              WHERE d.code = ? AND p.code = 'PROG_MAJOR'
-              LIMIT 1
-            )
-          ),
-          updated_at = CURRENT_TIMESTAMP
-        WHERE department_id IS NULL OR current_program_id IS NULL
-        """,
-        (legacy_dept_code, legacy_dept_code),
-    )
+    st_cols = fetch_table_columns(conn, "students")
+    has_pathway = "pathway_stage" in st_cols
+    if has_pathway:
+        cur.execute(
+            """
+            UPDATE students SET
+              department_id = COALESCE(
+                department_id,
+                (SELECT id FROM departments WHERE code = ? LIMIT 1)
+              ),
+              current_program_id = COALESCE(
+                current_program_id,
+                (
+                  SELECT p.id FROM programs p
+                  INNER JOIN departments d ON d.id = p.department_id
+                  WHERE d.code = ? AND p.code = 'PROG_MAJOR'
+                  LIMIT 1
+                )
+              ),
+              pathway_stage = CASE
+                WHEN TRIM(COALESCE(track_code, '')) <> '' THEN 'specialized'
+                WHEN pathway_stage IS NULL OR TRIM(COALESCE(pathway_stage, '')) = ''
+                  THEN 'dept_admitted'
+                ELSE pathway_stage
+              END,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE department_id IS NULL OR current_program_id IS NULL
+               OR pathway_stage IS NULL OR TRIM(COALESCE(pathway_stage, '')) = ''
+            """,
+            (legacy_dept_code, legacy_dept_code),
+        )
+    else:
+        cur.execute(
+            """
+            UPDATE students SET
+              department_id = COALESCE(
+                department_id,
+                (SELECT id FROM departments WHERE code = ? LIMIT 1)
+              ),
+              current_program_id = COALESCE(
+                current_program_id,
+                (
+                  SELECT p.id FROM programs p
+                  INNER JOIN departments d ON d.id = p.department_id
+                  WHERE d.code = ? AND p.code = 'PROG_MAJOR'
+                  LIMIT 1
+                )
+              ),
+              updated_at = CURRENT_TIMESTAMP
+            WHERE department_id IS NULL OR current_program_id IS NULL
+            """,
+            (legacy_dept_code, legacy_dept_code),
+        )
     updated = getattr(cur, "rowcount", -1)
 
     remaining_row = cur.execute(
@@ -242,21 +274,15 @@ _STAFF_ROLES_FOR_DEPT = frozenset(
 
 
 def _resolve_major_program_id(cur, legacy_dept_code: str) -> int:
-    cur.execute(
-        """
-        SELECT p.id FROM programs p
-        INNER JOIN departments d ON d.id = p.department_id
-        WHERE UPPER(TRIM(d.code)) = UPPER(TRIM(?)) AND TRIM(p.code) = 'PROG_MAJOR'
-        LIMIT 1
-        """,
-        (legacy_dept_code,),
+    from backend.core.program_tracks import resolve_base_program_id
+
+    pid = resolve_base_program_id(cur, legacy_dept_code)
+    if pid is not None:
+        return pid
+    raise ValueError(
+        f"برنامج الأساس (MECH/PROG_MAJOR) غير موجود للقسم {legacy_dept_code!r} — "
+        "شغّل ensure_phase0_catalog أو department_program_tracks/ensure"
     )
-    row = cur.fetchone()
-    if not row:
-        raise ValueError(
-            f"برنامج PROG_MAJOR غير موجود للقسم {legacy_dept_code!r} — شغّل ensure_phase0_catalog أولاً"
-        )
-    return _row_id(row)
 
 
 def _monolith_bind_all(

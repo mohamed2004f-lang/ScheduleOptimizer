@@ -127,6 +127,8 @@ class StudentService:
                 has_dept = "department_id" in cols
                 has_curr_prog = "current_program_id" in cols
                 has_adm_prog = "admission_program_id" in cols
+                has_pathway = "pathway_stage" in cols
+                has_track = "track_code" in cols
                 extra_cols = (", COALESCE(graduation_plan, '') AS graduation_plan" if has_plan else "")
                 if has_join:
                     extra_cols += ", COALESCE(join_term, '') AS join_term, COALESCE(join_year, '') AS join_year"
@@ -136,6 +138,10 @@ class StudentService:
                     extra_cols += ", current_program_id"
                 if has_adm_prog:
                     extra_cols += ", admission_program_id"
+                if has_pathway:
+                    extra_cols += ", COALESCE(pathway_stage, 'dept_admitted') AS pathway_stage"
+                if has_track:
+                    extra_cols += ", COALESCE(track_code, '') AS track_code"
                 has_sterm = "status_changed_term" in cols
                 has_syear = "status_changed_year" in cols
                 status_extra_sel = ""
@@ -203,6 +209,14 @@ class StudentService:
                         if has_adm_prog:
                             aid = r["admission_program_id"]
                             row_dict["admission_program_id"] = int(aid) if aid not in (None, "") else None
+                        if has_pathway:
+                            row_dict["pathway_stage"] = (r["pathway_stage"] or "dept_admitted").strip()
+                        else:
+                            row_dict["pathway_stage"] = "dept_admitted"
+                        if has_track:
+                            row_dict["track_code"] = (r["track_code"] or "").strip()
+                        else:
+                            row_dict["track_code"] = ""
                         result.append(row_dict)
                     return result
                 # قواعد قديمة بدون أعمدة حالة القيد
@@ -304,6 +318,43 @@ class StudentService:
             raise DatabaseError(f"فشل جلب بيانات الطالب: {str(e)}")
     
     @staticmethod
+    def _apply_cohort_pathway_after_upsert(cur, student_id: str, join_year: str) -> None:
+        """تعيين PROG_U1 لدفعة الاتجاه العام عند تفعيل سنة الالتحاق في اللائحة."""
+        from backend.core.academic_pathway import cohort_defaults_for_new_student
+
+        defaults = cohort_defaults_for_new_student(cur, join_year)
+        if not defaults:
+            return
+        cols = StudentService._students_columns(cur)
+        row = cur.execute(
+            "SELECT admission_program_id FROM students WHERE student_id = ? LIMIT 1",
+            (student_id,),
+        ).fetchone()
+        if row:
+            if hasattr(row, "keys"):
+                try:
+                    adm = row["admission_program_id"]
+                except (KeyError, TypeError, IndexError):
+                    adm = row[0]
+            else:
+                adm = row[0]
+            if adm not in (None, "", 0):
+                return
+        sets: List[str] = []
+        params: List[Any] = []
+        for key in ("department_id", "admission_program_id", "current_program_id", "pathway_stage"):
+            if key in cols and key in defaults:
+                sets.append(f"{key} = ?")
+                params.append(defaults[key])
+        if not sets:
+            return
+        params.append(student_id)
+        cur.execute(
+            "UPDATE students SET " + ", ".join(sets) + " WHERE student_id = ?",
+            params,
+        )
+
+    @staticmethod
     def add_student(
         student_id: str,
         student_name: str = "",
@@ -396,6 +447,7 @@ class StudentService:
                         """,
                         (sid, name),
                     )
+                StudentService._apply_cohort_pathway_after_upsert(cur, sid, year)
                 conn.commit()
                 logger.info(f"Student added/updated: {sid}")
                 return {'status': 'ok', 'message': 'تم إضافة الطالب', 'student_id': sid}

@@ -163,6 +163,9 @@ app.register_blueprint(academic_rules_bp, url_prefix="/academic_rules")
 app.register_blueprint(instructors_bp, url_prefix="/instructors")
 app.register_blueprint(course_equivalence_bp)
 app.register_blueprint(department_policies_bp)
+from backend.services.pathway_regulations import register_pathway_regulation_routes
+
+register_pathway_regulation_routes(college_catalog_bp)
 app.register_blueprint(college_catalog_bp)
 app.register_blueprint(performance_bp, url_prefix="/performance")
 app.register_blueprint(students_api_bp)

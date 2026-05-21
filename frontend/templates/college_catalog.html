@@ -13,13 +13,45 @@
     <div class="page-header mb-3">
       <div>
         <h1 class="page-title">كتالوج الأقسام والخطط</h1>
-        <p class="page-subtitle small text-muted mb-0">
-          إدارة الأقسام، البرامج (اتجاه عام / تخصص)، محتوى المقررات المشترك (<code>course_master</code>)، مقررات كل خطة بأرمزة مختلفة، وشُعَب تنفيذ المقرر في الاتجاه العام.
-          — <a href="/course_equivalences_page">تكافؤ المقررات بين الأقسام</a>
+        <p class="page-subtitle small text-muted mb-0" id="catalogSubtitle">
+          خطة القسم وبرنامج التخرج (ميكانيكي): مقررات مشتركة، ما قبل الشعبة، وشعب التخصص.
+          طلابكم الحاليون مقبولون في القسم بعد الاتجاه العام — لا حاجة لإدارة مرحلة الكلية هنا.
+          نظام 150/155 يبقى في سجل الطالب فقط (انتقالي).
+          — <a href="/course_equivalences_page">تكافؤ المقررات</a>
         </p>
       </div>
     </div>
     <div id="msgBox" class="mb-2"></div>
+
+    <div id="catalogActiveProgramBar" class="card border-primary border-opacity-50 mb-3 bg-body-secondary d-none shadow-sm">
+      <div class="card-body py-2 d-flex flex-wrap align-items-center gap-2 justify-content-between">
+        <div class="d-flex flex-wrap align-items-center gap-2 small">
+          <span class="text-muted">البرنامج النشط</span>
+          <strong id="activeProgTitle">—</strong>
+          <span class="text-muted">|</span>
+          <code id="activeProgIdLine" class="user-select-all mb-0">program_id: —</code>
+          <span id="activeProgDeptLine" class="text-muted"></span>
+        </div>
+        <button type="button" class="btn btn-sm btn-outline-primary" id="btnCopyProgramId" title="نسخ رقم البرنامج إلى الحافظة">
+          نسخ program_id
+        </button>
+      </div>
+    </div>
+
+    <ul class="nav nav-tabs flex-wrap mb-3" id="catalogMainTabs" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="catalogTabBtnStructure" data-bs-toggle="tab" data-bs-target="#catalogTabPaneStructure" type="button" role="tab" aria-controls="catalogTabPaneStructure" aria-selected="true">الهيكل العام</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="catalogTabBtnPlan" data-bs-toggle="tab" data-bs-target="#catalogTabPanePlan" type="button" role="tab" aria-controls="catalogTabPanePlan" aria-selected="false">خطة البرنامج والشعب</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="catalogTabBtnPathway" data-bs-toggle="tab" data-bs-target="#catalogTabPanePathway" type="button" role="tab" aria-controls="catalogTabPanePathway" aria-selected="false">لائحة المسار</button>
+      </li>
+    </ul>
+
+    <div class="tab-content mb-2" id="catalogTabContent">
+      <div class="tab-pane fade show active" id="catalogTabPaneStructure" role="tabpanel" aria-labelledby="catalogTabBtnStructure" tabindex="0">
 
     <!-- أقسام -->
     <div class="card mb-3" id="cardDepartments">
@@ -42,28 +74,58 @@
       </div>
     </div>
 
-    <!-- برامج -->
+    <!-- برامج وشعب القسم -->
     <div class="card mb-3" id="cardPrograms">
       <div class="card-header d-flex flex-wrap gap-2 align-items-center justify-content-between">
-        <strong>البرامج</strong>
-        <div class="d-flex gap-2">
+        <strong>البرامج والشعب (مسارات التخصص)</strong>
+        <div class="d-flex gap-2 flex-wrap">
           <select id="selProgDept" class="form-select form-select-sm" style="min-width:12rem;"></select>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="btnEnsureTrackPrograms" title="إنشاء MECH + قوالب الشعب">تهيئة قوالب الشعب</button>
+          <button type="button" class="btn btn-sm btn-outline-success" id="btnProgNew">برنامج / شعبة جديدة</button>
           <button type="button" class="btn btn-sm btn-outline-primary" id="btnProgRefresh">تحديث</button>
         </div>
       </div>
       <div class="card-body">
+        <p class="small text-muted mb-2" id="trackProgramsNote">
+          <strong>خطة القسم:</strong> برنامج <code>MECH</code> (بدون شعبة) — اتجاه عام + قبل الشعبة.
+          <strong>الشعب:</strong> قوالب جاهزة (PWR/MFG/DES) أو <strong>شعبة مخصصة</strong> برمز حر.
+          التهيئة لا تستبدل الأسماء التي عدّلتها يدوياً.
+        </p>
         <div class="table-responsive"><table class="table table-sm" id="tblProg"><thead><tr>
-          <th>id</th><th>dept</th><th>code</th><th>name_ar</th><th>phase</th><th>track_group</th><th>وحدات تخرج</th><th></th>
+          <th>id</th><th>dept</th><th>code</th><th>name_ar</th><th>نوع</th><th>شعبة</th><th>وحدات</th><th>نشط</th><th class="col-prog-actions"></th>
         </tr></thead><tbody></tbody></table></div>
-        <div class="row g-2 align-items-end border-top pt-2 small">
+        <div id="progEditForm" class="row g-2 align-items-end border-top pt-2 small">
           <div class="col-md-2"><label class="form-label small">id</label><input class="form-control form-control-sm" id="progId"></div>
           <div class="col-md-2"><label class="form-label small">department_id</label><input class="form-control form-control-sm" id="progDeptId"></div>
           <div class="col-md-2"><label class="form-label small">code</label><input class="form-control form-control-sm" id="progCode"></div>
           <div class="col-md-6"><label class="form-label small">name_ar</label><input class="form-control form-control-sm" id="progNameAr"></div>
           <div class="col-md-3"><label class="form-label small">name_en</label><input class="form-control form-control-sm" id="progNameEn"></div>
           <div class="col-md-2"><label class="form-label small">phase</label><select id="progPhase" class="form-select form-select-sm"><option value="general">general</option><option value="major">major</option></select></div>
-          <div class="col-md-3"><label class="form-label small">track_group</label><input class="form-control form-control-sm" id="progTrack" placeholder="شعبة/مسار"></div>
-          <div class="col-md-2"><label class="form-label small">min_total_units</label><input class="form-control form-control-sm" id="progUnits" type="number" value="160"></div>
+          <div class="col-md-3"><label class="form-label small">نوع البرنامج</label>
+            <select class="form-select form-select-sm" id="progKind">
+              <option value="base">خطة القسم (بدون شعبة)</option>
+              <option value="template">من القوالب الجاهزة</option>
+              <option value="custom">شعبة مخصصة</option>
+            </select>
+          </div>
+          <div class="col-md-3" id="progTrackTemplateWrap">
+            <label class="form-label small">قالب الشعبة</label>
+            <select class="form-select form-select-sm" id="progTrackTemplate">
+              <option value="PWR">PWR — شعبة القوى</option>
+              <option value="MFG">MFG — شعبة الإنتاج</option>
+              <option value="DES">DES — شعبة التصميم</option>
+            </select>
+          </div>
+          <div class="col-md-3 d-none" id="progTrackCustomWrap">
+            <label class="form-label small">رمز الشعبة (track_group)</label>
+            <input class="form-control form-control-sm" id="progTrackCustom" placeholder="مثل ROB أو SOL" maxlength="16" autocomplete="off">
+            <span class="text-muted" style="font-size:0.72rem">أحرف إنجليزية/أرقام — يُحوَّل تلقائياً لأحرف كبيرة</span>
+          </div>
+          <div class="col-md-3 d-none" id="progTrackLabelWrap">
+            <label class="form-label small">تسمية الشعبة (اختياري)</label>
+            <input class="form-control form-control-sm" id="progTrackLabelAr" placeholder="مثل: شعبة الروبوتات">
+          </div>
+          <div class="col-md-2"><label class="form-label small">min_total_units</label><input class="form-control form-control-sm" id="progUnits" type="number" value="155"></div>
           <div class="col-md-2"><label class="form-label small">نشط</label><select id="progActive" class="form-select form-select-sm"><option value="1">1</option><option value="0">0</option></select></div>
           <div class="col-12"><label class="form-label small">rules_json</label><input class="form-control form-control-sm" id="progRules" placeholder="JSON اختياري"></div>
           <div class="col-auto"><button class="btn btn-primary btn-sm" id="btnProgSave">حفظ البرنامج</button></div>
@@ -90,6 +152,9 @@
       </div>
     </div>
 
+      </div><!-- /catalogTabPaneStructure -->
+      <div class="tab-pane fade" id="catalogTabPanePlan" role="tabpanel" aria-labelledby="catalogTabBtnPlan" tabindex="0">
+
     <!-- program_courses -->
     <div class="card mb-3" id="cardProgramCourses">
       <div class="card-header d-flex flex-wrap gap-2 align-items-center justify-content-between">
@@ -98,20 +163,114 @@
           <select class="form-select form-select-sm" id="pcProgSelect" style="min-width:16rem; display:none;"></select>
           <input type="number" class="form-control form-control-sm" id="pcProgFilter" placeholder="program_id" style="width:7rem;">
           <button type="button" class="btn btn-sm btn-outline-primary" id="btnPcRefresh">تحديث بُنود الخطة</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="btnPcViewGrid">شبكة المستويات</button>
+          <a class="btn btn-sm btn-outline-success" id="btnPcExportPlan" href="#" target="_blank" rel="noopener">Excel الخطة</a>
         </div>
       </div>
       <div class="card-body">
+        <div id="pathwayCohortAlert" class="alert alert-secondary py-2 small d-none mb-2"></div>
         <p class="small text-muted mb-2">
-          هذه البطاقة خاصة بخطة القسم (150/155). إذا كان المقرر موجودًا اختره من القائمة، أو اختر "مقرر جديد خاص بهذه الخطة" لإدخال اسم جديد.
+          عند اختيار المقرر تُملأ تلقائياً: <strong>الرمز</strong> و<strong>الوحدات</strong> من القائمة،
+          و<strong>المستوى</strong> من أول رقم في الرمز (مثل GE 102 → مستوى 1)،
+          و<strong>النطاق</strong> (1 اتجاه عام، 2–4 قبل الشعبة، 5+ شعبة). يمكن التعديل يدوياً.
         </p>
-        <div class="table-responsive"><table class="table table-sm" id="tblPc"><thead><tr>
-          <th>id</th><th>رمز الخطة</th><th>عنوان أصلي</th><th>المعمول به</th><th>مستوى</th><th></th></tr></thead><tbody></tbody></table></div>
+        <div id="pcUnitsSummary" class="alert alert-info py-2 small d-none mb-2"></div>
+        <div id="pcClassifySummary" class="row g-2 mb-2 d-none">
+          <div class="col-6 col-md-4 col-lg-2">
+            <div class="border rounded p-2 text-center small">
+              <span class="text-muted d-block">مقررات</span>
+              <span class="fw-bold d-block fs-5" id="pcStatTotal">0</span>
+            </div>
+          </div>
+          <div class="col-6 col-md-4 col-lg-2">
+            <div class="border rounded p-2 text-center small bg-warning bg-opacity-10">
+              <span class="text-muted d-block">اتجاه عام</span>
+              <span class="fw-bold d-block fs-6" id="pcStatCollegeGen">0</span>
+              <span class="text-muted" style="font-size:0.72rem" id="pcStatCollegeGenUnits">0 و.</span>
+            </div>
+          </div>
+          <div class="col-6 col-md-4 col-lg-2">
+            <div class="border rounded p-2 text-center small">
+              <span class="text-muted d-block">قبل الشعبة</span>
+              <span class="fw-bold d-block fs-6" id="pcStatPre">0</span>
+              <span class="text-muted" style="font-size:0.72rem" id="pcStatPreUnits">0 و.</span>
+            </div>
+          </div>
+          <div class="col-6 col-md-4 col-lg-2">
+            <div class="border rounded p-2 text-center small">
+              <span class="text-muted d-block">شعبة</span>
+              <span class="fw-bold d-block fs-6" id="pcStatTrack">0</span>
+              <span class="text-muted" style="font-size:0.72rem" id="pcStatTrackUnits">0 و.</span>
+            </div>
+          </div>
+          <div class="col-6 col-md-4 col-lg-2">
+            <div class="border rounded p-2 text-center small bg-light">
+              <span class="text-muted d-block">مجموع الوحدات</span>
+              <span class="fw-bold d-block fs-6" id="pcStatPlanUnits">0</span>
+              <span class="text-muted" style="font-size:0.72rem">/ 155</span>
+            </div>
+          </div>
+        </div>
+        <div class="border rounded p-2 mb-2 small bg-white" id="studentPathwayPreviewWrap">
+          <div class="d-flex flex-wrap gap-2 align-items-center">
+            <strong class="text-muted">معاينة مسار طالب</strong>
+            <input type="text" class="form-control form-control-sm" id="sppStudentId" placeholder="الرقم الدراسي" style="max-width:11rem;">
+            <button type="button" class="btn btn-sm btn-outline-info" id="btnStudentPathwayPreview">عرض الملخص</button>
+            <a class="btn btn-sm btn-outline-success d-none" id="btnStudentPathwayExcel" href="#" target="_blank" rel="noopener">Excel</a>
+          </div>
+          <div id="sppSummary" class="mt-2 d-none small"></div>
+        </div>
+        <div id="catalogChangeLog" class="border rounded p-2 mb-2 small bg-white d-none">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <strong class="text-muted">آخر التغييرات (هذه الجلسة)</strong>
+            <button type="button" class="btn btn-link btn-sm p-0" id="btnClearCatalogLog">مسح</button>
+          </div>
+          <ul id="catalogChangeLogList" class="mb-0 ps-3 text-muted" style="max-height:6rem;overflow-y:auto;"></ul>
+        </div>
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-2 small border rounded p-2 bg-light">
+          <label class="mb-0"><input type="checkbox" id="pcSelectAll" class="form-check-input me-1"> تحديد الكل</label>
+          <select id="pcBulkScope" class="form-select form-select-sm" style="width:13rem;">
+            <option value="college_general">اتجاه عام (كلية)</option>
+            <option value="pre_track">قبل اختيار الشعبة</option>
+            <option value="track">شعبة / تخصص</option>
+            <option value="elective">اختياري</option>
+          </select>
+          <button type="button" class="btn btn-sm btn-primary" id="btnPcBulkScope">تطبيق على المحدد</button>
+          <button type="button" class="btn btn-sm btn-outline-primary" id="btnPcSuggestScope">اقتراح من المستوى</button>
+          <select id="pcFilterScope" class="form-select form-select-sm" style="width:11rem;">
+            <option value="">كل النطاقات</option>
+            <option value="college_general">اتجاه عام فقط</option>
+            <option value="pre_track">قبل الشعبة</option>
+            <option value="track">شعبة</option>
+            <option value="elective">اختياري</option>
+          </select>
+        </div>
+        <div id="pcLevelGridWrap" class="border rounded p-2 mb-2 bg-light d-none">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <strong class="small text-muted">شبكة المستويات</strong>
+            <button type="button" class="btn btn-link btn-sm p-0" id="btnPcHideGrid">عرض الجدول</button>
+          </div>
+          <div id="pcLevelGrid" class="small"></div>
+          <div class="mt-2 border-top pt-2">
+            <strong class="small text-muted">متطلب سابق (من → إلى)</strong>
+            <div class="d-flex flex-wrap gap-1 mt-1">
+              <select class="form-select form-select-sm" id="pcPrereqFrom" style="max-width:12rem;"></select>
+              <select class="form-select form-select-sm" id="pcPrereqTo" style="max-width:12rem;"></select>
+              <button type="button" class="btn btn-sm btn-outline-primary" id="btnPcPrereqSave">إضافة رابط</button>
+            </div>
+            <ul id="pcPrereqList" class="small text-muted mb-0 mt-1 ps-3"></ul>
+          </div>
+        </div>
+        <div class="table-responsive" id="pcTableWrap"><table class="table table-sm" id="tblPc"><thead><tr>
+          <th style="width:2rem"></th><th>id</th><th>رمز</th><th>عنوان</th><th>نطاق</th><th>مستوى</th><th></th></tr></thead><tbody></tbody></table></div>
         <div class="row g-2 align-items-end border-top pt-2 small">
           <input type="hidden" id="pcId">
           <input type="hidden" id="pcProgId">
           <input type="hidden" id="pcMasterId">
+          <input type="hidden" id="pcOperationalCourseName" value="">
           <div class="col-md-3">
             <label class="form-label small">المقرر</label>
+            <input type="search" class="form-control form-control-sm mb-1" id="pcMasterFilter" placeholder="فلترة بالاسم أو الرمز…" autocomplete="off">
             <select class="form-select form-select-sm" id="pcMasterSelect"></select>
           </div>
           <div class="col-md-3" id="pcNewCourseWrap" style="display:none;">
@@ -119,11 +278,12 @@
             <input class="form-control form-control-sm" id="pcNewCourseTitleAr" placeholder="مثال: مشاريع ميكانيكية متقدمة">
           </div>
           <div class="col-md-2"><label class="form-label small">course_code</label><input class="form-control form-control-sm" id="pcCode"></div>
-          <div class="col-md-2"><label class="form-label small">المعمول به</label>
-            <select class="form-select form-select-sm" id="pcPlanApplicability">
-              <option value="both">مشترك بين نظامي 150/155 (داخل القسم)</option>
-              <option value="150">150 فقط</option>
-              <option value="155">155 فقط</option>
+          <div class="col-md-3"><label class="form-label small">نطاق المتطلب</label>
+            <select class="form-select form-select-sm" id="pcRequirementScope">
+              <option value="college_general">اتجاه عام (كلية — ضمن 155)</option>
+              <option value="pre_track">قبل اختيار الشعبة</option>
+              <option value="track">شعبة / تخصص</option>
+              <option value="elective">اختياري</option>
             </select>
           </div>
           <div class="col-md-1">
@@ -135,6 +295,10 @@
               <option value="3">3</option>
               <option value="4">4</option>
               <option value="5">5</option>
+              <option value="6">6</option>
+              <option value="7">7</option>
+              <option value="8">8</option>
+              <option value="9">9</option>
             </select>
           </div>
           <div class="col-md-2"><label class="form-label small">وحدات (اختياري)</label><input class="form-control form-control-sm" id="pcUnitsOv"></div>
@@ -167,14 +331,344 @@
         </div>
       </div>
     </div>
+
+      </div><!-- /catalogTabPanePlan -->
+      <div class="tab-pane fade" id="catalogTabPanePathway" role="tabpanel" aria-labelledby="catalogTabBtnPathway" tabindex="0">
+
+    <!-- بنود لائحة المسار الأكاديمي -->
+    <div class="card mb-3" id="cardPathwayRegs">
+      <div class="card-header d-flex flex-wrap gap-2 align-items-center justify-content-between">
+        <strong>بنود لائحة المسار الأكاديمي</strong>
+        <div class="d-flex gap-2 align-items-center">
+          <select id="pathwayDeptSelect" class="form-select form-select-sm" style="min-width:14rem; display:none;"></select>
+          <button type="button" class="btn btn-sm btn-outline-primary" id="btnPathwayRegsRefresh">تحديث</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <p class="small text-muted mb-2">
+          عتبات قابلة للتعديل حسب اللائحة (مثل 36 و 22 للاتجاه العام، وحدات التخرج للقسم).
+          طلاب ميكانيك الحاليون داخل القسم — بنود العام للمرجع أو للدفعات القادمة.
+        </p>
+        <div id="pathwaySyncAlert" class="alert alert-warning py-2 small d-none mb-2"></div>
+        <div class="d-flex flex-wrap gap-2 mb-2">
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="btnSyncGradUnits">
+            مزامنة وحدات التخرج مع البرنامج
+          </button>
+        </div>
+        <h6 class="small fw-semibold text-muted">بنود الكلية / الاتجاه العام <span class="text-muted fw-normal">(الإدارة: قابلة للتعديل)</span></h6>
+        <div class="table-responsive mb-3">
+          <table class="table table-sm table-bordered">
+            <thead class="table-light"><tr>
+              <th>البند</th><th>القيمة</th><th>ملاحظة</th><th></th>
+            </tr></thead>
+            <tbody id="pathwayCollegeBody"><tr><td colspan="4" class="text-muted small">—</td></tr></tbody>
+          </table>
+        </div>
+        <h6 class="small fw-semibold text-muted">بنود قسم التشغيل</h6>
+        <div class="table-responsive mb-2">
+          <table class="table table-sm table-bordered">
+            <thead class="table-light"><tr>
+              <th>البند</th><th>القيمة</th><th>تصنيف</th><th></th>
+            </tr></thead>
+            <tbody id="pathwayDeptBody"><tr><td colspan="4" class="text-muted small">—</td></tr></tbody>
+          </table>
+        </div>
+        <div class="border-top pt-2 small" id="pathwayRegFormWrap">
+          <div class="fw-semibold mb-2">إضافة / تعديل بند</div>
+          <input type="hidden" id="pathwayRegId" value="">
+          <input type="hidden" id="pathwayRegDeptId" value="">
+          <div class="row g-2 align-items-end">
+            <div class="col-md-2" id="pathwayRegKeyWrap">
+              <label class="form-label small">مفتاح (إنجليزي)</label>
+              <input class="form-control form-control-sm" id="pathwayRegKey" placeholder="custom_rule_1">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">العنوان</label>
+              <input class="form-control form-control-sm" id="pathwayRegTitle">
+            </div>
+            <div class="col-md-2">
+              <label class="form-label small">القيمة الرقمية</label>
+              <input type="number" step="any" class="form-control form-control-sm" id="pathwayRegValue">
+            </div>
+            <div class="col-md-2">
+              <label class="form-label small">التصنيف</label>
+              <select class="form-select form-select-sm" id="pathwayRegCategory">
+                <option value="dept_track">القسم — الشعبة</option>
+                <option value="graduation">التخرج</option>
+                <option value="other">أخرى</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">وصف / نص اللائحة</label>
+              <input class="form-control form-control-sm" id="pathwayRegDesc">
+            </div>
+            <div class="col-auto">
+              <button type="button" class="btn btn-primary btn-sm" id="btnPathwayRegSave">حفظ البند</button>
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="btnPathwayRegClear">جديد</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+      </div><!-- /catalogTabPanePathway -->
+    </div><!-- /catalogTabContent -->
   </main>
 
   <script src="/static/js/common.js"></script>
   <script>
     let IS_HEAD_ONLY = false;
+    let IS_FULL_ADMIN = false;
+    let CAN_EDIT_COLLEGE_REGS = false;
     let MASTER_ITEMS = [];
+    let PC_ITEMS = [];
+    let CATALOG_PROGRAMS_LIST = [];
+    let PC_CATALOG_RAW = { courses: [], plan: [] };
+    function rememberPrograms(items) {
+      if (!Array.isArray(items)) return;
+      const byId = {};
+      CATALOG_PROGRAMS_LIST.forEach(p => { if (p && p.id != null) byId[p.id] = p; });
+      items.forEach(p => { if (p && p.id != null) byId[p.id] = p; });
+      CATALOG_PROGRAMS_LIST = Object.values(byId);
+    }
+
+    function pickPreferredBaseProgram(items) {
+      if (!Array.isArray(items) || !items.length) return null;
+      return items.find(p => (p.code || '').toUpperCase() === 'MECH')
+        || items.find(p => p.is_base_program && !(p.track_group || '').trim())
+        || items.find(p => !(p.track_group || '').trim())
+        || items[0];
+    }
+
+    const PROG_TEMPLATE_PRESETS = {
+      PWR: { code: 'MECH-PWR', name_ar: 'هندسة ميكانيكية — شعبة القوى', name_en: 'Mechanical Engineering — Power Track', label: 'شعبة القوى' },
+      MFG: { code: 'MECH-MFG', name_ar: 'هندسة ميكانيكية — شعبة الإنتاج', name_en: 'Mechanical Engineering — Manufacturing Track', label: 'شعبة الإنتاج' },
+      DES: { code: 'MECH-DES', name_ar: 'هندسة ميكانيكية — شعبة التصميم', name_en: 'Mechanical Engineering — Design Track', label: 'شعبة التصميم' },
+    };
+    const BUILTIN_TRACKS = new Set(['PWR', 'MFG', 'DES']);
+
+    function syncProgKindUi() {
+      const kind = (document.getElementById('progKind') || {}).value || 'base';
+      const tplWrap = document.getElementById('progTrackTemplateWrap');
+      const customWrap = document.getElementById('progTrackCustomWrap');
+      const labelWrap = document.getElementById('progTrackLabelWrap');
+      const codeIn = document.getElementById('progCode');
+      if (!tplWrap) return;
+      tplWrap.classList.toggle('d-none', kind !== 'template');
+      customWrap.classList.toggle('d-none', kind !== 'custom');
+      if (labelWrap) labelWrap.classList.toggle('d-none', kind !== 'custom');
+      if (codeIn) codeIn.readOnly = (kind === 'template');
+      if (kind === 'base' && codeIn && !document.getElementById('progId').value.trim()) {
+        codeIn.value = 'MECH';
+      }
+      if (kind === 'template') applyProgTemplatePreset(false);
+    }
+
+    function applyProgTemplatePreset(forceNames) {
+      const tg = (document.getElementById('progTrackTemplate') || {}).value || 'PWR';
+      const preset = PROG_TEMPLATE_PRESETS[tg];
+      if (!preset) return;
+      const codeIn = document.getElementById('progCode');
+      if (codeIn) codeIn.value = preset.code;
+      const isNew = !(document.getElementById('progId') || {}).value.trim();
+      if (forceNames || isNew) {
+        document.getElementById('progNameAr').value = preset.name_ar;
+        document.getElementById('progNameEn').value = preset.name_en;
+      }
+      const lbl = document.getElementById('progTrackLabelAr');
+      if (lbl) lbl.value = preset.label || '';
+    }
+
+    function resolveProgTrackGroup() {
+      const kind = (document.getElementById('progKind') || {}).value || 'base';
+      if (kind === 'base') return '';
+      if (kind === 'template') {
+        return ((document.getElementById('progTrackTemplate') || {}).value || '').trim().toUpperCase();
+      }
+      return ((document.getElementById('progTrackCustom') || {}).value || '')
+        .trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+    }
+
+    function fillProgFormFromProgram(ob) {
+      document.getElementById('progId').value = ob.id || '';
+      document.getElementById('progDeptId').value = ob.department_id || '';
+      document.getElementById('progCode').value = ob.code || '';
+      document.getElementById('progNameAr').value = ob.name_ar || '';
+      document.getElementById('progNameEn').value = ob.name_en || '';
+      document.getElementById('progPhase').value = ob.phase || 'major';
+      document.getElementById('progUnits').value = ob.min_total_units || 0;
+      document.getElementById('progActive').value = String(ob.is_active != null ? ob.is_active : 1);
+      document.getElementById('progRules').value = ob.rules_json || '';
+      const tg = (ob.track_group || '').trim().toUpperCase();
+      const isBase = ob.is_base_program || !tg;
+      let cat = {};
+      try { cat = ob.rules_json ? (JSON.parse(ob.rules_json).catalog || {}) : {}; } catch (e) { cat = {}; }
+      const kindEl = document.getElementById('progKind');
+      if (isBase) {
+        kindEl.value = 'base';
+      } else if (ob.is_custom_track || (tg && !BUILTIN_TRACKS.has(tg))) {
+        kindEl.value = 'custom';
+        document.getElementById('progTrackCustom').value = tg;
+        document.getElementById('progTrackLabelAr').value = cat.track_label_ar || ob.track_group_label || '';
+      } else {
+        kindEl.value = 'template';
+        document.getElementById('progTrackTemplate').value = tg || 'PWR';
+      }
+      syncProgKindUi();
+    }
+
+    function clearProgFormForNew() {
+      document.getElementById('progId').value = '';
+      document.getElementById('progCode').value = '';
+      document.getElementById('progNameAr').value = '';
+      document.getElementById('progNameEn').value = '';
+      document.getElementById('progPhase').value = 'major';
+      document.getElementById('progUnits').value = '155';
+      document.getElementById('progActive').value = '0';
+      document.getElementById('progRules').value = '';
+      document.getElementById('progKind').value = 'custom';
+      document.getElementById('progTrackCustom').value = '';
+      document.getElementById('progTrackLabelAr').value = '';
+      const deptSel = document.getElementById('selProgDept');
+      if (deptSel && deptSel.value) {
+        document.getElementById('progDeptId').value = deptSel.value;
+      }
+      syncProgKindUi();
+    }
+
+    function applyHeadCatalogUi() {
+      ['cardDepartments', 'cardCourseMaster', 'cardSections'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
+      const form = document.getElementById('progEditForm');
+      if (form) form.style.display = 'none';
+      const deptWrap = document.getElementById('selProgDept');
+      if (deptWrap) deptWrap.style.display = 'none';
+      const btnEnsure = document.getElementById('btnEnsureTrackPrograms');
+      if (btnEnsure) {
+        btnEnsure.textContent = 'تحديث قوالب الشعب';
+        btnEnsure.title = 'ترحيل MECH وتحديث قوالب الشعب (قراءة/تهيئة)';
+      }
+      document.querySelectorAll('.col-prog-actions').forEach(th => {
+        th.textContent = '';
+      });
+    }
+
+    function updateActiveProgramBar() {
+      const bar = document.getElementById('catalogActiveProgramBar');
+      const titleEl = document.getElementById('activeProgTitle');
+      const idLine = document.getElementById('activeProgIdLine');
+      const deptLine = document.getElementById('activeProgDeptLine');
+      const pf = document.getElementById('pcProgFilter');
+      if (!bar || !pf) return;
+      const pid = String(pf.value || '').trim();
+      if (!pid) {
+        bar.classList.add('d-none');
+        return;
+      }
+      bar.classList.remove('d-none');
+      const idNum = parseInt(pid, 10);
+      const p = CATALOG_PROGRAMS_LIST.find(x => String(x.id) === String(pid) || Number(x.id) === idNum);
+      if (p) {
+        titleEl.textContent = [p.code, p.name_ar].filter(Boolean).join(' — ') || ('برنامج #' + pid);
+        const dc = (p.department_code || '').trim();
+        deptLine.textContent = dc ? ('القسم: ' + dc) : '';
+      } else {
+        titleEl.textContent = 'برنامج #' + pid;
+        deptLine.textContent = '';
+      }
+      idLine.textContent = 'program_id: ' + pid;
+    }
+
+    const SCOPE_LABELS = {
+      college_general:'اتجاه عام (كلية)',
+      pre_track:'قبل الشعبة',
+      track:'شعبة',
+      elective:'اختياري',
+      dept_common:'مشترك (قديم)',
+    };
+    const SCOPE_OPTIONS = '<option value="college_general">اتجاه عام</option><option value="pre_track">قبل الشعبة</option><option value="track">شعبة</option><option value="elective">اختياري</option><option value="dept_common">مشترك (قديم)</option>';
+    const CATALOG_LOG_KEY = 'schedule_optimizer_catalog_change_log_v1';
+    const CATALOG_LOG_MAX = 10;
+
+    function appendCatalogChange(text) {
+      try {
+        const raw = localStorage.getItem(CATALOG_LOG_KEY);
+        let items = raw ? JSON.parse(raw) : [];
+        if (!Array.isArray(items)) items = [];
+        const ts = new Date().toLocaleString('ar-LY', { hour: '2-digit', minute: '2-digit' });
+        items.unshift({ ts, text });
+        items = items.slice(0, CATALOG_LOG_MAX);
+        localStorage.setItem(CATALOG_LOG_KEY, JSON.stringify(items));
+        renderCatalogChangeLog();
+      } catch (e) { /* ignore */ }
+    }
+
+    function renderCatalogChangeLog() {
+      const box = document.getElementById('catalogChangeLog');
+      const ul = document.getElementById('catalogChangeLogList');
+      if (!box || !ul) return;
+      let items = [];
+      try {
+        items = JSON.parse(localStorage.getItem(CATALOG_LOG_KEY) || '[]');
+      } catch (e) { items = []; }
+      if (!items.length) {
+        box.classList.add('d-none');
+        return;
+      }
+      box.classList.remove('d-none');
+      ul.innerHTML = items.map(it =>
+        `<li><span class="text-muted">${it.ts}</span> — ${it.text}</li>`
+      ).join('');
+    }
+
+    function scopeLabelAr(v) {
+      return (SCOPE_LABELS[v] || v || '—');
+    }
+
+    function openPloForPlanCourse(row) {
+      if (!row || !row.program_id) {
+        msg('حدد برنامج الخطة أولاً.', 'warning');
+        return;
+      }
+      const q = new URLSearchParams();
+      q.set('program_id', String(row.program_id));
+      if (row.course_master_id) q.set('course_master_id', String(row.course_master_id));
+      if (row.id) q.set('program_course_id', String(row.id));
+      q.set('tab', 'manage');
+      window.open('/ilo_catalog_page?' + q.toString(), '_blank');
+    }
+
     function msg(t, ty='info'){
       document.getElementById('msgBox').innerHTML = t ? `<div class="alert alert-${ty} py-1 px-2 mb-0">${t}</div>` : '';
+    }
+
+    document.getElementById('btnCopyProgramId').addEventListener('click', async () => {
+      const pid = (document.getElementById('pcProgFilter').value || '').trim();
+      if (!pid) { msg('لا يوجد program_id للنسخ.', 'warning'); return; }
+      try {
+        await navigator.clipboard.writeText(pid);
+        msg('تم نسخ program_id: ' + pid, 'success');
+      } catch (e) {
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = pid;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          msg('تم نسخ program_id: ' + pid, 'success');
+        } catch (e2) {
+          msg('تعذر النسخ — انسخ يدوياً: ' + pid, 'warning');
+        }
+      }
+    });
+
+    const pcProgFilterEl = document.getElementById('pcProgFilter');
+    if (pcProgFilterEl) {
+      pcProgFilterEl.addEventListener('change', () => updateActiveProgramBar());
+      pcProgFilterEl.addEventListener('blur', () => updateActiveProgramBar());
     }
 
     async function loadDepartments(){
@@ -203,36 +697,71 @@
       msg('تم تحميل الأقسام: '+items.length, 'success');
     }
 
+    let TRACK_PROGRAMS_META = null;
+
+    async function loadDepartmentTrackPrograms(ensure) {
+      const deptSel = document.getElementById('selProgDept');
+      const deptId = (deptSel && deptSel.value) || '';
+      let url = '/college/catalog/department_program_tracks?department_code=MECH';
+      if (ensure) url += '&ensure=1';
+      if (deptId) {
+        const opt = deptSel.options[deptSel.selectedIndex];
+        const label = (opt && opt.textContent) || '';
+        const m = label.match(/^([A-Z]+)/i);
+        if (m) url = '/college/catalog/department_program_tracks?department_code=' + encodeURIComponent(m[1]) + (ensure ? '&ensure=1' : '');
+      }
+      try {
+        TRACK_PROGRAMS_META = await apiGet(url);
+        const note = document.getElementById('trackProgramsNote');
+        if (note && TRACK_PROGRAMS_META.note_ar) {
+          note.innerHTML = '<span class="text-muted">' + TRACK_PROGRAMS_META.note_ar + '</span>';
+        }
+      } catch (e) {
+        TRACK_PROGRAMS_META = null;
+      }
+    }
+
     async function loadPrograms(){
       const dept = document.getElementById('selProgDept').value;
       let url = '/college/catalog/programs';
       if(dept) url += '?department_id='+encodeURIComponent(dept);
       const data = await apiGet(url);
+      rememberPrograms(data.items || []);
       const tbody = document.querySelector('#tblProg tbody');
       tbody.innerHTML='';
       (data.items||[]).forEach(p=>{
         const enc = encodeURIComponent(JSON.stringify(p));
-        tbody.insertAdjacentHTML('beforeend', `<tr><td>${p.id}</td><td>${p.department_code||''}</td><td>${p.code}</td><td>${p.name_ar}</td><td>${p.phase}</td><td>${p.track_group||''}</td><td>${p.min_total_units||0}</td>
-          <td><button type="button" class="btn btn-sm btn-link btn-edit-prog p-0" data-payload="${enc}">تحرير</button></td></tr>`);
+        const role = p.program_role || (p.is_base_program ? 'خطة القسم' : 'شعبة');
+        const active = Number(p.is_active) === 1;
+        const actBadge = active
+          ? '<span class="badge bg-success">نشط</span>'
+          : '<span class="badge bg-secondary">جاهز</span>';
+        const nameHint = p.names_customized
+          ? ' <span class="badge bg-info text-dark" title="الاسم محمي من التهيئة">اسم يدوي</span>'
+          : '';
+        const editCell = IS_HEAD_ONLY
+          ? ''
+          : `<td><button type="button" class="btn btn-sm btn-link btn-edit-prog p-0" data-payload="${enc}">تحرير</button></td>`;
+        tbody.insertAdjacentHTML('beforeend', `<tr class="${active ? '' : 'table-secondary'}">
+          <td>${p.id}</td><td>${p.department_code||''}</td><td><code>${p.code}</code></td>
+          <td class="small">${p.name_ar}${nameHint}</td><td>${role}</td>
+          <td>${p.track_group_label || p.track_group || '—'}</td>
+          <td>${p.min_total_units||0}</td><td>${actBadge}</td>
+          ${editCell}</tr>`);
       });
       document.querySelectorAll('.btn-edit-prog').forEach(btn=>{
         btn.onclick=()=>{
           const ob = JSON.parse(decodeURIComponent(btn.getAttribute('data-payload')));
-          document.getElementById('progId').value = ob.id||'';
-          document.getElementById('progDeptId').value = ob.department_id||'';
-          document.getElementById('progCode').value = ob.code||'';
-          document.getElementById('progNameAr').value = ob.name_ar||'';
-          document.getElementById('progNameEn').value = ob.name_en||'';
-          document.getElementById('progPhase').value = ob.phase||'major';
-          document.getElementById('progTrack').value = ob.track_group||'';
-          document.getElementById('progUnits').value = ob.min_total_units||0;
-          document.getElementById('progActive').value = String(ob.is_active!=null ? ob.is_active : 1);
-          document.getElementById('progRules').value = ob.rules_json||'';
+          fillProgFormFromProgram(ob);
           document.getElementById('pcProgFilter').value = ob.id||'';
           document.getElementById('pcProgId').value = ob.id||'';
+          const sel = document.getElementById('pcProgSelect');
+          if (sel && ob.id) sel.value = String(ob.id);
+          updateActiveProgramBar();
         };
       });
       msg('تم تحميل البرامج: '+(data.items||[]).length, 'success');
+      updateActiveProgramBar();
     }
 
     async function loadCm(){
@@ -245,21 +774,141 @@
       msg('تم تحميل محتوى المقررات: '+(data.items||[]).length, 'success');
     }
 
-    async function loadMasterChoices(){
-      try {
-        const data = await apiGet('/college/catalog/course_masters');
-        MASTER_ITEMS = data.items || [];
-      } catch(e) {
-        MASTER_ITEMS = [];
+    function inferLevelFromCourseCode(code) {
+      const m = String(code || '').trim().toUpperCase().match(/\d+/);
+      if (!m) return 0;
+      return parseInt(m[0].charAt(0), 10) || 0;
+    }
+
+    function suggestScopeFromLevel(level) {
+      const lv = Math.max(0, parseInt(level, 10) || 0);
+      if (lv <= 1) return 'college_general';
+      if (lv <= 4) return 'pre_track';
+      return 'track';
+    }
+
+    function ensureLevelSelectValue(level) {
+      const sel = document.getElementById('pcLevel');
+      if (!sel) return;
+      const lv = Math.max(0, Math.min(9, parseInt(level, 10) || 0));
+      if (![...sel.options].some(o => o.value === String(lv))) {
+        sel.insertAdjacentHTML('beforeend', `<option value="${lv}">${lv}</option>`);
       }
+      sel.value = String(lv);
+    }
+
+    function applyPlanCourseAutofill(opt) {
+      if (!opt || !opt.dataset) return;
+      const code = (opt.dataset.code || '').trim();
+      const units = opt.dataset.units;
+      const level = opt.dataset.level != null && opt.dataset.level !== ''
+        ? parseInt(opt.dataset.level, 10)
+        : inferLevelFromCourseCode(code);
+      const scope = opt.dataset.scope || suggestScopeFromLevel(level);
+      if (code) document.getElementById('pcCode').value = code;
+      if (units != null && String(units) !== '' && !Number.isNaN(Number(units))) {
+        document.getElementById('pcUnitsOv').value = String(units);
+      }
+      ensureLevelSelectValue(level);
+      const scopeSel = document.getElementById('pcRequirementScope');
+      if (scopeSel && [...scopeSel.options].some(o => o.value === scope)) {
+        scopeSel.value = scope;
+      }
+    }
+
+    async function loadMasterChoices(){
       const sel = document.getElementById('pcMasterSelect');
       if (!sel) return;
-      sel.innerHTML = '<option value="">— اختر مقررًا —</option><option value="__new__">+ مقرر جديد خاص بهذه الخطة</option>';
-      MASTER_ITEMS.forEach(m=>{
-        const id = Number(m.id || 0);
-        const title = (m.title_ar || '').trim();
-        if(!id || !title) return;
-        sel.insertAdjacentHTML('beforeend', `<option value="${id}">${title} — (#${id})</option>`);
+      const pid = (document.getElementById('pcProgFilter') || {}).value.trim();
+      const buildFromLegacy = () => {
+        PC_CATALOG_RAW = { courses: [], plan: [] };
+        sel.innerHTML = '<option value="">— اختر مقررًا —</option><option value="__new__">+ مقرر جديد خاص بهذه الخطة</option>';
+        MASTER_ITEMS.forEach(m=>{
+          const id = Number(m.id || 0);
+          const title = (m.title_ar || '').trim();
+          if(!id || !title) return;
+          sel.insertAdjacentHTML('beforeend', `<option value="m:${id}" data-units="${Number(m.default_units||0)}">${title} — (#${id})</option>`);
+        });
+      };
+      if (!pid) {
+        try {
+          const data = await apiGet('/college/catalog/course_masters');
+          MASTER_ITEMS = data.items || [];
+        } catch(e) { MASTER_ITEMS = []; }
+        buildFromLegacy();
+        return;
+      }
+      try {
+        const data = await apiGet('/college/catalog/department_course_catalog?program_id=' + encodeURIComponent(pid));
+        const groups = data.groups || {};
+        const reg = groups.courses || [];
+        const pln = groups.plan || [];
+        PC_CATALOG_RAW = { courses: reg, plan: pln };
+        const byMid = {};
+        [...reg, ...pln].forEach(it => {
+          const mid = it.course_master_id;
+          if (mid != null && mid !== '') byMid[mid] = it;
+        });
+        MASTER_ITEMS = Object.keys(byMid).sort((a,b)=>+a-+b).map(k => ({
+          id: +k,
+          title_ar: (byMid[k].title_ar || '').trim(),
+          default_units: Number(byMid[k].units || 0),
+        }));
+        const esc = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+        sel.innerHTML = '<option value="">— اختر مقررًا —</option><option value="__new__">+ مقرر جديد خاص بهذه الخطة</option>';
+        const optHtml = (list) => list.map(it => {
+          const units = Number(it.units || 0);
+          const code = (it.course_code || '').trim();
+          const lab = esc(it.label || it.title_ar || code);
+          const lv = it.inferred_level != null ? it.inferred_level : inferLevelFromCourseCode(code);
+          const sc = it.suggested_scope || suggestScopeFromLevel(lv);
+          const ds = `data-units="${units}" data-code="${esc(code)}" data-level="${lv}" data-scope="${esc(sc)}"`;
+          if (it.course_master_id != null && it.course_master_id !== '') {
+            const mid = Number(it.course_master_id);
+            return `<option value="m:${mid}" ${ds}>${lab}</option>`;
+          }
+          const nm = (it.operational_course_name || it.title_ar || '').trim();
+          if (!nm) return '';
+          const enc = encodeURIComponent(nm);
+          return `<option value="c:${enc}" ${ds}>${lab} (مسجّل)</option>`;
+        }).join('');
+        let extra = '';
+        if (reg.length) {
+          extra += '<optgroup label="مقررات مسجّلة (إدخال المقررات)">' + optHtml(reg) + '</optgroup>';
+        }
+        if (pln.length) {
+          extra += '<optgroup label="من خطط التخصصات في القسم">' + optHtml(pln) + '</optgroup>';
+        }
+        sel.insertAdjacentHTML('beforeend', extra);
+        applyPcMasterFilter();
+      } catch (e) {
+        try {
+          const data = await apiGet('/college/catalog/course_masters');
+          MASTER_ITEMS = data.items || [];
+        } catch(e2) { MASTER_ITEMS = []; }
+        buildFromLegacy();
+        msg('تعذر تحميل كتالوج القسم — عُرضت قائمة المحتوى العامة.', 'warning');
+      }
+    }
+
+    function applyPcMasterFilter() {
+      const inp = document.getElementById('pcMasterFilter');
+      const q = ((inp && inp.value) || '').trim().toLowerCase();
+      const sel = document.getElementById('pcMasterSelect');
+      if (!sel) return;
+      if (!q) {
+        sel.querySelectorAll('option, optgroup').forEach(el => { el.hidden = false; });
+        return;
+      }
+      sel.querySelectorAll('option').forEach(el => {
+        const v = (el.value || '');
+        if (v === '' || v === '__new__') { el.hidden = false; return; }
+        const t = (el.textContent || '').toLowerCase();
+        el.hidden = !t.includes(q);
+      });
+      sel.querySelectorAll('optgroup').forEach(og => {
+        const vis = [...og.querySelectorAll('option')].some(o => !o.hidden);
+        og.hidden = !vis;
       });
     }
 
@@ -278,49 +927,348 @@
       return `ME${lev}${String(mid).padStart(2, '0')}`;
     }
 
-    async function loadPc(){
-      const pid = document.getElementById('pcProgFilter').value.trim();
-      if(!pid){ msg('حدد program_id لمقررات الخطة', 'warning'); return;}
-      const data = await apiGet('/college/catalog/program_courses?program_id='+encodeURIComponent(pid));
+    async function loadPcClassificationSummary(pid) {
+      try {
+        const s = await apiGet('/college/catalog/program_courses/classification_summary?program_id=' + encodeURIComponent(pid));
+        document.getElementById('pcClassifySummary').classList.remove('d-none');
+        const by = s.by_scope || {};
+        const u = s.units_by_scope || {};
+        document.getElementById('pcStatTotal').textContent = String(s.total || 0);
+        document.getElementById('pcStatCollegeGen').textContent = String(by.college_general || 0);
+        document.getElementById('pcStatCollegeGenUnits').textContent = (u.college_general || 0) + ' و.';
+        document.getElementById('pcStatPre').textContent = String(by.pre_track || 0);
+        document.getElementById('pcStatPreUnits').textContent = (u.pre_track || 0) + ' و.';
+        document.getElementById('pcStatTrack').textContent = String(by.track || 0);
+        document.getElementById('pcStatTrackUnits').textContent = (u.track || 0) + ' و.';
+        document.getElementById('pcStatPlanUnits').textContent = String(s.plan_units_total || 0);
+        const sumEl = document.getElementById('pcUnitsSummary');
+        if (sumEl) {
+          const regG = s.regulation_college_general_units;
+          const regGrad = s.regulation_graduation_units;
+          const genU = s.college_general_units_in_plan || 0;
+          let html = 'مجموع وحدات الخطة في الجدول: <strong>' + (s.plan_units_total || 0) + '</strong>';
+          if (regGrad != null) html += ' — هدف التخرج: <strong>' + regGrad + '</strong> (شامل اتجاه عام)';
+          if (regG != null) {
+            html += ' — اتجاه عام في الخطة: <strong>' + genU + '</strong> / <strong>' + regG + '</strong> وحدة';
+            if (!s.college_general_units_ok) {
+              sumEl.className = 'alert alert-warning py-2 small mb-2';
+              html += ' <span class="text-danger">(يُفضّل ضبط وحدات العام على ' + regG + ')</span>';
+            } else {
+              sumEl.className = 'alert alert-success py-2 small mb-2';
+            }
+          } else {
+            sumEl.className = 'alert alert-info py-2 small mb-2';
+          }
+          if (regGrad != null && !s.plan_units_vs_graduation_ok) {
+            html += ' <span class="text-danger">— مجموع الخطة لا يساوي ' + regGrad + ' بعد</span>';
+          }
+          sumEl.innerHTML = html;
+          sumEl.classList.remove('d-none');
+        }
+      } catch (e) { /* optional */ }
+    }
+
+    function renderPcTable() {
+      const filter = (document.getElementById('pcFilterScope') || {}).value || '';
       const tbody = document.querySelector('#tblPc tbody');
-      tbody.innerHTML='';
-      (data.items||[]).forEach(x=>{
+      tbody.innerHTML = '';
+      const list = PC_ITEMS.filter(x => !filter || (x.requirement_scope || 'dept_common') === filter);
+      list.forEach(x => {
         const enc = encodeURIComponent(JSON.stringify(x));
-        const planLabel = (x.plan_applicability === '150'
-          ? '150 فقط'
-          : (x.plan_applicability === '155' ? '155 فقط' : 'مشترك 150/155'));
-        tbody.insertAdjacentHTML('beforeend', `<tr><td>${x.id}</td><td><code>${x.course_code}</code></td><td>${x.master_title_ar||''}</td><td>${planLabel}</td><td>${x.level_no}</td>
-          <td><button type="button" class="btn btn-sm btn-link p-0 btn-edit-pc" data-payload="${enc}">تحرير</button>
-           <button type="button" class="btn btn-sm btn-link text-danger p-0 btn-del-pc" data-id="${x.id}">حذف</button></td></tr>`);
+        const sc = x.requirement_scope || 'dept_common';
+        tbody.insertAdjacentHTML('beforeend', `<tr data-pc-id="${x.id}" data-scope="${sc}">
+          <td><input type="checkbox" class="form-check-input pc-row-cb" value="${x.id}"></td>
+          <td>${x.id}</td>
+          <td><code>${x.course_code}</code></td>
+          <td class="small">${(x.master_title_ar||'').slice(0,40)}</td>
+          <td><select class="form-select form-select-sm pc-inline-scope" data-id="${x.id}" style="min-width:9rem;">${SCOPE_OPTIONS}</select></td>
+          <td>${x.level_no}</td>
+          <td class="text-nowrap">
+            <button type="button" class="btn btn-sm btn-link p-0 btn-plo-pc" data-id="${x.id}" title="ربط مخرجات التعلم">مخرجات</button>
+            <button type="button" class="btn btn-sm btn-link p-0 btn-edit-pc" data-payload="${enc}">تحرير</button>
+            <button type="button" class="btn btn-sm btn-link text-danger p-0 btn-del-pc" data-id="${x.id}">حذف</button>
+          </td></tr>`);
       });
-      document.querySelectorAll('.btn-edit-pc').forEach(btn=>{
-        btn.onclick = ()=>{
-          const ob = JSON.parse(decodeURIComponent(btn.getAttribute('data-payload')));
-          document.getElementById('pcId').value = ob.id||'';
-          document.getElementById('pcProgId').value = ob.program_id||'';
-          document.getElementById('pcMasterId').value = ob.course_master_id||'';
-          document.getElementById('pcMasterSelect').value = String(ob.course_master_id||'');
-          document.getElementById('pcNewCourseTitleAr').value = '';
-          const newWrap = document.getElementById('pcNewCourseWrap');
-          if(newWrap) newWrap.style.display = 'none';
-          document.getElementById('pcCode').value = ob.course_code||'';
-          document.getElementById('pcPlanApplicability').value = (ob.plan_applicability||'both');
-          document.getElementById('pcLevel').value = ob.level_no||0;
-          document.getElementById('pcUnitsOv').value = ob.units_override!=null ? ob.units_override : '';
-          document.getElementById('secPcId').value = ob.id||'';
-          msg(`وضع تعديل البند #${ob.id} — يمكنك تعديل الحقول ثم الحفظ`, 'info');
+      tbody.querySelectorAll('.pc-inline-scope').forEach(sel => {
+        const id = sel.dataset.id;
+        const row = PC_ITEMS.find(r => String(r.id) === String(id));
+        if (row) sel.value = row.requirement_scope || 'dept_common';
+        sel.onchange = async () => {
+          await apiPost('/college/catalog/program_course/set_requirement_scope', {
+            id: +sel.dataset.id,
+            requirement_scope: sel.value,
+          });
+          if (row) row.requirement_scope = sel.value;
+          loadPcClassificationSummary(document.getElementById('pcProgFilter').value.trim());
+          appendCatalogChange('نطاق #' + sel.dataset.id + ' → ' + scopeLabelAr(sel.value));
+          msg('تم تحديث النطاق.', 'success');
         };
       });
-      document.querySelectorAll('.btn-del-pc').forEach(btn=>{
-        btn.onclick = async ()=>{
-          if(!confirm('حذف بند الخطة وجميع شُعبه؟')) return;
-          await apiPost('/college/catalog/program_course/delete', {id:+btn.dataset.id});
+      document.querySelectorAll('.btn-plo-pc').forEach(btn => {
+        btn.onclick = () => {
+          const row = PC_ITEMS.find(r => String(r.id) === String(btn.dataset.id));
+          openPloForPlanCourse(row);
+        };
+      });
+      document.querySelectorAll('.btn-edit-pc').forEach(btn => {
+        btn.onclick = () => {
+          const ob = JSON.parse(decodeURIComponent(btn.getAttribute('data-payload')));
+          document.getElementById('pcId').value = ob.id || '';
+          document.getElementById('pcProgId').value = ob.program_id || '';
+          document.getElementById('pcMasterId').value = ob.course_master_id || '';
+          document.getElementById('pcMasterSelect').value = ob.course_master_id ? ('m:' + ob.course_master_id) : '';
+          document.getElementById('pcNewCourseTitleAr').value = '';
+          const opEl = document.getElementById('pcOperationalCourseName');
+          if (opEl) opEl.value = '';
+          const newWrap = document.getElementById('pcNewCourseWrap');
+          if (newWrap) newWrap.style.display = 'none';
+          document.getElementById('pcCode').value = ob.course_code || '';
+          document.getElementById('pcRequirementScope').value = (ob.requirement_scope || 'dept_common');
+          document.getElementById('pcLevel').value = ob.level_no || 0;
+          document.getElementById('pcUnitsOv').value = ob.units_override != null ? ob.units_override : '';
+          document.getElementById('secPcId').value = ob.id || '';
+          msg('وضع تعديل البند #' + ob.id, 'info');
+        };
+      });
+      document.querySelectorAll('.btn-del-pc').forEach(btn => {
+        btn.onclick = async () => {
+          const row = PC_ITEMS.find(r => String(r.id) === String(btn.dataset.id));
+          const label = row ? (row.course_code + ' — ' + (row.master_title_ar || '')) : ('#' + btn.dataset.id);
+          if (!confirm('حذف بند الخطة؟\n' + label)) return;
+          await apiPost('/college/catalog/program_course/delete', { id: +btn.dataset.id });
+          appendCatalogChange('حذف مقرر: ' + label);
           msg('تم الحذف', 'success');
           loadPc();
         };
       });
-      msg('مقررات الخطة: '+(data.items||[]).length, 'success');
     }
+
+    async function loadPathwayMetaBanner() {
+      try {
+        const m = await apiGet('/college/catalog/pathway_meta');
+        const el = document.getElementById('pathwayCohortAlert');
+        if (!el) return;
+        const y = m.college_pathway_cohort_from_join_year;
+        if (y) {
+          el.className = 'alert alert-info py-2 small mb-2';
+          el.innerHTML = 'دفعات مسار الكلية: من سنة الالتحاق <strong>' + y +
+            '</strong> → برنامج ' + (m.college_general_program_code || 'PROG_U1');
+        } else {
+          el.className = 'alert alert-secondary py-2 small mb-2';
+          el.innerHTML = 'الوضع: طلاب القسم الحاليون (dept_only). لتفعيل دفعات الاتجاه العام: عيّن «دفعات مسار الكلية» في تبويب اللائحة.';
+        }
+        el.classList.remove('d-none');
+      } catch (_e) { /* optional */ }
+    }
+
+    function fillPcPrereqSelects() {
+      const opts = PC_ITEMS.map(x =>
+        '<option value="' + x.id + '">' + (x.course_code || '') + ' (م' + (x.level_no || 0) + ')</option>'
+      ).join('');
+      ['pcPrereqFrom', 'pcPrereqTo'].forEach(id => {
+        const sel = document.getElementById(id);
+        if (sel) sel.innerHTML = '<option value="">—</option>' + opts;
+      });
+    }
+
+    async function loadPcPrereqList(pid) {
+      const ul = document.getElementById('pcPrereqList');
+      if (!ul || !pid) return;
+      try {
+        const d = await apiGet('/college/catalog/program_course_prereqs?program_id=' + encodeURIComponent(pid));
+        const items = d.items || [];
+        ul.innerHTML = items.length
+          ? items.map(it =>
+              '<li>' + (it.required_course_code || '?') + ' → ' + (it.course_code || '?') +
+              ' <button type="button" class="btn btn-link btn-sm p-0 text-danger btn-del-prereq" data-id="' + it.id + '">حذف</button></li>'
+            ).join('')
+          : '<li class="text-muted">لا روابط بعد</li>';
+        ul.querySelectorAll('.btn-del-prereq').forEach(btn => {
+          btn.onclick = async () => {
+            if (!confirm('حذف المتطلب السابق؟')) return;
+            await apiPost('/college/catalog/program_course_prereq/delete', { id: +btn.dataset.id });
+            await loadPcPrereqList(pid);
+          };
+        });
+      } catch (_e) {
+        ul.innerHTML = '<li class="text-danger">تعذّر تحميل الروابط</li>';
+      }
+    }
+
+    async function renderPcLevelGrid() {
+      const pid = document.getElementById('pcProgFilter').value.trim();
+      const host = document.getElementById('pcLevelGrid');
+      if (!pid || !host) return;
+      host.innerHTML = '<span class="text-muted">جاري التحميل…</span>';
+      try {
+        const g = await apiGet('/college/catalog/program_courses/grid?program_id=' + encodeURIComponent(pid));
+        const levels = g.levels || [];
+        host.innerHTML = levels.length
+          ? levels.map(lv => {
+              const cards = (lv.courses || []).map(c =>
+                '<span class="badge bg-white text-dark border me-1 mb-1" title="' + (c.requirement_scope_label || '') + '">' +
+                '<strong>م' + lv.level_no + '</strong> ' + (c.course_code || '') + ' (' + (c.units || 0) + 'و)</span>'
+              ).join('');
+              return '<div class="mb-2"><span class="badge bg-primary me-1">المستوى ' + lv.level_no + '</span> ' +
+                '<span class="text-muted">(' + (lv.course_count || 0) + ' مقرر، ' + (lv.units_sum || 0) + ' و.)</span><div class="mt-1">' + cards + '</div></div>';
+            }).join('')
+          : '<span class="text-muted">لا مقررات في الخطة</span>';
+        const edges = g.edges || [];
+        if (edges.length) {
+          host.innerHTML += '<div class="mt-2 small text-muted">روابط: ' +
+            edges.map(e => (e.from_code || '?') + ' → ' + (e.to_code || '?')).join(' · ') + '</div>';
+        }
+        fillPcPrereqSelects();
+        await loadPcPrereqList(pid);
+      } catch (_e) {
+        host.innerHTML = '<span class="text-danger">تعذّر تحميل الشبكة</span>';
+      }
+    }
+
+    function syncPcExportLinks() {
+      const pid = (document.getElementById('pcProgFilter') || {}).value.trim();
+      const plan = document.getElementById('btnPcExportPlan');
+      if (plan) plan.href = pid ? ('/college/catalog/program_plan/export?program_id=' + encodeURIComponent(pid)) : '#';
+    }
+
+    function showPcGridView(show) {
+      const grid = document.getElementById('pcLevelGridWrap');
+      const table = document.getElementById('pcTableWrap');
+      if (grid) grid.classList.toggle('d-none', !show);
+      if (table) table.classList.toggle('d-none', show);
+    }
+
+    async function loadPc(){
+      const pid = document.getElementById('pcProgFilter').value.trim();
+      if(!pid){ msg('حدد program_id لمقررات الخطة', 'warning'); return;}
+      const data = await apiGet('/college/catalog/program_courses?program_id='+encodeURIComponent(pid));
+      PC_ITEMS = data.items || [];
+      renderPcTable();
+      await loadPcClassificationSummary(pid);
+      await updatePathwaySyncAlert(pid);
+      updateActiveProgramBar();
+      await loadMasterChoices();
+      syncPcExportLinks();
+      fillPcPrereqSelects();
+      const gridWrap = document.getElementById('pcLevelGridWrap');
+      if (gridWrap && !gridWrap.classList.contains('d-none')) await renderPcLevelGrid();
+      msg('مقررات الخطة: ' + PC_ITEMS.length, 'success');
+    }
+
+    function selectedPcIds() {
+      return [...document.querySelectorAll('.pc-row-cb:checked')].map(cb => parseInt(cb.value, 10));
+    }
+
+    document.getElementById('pcSelectAll').addEventListener('change', e => {
+      document.querySelectorAll('.pc-row-cb').forEach(cb => { cb.checked = e.target.checked; });
+    });
+    document.getElementById('pcFilterScope').addEventListener('change', () => renderPcTable());
+    document.getElementById('btnPcViewGrid').addEventListener('click', async () => {
+      showPcGridView(true);
+      await renderPcLevelGrid();
+    });
+    document.getElementById('btnPcHideGrid').addEventListener('click', () => showPcGridView(false));
+    document.getElementById('btnPcPrereqSave').addEventListener('click', async () => {
+      const fromId = +(document.getElementById('pcPrereqFrom') || {}).value;
+      const toId = +(document.getElementById('pcPrereqTo') || {}).value;
+      const pid = (document.getElementById('pcProgFilter') || {}).value.trim();
+      if (!fromId || !toId) { msg('اختر المقررين.', 'warning'); return; }
+      await apiPost('/college/catalog/program_course_prereq/save', {
+        program_course_id: toId,
+        required_program_course_id: fromId,
+      });
+      msg('تمت إضافة المتطلب السابق.', 'success');
+      await loadPcPrereqList(pid);
+      await renderPcLevelGrid();
+    });
+    document.getElementById('btnPcBulkScope').addEventListener('click', async () => {
+      const pid = document.getElementById('pcProgFilter').value.trim();
+      const ids = selectedPcIds();
+      if (!pid) return;
+      if (!ids.length) { msg('حدد مقررات من الجدول.', 'warning'); return; }
+      const scope = document.getElementById('pcBulkScope').value;
+      if (!confirm(
+        'تطبيق النطاق على ' + ids.length + ' مقرر؟\nالنطاق الجديد: ' + scopeLabelAr(scope)
+      )) return;
+      await apiPost('/college/catalog/program_courses/bulk_requirement_scope', {
+        program_id: +pid,
+        program_course_ids: ids,
+        requirement_scope: scope,
+      });
+      appendCatalogChange('تعيين جماعي: ' + ids.length + ' مقرر → ' + scopeLabelAr(scope));
+      msg('تم تعيين النطاق للمحدد (' + ids.length + ').', 'success');
+      loadPc();
+    });
+    async function renderStudentPathwayPreview() {
+      const sid = (document.getElementById('sppStudentId') || {}).value.trim();
+      const box = document.getElementById('sppSummary');
+      if (!sid) {
+        msg('أدخل الرقم الدراسي.', 'warning');
+        return;
+      }
+      if (box) {
+        box.classList.remove('d-none');
+        box.innerHTML = '<span class="text-muted">جاري الحساب…</span>';
+      }
+      try {
+        const data = await apiGet('/college/catalog/student_pathway_progress?student_id=' + encodeURIComponent(sid));
+        if (data.status !== 'ok') {
+          if (box) box.innerHTML = '<span class="text-danger">' + (data.message || 'خطأ') + '</span>';
+          return;
+        }
+        const t = data.totals || {};
+        const scopes = data.by_scope || {};
+        const scopeLines = ['college_general', 'pre_track', 'track', 'elective']
+          .filter(k => scopes[k])
+          .map(k => {
+            const b = scopes[k];
+            return (b.label || k) + ': ' + (b.completed_units || 0) + '/' + (b.required_units || 0);
+          });
+        const xls = document.getElementById('btnStudentPathwayExcel');
+        if (xls) {
+          xls.href = '/college/catalog/pathway_progress/export?student_id=' + encodeURIComponent(sid);
+          xls.classList.remove('d-none');
+        }
+        if (box) {
+          box.innerHTML =
+            '<div class="fw-bold mb-1">' + (data.student_name || sid) +
+            (data.operating_mode ? ' <span class="badge bg-secondary">' + data.operating_mode + '</span>' : '') + '</div>' +
+            '<div>منجز الخطة: <strong>' + (t.plan_completed_units || 0) + '</strong> / ' +
+            (t.graduation_target || 155) + ' — متبقي: <strong>' + (t.graduation_remaining || 0) + '</strong></div>' +
+            '<div>اتجاه عام: ' + (t.college_general_completed || 0) + ' / ' +
+            (t.college_general_target || 36) + '</div>' +
+            '<div class="text-muted mt-1">' + scopeLines.join(' · ') + '</div>';
+        }
+      } catch (e) {
+        if (box) box.innerHTML = '<span class="text-danger">تعذّر التحميل</span>';
+      }
+    }
+    const btnSpp = document.getElementById('btnStudentPathwayPreview');
+    if (btnSpp) btnSpp.addEventListener('click', () => renderStudentPathwayPreview());
+
+    document.getElementById('btnPcSuggestScope').addEventListener('click', async () => {
+      const pid = document.getElementById('pcProgFilter').value.trim();
+      const ids = selectedPcIds();
+      if (!pid) return;
+      const all = !ids.length;
+      const n = all ? PC_ITEMS.length : ids.length;
+      const detail = '1→اتجاه عام، 2–4→قبل الشعبة، 5+→شعبة';
+      if (!confirm(
+        (all ? 'اقتراح النطاق من المستوى لكل المقررات (' + n + ')؟\n' : 'اقتراح النطاق للمحدد (' + n + ')؟\n') + detail
+      )) return;
+      const r = await apiPost('/college/catalog/program_courses/apply_suggested_scope', {
+        program_id: +pid,
+        program_course_ids: ids,
+      });
+      const updated = r.updated || n || 'الكل';
+      appendCatalogChange('اقتراح نطاق من المستوى: ' + updated + ' مقرر');
+      msg('تم اقتراح التصنيف لـ ' + updated + ' مقرر.', 'success');
+      loadPc();
+    });
+    document.getElementById('btnClearCatalogLog')?.addEventListener('click', () => {
+      localStorage.removeItem(CATALOG_LOG_KEY);
+      renderCatalogChangeLog();
+    });
 
     function bindProgramSelect(items){
       const sel = document.getElementById('pcProgSelect');
@@ -331,35 +1279,54 @@
       if(!Array.isArray(items) || !items.length){
         sel.style.display = 'none';
         inpFilter.style.display = '';
+        updateActiveProgramBar();
         return;
       }
-      items.forEach(p=>{
+      rememberPrograms(items);
+      const base = items.filter(p => p.is_base_program || !(p.track_group || '').trim());
+      const tracks = items.filter(p => (p.track_group || '').trim() && Number(p.is_active) === 1);
+      const tracksPending = items.filter(p => (p.track_group || '').trim() && Number(p.is_active) !== 1);
+      const optLine = (p) => {
         const id = p.id || '';
-        const label = `${p.code || ''} — ${p.name_ar || ''}`.trim();
-        sel.insertAdjacentHTML('beforeend', `<option value="${id}">${label}</option>`);
-      });
+        const tg = (p.track_group || '').trim();
+        const suffix = tg ? ` [${tg}]` : '';
+        const label = `${p.code || ''} — ${p.name_ar || ''}${suffix}`.trim();
+        return `<option value="${id}">${label}</option>`;
+      };
+      if (base.length) {
+        sel.insertAdjacentHTML('beforeend', '<optgroup label="خطة القسم (بدون شعبة)">' + base.map(optLine).join('') + '</optgroup>');
+      }
+      if (tracks.length) {
+        sel.insertAdjacentHTML('beforeend', '<optgroup label="شعب مفعّلة">' + tracks.map(optLine).join('') + '</optgroup>');
+      }
+      if (tracksPending.length) {
+        sel.insertAdjacentHTML('beforeend', '<optgroup label="شعب — جاهزة (غير مفعّلة)">' + tracksPending.map(optLine).join('') + '</optgroup>');
+      }
+      const inactive = items.filter(p => !base.includes(p) && !tracks.includes(p) && !tracksPending.includes(p));
+      inactive.forEach(p => sel.insertAdjacentHTML('beforeend', optLine(p)));
       sel.style.display = '';
       inpFilter.style.display = 'none';
-      const first = items[0];
-      if(first){
-        inpFilter.value = first.id || '';
-        inpEdit.value = first.id || '';
+      const preferred = pickPreferredBaseProgram(items);
+      const pick = preferred || items[0];
+      if (pick) {
+        inpFilter.value = pick.id || '';
+        inpEdit.value = pick.id || '';
+        if (sel && pick.id) sel.value = String(pick.id);
       }
-      if (IS_HEAD_ONLY) {
-        // رئيس القسم يعمل داخل نطاق قسمه فقط: تثبيت البرنامج الافتراضي وعدم السماح بتبديله من الواجهة.
-        sel.disabled = true;
-        sel.style.pointerEvents = 'none';
-        sel.title = 'تم التحديد تلقائياً حسب نطاق رئيس القسم';
-      } else {
-        sel.disabled = false;
-        sel.style.pointerEvents = '';
-        sel.title = '';
-        sel.addEventListener('change', ()=>{
-          const v = sel.value || '';
-          inpFilter.value = v;
-          inpEdit.value = v;
-        });
-      }
+      sel.disabled = false;
+      sel.style.pointerEvents = '';
+      sel.title = IS_HEAD_ONLY
+        ? 'اختر خطة القسم (MECH) أو شعبة مفعّلة لعرض مقرراتها'
+        : '';
+      sel.onchange = () => {
+        const v = sel.value || '';
+        inpFilter.value = v;
+        inpEdit.value = v;
+        updateActiveProgramBar();
+        loadMasterChoices();
+        if (typeof loadPc === 'function') loadPc();
+      };
+      updateActiveProgramBar();
     }
 
     async function loadSections(){
@@ -408,25 +1375,84 @@
       loadDepartments();
     };
 
-    document.getElementById('btnProgRefresh').onclick = loadPrograms;
+    document.getElementById('btnProgRefresh').onclick = async () => {
+      await loadDepartmentTrackPrograms(false);
+      await loadPrograms();
+    };
+    async function runEnsureTrackPrograms() {
+      if (!confirm('تهيئة/تحديث برنامج MECH الأساس + قوالب الشعب؟\nلن تُحذف مقررات موجودة.')) return;
+      if (IS_HEAD_ONLY) {
+        await loadDepartmentTrackPrograms(true);
+      } else {
+        await apiPost('/college/catalog/department_program_tracks/ensure', {
+          department_code: 'MECH',
+          min_total_units: 155,
+        });
+        await loadDepartmentTrackPrograms(false);
+      }
+      msg('تمت تهيئة/تحديث برامج الشعب.', 'success');
+      await loadPrograms();
+      const dept = document.getElementById('selProgDept').value;
+      let url = '/college/catalog/programs';
+      if (dept) url += '?department_id=' + encodeURIComponent(dept);
+      const data = await apiGet(url);
+      bindProgramSelect(data.items || []);
+    }
+    document.getElementById('btnEnsureTrackPrograms').addEventListener('click', runEnsureTrackPrograms);
     document.getElementById('selProgDept').onchange = loadPrograms;
 
     document.getElementById('btnProgSave').onclick = async ()=>{
+      const kind = document.getElementById('progKind').value;
+      const track_group = resolveProgTrackGroup();
+      let code = document.getElementById('progCode').value.trim();
+      const name_ar = document.getElementById('progNameAr').value.trim();
+      if (!+document.getElementById('progDeptId').value) {
+        msg('حدد department_id (من قائمة الأقسام).', 'warning');
+        return;
+      }
+      if (kind === 'custom' && !track_group) {
+        msg('أدخل رمز الشعبة (track_group) للشعبة المخصصة.', 'warning');
+        return;
+      }
+      if (kind === 'custom' && !code && track_group) code = 'MECH-' + track_group;
+      if (!code || !name_ar) {
+        msg('رمز البرنامج والاسم بالعربية مطلوبان.', 'warning');
+        return;
+      }
+      const track_label_ar = (document.getElementById('progTrackLabelAr') || {}).value.trim();
       await apiPost('/college/catalog/program/save', {
         id: document.getElementById('progId').value ? +document.getElementById('progId').value : null,
         department_id: +document.getElementById('progDeptId').value,
-        code: document.getElementById('progCode').value.trim(),
-        name_ar: document.getElementById('progNameAr').value.trim(),
+        code,
+        name_ar,
         name_en: document.getElementById('progNameEn').value.trim(),
         phase: document.getElementById('progPhase').value,
-        track_group: document.getElementById('progTrack').value.trim(),
+        track_group,
         min_total_units: +document.getElementById('progUnits').value,
         rules_json: document.getElementById('progRules').value.trim(),
-        is_active: +document.getElementById('progActive').value
+        is_active: +document.getElementById('progActive').value,
+        names_customized: 1,
+        custom_track: kind === 'custom' ? 1 : 0,
+        track_label_ar: kind === 'custom' ? track_label_ar : '',
       });
-      msg('تم حفظ البرنامج', 'success');
-      loadPrograms();
+      msg('تم حفظ البرنامج (الأسماء محمية من التهيئة).', 'success');
+      await loadPrograms();
+      const dept = document.getElementById('selProgDept').value;
+      let url = '/college/catalog/programs';
+      if (dept) url += '?department_id=' + encodeURIComponent(dept);
+      const data = await apiGet(url);
+      bindProgramSelect(data.items || []);
     };
+    document.getElementById('btnProgNew').addEventListener('click', clearProgFormForNew);
+    document.getElementById('progKind').addEventListener('change', syncProgKindUi);
+    document.getElementById('progTrackTemplate').addEventListener('change', () => applyProgTemplatePreset(true));
+    document.getElementById('progTrackCustom').addEventListener('input', () => {
+      const tg = resolveProgTrackGroup();
+      const codeIn = document.getElementById('progCode');
+      if (codeIn && !(document.getElementById('progId').value || '').trim() && tg) {
+        codeIn.value = 'MECH-' + tg;
+      }
+    });
 
     document.getElementById('btnCmRefresh').onclick = loadCm;
     document.getElementById('btnCmSave').onclick = async ()=>{
@@ -441,25 +1467,42 @@
     };
 
     document.getElementById('btnPcRefresh').onclick = loadPc;
+    document.getElementById('pcMasterFilter').addEventListener('input', () => applyPcMasterFilter());
     document.getElementById('pcMasterSelect').addEventListener('change', ()=>{
-      const v = document.getElementById('pcMasterSelect').value || '';
+      const raw = document.getElementById('pcMasterSelect').value || '';
       const newWrap = document.getElementById('pcNewCourseWrap');
-      if(v === '__new__'){
+      const opEl = document.getElementById('pcOperationalCourseName');
+      if(raw === '__new__'){
         if(newWrap) newWrap.style.display = '';
         document.getElementById('pcMasterId').value = '';
+        if (opEl) opEl.value = '';
         return;
       }
       if(newWrap) newWrap.style.display = 'none';
-      const mid = Number(v || 0);
-      if(mid > 0){
-        document.getElementById('pcMasterId').value = String(mid);
-        if(!(document.getElementById('pcCode').value || '').trim()){
-          const c = generateCourseCode();
-          if(c) document.getElementById('pcCode').value = c;
-        }
+      const sel = document.getElementById('pcMasterSelect');
+      const opt = sel.selectedOptions && sel.selectedOptions[0];
+      if(raw.startsWith('m:')){
+        const mid = parseInt(raw.slice(2), 10);
+        document.getElementById('pcMasterId').value = Number.isFinite(mid) && mid > 0 ? String(mid) : '';
+        if (opEl) opEl.value = '';
+        applyPlanCourseAutofill(opt);
+      } else if (raw.startsWith('c:')){
+        document.getElementById('pcMasterId').value = '';
+        try {
+          if (opEl) opEl.value = decodeURIComponent(raw.slice(2));
+        } catch (e) { if (opEl) opEl.value = ''; }
+        applyPlanCourseAutofill(opt);
       } else {
         document.getElementById('pcMasterId').value = '';
+        if (opEl) opEl.value = '';
       }
+    });
+    document.getElementById('pcCode').addEventListener('change', () => {
+      const code = (document.getElementById('pcCode').value || '').trim();
+      if (!code) return;
+      ensureLevelSelectValue(inferLevelFromCourseCode(code));
+      const scopeSel = document.getElementById('pcRequirementScope');
+      if (scopeSel) scopeSel.value = suggestScopeFromLevel(document.getElementById('pcLevel').value);
     });
     document.getElementById('pcLevel').addEventListener('change', ()=>{
       if(!(document.getElementById('pcCode').value || '').trim()){
@@ -480,7 +1523,11 @@
       try {
         const u = document.getElementById('pcUnitsOv').value.trim();
         const selectedMasterRaw = document.getElementById('pcMasterSelect').value || '';
-        let selectedMasterId = Number(selectedMasterRaw || 0);
+        const opName = (document.getElementById('pcOperationalCourseName').value || '').trim();
+        let selectedMasterId = 0;
+        if (selectedMasterRaw.startsWith('m:')) {
+          selectedMasterId = parseInt(selectedMasterRaw.slice(2), 10) || 0;
+        }
         let selectedMaster = resolveMasterById(selectedMasterId);
         const newTitleAr = (document.getElementById('pcNewCourseTitleAr').value || '').trim();
         if(selectedMasterRaw === '__new__'){
@@ -490,7 +1537,14 @@
             msg('أدخل اسم المقرر الجديد الخاص بالخطة.', 'warning');
             return;
           }
-        } else if(!selectedMaster){
+        } else if (selectedMasterRaw.startsWith('c:')){
+          selectedMasterId = 0;
+          selectedMaster = null;
+          if (!opName) {
+            msg('اختر مقررًا مسجّلاً من القائمة.', 'warning');
+            return;
+          }
+        } else if(!selectedMasterRaw.startsWith('m:') || !selectedMaster){
           msg('يرجى اختيار مقرر من القائمة المنسدلة.', 'warning');
           return;
         }
@@ -518,9 +1572,10 @@
           id: document.getElementById('pcId').value ? +document.getElementById('pcId').value : null,
           program_id:+document.getElementById('pcProgId').value,
           course_master_id: document.getElementById('pcMasterId').value ? +document.getElementById('pcMasterId').value : null,
+          operational_course_name: opName,
           course_master_title_ar: newTitleAr || '',
           course_code: code,
-          plan_applicability: document.getElementById('pcPlanApplicability').value || 'both',
+          requirement_scope: document.getElementById('pcRequirementScope').value || 'pre_track',
           level_no: level,
           units_override: u === '' ? null : +u
         });
@@ -529,10 +1584,12 @@
         document.getElementById('pcMasterId').value = '';
         document.getElementById('pcMasterSelect').value = '';
         document.getElementById('pcNewCourseTitleAr').value = '';
+        const opEl2 = document.getElementById('pcOperationalCourseName');
+        if (opEl2) opEl2.value = '';
         const newWrap = document.getElementById('pcNewCourseWrap');
         if(newWrap) newWrap.style.display = 'none';
         document.getElementById('pcCode').value = '';
-        document.getElementById('pcPlanApplicability').value = 'both';
+        document.getElementById('pcRequirementScope').value = 'pre_track';
         document.getElementById('pcLevel').value = '0';
         document.getElementById('pcUnitsOv').value = '';
         loadPc();
@@ -558,42 +1615,182 @@
       loadSections();
     };
 
+    let PATHWAY_DEPT_ID = null;
+
+    function renderPathwayRow(item, editable) {
+      const val = item.value_number != null ? item.value_number : (item.value_text || '—');
+      const desc = (item.description || '').slice(0, 80);
+      const editBtn = editable
+        ? `<button type="button" class="btn btn-sm btn-link p-0 btn-edit-pathway-reg" data-payload="${encodeURIComponent(JSON.stringify(item))}">تعديل</button>`
+        : '<span class="text-muted small">للاطلاع</span>';
+      return `<tr>
+        <td><div class="fw-semibold small">${item.title || item.rule_key}</div>
+          <div class="text-muted" style="font-size:0.72rem">${item.rule_key || ''}</div></td>
+        <td><strong>${val}</strong></td>
+        <td class="small">${item.category_label || item.category || ''}${desc ? '<br><span class="text-muted">' + desc + '</span>' : ''}</td>
+        <td>${editBtn}</td></tr>`;
+    }
+
+    async function updatePathwaySyncAlert(pid) {
+      const el = document.getElementById('pathwaySyncAlert');
+      if (!pid || !el) return;
+      try {
+        const s = await apiGet('/college/catalog/program_courses/classification_summary?program_id=' + encodeURIComponent(pid));
+        const prog = s.program || {};
+        const reg = s.regulation_graduation_units;
+        if (reg == null) {
+          el.classList.add('d-none');
+          return;
+        }
+        const cur = prog.min_total_units;
+        if (s.units_in_sync) {
+          el.classList.add('d-none');
+        } else {
+          el.classList.remove('d-none');
+          el.innerHTML = 'وحدات التخرج في البرنامج: <strong>' + (cur ?? '—') + '</strong> — في اللائحة: <strong>' + reg + '</strong>. استخدم «مزامنة وحدات التخرج».';
+        }
+      } catch (e) {
+        el.classList.add('d-none');
+      }
+    }
+
+    async function loadPathwayRegulations() {
+      let url = '/college/catalog/pathway_regulations';
+      if (PATHWAY_DEPT_ID) url += '?department_id=' + encodeURIComponent(PATHWAY_DEPT_ID);
+      const data = await apiGet(url);
+      PATHWAY_DEPT_ID = data.department_id || PATHWAY_DEPT_ID;
+      CAN_EDIT_COLLEGE_REGS = !!data.can_edit_college_items;
+      document.getElementById('pathwayRegDeptId').value = PATHWAY_DEPT_ID || '';
+      const collegeBody = document.getElementById('pathwayCollegeBody');
+      const deptBody = document.getElementById('pathwayDeptBody');
+      const college = data.college_items || [];
+      const items = data.items || [];
+      collegeBody.innerHTML = college.length
+        ? college.map(x => renderPathwayRow(x, CAN_EDIT_COLLEGE_REGS)).join('')
+        : '<tr><td colspan="4" class="text-muted small">لا بنود عامة — شغّل التحديث بعد إعداد قسم GENERAL.</td></tr>';
+      deptBody.innerHTML = items.length
+        ? items.map(x => renderPathwayRow(x, true)).join('')
+        : '<tr><td colspan="4" class="text-muted small">لا بنود — أضف من النموذج أدناه.</td></tr>';
+      document.querySelectorAll('.btn-edit-pathway-reg').forEach(btn => {
+        btn.onclick = () => {
+          const ob = JSON.parse(decodeURIComponent(btn.getAttribute('data-payload')));
+          document.getElementById('pathwayRegId').value = ob.id || '';
+          document.getElementById('pathwayRegDeptId').value = ob.department_id || PATHWAY_DEPT_ID || '';
+          document.getElementById('pathwayRegKey').value = ob.rule_key || '';
+          document.getElementById('pathwayRegKey').disabled = true;
+          document.getElementById('pathwayRegTitle').value = ob.title || '';
+          document.getElementById('pathwayRegValue').value = ob.value_number != null ? ob.value_number : '';
+          document.getElementById('pathwayRegDesc').value = ob.description || '';
+          const catSel = document.getElementById('pathwayRegCategory');
+          const cat = ob.category || 'dept_track';
+          if ([...catSel.options].some(o => o.value === cat)) catSel.value = cat;
+          else catSel.value = 'other';
+        };
+      });
+      const pid = (document.getElementById('pcProgFilter') || {}).value.trim();
+      if (pid) await updatePathwaySyncAlert(pid);
+    }
+
+    document.getElementById('btnSyncGradUnits').addEventListener('click', async () => {
+      const pid = document.getElementById('pcProgFilter').value.trim();
+      if (!pid) { msg('حدد program_id في مقررات الخطة أولاً.', 'warning'); return; }
+      if (!confirm('مزامنة وحدات التخرج للبرنامج #' + pid + ' من بند اللائحة؟')) return;
+      const r = await apiPost('/college/catalog/program/sync_graduation_units', { program_id: +pid });
+      appendCatalogChange('مزامنة وحدات التخرج → ' + (r.min_total_units ?? '—') + ' وحدة');
+      msg('تمت المزامنة: ' + (r.min_total_units ?? '') + ' وحدة.', 'success');
+      await updatePathwaySyncAlert(pid);
+      await loadPcClassificationSummary(pid);
+    });
+
+    function clearPathwayRegForm() {
+      document.getElementById('pathwayRegId').value = '';
+      document.getElementById('pathwayRegKey').value = '';
+      document.getElementById('pathwayRegKey').disabled = false;
+      document.getElementById('pathwayRegTitle').value = '';
+      document.getElementById('pathwayRegValue').value = '';
+      document.getElementById('pathwayRegDesc').value = '';
+      document.getElementById('pathwayRegCategory').value = 'dept_track';
+    }
+
+    document.getElementById('btnPathwayRegsRefresh').onclick = () => loadPathwayRegulations();
+    document.getElementById('btnPathwayRegClear').onclick = clearPathwayRegForm;
+    document.getElementById('btnPathwayRegSave').onclick = async () => {
+      const deptId = document.getElementById('pathwayRegDeptId').value || PATHWAY_DEPT_ID;
+      if (!deptId) { msg('حدد قسم التشغيل أولاً (حمّل البرامج).', 'warning'); return; }
+      const payload = {
+        id: document.getElementById('pathwayRegId').value ? +document.getElementById('pathwayRegId').value : null,
+        department_id: +deptId,
+        rule_key: document.getElementById('pathwayRegKey').value.trim(),
+        title: document.getElementById('pathwayRegTitle').value.trim(),
+        description: document.getElementById('pathwayRegDesc').value.trim(),
+        category: document.getElementById('pathwayRegCategory').value,
+        value_number: document.getElementById('pathwayRegValue').value.trim() === ''
+          ? null : +document.getElementById('pathwayRegValue').value,
+      };
+      await apiPost('/college/catalog/pathway_regulation/save', payload);
+      msg('تم حفظ بند اللائحة.', 'success');
+      clearPathwayRegForm();
+      loadPathwayRegulations();
+    };
+
+    function applyCatalogHashTab() {
+      const h = (location.hash || '').replace(/^#/, '').toLowerCase();
+      const map = {
+        'catalog-plan': 'catalogTabBtnPlan',
+        'catalog-pathway': 'catalogTabBtnPathway',
+        'catalog-structure': 'catalogTabBtnStructure',
+      };
+      const btnId = map[h];
+      if (!btnId || typeof bootstrap === 'undefined' || !bootstrap.Tab) return;
+      const btn = document.getElementById(btnId);
+      if (btn) bootstrap.Tab.getOrCreateInstance(btn).show();
+    }
+    window.addEventListener('hashchange', applyCatalogHashTab);
+
     window.addEventListener('DOMContentLoaded', ()=>{
+      loadPathwayMetaBanner();
+      renderCatalogChangeLog();
       (async function initPage(){
         try {
           const r = await fetch('/auth/check', { credentials:'include', cache:'no-store' });
           const a = await r.json().catch(()=>null);
           const role = String((a && a.role) || '').trim().toLowerCase();
           IS_HEAD_ONLY = role === 'head_of_department';
+          IS_FULL_ADMIN = role === 'admin' || role === 'admin_main';
         } catch(e) {
           IS_HEAD_ONLY = false;
+          IS_FULL_ADMIN = false;
         }
 
         if (IS_HEAD_ONLY) {
           const h = document.querySelector('.page-subtitle');
-          if (h) h.textContent = 'عرض مخصص لرئيس القسم: إدارة مقررات الخطة فقط.';
-          const ids = ['cardDepartments','cardPrograms','cardCourseMaster','cardSections'];
-          ids.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
-
-          // اجلب برامج القسم لاختيار program_id بشكل مريح دون كشف بقية وحدات الكتالوج.
+          if (h) h.textContent = 'رئيس القسم: إدارة خطة ميكانيكي (طلاب القسم بعد الاتجاه العام).';
+          applyHeadCatalogUi();
           try {
+            await loadDepartmentTrackPrograms(true);
+            await loadPrograms();
             const data = await apiGet('/college/catalog/programs');
             const items = data.items || [];
             bindProgramSelect(items);
-            if (items.length) {
-              const preferred = items[0];
+            const preferred = pickPreferredBaseProgram(items);
+            if (preferred) {
               document.getElementById('pcProgFilter').value = preferred.id || '';
               document.getElementById('pcProgId').value = preferred.id || '';
-              const pIn = document.getElementById('pcProgId');
-              if (pIn) {
-                pIn.readOnly = true;
-                pIn.title = 'program_id محدد تلقائياً حسب رئيس القسم';
-              }
+              const sel = document.getElementById('pcProgSelect');
+              if (sel && preferred.id) sel.value = String(preferred.id);
+              updateActiveProgramBar();
               await loadPc();
             } else {
-              msg('لا توجد برامج ضمن نطاق قسمك حالياً.', 'warning');
+              msg('لا توجد برامج ضمن نطاق قسمك — اضغط «تحديث قوالب الشعب» في الهيكل العام.', 'warning');
             }
             await loadMasterChoices();
+            if (preferred && preferred.department_id) {
+              PATHWAY_DEPT_ID = preferred.department_id;
+            } else if (items.length && items[0].department_id) {
+              PATHWAY_DEPT_ID = items[0].department_id;
+            }
+            await loadPathwayRegulations();
+            applyCatalogHashTab();
           } catch(e) {
             msg('تعذر تحميل برامج القسم.', 'danger');
           }
@@ -601,12 +1798,29 @@
         }
 
         loadDepartments();
-        loadPrograms();
+        await loadDepartmentTrackPrograms(true);
+        await loadPrograms();
         loadCm();
         await loadMasterChoices();
         try {
           const data = await apiGet('/college/catalog/programs');
           bindProgramSelect(data.items || []);
+          const items = data.items || [];
+          const mechBase = items.find(p =>
+            (p.department_code || '').toUpperCase() === 'MECH' &&
+            (p.is_base_program || !(p.track_group || '').trim())
+          );
+          const first = mechBase || items.find(p => (p.department_code || '').toUpperCase() === 'MECH') || items[0];
+          if (first) {
+            if (first.department_id) PATHWAY_DEPT_ID = first.department_id;
+            document.getElementById('pcProgFilter').value = first.id || '';
+            document.getElementById('pcProgId').value = first.id || '';
+            const sel = document.getElementById('pcProgSelect');
+            if (sel && first.id) sel.value = String(first.id);
+          }
+          await loadPathwayRegulations();
+          if (first && first.id) await loadPc();
+          applyCatalogHashTab();
         } catch(e) {}
       })();
     });

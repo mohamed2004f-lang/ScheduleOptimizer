@@ -76,6 +76,22 @@ CREATE TABLE IF NOT EXISTS programs (
     UNIQUE (department_id, code)
 );
 
+CREATE TABLE IF NOT EXISTS pathway_regulation_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    department_id INTEGER NOT NULL,
+    rule_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    category TEXT NOT NULL DEFAULT 'other',
+    value_number REAL,
+    value_text TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (department_id, rule_key),
+    FOREIGN KEY (department_id) REFERENCES departments(id)
+);
+
 CREATE TABLE IF NOT EXISTS course_master (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title_ar TEXT NOT NULL,
@@ -93,6 +109,8 @@ CREATE TABLE IF NOT EXISTS program_courses (
     course_master_id INTEGER NOT NULL,
     course_code TEXT NOT NULL,
     course_name_override TEXT DEFAULT '',
+    plan_applicability TEXT NOT NULL DEFAULT 'both',
+    requirement_scope TEXT NOT NULL DEFAULT 'dept_common',
     level_no INTEGER DEFAULT 0,
     term_hint TEXT DEFAULT '',
     units_override INTEGER,
@@ -142,6 +160,7 @@ CREATE TABLE IF NOT EXISTS students (
     status_changed_term TEXT,
     status_changed_year TEXT,
     graduation_plan TEXT DEFAULT '',
+    pathway_stage TEXT NOT NULL DEFAULT 'dept_admitted',
     join_term TEXT DEFAULT '',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -471,6 +490,113 @@ CREATE TABLE IF NOT EXISTS quality_metrics_snapshots (
     metrics_json TEXT DEFAULT '',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     created_by TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS accreditation_standards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    catalog_version TEXT NOT NULL DEFAULT '2026.1',
+    domain_code TEXT NOT NULL,
+    code TEXT NOT NULL,
+    title_ar TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    weight_percent REAL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (catalog_version, code)
+);
+
+CREATE TABLE IF NOT EXISTS accreditation_indicators (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    standard_id INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    title_ar TEXT NOT NULL,
+    source_type TEXT NOT NULL DEFAULT 'manual',
+    target_hint_ar TEXT DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (standard_id, code),
+    FOREIGN KEY (standard_id) REFERENCES accreditation_standards(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS accreditation_assessments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    semester TEXT NOT NULL,
+    department_id INTEGER,
+    indicator_id INTEGER NOT NULL,
+    score_percent REAL,
+    compliance_status TEXT NOT NULL DEFAULT 'not_started',
+    notes TEXT DEFAULT '',
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT DEFAULT '',
+    UNIQUE (semester, department_id, indicator_id),
+    FOREIGN KEY (indicator_id) REFERENCES accreditation_indicators(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS accreditation_evidence (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    semester TEXT NOT NULL,
+    department_id INTEGER,
+    indicator_id INTEGER,
+    standard_id INTEGER,
+    checklist_key TEXT,
+    title_ar TEXT NOT NULL DEFAULT '',
+    description TEXT DEFAULT '',
+    evidence_type TEXT NOT NULL DEFAULT 'file',
+    external_url TEXT DEFAULT '',
+    original_name TEXT DEFAULT '',
+    stored_path TEXT DEFAULT '',
+    mime_type TEXT DEFAULT '',
+    file_size INTEGER DEFAULT 0,
+    sha256 TEXT DEFAULT '',
+    uploaded_by TEXT DEFAULT '',
+    uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    FOREIGN KEY (indicator_id) REFERENCES accreditation_indicators(id) ON DELETE SET NULL,
+    FOREIGN KEY (standard_id) REFERENCES accreditation_standards(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS accreditation_manual_inputs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    semester TEXT NOT NULL,
+    department_id INTEGER,
+    classrooms_count INTEGER,
+    labs_count INTEGER,
+    facilities_rating REAL,
+    facilities_notes TEXT DEFAULT '',
+    annual_budget_million REAL,
+    budget_execution_percent REAL,
+    finance_notes TEXT DEFAULT '',
+    governance_meetings_count INTEGER,
+    policies_active_count INTEGER,
+    governance_notes TEXT DEFAULT '',
+    community_events_count INTEGER,
+    community_beneficiaries_count INTEGER,
+    research_outputs_count INTEGER,
+    community_notes TEXT DEFAULT '',
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT DEFAULT '',
+    UNIQUE (semester, department_id)
+);
+
+CREATE TABLE IF NOT EXISTS accreditation_improvement_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    semester TEXT NOT NULL,
+    department_id INTEGER,
+    indicator_id INTEGER,
+    title_ar TEXT NOT NULL,
+    action_ar TEXT DEFAULT '',
+    target_date TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'planned',
+    priority TEXT DEFAULT 'medium',
+    owner_ar TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    FOREIGN KEY (indicator_id) REFERENCES accreditation_indicators(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS quality_institutional_inputs (
@@ -948,6 +1074,8 @@ def _setup_shared_db():
         "backend.services.academic_calendar",
         "backend.services.academic_rules",
         "backend.services.instructors",
+        "backend.services.academic_quality",
+        "backend.services.institutional_accreditation",
         "backend.services.course_equivalences",
         "backend.core.monitoring",
         "backend.core.auth",

@@ -915,8 +915,8 @@ def add_operational_course_to_plan(program_id: int):
                 """
                 INSERT INTO program_courses
                 (program_id, course_master_id, course_code, course_name_override,
-                 plan_applicability, level_no, category, is_required, is_active)
-                VALUES (?, ?, ?, ?, 'both', ?, 'required', 1, 1)
+                 plan_applicability, requirement_scope, level_no, category, is_required, is_active)
+                VALUES (?, ?, ?, ?, 'both', 'dept_common', ?, 'required', 1, 1)
                 """,
                 (program_id, cmid, course_code, course_name or "", level_no),
             )
