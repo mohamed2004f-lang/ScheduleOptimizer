@@ -322,6 +322,24 @@ def test_department_program_tracks_api(auth_client, db_conn):
     assert "MECH-PWR" in codes
 
 
+def test_department_program_tracks_civil_templates(auth_client, db_conn):
+    from backend.boot.phase0 import ensure_phase0_catalog
+    from backend.core.program_tracks import ensure_department_track_programs
+
+    ensure_phase0_catalog(db_conn)
+    ensure_department_track_programs(db_conn, "CIVIL")
+    db_conn.commit()
+    resp = auth_client.get(
+        "/college/catalog/department_program_tracks?department_code=CIVIL"
+    )
+    assert resp.status_code == 200
+    body = resp.get_json() or {}
+    tgroups = {t.get("track_group") for t in (body.get("track_templates") or [])}
+    assert "STR" in tgroups
+    assert "PWR" not in tgroups
+    assert body.get("base_program_code") in ("CIVIL", "PROG_MAJOR")
+
+
 def test_ensure_preserves_customized_program_names(db_conn):
     from backend.boot.phase0 import ensure_phase0_catalog
     from backend.core.program_tracks import (

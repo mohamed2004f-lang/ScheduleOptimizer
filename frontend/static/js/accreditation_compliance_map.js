@@ -477,10 +477,19 @@
       } else showToast(j.message || 'فشل الحساب', false);
     });
 
-    const role = (document.body.dataset?.role || window.CURRENT_ROLE || '').trim();
-    if (role === 'admin' || role === 'admin_main') {
-      document.getElementById('importCatalogCard')?.classList.remove('d-none');
-    }
+    document.getElementById('btnEnsureCatalog')?.addEventListener('click', async () => {
+      if (!confirm('إعادة بذر كتالوج المعايير الافتراضي (2026.1)؟\nلن يحذف التقييمات المحفوظة.')) return;
+      const r = await fetch('/academic_quality/api/accreditation/ensure_catalog', {
+        method: 'POST', credentials: 'include', headers: hdr(),
+        body: JSON.stringify({}),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        showToast('تم تحديث الكتالوج', true);
+        await reloadComplianceMap();
+      } else showToast(j.message || 'فشل', false);
+    });
+
     document.getElementById('btnImportCatalog')?.addEventListener('click', async () => {
       const f = document.getElementById('importCatalogFile').files[0];
       if (!f) { alert('اختر ملف Excel'); return; }

@@ -3086,6 +3086,12 @@ def _ensure_tables_postgresql() -> None:
                 conn.rollback()
             except Exception:
                 pass
+        try:
+            from backend.core.plo_schema import ensure_plo_enhancement_schema
+
+            ensure_plo_enhancement_schema(conn)
+        except Exception as e:
+            logger.warning("plo enhancement schema (postgresql): %s", e)
     logger.info("PostgreSQL compatibility migrations applied")
 
 
@@ -3352,6 +3358,12 @@ def ensure_tables(db_file=None):
             ensure_pathway_regulation_defaults(conn)
         except Exception as e:
             logger.warning("ensure pathway regulations (sqlite): %s", e)
+        try:
+            from backend.core.plo_schema import ensure_plo_enhancement_schema
+
+            ensure_plo_enhancement_schema(conn)
+        except Exception as e:
+            logger.warning("plo enhancement schema (sqlite): %s", e)
 
         conn.commit()
         logger.info("Database tables and indexes ensured")

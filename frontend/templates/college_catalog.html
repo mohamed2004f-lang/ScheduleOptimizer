@@ -87,9 +87,7 @@
       </div>
       <div class="card-body">
         <p class="small text-muted mb-2" id="trackProgramsNote">
-          <strong>خطة القسم:</strong> برنامج <code>MECH</code> (بدون شعبة) — اتجاه عام + قبل الشعبة.
-          <strong>الشعب:</strong> قوالب جاهزة (PWR/MFG/DES) أو <strong>شعبة مخصصة</strong> برمز حر.
-          التهيئة لا تستبدل الأسماء التي عدّلتها يدوياً.
+          اختر <strong>قسم</strong> من القائمة أعلاه لعرض قوالب الشعب المناسبة (ميكانيك: PWR/MFG/DES — مدني: STR/GEO/WTR — …).
         </p>
         <div class="table-responsive"><table class="table table-sm" id="tblProg"><thead><tr>
           <th>id</th><th>dept</th><th>code</th><th>name_ar</th><th>نوع</th><th>شعبة</th><th>وحدات</th><th>نشط</th><th class="col-prog-actions"></th>
@@ -111,9 +109,7 @@
           <div class="col-md-3" id="progTrackTemplateWrap">
             <label class="form-label small">قالب الشعبة</label>
             <select class="form-select form-select-sm" id="progTrackTemplate">
-              <option value="PWR">PWR — شعبة القوى</option>
-              <option value="MFG">MFG — شعبة الإنتاج</option>
-              <option value="DES">DES — شعبة التصميم</option>
+              <option value="">— اختر قسماً أولاً —</option>
             </select>
           </div>
           <div class="col-md-3 d-none" id="progTrackCustomWrap">
@@ -434,18 +430,63 @@
 
     function pickPreferredBaseProgram(items) {
       if (!Array.isArray(items) || !items.length) return null;
-      return items.find(p => (p.code || '').toUpperCase() === 'MECH')
-        || items.find(p => p.is_base_program && !(p.track_group || '').trim())
+      const baseCode = (TRACK_PROGRAMS_META && TRACK_PROGRAMS_META.base_program_code) || '';
+      if (baseCode) {
+        const hit = items.find(p => (p.code || '').toUpperCase() === baseCode.toUpperCase());
+        if (hit) return hit;
+      }
+      return items.find(p => p.is_base_program && !(p.track_group || '').trim())
         || items.find(p => !(p.track_group || '').trim())
         || items[0];
     }
 
-    const PROG_TEMPLATE_PRESETS = {
-      PWR: { code: 'MECH-PWR', name_ar: 'هندسة ميكانيكية — شعبة القوى', name_en: 'Mechanical Engineering — Power Track', label: 'شعبة القوى' },
-      MFG: { code: 'MECH-MFG', name_ar: 'هندسة ميكانيكية — شعبة الإنتاج', name_en: 'Mechanical Engineering — Manufacturing Track', label: 'شعبة الإنتاج' },
-      DES: { code: 'MECH-DES', name_ar: 'هندسة ميكانيكية — شعبة التصميم', name_en: 'Mechanical Engineering — Design Track', label: 'شعبة التصميم' },
-    };
-    const BUILTIN_TRACKS = new Set(['PWR', 'MFG', 'DES']);
+    let PROG_TEMPLATE_PRESETS = {};
+    let BUILTIN_TRACKS = new Set();
+    let CURRENT_DEPT_CODE = 'MECH';
+
+    function selectedDepartmentCode() {
+      const deptSel = document.getElementById('selProgDept');
+      if (!deptSel || !deptSel.value) return '';
+      const opt = deptSel.options[deptSel.selectedIndex];
+      const label = (opt && opt.textContent) || '';
+      const m = label.match(/^([A-Za-z0-9_-]+)/);
+      return m ? m[1].toUpperCase() : '';
+    }
+
+    function applyTrackCatalogMeta(meta) {
+      TRACK_PROGRAMS_META = meta || null;
+      PROG_TEMPLATE_PRESETS = {};
+      BUILTIN_TRACKS = new Set();
+      CURRENT_DEPT_CODE = (meta && meta.department_code) || selectedDepartmentCode() || '';
+      (meta && meta.track_templates || []).forEach(t => {
+        const tg = (t.track_group || '').toUpperCase();
+        if (!tg) return;
+        PROG_TEMPLATE_PRESETS[tg] = {
+          code: t.program_code,
+          name_ar: t.name_ar,
+          name_en: t.name_en,
+          label: t.label_ar || tg,
+        };
+        BUILTIN_TRACKS.add(tg);
+      });
+      const sel = document.getElementById('progTrackTemplate');
+      if (sel) {
+        const cur = sel.value;
+        if (!meta || !meta.track_templates || !meta.track_templates.length) {
+          sel.innerHTML = '<option value="">لا قوالب لهذا القسم — استخدم شعبة مخصصة</option>';
+        } else {
+          sel.innerHTML = meta.track_templates.map(t => {
+            const tg = (t.track_group || '').toUpperCase();
+            return `<option value="${tg}">${tg} — ${t.label_ar || t.name_ar || tg}</option>`;
+          }).join('');
+          if (cur && PROG_TEMPLATE_PRESETS[cur]) sel.value = cur;
+          else sel.selectedIndex = 0;
+        }
+      }
+      const note = document.getElementById('trackProgramsNote');
+      if (note && meta && meta.note_ar) note.innerHTML = meta.note_ar;
+      syncProgKindUi();
+    }
 
     function syncProgKindUi() {
       const kind = (document.getElementById('progKind') || {}).value || 'base';
@@ -459,13 +500,17 @@
       if (labelWrap) labelWrap.classList.toggle('d-none', kind !== 'custom');
       if (codeIn) codeIn.readOnly = (kind === 'template');
       if (kind === 'base' && codeIn && !document.getElementById('progId').value.trim()) {
-        codeIn.value = 'MECH';
+        const bc = (TRACK_PROGRAMS_META && TRACK_PROGRAMS_META.base_program_code)
+          || CURRENT_DEPT_CODE
+          || '';
+        if (bc) codeIn.value = bc;
       }
       if (kind === 'template') applyProgTemplatePreset(false);
     }
 
     function applyProgTemplatePreset(forceNames) {
-      const tg = (document.getElementById('progTrackTemplate') || {}).value || 'PWR';
+      const tg = (document.getElementById('progTrackTemplate') || {}).value || '';
+      if (!tg) return;
       const preset = PROG_TEMPLATE_PRESETS[tg];
       if (!preset) return;
       const codeIn = document.getElementById('progCode');
@@ -489,7 +534,17 @@
         .trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
     }
 
-    function fillProgFormFromProgram(ob) {
+    async function fillProgFormFromProgram(ob) {
+      const deptCode = (ob.department_code || '').trim().toUpperCase();
+      if (deptCode) {
+        try {
+          const meta = await apiGet(
+            '/college/catalog/department_program_tracks?department_code='
+            + encodeURIComponent(deptCode)
+          );
+          applyTrackCatalogMeta(meta);
+        } catch (e) { /* ignore */ }
+      }
       document.getElementById('progId').value = ob.id || '';
       document.getElementById('progDeptId').value = ob.department_id || '';
       document.getElementById('progCode').value = ob.code || '';
@@ -512,12 +567,24 @@
         document.getElementById('progTrackLabelAr').value = cat.track_label_ar || ob.track_group_label || '';
       } else {
         kindEl.value = 'template';
-        document.getElementById('progTrackTemplate').value = tg || 'PWR';
+        document.getElementById('progTrackTemplate').value = tg && BUILTIN_TRACKS.has(tg) ? tg : (selFirstTrackGroup() || '');
       }
       syncProgKindUi();
     }
 
+    function selFirstTrackGroup() {
+      const keys = Object.keys(PROG_TEMPLATE_PRESETS);
+      return keys.length ? keys[0] : '';
+    }
+
+    function defaultProgramCodePrefix() {
+      const fromMeta = TRACK_PROGRAMS_META && TRACK_PROGRAMS_META.base_program_code;
+      const fromSel = selectedDepartmentCode();
+      return fromMeta || fromSel || CURRENT_DEPT_CODE || '';
+    }
+
     function clearProgFormForNew() {
+      const deptSel = document.getElementById('selProgDept');
       document.getElementById('progId').value = '';
       document.getElementById('progCode').value = '';
       document.getElementById('progNameAr').value = '';
@@ -526,12 +593,13 @@
       document.getElementById('progUnits').value = '155';
       document.getElementById('progActive').value = '0';
       document.getElementById('progRules').value = '';
-      document.getElementById('progKind').value = 'custom';
+      document.getElementById('progKind').value = deptSel && deptSel.value ? 'base' : 'custom';
       document.getElementById('progTrackCustom').value = '';
       document.getElementById('progTrackLabelAr').value = '';
-      const deptSel = document.getElementById('selProgDept');
       if (deptSel && deptSel.value) {
         document.getElementById('progDeptId').value = deptSel.value;
+      } else {
+        document.getElementById('progDeptId').value = '';
       }
       syncProgKindUi();
     }
@@ -700,31 +768,39 @@
     let TRACK_PROGRAMS_META = null;
 
     async function loadDepartmentTrackPrograms(ensure) {
-      const deptSel = document.getElementById('selProgDept');
-      const deptId = (deptSel && deptSel.value) || '';
-      let url = '/college/catalog/department_program_tracks?department_code=MECH';
-      if (ensure) url += '&ensure=1';
-      if (deptId) {
-        const opt = deptSel.options[deptSel.selectedIndex];
-        const label = (opt && opt.textContent) || '';
-        const m = label.match(/^([A-Z]+)/i);
-        if (m) url = '/college/catalog/department_program_tracks?department_code=' + encodeURIComponent(m[1]) + (ensure ? '&ensure=1' : '');
+      const deptCode = selectedDepartmentCode();
+      if (!deptCode) {
+        applyTrackCatalogMeta({
+          department_code: '',
+          note_ar: (
+            '<strong>كل الأقسام:</strong> يعرض الجدول برامج جميع الأقسام. '
+            + 'لقوالب الشعب (STR/PWR/…) اختر <strong>قسماً واحداً</strong> من القائمة. '
+            + 'إن ظهر قسم واحد فقط فقد يكون «نطاق الأدمن» مفعّلاً — اختر «كل الأقسام» في التحديث أو امسح النطاق من شريط الأدوات.'
+          ),
+          track_templates: [],
+          base_program_code: '',
+        });
+        return;
       }
+      let url = '/college/catalog/department_program_tracks?department_code='
+        + encodeURIComponent(deptCode);
+      if (ensure) url += '&ensure=1';
       try {
-        TRACK_PROGRAMS_META = await apiGet(url);
-        const note = document.getElementById('trackProgramsNote');
-        if (note && TRACK_PROGRAMS_META.note_ar) {
-          note.innerHTML = '<span class="text-muted">' + TRACK_PROGRAMS_META.note_ar + '</span>';
-        }
+        applyTrackCatalogMeta(await apiGet(url));
       } catch (e) {
-        TRACK_PROGRAMS_META = null;
+        applyTrackCatalogMeta(null);
       }
     }
 
     async function loadPrograms(){
       const dept = document.getElementById('selProgDept').value;
+      await loadDepartmentTrackPrograms(false);
       let url = '/college/catalog/programs';
-      if(dept) url += '?department_id='+encodeURIComponent(dept);
+      if (dept) {
+        url += '?department_id=' + encodeURIComponent(dept);
+      } else {
+        url += '?all=1';
+      }
       const data = await apiGet(url);
       rememberPrograms(data.items || []);
       const tbody = document.querySelector('#tblProg tbody');
@@ -750,9 +826,13 @@
           ${editCell}</tr>`);
       });
       document.querySelectorAll('.btn-edit-prog').forEach(btn=>{
-        btn.onclick=()=>{
+        btn.onclick=async ()=>{
           const ob = JSON.parse(decodeURIComponent(btn.getAttribute('data-payload')));
-          fillProgFormFromProgram(ob);
+          if (ob.department_id) {
+            const deptSel = document.getElementById('selProgDept');
+            if (deptSel) deptSel.value = String(ob.department_id);
+          }
+          await fillProgFormFromProgram(ob);
           document.getElementById('pcProgFilter').value = ob.id||'';
           document.getElementById('pcProgId').value = ob.id||'';
           const sel = document.getElementById('pcProgSelect');
@@ -760,7 +840,13 @@
           updateActiveProgramBar();
         };
       });
-      msg('تم تحميل البرامج: '+(data.items||[]).length, 'success');
+      let hint = 'تم تحميل البرامج: ' + (data.items||[]).length;
+      if (!dept && data.scope_department_id) {
+        hint += ' (ملاحظة: نطاق أدمن يقيّد العرض — استخدم ?all=1 أو امسح نطاق القسم)';
+      } else if (!dept && data.filtered_all_departments) {
+        hint += ' — كل الأقسام';
+      }
+      msg(hint, 'success');
       updateActiveProgramBar();
     }
 
@@ -1380,13 +1466,18 @@
       await loadPrograms();
     };
     async function runEnsureTrackPrograms() {
-      if (!confirm('تهيئة/تحديث برنامج MECH الأساس + قوالب الشعب؟\nلن تُحذف مقررات موجودة.')) return;
+      const deptCode = selectedDepartmentCode();
+      if (!deptCode) {
+        msg('اختر قسماً من القائمة أولاً.', 'warning');
+        return;
+      }
+      if (!confirm('تهيئة/تحديث برنامج ' + deptCode + ' الأساس + قوالب الشعب؟\nلن تُحذف مقررات موجودة.')) return;
       if (IS_HEAD_ONLY) {
         await loadDepartmentTrackPrograms(true);
       } else {
         await apiPost('/college/catalog/department_program_tracks/ensure', {
-          department_code: 'MECH',
-          min_total_units: 155,
+          department_code: deptCode,
+          min_total_units: +(document.getElementById('progUnits').value || 155),
         });
         await loadDepartmentTrackPrograms(false);
       }
@@ -1414,7 +1505,9 @@
         msg('أدخل رمز الشعبة (track_group) للشعبة المخصصة.', 'warning');
         return;
       }
-      if (kind === 'custom' && !code && track_group) code = 'MECH-' + track_group;
+      if (kind === 'custom' && !code && track_group) {
+        code = defaultProgramCodePrefix() + '-' + track_group;
+      }
       if (!code || !name_ar) {
         msg('رمز البرنامج والاسم بالعربية مطلوبان.', 'warning');
         return;
@@ -1450,7 +1543,7 @@
       const tg = resolveProgTrackGroup();
       const codeIn = document.getElementById('progCode');
       if (codeIn && !(document.getElementById('progId').value || '').trim() && tg) {
-        codeIn.value = 'MECH-' + tg;
+        codeIn.value = defaultProgramCodePrefix() + '-' + tg;
       }
     });
 

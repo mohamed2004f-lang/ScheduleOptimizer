@@ -19,13 +19,18 @@ from backend.core.program_tracks import (
     BUILTIN_TRACK_GROUPS,
     CANONICAL_BASE_PROGRAM_CODE,
     TRACK_GROUP_LABELS,
+    base_program_template,
+    builtin_track_groups_for_department,
     catalog_rules,
+    department_has_track_catalog,
+    department_tracks_note_ar,
     ensure_department_track_programs,
     is_custom_track_from_rules,
     merge_catalog_rules,
     names_customized_from_rules,
     program_role_label,
     track_group_label,
+    track_template_presets,
 )
 from backend.core.auth import get_admin_department_scope_id, role_required
 from backend.core.department_scope_policy import head_home_department_id
@@ -365,11 +370,18 @@ def save_department():
 @role_required(*_PLAN_EDITOR)
 def list_programs():
     dept_id = _i(request.args.get("department_id"))
+    all_depts = (request.args.get("all") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    scope_applied = None
     with get_connection() as conn:
-        if dept_id is None:
+        if dept_id is None and not all_depts:
             scoped = _catalog_scope_department_id(conn)
             if scoped is not None:
                 dept_id = scoped
+                scope_applied = scoped
         base = """
             SELECT p.*, d.code AS department_code
             FROM programs p
@@ -388,21 +400,34 @@ def list_programs():
         tg = (r.get("track_group") or "").strip()
         code = (r.get("code") or "").strip()
         rules = r.get("rules_json")
+        dept_code = (r.get("department_code") or "").strip().upper()
+        base_tpl = base_program_template(dept_code) if dept_code else None
+        base_codes = {CANONICAL_BASE_PROGRAM_CODE, "PROG_MAJOR"}
+        if base_tpl:
+            base_codes.add((base_tpl.program_code or "").strip().upper())
+        dept_builtin = (
+            builtin_track_groups_for_department(dept_code) if dept_code else frozenset()
+        )
+        builtin = dept_builtin if dept_builtin else BUILTIN_TRACK_GROUPS
         r["track_group_label"] = track_group_label(
             tg, rules_json=rules, name_ar=r.get("name_ar")
         )
         r["program_role"] = program_role_label(
             tg, code, rules_json=rules, name_ar=r.get("name_ar")
         )
-        r["is_base_program"] = (not tg) or code.upper() in (
-            CANONICAL_BASE_PROGRAM_CODE,
-            "PROG_MAJOR",
-        )
+        r["is_base_program"] = (not tg) or code.upper() in base_codes
         r["names_customized"] = names_customized_from_rules(rules)
         r["is_custom_track"] = is_custom_track_from_rules(rules) or (
-            bool(tg) and tg.upper() not in BUILTIN_TRACK_GROUPS
+            bool(tg) and tg.upper() not in builtin
         )
-    return jsonify({"status": "ok", "items": rows}), 200
+    return jsonify(
+        {
+            "status": "ok",
+            "items": rows,
+            "filtered_all_departments": bool(all_depts),
+            "scope_department_id": scope_applied,
+        }
+    ), 200
 
 
 @college_catalog_bp.route("/department_program_tracks", methods=["GET"])
@@ -439,6 +464,11 @@ def department_program_tracks():
             """,
             (int(dept_id),),
         )
+    dept_builtin = builtin_track_groups_for_department(dept_code)
+    base_tpl = base_program_template(dept_code)
+    base_codes = {CANONICAL_BASE_PROGRAM_CODE, "PROG_MAJOR"}
+    if base_tpl:
+        base_codes.add((base_tpl.program_code or "").strip().upper())
     base_list = []
     track_list = []
     for p in programs:
@@ -451,15 +481,17 @@ def department_program_tracks():
         p["program_role"] = program_role_label(
             tg, code, rules_json=rules, name_ar=p.get("name_ar")
         )
-        p["is_base_program"] = not tg or code.upper() == CANONICAL_BASE_PROGRAM_CODE
+        p["is_base_program"] = not tg or code.upper() in base_codes
         p["names_customized"] = names_customized_from_rules(rules)
+        builtin = dept_builtin if dept_builtin else BUILTIN_TRACK_GROUPS
         p["is_custom_track"] = is_custom_track_from_rules(rules) or (
-            bool(tg) and tg.upper() not in BUILTIN_TRACK_GROUPS
+            bool(tg) and tg.upper() not in builtin
         )
         if p["is_base_program"] and not tg:
             base_list.append(p)
         else:
             track_list.append(p)
+    bp = base_tpl.program_code if base_tpl else dept_code
     return jsonify(
         {
             "status": "ok",
@@ -469,10 +501,11 @@ def department_program_tracks():
             "base_programs": base_list,
             "track_programs": track_list,
             "items": programs,
-            "note_ar": (
-                "البرنامج الأساس (MECH): مقررات مشتركة واتجاه عام. "
-                "برامج الشعب (MECH-PWR …): مقررات التخصص فقط — فعّل الشعبة عند الافتتاح."
-            ),
+            "track_templates": track_template_presets(dept_code),
+            "base_program_code": bp,
+            "builtin_track_groups": sorted(dept_builtin) if dept_builtin else [],
+            "has_track_catalog": department_has_track_catalog(dept_code),
+            "note_ar": department_tracks_note_ar(dept_code),
         }
     ), 200
 

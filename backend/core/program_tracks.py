@@ -21,6 +21,13 @@ TRACK_GROUP_LABELS = {
     "PWR": "شعبة القوى",
     "MFG": "شعبة الإنتاج",
     "DES": "شعبة التصميم",
+    "STR": "شعبة إنشائي",
+    "GEO": "شعبة جيوتقنية",
+    "WTR": "شعبة مياه/بيئة",
+    "COM": "شعبة اتصالات",
+    "CTL": "شعبة تحكم",
+    "SOL": "شعبة طاقة شمسية",
+    "WND": "شعبة طاقة رياح",
 }
 
 BUILTIN_TRACK_GROUPS = frozenset(k for k in TRACK_GROUP_LABELS if k)
@@ -135,9 +142,170 @@ MECH_TRACK_TEMPLATES: tuple[TrackProgramTemplate, ...] = (
     ),
 )
 
+CIVIL_TRACK_TEMPLATES: tuple[TrackProgramTemplate, ...] = (
+    TrackProgramTemplate(
+        "CIVIL",
+        "بكالوريوس الهندسة المدنية — خطة القسم",
+        "Civil Engineering — Department Plan",
+        "",
+        "base",
+        True,
+    ),
+    TrackProgramTemplate(
+        "CIVIL-STR",
+        "هندسة مدنية — شعبة إنشائي",
+        "Civil Engineering — Structures",
+        "STR",
+        "track",
+        False,
+    ),
+    TrackProgramTemplate(
+        "CIVIL-GEO",
+        "هندسة مدنية — شعبة جيوتقنية",
+        "Civil Engineering — Geotechnical",
+        "GEO",
+        "track",
+        False,
+    ),
+    TrackProgramTemplate(
+        "CIVIL-WTR",
+        "هندسة مدنية — شعبة مياه وبيئة",
+        "Civil Engineering — Water & Environment",
+        "WTR",
+        "track",
+        False,
+    ),
+)
+
+ELEC_TRACK_TEMPLATES: tuple[TrackProgramTemplate, ...] = (
+    TrackProgramTemplate(
+        "ELEC",
+        "بكالوريوس الهندسة الكهربائية — خطة القسم",
+        "Electrical Engineering — Department Plan",
+        "",
+        "base",
+        True,
+    ),
+    TrackProgramTemplate(
+        "ELEC-PWR",
+        "هندسة كهربائية — شعبة قوى",
+        "Electrical Engineering — Power",
+        "PWR",
+        "track",
+        False,
+    ),
+    TrackProgramTemplate(
+        "ELEC-COM",
+        "هندسة كهربائية — شعبة اتصالات",
+        "Electrical Engineering — Communications",
+        "COM",
+        "track",
+        False,
+    ),
+    TrackProgramTemplate(
+        "ELEC-CTL",
+        "هندسة كهربائية — شعبة تحكم",
+        "Electrical Engineering — Control",
+        "CTL",
+        "track",
+        False,
+    ),
+)
+
+RENEW_TRACK_TEMPLATES: tuple[TrackProgramTemplate, ...] = (
+    TrackProgramTemplate(
+        "RENEW",
+        "بكالوريوس هندسة الطاقات المتجددة — خطة القسم",
+        "Renewable Energy — Department Plan",
+        "",
+        "base",
+        True,
+    ),
+    TrackProgramTemplate(
+        "RENEW-SOL",
+        "طاقات متجددة — شعبة شمسية",
+        "Renewable Energy — Solar",
+        "SOL",
+        "track",
+        False,
+    ),
+    TrackProgramTemplate(
+        "RENEW-WND",
+        "طاقات متجددة — شعبة رياح",
+        "Renewable Energy — Wind",
+        "WND",
+        "track",
+        False,
+    ),
+)
+
 DEPARTMENT_TRACK_CATALOGS: dict[str, tuple[TrackProgramTemplate, ...]] = {
     "MECH": MECH_TRACK_TEMPLATES,
+    "CIVIL": CIVIL_TRACK_TEMPLATES,
+    "ELEC": ELEC_TRACK_TEMPLATES,
+    "RENEW": RENEW_TRACK_TEMPLATES,
 }
+
+
+def department_has_track_catalog(dept_code: str) -> bool:
+    return (dept_code or "").strip().upper() in DEPARTMENT_TRACK_CATALOGS
+
+
+def base_program_template(dept_code: str) -> TrackProgramTemplate | None:
+    cat = DEPARTMENT_TRACK_CATALOGS.get((dept_code or "").strip().upper())
+    if not cat:
+        return None
+    for tpl in cat:
+        if tpl.role == "base":
+            return tpl
+    return cat[0] if cat else None
+
+
+def track_template_presets(dept_code: str) -> list[dict[str, Any]]:
+    """قوالب الشعب الجاهزة لقسم (للواجهة — ليس ميكانيك فقط)."""
+    cat = DEPARTMENT_TRACK_CATALOGS.get((dept_code or "").strip().upper())
+    if not cat:
+        return []
+    out: list[dict[str, Any]] = []
+    for tpl in cat:
+        if tpl.role != "track":
+            continue
+        tg = (tpl.track_group or "").strip().upper()
+        out.append(
+            {
+                "track_group": tg,
+                "program_code": tpl.program_code,
+                "name_ar": tpl.name_ar,
+                "name_en": tpl.name_en,
+                "label_ar": track_group_label(tg) or tpl.name_ar,
+            }
+        )
+    return out
+
+
+def builtin_track_groups_for_department(dept_code: str) -> frozenset[str]:
+    return frozenset(
+        (p["track_group"] or "").upper()
+        for p in track_template_presets(dept_code)
+        if p.get("track_group")
+    )
+
+
+def department_tracks_note_ar(dept_code: str) -> str:
+    dept = (dept_code or "").strip().upper()
+    base = base_program_template(dept)
+    if not base:
+        return (
+            "لا توجد قوالب شعب مُعرّفة لهذا القسم — استخدم «شعبة مخصصة» "
+            "أو عرّف القسم في كتالوج المسارات."
+        )
+    tracks = track_template_presets(dept)
+    tg_list = ", ".join(p["track_group"] for p in tracks) or "—"
+    return (
+        f"<strong>خطة القسم:</strong> برنامج <code>{base.program_code}</code> (بدون شعبة). "
+        f"<strong>الشعب:</strong> قوالب ({tg_list}) أو <strong>شعبة مخصصة</strong>. "
+        "التهيئة لا تستبدل الأسماء التي عدّلتها يدوياً."
+    )
 
 
 def track_group_label(

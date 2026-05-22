@@ -292,6 +292,9 @@ def register_institutional_accreditation_routes(bp) -> None:
 
             logging.getLogger(__name__).exception("accreditation_map_page failed")
 
+        from backend.core.auth import _normalize_role
+
+        user_role = _normalize_role((session.get("user_role") or "").strip())
         return render_template(
             "accreditation_compliance_map.html",
             map_data=data,
@@ -305,6 +308,8 @@ def register_institutional_accreditation_routes(bp) -> None:
             qaa_url=QAA_HIGHER_ED_URL,
             coordinator_roles=ACCREDITATION_COORDINATOR_ROLES,
             catalog_versions=catalog_versions,
+            user_role=user_role,
+            is_admin_main=user_role in ("admin", "admin_main"),
             page_error=None if data.get("status") == "ok" else (data.get("message") or "خطأ في التحميل"),
         )
 

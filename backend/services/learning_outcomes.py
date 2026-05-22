@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime
 
-from flask import Blueprint, jsonify, render_template, request, session
+from flask import Blueprint, Response, jsonify, render_template, request, session
 
 from backend.core.auth import (
     login_required,
@@ -14,12 +14,28 @@ from backend.core.auth import (
     get_admin_department_scope_id,
 )
 from backend.core.department_scope_policy import head_home_department_id, resolve_users_list_scope
-from backend.database.database import schedule_pk_column
+from backend.database.database import is_postgresql, schedule_pk_column
 from backend.services.utilities import get_connection
 from backend.services.quality_metrics import term_label_from_conn
 from backend.services.schedule import _is_instructor_effective_session, _sync_schedule_pk_col
+from backend.core.plo_benchmarks import import_template, templates_for_program
+from backend.core.plo_excel import (
+    export_program_outcomes_xlsx,
+    import_outcomes_from_xlsx,
+    template_xlsx_bytes,
+)
+from backend.core.plo_glo import (
+    BLOOM_LABELS_AR,
+    COVERAGE_LABELS_AR,
+    DOMAIN_LABELS_AR,
+    GOVERNANCE_LABELS_AR,
+    glo_list,
+)
+from backend.core.plo_schema import ensure_plo_enhancement_schema
+from backend.services.plo_analytics import export_plo_matrix_csv, program_plo_analytics
 from backend.services.plo_linking import (
     cell_is_linked,
+    cycle_cell_coverage,
     linked_outcome_ids_for_pc,
     set_cell_link,
     set_master_link,
@@ -27,6 +43,34 @@ from backend.services.plo_linking import (
 )
 
 learning_outcomes_bp = Blueprint("learning_outcomes", __name__)
+
+PLO_SELECT = """
+    id, program_id, code, title_ar, COALESCE(title_en,'') AS title_en,
+    COALESCE(description,'') AS description, COALESCE(domain,'skills') AS domain,
+    COALESCE(bloom_level,'') AS bloom_level,
+    COALESCE(performance_indicator,'') AS performance_indicator,
+    COALESCE(accreditation_tag,'') AS accreditation_tag,
+    COALESCE(version,1) AS version, COALESCE(effective_from,'') AS effective_from,
+    COALESCE(governance_status,'draft') AS governance_status,
+    COALESCE(approved_by,'') AS approved_by, COALESCE(approved_at,'') AS approved_at,
+    COALESCE(parent_glo_code,'') AS parent_glo_code,
+    sort_order, is_active
+"""
+
+
+def _log_plo_revision(cur, outcome_id: int, action: str, snapshot: dict, actor: str) -> None:
+    import json
+
+    try:
+        cur.execute(
+            """
+            INSERT INTO plo_revision_log (outcome_id, action, snapshot_json, actor)
+            VALUES (?, ?, ?, ?)
+            """,
+            (int(outcome_id), action, json.dumps(snapshot, ensure_ascii=False), actor or ""),
+        )
+    except Exception:
+        pass
 
 
 def _row_dict(row, keys=None):
@@ -113,7 +157,15 @@ def _courses_table_exists(conn) -> bool:
 @login_required
 @role_required("admin", "admin_main", "head_of_department")
 def ilo_catalog_page():
-    return render_template("ilo_catalog.html")
+    with get_connection() as conn:
+        ensure_plo_enhancement_schema(conn)
+    return render_template(
+        "ilo_catalog.html",
+        domain_labels=DOMAIN_LABELS_AR,
+        bloom_labels=BLOOM_LABELS_AR,
+        governance_labels=GOVERNANCE_LABELS_AR,
+        coverage_labels=COVERAGE_LABELS_AR,
+    )
 
 
 @learning_outcomes_bp.route("/api/programs")
@@ -158,11 +210,11 @@ def program_outcomes(program_id: int):
         if not _program_in_scope(conn, program_id):
             return jsonify({"status": "error", "message": "غير مصرح"}), 403
         cur = conn.cursor()
+        ensure_plo_enhancement_schema(conn)
         if request.method == "GET":
             rows = cur.execute(
-                """
-                SELECT id, program_id, code, title_ar, COALESCE(description,'') AS description,
-                       sort_order, is_active
+                f"""
+                SELECT {PLO_SELECT}
                 FROM program_learning_outcomes
                 WHERE program_id = ?
                 ORDER BY sort_order, code
@@ -180,10 +232,26 @@ def program_outcomes(program_id: int):
         sort_order = int(data.get("sort_order") or 0)
         cur.execute(
             """
-            INSERT INTO program_learning_outcomes (program_id, code, title_ar, description, sort_order)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO program_learning_outcomes (
+                program_id, code, title_ar, title_en, description, domain, bloom_level,
+                performance_indicator, accreditation_tag, parent_glo_code, sort_order,
+                governance_status, version, effective_from
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 1, ?)
             """,
-            (program_id, code, title_ar, description, sort_order),
+            (
+                program_id,
+                code,
+                title_ar,
+                (data.get("title_en") or "").strip(),
+                description,
+                (data.get("domain") or "skills").strip() or "skills",
+                (data.get("bloom_level") or "").strip(),
+                (data.get("performance_indicator") or "").strip(),
+                (data.get("accreditation_tag") or "").strip(),
+                (data.get("parent_glo_code") or "").strip(),
+                sort_order,
+                (data.get("effective_from") or "").strip(),
+            ),
         )
         conn.commit()
         oid = int(cur.lastrowid or 0)
@@ -209,36 +277,69 @@ def update_outcome(outcome_id: int):
             cur.execute("DELETE FROM program_learning_outcomes WHERE id = ?", (outcome_id,))
             conn.commit()
             return jsonify({"status": "ok"})
+        ensure_plo_enhancement_schema(conn)
         data = request.get_json(force=True) or {}
-        title_ar = (data.get("title_ar") or "").strip()
-        description = (data.get("description") or "").strip()
-        sort_order = data.get("sort_order")
-        is_active = data.get("is_active")
+        actor = (session.get("user") or "").strip()
         sets = []
         params = []
-        if title_ar:
-            sets.append("title_ar = ?")
-            params.append(title_ar)
+        field_map = {
+            "title_ar": lambda v: (v or "").strip(),
+            "title_en": lambda v: (v or "").strip(),
+            "description": lambda v: (v or "").strip(),
+            "domain": lambda v: (v or "skills").strip() or "skills",
+            "bloom_level": lambda v: (v or "").strip(),
+            "performance_indicator": lambda v: (v or "").strip(),
+            "accreditation_tag": lambda v: (v or "").strip(),
+            "parent_glo_code": lambda v: (v or "").strip(),
+            "effective_from": lambda v: (v or "").strip(),
+            "governance_status": lambda v: (v or "").strip(),
+        }
+        for key, fn in field_map.items():
+            if key in data:
+                val = fn(data.get(key))
+                if key == "title_ar" and not val:
+                    continue
+                sets.append(f"{key} = ?")
+                params.append(val)
         code = (data.get("code") or "").strip()
         if code:
             sets.append("code = ?")
             params.append(code)
-        if "description" in data:
-            sets.append("description = ?")
-            params.append(description)
-        if sort_order is not None:
+        if data.get("sort_order") is not None:
             sets.append("sort_order = ?")
-            params.append(int(sort_order))
-        if is_active is not None:
+            params.append(int(data.get("sort_order")))
+        if data.get("is_active") is not None:
             sets.append("is_active = ?")
-            params.append(1 if is_active else 0)
+            params.append(1 if data.get("is_active") else 0)
+        if data.get("approve"):
+            sets.append("governance_status = ?")
+            params.append("approved")
+            sets.append("approved_by = ?")
+            params.append(actor)
+            sets.append("approved_at = ?")
+            params.append(datetime.datetime.utcnow().isoformat())
         if not sets:
             return jsonify({"status": "error", "message": "لا توجد حقول"}), 400
+        snap_row = cur.execute(
+            f"SELECT {PLO_SELECT} FROM program_learning_outcomes WHERE id = ?",
+            (outcome_id,),
+        ).fetchone()
         params.append(outcome_id)
         cur.execute(
             f"UPDATE program_learning_outcomes SET {', '.join(sets)} WHERE id = ?",
             tuple(params),
         )
+        if snap_row:
+            snap = _rows_to_dicts(cur, [snap_row])[0] if hasattr(snap_row, "keys") else {}
+            if not snap and hasattr(snap_row, "__getitem__"):
+                snap = {"id": outcome_id}
+            _log_plo_revision(
+                cur,
+                outcome_id,
+                "approve" if data.get("approve") else "update",
+                snap,
+                actor,
+            )
         conn.commit()
     return jsonify({"status": "ok"})
 
@@ -765,27 +866,28 @@ def coverage_matrix(program_id: int):
             for o in outcome_list:
                 oid = int(o["id"])
                 if col.get("col_type") == "program_course" and col.get("program_course_id"):
-                    linked, src = cell_is_linked(
+                    linked, src, cov = cell_is_linked(
                         cur,
                         program_id,
                         oid,
                         program_course_id=int(col["program_course_id"]),
                     )
                 elif col.get("course_master_id") is not None:
-                    linked, src = cell_is_linked(
+                    linked, src, cov = cell_is_linked(
                         cur,
                         program_id,
                         oid,
                         course_master_id=int(col["course_master_id"]),
                     )
                 else:
-                    linked, src = False, ""
+                    linked, src, cov = False, "", ""
                 cells.append(
                     {
                         "outcome_id": oid,
                         "col_key": col["col_key"],
                         "linked": linked,
                         "link_source": src,
+                        "coverage_level": cov if linked else "",
                     }
                 )
     return jsonify(
@@ -809,7 +911,9 @@ def coverage_matrix_toggle(program_id: int):
     except (TypeError, ValueError):
         return jsonify({"status": "error", "message": "outcome_id مطلوب"}), 400
     col_key = (data.get("col_key") or "").strip()
-    linked = bool(data.get("linked"))
+    cycle = data.get("cycle", True)
+    linked = data.get("linked")
+    coverage_level = (data.get("coverage_level") or "").strip().upper()
     sync_master = data.get("sync_master", True)
     if not col_key or ":" not in col_key:
         return jsonify({"status": "error", "message": "col_key غير صالح"}), 400
@@ -819,6 +923,7 @@ def coverage_matrix_toggle(program_id: int):
     except ValueError:
         return jsonify({"status": "error", "message": "col_key غير صالح"}), 400
     with get_connection() as conn:
+        ensure_plo_enhancement_schema(conn)
         if not _program_in_scope(conn, program_id):
             return jsonify({"status": "error", "message": "غير مصرح"}), 403
         cur = conn.cursor()
@@ -829,31 +934,62 @@ def coverage_matrix_toggle(program_id: int):
         if not row:
             return jsonify({"status": "error", "message": "مخرج غير تابع للبرنامج"}), 400
         if kind == "pc":
-            set_cell_link(
-                cur,
-                program_id,
-                outcome_id,
-                program_course_id=target_id,
-                linked=linked,
-                sync_master=bool(sync_master),
-            )
+            if cycle and linked is None and not coverage_level:
+                ln, src, cov = cycle_cell_coverage(
+                    cur,
+                    program_id,
+                    outcome_id,
+                    program_course_id=target_id,
+                    sync_master=bool(sync_master),
+                )
+            else:
+                want = bool(linked) if linked is not None else True
+                set_cell_link(
+                    cur,
+                    program_id,
+                    outcome_id,
+                    program_course_id=target_id,
+                    linked=want,
+                    sync_master=bool(sync_master),
+                    coverage_level=coverage_level or "I",
+                )
+                ln, src, cov = cell_is_linked(
+                    cur, program_id, outcome_id, program_course_id=target_id
+                )
         elif kind == "cm":
-            set_cell_link(
-                cur,
-                program_id,
-                outcome_id,
-                course_master_id=target_id,
-                linked=linked,
-                sync_master=True,
-            )
+            if cycle and linked is None and not coverage_level:
+                ln, src, cov = cycle_cell_coverage(
+                    cur,
+                    program_id,
+                    outcome_id,
+                    course_master_id=target_id,
+                    sync_master=True,
+                )
+            else:
+                want = bool(linked) if linked is not None else True
+                set_cell_link(
+                    cur,
+                    program_id,
+                    outcome_id,
+                    course_master_id=target_id,
+                    linked=want,
+                    sync_master=True,
+                    coverage_level=coverage_level or "I",
+                )
+                ln, src, cov = cell_is_linked(
+                    cur, program_id, outcome_id, course_master_id=target_id
+                )
         else:
             return jsonify({"status": "error", "message": "نوع عمود غير معروف"}), 400
         conn.commit()
-        if kind == "pc":
-            ln, src = cell_is_linked(cur, program_id, outcome_id, program_course_id=target_id)
-        else:
-            ln, src = cell_is_linked(cur, program_id, outcome_id, course_master_id=target_id)
-    return jsonify({"status": "ok", "linked": ln, "link_source": src})
+    return jsonify(
+        {
+            "status": "ok",
+            "linked": ln,
+            "link_source": src,
+            "coverage_level": cov if ln else "",
+        }
+    )
 
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/add_to_plan", methods=["POST"])
@@ -1104,3 +1240,329 @@ def sync_closure_ilo_from_assessments(conn, section_id: int, instructor_id: int,
         (avg_pct, section_id, instructor_id, semester),
     )
     return avg_pct
+
+
+@learning_outcomes_bp.route("/api/glo")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def college_glo_list():
+    return jsonify({"status": "ok", "items": glo_list()})
+
+
+@learning_outcomes_bp.route("/api/benchmark_templates")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def benchmark_templates_api():
+    program_id = request.args.get("program_id")
+    if not program_id:
+        return jsonify({"status": "error", "message": "program_id مطلوب"}), 400
+    with get_connection() as conn:
+        ensure_plo_enhancement_schema(conn)
+        cur = conn.cursor()
+        if not _program_in_scope(conn, int(program_id)):
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        items = templates_for_program(cur, int(program_id))
+    return jsonify({"status": "ok", "items": items})
+
+
+@learning_outcomes_bp.route("/api/programs/<int:program_id>/import_benchmark", methods=["POST"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def import_benchmark(program_id: int):
+    data = request.get_json(force=True) or {}
+    template_code = (data.get("template_code") or "").strip()
+    if not template_code:
+        return jsonify({"status": "error", "message": "template_code مطلوب"}), 400
+    with get_connection() as conn:
+        ensure_plo_enhancement_schema(conn)
+        if not _program_in_scope(conn, program_id):
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        cur = conn.cursor()
+        result = import_template(
+            cur,
+            program_id,
+            template_code,
+            merge=bool(data.get("merge", True)),
+            actor=(session.get("user") or "").strip(),
+        )
+        if result.get("status") != "ok":
+            return jsonify(result), 400
+        conn.commit()
+    return jsonify(result)
+
+
+@learning_outcomes_bp.route("/api/programs/<int:program_id>/outcomes/template.xlsx")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def plo_excel_template(program_id: int):
+    with get_connection() as conn:
+        if not _program_in_scope(conn, program_id):
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    data = template_xlsx_bytes()
+    return Response(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=plo_template.xlsx"},
+    )
+
+
+@learning_outcomes_bp.route("/api/programs/<int:program_id>/outcomes/export.xlsx")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def plo_excel_export(program_id: int):
+    with get_connection() as conn:
+        ensure_plo_enhancement_schema(conn)
+        if not _program_in_scope(conn, program_id):
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        cur = conn.cursor()
+        rows = cur.execute(
+            f"""
+            SELECT {PLO_SELECT}
+            FROM program_learning_outcomes
+            WHERE program_id = ?
+            ORDER BY sort_order, code
+            """,
+            (program_id,),
+        ).fetchall()
+        items = _rows_to_dicts(cur, rows)
+    data = export_program_outcomes_xlsx(items)
+    return Response(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename=plo_program_{program_id}.xlsx"
+        },
+    )
+
+
+@learning_outcomes_bp.route("/api/programs/<int:program_id>/outcomes/import.xlsx", methods=["POST"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def plo_excel_import(program_id: int):
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"status": "error", "message": "لم يُرفع ملف"}), 400
+    raw = f.read()
+    if not raw:
+        return jsonify({"status": "error", "message": "ملف فارغ"}), 400
+    merge = (request.form.get("merge") or "1").strip().lower() not in ("0", "false", "no")
+    with get_connection() as conn:
+        ensure_plo_enhancement_schema(conn)
+        if not _program_in_scope(conn, program_id):
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        cur = conn.cursor()
+        result = import_outcomes_from_xlsx(cur, program_id, raw, merge=merge)
+        if result.get("status") != "ok":
+            return jsonify(result), 400
+        conn.commit()
+    return jsonify(result)
+
+
+@learning_outcomes_bp.route("/api/programs/<int:program_id>/analytics")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def program_analytics(program_id: int):
+    with get_connection() as conn:
+        ensure_plo_enhancement_schema(conn)
+        if not _program_in_scope(conn, program_id):
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        cur = conn.cursor()
+        data = program_plo_analytics(cur, program_id)
+    return jsonify({"status": "ok", **data})
+
+
+@learning_outcomes_bp.route("/api/programs/<int:program_id>/export_matrix.csv")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def export_matrix_csv(program_id: int):
+    with get_connection() as conn:
+        if not _program_in_scope(conn, program_id):
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        cur = conn.cursor()
+        dept_id = _program_department_id(conn, program_id)
+        outcomes = cur.execute(
+            """
+            SELECT id, code, title_ar FROM program_learning_outcomes
+            WHERE program_id = ? AND COALESCE(is_active,1)=1
+            ORDER BY sort_order, code
+            """,
+            (program_id,),
+        ).fetchall()
+        outcome_list = _rows_to_dicts(cur, outcomes)
+        columns, _op = _matrix_columns_for_program(cur, program_id, dept_id)
+        cells = []
+        for col in columns:
+            for o in outcome_list:
+                oid = int(o["id"])
+                if col.get("col_type") == "program_course" and col.get("program_course_id"):
+                    linked, src, cov = cell_is_linked(
+                        cur,
+                        program_id,
+                        oid,
+                        program_course_id=int(col["program_course_id"]),
+                    )
+                elif col.get("course_master_id") is not None:
+                    linked, src, cov = cell_is_linked(
+                        cur,
+                        program_id,
+                        oid,
+                        course_master_id=int(col["course_master_id"]),
+                    )
+                else:
+                    linked, src, cov = False, "", ""
+                cells.append(
+                    {
+                        "outcome_id": oid,
+                        "col_key": col["col_key"],
+                        "linked": linked,
+                        "coverage_level": cov if linked else "",
+                    }
+                )
+    csv_text = export_plo_matrix_csv(outcome_list, columns, cells)
+    return Response(
+        csv_text,
+        mimetype="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename=plo_matrix_{program_id}.csv"},
+    )
+
+
+@learning_outcomes_bp.route("/api/program_courses/<int:program_course_id>/clos", methods=["GET", "POST"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def course_clos(program_course_id: int):
+    with get_connection() as conn:
+        ensure_plo_enhancement_schema(conn)
+        cur = conn.cursor()
+        prow = cur.execute(
+            "SELECT program_id FROM program_courses WHERE id = ?",
+            (program_course_id,),
+        ).fetchone()
+        if not prow:
+            return jsonify({"status": "error", "message": "مقرر غير موجود"}), 404
+        pid = int(prow[0] if not hasattr(prow, "keys") else prow["program_id"])
+        if not _program_in_scope(conn, pid):
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        if request.method == "GET":
+            rows = cur.execute(
+                """
+                SELECT c.id, c.program_course_id, c.code, c.title_ar, c.title_en,
+                       COALESCE(c.description,'') AS description, COALESCE(c.bloom_level,'') AS bloom_level,
+                       c.sort_order, c.is_active
+                FROM course_learning_outcomes c
+                WHERE c.program_course_id = ? AND COALESCE(c.is_active,1)=1
+                ORDER BY c.sort_order, c.code
+                """,
+                (program_course_id,),
+            ).fetchall()
+            items = []
+            for r in _rows_to_dicts(cur, rows):
+                links = cur.execute(
+                    """
+                    SELECT o.code FROM clo_plo_links l
+                    JOIN program_learning_outcomes o ON o.id = l.outcome_id
+                    WHERE l.clo_id = ?
+                    """,
+                    (r["id"],),
+                ).fetchall()
+                r["plo_codes"] = [
+                    (x[0] if not hasattr(x, "keys") else x["code"]) for x in links or []
+                ]
+                items.append(r)
+            return jsonify({"status": "ok", "items": items})
+        data = request.get_json(force=True) or {}
+        code = (data.get("code") or "").strip()
+        title_ar = (data.get("title_ar") or "").strip()
+        if not code or not title_ar:
+            return jsonify({"status": "error", "message": "الرمز والعنوان مطلوبان"}), 400
+        cur.execute(
+            """
+            INSERT INTO course_learning_outcomes (
+                program_course_id, code, title_ar, title_en, description, bloom_level, sort_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                program_course_id,
+                code,
+                title_ar,
+                (data.get("title_en") or "").strip(),
+                (data.get("description") or "").strip(),
+                (data.get("bloom_level") or "").strip(),
+                int(data.get("sort_order") or 0),
+            ),
+        )
+        clo_id = int(cur.lastrowid or 0)
+        for oid in [int(x) for x in (data.get("plo_ids") or [])]:
+            if is_postgresql():
+                cur.execute(
+                    """
+                    INSERT INTO clo_plo_links (clo_id, outcome_id) VALUES (?, ?)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (clo_id, oid),
+                )
+            else:
+                cur.execute(
+                    "INSERT OR IGNORE INTO clo_plo_links (clo_id, outcome_id) VALUES (?, ?)",
+                    (clo_id, oid),
+                )
+        conn.commit()
+    return jsonify({"status": "ok", "id": clo_id})
+
+
+@learning_outcomes_bp.route("/api/clos/<int:clo_id>", methods=["PUT", "DELETE"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def update_clo(clo_id: int):
+    with get_connection() as conn:
+        ensure_plo_enhancement_schema(conn)
+        cur = conn.cursor()
+        row = cur.execute(
+            """
+            SELECT c.id, pc.program_id FROM course_learning_outcomes c
+            JOIN program_courses pc ON pc.id = c.program_course_id
+            WHERE c.id = ?
+            """,
+            (clo_id,),
+        ).fetchone()
+        if not row:
+            return jsonify({"status": "error", "message": "غير موجود"}), 404
+        prog_id = int(row[1] if not hasattr(row, "keys") else row["program_id"])
+        if not _program_in_scope(conn, prog_id):
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        if request.method == "DELETE":
+            cur.execute("DELETE FROM course_learning_outcomes WHERE id = ?", (clo_id,))
+            conn.commit()
+            return jsonify({"status": "ok"})
+        data = request.get_json(force=True) or {}
+        sets, params = [], []
+        for key in ("title_ar", "title_en", "description", "bloom_level", "code"):
+            if key in data:
+                sets.append(f"{key} = ?")
+                params.append((data.get(key) or "").strip())
+        if data.get("sort_order") is not None:
+            sets.append("sort_order = ?")
+            params.append(int(data.get("sort_order")))
+        if sets:
+            params.append(clo_id)
+            cur.execute(
+                f"UPDATE course_learning_outcomes SET {', '.join(sets)} WHERE id = ?",
+                tuple(params),
+            )
+        if "plo_ids" in data:
+            cur.execute("DELETE FROM clo_plo_links WHERE clo_id = ?", (clo_id,))
+            for oid in [int(x) for x in (data.get("plo_ids") or [])]:
+                if is_postgresql():
+                    cur.execute(
+                        """
+                        INSERT INTO clo_plo_links (clo_id, outcome_id) VALUES (?, ?)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        (clo_id, oid),
+                    )
+                else:
+                    cur.execute(
+                        "INSERT OR IGNORE INTO clo_plo_links (clo_id, outcome_id) VALUES (?, ?)",
+                        (clo_id, oid),
+                    )
+        conn.commit()
+    return jsonify({"status": "ok"})

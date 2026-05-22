@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>الاستبيانات</title>
+  <title>تعبئة الاستبيانات</title>
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
@@ -13,16 +13,37 @@
     <nav aria-label="breadcrumb" class="mb-2">
       <ol class="breadcrumb small mb-0">
         <li class="breadcrumb-item">ضمان الجودة والاعتماد</li>
-        <li class="breadcrumb-item active" aria-current="page">الاستبيانات</li>
+        <li class="breadcrumb-item active" aria-current="page">تعبئة الاستبيانات</li>
       </ol>
     </nav>
-    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
+
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
       <div>
-        <h4 class="mb-1"><i class="fa-solid fa-clipboard-list"></i> الاستبيانات</h4>
-        <p class="text-muted small mb-0">الفصل: {{ semester }} — من هنا <strong>تُدخل</strong> إجاباتك (ليست صفحة النتائج).</p>
+        <h4 class="mb-1"><i class="fa-solid fa-pen-to-square text-primary"></i> تعبئة الاستبيانات</h4>
+        <p class="text-muted small mb-1">
+          الفصل: <strong>{{ semester }}</strong> —
+          تظهر هنا فقط الاستبيانات التي <strong>يُفترض أن تملأها أنت</strong> حسب دورك الحالي.
+        </p>
+        <span class="badge bg-primary">{{ respondent_label }}</span>
+        {% if user_role == 'head_of_department' and user_role != respondent_role %}
+        <span class="badge bg-secondary ms-1">حساب: رئيس قسم · تعبئة كـ {{ respondent_label }}</span>
+        {% endif %}
       </div>
-      {% if user_role in ('admin', 'admin_main', 'head_of_department') %}
-      <a href="/academic_quality/surveys/results?semester={{ semester|urlencode }}" class="btn btn-outline-secondary btn-sm">عرض النتائج المجمّعة</a>
+      {% if show_results_link %}
+      <a href="/academic_quality/surveys/results?semester={{ semester|urlencode }}" class="btn btn-outline-secondary btn-sm">
+        نتائج مجمّعة (إدارة)
+      </a>
+      {% endif %}
+    </div>
+
+    <div class="alert alert-info border-start border-info border-4 small mb-4">
+      <strong>ليست هذه الصفحة:</strong>
+      <ul class="mb-2 ps-3">
+        <li><strong>نتائج الاستبيانات</strong> — عرض تجميعي سري بعد عدد كافٍ من الإجابات (لرئيس القسم/الإدارة).</li>
+        <li><strong>إعداد بنود الاستبيانات</strong> — تحرير أسئلة القوالب (منسق جودة / إدارة).</li>
+      </ul>
+      {% if fill_guide %}
+      <p class="mb-0"><strong>المطلوب منك في هذا الدور:</strong> {{ fill_guide }}</p>
       {% endif %}
     </div>
 
@@ -30,28 +51,41 @@
     <div class="card mb-3 border-primary">
       <div class="card-body d-flex justify-content-between align-items-center flex-wrap gap-2">
         <div>
-          <strong>تقييم المقررات والأساتذة</strong>
-          <div class="small text-muted">استبيان لكل شعبة مسجّل بها</div>
+          <strong>١ — تقييم المقررات والأساتذة</strong>
+          <div class="small text-muted">استبيان منفصل لكل شعبة دراسية مسجّل بها — يُحسب في مؤشر رضا الطلاب</div>
         </div>
-        <a href="{{ course_eval_link }}" class="btn btn-primary">فتح التقييمات</a>
+        <a href="{{ course_eval_link }}" class="btn btn-primary">فتح تقييم المقررات</a>
       </div>
     </div>
     {% endif %}
 
-    <h6 class="mt-3">استبيانات أخرى مطلوبة</h6>
+    <h6 class="mt-2 mb-2">
+      {% if course_eval_link %}٢ — {% endif %}استبيانات عامة مطلوبة مني
+    </h6>
     {% if pending %}
     <div class="list-group mb-4">
       {% for p in pending %}
       <a href="{{ p.fill_url }}?semester={{ semester|urlencode }}" class="list-group-item list-group-item-action">
-        <div class="d-flex justify-content-between">
-          <span>{{ p.title_ar }}</span>
-          <span class="badge bg-warning text-dark">مطلوب</span>
+        <div class="d-flex justify-content-between align-items-center gap-2">
+          <div>
+            <span class="fw-semibold">{{ p.title_ar }}</span>
+            <div class="small text-muted">اضغط للتعبئة — تقييم سري (1–5)</div>
+          </div>
+          <span class="badge bg-warning text-dark">لم يُرسل بعد</span>
         </div>
       </a>
       {% endfor %}
     </div>
     {% else %}
-    <div class="alert alert-success">لا توجد استبيانات إضافية مطلوبة حالياً — شكراً لمشاركتك.</div>
+    <div class="alert alert-success mb-4">
+      {% if user_role in ('admin', 'admin_main') %}
+      لا توجد استبيانات تعبئة مرتبطة بحساب الإدارة.
+      راجع <a href="/academic_quality/surveys/results">نتائج الاستبيانات</a>
+      أو <a href="/academic_quality/survey_admin">إعداد البنود</a>.
+      {% else %}
+      أكملت جميع الاستبيانات المطلوبة منك لهذا الفصل — شكراً لمشاركتك.
+      {% endif %}
+    </div>
     {% endif %}
   </main>
 </body>

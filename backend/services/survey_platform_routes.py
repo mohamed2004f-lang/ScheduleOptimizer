@@ -11,6 +11,7 @@ from backend.core.auth import (
     role_required,
 )
 from backend.core.department_scope_policy import head_home_department_id, resolve_users_list_scope
+from backend.core.survey_platform import RESPONDENT_ROLE_LABELS, ROLE_SURVEY_FILL_GUIDE
 from backend.services.multi_surveys import (
     aggregate_template,
     get_template_by_code,
@@ -93,12 +94,19 @@ def register_survey_platform_routes(bp) -> None:
             course_eval_link = None
             if role == "student":
                 course_eval_link = "/students/evaluations/"
+            eff = survey_respondent_role(role)
+            fill_guide = ROLE_SURVEY_FILL_GUIDE.get(role) or ROLE_SURVEY_FILL_GUIDE.get(eff, "")
+            respondent_label = RESPONDENT_ROLE_LABELS.get(eff, role)
         return render_template(
             "survey_hub.html",
             pending=pending,
             semester=sem,
             user_role=role,
+            respondent_role=eff,
+            respondent_label=respondent_label,
+            fill_guide=fill_guide,
             course_eval_link=course_eval_link,
+            show_results_link=role in ("admin", "admin_main", "head_of_department"),
         )
 
     @bp.route("/surveys/fill/<template_code>", methods=["GET"])

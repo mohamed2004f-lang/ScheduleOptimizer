@@ -331,23 +331,65 @@
       </div>
 
       <div class="tab-pane fade" id="tabAdmin" role="tabpanel">
-        <div class="card mb-3 border-start border-dark border-4 d-none" id="importCatalogCard">
+        <div class="alert alert-secondary small mb-3">
+          <strong>دور تبويب «إدارة»:</strong> إعدادات الاعتماد على مستوى النظام والكتالوج — وليس تقييم المؤشرات (ذلك في تبويب <em>امتثال</em>)
+          أو الأدلة (<em>أدلة</em>). التقييمات اليومية في <em>إدخال يدوي</em> و<em>خطط التحسين</em>.
+        </div>
+
+        <div class="row g-3 mb-3">
+          <div class="col-md-6">
+            <div class="card h-100 border-primary">
+              <div class="card-header bg-light"><strong>ضمان الجودة والاستبيانات</strong></div>
+              <div class="card-body small d-flex flex-column gap-2">
+                <a class="btn btn-outline-primary btn-sm" href="/academic_quality/surveys?semester={{ map_data.semester|urlencode }}">تعبئة الاستبيانات (دوري)</a>
+                <a class="btn btn-outline-primary btn-sm" href="/academic_quality/surveys/results?semester={{ map_data.semester|urlencode }}">نتائج الاستبيانات (مجمّعة)</a>
+                <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/survey_admin">إعداد بنود الاستبيانات</a>
+                <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/dashboard">لوحة الجودة الأكاديمية</a>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="card h-100">
+              <div class="card-header bg-light"><strong>منسقو القسم (تشغيلياً)</strong></div>
+              <div class="card-body small">
+                <ul class="mb-2 ps-3">
+                  {% for role in coordinator_roles %}
+                  <li>{{ role.title_ar }} — {{ role.holder_ar }}
+                    {% if role.active_in_system %}<span class="badge bg-success">مدعوم</span>{% else %}<span class="badge bg-secondary">غير مفعّل</span>{% endif %}
+                  </li>
+                  {% endfor %}
+                </ul>
+                <p class="text-muted mb-0">تفعيل أدوار منسقي البحث/المجتمع كحسابات مستقلة — مرحلة لاحقة في «المستخدمون».</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {% if is_admin_main %}
+        <div class="card mb-3 border-start border-dark border-4" id="importCatalogCard">
           <div class="card-header bg-light">
-            <strong>استيراد كتالوج معايير من Excel (هـ-5)</strong>
-            <span class="text-muted small">— للمسؤول الرئيسي فقط</span>
+            <strong>كتالوج المعايير (هـ-5) — المسؤول الرئيسي</strong>
           </div>
           <div class="card-body small">
-            <p class="mb-2">
+            <p class="mb-2">تحديث معايير ومؤشرات الاعتماد من ملف Excel أو إعادة البذر الافتراضي.</p>
+            <div class="d-flex flex-wrap gap-2 mb-3">
               <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/api/accreditation/import_catalog/template">تنزيل قالب Excel</a>
-            </p>
+              <button type="button" class="btn btn-outline-primary btn-sm" id="btnEnsureCatalog">إعادة بذر الكتالوج الافتراضي</button>
+            </div>
             <div class="d-flex flex-wrap gap-2 align-items-center">
               <input type="file" class="form-control form-control-sm" id="importCatalogFile" accept=".xlsx,.xls" style="max-width:280px;">
               <label class="form-check-label"><input type="checkbox" class="form-check-input" id="importDeactivatePrev"> إيقاف إصدارات سابقة</label>
-              <button type="button" class="btn btn-dark btn-sm" id="btnImportCatalog">رفع واستيراد</button>
+              <button type="button" class="btn btn-dark btn-sm" id="btnImportCatalog">رفع واستيراد Excel</button>
             </div>
-            <p class="text-muted mt-2 mb-0">بعد الاستيراد اختر الإصدار من القائمة أعلى الصفحة.</p>
+            <p class="text-muted mt-2 mb-0">بعد الاستيراد اختر «إصدار المعايير» من أعلى الصفحة.</p>
           </div>
         </div>
+        {% else %}
+        <div class="alert alert-light border small mb-0">
+          <strong>رئيس القسم:</strong> استيراد/تحديث كتالوج المعايير من Excel متاح للمسؤول الرئيسي (<code>admin_main</code>) فقط.
+          يمكنك استخدام الروابط أعلاه لإدارة الاستبيانات ونتائجها ضمن نطاق القسم.
+        </div>
+        {% endif %}
       </div>
     </div>
   </main>
@@ -489,6 +531,8 @@
       statusLabels: {{ status_labels | tojson }},
       planStatusLabels: {{ plan_status_labels | tojson }},
       planPriorityLabels: {{ plan_priority_labels | tojson }},
+      userRole: {{ user_role | tojson }},
+      isAdminMain: {{ is_admin_main | tojson }},
     };
   </script>
   <script src="/static/js/accreditation_compliance_map.js?v=20260522"></script>

@@ -43,23 +43,84 @@ def _resolve_department_scope(conn) -> int | None:
     return None
 
 
+def _quality_scope_label(conn, department_id: int | None) -> str:
+    if department_id is None:
+        return "نطاق الكلية (مؤسسي)"
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT COALESCE(NULLIF(TRIM(name_ar), ''), NULLIF(TRIM(name), ''), code, '')
+        FROM departments WHERE id = ? LIMIT 1
+        """,
+        (int(department_id),),
+    ).fetchone()
+    name = (row[0] if row else "") or f"#{department_id}"
+    return f"قسم: {name}"
+
+
 @academic_quality_bp.route("/dashboard")
 @login_required
 @role_required("admin", "admin_main", "head_of_department")
 def quality_dashboard():
+    from backend.core.survey_platform import SURVEY_METRIC_LABELS
+
     semester = (request.args.get("semester") or "").strip()
-    with get_connection() as conn:
-        dept_id = _resolve_department_scope(conn)
-        metrics = compute_quality_metrics(
-            conn,
-            semester=semester or None,
-            department_id=dept_id,
-        )
-        critical = list_critical_courses(conn, metrics["semester"], dept_id)
+    page_error = None
+    metrics: dict = {}
+    critical: list = []
+    scope_label = ""
+    survey_cards: list = []
+    try:
+        with get_connection() as conn:
+            dept_id = _resolve_department_scope(conn)
+            metrics = compute_quality_metrics(
+                conn,
+                semester=semester or None,
+                department_id=dept_id,
+            )
+            critical = list_critical_courses(conn, metrics["semester"], dept_id)
+            scope_label = _quality_scope_label(conn, dept_id)
+            sm = metrics.get("survey_metrics") or {}
+            for code, label_ar in SURVEY_METRIC_LABELS.items():
+                item = sm.get(code) or {}
+                survey_cards.append(
+                    {
+                        "code": code,
+                        "label_ar": label_ar,
+                        "score_percent": item.get("score_percent"),
+                        "response_count": int(item.get("response_count") or 0),
+                        "aggregated": bool(item.get("aggregated")),
+                    }
+                )
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception("quality_dashboard failed")
+        page_error = "تعذر تحميل بعض المؤشرات — تحقق من الجداول أو أعد تشغيل التطبيق."
+        if not metrics:
+            metrics = {
+                "semester": semester or "",
+                "program_student_satisfaction": 0,
+                "program_course_reports_completion": 0,
+                "program_ilo_achievement": 0,
+                "program_graduation_rate": 0,
+                "institutional_faculty_qualifications": 0,
+                "institutional_student_to_faculty_ratio": None,
+                "institutional_infrastructure_rating": 0,
+                "overall_accreditation_score": 0,
+                "program_score": 0,
+                "institutional_score": 0,
+                "accreditation_status_ar": "—",
+                "evaluation_count": 0,
+                "survey_metrics": {},
+            }
     return render_template(
         "academic_quality_dashboard.html",
         metrics=metrics,
         critical_courses=critical,
+        scope_label=scope_label,
+        survey_cards=survey_cards,
+        page_error=page_error,
     )
 
 
@@ -98,16 +159,17 @@ def institutional_inputs():
         sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
         cur = conn.cursor()
         if request.method == "GET":
+            from backend.services.quality_metrics import _dept_filter_sql
+
+            dept_sql, dept_params = _dept_filter_sql(dept_id)
             row = cur.execute(
-                """
+                f"""
                 SELECT faculty_qualifications_percent, infrastructure_rating, notes
                 FROM quality_institutional_inputs
-                WHERE semester = ? AND (
-                    (? IS NULL AND department_id IS NULL) OR department_id = ?
-                )
+                WHERE semester = ? AND {dept_sql}
                 LIMIT 1
                 """,
-                (sem, dept_id, dept_id),
+                (sem, *dept_params),
             ).fetchone()
             if not row:
                 return jsonify({"status": "ok", "semester": sem, "inputs": {}})

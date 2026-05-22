@@ -9,6 +9,13 @@ from backend.database.database import fetch_table_columns, schedule_pk_column, t
 from backend.services.utilities import get_current_term, SEMESTER_LABEL
 
 
+def _dept_filter_sql(department_id: int | None) -> tuple[str, list[Any]]:
+    """فلتر department_id — متوافق مع PostgreSQL (تجنّب ? IS NULL)."""
+    if department_id is None:
+        return "department_id IS NULL", []
+    return "department_id = ?", [int(department_id)]
+
+
 def term_label_from_conn(conn) -> str:
     try:
         tname, tyear = get_current_term(conn=conn)
@@ -232,16 +239,15 @@ def _student_faculty_ratio(cur, department_id: int | None) -> float | None:
 
 
 def _institutional_inputs(cur, semester: str, department_id: int | None) -> dict:
+    dept_sql, dept_params = _dept_filter_sql(department_id)
     row = cur.execute(
-        """
+        f"""
         SELECT faculty_qualifications_percent, infrastructure_rating, notes
         FROM quality_institutional_inputs
-        WHERE semester = ? AND (
-            (? IS NULL AND department_id IS NULL) OR department_id = ?
-        )
+        WHERE semester = ? AND {dept_sql}
         LIMIT 1
         """,
-        (semester, department_id, department_id),
+        (semester, *dept_params),
     ).fetchone()
     if not row:
         return {}
@@ -321,6 +327,8 @@ def compute_quality_metrics(
         "institutional_student_to_faculty_ratio": ratio,
         "institutional_infrastructure_rating": round(infra, 1),
         "overall_accreditation_score": round(overall, 1),
+        "program_score": round(program_score, 1),
+        "institutional_score": round(inst_score, 1),
         "accreditation_status": status,
         "accreditation_status_ar": _status_label_ar(status),
         "evaluation_count": eval_count,
