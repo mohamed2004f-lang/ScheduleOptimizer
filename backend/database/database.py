@@ -1509,6 +1509,70 @@ TABLES_SCHEMA = {
         )
     """,
 
+    'survey_templates': """
+        CREATE TABLE IF NOT EXISTS survey_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL UNIQUE,
+            title_ar TEXT NOT NULL,
+            respondent_role TEXT NOT NULL,
+            subject_type TEXT NOT NULL,
+            is_anonymous INTEGER NOT NULL DEFAULT 1 CHECK (is_anonymous IN (0, 1)),
+            min_aggregate INTEGER NOT NULL DEFAULT 3,
+            department_scoped INTEGER NOT NULL DEFAULT 0 CHECK (department_scoped IN (0, 1)),
+            legacy_course_eval INTEGER NOT NULL DEFAULT 0 CHECK (legacy_course_eval IN (0, 1)),
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """,
+
+    'survey_questions': """
+        CREATE TABLE IF NOT EXISTS survey_questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            template_id INTEGER NOT NULL,
+            label_ar TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            question_type TEXT NOT NULL DEFAULT 'likert_5',
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (template_id) REFERENCES survey_templates(id) ON DELETE CASCADE
+        )
+    """,
+
+    'survey_responses': """
+        CREATE TABLE IF NOT EXISTS survey_responses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            template_id INTEGER NOT NULL,
+            template_code TEXT NOT NULL,
+            semester TEXT NOT NULL,
+            respondent_role TEXT NOT NULL,
+            respondent_id TEXT NOT NULL,
+            subject_type TEXT NOT NULL,
+            subject_id INTEGER NOT NULL DEFAULT 0,
+            department_id INTEGER,
+            comments TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'submitted',
+            submitted_by TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            submitted_at TEXT,
+            UNIQUE (template_code, semester, respondent_role, respondent_id, subject_type, subject_id),
+            FOREIGN KEY (template_id) REFERENCES survey_templates(id) ON DELETE RESTRICT
+        )
+    """,
+
+    'survey_answers': """
+        CREATE TABLE IF NOT EXISTS survey_answers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            response_id INTEGER NOT NULL,
+            question_id INTEGER NOT NULL,
+            rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+            UNIQUE (response_id, question_id),
+            FOREIGN KEY (response_id) REFERENCES survey_responses(id) ON DELETE CASCADE,
+            FOREIGN KEY (question_id) REFERENCES survey_questions(id) ON DELETE RESTRICT
+        )
+    """,
+
     'supervisor_quality_reports': """
         CREATE TABLE IF NOT EXISTS supervisor_quality_reports (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1826,6 +1890,9 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_eval_survey_q_sort ON evaluation_survey_questions(sort_order, is_active)",
     "CREATE INDEX IF NOT EXISTS idx_eval_survey_ans_eval ON evaluation_survey_answers(evaluation_id)",
     "CREATE INDEX IF NOT EXISTS idx_eval_survey_ans_q ON evaluation_survey_answers(question_id)",
+    "CREATE INDEX IF NOT EXISTS idx_survey_resp_sem ON survey_responses(template_code, semester)",
+    "CREATE INDEX IF NOT EXISTS idx_survey_resp_resp ON survey_responses(respondent_role, respondent_id)",
+    "CREATE INDEX IF NOT EXISTS idx_survey_ans_resp ON survey_answers(response_id)",
     "CREATE INDEX IF NOT EXISTS idx_supervisor_quality_sem ON supervisor_quality_reports(supervisor_instructor_id, semester)",
     "CREATE INDEX IF NOT EXISTS idx_quality_metrics_sem_dept ON quality_metrics_snapshots(semester, department_id)",
     "CREATE INDEX IF NOT EXISTS idx_accred_std_domain ON accreditation_standards(domain_code, catalog_version)",
@@ -2577,6 +2644,74 @@ def _ensure_tables_postgresql() -> None:
                         REFERENCES course_evaluations(id) ON DELETE CASCADE,
                     CONSTRAINT esa_question_fk FOREIGN KEY (question_id)
                         REFERENCES evaluation_survey_questions(id) ON DELETE RESTRICT
+                )
+                """,
+            ),
+            (
+                "survey_templates",
+                """
+                CREATE TABLE IF NOT EXISTS survey_templates (
+                    id BIGSERIAL PRIMARY KEY,
+                    code TEXT NOT NULL UNIQUE,
+                    title_ar TEXT NOT NULL,
+                    respondent_role TEXT NOT NULL,
+                    subject_type TEXT NOT NULL,
+                    is_anonymous INTEGER NOT NULL DEFAULT 1 CHECK (is_anonymous IN (0, 1)),
+                    min_aggregate INTEGER NOT NULL DEFAULT 3,
+                    department_scoped INTEGER NOT NULL DEFAULT 0 CHECK (department_scoped IN (0, 1)),
+                    legacy_course_eval INTEGER NOT NULL DEFAULT 0 CHECK (legacy_course_eval IN (0, 1)),
+                    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
+            ),
+            (
+                "survey_questions",
+                """
+                CREATE TABLE IF NOT EXISTS survey_questions (
+                    id BIGSERIAL PRIMARY KEY,
+                    template_id BIGINT NOT NULL REFERENCES survey_templates(id) ON DELETE CASCADE,
+                    label_ar TEXT NOT NULL,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    question_type TEXT NOT NULL DEFAULT 'likert_5',
+                    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
+            ),
+            (
+                "survey_responses",
+                """
+                CREATE TABLE IF NOT EXISTS survey_responses (
+                    id BIGSERIAL PRIMARY KEY,
+                    template_id BIGINT NOT NULL REFERENCES survey_templates(id) ON DELETE RESTRICT,
+                    template_code TEXT NOT NULL,
+                    semester TEXT NOT NULL,
+                    respondent_role TEXT NOT NULL,
+                    respondent_id TEXT NOT NULL,
+                    subject_type TEXT NOT NULL,
+                    subject_id BIGINT NOT NULL DEFAULT 0,
+                    department_id BIGINT,
+                    comments TEXT DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'submitted',
+                    submitted_by TEXT DEFAULT '',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    submitted_at TEXT,
+                    UNIQUE (template_code, semester, respondent_role, respondent_id, subject_type, subject_id)
+                )
+                """,
+            ),
+            (
+                "survey_answers",
+                """
+                CREATE TABLE IF NOT EXISTS survey_answers (
+                    id BIGSERIAL PRIMARY KEY,
+                    response_id BIGINT NOT NULL REFERENCES survey_responses(id) ON DELETE CASCADE,
+                    question_id BIGINT NOT NULL REFERENCES survey_questions(id) ON DELETE RESTRICT,
+                    rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+                    UNIQUE (response_id, question_id)
                 )
                 """,
             ),

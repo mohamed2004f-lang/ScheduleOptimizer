@@ -3,19 +3,53 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>إدارة استبيان تقييم المقررات</title>
+  <title>إدارة بنود الاستبيانات</title>
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   {% include "base_nav.html" %}
   <main class="container-main container-900 theme-formal mt-4">
+    <nav aria-label="breadcrumb" class="mb-2">
+      <ol class="breadcrumb small mb-0">
+        <li class="breadcrumb-item">ضمان الجودة والاعتماد</li>
+        <li class="breadcrumb-item active" aria-current="page">إدارة بنود الاستبيانات</li>
+      </ol>
+    </nav>
+
     <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
       <div>
-        <h1 class="page-title h4 mb-1"><i class="fa-solid fa-list-check text-primary"></i> إدارة بنود الاستبيان</h1>
-        <p class="text-muted small mb-0">البنود النشطة فقط تظهر للطالب. البنود ذات إجابات لا تُحذف — يُفضّل إيقافها.</p>
+        <h1 class="page-title h4 mb-1"><i class="fa-solid fa-list-check text-primary"></i> إدارة بنود الاستبيانات</h1>
+        <p class="text-muted small mb-0">اختر الاستبيان من القائمة ثم أضف/عدّل/رتّب البنود. البنود النشطة فقط تظهر للمُقيِّم.</p>
       </div>
-      <a href="/academic_quality/dashboard" class="btn btn-outline-secondary btn-sm">لوحة الجودة</a>
+      <div class="d-flex gap-2">
+        <a href="/academic_quality/surveys" class="btn btn-outline-primary btn-sm">صفحة الاستبيانات</a>
+        <a href="/academic_quality/dashboard" class="btn btn-outline-secondary btn-sm">لوحة الجودة</a>
+      </div>
+    </div>
+
+    <div class="card shadow-sm mb-4">
+      <div class="card-body">
+        <label for="templateSelect" class="form-label fw-bold">الاستبيان</label>
+        <select id="templateSelect" class="form-select">
+          {% for t in templates %}
+          <option value="{{ t.code }}" {% if t.code == template_code %}selected{% endif %}>
+            {{ t.title_ar }} ({{ t.code }})
+          </option>
+          {% endfor %}
+        </select>
+        <div class="small text-muted mt-2" id="templateMeta">
+          {% if selected_template %}
+          <span>يُعبّأ بواسطة: <strong>{{ respondent_label }}</strong></span>
+          · <span>حد التجميع: {{ selected_template.min_aggregate }} إجابات</span>
+          {% if selected_template.legacy_course_eval %}
+          · <span class="text-info">مسار الطالب: <a href="/students/evaluations/">تقييم المقررات</a></span>
+          {% else %}
+          · <span class="text-info">مسار الإدخال: <a href="/academic_quality/surveys/fill/{{ template_code }}">معاينة النموذج</a></span>
+          {% endif %}
+          {% endif %}
+        </div>
+      </div>
     </div>
 
     <div class="card shadow-sm mb-4">
@@ -29,21 +63,21 @@
     </div>
 
     <div class="card shadow-sm">
-      <div class="card-header bg-light d-flex justify-content-between align-items-center">
-        <span>البنود (اسحب للترتيب)</span>
+      <div class="card-header bg-light d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span>بنود: <strong id="templateTitle">{{ selected_template.title_ar if selected_template else '' }}</strong></span>
         <button type="button" class="btn btn-sm btn-success" id="btnSaveOrder" disabled>حفظ الترتيب</button>
       </div>
       <ul class="list-group list-group-flush" id="questionList">
         {% for q in questions %}
-        <li class="list-group-item" data-id="{{ q.id }}" draggable="true">
+        <li class="list-group-item {% if not q.is_active %}list-group-item-secondary{% endif %}" data-id="{{ q.id }}" draggable="true">
           <div class="d-flex align-items-start gap-2">
             <span class="text-muted drag-handle" title="سحب"><i class="fa-solid fa-grip-vertical"></i></span>
             <div class="flex-grow-1">
               <input type="text" class="form-control form-control-sm label-input" value="{{ q.label_ar }}" data-id="{{ q.id }}">
-              <small class="text-muted">#{{ q.id }}{% if q.legacy_key %} — مفتاح قديم: {{ q.legacy_key }}{% endif %}</small>
+              <small class="text-muted">#{{ q.id }}{% if q.legacy_key %} — مفتاح: {{ q.legacy_key }}{% endif %}</small>
             </div>
-            <div class="btn-group btn-group-sm">
-              <button type="button" class="btn btn-outline-primary btn-save-label" data-id="{{ q.id }}">حفظ النص</button>
+            <div class="btn-group btn-group-sm flex-wrap">
+              <button type="button" class="btn btn-outline-primary btn-save-label" data-id="{{ q.id }}">حفظ</button>
               <button type="button" class="btn btn-outline-secondary btn-toggle" data-id="{{ q.id }}" data-active="{{ q.is_active }}">
                 {% if q.is_active %}إيقاف{% else %}تفعيل{% endif %}
               </button>
@@ -52,25 +86,42 @@
           </div>
         </li>
         {% else %}
-        <li class="list-group-item text-muted text-center">لا توجد بنود — سيتم إنشاء البنود الافتراضية عند التحميل.</li>
+        <li class="list-group-item text-muted text-center" id="emptyMsg">لا توجد بنود — أضف بنداً أو انتظر البذر الافتراضي.</li>
         {% endfor %}
       </ul>
     </div>
   </main>
   <script>
+    const templateSelect = document.getElementById('templateSelect');
+    const initialCode = {{ template_code|tojson }};
+
+    function currentTemplate() {
+      return (templateSelect?.value || initialCode || 'student_course').trim();
+    }
+
+    function apiQs() {
+      return '?template=' + encodeURIComponent(currentTemplate());
+    }
+
     function hdr() {
       const c = document.querySelector('meta[name=csrf-token]')?.content || '';
       const h = { 'Content-Type': 'application/json' };
       if (c) h['X-CSRFToken'] = c;
       return h;
     }
+
+    templateSelect?.addEventListener('change', () => {
+      window.location.href = '/academic_quality/survey_admin?template=' + encodeURIComponent(currentTemplate());
+    });
+
     const list = document.getElementById('questionList');
     let orderDirty = false;
     let dragEl = null;
 
     function setOrderDirty(v) {
       orderDirty = v;
-      document.getElementById('btnSaveOrder').disabled = !v;
+      const btn = document.getElementById('btnSaveOrder');
+      if (btn) btn.disabled = !v;
     }
 
     function currentOrder() {
@@ -97,7 +148,7 @@
     document.getElementById('btnSaveOrder')?.addEventListener('click', async () => {
       const r = await fetch('/academic_quality/api/survey_questions/reorder', {
         method: 'POST', credentials: 'include', headers: hdr(),
-        body: JSON.stringify({ order: currentOrder() })
+        body: JSON.stringify({ order: currentOrder(), template_code: currentTemplate() })
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { alert(j.message || 'فشل حفظ الترتيب'); return; }
@@ -110,23 +161,24 @@
       if (!label) { alert('أدخل نص البند'); return; }
       const r = await fetch('/academic_quality/api/survey_questions', {
         method: 'POST', credentials: 'include', headers: hdr(),
-        body: JSON.stringify({ label_ar: label })
+        body: JSON.stringify({ label_ar: label, template_code: currentTemplate() })
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { alert(j.message || 'فشل الإضافة'); return; }
-      location.reload();
+      location.href = '/academic_quality/survey_admin?template=' + encodeURIComponent(currentTemplate());
     });
 
     list?.addEventListener('click', async e => {
       const saveBtn = e.target.closest('.btn-save-label');
       const toggleBtn = e.target.closest('.btn-toggle');
       const delBtn = e.target.closest('.btn-delete');
+      const tc = currentTemplate();
       if (saveBtn) {
         const id = saveBtn.dataset.id;
-        const inp = list.querySelector(`.label-input[data-id="${id}"]`);
-        const r = await fetch(`/academic_quality/api/survey_questions/${id}`, {
+        const inp = list.querySelector('.label-input[data-id="' + id + '"]');
+        const r = await fetch('/academic_quality/api/survey_questions/' + id + apiQs(), {
           method: 'PUT', credentials: 'include', headers: hdr(),
-          body: JSON.stringify({ label_ar: inp.value.trim() })
+          body: JSON.stringify({ label_ar: inp.value.trim(), template_code: tc })
         });
         const j = await r.json().catch(() => ({}));
         alert(r.ok ? 'تم حفظ النص' : (j.message || 'فشل'));
@@ -135,23 +187,23 @@
       if (toggleBtn) {
         const id = toggleBtn.dataset.id;
         const active = parseInt(toggleBtn.dataset.active, 10);
-        const r = await fetch(`/academic_quality/api/survey_questions/${id}`, {
+        const r = await fetch('/academic_quality/api/survey_questions/' + id + apiQs(), {
           method: 'PUT', credentials: 'include', headers: hdr(),
-          body: JSON.stringify({ is_active: active ? 0 : 1 })
+          body: JSON.stringify({ is_active: active ? 0 : 1, template_code: tc })
         });
         if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.message || 'فشل'); return; }
-        location.reload();
+        location.href = '/academic_quality/survey_admin?template=' + encodeURIComponent(tc);
         return;
       }
       if (delBtn) {
         if (!confirm('حذف هذا البند؟ (يُرفض إن وُجدت إجابات سابقة)')) return;
         const id = delBtn.dataset.id;
-        const r = await fetch(`/academic_quality/api/survey_questions/${id}`, {
+        const r = await fetch('/academic_quality/api/survey_questions/' + id + apiQs(), {
           method: 'DELETE', credentials: 'include', headers: hdr()
         });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) { alert(j.message || 'تعذر الحذف'); return; }
-        location.reload();
+        location.href = '/academic_quality/survey_admin?template=' + encodeURIComponent(tc);
       }
     });
   </script>

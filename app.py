@@ -109,6 +109,17 @@ print("ACTIVE DATABASE:", ("PostgreSQL — " + tail) if is_postgresql() else tai
 
 # تهيئة الجداول
 ensure_tables()
+try:
+    from backend.services.utilities import get_connection
+    from backend.services.multi_surveys import ensure_survey_templates_seeded
+
+    with get_connection() as _conn:
+        ensure_survey_templates_seeded(_conn)
+        from backend.services.evaluation_survey import ensure_survey_questions_seeded
+
+        ensure_survey_questions_seeded(_conn)
+except Exception as _survey_seed_exc:
+    logging.getLogger(__name__).warning("Survey platform seed skipped: %s", _survey_seed_exc)
 
 # إغلاق connection pool عند إيقاف التطبيق
 atexit.register(close_pool)

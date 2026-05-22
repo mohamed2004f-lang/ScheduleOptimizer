@@ -20,12 +20,18 @@ LEGACY_EVAL_KEYS = frozenset(
     }
 )
 
-DEFAULT_SURVEY_SEED: list[tuple[str, str, int]] = [
-    ("instructor_punctuality", "التزام الأستاذ بمواعيد المحاضرات", 10),
-    ("communication_quality", "وضوح شرح الأستاذ للمادة", 20),
-    ("course_clarity", "وضوح مفردات المقرر وتطابقها مع التدريس", 30),
-    ("assessment_fairness", "عدالة وشفافية التقييم", 40),
-    ("material_relevance", "ملاءمة المواد والمراجع", 50),
+# 10 بنود — مستوحاة من إطار IDEA/SERU لتقييم التدريس والمقرر
+DEFAULT_SURVEY_SEED: list[tuple[str | None, str, int]] = [
+    ("instructor_punctuality", "التزام الأستاذ بمواعيد المحاضرات والحضور الفعلي", 10),
+    ("communication_quality", "وضوح الشرح وإتقان توصيل المفاهيم الأساسية", 20),
+    ("course_clarity", "وضوح أهداف المقرر وتوافق المحتوى مع ما يُدرَّس", 30),
+    ("assessment_fairness", "عدالة التقييم وشفافية معاييره وتطبيقها", 40),
+    ("material_relevance", "ملاءمة المواد التعليمية والمراجع لمخرجات المقرر", 50),
+    ("student_engagement", "تحفيز التفاعل والمشاركة الصفية النشطة", 60),
+    ("feedback_timeliness", "تقديم تغذية راجعة بنّاءة في وقت مناسب", 70),
+    ("critical_thinking", "تعزيز التفكير النقدي وحل المشكلات", 80),
+    ("instructor_professionalism", "الاحترافية والالتزام بأخلاقيات التعليم", 90),
+    ("learning_contribution", "المساهمة الإجمالية في تحقيق مخرجات التعلم للمقرر", 100),
 ]
 
 
@@ -43,20 +49,70 @@ def ensure_survey_questions_seeded(conn) -> None:
     cur = conn.cursor()
     n = cur.execute("SELECT COUNT(*) FROM evaluation_survey_questions").fetchone()
     count = int((n[0] if n else 0) or 0)
-    if count > 0:
-        return
     now = datetime.datetime.utcnow().isoformat()
-    for legacy_key, label_ar, sort_order in DEFAULT_SURVEY_SEED:
+    if count == 0:
+        for legacy_key, label_ar, sort_order in DEFAULT_SURVEY_SEED:
+            cur.execute(
+                """
+                INSERT INTO evaluation_survey_questions
+                    (legacy_key, label_ar, sort_order, is_active, question_type, created_at, updated_at)
+                VALUES (?, ?, ?, 1, 'likert_5', ?, ?)
+                """,
+                (legacy_key, label_ar, sort_order, now, now),
+            )
+        conn.commit()
+        logger.info("Seeded %s default evaluation survey questions", len(DEFAULT_SURVEY_SEED))
+        return
+    _upgrade_course_eval_questions(conn)
+
+
+def _upgrade_course_eval_questions(conn) -> None:
+    """إضافة بنود البذر الناقصة دون المساس بالبنود المخصّصة أو التي لها إجابات."""
+    from backend.core.survey_platform import SURVEY_QUESTIONS_TARGET_COUNT
+
+    cur = conn.cursor()
+    rows = cur.execute(
+        "SELECT id, legacy_key, label_ar FROM evaluation_survey_questions"
+    ).fetchall()
+    if len(rows) >= SURVEY_QUESTIONS_TARGET_COUNT:
+        return
+    existing_keys = {
+        (r[1] if not hasattr(r, "keys") else r["legacy_key"] or "").strip()
+        for r in rows
+    }
+    existing_labels = {
+        (r[2] if not hasattr(r, "keys") else r["label_ar"] or "").strip()
+        for r in rows
+    }
+    max_sort = cur.execute(
+        "SELECT COALESCE(MAX(sort_order), 0) FROM evaluation_survey_questions"
+    ).fetchone()
+    sort_order = int((max_sort[0] if max_sort else 0) or 0)
+    added = 0
+    now = datetime.datetime.utcnow().isoformat()
+    for legacy_key, label_ar, seed_sort in DEFAULT_SURVEY_SEED:
+        label = label_ar.strip()
+        lk = (legacy_key or "").strip() or None
+        if lk and lk in existing_keys:
+            continue
+        if label in existing_labels:
+            continue
+        sort_order = max(sort_order + 10, seed_sort)
         cur.execute(
             """
             INSERT INTO evaluation_survey_questions
                 (legacy_key, label_ar, sort_order, is_active, question_type, created_at, updated_at)
             VALUES (?, ?, ?, 1, 'likert_5', ?, ?)
             """,
-            (legacy_key, label_ar, sort_order, now, now),
+            (lk, label, sort_order, now, now),
         )
-    conn.commit()
-    logger.info("Seeded %s default evaluation survey questions", len(DEFAULT_SURVEY_SEED))
+        if lk:
+            existing_keys.add(lk)
+        existing_labels.add(label)
+        added += 1
+    if added:
+        conn.commit()
+        logger.info("Upgraded course evaluation survey: added %s questions", added)
 
 
 def list_survey_questions(conn, *, active_only: bool = False) -> list[dict]:

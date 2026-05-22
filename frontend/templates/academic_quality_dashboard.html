@@ -21,7 +21,9 @@
         <a class="btn btn-outline-primary" href="/academic_quality/export/institutional.pdf">تقرير مؤسسي PDF</a>
         <a class="btn btn-outline-primary" href="/academic_quality/accreditation/map">خريطة الامتثال المؤسسي</a>
         <a class="btn btn-outline-secondary" href="/ilo_catalog_page">كتالوج المخرجات</a>
-        <a class="btn btn-outline-secondary" href="/academic_quality/survey_admin">إدارة استبيان التقييم</a>
+        <a class="btn btn-outline-secondary" href="/academic_quality/survey_admin">إدارة بنود الاستبيانات</a>
+        <a class="btn btn-outline-secondary" href="/academic_quality/surveys/results">نتائج الاستبيانات</a>
+        <a class="btn btn-outline-info" href="/academic_quality/surveys/export.xlsx">تصدير استبيانات</a>
         <button type="button" class="btn btn-outline-primary" id="btnSnapshot">حفظ لقطة</button>
         <button type="button" class="btn btn-outline-secondary" id="btnInstInputs">إدخالات مؤسسية</button>
       </div>
@@ -46,7 +48,10 @@
     <div class="tab-content">
       <div class="tab-pane fade show active" id="tabProgram">
         <div class="row g-3 mb-4">
-          <div class="col-md-3"><div class="card"><div class="card-body"><small>رضا الطلاب</small><h3>{{ metrics.program_student_satisfaction }}%</h3><small>{{ metrics.evaluation_count }} استبيان</small></div></div></div>
+          <div class="col-md-3"><div class="card"><div class="card-body"><small>رضا الطلاب (مقرر)</small><h3>{{ metrics.program_student_satisfaction }}%</h3><small>{{ metrics.evaluation_count }} تقييم مقرر</small></div></div></div>
+          {% if metrics.survey_metrics and metrics.survey_metrics.get('student_services') %}
+          <div class="col-md-3"><div class="card"><div class="card-body"><small>خدمات الطالب (استبيان)</small><h3>{{ metrics.survey_metrics.student_services.score_percent or '—' }}{% if metrics.survey_metrics.student_services.score_percent %}%{% endif %}</h3><small>{{ metrics.survey_metrics.student_services.response_count }} إجابة</small></div></div></div>
+          {% endif %}
           <div class="col-md-3"><div class="card"><div class="card-body"><small>تقارير الإقفال</small><h3>{{ metrics.program_course_reports_completion }}%</h3></div></div></div>
           <div class="col-md-3"><div class="card"><div class="card-body"><small>مخرجات التعلم</small><h3>{{ metrics.program_ilo_achievement }}%</h3></div></div></div>
           <div class="col-md-3"><div class="card"><div class="card-body"><small>التخرج (تقريبي)</small><h3>{{ metrics.program_graduation_rate }}%</h3></div></div></div>

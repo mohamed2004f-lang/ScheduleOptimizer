@@ -10,12 +10,15 @@ from backend.core.auth import login_required, role_required, current_supervisor_
 from backend.core.department_scope_policy import head_home_department_id, resolve_users_list_scope
 from backend.core.auth import get_admin_department_scope_id
 from backend.services.utilities import get_connection, pdf_response_from_html
-from backend.services.evaluation_survey import (
-    create_survey_question,
-    delete_survey_question,
-    list_survey_questions,
-    reorder_survey_questions,
-    update_survey_question,
+from backend.core.survey_platform import RESPONDENT_ROLE_LABELS
+from backend.services.multi_surveys import (
+    create_admin_question,
+    delete_admin_question,
+    get_template_by_code,
+    list_admin_questions,
+    list_templates,
+    reorder_admin_questions,
+    update_admin_question,
 )
 from backend.services.quality_metrics import (
     compute_quality_metrics,
@@ -301,42 +304,94 @@ def supervisor_report_page():
     return render_template("supervisor_quality_report.html")
 
 
+def _survey_admin_template_code() -> str:
+    return (
+        (request.args.get("template") or request.args.get("template_code") or "").strip()
+        or "student_course"
+    )
+
+
 @academic_quality_bp.route("/survey_admin")
 @login_required
 @role_required("admin", "admin_main", "head_of_department")
 def survey_admin_page():
+    template_code = _survey_admin_template_code()
     with get_connection() as conn:
-        questions = list_survey_questions(conn)
-    return render_template("evaluation_survey_admin.html", questions=questions)
+        templates = list_templates(conn, active_only=False)
+        try:
+            questions = list_admin_questions(conn, template_code)
+        except ValueError:
+            questions = []
+            template_code = "student_course"
+            questions = list_admin_questions(conn, template_code)
+        selected = get_template_by_code(conn, template_code) or {}
+        resp_label = RESPONDENT_ROLE_LABELS.get(
+            (selected.get("respondent_role") or "").strip(), "—"
+        )
+    return render_template(
+        "evaluation_survey_admin.html",
+        questions=questions,
+        templates=templates,
+        selected_template=selected,
+        template_code=template_code,
+        respondent_label=resp_label,
+    )
+
+
+@academic_quality_bp.route("/api/survey_templates")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def survey_templates_api():
+    with get_connection() as conn:
+        templates = list_templates(conn, active_only=False)
+    return jsonify({"status": "ok", "templates": templates})
 
 
 @academic_quality_bp.route("/api/survey_questions", methods=["GET", "POST"])
 @login_required
 @role_required("admin", "admin_main", "head_of_department")
 def survey_questions_api():
+    template_code = _survey_admin_template_code()
+    body: dict = {}
+    if request.method == "POST":
+        body = request.get_json(force=True) or {}
+        template_code = (body.get("template_code") or body.get("template") or template_code).strip()
     with get_connection() as conn:
         if request.method == "GET":
-            return jsonify({"status": "ok", "questions": list_survey_questions(conn)})
-        data = request.get_json(force=True) or {}
-        label = (data.get("label_ar") or "").strip()
+            try:
+                questions = list_admin_questions(conn, template_code)
+            except ValueError as e:
+                return jsonify({"status": "error", "message": str(e)}), 400
+            tpl = get_template_by_code(conn, template_code)
+            return jsonify(
+                {
+                    "status": "ok",
+                    "template_code": template_code,
+                    "template": tpl,
+                    "questions": questions,
+                }
+            )
+        label = (body.get("label_ar") or "").strip()
         try:
-            q = create_survey_question(conn, label)
+            q = create_admin_question(conn, template_code, label)
         except ValueError as e:
             return jsonify({"status": "error", "message": str(e)}), 400
-    return jsonify({"status": "ok", "question": q})
+    return jsonify({"status": "ok", "template_code": template_code, "question": q})
 
 
 @academic_quality_bp.route("/api/survey_questions/<int:question_id>", methods=["PUT", "DELETE"])
 @login_required
 @role_required("admin", "admin_main", "head_of_department")
 def survey_question_item_api(question_id: int):
+    template_code = _survey_admin_template_code()
     with get_connection() as conn:
         if request.method == "DELETE":
-            ok, msg = delete_survey_question(conn, question_id)
+            ok, msg = delete_admin_question(conn, template_code, question_id)
             if not ok:
                 return jsonify({"status": "error", "message": msg}), 409
             return jsonify({"status": "ok"})
         data = request.get_json(force=True) or {}
+        template_code = (data.get("template_code") or data.get("template") or template_code).strip()
         label = data.get("label_ar")
         is_active = data.get("is_active")
         if is_active is not None:
@@ -345,8 +400,9 @@ def survey_question_item_api(question_id: int):
             except (TypeError, ValueError):
                 is_active = None
         try:
-            q = update_survey_question(
+            q = update_admin_question(
                 conn,
+                template_code,
                 question_id,
                 label_ar=label if label is not None else None,
                 is_active=is_active,
@@ -363,19 +419,23 @@ def survey_question_item_api(question_id: int):
 @role_required("admin", "admin_main", "head_of_department")
 def survey_questions_reorder_api():
     data = request.get_json(force=True) or {}
+    template_code = (data.get("template_code") or data.get("template") or _survey_admin_template_code()).strip()
     order = data.get("order") or data.get("ordered_ids") or []
     if not isinstance(order, list):
         return jsonify({"status": "error", "message": "صيغة الترتيب غير صالحة"}), 400
     with get_connection() as conn:
         try:
-            questions = reorder_survey_questions(conn, order)
+            questions = reorder_admin_questions(conn, template_code, order)
         except ValueError as e:
             return jsonify({"status": "error", "message": str(e)}), 400
-    return jsonify({"status": "ok", "questions": questions})
+    return jsonify({"status": "ok", "template_code": template_code, "questions": questions})
 
 
 from backend.services.institutional_accreditation import (  # noqa: E402
     register_institutional_accreditation_routes,
 )
 
+from backend.services.survey_platform_routes import register_survey_platform_routes  # noqa: E402
+
+register_survey_platform_routes(academic_quality_bp)
 register_institutional_accreditation_routes(academic_quality_bp)

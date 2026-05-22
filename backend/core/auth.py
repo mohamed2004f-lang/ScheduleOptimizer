@@ -187,9 +187,9 @@ def _normalize_role(role: str) -> str:
         return "admin_main"
     if k == "head_of_department" or k_norm == "head_of_department" or k in _HEAD_ROLE_ALIASES or k_norm in _HEAD_ROLE_ALIASES:
         return "head_of_department"
-    if k in ("instructor", "student", "supervisor", "admin_main"):
+    if k in ("instructor", "student", "supervisor", "admin_main", "staff"):
         return k
-    if k_norm in ("instructor", "student", "supervisor", "admin_main"):
+    if k_norm in ("instructor", "student", "supervisor", "admin_main", "staff"):
         return k_norm
     return r
 
@@ -364,6 +364,8 @@ def compute_capabilities(
             "nav_ilo_catalog": staff_quality,
             "nav_supervisor_quality_report": bool(is_supervisor_effective),
             "nav_student_course_evaluations": False,
+            "nav_surveys_hub": hod_mode in ("head", "instructor") or has_ins,
+            "nav_surveys_results": staff_quality,
             "is_supervisor_effective": bool(is_supervisor_effective),
             "is_instructor_or_supervisor_nav": inst_sup_nav,
             "can_switch_active_mode": can_switch,
@@ -402,6 +404,8 @@ def compute_capabilities(
         "nav_ilo_catalog": staff_quality,
         "nav_supervisor_quality_report": bool(is_supervisor_effective),
         "nav_student_course_evaluations": role == "student",
+        "nav_surveys_hub": role in ("student", "instructor", "staff", "head_of_department"),
+        "nav_surveys_results": staff_quality,
         "nav_dashboard": role != "student",
         "nav_admin_settings": role != "student",
         "nav_student_affairs_menu": role != "student",

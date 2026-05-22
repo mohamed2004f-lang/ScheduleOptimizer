@@ -301,6 +301,15 @@ def compute_quality_metrics(
     ).fetchone()
     eval_count = int(_row_val(eval_count_row, 0) or 0)
 
+    survey_metrics: dict[str, Any] = {}
+    try:
+        from backend.services.multi_surveys import survey_metrics_for_quality
+
+        if table_exists(conn, "survey_responses"):
+            survey_metrics = survey_metrics_for_quality(conn, sem, department_id)
+    except Exception:
+        survey_metrics = {}
+
     return {
         "semester": sem,
         "department_id": department_id,
@@ -316,6 +325,7 @@ def compute_quality_metrics(
         "accreditation_status_ar": _status_label_ar(status),
         "evaluation_count": eval_count,
         "institutional_inputs": inst,
+        "survey_metrics": survey_metrics,
     }
 
 

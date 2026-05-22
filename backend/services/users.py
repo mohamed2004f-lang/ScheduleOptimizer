@@ -823,7 +823,7 @@ def add_user():
             jsonify({"status": "error", "message": "username مطلوب"}),
             400,
         )
-    if role not in ("admin_main", "head_of_department", "instructor", "student"):
+    if role not in ("admin_main", "head_of_department", "instructor", "student", "staff"):
         return (
             jsonify({"status": "error", "message": "role غير صحيح"}),
             400,

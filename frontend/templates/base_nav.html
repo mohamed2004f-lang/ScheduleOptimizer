@@ -226,8 +226,10 @@
           </a>
           <ul class="dropdown-menu" aria-labelledby="qualityAccreditationMenu">
             <li><a class="dropdown-item" id="navAcademicQuality" href="/academic_quality/dashboard" style="display:none;">لوحة الجودة</a></li>
+            <li><a class="dropdown-item" id="navSurveysHub" href="/academic_quality/surveys" style="display:none;">الاستبيانات</a></li>
             <li><a class="dropdown-item" id="navAccreditationMap" href="/academic_quality/accreditation/map" style="display:none;">خريطة الامتثال المؤسسي</a></li>
-            <li><a class="dropdown-item" id="navEvaluationSurveyAdmin" href="/academic_quality/survey_admin" style="display:none;">إدارة استبيان التقييم</a></li>
+            <li><a class="dropdown-item" id="navSurveysResults" href="/academic_quality/surveys/results" style="display:none;">نتائج الاستبيانات</a></li>
+            <li><a class="dropdown-item" id="navEvaluationSurveyAdmin" href="/academic_quality/survey_admin" style="display:none;">إدارة بنود الاستبيانات</a></li>
             <li><a class="dropdown-item" id="navIloCatalog" href="/ilo_catalog_page" style="display:none;">كتالوج مخرجات التعلم</a></li>
           </ul>
         </li>
@@ -342,7 +344,7 @@
       // إخفاء بعض الروابط — يُفضّل capabilities من الخادم؛ احتياطياً منطق الأدوار القديم
       let navUsers = false, navSup = false, navRules = false, navCollegeCatalog = false;
       let showCourseReg = false, showScheduleVersions = false, showExamArch = false, showGradeDrafts = false;
-      let showClosureReports = false, showFacultyScorecards = false, showFacultyDossier = false, showQualityDash = false, showSurveyAdmin = false, showIloCatalog = false, showSupQuality = false, showStudentEvals = false;
+      let showClosureReports = false, showFacultyScorecards = false, showFacultyDossier = false, showQualityDash = false, showSurveyAdmin = false, showIloCatalog = false, showSupQuality = false, showStudentEvals = false, showSurveysHub = false, showSurveysResults = false;
       let canDeptScope = false;
       let isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(data.is_supervisor || 0) === 1);
       const isStudentUi = (caps && caps.v >= 1) ? !!caps.is_student : (role === 'student');
@@ -363,6 +365,8 @@
         showIloCatalog = !!caps.nav_ilo_catalog;
         showSupQuality = !!caps.nav_supervisor_quality_report;
         showStudentEvals = !!caps.nav_student_course_evaluations;
+        showSurveysHub = !!caps.nav_surveys_hub;
+        showSurveysResults = !!caps.nav_surveys_results;
         isSupervisor = !!caps.is_supervisor_effective;
         canDeptScope = !!caps.can_switch_department_scope;
       } else {
@@ -382,6 +386,8 @@
         showIloCatalog = showCourseReg;
         showSupQuality = isSupervisor;
         showStudentEvals = role === 'student';
+        showSurveysHub = ['student', 'instructor', 'staff', 'head_of_department'].includes(role || '');
+        showSurveysResults = ['admin', 'admin_main', 'head_of_department'].includes(role || '');
         canDeptScope = (role === 'admin' || role === 'admin_main');
       }
       const showMyCourses = (caps && caps.v >= 1 && caps.nav_my_assigned_courses) || role === 'instructor';
@@ -438,8 +444,12 @@
       if (elQuality) elQuality.style.display = showQualityDash ? '' : 'none';
       const elAccredMap = document.getElementById('navAccreditationMap');
       if (elAccredMap) elAccredMap.style.display = showQualityDash ? '' : 'none';
+      const elSurveysHub = document.getElementById('navSurveysHub');
+      if (elSurveysHub) elSurveysHub.style.display = showSurveysHub ? '' : 'none';
       const elSurveyAdmin = document.getElementById('navEvaluationSurveyAdmin');
       if (elSurveyAdmin) elSurveyAdmin.style.display = showSurveyAdmin ? '' : 'none';
+      const elSurveysResults = document.getElementById('navSurveysResults');
+      if (elSurveysResults) elSurveysResults.style.display = showSurveysResults ? '' : 'none';
       const elIlo = document.getElementById('navIloCatalog');
       if (elIlo) elIlo.style.display = showIloCatalog ? '' : 'none';
       const elSupQ = document.getElementById('navSupervisorQualityReport');
@@ -736,7 +746,7 @@
       }
 
       // ضمان الجودة والاعتماد (بعد فلاتر الأدوار — لا يُخفى بـ d-none فقط)
-      let showQualityMenu = showQualityDash || showSurveyAdmin || showIloCatalog;
+      let showQualityMenu = showQualityDash || showSurveyAdmin || showIloCatalog || showSurveysHub || showSurveysResults;
       if (!showQualityMenu) {
         const amQ = (data.active_mode || '').trim().toLowerCase();
         const hodHeadMode = role === 'head_of_department'
@@ -805,6 +815,8 @@
         ['/academic_quality/dashboard','navAcademicQuality'],
         ['/academic_quality/accreditation/map','navAccreditationMap'],
         ['/academic_quality/survey_admin','navEvaluationSurveyAdmin'],
+        ['/academic_quality/surveys','navSurveysHub'],
+        ['/academic_quality/surveys/results','navSurveysResults'],
         ['/students/evaluations','navStudentEvaluations'],
         ['/ilo_catalog_page','navIloCatalog'],
         ['/academic_quality/ilo/catalog','navIloCatalog'],

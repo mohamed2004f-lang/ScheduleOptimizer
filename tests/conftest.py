@@ -462,6 +462,58 @@ CREATE TABLE IF NOT EXISTS evaluation_survey_answers (
     UNIQUE (evaluation_id, question_id)
 );
 
+CREATE TABLE IF NOT EXISTS survey_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    title_ar TEXT NOT NULL,
+    respondent_role TEXT NOT NULL,
+    subject_type TEXT NOT NULL,
+    is_anonymous INTEGER NOT NULL DEFAULT 1,
+    min_aggregate INTEGER NOT NULL DEFAULT 3,
+    department_scoped INTEGER NOT NULL DEFAULT 0,
+    legacy_course_eval INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS survey_questions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id INTEGER NOT NULL,
+    label_ar TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    question_type TEXT NOT NULL DEFAULT 'likert_5',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS survey_responses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id INTEGER NOT NULL,
+    template_code TEXT NOT NULL,
+    semester TEXT NOT NULL,
+    respondent_role TEXT NOT NULL,
+    respondent_id TEXT NOT NULL,
+    subject_type TEXT NOT NULL,
+    subject_id INTEGER NOT NULL DEFAULT 0,
+    department_id INTEGER,
+    comments TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'submitted',
+    submitted_by TEXT DEFAULT '',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    submitted_at TEXT,
+    UNIQUE (template_code, semester, respondent_role, respondent_id, subject_type, subject_id)
+);
+
+CREATE TABLE IF NOT EXISTS survey_answers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    response_id INTEGER NOT NULL,
+    question_id INTEGER NOT NULL,
+    rating INTEGER NOT NULL,
+    UNIQUE (response_id, question_id)
+);
+
 CREATE TABLE IF NOT EXISTS supervisor_quality_reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     supervisor_instructor_id INTEGER NOT NULL,

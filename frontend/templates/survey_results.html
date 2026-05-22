@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>نتائج الاستبيانات</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-fluid mt-4 px-3" style="max-width:1200px;">
+    <nav aria-label="breadcrumb" class="mb-2">
+      <ol class="breadcrumb small mb-0">
+        <li class="breadcrumb-item">ضمان الجودة والاعتماد</li>
+        <li class="breadcrumb-item"><a href="/academic_quality/surveys">الاستبيانات</a></li>
+        <li class="breadcrumb-item active" aria-current="page">النتائج المجمّعة</li>
+      </ol>
+    </nav>
+
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+      <h4 class="mb-0"><i class="fa-solid fa-chart-bar"></i> نتائج الاستبيانات المجمّعة</h4>
+      <div class="d-flex gap-2 flex-wrap">
+        <a class="btn btn-primary btn-sm" href="/academic_quality/surveys"><i class="fa-solid fa-pen-to-square"></i> صفحة ملء الاستبيانات</a>
+        <a class="btn btn-outline-success btn-sm" href="/academic_quality/surveys/export.xlsx?semester={{ semester|urlencode }}">تصدير Excel</a>
+        <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/dashboard">لوحة الجودة</a>
+      </div>
+    </div>
+
+    <div class="alert alert-info border-start border-info border-4 mb-4">
+      <strong>أين تُدخل البيانات؟</strong>
+      <p class="mb-2 small">هذه الصفحة <strong>للعرض والتجميع فقط</strong>. الإدخال يتم من حساب كل فئة عبر
+        <a href="/academic_quality/surveys" class="alert-link">صفحة الاستبيانات</a> (ضمان الجودة والاعتماد ← الاستبيانات)،
+        أو تقييم المقرر من <a href="/students/evaluations/" class="alert-link">تقييم المقررات</a> (للطالب).</p>
+      <ul class="small mb-0">
+        <li><strong>طالب:</strong> خدمات الشؤون، المرافق، + تقييم كل مقرر.</li>
+        <li><strong>أستاذ / رئيس قسم (وضع أستاذ):</strong> رئيس القسم، العميد، العملية التعليمية.</li>
+        <li><strong>موظف (staff):</strong> بيئة العمل، جودة خدمة الطالب.</li>
+      </ul>
+    </div>
+
+    <p class="text-muted small mb-3">
+      الفصل: <strong>{{ semester }}</strong> —
+      النتائج التفصيلية تظهر بعد بلوغ الحد الأدنى (خصوصية).
+      {% if course_eval_count is defined %}
+      تقييمات المقرر المسجّلة: <strong>{{ course_eval_count }}</strong>
+      (حد أدنى للتجميع في البطاقة البرامجية: 5).
+      {% endif %}
+    </p>
+
+    <div class="row g-3">
+      {% for agg in aggregates %}
+      <div class="col-md-6 col-lg-4">
+        <div class="card h-100 {% if agg.aggregated %}border-success{% else %}border-secondary{% endif %}">
+          <div class="card-body d-flex flex-column">
+            <h6 class="card-title">{{ agg.title_ar }}</h6>
+            <p class="small text-muted mb-1"><code>{{ agg.template_code }}</code></p>
+            <p class="small mb-2">
+              <i class="fa-solid fa-user-check text-primary"></i>
+              يُعبّأ بواسطة: <strong>{{ agg.respondent_label or '—' }}</strong>
+            </p>
+            <div class="mb-2">
+              <div class="d-flex justify-content-between small mb-1">
+                <span>إجابات: <strong>{{ agg.response_count }}</strong> / {{ agg.min_aggregate }}</span>
+                {% if agg.remaining > 0 %}
+                <span class="text-warning">متبقي {{ agg.remaining }}</span>
+                {% else %}
+                <span class="text-success">مكتمل</span>
+                {% endif %}
+              </div>
+              <div class="progress" style="height:8px;">
+                <div class="progress-bar {% if agg.aggregated %}bg-success{% else %}bg-secondary{% endif %}"
+                     style="width:{{ agg.progress_pct }}%;" role="progressbar"
+                     aria-valuenow="{{ agg.progress_pct }}" aria-valuemin="0" aria-valuemax="100"></div>
+              </div>
+            </div>
+            {% if agg.aggregated %}
+            <h3 class="text-success mb-2">{{ agg.overall_score_percent }}%</h3>
+            {% else %}
+            <span class="badge bg-secondary mb-2">بانتظار إجابات كافية</span>
+            {% endif %}
+            <p class="small text-muted mt-auto mb-0">
+              مسار الإدخال:
+              <a href="{{ agg.fill_url }}?semester={{ semester|urlencode }}">{{ agg.fill_url }}</a>
+              <span class="d-block">(يحتاج تسجيل دخول بالدور المناسب)</span>
+            </p>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    {% if aggregates and aggregates|selectattr('aggregated')|list|length == 0 %}
+    <div class="alert alert-warning mt-4">
+      <strong>لا توجد نتائج مجمّعة بعد.</strong>
+      للتجربة: سجّل دخولاً كطالب أو أستاذ أو موظف، ثم افتح
+      <a href="/academic_quality/surveys">صفحة الاستبيانات</a> وأرسل الاستبيانات المطلوبة
+      (3 إجابات على الأقل لاستبيانات الأستاذ/الموظف، 10 للطالب في الخدمات والمرافق).
+    </div>
+    {% endif %}
+
+    {% for agg in aggregates if agg.aggregated and agg.questions %}
+    <div class="card mt-4 shadow-sm">
+      <div class="card-header bg-light">
+        <strong>{{ agg.title_ar }}</strong>
+        <span class="badge bg-success ms-2">{{ agg.overall_score_percent }}%</span>
+        <span class="small text-muted">({{ agg.response_count }} إجابة)</span>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0">
+          <thead class="table-light">
+            <tr><th>البند</th><th>متوسط (1–5)</th><th>النسبة %</th></tr>
+          </thead>
+          <tbody>
+            {% for q in agg.questions %}
+            <tr>
+              <td>{{ q.label_ar }}</td>
+              <td>{{ q.avg_rating or '—' }}</td>
+              <td>{% if q.score_percent is not none %}{{ q.score_percent }}%{% else %}—{% endif %}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endfor %}
+  </main>
+</body>
+</html>

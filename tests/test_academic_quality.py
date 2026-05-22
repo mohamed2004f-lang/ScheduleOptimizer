@@ -121,7 +121,7 @@ def test_survey_admin_page_and_crud(app):
         data = r.get_json() or {}
         assert data.get("status") == "ok"
         qs = data.get("questions") or []
-        assert len(qs) >= 5
+        assert len(qs) >= 10
         r2 = c.post(
             "/academic_quality/api/survey_questions",
             json={"label_ar": "بند اختبار آلي"},
@@ -140,7 +140,26 @@ def test_survey_admin_page_and_crud(app):
             json={"order": list(reversed(order))},
         )
         assert r4.status_code == 200
-        c.delete(f"/academic_quality/api/survey_questions/{qid}")
+        c.delete(f"/academic_quality/api/survey_questions/{qid}?template=student_course")
+
+
+def test_survey_admin_platform_template(app):
+    with app.test_client() as c:
+        c.post("/auth/login", json={"username": "admin-test", "password": "TestP@ssw0rd!"})
+        page = c.get("/academic_quality/survey_admin?template=faculty_hod")
+        assert page.status_code == 200
+        r = c.get("/academic_quality/api/survey_questions?template=faculty_hod")
+        assert r.status_code == 200
+        qs = (r.get_json() or {}).get("questions") or []
+        assert len(qs) >= 10
+        r2 = c.post(
+            "/academic_quality/api/survey_questions",
+            json={"label_ar": "بند اختبار رئيس قسم", "template_code": "faculty_hod"},
+        )
+        assert r2.status_code == 200
+        qid = (r2.get_json() or {}).get("question", {}).get("id")
+        assert qid
+        c.delete(f"/academic_quality/api/survey_questions/{qid}?template=faculty_hod")
 
 
 def test_quality_metrics_api(app):
