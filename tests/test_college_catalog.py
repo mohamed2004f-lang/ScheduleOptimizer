@@ -585,6 +585,57 @@ def test_course_master_usage_and_delete(auth_client):
     assert (upd.get_json() or {}).get("id") == linked_id
 
 
+def test_college_general_component_explicit(auth_client, db_conn):
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT OR IGNORE INTO departments (code, name_ar, name_en) VALUES ('GEN_T', 'عام', 'Gen')"
+    )
+    db_conn.commit()
+    gid = cur.execute("SELECT id FROM departments WHERE code = 'GEN_T'").fetchone()[0]
+    cur.execute(
+        """
+        INSERT INTO programs (department_id, code, name_ar, min_total_units, is_active)
+        VALUES (?, 'GEN_T_P', 'برنامج عام', 36, 1)
+        """,
+        (gid,),
+    )
+    pid = cur.lastrowid
+    save_u = auth_client.post(
+        "/college/catalog/program_course/save",
+        json={
+            "program_id": pid,
+            "course_master_title_ar": "متطلب جامعة",
+            "course_code": "UR101",
+            "requirement_scope": "college_general",
+            "college_general_component": "university",
+            "units_override": 4,
+            "level_no": 1,
+        },
+    )
+    assert save_u.status_code == 200
+    save_c = auth_client.post(
+        "/college/catalog/program_course/save",
+        json={
+            "program_id": pid,
+            "course_master_title_ar": "متطلب كلية",
+            "course_code": "GE999",
+            "requirement_scope": "college_general",
+            "college_general_component": "college",
+            "units_override": 32,
+            "level_no": 1,
+        },
+    )
+    assert save_c.status_code == 200
+    summary = auth_client.get(
+        f"/college/catalog/program_courses/classification_summary?program_id={pid}"
+    )
+    sb = summary.get_json() or {}
+    assert sb.get("college_general_university_units_in_plan") == 4
+    assert sb.get("college_general_college_units_in_plan") == 32
+    assert sb.get("college_general_university_units_ok") is True
+    assert sb.get("college_general_college_units_ok") is True
+
+
 def test_college_general_scope_in_plan(auth_client, db_conn):
     cur = db_conn.cursor()
     cur.execute(

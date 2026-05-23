@@ -46,12 +46,53 @@ REQUIREMENT_SCOPE_LABELS = {
     "elective": "اختياري",
 }
 
+COLLEGE_GENERAL_COMPONENTS = ("", "auto", "university", "college")
+
+COLLEGE_GENERAL_COMPONENT_LABELS = {
+    "": "تلقائي (من الرمز/الاسم)",
+    "auto": "تلقائي (من الرمز/الاسم)",
+    "university": "متطلبات الجامعة",
+    "college": "متطلبات الكلية",
+}
+
 
 def normalize_requirement_scope(value: str | None) -> str:
     v = (value or "").strip().lower()
     if v in REQUIREMENT_SCOPES:
         return v
     return DEFAULT_REQUIREMENT_SCOPE
+
+
+def normalize_college_general_component(value: str | None) -> str:
+    """قيمة صريحة لبند اتجاه عام: تلقائي | university | college."""
+    v = (value or "").strip().lower()
+    if v in ("", "auto"):
+        return ""
+    if v in ("university", "college"):
+        return v
+    return ""
+
+
+def ensure_program_course_plan_schema(conn) -> None:
+    from backend.database.database import fetch_table_columns, is_postgresql
+
+    cols = set(fetch_table_columns(conn, "program_courses") or [])
+    cur = conn.cursor()
+    if "college_general_component" not in cols:
+        if is_postgresql():
+            cur.execute(
+                """
+                ALTER TABLE program_courses
+                ADD COLUMN IF NOT EXISTS college_general_component TEXT NOT NULL DEFAULT ''
+                """
+            )
+        else:
+            cur.execute(
+                """
+                ALTER TABLE program_courses
+                ADD COLUMN college_general_component TEXT NOT NULL DEFAULT ''
+                """
+            )
 
 
 def normalize_pathway_stage(value: str | None) -> str:

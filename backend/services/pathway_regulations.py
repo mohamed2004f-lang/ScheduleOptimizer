@@ -57,6 +57,22 @@ DEFAULT_PATHWAY_REGULATIONS: list[tuple] = [
         "GENERAL",
     ),
     (
+        "college_general_university_units",
+        "وحدات متطلبات الجامعة في الاتجاه العام",
+        "الجزء المطلوب من وحدات الاتجاه العام لمتطلبات الجامعة.",
+        "college_general",
+        4.0,
+        "GENERAL",
+    ),
+    (
+        "college_general_college_units",
+        "وحدات متطلبات الكلية في الاتجاه العام",
+        "الجزء المطلوب من وحدات الاتجاه العام لمتطلبات الكلية.",
+        "college_general",
+        32.0,
+        "GENERAL",
+    ),
+    (
         "transfer_to_department_min_units",
         "أدنى وحدات للانتقال إلى القسم",
         "الحد الأدنى من الوحدات المنجزة في الاتجاه العام للتقديم على القسم (مثال: 22 وحدة).",

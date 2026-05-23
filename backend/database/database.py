@@ -3098,6 +3098,12 @@ def _ensure_tables_postgresql() -> None:
             ensure_course_master_catalog_schema(conn)
         except Exception as e:
             logger.warning("course_master catalog schema (postgresql): %s", e)
+        try:
+            from backend.core.academic_pathway import ensure_program_course_plan_schema
+
+            ensure_program_course_plan_schema(conn)
+        except Exception as e:
+            logger.warning("program_courses plan schema (postgresql): %s", e)
     logger.info("PostgreSQL compatibility migrations applied")
 
 
@@ -3376,6 +3382,12 @@ def ensure_tables(db_file=None):
             ensure_course_master_catalog_schema(conn)
         except Exception as e:
             logger.warning("course_master catalog schema (sqlite): %s", e)
+        try:
+            from backend.core.academic_pathway import ensure_program_course_plan_schema
+
+            ensure_program_course_plan_schema(conn)
+        except Exception as e:
+            logger.warning("program_courses plan schema (sqlite): %s", e)
 
         conn.commit()
         logger.info("Database tables and indexes ensured")

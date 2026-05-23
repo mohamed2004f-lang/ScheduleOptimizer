@@ -12,7 +12,10 @@ import re
 from flask import Blueprint, jsonify, request, session
 
 from backend.core.academic_pathway import (
+    COLLEGE_GENERAL_COMPONENT_LABELS,
     REQUIREMENT_SCOPE_LABELS,
+    ensure_program_course_plan_schema,
+    normalize_college_general_component,
     normalize_requirement_scope,
 )
 from backend.core.program_tracks import (
@@ -1336,6 +1339,41 @@ def suggest_requirement_scope_for_level(level_no: int) -> str:
     return _scope_for_level(level_no)
 
 
+def _infer_college_general_component(course_code: str, title_ar: str) -> str:
+    """تصنيف تلقائي لمقرر الاتجاه العام إلى جامعة/كلية."""
+    code = (course_code or "").strip().upper()
+    title = (title_ar or "").strip()
+    if code.startswith(("UR", "UNI", "UNV", "U-")):
+        return "university"
+    if code.startswith(("CR", "COL", "C-")):
+        return "college"
+    if "جامعة" in title:
+        return "university"
+    if "كلية" in title:
+        return "college"
+    return "college"
+
+
+def resolve_college_general_component(
+    explicit: str | None,
+    course_code: str,
+    title_ar: str,
+) -> str:
+    """يُفضَّل القيمة الصريحة من الخطة، وإلا التصنيف التلقائي."""
+    comp = normalize_college_general_component(explicit)
+    if comp in ("university", "college"):
+        return comp
+    return _infer_college_general_component(course_code, title_ar)
+
+
+def _college_general_component_for_scope(
+    requirement_scope: str, raw_component: str | None
+) -> str:
+    if normalize_requirement_scope(requirement_scope) != "college_general":
+        return ""
+    return normalize_college_general_component(raw_component)
+
+
 def _catalog_item_fields(**kwargs) -> dict:
     code = (kwargs.get("course_code") or "").strip()
     lv = infer_level_from_course_code(code)
@@ -1627,7 +1665,8 @@ def list_program_courses():
             cur,
             """
             SELECT pc.*, cm.title_ar AS master_title_ar,
-                   COALESCE(pc.requirement_scope, 'dept_common') AS requirement_scope
+                   COALESCE(pc.requirement_scope, 'dept_common') AS requirement_scope,
+                   COALESCE(pc.college_general_component, '') AS college_general_component
             FROM program_courses pc
             INNER JOIN course_master cm ON cm.id = pc.course_master_id
             WHERE pc.program_id = ?
@@ -1716,7 +1755,45 @@ def program_courses_classification_summary():
             reg_general_units = get_pathway_regulation_value(
                 cur, gid, "college_general_total_units", default=None
             )
+            reg_general_university_units = get_pathway_regulation_value(
+                cur, gid, "college_general_university_units", default=None
+            )
+            reg_general_college_units = get_pathway_regulation_value(
+                cur, gid, "college_general_college_units", default=None
+            )
+        else:
+            reg_general_university_units = None
+            reg_general_college_units = None
+        ensure_program_course_plan_schema(conn)
+        cg_rows = _rows(
+            cur,
+            """
+            SELECT COALESCE(pc.course_code, '') AS course_code,
+                   COALESCE(cm.title_ar, '') AS title_ar,
+                   COALESCE(pc.college_general_component, '') AS college_general_component,
+                   COALESCE(pc.units_override, cm.default_units, 0) AS units
+            FROM program_courses pc
+            INNER JOIN course_master cm ON cm.id = pc.course_master_id
+            WHERE pc.program_id = ?
+              AND COALESCE(pc.is_active, 1) = 1
+              AND COALESCE(pc.requirement_scope, 'dept_common') = 'college_general'
+            """,
+            (int(program_id),),
+        )
         college_general_units = int(units_by_scope.get("college_general", 0))
+        university_general_units = 0
+        college_general_only_units = 0
+        for r in cg_rows:
+            units = int(r.get("units") or 0)
+            bucket = resolve_college_general_component(
+                str(r.get("college_general_component") or ""),
+                str(r.get("course_code") or ""),
+                str(r.get("title_ar") or ""),
+            )
+            if bucket == "university":
+                university_general_units += units
+            else:
+                college_general_only_units += units
     return jsonify(
         {
             "status": "ok",
@@ -1726,12 +1803,32 @@ def program_courses_classification_summary():
             "units_by_scope": units_by_scope,
             "plan_units_total": plan_units_total,
             "college_general_units_in_plan": college_general_units,
+            "college_general_university_units_in_plan": university_general_units,
+            "college_general_college_units_in_plan": college_general_only_units,
             "regulation_college_general_units": (
                 int(reg_general_units) if reg_general_units is not None else None
+            ),
+            "regulation_college_general_university_units": (
+                int(reg_general_university_units)
+                if reg_general_university_units is not None
+                else None
+            ),
+            "regulation_college_general_college_units": (
+                int(reg_general_college_units)
+                if reg_general_college_units is not None
+                else None
             ),
             "college_general_units_ok": (
                 reg_general_units is None
                 or college_general_units == int(reg_general_units)
+            ),
+            "college_general_university_units_ok": (
+                reg_general_university_units is None
+                or university_general_units == int(reg_general_university_units)
+            ),
+            "college_general_college_units_ok": (
+                reg_general_college_units is None
+                or college_general_only_units == int(reg_general_college_units)
             ),
             "scope_labels": REQUIREMENT_SCOPE_LABELS,
             "program": prog_d,
@@ -2031,12 +2128,74 @@ def set_program_course_requirement_scope():
         pid = int(row[0] if not hasattr(row, "keys") else row["program_id"])
         if not _program_belongs_to_scope(conn, pid):
             return jsonify({"status": "error", "message": "غير مصرح"}), 403
-        cur.execute(
-            "UPDATE program_courses SET requirement_scope = ? WHERE id = ?",
-            (scope, pcid),
-        )
+        if scope != "college_general":
+            cur.execute(
+                """
+                UPDATE program_courses
+                SET requirement_scope = ?, college_general_component = ''
+                WHERE id = ?
+                """,
+                (scope, pcid),
+            )
+        else:
+            cur.execute(
+                "UPDATE program_courses SET requirement_scope = ? WHERE id = ?",
+                (scope, pcid),
+            )
         conn.commit()
     return jsonify({"status": "ok", "id": pcid, "requirement_scope": scope}), 200
+
+
+@college_catalog_bp.route("/program_course/set_college_general_component", methods=["POST"])
+@role_required(*_PLAN_EDITOR)
+def set_program_course_college_general_component():
+    b = _body()
+    pcid = _i(b.get("id"))
+    comp = normalize_college_general_component(b.get("college_general_component"))
+    if pcid is None:
+        return jsonify({"status": "error", "message": "id مطلوب"}), 400
+    with get_connection() as conn:
+        ensure_program_course_plan_schema(conn)
+        cur = conn.cursor()
+        row = cur.execute(
+            """
+            SELECT program_id, COALESCE(requirement_scope, 'dept_common') AS requirement_scope
+            FROM program_courses WHERE id = ?
+            """,
+            (pcid,),
+        ).fetchone()
+        if not row:
+            return jsonify({"status": "error", "message": "بند غير موجود"}), 404
+        if hasattr(row, "keys"):
+            pid = int(row["program_id"])
+            scope = normalize_requirement_scope(row["requirement_scope"])
+        else:
+            pid = int(row[0])
+            scope = normalize_requirement_scope(row[1])
+        if scope != "college_general":
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "نوع الاتجاه العام يُضبط فقط لمقررات نطاق «اتجاه عام»",
+                }
+            ), 400
+        if not _program_belongs_to_scope(conn, pid):
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        cur.execute(
+            "UPDATE program_courses SET college_general_component = ? WHERE id = ?",
+            (comp, pcid),
+        )
+        conn.commit()
+    return jsonify(
+        {
+            "status": "ok",
+            "id": pcid,
+            "college_general_component": comp,
+            "college_general_component_label": COLLEGE_GENERAL_COMPONENT_LABELS.get(
+                comp or "auto", comp
+            ),
+        }
+    ), 200
 
 
 @college_catalog_bp.route("/program/sync_graduation_units", methods=["POST"])
@@ -2144,6 +2303,9 @@ def save_program_course():
     units_ov = b.get("units_override")
     units_ov_int = None if units_ov in (None, "") else _i(units_ov, 0)
     req_scope = normalize_requirement_scope(b.get("requirement_scope"))
+    cg_comp = _college_general_component_for_scope(
+        req_scope, b.get("college_general_component")
+    )
     plan_app = "both"  # 150/155 متوقف — لا يُستخدم في الخطة الجديدة
     category = str(b.get("category") or "required").strip() or "required"
     reqd = _ibool(b.get("is_required"), 1)
@@ -2153,6 +2315,7 @@ def save_program_course():
             {"status": "error", "message": "program_id ورمز المقرر في الخطة مطلوبة"}
         ), 400
     with get_connection() as conn:
+        ensure_program_course_plan_schema(conn)
         if not _program_belongs_to_scope(conn, int(program_id)):
             return jsonify({"status": "error", "message": "FORBIDDEN_PROGRAM_SCOPE"}), 403
         cur = conn.cursor()
@@ -2215,6 +2378,7 @@ def save_program_course():
                 """
                 UPDATE program_courses SET program_id = ?, course_master_id = ?, course_code = ?,
                   course_name_override = ?, plan_applicability = ?, requirement_scope = ?,
+                  college_general_component = ?,
                   level_no = ?, term_hint = ?, units_override = ?,
                   category = ?, is_required = ?, is_active = ?
                 WHERE id = ?
@@ -2226,6 +2390,7 @@ def save_program_course():
                     name_ov,
                     plan_app,
                     req_scope,
+                    cg_comp,
                     level_no,
                     term_hint,
                     units_ov_int,
@@ -2240,14 +2405,16 @@ def save_program_course():
                 """
                 INSERT INTO program_courses
                 (program_id, course_master_id, course_code, course_name_override,
-                 plan_applicability, requirement_scope, level_no, term_hint, units_override,
+                 plan_applicability, requirement_scope, college_general_component,
+                 level_no, term_hint, units_override,
                  category, is_required, is_active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (program_id, course_code) DO UPDATE SET
                   course_master_id = EXCLUDED.course_master_id,
                   course_name_override = EXCLUDED.course_name_override,
                   plan_applicability = EXCLUDED.plan_applicability,
                   requirement_scope = EXCLUDED.requirement_scope,
+                  college_general_component = EXCLUDED.college_general_component,
                   level_no = EXCLUDED.level_no,
                   term_hint = EXCLUDED.term_hint,
                   units_override = EXCLUDED.units_override,
@@ -2263,6 +2430,7 @@ def save_program_course():
                     name_ov,
                     plan_app,
                     req_scope,
+                    cg_comp,
                     level_no,
                     term_hint,
                     units_ov_int,
@@ -2277,14 +2445,16 @@ def save_program_course():
                 """
                 INSERT INTO program_courses
                 (program_id, course_master_id, course_code, course_name_override,
-                 plan_applicability, requirement_scope, level_no, term_hint, units_override,
+                 plan_applicability, requirement_scope, college_general_component,
+                 level_no, term_hint, units_override,
                  category, is_required, is_active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (program_id, course_code) DO UPDATE SET
                   course_master_id = excluded.course_master_id,
                   course_name_override = excluded.course_name_override,
                   plan_applicability = excluded.plan_applicability,
                   requirement_scope = excluded.requirement_scope,
+                  college_general_component = excluded.college_general_component,
                   level_no = excluded.level_no,
                   term_hint = excluded.term_hint,
                   units_override = excluded.units_override,
@@ -2299,6 +2469,7 @@ def save_program_course():
                     name_ov,
                     plan_app,
                     req_scope,
+                    cg_comp,
                     level_no,
                     term_hint,
                     units_ov_int,

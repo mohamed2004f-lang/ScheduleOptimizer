@@ -379,7 +379,7 @@
           </div>
         </div>
         <div class="table-responsive" id="pcTableWrap"><table class="table table-sm" id="tblPc"><thead><tr>
-          <th style="width:2rem"></th><th>id</th><th>رمز</th><th>عنوان</th><th>نطاق</th><th>مستوى</th><th></th></tr></thead><tbody></tbody></table></div>
+          <th style="width:2rem"></th><th>id</th><th>رمز</th><th>عنوان</th><th>نطاق</th><th>نوع عام</th><th>مستوى</th><th></th></tr></thead><tbody></tbody></table></div>
         <div class="row g-2 align-items-end border-top pt-2 small">
           <input type="hidden" id="pcId">
           <input type="hidden" id="pcProgId">
@@ -401,6 +401,14 @@
               <option value="pre_track">قبل اختيار الشعبة</option>
               <option value="track">شعبة / تخصص</option>
               <option value="elective">اختياري</option>
+            </select>
+          </div>
+          <div class="col-md-2" id="pcGeneralComponentWrap" style="display:none;">
+            <label class="form-label small">نوع الاتجاه العام</label>
+            <select class="form-select form-select-sm" id="pcGeneralComponent">
+              <option value="">تلقائي</option>
+              <option value="university">جامعة (4 و.)</option>
+              <option value="college">كلية (32 و.)</option>
             </select>
           </div>
           <div class="col-md-1">
@@ -778,6 +786,18 @@
       dept_common:'مشترك (قديم)',
     };
     const SCOPE_OPTIONS = '<option value="college_general">اتجاه عام</option><option value="pre_track">قبل الشعبة</option><option value="track">شعبة</option><option value="elective">اختياري</option><option value="dept_common">مشترك (قديم)</option>';
+    const GENERAL_COMPONENT_OPTIONS = '<option value="">تلقائي</option><option value="university">جامعة</option><option value="college">كلية</option>';
+
+    function generalComponentLabelAr(v) {
+      const m = { '': 'تلقائي', university: 'جامعة', college: 'كلية' };
+      return m[v || ''] || v || '—';
+    }
+
+    function syncPcGeneralComponentUi() {
+      const scope = (document.getElementById('pcRequirementScope') || {}).value || '';
+      const wrap = document.getElementById('pcGeneralComponentWrap');
+      if (wrap) wrap.style.display = scope === 'college_general' ? '' : 'none';
+    }
     const CATALOG_LOG_KEY = 'schedule_optimizer_catalog_change_log_v1';
     const CATALOG_LOG_MAX = 10;
 
@@ -1364,6 +1384,21 @@
           } else {
             sumEl.className = 'alert alert-info py-2 small mb-2';
           }
+          const regUni = s.regulation_college_general_university_units;
+          const regCol = s.regulation_college_general_college_units;
+          const uniU = s.college_general_university_units_in_plan || 0;
+          const colU = s.college_general_college_units_in_plan || 0;
+          if (regUni != null || regCol != null) {
+            html += ' — تفصيل الاتجاه العام:';
+            if (regUni != null) {
+              html += ' جامعة <strong>' + uniU + '</strong> / <strong>' + regUni + '</strong>';
+              if (!s.college_general_university_units_ok) html += ' <span class="text-danger">(غير مطابق)</span>';
+            }
+            if (regCol != null) {
+              html += ' ، كلية <strong>' + colU + '</strong> / <strong>' + regCol + '</strong>';
+              if (!s.college_general_college_units_ok) html += ' <span class="text-danger">(غير مطابق)</span>';
+            }
+          }
           if (regGrad != null && !s.plan_units_vs_graduation_ok) {
             html += ' <span class="text-danger">— مجموع الخطة لا يساوي ' + regGrad + ' بعد</span>';
           }
@@ -1381,12 +1416,17 @@
       list.forEach(x => {
         const enc = encodeURIComponent(JSON.stringify(x));
         const sc = x.requirement_scope || 'dept_common';
+        const gc = x.college_general_component || '';
+        const gcCell = sc === 'college_general'
+          ? `<select class="form-select form-select-sm pc-inline-gc" data-id="${x.id}" style="min-width:7rem;">${GENERAL_COMPONENT_OPTIONS}</select>`
+          : '<span class="text-muted">—</span>';
         tbody.insertAdjacentHTML('beforeend', `<tr data-pc-id="${x.id}" data-scope="${sc}">
           <td><input type="checkbox" class="form-check-input pc-row-cb" value="${x.id}"></td>
           <td>${x.id}</td>
           <td><code>${x.course_code}</code></td>
           <td class="small">${(x.master_title_ar||'').slice(0,40)}</td>
           <td><select class="form-select form-select-sm pc-inline-scope" data-id="${x.id}" style="min-width:9rem;">${SCOPE_OPTIONS}</select></td>
+          <td>${gcCell}</td>
           <td>${x.level_no}</td>
           <td class="text-nowrap">
             <button type="button" class="btn btn-sm btn-link p-0 btn-plo-pc" data-id="${x.id}" title="ربط مخرجات التعلم">مخرجات</button>
@@ -1404,9 +1444,25 @@
             requirement_scope: sel.value,
           });
           if (row) row.requirement_scope = sel.value;
-          loadPcClassificationSummary(document.getElementById('pcProgFilter').value.trim());
+          if (row && sel.value !== 'college_general') row.college_general_component = '';
+          loadPc();
           appendCatalogChange('نطاق #' + sel.dataset.id + ' → ' + scopeLabelAr(sel.value));
           msg('تم تحديث النطاق.', 'success');
+        };
+      });
+      tbody.querySelectorAll('.pc-inline-gc').forEach(sel => {
+        const id = sel.dataset.id;
+        const row = PC_ITEMS.find(r => String(r.id) === String(id));
+        if (row) sel.value = row.college_general_component || '';
+        sel.onchange = async () => {
+          await apiPost('/college/catalog/program_course/set_college_general_component', {
+            id: +sel.dataset.id,
+            college_general_component: sel.value,
+          });
+          if (row) row.college_general_component = sel.value;
+          loadPcClassificationSummary(document.getElementById('pcProgFilter').value.trim());
+          appendCatalogChange('نوع عام #' + sel.dataset.id + ' → ' + generalComponentLabelAr(sel.value));
+          msg('تم تحديث نوع الاتجاه العام.', 'success');
         };
       });
       document.querySelectorAll('.btn-plo-pc').forEach(btn => {
@@ -1429,6 +1485,8 @@
           if (newWrap) newWrap.style.display = 'none';
           document.getElementById('pcCode').value = ob.course_code || '';
           document.getElementById('pcRequirementScope').value = (ob.requirement_scope || 'dept_common');
+          document.getElementById('pcGeneralComponent').value = ob.college_general_component || '';
+          syncPcGeneralComponentUi();
           document.getElementById('pcLevel').value = ob.level_no || 0;
           document.getElementById('pcUnitsOv').value = ob.units_override != null ? ob.units_override : '';
           document.getElementById('secPcId').value = ob.id || '';
@@ -1557,6 +1615,7 @@
       fillPcPrereqSelects();
       const gridWrap = document.getElementById('pcLevelGridWrap');
       if (gridWrap && !gridWrap.classList.contains('d-none')) await renderPcLevelGrid();
+      syncPcGeneralComponentUi();
       msg('مقررات الخطة: ' + PC_ITEMS.length, 'success');
     }
 
@@ -1963,12 +2022,14 @@
         if (opEl) opEl.value = '';
       }
     });
+    document.getElementById('pcRequirementScope').addEventListener('change', syncPcGeneralComponentUi);
     document.getElementById('pcCode').addEventListener('change', () => {
       const code = (document.getElementById('pcCode').value || '').trim();
       if (!code) return;
       ensureLevelSelectValue(inferLevelFromCourseCode(code));
       const scopeSel = document.getElementById('pcRequirementScope');
       if (scopeSel) scopeSel.value = suggestScopeFromLevel(document.getElementById('pcLevel').value);
+      syncPcGeneralComponentUi();
     });
     document.getElementById('pcLevel').addEventListener('change', ()=>{
       if(!(document.getElementById('pcCode').value || '').trim()){
@@ -2042,6 +2103,7 @@
           course_master_title_ar: newTitleAr || '',
           course_code: code,
           requirement_scope: document.getElementById('pcRequirementScope').value || 'pre_track',
+          college_general_component: document.getElementById('pcGeneralComponent').value || '',
           level_no: level,
           units_override: u === '' ? null : +u
         });
@@ -2056,6 +2118,8 @@
         if(newWrap) newWrap.style.display = 'none';
         document.getElementById('pcCode').value = '';
         document.getElementById('pcRequirementScope').value = 'pre_track';
+        document.getElementById('pcGeneralComponent').value = '';
+        syncPcGeneralComponentUi();
         document.getElementById('pcLevel').value = '0';
         document.getElementById('pcUnitsOv').value = '';
         loadPc();

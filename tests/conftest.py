@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS program_courses (
     course_name_override TEXT DEFAULT '',
     plan_applicability TEXT NOT NULL DEFAULT 'both',
     requirement_scope TEXT NOT NULL DEFAULT 'dept_common',
+    college_general_component TEXT NOT NULL DEFAULT '',
     level_no INTEGER DEFAULT 0,
     term_hint TEXT DEFAULT '',
     units_override INTEGER,
