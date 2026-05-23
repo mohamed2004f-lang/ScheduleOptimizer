@@ -407,6 +407,184 @@ def test_infer_level_and_scope_from_course_code():
     assert suggest_requirement_scope_for_level(5) == "track"
 
 
+def test_course_master_lifecycle_and_cross_dept_link(auth_client):
+    orphan = auth_client.post(
+        "/college/catalog/course_master/save",
+        json={
+            "title_ar": "مادة مشتركة اختبار",
+            "default_units": 3,
+            "catalog_lifecycle": "shared",
+        },
+    )
+    mid = (orphan.get_json() or {}).get("id")
+    assert mid
+
+    mark = auth_client.post(
+        "/college/catalog/course_master/mark_lifecycle",
+        json={
+            "ids": [mid],
+            "catalog_lifecycle": "transitional",
+            "catalog_note": "دفعة قديمة",
+            "sync_title_tag": 1,
+        },
+    )
+    assert mark.status_code == 200
+
+    trans = auth_client.post(
+        "/college/catalog/course_master/save",
+        json={"title_ar": "مقرر انتقالي فقط", "catalog_lifecycle": "transitional"},
+    )
+    trans_id = (trans.get_json() or {}).get("id")
+
+    dept = auth_client.post(
+        "/college/catalog/department/save",
+        json={"code": "TSTB", "name_ar": "قسم ب", "name_en": "B", "is_active": True},
+    )
+    assert dept.status_code == 200
+    depts = auth_client.get("/college/catalog/departments").get_json().get("items") or []
+    dept_id = next(d["id"] for d in depts if d.get("code") == "TSTB")
+    p1 = auth_client.post(
+        "/college/catalog/program/save",
+        json={
+            "department_id": dept_id,
+            "code": "TSTB_P1",
+            "name_ar": "برنامج 1",
+            "min_total_units": 155,
+            "is_active": True,
+        },
+    ).get_json()["id"]
+    p2 = auth_client.post(
+        "/college/catalog/program/save",
+        json={
+            "department_id": dept_id,
+            "code": "TSTB_P2",
+            "name_ar": "برنامج 2",
+            "min_total_units": 155,
+            "is_active": True,
+        },
+    ).get_json()["id"]
+
+    auth_client.post(
+        "/college/catalog/course_master/mark_lifecycle",
+        json={"ids": [mid], "catalog_lifecycle": "shared"},
+    )
+    blocked = auth_client.post(
+        f"/college/catalog/course_master/{trans_id}/link_to_program",
+        json={"program_id": p1, "course_code": "OLD-01", "level_no": 1},
+    )
+    assert blocked.status_code == 400
+
+    ok = auth_client.post(
+        f"/college/catalog/course_master/{mid}/link_to_program",
+        json={"program_id": p1, "course_code": "SHR-01", "level_no": 2},
+    )
+    assert ok.status_code == 200
+    ok2 = auth_client.post(
+        f"/college/catalog/course_master/{mid}/link_to_program",
+        json={"program_id": p2, "course_code": "SHR-02", "level_no": 2},
+    )
+    assert ok2.status_code == 200
+
+    audit = auth_client.get("/college/catalog/course_masters/transition_audit")
+    assert audit.status_code == 200
+    body = audit.get_json() or {}
+    assert body.get("summary", {}).get("total", 0) >= 2
+
+    meta = auth_client.get("/college/catalog/course_master/implementation_meta")
+    assert meta.status_code == 200
+    assert meta.get_json().get("reg_program_course_mode") in ("off", "warn", "enforce")
+
+
+def test_course_master_usage_and_delete(auth_client):
+    orphan = auth_client.post(
+        "/college/catalog/course_master/save",
+        json={"title_ar": "محتوى حذف اختبار CM", "default_units": 2},
+    )
+    assert orphan.status_code == 200
+    orphan_id = (orphan.get_json() or {}).get("id")
+    assert orphan_id
+
+    linked = auth_client.post(
+        "/college/catalog/course_master/save",
+        json={"title_ar": "محتوى مربوط اختبار CM", "default_units": 3},
+    )
+    assert linked.status_code == 200
+    linked_id = (linked.get_json() or {}).get("id")
+    assert linked_id
+
+    dept = auth_client.post(
+        "/college/catalog/department/save",
+        json={"code": "TSTCM", "name_ar": "قسم اختبار CM", "name_en": "CM Test", "is_active": True},
+    )
+    assert dept.status_code == 200
+    depts = auth_client.get("/college/catalog/departments")
+    dept_row = next(
+        (d for d in (depts.get_json() or {}).get("items") or [] if d.get("code") == "TSTCM"),
+        None,
+    )
+    assert dept_row
+    prog_save = auth_client.post(
+        "/college/catalog/program/save",
+        json={
+            "department_id": dept_row["id"],
+            "code": "TSTCM_P1",
+            "name_ar": "برنامج اختبار CM",
+            "phase": "undergrad",
+            "min_total_units": 120,
+            "is_active": True,
+        },
+    )
+    assert prog_save.status_code == 200
+    prog_id = (prog_save.get_json() or {}).get("id")
+    assert prog_id
+
+    link = auth_client.post(
+        "/college/catalog/program_course/save",
+        json={
+            "program_id": prog_id,
+            "course_master_id": linked_id,
+            "course_code": "TSTCM-LINK-99",
+            "level_no": 1,
+        },
+    )
+    assert link.status_code == 200
+
+    lst = auth_client.get("/college/catalog/course_masters")
+    assert lst.status_code == 200
+    items = (lst.get_json() or {}).get("items") or []
+    linked = next((x for x in items if x.get("id") == linked_id), None)
+    orphan = next((x for x in items if x.get("id") == orphan_id), None)
+    assert linked and linked.get("program_count") == 1
+    assert linked.get("department_count") == 1
+    assert orphan and orphan.get("program_count") == 0
+
+    usage = auth_client.get(f"/college/catalog/course_master/{linked_id}/usage")
+    assert usage.status_code == 200
+    body = usage.get_json() or {}
+    assert body.get("program_count") == 1
+    assert body.get("can_delete") is False
+    assert len(body.get("plan_rows") or []) == 1
+
+    blocked = auth_client.post(
+        "/college/catalog/course_master/delete",
+        json={"id": linked_id},
+    )
+    assert blocked.status_code == 409
+
+    ok = auth_client.post(
+        "/college/catalog/course_master/delete",
+        json={"id": orphan_id},
+    )
+    assert ok.status_code == 200
+
+    upd = auth_client.post(
+        "/college/catalog/course_master/save",
+        json={"id": linked_id, "title_ar": "محتوى مربوط محدّث", "default_units": 4},
+    )
+    assert upd.status_code == 200
+    assert (upd.get_json() or {}).get("id") == linked_id
+
+
 def test_college_general_scope_in_plan(auth_client, db_conn):
     cur = db_conn.cursor()
     cur.execute(

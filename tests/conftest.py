@@ -100,6 +100,9 @@ CREATE TABLE IF NOT EXISTS course_master (
     default_units INTEGER DEFAULT 0,
     grading_mode TEXT NOT NULL DEFAULT 'partial_final',
     assessment_type TEXT NOT NULL DEFAULT 'theoretical',
+    catalog_lifecycle TEXT NOT NULL DEFAULT 'standard',
+    catalog_note TEXT DEFAULT '',
+    review_after TEXT DEFAULT '',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -1129,6 +1132,7 @@ def _setup_shared_db():
         "backend.services.academic_quality",
         "backend.services.institutional_accreditation",
         "backend.services.course_equivalences",
+        "backend.services.college_catalog",
         "backend.core.monitoring",
         "backend.core.auth",
     ]

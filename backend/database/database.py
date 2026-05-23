@@ -3092,6 +3092,12 @@ def _ensure_tables_postgresql() -> None:
             ensure_plo_enhancement_schema(conn)
         except Exception as e:
             logger.warning("plo enhancement schema (postgresql): %s", e)
+        try:
+            from backend.core.course_master_catalog import ensure_course_master_catalog_schema
+
+            ensure_course_master_catalog_schema(conn)
+        except Exception as e:
+            logger.warning("course_master catalog schema (postgresql): %s", e)
     logger.info("PostgreSQL compatibility migrations applied")
 
 
@@ -3364,6 +3370,12 @@ def ensure_tables(db_file=None):
             ensure_plo_enhancement_schema(conn)
         except Exception as e:
             logger.warning("plo enhancement schema (sqlite): %s", e)
+        try:
+            from backend.core.course_master_catalog import ensure_course_master_catalog_schema
+
+            ensure_course_master_catalog_schema(conn)
+        except Exception as e:
+            logger.warning("course_master catalog schema (sqlite): %s", e)
 
         conn.commit()
         logger.info("Database tables and indexes ensured")

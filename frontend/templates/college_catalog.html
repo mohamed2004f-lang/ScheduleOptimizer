@@ -131,19 +131,140 @@
 
     <!-- course_master -->
     <div class="card mb-3" id="cardCourseMaster">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <strong>محتوى المقرر (<code>course_master</code>)</strong>
-        <button type="button" class="btn btn-sm btn-outline-primary" id="btnCmRefresh">تحديث</button>
+      <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div>
+          <strong>محتوى المقرر (<code>course_master</code>)</strong>
+          <div class="small text-muted fw-normal">قاموس محتوى مشترك للكلية — الربط بالبرامج عبر «مقررات الخطة»</div>
+        </div>
+        <div class="d-flex gap-1 flex-wrap">
+          <button type="button" class="btn btn-sm btn-outline-info" id="btnCmAudit">تقرير الجرد (أ)</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="btnCmNew">جديد</button>
+          <button type="button" class="btn btn-sm btn-outline-primary" id="btnCmRefresh">تحديث</button>
+        </div>
       </div>
       <div class="card-body">
-        <div class="table-responsive"><table class="table table-sm" id="tblCm"><thead><tr>
-          <th>id</th><th>title_ar</th><th>وحدات</th><th>grading</th></tr></thead><tbody></tbody></table></div>
+        <div id="cmImplBanner" class="alert alert-info py-2 small d-none mb-2"></div>
+        <div id="cmPhasePanel" class="border rounded p-2 mb-2 small bg-light d-none">
+          <div class="fw-bold mb-1">خطة التنفيذ (كتالوج فقط)</div>
+          <div class="row g-2">
+            <div class="col-md-6"><span class="text-primary fw-semibold">أ — انتقالي</span><ul class="mb-0 ps-3" id="cmPhaseAList"></ul></div>
+            <div class="col-md-6"><span class="text-success fw-semibold">ب — مشاركة بين أقسام</span><ul class="mb-0 ps-3" id="cmPhaseBList"></ul></div>
+          </div>
+        </div>
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+          <label class="small mb-0">فلتر الحالة:</label>
+          <select class="form-select form-select-sm" id="cmLifecycleFilter" style="width:12rem;">
+            <option value="all">الكل</option>
+            <option value="standard">معياري (155)</option>
+            <option value="transitional">انتقالي (قديم)</option>
+            <option value="shared">مشترك بين أقسام</option>
+          </select>
+        </div>
+        <div class="table-responsive"><table class="table table-sm table-hover" id="tblCm"><thead><tr>
+          <th>id</th><th>title_ar</th><th>الحالة</th><th>وحدات</th><th>grading</th>
+          <th>الاستخدام</th><th class="text-nowrap">إجراءات</th></tr></thead><tbody></tbody></table></div>
         <div class="row g-2 align-items-end border-top pt-2">
-          <div class="col-md-2"><label class="form-label small">id</label><input class="form-control form-control-sm" id="cmId"></div>
-          <div class="col-md-5"><label class="form-label small">title_ar</label><input class="form-control form-control-sm" id="cmTitleAr"></div>
-          <div class="col-md-3"><label class="form-label small">title_en</label><input class="form-control form-control-sm" id="cmTitleEn"></div>
-          <div class="col-md-1"><label class="form-label small">units</label><input class="form-control form-control-sm" id="cmUnits" type="number" value="3"></div>
-          <div class="col-auto"><button class="btn btn-primary btn-sm" id="btnCmSave">حفظ المحتوى</button></div>
+          <div class="col-md-2"><label class="form-label small">id</label><input class="form-control form-control-sm" id="cmId" readonly placeholder="جديد"></div>
+          <div class="col-md-3"><label class="form-label small">title_ar</label><input class="form-control form-control-sm" id="cmTitleAr"></div>
+          <div class="col-md-2"><label class="form-label small">title_en</label><input class="form-control form-control-sm" id="cmTitleEn"></div>
+          <div class="col-md-1"><label class="form-label small">units</label><input class="form-control form-control-sm" id="cmUnits" type="number" value="3" min="0"></div>
+          <div class="col-md-2">
+            <label class="form-label small">حالة المحتوى</label>
+            <select class="form-select form-select-sm" id="cmLifecycle">
+              <option value="standard">معياري (155)</option>
+              <option value="transitional">انتقالي (قديم)</option>
+              <option value="shared">مشترك بين أقسام</option>
+            </select>
+          </div>
+          <div class="col-md-2"><label class="form-label small">مراجعة بعد</label><input class="form-control form-control-sm" id="cmReviewAfter" type="date"></div>
+          <div class="col-12">
+            <label class="form-label small">ملاحظة كتالوج</label>
+            <input class="form-control form-control-sm" id="cmCatalogNote" placeholder="مثال: حتى انتهاء دفعة 20XX — لا دمج">
+          </div>
+          <div class="col-12">
+            <div class="form-check form-check-inline">
+              <input class="form-check-input" type="checkbox" id="cmSyncTitleTag">
+              <label class="form-check-label small" for="cmSyncTitleTag">مزامنة وسم [انتقالي] في العنوان عند الحفظ</label>
+            </div>
+          </div>
+          <div class="col-auto d-flex gap-1 flex-wrap">
+            <button class="btn btn-primary btn-sm" id="btnCmSave">حفظ</button>
+            <button class="btn btn-outline-warning btn-sm" id="btnCmMarkTransitional" type="button">وسم انتقالي</button>
+            <button class="btn btn-outline-danger btn-sm" id="btnCmDelete" type="button">حذف</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal fade" id="cmUsageModal" tabindex="-1" aria-labelledby="cmUsageModalLabel" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="cmUsageModalLabel">أين يُستخدم المحتوى؟</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+          </div>
+          <div class="modal-body">
+            <p class="small text-muted mb-2" id="cmUsageSubtitle"></p>
+            <div id="cmUsageBlockers" class="alert alert-warning py-2 small d-none"></div>
+            <h6 class="small fw-bold">بنود الخطة (program_courses)</h6>
+            <div class="table-responsive mb-3">
+              <table class="table table-sm table-bordered mb-0" id="cmUsagePlanTable">
+                <thead><tr>
+                  <th>قسم</th><th>برنامج</th><th>رمز</th><th>مستوى</th><th>نطاق</th>
+                </tr></thead><tbody></tbody>
+              </table>
+            </div>
+            <h6 class="small fw-bold">مقررات مسجّلة (courses)</h6>
+            <ul class="small mb-0" id="cmUsageOperational"></ul>
+          </div>
+          <div id="cmUsageLinkPanel" class="border-top pt-3 mt-2 d-none">
+            <h6 class="small fw-bold text-success">ربط لبرنامج آخر (مرحلة ب)</h6>
+            <p class="small text-muted mb-2">نفس المحتوى — رمز خطة مختلف لكل قسم/برنامج. لا يُطبَّق على المحتوى الانتقالي.</p>
+            <div class="row g-2 align-items-end">
+              <div class="col-md-5">
+                <label class="form-label small">برنامج</label>
+                <select class="form-select form-select-sm" id="cmLinkProgram"></select>
+              </div>
+              <div class="col-md-3">
+                <label class="form-label small">رمز في الخطة</label>
+                <input class="form-control form-control-sm" id="cmLinkCode" placeholder="ME201">
+              </div>
+              <div class="col-md-2">
+                <label class="form-label small">مستوى</label>
+                <input class="form-control form-control-sm" id="cmLinkLevel" type="number" min="0" value="0">
+              </div>
+              <div class="col-md-2">
+                <button type="button" class="btn btn-success btn-sm w-100" id="btnCmLinkProgram">ربط</button>
+              </div>
+            </div>
+            <div class="form-check mt-2">
+              <input class="form-check-input" type="checkbox" id="cmLinkMarkShared" checked>
+              <label class="form-check-label small" for="cmLinkMarkShared">تعيين الحالة «مشترك بين أقسام»</label>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">إغلاق</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal fade" id="cmAuditModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">تقرير جرد المحتوى — مرحلة أ</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <pre id="cmAuditSummary" class="small bg-light p-2"></pre>
+            <div class="table-responsive">
+              <table class="table table-sm table-bordered" id="cmAuditTable">
+                <thead><tr><th>id</th><th>عنوان</th><th>حالة</th><th>استخدام</th><th>ملاحظة</th><th>مراجعة</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -850,12 +971,210 @@
       updateActiveProgramBar();
     }
 
+    function escHtml(s) {
+      return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+    }
+
+    function cmLifecycleBadge(lc) {
+      const map = {
+        standard: '<span class="badge bg-primary">معياري</span>',
+        transitional: '<span class="badge bg-warning text-dark">انتقالي</span>',
+        shared: '<span class="badge bg-success">مشترك</span>',
+      };
+      return map[lc] || escHtml(lc || '');
+    }
+
+    function clearCmForm() {
+      document.getElementById('cmId').value = '';
+      document.getElementById('cmTitleAr').value = '';
+      document.getElementById('cmTitleEn').value = '';
+      document.getElementById('cmUnits').value = '3';
+      document.getElementById('cmLifecycle').value = 'standard';
+      document.getElementById('cmCatalogNote').value = '';
+      document.getElementById('cmReviewAfter').value = '';
+      document.getElementById('cmSyncTitleTag').checked = false;
+    }
+
+    function fillCmForm(m) {
+      document.getElementById('cmId').value = m.id || '';
+      document.getElementById('cmTitleAr').value = m.title_ar || '';
+      document.getElementById('cmTitleEn').value = m.title_en || '';
+      document.getElementById('cmUnits').value = String(m.default_units != null ? m.default_units : 3);
+      document.getElementById('cmLifecycle').value = m.catalog_lifecycle || 'standard';
+      document.getElementById('cmCatalogNote').value = m.catalog_note || '';
+      document.getElementById('cmReviewAfter').value = m.review_after || '';
+    }
+
+    let cmAuditModalInst = null;
+    let cmUsageMasterId = null;
+
+    async function loadCmImplementationMeta() {
+      try {
+        const meta = await apiGet('/college/catalog/course_master/implementation_meta');
+        const banner = document.getElementById('cmImplBanner');
+        const panel = document.getElementById('cmPhasePanel');
+        const safeguards = (meta.safeguards || []).map(s => `<li>${escHtml(s)}</li>`).join('');
+        const regOk = meta.reg_mode_ok !== false;
+        banner.classList.remove('d-none', 'alert-info', 'alert-warning');
+        banner.classList.add(regOk ? 'alert-info' : 'alert-warning');
+        banner.innerHTML = '<strong>ضمانات التنفيذ:</strong><ul class="mb-0 ps-3">' + safeguards + '</ul>';
+        panel.classList.remove('d-none');
+        document.getElementById('cmPhaseAList').innerHTML = (meta.phase_a_steps || [])
+          .map(s => `<li>${escHtml(s)}</li>`).join('');
+        document.getElementById('cmPhaseBList').innerHTML = (meta.phase_b_steps || [])
+          .map(s => `<li>${escHtml(s)}</li>`).join('');
+      } catch (e) {
+        /* optional */
+      }
+    }
+
+    async function showCmTransitionAudit() {
+      const data = await apiGet('/college/catalog/course_masters/transition_audit');
+      const s = data.summary || {};
+      document.getElementById('cmAuditSummary').textContent = JSON.stringify(s, null, 2);
+      const tbody = document.querySelector('#cmAuditTable tbody');
+      tbody.innerHTML = '';
+      (data.items || []).forEach(r => {
+        const use = r.is_in_use
+          ? `${r.program_count || 0} برنامج / ${r.plan_row_count || 0} بند`
+          : 'غير مستخدم';
+        tbody.insertAdjacentHTML('beforeend',
+          `<tr class="${r.catalog_lifecycle === 'transitional' ? 'table-warning' : ''}">` +
+          `<td>${r.id}</td><td>${escHtml(r.title_ar)}</td><td>${cmLifecycleBadge(r.catalog_lifecycle)}</td>` +
+          `<td>${use}</td><td>${escHtml(r.catalog_note)}</td><td>${escHtml(r.review_after)}</td></tr>`);
+      });
+      const el = document.getElementById('cmAuditModal');
+      if (window.bootstrap && bootstrap.Modal) {
+        if (!cmAuditModalInst) cmAuditModalInst = new bootstrap.Modal(el);
+        cmAuditModalInst.show();
+      }
+    }
+
+    function cmUsageLabel(m) {
+      const pc = Number(m.program_count || 0);
+      const dc = Number(m.department_count || 0);
+      if (!pc && !Number(m.operational_count || 0) && !Number(m.plo_link_count || 0)) {
+        return '<span class="text-muted">غير مستخدم</span>';
+      }
+      let t = pc ? `${pc} برنامج` : '';
+      if (dc) t += (t ? ' / ' : '') + `${dc} قسم`;
+      const rows = Number(m.plan_row_count || 0);
+      if (rows > pc) t += ` <span class="text-muted">(${rows} بند)</span>`;
+      return t || '<span class="text-warning">مسجّل فقط</span>';
+    }
+
+    let cmUsageModalInst = null;
+
+    async function showCmUsage(masterId) {
+      cmUsageMasterId = masterId;
+      const data = await apiGet('/college/catalog/course_master/' + encodeURIComponent(masterId) + '/usage');
+      const sub = document.getElementById('cmUsageSubtitle');
+      sub.textContent = `#${data.course_master_id} — ${data.title_ar || ''} (${data.catalog_lifecycle_label || ''})`;
+      const linkPanel = document.getElementById('cmUsageLinkPanel');
+      if (data.allow_cross_dept_link) {
+        linkPanel.classList.remove('d-none');
+        const sug = await apiGet('/college/catalog/course_master/' + encodeURIComponent(masterId) + '/link_suggestions');
+        const sel = document.getElementById('cmLinkProgram');
+        sel.innerHTML = '<option value="">— اختر برنامجاً —</option>' +
+          (sug.items || []).map(p =>
+            `<option value="${p.program_id}">${escHtml(p.department_code)} / ${escHtml(p.program_code)} — ${escHtml(p.program_name_ar)}</option>`
+          ).join('');
+      } else {
+        linkPanel.classList.add('d-none');
+      }
+      const blockEl = document.getElementById('cmUsageBlockers');
+      if (data.can_delete) {
+        blockEl.classList.add('d-none');
+        blockEl.textContent = '';
+      } else {
+        const b = data.delete_blockers || {};
+        const parts = [];
+        if (b.program_courses) parts.push(`${b.program_courses} بند خطة`);
+        if (b.program_course_prereqs) parts.push(`${b.program_course_prereqs} متطلب سابق`);
+        if (b.plo_course_master_links) parts.push(`${b.plo_course_master_links} ربط مخرجات`);
+        blockEl.textContent = 'لا يمكن حذف هذا المحتوى قبل إزالة الربط: ' + parts.join('، ');
+        blockEl.classList.remove('d-none');
+      }
+      const ptbody = document.querySelector('#cmUsagePlanTable tbody');
+      ptbody.innerHTML = '';
+      (data.plan_rows || []).forEach(r => {
+        ptbody.insertAdjacentHTML('beforeend',
+          `<tr><td>${escHtml(r.department_code)}</td><td>${escHtml(r.program_code)} — ${escHtml(r.program_name_ar)}</td>` +
+          `<td>${escHtml(r.course_code)}</td><td>${r.level_no != null ? r.level_no : ''}</td><td>${escHtml(r.requirement_scope)}</td></tr>`);
+      });
+      if (!(data.plan_rows || []).length) {
+        ptbody.insertAdjacentHTML('beforeend', '<tr><td colspan="5" class="text-muted">لا توجد بنود خطة</td></tr>');
+      }
+      const opUl = document.getElementById('cmUsageOperational');
+      const ops = data.operational_courses || [];
+      if (!ops.length) {
+        opUl.innerHTML = '<li class="text-muted">لا يوجد</li>';
+      } else {
+        opUl.innerHTML = ops.map(c =>
+          `<li>${escHtml(c.course_name)}${c.course_code ? ' (' + escHtml(c.course_code) + ')' : ''}</li>`
+        ).join('');
+      }
+      const el = document.getElementById('cmUsageModal');
+      if (window.bootstrap && bootstrap.Modal) {
+        if (!cmUsageModalInst) cmUsageModalInst = new bootstrap.Modal(el);
+        cmUsageModalInst.show();
+      } else {
+        el.classList.add('show');
+        el.style.display = 'block';
+      }
+    }
+
     async function loadCm(){
-      const data = await apiGet('/college/catalog/course_masters');
+      const lf = (document.getElementById('cmLifecycleFilter') || {}).value || 'all';
+      const url = '/college/catalog/course_masters' + (lf && lf !== 'all' ? '?lifecycle=' + encodeURIComponent(lf) : '');
+      const data = await apiGet(url);
       const tbody = document.querySelector('#tblCm tbody');
       tbody.innerHTML='';
       (data.items||[]).forEach(m=>{
-        tbody.insertAdjacentHTML('beforeend', `<tr><td>${m.id}</td><td>${m.title_ar}</td><td>${m.default_units||0}</td><td>${m.grading_mode||''}</td></tr>`);
+        const payload = encodeURIComponent(JSON.stringify({
+          id: m.id, title_ar: m.title_ar, title_en: m.title_en, default_units: m.default_units,
+          catalog_lifecycle: m.catalog_lifecycle, catalog_note: m.catalog_note, review_after: m.review_after
+        }));
+        const inUse = m.is_in_use;
+        const lc = m.catalog_lifecycle || 'standard';
+        const rowCls = lc === 'transitional' ? 'table-warning' : (inUse ? '' : 'table-light');
+        const blockDelete = Number(m.program_count || 0) || Number(m.plo_link_count || 0);
+        tbody.insertAdjacentHTML('beforeend',
+          `<tr data-cm-id="${m.id}" class="${rowCls}">` +
+          `<td>${m.id}</td><td>${escHtml(m.title_ar)}</td><td>${cmLifecycleBadge(lc)}</td>` +
+          `<td>${m.default_units||0}</td><td>${escHtml(m.grading_mode||'')}</td>` +
+          `<td>${cmUsageLabel(m)}</td>` +
+          `<td class="text-nowrap">` +
+          `<button type="button" class="btn btn-outline-secondary btn-sm py-0 cm-edit" data-payload="${payload}">تعديل</button> ` +
+          `<button type="button" class="btn btn-outline-info btn-sm py-0 cm-usage" data-id="${m.id}">أين يُستخدم؟</button> ` +
+          `<button type="button" class="btn btn-outline-danger btn-sm py-0 cm-del" data-id="${m.id}" data-title="${escHtml(m.title_ar)}" ${blockDelete ? 'disabled title="مربوط بخطط أو مخرجات — أزل الربط أولاً"' : ''}>حذف</button>` +
+          `</td></tr>`);
+      });
+      tbody.querySelectorAll('.cm-edit').forEach(btn => {
+        btn.onclick = () => {
+          try { fillCmForm(JSON.parse(decodeURIComponent(btn.getAttribute('data-payload')))); }
+          catch (e) { /* ignore */ }
+          document.getElementById('cardCourseMaster').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        };
+      });
+      tbody.querySelectorAll('.cm-usage').forEach(btn => {
+        btn.onclick = () => showCmUsage(btn.getAttribute('data-id'));
+      });
+      tbody.querySelectorAll('.cm-del').forEach(btn => {
+        btn.onclick = async () => {
+          const id = btn.getAttribute('data-id');
+          const title = btn.getAttribute('data-title') || id;
+          if (!confirm('حذف محتوى المقرر «' + title + '»؟')) return;
+          try {
+            await apiPost('/college/catalog/course_master/delete', { id: +id });
+            msg('تم الحذف', 'success');
+            if (String(document.getElementById('cmId').value) === String(id)) clearCmForm();
+            loadCm();
+            loadMasterChoices();
+          } catch (e) {
+            msg(e.message || 'تعذر الحذف', 'danger');
+          }
+        };
       });
       msg('تم تحميل محتوى المقررات: '+(data.items||[]).length, 'success');
     }
@@ -1547,16 +1866,70 @@
       }
     });
 
-    document.getElementById('btnCmRefresh').onclick = loadCm;
+    document.getElementById('btnCmRefresh').onclick = () => { loadCm(); loadCmImplementationMeta(); };
+    document.getElementById('btnCmNew').onclick = clearCmForm;
+    document.getElementById('cmLifecycleFilter').addEventListener('change', loadCm);
+    document.getElementById('btnCmAudit').onclick = showCmTransitionAudit;
     document.getElementById('btnCmSave').onclick = async ()=>{
+      const titleAr = document.getElementById('cmTitleAr').value.trim();
+      if (!titleAr) { msg('عنوان المقرر بالعربية مطلوب', 'warning'); return; }
       await apiPost('/college/catalog/course_master/save', {
         id: document.getElementById('cmId').value ? +document.getElementById('cmId').value : null,
-        title_ar: document.getElementById('cmTitleAr').value.trim(),
+        title_ar: titleAr,
         title_en: document.getElementById('cmTitleEn').value.trim(),
-        default_units:+document.getElementById('cmUnits').value
+        default_units:+document.getElementById('cmUnits').value,
+        catalog_lifecycle: document.getElementById('cmLifecycle').value,
+        catalog_note: document.getElementById('cmCatalogNote').value.trim(),
+        review_after: document.getElementById('cmReviewAfter').value,
+        sync_title_tag: document.getElementById('cmSyncTitleTag').checked ? 1 : 0,
       });
       msg('تم حفظ المحتوى', 'success');
       loadCm();
+      loadMasterChoices();
+    };
+    document.getElementById('btnCmMarkTransitional').onclick = async () => {
+      const id = document.getElementById('cmId').value;
+      if (!id) { msg('اختر مقرراً أو احفظه أولاً', 'warning'); return; }
+      await apiPost('/college/catalog/course_master/mark_lifecycle', {
+        ids: [+id],
+        catalog_lifecycle: 'transitional',
+        catalog_note: document.getElementById('cmCatalogNote').value.trim() || 'انتقالي — دفعة قديمة',
+        review_after: document.getElementById('cmReviewAfter').value,
+        sync_title_tag: 1,
+      });
+      msg('تم وسم المحتوى كانتقالي', 'success');
+      loadCm();
+    };
+    document.getElementById('btnCmLinkProgram').onclick = async () => {
+      if (!cmUsageMasterId) return;
+      const pid = document.getElementById('cmLinkProgram').value;
+      const code = (document.getElementById('cmLinkCode').value || '').trim();
+      if (!pid || !code) { msg('اختر برنامجاً وأدخل رمز المقرر', 'warning'); return; }
+      await apiPost('/college/catalog/course_master/' + cmUsageMasterId + '/link_to_program', {
+        program_id: +pid,
+        course_code: code,
+        level_no: +(document.getElementById('cmLinkLevel').value || 0),
+        mark_shared: document.getElementById('cmLinkMarkShared').checked ? 1 : 0,
+      });
+      msg('تم ربط المحتوى بالبرنامج', 'success');
+      showCmUsage(cmUsageMasterId);
+      loadCm();
+      loadMasterChoices();
+    };
+    document.getElementById('btnCmDelete').onclick = async () => {
+      const id = document.getElementById('cmId').value;
+      if (!id) { msg('اختر مقرراً للحذف أو اضغط حذف من الجدول', 'warning'); return; }
+      const title = document.getElementById('cmTitleAr').value.trim() || id;
+      if (!confirm('حذف محتوى المقرر «' + title + '»؟')) return;
+      try {
+        await apiPost('/college/catalog/course_master/delete', { id: +id });
+        msg('تم الحذف', 'success');
+        clearCmForm();
+        loadCm();
+        loadMasterChoices();
+      } catch (e) {
+        msg(e.message || 'تعذر الحذف — قد يكون مربوطاً بخطط', 'danger');
+      }
     };
 
     document.getElementById('btnPcRefresh').onclick = loadPc;
@@ -1894,6 +2267,7 @@
         await loadDepartmentTrackPrograms(true);
         await loadPrograms();
         loadCm();
+        loadCmImplementationMeta();
         await loadMasterChoices();
         try {
           const data = await apiGet('/college/catalog/programs');

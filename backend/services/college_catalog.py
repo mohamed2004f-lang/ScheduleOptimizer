@@ -33,7 +33,18 @@ from backend.core.program_tracks import (
     track_template_presets,
 )
 from backend.core.auth import get_admin_department_scope_id, role_required
+from backend.core.course_master_catalog import (
+    LIFECYCLE_LABELS_AR,
+    LIFECYCLE_SHARED,
+    LIFECYCLE_STANDARD,
+    LIFECYCLE_TRANSITIONAL,
+    apply_transitional_title_tag,
+    ensure_course_master_catalog_schema,
+    normalize_catalog_lifecycle,
+    title_suggests_transitional,
+)
 from backend.core.department_scope_policy import head_home_department_id
+from backend.core.feature_flags import registration_program_course_mode
 from backend.database.database import fetch_table_columns, is_postgresql
 from backend.services.utilities import excel_response_from_frames, get_connection
 
@@ -684,17 +695,616 @@ def save_program():
     return jsonify({"status": "ok", "id": pid}), 200
 
 
+def _course_master_usage_map(cur) -> dict[int, dict]:
+    """عدد البرامج والأقسام وبنود الخطة لكل course_master."""
+    out: dict[int, dict] = {}
+
+    def _merge_rows(rows: list[dict], fields: dict[str, str]) -> None:
+        for r in rows:
+            mid = _i(r.get("mid"))
+            if mid is None:
+                continue
+            slot = out.setdefault(
+                mid,
+                {"program_count": 0, "department_count": 0, "plan_row_count": 0},
+            )
+            for key, src in fields.items():
+                slot[key] = int(r.get(src) or 0)
+
+    try:
+        _merge_rows(
+            _rows(
+                cur,
+                """
+                SELECT pc.course_master_id AS mid,
+                       COUNT(DISTINCT pc.program_id) AS program_count,
+                       COUNT(DISTINCT p.department_id) AS department_count,
+                       COUNT(*) AS plan_row_count
+                FROM program_courses pc
+                INNER JOIN programs p ON p.id = pc.program_id
+                GROUP BY pc.course_master_id
+                """,
+            ),
+            {
+                "program_count": "program_count",
+                "department_count": "department_count",
+                "plan_row_count": "plan_row_count",
+            },
+        )
+    except Exception:
+        pass
+    try:
+        _merge_rows(
+            _rows(
+                cur,
+                """
+                SELECT course_master_id AS mid, COUNT(*) AS operational_count
+                FROM courses
+                WHERE course_master_id IS NOT NULL
+                GROUP BY course_master_id
+                """,
+            ),
+            {"operational_count": "operational_count"},
+        )
+    except Exception:
+        pass
+    try:
+        _merge_rows(
+            _rows(
+                cur,
+                """
+                SELECT course_master_id AS mid, COUNT(*) AS plo_link_count
+                FROM plo_course_master_links
+                GROUP BY course_master_id
+                """,
+            ),
+            {"plo_link_count": "plo_link_count"},
+        )
+    except Exception:
+        pass
+    return out
+
+
+def _sql_count(cur, sql: str, params: tuple) -> int:
+    r = cur.execute(sql, params).fetchone()
+    if not r:
+        return 0
+    try:
+        return int(r[0])
+    except (TypeError, IndexError, KeyError):
+        pass
+    if hasattr(r, "keys"):
+        keys = list(r.keys())
+        if keys:
+            return int(r[keys[0]])
+    return 0
+
+
+def _course_master_delete_blockers(cur, master_id: int) -> dict[str, int]:
+    blockers: dict[str, int] = {}
+    pc = _sql_count(
+        cur,
+        "SELECT COUNT(*) FROM program_courses WHERE course_master_id = ?",
+        (master_id,),
+    )
+    if pc:
+        blockers["program_courses"] = pc
+    pr = _sql_count(
+        cur,
+        """
+        SELECT COUNT(*) FROM program_course_prereqs
+        WHERE required_course_master_id = ?
+        """,
+        (master_id,),
+    )
+    if pr:
+        blockers["program_course_prereqs"] = pr
+    try:
+        pl = _sql_count(
+            cur,
+            """
+            SELECT COUNT(*) FROM plo_course_master_links
+            WHERE course_master_id = ?
+            """,
+            (master_id,),
+        )
+        if pl:
+            blockers["plo_course_master_links"] = pl
+    except Exception:
+        pass
+    return blockers
+
+
+def _attach_course_master_usage(row: dict, usage: dict[int, dict], cur) -> None:
+    mid = _i(row.get("id"))
+    lc = normalize_catalog_lifecycle(row.get("catalog_lifecycle"))
+    if lc == LIFECYCLE_STANDARD and title_suggests_transitional(row.get("title_ar")):
+        lc = LIFECYCLE_TRANSITIONAL
+    row["catalog_lifecycle"] = lc
+    row["catalog_lifecycle_label"] = LIFECYCLE_LABELS_AR.get(lc, lc)
+    row["catalog_note"] = str(row.get("catalog_note") or "").strip()
+    row["review_after"] = str(row.get("review_after") or "").strip()
+    u = usage.get(mid or -1, {})
+    row["program_count"] = int(u.get("program_count") or 0)
+    row["department_count"] = int(u.get("department_count") or 0)
+    row["plan_row_count"] = int(u.get("plan_row_count") or 0)
+    row["operational_count"] = int(u.get("operational_count") or 0)
+    row["plo_link_count"] = int(u.get("plo_link_count") or 0)
+    row["is_in_use"] = bool(
+        row["program_count"]
+        or row["plan_row_count"]
+        or row["operational_count"]
+        or row["plo_link_count"]
+    )
+    row["can_delete"] = not bool(_course_master_delete_blockers(cur, mid or 0))
+    row["allow_cross_dept_link"] = lc in (LIFECYCLE_STANDARD, LIFECYCLE_SHARED)
+
+
 # ---------------------------------------------------------------------------
 @college_catalog_bp.route("/course_masters", methods=["GET"])
 @role_required(*_PLAN_EDITOR)
 def list_course_masters():
+    lifecycle_raw = (request.args.get("lifecycle") or "all").strip().lower()
+    lifecycle_filter = (
+        None if lifecycle_raw in ("", "all") else normalize_catalog_lifecycle(lifecycle_raw)
+    )
     with get_connection() as conn:
+        ensure_course_master_catalog_schema(conn)
         cur = conn.cursor()
         if is_postgresql():
             rows = _rows(cur, "SELECT * FROM course_master ORDER BY title_ar ASC")
         else:
             rows = _rows(cur, "SELECT * FROM course_master ORDER BY title_ar COLLATE NOCASE ASC")
+        usage = _course_master_usage_map(cur)
+        for row in rows:
+            _attach_course_master_usage(row, usage, cur)
+        if lifecycle_filter:
+            rows = [r for r in rows if r.get("catalog_lifecycle") == lifecycle_filter]
     return jsonify({"status": "ok", "items": rows}), 200
+
+
+@college_catalog_bp.route("/course_master/<int:master_id>/usage", methods=["GET"])
+@role_required(*_PLAN_EDITOR)
+def course_master_usage(master_id: int):
+    with get_connection() as conn:
+        ensure_course_master_catalog_schema(conn)
+        cur = conn.cursor()
+        exists = cur.execute(
+            "SELECT id, title_ar FROM course_master WHERE id = ?",
+            (master_id,),
+        ).fetchone()
+        if not exists:
+            return jsonify({"status": "error", "message": "المحتوى غير موجود"}), 404
+        title_ar = (
+            exists["title_ar"]
+            if hasattr(exists, "keys")
+            else exists[1]
+        )
+        plan_rows = _rows(
+            cur,
+            """
+            SELECT d.code AS department_code,
+                   d.name_ar AS department_name_ar,
+                   p.id AS program_id,
+                   p.code AS program_code,
+                   p.name_ar AS program_name_ar,
+                   pc.id AS program_course_id,
+                   pc.course_code,
+                   pc.level_no,
+                   COALESCE(pc.requirement_scope, 'dept_common') AS requirement_scope
+            FROM program_courses pc
+            INNER JOIN programs p ON p.id = pc.program_id
+            INNER JOIN departments d ON d.id = p.department_id
+            WHERE pc.course_master_id = ?
+            ORDER BY d.code, p.code, pc.course_code
+            """,
+            (master_id,),
+        )
+        operational = _rows(
+            cur,
+            """
+            SELECT course_name, course_code, units
+            FROM courses
+            WHERE course_master_id = ?
+            ORDER BY course_name
+            """,
+            (master_id,),
+        )
+        plo_links: list[dict] = []
+        try:
+            plo_links = _rows(
+                cur,
+                """
+                SELECT p.code AS program_code,
+                       d.code AS department_code,
+                       o.code AS outcome_code,
+                       o.title_ar AS outcome_title_ar
+                FROM plo_course_master_links m
+                INNER JOIN programs p ON p.id = m.program_id
+                INNER JOIN departments d ON d.id = p.department_id
+                INNER JOIN program_learning_outcomes o ON o.id = m.outcome_id
+                WHERE m.course_master_id = ?
+                ORDER BY d.code, p.code, o.code
+                """,
+                (master_id,),
+            )
+        except Exception:
+            plo_links = []
+        blockers = _course_master_delete_blockers(cur, master_id)
+        lc_row = cur.execute(
+            "SELECT catalog_lifecycle, title_ar FROM course_master WHERE id = ?",
+            (master_id,),
+        ).fetchone()
+        lc = LIFECYCLE_STANDARD
+        if lc_row:
+            lc = normalize_catalog_lifecycle(
+                lc_row["catalog_lifecycle"] if hasattr(lc_row, "keys") else None
+            )
+            title_chk = (
+                lc_row["title_ar"] if hasattr(lc_row, "keys") else lc_row[1]
+            )
+            if lc == LIFECYCLE_STANDARD and title_suggests_transitional(title_chk):
+                lc = LIFECYCLE_TRANSITIONAL
+    dept_codes = sorted({r.get("department_code") for r in plan_rows if r.get("department_code")})
+    return jsonify(
+        {
+            "status": "ok",
+            "course_master_id": master_id,
+            "title_ar": title_ar,
+            "catalog_lifecycle": lc,
+            "catalog_lifecycle_label": LIFECYCLE_LABELS_AR.get(lc, lc),
+            "allow_cross_dept_link": lc in (LIFECYCLE_STANDARD, LIFECYCLE_SHARED),
+            "program_count": len({r.get("program_id") for r in plan_rows}),
+            "department_count": len(dept_codes),
+            "plan_row_count": len(plan_rows),
+            "operational_count": len(operational),
+            "plo_link_count": len(plo_links),
+            "can_delete": not blockers,
+            "delete_blockers": blockers,
+            "plan_rows": plan_rows,
+            "operational_courses": operational,
+            "plo_links": plo_links,
+        }
+    ), 200
+
+
+@college_catalog_bp.route("/course_master/delete", methods=["POST"])
+@role_required(*_ADMIN_FULL)
+def delete_course_master():
+    b = _body()
+    mid = _i(b.get("id"))
+    if not mid:
+        return jsonify({"status": "error", "message": "id مطلوب"}), 400
+    with get_connection() as conn:
+        cur = conn.cursor()
+        ensure_course_master_catalog_schema(conn)
+        exists = cur.execute(
+            "SELECT id, title_ar, catalog_lifecycle FROM course_master WHERE id = ?",
+            (mid,),
+        ).fetchone()
+        if not exists:
+            return jsonify({"status": "error", "message": "المحتوى غير موجود"}), 404
+        blockers = _course_master_delete_blockers(cur, mid)
+        if blockers:
+            lc = LIFECYCLE_STANDARD
+            try:
+                if hasattr(exists, "keys"):
+                    lc = normalize_catalog_lifecycle(exists["catalog_lifecycle"])
+            except Exception:
+                pass
+            msg = (
+                "لا يمكن حذف محتوى انتقالي ما زال مربوطاً بخطط أو مخرجات. "
+                "أزل الربط من مقررات الخطة أولاً (لا تغيّر أسماء المقررات في التسجيل/الدرجات)."
+                if lc == LIFECYCLE_TRANSITIONAL
+                else "لا يمكن الحذف: المحتوى مربوط بخطط أو مخرجات. افتح «أين يُستخدم؟» ثم أزل الربط من مقررات الخطة أولاً."
+            )
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": msg,
+                        "delete_blockers": blockers,
+                    }
+                ),
+                409,
+            )
+        cur.execute("DELETE FROM course_master WHERE id = ?", (mid,))
+        conn.commit()
+    return jsonify({"status": "ok", "id": mid}), 200
+
+
+@college_catalog_bp.route("/course_master/implementation_meta", methods=["GET"])
+@role_required(*_PLAN_EDITOR)
+def course_master_implementation_meta():
+    """إرشادات المرحلة أ/ب وضمانات ما قبل التنفيذ (كتالوج فقط)."""
+    reg_mode = registration_program_course_mode()
+    return jsonify(
+        {
+            "status": "ok",
+            "reg_program_course_mode": reg_mode,
+            "reg_mode_ok": reg_mode in ("off", "warn"),
+            "safeguards": [
+                "العمل في كتالوج الكلية فقط — لا تعديل على قائمة المقررات/التسجيل/خطة التسجيل/كشف الدرجات من هنا.",
+                "لا حذف محتوى يظهر مستخدماً في «أين يُستخدم؟».",
+                "لا تغيير course_name في courses أو grades للمقررات الانتقالية.",
+                "يُفضّل REG_PROGRAM_COURSE_MODE=warn أو off أثناء الانتقال (الحالي: "
+                + reg_mode
+                + ").",
+            ],
+            "phase_a_steps": [
+                "وسم المحتوى المؤقت: حالة «انتقالي» + ملاحظة + تاريخ مراجعة.",
+                "جرد عبر «أين يُستخدم؟» — لا دمج لسجلات متشابهة الاسم.",
+                "تقرير الجرد الانتقالي (زر أدناه) لمعرفة ما يُحذف لاحقاً.",
+            ],
+            "phase_b_steps": [
+                "للمقررات المشتركة بين الأقسام: حالة «مشترك بين أقسام» ثم «ربط لبرنامج» من نافذة الاستخدام.",
+                "لا تربط برامج جديدة بمحتوى «انتقالي».",
+                "بعد انتهاء الدفعة القديمة: حذف غير المستخدم فقط.",
+            ],
+        }
+    ), 200
+
+
+@college_catalog_bp.route("/course_masters/transition_audit", methods=["GET"])
+@role_required(*_PLAN_EDITOR)
+def course_masters_transition_audit():
+    """تقرير جرد المحتوى الانتقالي والمعياري (مرحلة أ)."""
+    with get_connection() as conn:
+        ensure_course_master_catalog_schema(conn)
+        cur = conn.cursor()
+        if is_postgresql():
+            rows = _rows(cur, "SELECT * FROM course_master ORDER BY title_ar ASC")
+        else:
+            rows = _rows(cur, "SELECT * FROM course_master ORDER BY title_ar COLLATE NOCASE ASC")
+        usage = _course_master_usage_map(cur)
+        items = []
+        summary = {
+            "total": 0,
+            "transitional": 0,
+            "shared": 0,
+            "standard": 0,
+            "transitional_in_use": 0,
+            "unused_transitional": 0,
+        }
+        for row in rows:
+            _attach_course_master_usage(row, usage, cur)
+            summary["total"] += 1
+            lc = row.get("catalog_lifecycle") or LIFECYCLE_STANDARD
+            summary[lc] = summary.get(lc, 0) + 1
+            if lc == LIFECYCLE_TRANSITIONAL:
+                if row.get("is_in_use"):
+                    summary["transitional_in_use"] += 1
+                else:
+                    summary["unused_transitional"] += 1
+            items.append(
+                {
+                    "id": row.get("id"),
+                    "title_ar": row.get("title_ar"),
+                    "catalog_lifecycle": lc,
+                    "catalog_lifecycle_label": row.get("catalog_lifecycle_label"),
+                    "catalog_note": row.get("catalog_note"),
+                    "review_after": row.get("review_after"),
+                    "program_count": row.get("program_count"),
+                    "department_count": row.get("department_count"),
+                    "plan_row_count": row.get("plan_row_count"),
+                    "is_in_use": row.get("is_in_use"),
+                    "can_delete": row.get("can_delete"),
+                }
+            )
+    return jsonify({"status": "ok", "summary": summary, "items": items}), 200
+
+
+@college_catalog_bp.route("/course_master/mark_lifecycle", methods=["POST"])
+@role_required(*_ADMIN_FULL)
+def course_master_mark_lifecycle():
+    """وسم دفعة من سجلات المحتوى (مرحلة أ)."""
+    b = _body()
+    ids = b.get("ids") or []
+    if not isinstance(ids, list) or not ids:
+        mid = _i(b.get("id"))
+        ids = [mid] if mid else []
+    lifecycle = normalize_catalog_lifecycle(b.get("catalog_lifecycle"))
+    note = str(b.get("catalog_note") or "").strip()
+    review_after = str(b.get("review_after") or "").strip()
+    sync_title = _ibool(b.get("sync_title_tag"), 0)
+    updated = 0
+    with get_connection() as conn:
+        ensure_course_master_catalog_schema(conn)
+        cur = conn.cursor()
+        for raw_id in ids:
+            mid = _i(raw_id)
+            if not mid:
+                continue
+            row = cur.execute(
+                "SELECT title_ar FROM course_master WHERE id = ?",
+                (mid,),
+            ).fetchone()
+            if not row:
+                continue
+            title_ar = row["title_ar"] if hasattr(row, "keys") else row[0]
+            if sync_title and lifecycle == LIFECYCLE_TRANSITIONAL:
+                title_ar = apply_transitional_title_tag(title_ar, True)
+            elif sync_title and lifecycle == LIFECYCLE_STANDARD:
+                title_ar = apply_transitional_title_tag(title_ar, False)
+            cur.execute(
+                """
+                UPDATE course_master
+                SET catalog_lifecycle = ?, catalog_note = ?, review_after = ?, title_ar = ?
+                WHERE id = ?
+                """,
+                (lifecycle, note, review_after, title_ar, mid),
+            )
+            updated += 1
+        conn.commit()
+    return jsonify({"status": "ok", "updated": updated, "catalog_lifecycle": lifecycle}), 200
+
+
+@college_catalog_bp.route("/course_master/<int:master_id>/link_suggestions", methods=["GET"])
+@role_required(*_PLAN_EDITOR)
+def course_master_link_suggestions(master_id: int):
+    """برامج لا تملك بعد بنداً لهذا المحتوى (مرحلة ب)."""
+    with get_connection() as conn:
+        ensure_course_master_catalog_schema(conn)
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT id, title_ar, catalog_lifecycle FROM course_master WHERE id = ?",
+            (master_id,),
+        ).fetchone()
+        if not row:
+            return jsonify({"status": "error", "message": "المحتوى غير موجود"}), 404
+        lc = normalize_catalog_lifecycle(
+            row["catalog_lifecycle"] if hasattr(row, "keys") else LIFECYCLE_STANDARD
+        )
+        if lc == LIFECYCLE_TRANSITIONAL:
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "محتوى انتقالي — لا يُربط ببرامج جديدة. أنشئ نسخة معيارية أو مشتركة.",
+                    "catalog_lifecycle": lc,
+                }
+            ), 400
+        scope = _catalog_scope_department_id(conn)
+        sql = """
+            SELECT p.id AS program_id, p.code AS program_code, p.name_ar AS program_name_ar,
+                   d.code AS department_code, d.name_ar AS department_name_ar
+            FROM programs p
+            INNER JOIN departments d ON d.id = p.department_id
+            WHERE COALESCE(p.is_active, 1) = 1
+              AND NOT EXISTS (
+                SELECT 1 FROM program_courses pc
+                WHERE pc.program_id = p.id AND pc.course_master_id = ?
+              )
+        """
+        params: list = [master_id]
+        if scope is not None:
+            sql += " AND p.department_id = ?"
+            params.append(int(scope))
+        sql += " ORDER BY d.code, p.code"
+        programs = _rows(cur, sql, tuple(params))
+    return jsonify(
+        {
+            "status": "ok",
+            "course_master_id": master_id,
+            "items": programs,
+        }
+    ), 200
+
+
+@college_catalog_bp.route("/course_master/<int:master_id>/link_to_program", methods=["POST"])
+@role_required(*_PLAN_EDITOR)
+def course_master_link_to_program(master_id: int):
+    """إضافة بند خطة لبرنامج آخر بنفس المحتوى (مرحلة ب)."""
+    b = _body()
+    program_id = _i(b.get("program_id"))
+    course_code = str(b.get("course_code") or "").strip()
+    level_no = max(0, _i(b.get("level_no"), 0) or 0)
+    req_scope = normalize_requirement_scope(
+        b.get("requirement_scope") or suggest_requirement_scope_for_level(level_no)
+    )
+    units_ov = b.get("units_override")
+    if program_id is None or not course_code:
+        return jsonify(
+            {"status": "error", "message": "program_id ورمز المقرر في الخطة مطلوبان"}
+        ), 400
+    with get_connection() as conn:
+        ensure_course_master_catalog_schema(conn)
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT id, catalog_lifecycle, default_units FROM course_master WHERE id = ?",
+            (master_id,),
+        ).fetchone()
+        if not row:
+            return jsonify({"status": "error", "message": "المحتوى غير موجود"}), 404
+        lc = normalize_catalog_lifecycle(
+            row["catalog_lifecycle"] if hasattr(row, "keys") else LIFECYCLE_STANDARD
+        )
+        if lc == LIFECYCLE_TRANSITIONAL:
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "لا يُربط المحتوى الانتقالي ببرامج جديدة.",
+                }
+            ), 400
+        if not _program_belongs_to_scope(conn, int(program_id)):
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        default_u = int(
+            row["default_units"] if hasattr(row, "keys") else (row[2] or 0)
+        )
+        units_ov_int = (
+            _i(units_ov, default_u) if units_ov not in (None, "") else default_u
+        )
+        if lc == LIFECYCLE_STANDARD and _i(b.get("mark_shared"), 0):
+            cur.execute(
+                "UPDATE course_master SET catalog_lifecycle = ? WHERE id = ?",
+                (LIFECYCLE_SHARED, master_id),
+            )
+        pg = is_postgresql()
+        if pg:
+            cur.execute(
+                """
+                INSERT INTO program_courses
+                (program_id, course_master_id, course_code, course_name_override,
+                 plan_applicability, requirement_scope, level_no, units_override,
+                 category, is_required, is_active)
+                VALUES (?, ?, ?, '', 'both', ?, ?, ?, 'required', 1, 1)
+                ON CONFLICT (program_id, course_code) DO UPDATE SET
+                  course_master_id = EXCLUDED.course_master_id,
+                  requirement_scope = EXCLUDED.requirement_scope,
+                  level_no = EXCLUDED.level_no,
+                  units_override = EXCLUDED.units_override,
+                  is_active = 1
+                RETURNING id
+                """,
+                (
+                    program_id,
+                    master_id,
+                    course_code,
+                    req_scope,
+                    level_no,
+                    units_ov_int,
+                ),
+            )
+            pcid = _row_id(cur.fetchone())
+        else:
+            cur.execute(
+                """
+                INSERT INTO program_courses
+                (program_id, course_master_id, course_code, course_name_override,
+                 plan_applicability, requirement_scope, level_no, units_override,
+                 category, is_required, is_active)
+                VALUES (?, ?, ?, '', 'both', ?, ?, ?, 'required', 1, 1)
+                ON CONFLICT (program_id, course_code) DO UPDATE SET
+                  course_master_id = excluded.course_master_id,
+                  requirement_scope = excluded.requirement_scope,
+                  level_no = excluded.level_no,
+                  units_override = excluded.units_override,
+                  is_active = 1
+                """,
+                (
+                    program_id,
+                    master_id,
+                    course_code,
+                    req_scope,
+                    level_no,
+                    units_ov_int,
+                ),
+            )
+            pcid = int(
+                cur.execute(
+                    "SELECT id FROM program_courses WHERE program_id = ? AND course_code = ?",
+                    (program_id, course_code),
+                ).fetchone()[0]
+            )
+        conn.commit()
+    return jsonify(
+        {
+            "status": "ok",
+            "program_course_id": pcid,
+            "course_master_id": master_id,
+            "program_id": program_id,
+            "course_code": course_code,
+        }
+    ), 200
 
 
 def _scope_for_level(level_no: int) -> str:
@@ -920,43 +1530,86 @@ def save_course_master():
     units = max(0, _i(b.get("default_units"), 0) or 0)
     gm = _grading_mode(b.get("grading_mode"))
     at = _assessment(b.get("assessment_type"))
+    lifecycle = normalize_catalog_lifecycle(b.get("catalog_lifecycle"))
+    catalog_note = str(b.get("catalog_note") or "").strip()
+    review_after = str(b.get("review_after") or "").strip()
+    sync_title = _ibool(b.get("sync_title_tag"), 0)
+    if sync_title and lifecycle == LIFECYCLE_TRANSITIONAL:
+        title_ar = apply_transitional_title_tag(title_ar, True)
+    elif sync_title and lifecycle == LIFECYCLE_STANDARD:
+        title_ar = apply_transitional_title_tag(title_ar, False)
     if not title_ar:
         return jsonify({"status": "error", "message": "عنوان المقرر بالعربية مطلوب"}), 400
     with get_connection() as conn:
+        ensure_course_master_catalog_schema(conn)
         cur = conn.cursor()
         pg = is_postgresql()
         if mid:
             cur.execute(
                 """
                 UPDATE course_master SET title_ar = ?, title_en = ?, description = ?, default_units = ?,
-                  grading_mode = ?, assessment_type = ?
+                  grading_mode = ?, assessment_type = ?,
+                  catalog_lifecycle = ?, catalog_note = ?, review_after = ?
                 WHERE id = ?
                 """,
-                (title_ar, title_en, description, units, gm, at, mid),
+                (
+                    title_ar,
+                    title_en,
+                    description,
+                    units,
+                    gm,
+                    at,
+                    lifecycle,
+                    catalog_note,
+                    review_after,
+                    mid,
+                ),
             )
         elif pg:
             cur.execute(
                 """
                 INSERT INTO course_master
-                  (title_ar, title_en, description, default_units, grading_mode, assessment_type)
-                VALUES (?, ?, ?, ?, ?, ?)
+                  (title_ar, title_en, description, default_units, grading_mode, assessment_type,
+                   catalog_lifecycle, catalog_note, review_after)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 RETURNING id
                 """,
-                (title_ar, title_en, description, units, gm, at),
+                (
+                    title_ar,
+                    title_en,
+                    description,
+                    units,
+                    gm,
+                    at,
+                    lifecycle,
+                    catalog_note,
+                    review_after,
+                ),
             )
             mid = _row_id(cur.fetchone())
         else:
             cur.execute(
                 """
                 INSERT INTO course_master
-                  (title_ar, title_en, description, default_units, grading_mode, assessment_type)
-                VALUES (?, ?, ?, ?, ?, ?)
+                  (title_ar, title_en, description, default_units, grading_mode, assessment_type,
+                   catalog_lifecycle, catalog_note, review_after)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (title_ar, title_en, description, units, gm, at),
+                (
+                    title_ar,
+                    title_en,
+                    description,
+                    units,
+                    gm,
+                    at,
+                    lifecycle,
+                    catalog_note,
+                    review_after,
+                ),
             )
             mid = int(getattr(cur, "lastrowid", None) or cur.execute("SELECT last_insert_rowid()").fetchone()[0])
         conn.commit()
-    return jsonify({"status": "ok", "id": mid}), 200
+    return jsonify({"status": "ok", "id": mid, "catalog_lifecycle": lifecycle}), 200
 
 
 # ---------------------------------------------------------------------------
