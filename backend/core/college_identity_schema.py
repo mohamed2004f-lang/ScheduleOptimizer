@@ -16,6 +16,32 @@ PROGRAM_PROFILE_COLUMNS: tuple[tuple[str, str], ...] = (
 
 GOAL_IG_COLUMN = ("parent_ig_code", "TEXT DEFAULT ''")
 
+PROGRAM_IG_ALIGNMENT_SQLITE = (
+    "program_ig_alignment",
+    """
+    CREATE TABLE IF NOT EXISTS program_ig_alignment (
+        program_id INTEGER NOT NULL,
+        ig_code TEXT NOT NULL,
+        alignment_type TEXT NOT NULL DEFAULT 'supports',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (program_id, ig_code)
+    )
+    """,
+)
+
+PROGRAM_IG_ALIGNMENT_PG = (
+    "program_ig_alignment",
+    """
+    CREATE TABLE IF NOT EXISTS program_ig_alignment (
+        program_id INTEGER NOT NULL,
+        ig_code TEXT NOT NULL,
+        alignment_type TEXT NOT NULL DEFAULT 'supports',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (program_id, ig_code)
+    )
+    """,
+)
+
 COLLEGE_TABLES_SQLITE: tuple[tuple[str, str], ...] = (
     (
         "college_identity",
@@ -176,6 +202,11 @@ def ensure_college_identity_schema(conn) -> None:
             cur.execute(ddl)
         except Exception as e:
             logger.warning("college identity table %s: %s", _name, e)
+    alignment_tbl = PROGRAM_IG_ALIGNMENT_PG if pg else PROGRAM_IG_ALIGNMENT_SQLITE
+    try:
+        cur.execute(alignment_tbl[1])
+    except Exception as e:
+        logger.debug("program_ig_alignment: %s", e)
     if pg:
         for col, typ in PROGRAM_PROFILE_COLUMNS:
             try:

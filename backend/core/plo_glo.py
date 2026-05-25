@@ -106,6 +106,8 @@ GLO_CODE_DOMAIN: dict[str, str] = {
     "GLO6": "social_responsibility",
     "GLO7": "environmental_values",
     "GLO8": "ethical_values",
+    "GLO9": "general_skills",
+    "GLO10": "general_skills",
 }
 
 VALID_GLO_DOMAINS = frozenset(DOMAIN_LABELS_AR.keys())
@@ -150,6 +152,9 @@ def migrate_outcome_domains(conn) -> dict[str, int]:
             code = r[1] if not hasattr(r, "keys") else r["code"]
             old = r[2] if not hasattr(r, "keys") else r["domain"]
             new = normalize_outcome_domain(old, glo_code=str(code or ""))
+            expected = GLO_CODE_DOMAIN.get(str(code or "").strip().upper())
+            if expected and new != expected:
+                new = expected
             if new != (old or "").strip().lower():
                 cur.execute(
                     "UPDATE college_graduate_outcomes SET domain = ? WHERE id = ?",

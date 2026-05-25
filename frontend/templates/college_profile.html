@@ -22,9 +22,7 @@
       </div>
       <div class="d-flex flex-wrap gap-2 align-items-center">
         <a href="/academic_quality/programs" class="btn btn-outline-primary btn-sm">برامج الكلية</a>
-        {% if can_edit %}
-        <button type="button" class="btn btn-outline-primary btn-sm" id="btnToggleEditMode">وضع التحرير</button>
-        {% endif %}
+        <button type="button" class="btn btn-outline-primary btn-sm d-none" id="btnToggleEditMode">وضع التحرير</button>
         <a href="/academic_quality/export/college-strategic" class="btn btn-outline-secondary btn-sm" target="_blank">تقرير HTML</a>
         <a href="/academic_quality/export/college-strategic.pdf" class="btn btn-outline-secondary btn-sm">تقرير PDF</a>
       </div>
@@ -234,8 +232,8 @@
 
   <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
   <script>
-    const CAN_EDIT = {{ 'true' if can_edit else 'false' }};
-    const CAN_EDIT_KPI = {{ 'true' if can_edit_kpi else 'false' }};
+    let CAN_EDIT = false;
+    let CAN_EDIT_KPI = false;
     const DOMAIN_LABELS = {{ domain_labels|tojson }};
     const DOMAIN_ORDER = {{ domain_order|tojson }};
     let profileData = null;
@@ -413,7 +411,8 @@
       html += '</tr></thead><tbody>';
       kpis.forEach(k => {
         const actual = k.actual_value != null ? k.actual_value : (k.computed_value != null ? k.computed_value + ' (محسوب)' : '—');
-        html += '<tr><td>' + esc(k.goal_code) + '</td><td>' + esc(k.name_ar) + '</td><td>' + esc(k.target_value) + ' ' + esc(k.unit) + '</td><td>' + esc(actual) + '</td><td>' + esc(k.data_source) + '</td>';
+        const tgt = k.unit === '%' ? (esc(k.target_value) + '%') : (esc(k.target_value) + ' ' + esc(k.unit));
+        html += '<tr><td>' + esc(k.goal_code) + '</td><td>' + esc(k.name_ar) + '</td><td dir="ltr" class="text-start">' + tgt + '</td><td dir="ltr" class="text-start">' + esc(actual) + '</td><td>' + esc(k.data_source) + '</td>';
         if (editOn()) {
           html += '<td class="text-nowrap"><button type="button" class="btn btn-sm btn-outline-primary btn-edit-kpi" data-id="' + k.id + '">تعديل</button> ' +
             '<button type="button" class="btn btn-sm btn-outline-danger btn-del-kpi" data-id="' + k.id + '">حذف</button></td>';
@@ -546,6 +545,9 @@
         return;
       }
       profileData = j;
+      CAN_EDIT = true;
+      CAN_EDIT_KPI = true;
+      document.getElementById('btnToggleEditMode')?.classList.remove('d-none');
       document.getElementById('loadState').classList.add('d-none');
       document.getElementById('mainWrap').classList.remove('d-none');
       renderAll();

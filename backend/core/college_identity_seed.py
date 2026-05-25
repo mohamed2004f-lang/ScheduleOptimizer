@@ -97,11 +97,22 @@ IG_GLO_LINKS: dict[str, list[str]] = {
 }
 
 DEFAULT_KPIS: tuple[dict[str, Any], ...] = (
-    {"goal_code": "IG1", "name_ar": "نسبة المقررات تحقق مخرجاتها ≥ 80%", "target_value": 80.0, "unit": "%", "data_source": "system", "frequency": "annual"},
-    {"goal_code": "IG1", "name_ar": "معدل رضا الطلاب عن التعليم ≥ 4/5", "target_value": 4.0, "unit": "من 5", "data_source": "survey", "frequency": "semester"},
-    {"goal_code": "IG2", "name_ar": "نسبة الطلاب تحقق مخرجات البرنامج ≥ 85%", "target_value": 85.0, "unit": "%", "data_source": "system", "frequency": "annual"},
-    {"goal_code": "IG7", "name_ar": "نسبة PLO ذات تغطية M كافية (≥3 مقررات)", "target_value": 90.0, "unit": "%", "data_source": "system", "frequency": "annual"},
-    {"goal_code": "IG8", "name_ar": "نسبة مقررات بمحتوى استدامة/مسؤولية", "target_value": 60.0, "unit": "%", "data_source": "manual", "frequency": "annual"},
+    {"goal_code": "IG1", "name_ar": "نسبة المقررات تحقق مخرجاتها ≥ 80%", "target_value": 80.0, "unit": "%", "data_source": "system", "frequency": "annual", "sort_order": 10},
+    {"goal_code": "IG1", "name_ar": "معدل رضا الطلاب عن التعليم ≥ 4/5", "target_value": 4.0, "unit": "من 5", "data_source": "survey", "frequency": "semester", "sort_order": 11},
+    {"goal_code": "IG2", "name_ar": "نسبة الطلاب تحقق مخرجات البرنامج ≥ 85%", "target_value": 85.0, "unit": "%", "data_source": "system", "frequency": "annual", "sort_order": 20},
+    {"goal_code": "IG2", "name_ar": "نسبة الطلاب يمتلكون مهارات تواصل وعمل جماعي فعّالة", "target_value": 80.0, "unit": "%", "data_source": "survey", "frequency": "annual", "sort_order": 21},
+    {"goal_code": "IG3", "name_ar": "عدد المشاريع البحثية المنجزة سنوياً", "target_value": 10.0, "unit": "مشروع", "data_source": "manual", "frequency": "annual", "sort_order": 30},
+    {"goal_code": "IG3", "name_ar": "عدد الأوراق العلمية المنشورة", "target_value": 5.0, "unit": "ورقة", "data_source": "manual", "frequency": "annual", "sort_order": 31},
+    {"goal_code": "IG4", "name_ar": "نسبة المختبرات المجهزة وفق المعايير", "target_value": 75.0, "unit": "%", "data_source": "manual", "frequency": "annual", "sort_order": 40},
+    {"goal_code": "IG4", "name_ar": "معدل رضا الطلاب عن البنية التحتية", "target_value": 3.5, "unit": "من 5", "data_source": "survey", "frequency": "semester", "sort_order": 41},
+    {"goal_code": "IG5", "name_ar": "عدد ورش التطوير المهني للأساتذة", "target_value": 6.0, "unit": "ورشة", "data_source": "manual", "frequency": "annual", "sort_order": 50},
+    {"goal_code": "IG5", "name_ar": "نسبة الأساتذة المشاركين في برامج تدريب", "target_value": 70.0, "unit": "%", "data_source": "manual", "frequency": "annual", "sort_order": 51},
+    {"goal_code": "IG6", "name_ar": "عدد اتفاقيات الشراكة الوطنية الفعّالة", "target_value": 3.0, "unit": "اتفاقية", "data_source": "manual", "frequency": "annual", "sort_order": 60},
+    {"goal_code": "IG6", "name_ar": "عدد المشاريع المجتمعية المنفذة", "target_value": 4.0, "unit": "مشروع", "data_source": "manual", "frequency": "annual", "sort_order": 61},
+    {"goal_code": "IG7", "name_ar": "نسبة PLO ذات تغطية M كافية (≥3 مقررات)", "target_value": 90.0, "unit": "%", "data_source": "system", "frequency": "annual", "sort_order": 70},
+    {"goal_code": "IG7", "name_ar": "إتمام المراجعة الذاتية السنوية للبرامج", "target_value": 100.0, "unit": "%", "data_source": "manual", "frequency": "annual", "sort_order": 71},
+    {"goal_code": "IG8", "name_ar": "نسبة مقررات بمحتوى استدامة/مسؤولية", "target_value": 60.0, "unit": "%", "data_source": "manual", "frequency": "annual", "sort_order": 80},
+    {"goal_code": "IG8", "name_ar": "عدد المبادرات المجتمعية المنفذة", "target_value": 3.0, "unit": "مبادرة", "data_source": "manual", "frequency": "annual", "sort_order": 81},
 )
 
 
@@ -195,12 +206,43 @@ def seed_college_identity_defaults(conn) -> dict[str, int]:
                     k.get("unit") or "",
                     k.get("frequency") or "annual",
                     k.get("data_source") or "manual",
-                    i * 10,
+                    int(k.get("sort_order") or i * 10),
                 ),
             )
             stats["kpis"] += 1
+    _ensure_all_kpis_seeded(cur)
     try:
         conn.commit()
     except Exception:
         pass
     return stats
+
+
+def _ensure_all_kpis_seeded(cur):
+    """تُكمل KPIs الناقصة إذا أضيفت أهداف جديدة في DEFAULT_KPIS."""
+    for k in DEFAULT_KPIS:
+        try:
+            exists = cur.execute(
+                "SELECT 1 FROM goal_kpi WHERE goal_code = ? AND name_ar = ?",
+                (k["goal_code"], k["name_ar"]),
+            ).fetchone()
+            if not exists:
+                cur.execute(
+                    """
+                    INSERT INTO goal_kpi (
+                        goal_code, name_ar, target_value, unit, frequency,
+                        data_source, sort_order
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        k["goal_code"],
+                        k["name_ar"],
+                        k.get("target_value"),
+                        k.get("unit") or "",
+                        k.get("frequency") or "annual",
+                        k.get("data_source") or "manual",
+                        int(k.get("sort_order") or 0),
+                    ),
+                )
+        except Exception:
+            pass

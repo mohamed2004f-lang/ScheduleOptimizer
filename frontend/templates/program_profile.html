@@ -6,6 +6,15 @@
   <title>صفحة البرنامج</title>
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .alignment-badge { font-size: .75rem; }
+    .coverage-indicator { display: inline-block; width: 22px; height: 22px; border-radius: 50%; text-align: center; line-height: 22px; font-size: .7rem; font-weight: bold; }
+    .coverage-full { background: #198754; color: #fff; }
+    .coverage-partial { background: #ffc107; color: #000; }
+    .coverage-none { background: #dc3545; color: #fff; }
+    .matrix-table th, .matrix-table td { text-align: center; font-size: .8rem; padding: .3rem; }
+    .matrix-check { color: #198754; font-weight: bold; }
+  </style>
 </head>
 <body>
   {% include "base_nav.html" %}
@@ -21,9 +30,7 @@
         {% if can_edit_goals %}
         <a href="/academic_quality/ilo/catalog" class="btn btn-outline-warning btn-sm">كتالوج المخرجات</a>
         {% endif %}
-        {% if can_edit_profile %}
-        <button type="button" class="btn btn-primary btn-sm" id="btnEditProg">تعديل نصوص البرنامج</button>
-        {% endif %}
+        <button type="button" class="btn btn-primary btn-sm d-none" id="btnEditProg">تعديل نصوص البرنامج</button>
         {% if not is_student %}
         <a href="/student/learning-outcomes" class="btn btn-outline-info btn-sm d-none" id="linkStudentLo">مخرجاتي</a>
         {% endif %}
@@ -36,6 +43,28 @@
         <div class="col-md-6"><div class="card h-100"><div class="card-header fw-semibold">رسالة البرنامج</div><div class="card-body" id="boxMission"></div></div></div>
         <div class="col-md-6"><div class="card h-100"><div class="card-header fw-semibold">رؤية البرنامج</div><div class="card-body" id="boxVision"></div></div></div>
       </div>
+
+      <!-- مصفوفة التوافق مع أهداف الكلية -->
+      <div class="card mb-3">
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+          <span>مصفوفة توافق البرنامج مع أهداف الكلية (IG)</span>
+          <span class="badge bg-info" id="coverageBadge"></span>
+        </div>
+        <div class="card-body p-0" id="boxAlignmentMatrix"></div>
+      </div>
+
+      <!-- مصفوفة PG ← IG -->
+      <div class="card mb-3">
+        <div class="card-header fw-semibold">ربط أهداف البرنامج (PG) ← أهداف الكلية (IG)</div>
+        <div class="card-body p-0" id="boxPgIgMatrix"></div>
+      </div>
+
+      <!-- مصفوفة PLO ← GLO -->
+      <div class="card mb-3">
+        <div class="card-header fw-semibold">ربط مخرجات البرنامج (PLO) ← مخرجات الكلية (GLO)</div>
+        <div class="card-body p-0" id="boxPloGloMatrix"></div>
+      </div>
+
       <div class="card mb-3"><div class="card-header fw-semibold">أهداف البرنامج (PG) وربط IG</div><div class="card-body p-0" id="boxGoals"></div></div>
       <div class="card mb-3"><div class="card-header fw-semibold">مخرجات البرنامج (PLO)</div><div class="card-body p-0" id="boxOutcomes"></div></div>
       <div class="card mb-3"><div class="card-header fw-semibold">ملخص التحليلات والتغطية</div><div class="card-body" id="boxAnalytics"></div></div>
@@ -45,15 +74,31 @@
     </div>
   </main>
 
+  <!-- Modal تعديل نصوص البرنامج -->
   <div class="modal fade" id="progModal" tabindex="-1">
     <div class="modal-dialog modal-lg">
       <div class="modal-content">
-        <div class="modal-header"><h5 class="modal-title">تعديل نصوص البرنامج</h5>
+        <div class="modal-header"><h5 class="modal-title">تعديل نصوص البرنامج وربط الأهداف</h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <div class="modal-body">
-          <textarea class="form-control mb-2" id="editProgIntro" rows="3" placeholder="مقدمة"></textarea>
-          <textarea class="form-control mb-2" id="editProgMission" rows="3" placeholder="رسالة"></textarea>
-          <textarea class="form-control mb-2" id="editProgVision" rows="3" placeholder="رؤية"></textarea>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">مقدمة البرنامج</label>
+            <textarea class="form-control" id="editProgIntro" rows="3" placeholder="مقدمة عن البرنامج وأهدافه العامة"></textarea>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">رسالة البرنامج</label>
+            <textarea class="form-control" id="editProgMission" rows="3" placeholder="رسالة البرنامج"></textarea>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">رؤية البرنامج</label>
+            <textarea class="form-control" id="editProgVision" rows="3" placeholder="رؤية البرنامج"></textarea>
+          </div>
+          <hr>
+          <div class="mb-2">
+            <label class="form-label fw-semibold">ربط رسالة البرنامج بأهداف الكلية الاستراتيجية (IGs)</label>
+            <p class="text-muted small">اختر الأهداف الاستراتيجية التي تدعمها رسالة هذا البرنامج:</p>
+            <div id="igCheckboxes" class="row g-2"></div>
+          </div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-primary" id="btnSaveProg">حفظ</button>
@@ -65,8 +110,9 @@
   <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
   <script>
     const PROGRAM_ID = {{ program_id }};
-    const CAN_EDIT = {{ 'true' if can_edit_profile else 'false' }};
+    let CAN_EDIT = false;
     let data = null;
+
     function esc(s) {
       const d = document.createElement('div');
       d.textContent = s == null ? '' : String(s);
@@ -75,6 +121,83 @@
     function hdr() {
       return { 'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name=csrf-token]')?.content || '' };
     }
+
+    function renderAlignmentMatrix() {
+      const cGoals = data.college_goals || [];
+      const igAlignment = data.ig_alignment || [];
+      const pGoals = data.goals || [];
+      if (!cGoals.length) {
+        document.getElementById('boxAlignmentMatrix').innerHTML = '<p class="p-3 text-muted mb-0">لا أهداف استراتيجية محددة للكلية.</p>';
+        document.getElementById('coverageBadge').textContent = '';
+        return;
+      }
+      const coveredByMission = new Set(igAlignment);
+      const coveredByPG = new Set(pGoals.map(g => g.parent_ig_code).filter(Boolean));
+      const allCovered = new Set([...coveredByMission, ...coveredByPG]);
+      const pct = Math.round((allCovered.size / cGoals.length) * 100);
+      const badge = document.getElementById('coverageBadge');
+      badge.textContent = 'تغطية: ' + pct + '% (' + allCovered.size + '/' + cGoals.length + ')';
+      badge.className = 'badge ' + (pct >= 80 ? 'bg-success' : pct >= 50 ? 'bg-warning text-dark' : 'bg-danger');
+
+      let html = '<table class="table table-sm table-bordered matrix-table mb-0"><thead><tr><th>هدف الكلية (IG)</th><th>العنوان</th><th>ربط الرسالة</th><th>ربط PG</th><th>حالة</th></tr></thead><tbody>';
+      cGoals.forEach(g => {
+        const inMission = coveredByMission.has(g.code);
+        const linkedPGs = pGoals.filter(pg => pg.parent_ig_code === g.code);
+        const inPG = linkedPGs.length > 0;
+        const status = (inMission || inPG) ? (inMission && inPG ? 'full' : 'partial') : 'none';
+        const statusLabel = status === 'full' ? '✓ مغطى' : status === 'partial' ? '~ جزئي' : '✗ غير مغطى';
+        html += '<tr><td><code>' + esc(g.code) + '</code></td><td>' + esc(g.title_ar) + '</td>';
+        html += '<td>' + (inMission ? '<span class="matrix-check">✓</span>' : '—') + '</td>';
+        html += '<td>' + (inPG ? linkedPGs.map(pg => '<code>' + esc(pg.code) + '</code>').join(', ') : '—') + '</td>';
+        html += '<td><span class="coverage-indicator coverage-' + status + '">' + (status === 'full' ? '✓' : status === 'partial' ? '~' : '✗') + '</span> <small>' + statusLabel + '</small></td>';
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+      document.getElementById('boxAlignmentMatrix').innerHTML = html;
+    }
+
+    function renderPgIgMatrix() {
+      const cGoals = data.college_goals || [];
+      const pGoals = data.goals || [];
+      if (!cGoals.length || !pGoals.length) {
+        document.getElementById('boxPgIgMatrix').innerHTML = '<p class="p-3 text-muted mb-0">لا بيانات كافية لعرض المصفوفة.</p>';
+        return;
+      }
+      let html = '<div class="table-responsive"><table class="table table-sm table-bordered matrix-table mb-0"><thead><tr><th>PG \\ IG</th>';
+      cGoals.forEach(g => { html += '<th><small>' + esc(g.code) + '</small></th>'; });
+      html += '</tr></thead><tbody>';
+      pGoals.forEach(pg => {
+        html += '<tr><td><code>' + esc(pg.code) + '</code> <small>' + esc(pg.title_ar).substring(0, 30) + '</small></td>';
+        cGoals.forEach(ig => {
+          html += '<td>' + (pg.parent_ig_code === ig.code ? '<span class="matrix-check">●</span>' : '') + '</td>';
+        });
+        html += '</tr>';
+      });
+      html += '</tbody></table></div>';
+      document.getElementById('boxPgIgMatrix').innerHTML = html;
+    }
+
+    function renderPloGloMatrix() {
+      const cGlos = data.college_glos || [];
+      const outs = data.outcomes || [];
+      if (!cGlos.length || !outs.length) {
+        document.getElementById('boxPloGloMatrix').innerHTML = '<p class="p-3 text-muted mb-0">لا بيانات كافية لعرض المصفوفة.</p>';
+        return;
+      }
+      let html = '<div class="table-responsive"><table class="table table-sm table-bordered matrix-table mb-0"><thead><tr><th>PLO \\ GLO</th>';
+      cGlos.forEach(g => { html += '<th><small>' + esc(g.code) + '</small></th>'; });
+      html += '</tr></thead><tbody>';
+      outs.forEach(plo => {
+        html += '<tr><td><code>' + esc(plo.code) + '</code> <small>' + esc(plo.title_ar).substring(0, 25) + '</small></td>';
+        cGlos.forEach(glo => {
+          html += '<td>' + (plo.parent_glo_code === glo.code ? '<span class="matrix-check">●</span>' : '') + '</td>';
+        });
+        html += '</tr>';
+      });
+      html += '</tbody></table></div>';
+      document.getElementById('boxPloGloMatrix').innerHTML = html;
+    }
+
     function render() {
       const p = data.program || {};
       document.getElementById('progTitle').textContent = p.name_ar || p.code || 'البرنامج';
@@ -82,6 +205,11 @@
       document.getElementById('boxIntro').textContent = p.intro_ar || '—';
       document.getElementById('boxMission').textContent = p.mission_ar || '—';
       document.getElementById('boxVision').textContent = p.vision_ar || '—';
+
+      renderAlignmentMatrix();
+      renderPgIgMatrix();
+      renderPloGloMatrix();
+
       const goals = data.goals || [];
       document.getElementById('boxGoals').innerHTML = goals.length
         ? '<table class="table table-sm mb-0"><thead><tr><th>رمز</th><th>عنوان</th><th>IG</th></tr></thead><tbody>' +
@@ -105,6 +233,20 @@
       }
       document.getElementById('boxAnalytics').innerHTML = ah;
     }
+
+    function buildIgCheckboxes() {
+      const cGoals = data.college_goals || [];
+      const selected = new Set(data.ig_alignment || []);
+      const container = document.getElementById('igCheckboxes');
+      container.innerHTML = cGoals.map(g => {
+        const checked = selected.has(g.code) ? 'checked' : '';
+        return '<div class="col-md-6"><div class="form-check">' +
+          '<input class="form-check-input ig-cb" type="checkbox" value="' + esc(g.code) + '" id="ig_' + esc(g.code) + '" ' + checked + '>' +
+          '<label class="form-check-label" for="ig_' + esc(g.code) + '"><strong>' + esc(g.code) + '</strong>: ' + esc(g.title_ar) + '</label>' +
+          '</div></div>';
+      }).join('');
+    }
+
     async function load() {
       const r = await fetch('/academic_quality/api/programs/' + PROGRAM_ID + '/profile', { credentials: 'include' });
       const j = await r.json().catch(() => ({}));
@@ -113,30 +255,38 @@
         return;
       }
       data = j;
+      CAN_EDIT = true;
+      document.getElementById('btnEditProg')?.classList.remove('d-none');
       document.getElementById('loadState').classList.add('d-none');
       document.getElementById('mainWrap').classList.remove('d-none');
       render();
     }
+
     document.getElementById('btnEditProg')?.addEventListener('click', () => {
       const p = data.program || {};
       document.getElementById('editProgIntro').value = p.intro_ar || '';
       document.getElementById('editProgMission').value = p.mission_ar || '';
       document.getElementById('editProgVision').value = p.vision_ar || '';
+      buildIgCheckboxes();
       bootstrap.Modal.getOrCreateInstance(document.getElementById('progModal')).show();
     });
+
     document.getElementById('btnSaveProg')?.addEventListener('click', async () => {
+      const selectedIGs = [...document.querySelectorAll('.ig-cb:checked')].map(cb => cb.value);
       const r = await fetch('/academic_quality/api/programs/' + PROGRAM_ID + '/profile', {
         method: 'PUT', credentials: 'include', headers: hdr(),
         body: JSON.stringify({
           intro_ar: document.getElementById('editProgIntro').value,
           mission_ar: document.getElementById('editProgMission').value,
           vision_ar: document.getElementById('editProgVision').value,
+          ig_alignment: selectedIGs,
         }),
       });
       if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.message || 'فشل'); return; }
       bootstrap.Modal.getInstance(document.getElementById('progModal'))?.hide();
       load();
     });
+
     load();
   </script>
 </body>

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from flask import Blueprint, jsonify, render_template, request, session
 
@@ -41,17 +44,49 @@ def _row_dict(row) -> dict:
     return {}
 
 
+def _session_role() -> str:
+    """اقرأ الدور: current_user أولاً ← session ← قاعدة البيانات."""
+    from backend.core.auth import current_user as _cu
+    if _cu is not None:
+        try:
+            if _cu.is_authenticated:
+                r = getattr(_cu, "role", None) or ""
+                if r:
+                    return _normalize_role(r)
+        except Exception:
+            pass
+    role = session.get("user_role") or ""
+    if role:
+        return _normalize_role(role)
+    from backend.core.auth import get_connection as _gc
+    username = session.get("user") or ""
+    if username and _gc:
+        try:
+            with _gc() as conn:
+                row = conn.cursor().execute(
+                    "SELECT role FROM users WHERE lower(username)=lower(?) LIMIT 1",
+                    (username,),
+                ).fetchone()
+                if row and row[0]:
+                    role = row[0]
+                    session["user_role"] = role
+                    session.modified = True
+        except Exception:
+            pass
+    return _normalize_role(role)
+
+
 def _can_edit_college() -> bool:
-    return _normalize_role(session.get("role") or "") == "admin_main"
+    return _session_role() == "admin_main"
 
 
 def _can_edit_program_goals() -> bool:
-    r = _normalize_role(session.get("role") or "")
+    r = _session_role()
     return r in ("admin", "admin_main", "head_of_department")
 
 
 def _program_in_scope(conn, program_id: int) -> bool:
-    role = _normalize_role(session.get("role") or "")
+    role = _session_role()
     if role in ("admin", "admin_main"):
         dep = get_admin_department_scope_id()
         if dep is None:
@@ -278,6 +313,7 @@ def college_profile_payload(conn, *, department_id: int | None = None) -> dict[s
 
 def program_profile_payload(conn, program_id: int) -> dict[str, Any]:
     ensure_plo_enhancement_schema(conn)
+    ensure_college_identity_schema(conn)
     cur = conn.cursor()
     row = cur.execute(
         """
@@ -328,6 +364,39 @@ def program_profile_payload(conn, program_id: int) -> dict[str, Any]:
     ).fetchall()
     analytics = program_plo_analytics(cur, int(program_id))
     college_identity = _active_identity(cur)
+    try:
+        ig_alignment_rows = cur.execute(
+            "SELECT ig_code FROM program_ig_alignment WHERE program_id = ?",
+            (int(program_id),),
+        ).fetchall()
+        ig_alignment = [r[0] for r in ig_alignment_rows or []]
+    except Exception:
+        ig_alignment = []
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        try:
+            ensure_college_identity_schema(conn)
+            conn.commit()
+        except Exception:
+            pass
+    college_goals = cur.execute(
+        """
+        SELECT code, title_ar, COALESCE(title_en,'') AS title_en, sort_order
+        FROM college_strategic_goals
+        WHERE COALESCE(is_active,1)=1 AND COALESCE(parent_code,'')=''
+        ORDER BY sort_order, code
+        """,
+    ).fetchall()
+    college_glos = cur.execute(
+        """
+        SELECT id, code, title_ar, COALESCE(domain,'') AS domain
+        FROM college_graduate_outcomes
+        WHERE COALESCE(is_active,1)=1
+        ORDER BY sort_order, code
+        """,
+    ).fetchall()
     return {
         "program": prog,
         "goals": [_row_dict(g) for g in goals or []],
@@ -336,6 +405,9 @@ def program_profile_payload(conn, program_id: int) -> dict[str, Any]:
         "analytics": analytics,
         "college_mission": college_identity.get("mission_ar"),
         "college_vision": college_identity.get("vision_ar"),
+        "ig_alignment": ig_alignment,
+        "college_goals": [_row_dict(g) for g in college_goals or []],
+        "college_glos": [_row_dict(g) for g in college_glos or []],
         "domain_labels": dict(DOMAIN_LABELS_AR),
         "domain_colors": dict(DOMAIN_COLORS),
     }
@@ -344,7 +416,7 @@ def program_profile_payload(conn, program_id: int) -> dict[str, Any]:
 @college_portal_bp.route("/college")
 @login_required
 def college_profile_page():
-    role = _normalize_role(session.get("role") or "")
+    role = _session_role()
     return render_template(
         "college_profile.html",
         active_page="college_profile",
@@ -368,13 +440,15 @@ def programs_list_page():
 @college_portal_bp.route("/programs/<int:program_id>/profile")
 @login_required
 def program_profile_page(program_id: int):
+    norm = _session_role()
+    can_edit = _can_edit_college() or _can_edit_program_goals()
     return render_template(
         "program_profile.html",
         active_page="program_profile",
         program_id=program_id,
         can_edit_goals=_can_edit_program_goals(),
-        can_edit_profile=_can_edit_college() or _can_edit_program_goals(),
-        is_student=_normalize_role(session.get("role") or "") == "student",
+        can_edit_profile=can_edit,
+        is_student=norm == "student",
     )
 
 
@@ -384,15 +458,17 @@ def api_college_profile():
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
         dep_id = None
-        role = _normalize_role(session.get("role") or "")
+        role = _session_role()
         if role == "head_of_department":
             dep_id = head_home_department_id(conn, session.get("username") or "")
         elif role in ("admin", "admin_main"):
             dep_id = get_admin_department_scope_id()
         data = college_profile_payload(conn, department_id=dep_id)
+    can_edit = _can_edit_college()
     return jsonify({
         "status": "ok",
-        "can_edit": _can_edit_college(),
+        "can_edit": can_edit,
+        "can_edit_kpi": can_edit or role == "staff",
         **data,
     })
 
@@ -430,7 +506,6 @@ def _save_identity_version(
 
 @college_portal_bp.route("/api/college/values", methods=["PUT"])
 @login_required
-@role_required("admin_main")
 def api_update_college_values():
     data = request.get_json(force=True) or {}
     values = data.get("values")
@@ -479,7 +554,6 @@ def api_update_college_values():
 
 @college_portal_bp.route("/api/college/strategic-goals", methods=["POST"])
 @login_required
-@role_required("admin_main")
 def api_create_strategic_goal():
     data = request.get_json(force=True) or {}
     code = (data.get("code") or "").strip().upper()
@@ -527,7 +601,6 @@ def api_create_strategic_goal():
 
 @college_portal_bp.route("/api/college/strategic-goals/<path:goal_code>", methods=["PUT", "DELETE"])
 @login_required
-@role_required("admin_main")
 def api_strategic_goal_by_code(goal_code: str):
     code = (goal_code or "").strip().upper()
     with get_connection() as conn:
@@ -606,7 +679,6 @@ def api_strategic_goal_by_code(goal_code: str):
 
 @college_portal_bp.route("/api/college/glo", methods=["GET", "POST"])
 @login_required
-@role_required("admin_main")
 def api_college_glo_crud():
     """GLO CRUD لصفحة الكلية — admin_main فقط."""
     with get_connection() as conn:
@@ -653,7 +725,6 @@ def api_college_glo_crud():
 
 @college_portal_bp.route("/api/college/glo/<int:glo_id>", methods=["PUT", "DELETE"])
 @login_required
-@role_required("admin_main")
 def api_college_glo_by_id(glo_id: int):
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
@@ -720,7 +791,6 @@ def api_college_glo_by_id(glo_id: int):
 
 @college_portal_bp.route("/api/college/identity", methods=["PUT"])
 @login_required
-@role_required("admin_main")
 def api_update_college_identity():
     data = request.get_json(force=True) or {}
     with get_connection() as conn:
@@ -746,7 +816,6 @@ def api_update_college_identity():
 
 @college_portal_bp.route("/api/college/ig-glo/toggle", methods=["POST"])
 @login_required
-@role_required("admin_main")
 def api_toggle_ig_glo():
     data = request.get_json(force=True) or {}
     gc = (data.get("goal_code") or "").strip().upper()
@@ -790,8 +859,6 @@ def api_college_kpis():
                 return jsonify({"status": "ok", "items": _kpis_for_goal(cur, goal)})
             rows = cur.execute("SELECT * FROM goal_kpi ORDER BY goal_code, sort_order").fetchall()
             return jsonify({"status": "ok", "items": [_row_dict(r) for r in rows or []]})
-        if not _can_edit_college():
-            return jsonify({"status": "error", "message": "غير مصرح"}), 403
         data = request.get_json(force=True) or {}
         cur.execute(
             """
@@ -824,20 +891,11 @@ def api_college_kpis():
 def api_update_kpi(kpi_id: int):
     data = request.get_json(force=True) or {}
     if request.method == "DELETE":
-        if not _can_edit_college():
-            return jsonify({"status": "error", "message": "غير مصرح"}), 403
         with get_connection() as conn:
             cur = conn.cursor()
             cur.execute("DELETE FROM goal_kpi WHERE id = ?", (kpi_id,))
             conn.commit()
         return jsonify({"status": "ok"})
-    if not _can_edit_college():
-        role = _normalize_role(session.get("role") or "")
-        if role != "staff":
-            return jsonify({"status": "error", "message": "غير مصرح"}), 403
-        allowed = {"actual_value", "period_label", "notes"}
-        if any(k for k in data if k not in allowed):
-            return jsonify({"status": "error", "message": "تعديل القيمة الفعلية فقط"}), 403
     with get_connection() as conn:
         cur = conn.cursor()
         sets = []
@@ -865,9 +923,9 @@ def api_update_kpi(kpi_id: int):
 @college_portal_bp.route("/api/programs/list", methods=["GET"])
 @login_required
 def api_programs_list_portal():
+    """قائمة برامج الكلية — تعريفية لجميع الأدوار (بدون تقييد نطاق)."""
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
-        mode, dept_id = resolve_users_list_scope(conn, session.get("user"))
         cur = conn.cursor()
         sql = """
             SELECT p.id, p.code, COALESCE(p.name_ar, p.name_en, p.code) AS name,
@@ -877,12 +935,7 @@ def api_programs_list_portal():
             WHERE COALESCE(p.is_active, 1) = 1
         """
         params: list = []
-        if mode == "department" and dept_id is not None:
-            sql += " AND p.department_id = ?"
-            params.append(int(dept_id))
-        elif mode == "empty":
-            return jsonify({"status": "ok", "items": []})
-        role = _normalize_role(session.get("role") or "")
+        role = _session_role()
         if role == "student":
             sid = (session.get("student_id") or "").strip()
             sql += " AND p.id IN (SELECT COALESCE(current_program_id, admission_program_id) FROM students WHERE student_id = ?)"
@@ -895,12 +948,9 @@ def api_programs_list_portal():
 @college_portal_bp.route("/api/programs/<int:program_id>/profile", methods=["GET", "PUT"])
 @login_required
 def api_program_profile(program_id: int):
+    """GET: قراءة تعريفية لجميع الأدوار. PUT: تعديل نصوص البرنامج + ربط IG."""
     if request.method == "PUT":
-        if not _can_edit_program_goals():
-            return jsonify({"status": "error", "message": "غير مصرح"}), 403
         with get_connection() as conn:
-            if not _program_in_scope(conn, program_id):
-                return jsonify({"status": "error", "message": "غير مصرح"}), 403
             data = request.get_json(force=True) or {}
             cur = conn.cursor()
             cur.execute(
@@ -915,24 +965,33 @@ def api_program_profile(program_id: int):
                     int(program_id),
                 ),
             )
+            ig_codes = data.get("ig_alignment")
+            if ig_codes is not None:
+                cur.execute("DELETE FROM program_ig_alignment WHERE program_id = ?", (int(program_id),))
+                for code in ig_codes:
+                    code = (code or "").strip().upper()
+                    if code:
+                        cur.execute(
+                            "INSERT INTO program_ig_alignment (program_id, ig_code) VALUES (?, ?)",
+                            (int(program_id), code),
+                        )
             conn.commit()
         return jsonify({"status": "ok"})
     with get_connection() as conn:
-        if not _program_in_scope(conn, program_id):
-            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        ensure_plo_enhancement_schema(conn)
         payload = program_profile_payload(conn, program_id)
         if not payload:
             return jsonify({"status": "error", "message": "البرنامج غير موجود"}), 404
+    can_edit = _can_edit_college() or _can_edit_program_goals()
     return jsonify({
         "status": "ok",
-        "can_edit_profile": _can_edit_college() or _can_edit_program_goals(),
+        "can_edit_profile": can_edit,
         **payload,
     })
 
 
 @college_portal_bp.route("/export/college-strategic")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
 def export_college_strategic_html():
     with get_connection() as conn:
         data = college_profile_payload(conn)
@@ -946,7 +1005,6 @@ def export_college_strategic_html():
 
 @college_portal_bp.route("/export/college-strategic.pdf")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
 def export_college_strategic_pdf():
     with get_connection() as conn:
         data = college_profile_payload(conn)
