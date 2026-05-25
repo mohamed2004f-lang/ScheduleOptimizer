@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>صفحة البرنامج</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal">
+    <div class="page-header d-flex justify-content-between flex-wrap gap-2">
+      <div>
+        <h1 class="page-title" id="progTitle">صفحة البرنامج</h1>
+        <p class="page-subtitle" id="progSub"></p>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <a href="/academic_quality/programs" class="btn btn-outline-secondary btn-sm">كل البرامج</a>
+        <a href="/academic_quality/college" class="btn btn-outline-primary btn-sm">هوية الكلية</a>
+        {% if can_edit_goals %}
+        <a href="/academic_quality/ilo/catalog" class="btn btn-outline-warning btn-sm">كتالوج المخرجات</a>
+        {% endif %}
+        {% if can_edit_profile %}
+        <button type="button" class="btn btn-primary btn-sm" id="btnEditProg">تعديل نصوص البرنامج</button>
+        {% endif %}
+        {% if not is_student %}
+        <a href="/student/learning-outcomes" class="btn btn-outline-info btn-sm d-none" id="linkStudentLo">مخرجاتي</a>
+        {% endif %}
+      </div>
+    </div>
+    <div id="loadState" class="text-muted">جاري التحميل…</div>
+    <div id="mainWrap" class="d-none">
+      <div class="card mb-3"><div class="card-header fw-semibold">مقدمة البرنامج</div><div class="card-body" id="boxIntro"></div></div>
+      <div class="row g-3 mb-3">
+        <div class="col-md-6"><div class="card h-100"><div class="card-header fw-semibold">رسالة البرنامج</div><div class="card-body" id="boxMission"></div></div></div>
+        <div class="col-md-6"><div class="card h-100"><div class="card-header fw-semibold">رؤية البرنامج</div><div class="card-body" id="boxVision"></div></div></div>
+      </div>
+      <div class="card mb-3"><div class="card-header fw-semibold">أهداف البرنامج (PG) وربط IG</div><div class="card-body p-0" id="boxGoals"></div></div>
+      <div class="card mb-3"><div class="card-header fw-semibold">مخرجات البرنامج (PLO)</div><div class="card-body p-0" id="boxOutcomes"></div></div>
+      <div class="card mb-3"><div class="card-header fw-semibold">ملخص التحليلات والتغطية</div><div class="card-body" id="boxAnalytics"></div></div>
+      <div class="alert alert-light small mb-0">
+        <strong>سلسلة ضمان الجودة:</strong> أهداف الكلية (IG) → GLO → PG → PLO → CLO في المقررات (عبر مصفوفة I/R/M). لا ربط مباشر CLO↔GLO.
+      </div>
+    </div>
+  </main>
+
+  <div class="modal fade" id="progModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">تعديل نصوص البرنامج</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+          <textarea class="form-control mb-2" id="editProgIntro" rows="3" placeholder="مقدمة"></textarea>
+          <textarea class="form-control mb-2" id="editProgMission" rows="3" placeholder="رسالة"></textarea>
+          <textarea class="form-control mb-2" id="editProgVision" rows="3" placeholder="رؤية"></textarea>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-primary" id="btnSaveProg">حفظ</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+  <script>
+    const PROGRAM_ID = {{ program_id }};
+    const CAN_EDIT = {{ 'true' if can_edit_profile else 'false' }};
+    let data = null;
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s == null ? '' : String(s);
+      return d.innerHTML;
+    }
+    function hdr() {
+      return { 'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name=csrf-token]')?.content || '' };
+    }
+    function render() {
+      const p = data.program || {};
+      document.getElementById('progTitle').textContent = p.name_ar || p.code || 'البرنامج';
+      document.getElementById('progSub').textContent = (p.department_name || '') + ' — ' + (p.code || '');
+      document.getElementById('boxIntro').textContent = p.intro_ar || '—';
+      document.getElementById('boxMission').textContent = p.mission_ar || '—';
+      document.getElementById('boxVision').textContent = p.vision_ar || '—';
+      const goals = data.goals || [];
+      document.getElementById('boxGoals').innerHTML = goals.length
+        ? '<table class="table table-sm mb-0"><thead><tr><th>رمز</th><th>عنوان</th><th>IG</th></tr></thead><tbody>' +
+          goals.map(g => '<tr><td><code>' + esc(g.code) + '</code></td><td>' + esc(g.title_ar) +
+            '</td><td>' + (g.parent_ig_code ? '<span class="badge bg-secondary">' + esc(g.parent_ig_code) + '</span>' : '—') + '</td></tr>').join('') +
+          '</tbody></table>' : '<p class="p-3 text-muted mb-0">لا أهداف — أضفها من كتالوج المخرجات.</p>';
+      const outs = data.outcomes || [];
+      document.getElementById('boxOutcomes').innerHTML = outs.length
+        ? '<table class="table table-sm mb-0"><thead><tr><th>PLO</th><th>عنوان</th><th>GLO</th><th>مجال</th></tr></thead><tbody>' +
+          outs.map(o => '<tr><td><code>' + esc(o.code) + '</code></td><td>' + esc(o.title_ar) +
+            '</td><td>' + esc(o.parent_glo_code) + '</td><td>' + esc(o.domain) + '</td></tr>').join('') +
+          '</tbody></table>' : '<p class="p-3 text-muted mb-0">لا مخرجات.</p>';
+      const a = data.analytics || {};
+      let ah = '<p class="small">مخرجات: <strong>' + (a.outcomes_count||0) + '</strong> | مقررات: <strong>' + (a.courses_count||0) +
+        '</strong> | CLO: <strong>' + (a.clo_count||0) + '</strong></p>';
+      if ((a.gaps||[]).length) {
+        ah += '<div class="alert alert-warning small"><ul class="mb-0">' +
+          a.gaps.slice(0,8).map(g => '<li><code>' + esc(g.code) + '</code>: ' + esc(g.reason) + '</li>').join('') + '</ul></div>';
+      } else {
+        ah += '<p class="small text-success">لا فجوات حرجة مسجّلة في التحليل الحالي.</p>';
+      }
+      document.getElementById('boxAnalytics').innerHTML = ah;
+    }
+    async function load() {
+      const r = await fetch('/academic_quality/api/programs/' + PROGRAM_ID + '/profile', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        document.getElementById('loadState').textContent = j.message || 'تعذر التحميل';
+        return;
+      }
+      data = j;
+      document.getElementById('loadState').classList.add('d-none');
+      document.getElementById('mainWrap').classList.remove('d-none');
+      render();
+    }
+    document.getElementById('btnEditProg')?.addEventListener('click', () => {
+      const p = data.program || {};
+      document.getElementById('editProgIntro').value = p.intro_ar || '';
+      document.getElementById('editProgMission').value = p.mission_ar || '';
+      document.getElementById('editProgVision').value = p.vision_ar || '';
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('progModal')).show();
+    });
+    document.getElementById('btnSaveProg')?.addEventListener('click', async () => {
+      const r = await fetch('/academic_quality/api/programs/' + PROGRAM_ID + '/profile', {
+        method: 'PUT', credentials: 'include', headers: hdr(),
+        body: JSON.stringify({
+          intro_ar: document.getElementById('editProgIntro').value,
+          mission_ar: document.getElementById('editProgMission').value,
+          vision_ar: document.getElementById('editProgVision').value,
+        }),
+      });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.message || 'فشل'); return; }
+      bootstrap.Modal.getInstance(document.getElementById('progModal'))?.hide();
+      load();
+    });
+    load();
+  </script>
+</body>
+</html>

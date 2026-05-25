@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>مخرجاتي التعليمية</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal">
+    <div class="page-header">
+      <h1 class="page-title">مخرجاتي التعليمية</h1>
+      <p class="page-subtitle">مخرجات المقررات (CLO) وتقييم إتقانك والمخرجات الكلية (GLO)</p>
+    </div>
+    <div id="loadState" class="text-muted">جاري التحميل…</div>
+    <div id="gloCard" class="card mb-3 d-none">
+      <div class="card-header fw-semibold">المخرجات الكلية (GLO)</div>
+      <div class="card-body" id="gloBody"></div>
+    </div>
+    <div id="coursesWrap" class="d-none"></div>
+  </main>
+  <script>
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s == null ? '' : String(s);
+      return d.innerHTML;
+    }
+    function badgeMastery(p) {
+      if (p == null || p === '') return '<span class="badge bg-secondary">—</span>';
+      const n = Number(p);
+      const cls = n >= 70 ? 'bg-success' : (n >= 50 ? 'bg-warning text-dark' : 'bg-danger');
+      return '<span class="badge ' + cls + '">' + n + '%</span>';
+    }
+    (async function () {
+      const load = document.getElementById('loadState');
+      try {
+        const r = await fetch('/academic_quality/ilo/api/student/learning-outcomes', { credentials: 'include' });
+        const j = await r.json().catch(() => ({}));
+        load.classList.add('d-none');
+        if (!r.ok) {
+          load.textContent = j.message || 'تعذر تحميل البيانات';
+          load.classList.remove('d-none');
+          return;
+        }
+        const glo = j.glo_summary || [];
+        if (glo.length) {
+          document.getElementById('gloCard').classList.remove('d-none');
+          document.getElementById('gloBody').innerHTML = '<div class="table-responsive"><table class="table table-sm"><thead><tr><th>المخرج</th><th>متوسط إتقانك</th><th>الحالة</th></tr></thead><tbody>' +
+            glo.map(g => '<tr><td>' + esc(g.glo_code) + '</td><td>' + badgeMastery(g.average_mastery_percent) + '</td><td>' + (g.achieved ? 'محقق' : 'قيد التحسين') + '</td></tr>').join('') +
+            '</tbody></table></div>';
+        }
+        const courses = j.courses || [];
+        const wrap = document.getElementById('coursesWrap');
+        if (!courses.length) {
+          wrap.innerHTML = '<div class="alert alert-secondary">لا توجد مخرجات مرتبطة بمقرراتك المسجّلة بعد.</div>';
+        } else {
+          wrap.innerHTML = courses.map(c => {
+            const clos = c.clos || [];
+            const rows = clos.length ? clos.map(cl =>
+              '<tr><td>' + esc(cl.code) + '</td><td>' + esc(cl.title_ar) + '</td><td class="small">' + esc((cl.glo_codes || []).join(', ')) + '</td><td>' + badgeMastery(cl.mastery_percent) + '</td></tr>'
+            ).join('') : '<tr><td colspan="4" class="text-muted">لا CLO معرّفة لهذا المقرر</td></tr>';
+            return '<div class="card mb-3"><div class="card-header fw-semibold">' + esc(c.course_name) + ' <span class="text-muted small">(' + esc(c.semester) + ')</span></div><div class="card-body p-0"><table class="table table-sm mb-0"><thead><tr><th>الرمز</th><th>المخرج</th><th>GLO</th><th>إتقانك</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+          }).join('');
+        }
+        wrap.classList.remove('d-none');
+      } catch (e) {
+        load.textContent = 'خطأ في الاتصال';
+      }
+    })();
+  </script>
+</body>
+</html>

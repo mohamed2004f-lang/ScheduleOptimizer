@@ -79,10 +79,25 @@ def _pg_conninfo() -> str:
     return s
 
 
+def conn_is_postgresql(conn) -> bool:
+    """True إذا كان الاتصال فعلياً PostgreSQL (وليس SQLite في اختبارات الذاكرة)."""
+    if not is_postgresql():
+        return False
+    try:
+        import sqlite3
+
+        raw = getattr(conn, "_conn", conn)
+        if isinstance(raw, sqlite3.Connection):
+            return False
+    except Exception:
+        pass
+    return True
+
+
 def fetch_table_columns(conn, table_name: str) -> list[str]:
     """أسماء أعمدة جدول (بديل PRAGMA table_info) لـ SQLite وPostgreSQL."""
     cur = conn.cursor()
-    if is_postgresql():
+    if conn_is_postgresql(conn):
         cur.execute(
             """
             SELECT column_name FROM information_schema.columns

@@ -13,7 +13,7 @@
     <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
       <div>
         <h1 class="page-title h4 mb-1"><i class="fa-solid fa-award text-primary"></i> كتالوج مخرجات التعلم (PLO)</h1>
-        <p class="text-muted small mb-0">تعريف مخرجات البرنامج (Program Learning Outcomes) وربطها بمقررات الخطة الدراسية.</p>
+        <p class="text-muted small mb-0">أهداف البرنامج (PG) ومخرجات تعلم الطالب (SO/PLO) وربطها بمقررات الخطة.</p>
       </div>
       <a href="/academic_quality/dashboard" class="btn btn-outline-secondary btn-sm">لوحة الجودة</a>
     </div>
@@ -48,29 +48,37 @@
           <a class="btn btn-sm btn-outline-secondary" id="btnPloTemplate" href="/academic_quality/ilo/api/programs/0/outcomes/template.xlsx">قالب Excel</a>
           <button type="button" class="btn btn-sm btn-outline-primary" id="btnImportPloXlsx" disabled>استيراد Excel</button>
           <input type="file" id="ploExcelFile" accept=".xlsx,.xls" class="d-none">
+          <button type="button" class="btn btn-sm btn-outline-danger" id="btnImportMechProfile" disabled title="4 أهداف + 6 مخرجات ميكانيك">تحميل وثيقة ميكانيك</button>
+          <a class="btn btn-sm btn-outline-success" id="btnExportProfileXlsx" href="#" style="pointer-events:none;opacity:.6">تصدير أهداف+مخرجات</a>
           <button type="button" class="btn btn-sm btn-outline-info" id="btnShowGlo" disabled>مخرجات الكلية (GLO)</button>
           <button type="button" class="btn btn-sm btn-outline-warning" id="btnShowAnalytics" disabled>تحليلات وفجوات</button>
         </div>
         <div id="summaryRow" class="row g-2 mt-3 d-none">
-          <div class="col-6 col-md-3">
+          <div class="col-6 col-md-4 col-lg">
             <div class="border rounded p-2 text-center bg-light">
-              <div class="small text-muted">المخرجات</div>
+              <div class="small text-muted">أهداف البرنامج</div>
+              <div class="fw-bold fs-5" id="statGoals">0</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-4 col-lg">
+            <div class="border rounded p-2 text-center bg-light">
+              <div class="small text-muted">مخرجات SO/PLO</div>
               <div class="fw-bold fs-5" id="statOutcomes">0</div>
             </div>
           </div>
-          <div class="col-6 col-md-3">
+          <div class="col-6 col-md-4 col-lg">
             <div class="border rounded p-2 text-center bg-light">
               <div class="small text-muted">مقررات الخطة</div>
               <div class="fw-bold fs-5" id="statCourses">0</div>
             </div>
           </div>
-          <div class="col-6 col-md-3">
+          <div class="col-6 col-md-6 col-lg">
             <div class="border rounded p-2 text-center bg-light">
               <div class="small text-muted">روابط مُعرَّفة</div>
               <div class="fw-bold fs-5" id="statLinks">0</div>
             </div>
           </div>
-          <div class="col-6 col-md-3">
+          <div class="col-6 col-md-6 col-lg">
             <div class="border rounded p-2 text-center bg-light">
               <div class="small text-muted">مقررات بلا ربط</div>
               <div class="fw-bold fs-5 text-danger" id="statUnlinked">0</div>
@@ -83,6 +91,15 @@
     <ul class="nav nav-tabs mb-3 d-none" id="iloMainTabs" role="tablist">
       <li class="nav-item" role="presentation">
         <button class="nav-link active" type="button" data-ilo-tab="manage" id="tabBtnManage">المخرجات والربط</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" type="button" data-ilo-tab="goals" id="tabBtnGoals">أهداف البرنامج</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" type="button" data-ilo-tab="goalMatrix" id="tabBtnGoalMatrix">مصفوفة هدف↔مخرج</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" type="button" data-ilo-tab="glo" id="tabBtnGlo">مخرجات الكلية (GLO)</button>
       </li>
       <li class="nav-item" role="presentation">
         <button class="nav-link" type="button" data-ilo-tab="matrix" id="tabBtnMatrix">مصفوفة التغطية</button>
@@ -153,6 +170,85 @@
     </div>
     </div>
 
+    <div id="tabPaneGoals" class="ilo-tab-pane d-none">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <span class="fw-semibold">أهداف البرنامج (Program Goals)</span>
+          <button type="button" class="btn btn-sm btn-success" id="btnAddGoal">
+            <i class="fa-solid fa-plus"></i> إضافة هدف
+          </button>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0 align-middle">
+              <thead class="table-light">
+                <tr>
+                  <th style="width:5rem">الرمز</th>
+                  <th>العنوان والوصف</th>
+                  <th style="width:4rem">ترتيب</th>
+                  <th style="width:7rem"></th>
+                </tr>
+              </thead>
+              <tbody id="goalsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tabPaneGoalMatrix" class="ilo-tab-pane d-none">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <span class="fw-semibold">مصفوفة: أهداف البرنامج × مخرجات الطالب</span>
+          <button type="button" class="btn btn-sm btn-outline-primary" id="btnRefreshGoalMatrix">
+            <i class="fa-solid fa-rotate"></i> تحديث
+          </button>
+        </div>
+        <div class="card-body">
+          <p class="small text-muted mb-2">انقر الخلية لربط/إلغاء ربط هدف بمخرج. احفظ الروابط من القائمة الجانبية أو استخدم «تحميل وثيقة ميكانيك» للربط الافتراضي.</p>
+          <div id="goalMatrixWrap" class="table-responsive ilo-matrix-wrap">
+            <p class="text-muted small p-3 mb-0">حمّل بيانات البرنامج أولاً.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tabPaneGlo" class="ilo-tab-pane d-none">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <span class="fw-semibold">مخرجات الخريج — كلية الهندسة (GLO)</span>
+          <button type="button" class="btn btn-sm btn-success d-none" id="btnAddGlo">
+            <i class="fa-solid fa-plus"></i> إضافة GLO
+          </button>
+        </div>
+        <div class="card-body">
+          <p class="small text-muted mb-2" id="gloPermHint">تُربط مخرجات البرنامج (PLO/SO) بـ GLO عبر حقل «GLO الكلية» عند تعريف المخرج — لا ربط مباشر CLO↔GLO.</p>
+          <div class="d-flex flex-wrap gap-2 mb-2 align-items-center">
+            <label class="small text-muted mb-0">فلتر المجال:</label>
+            <select id="gloDomainFilter" class="form-select form-select-sm" style="max-width:16rem">
+              <option value="">كل المجالات</option>
+            </select>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0 align-middle">
+              <thead class="table-light">
+                <tr>
+                  <th style="width:5rem">الرمز</th>
+                  <th>العنوان والوصف</th>
+                  <th style="width:5rem">المجال</th>
+                  <th style="width:4rem">ترتيب</th>
+                  <th style="width:7rem" class="glo-edit-col"></th>
+                </tr>
+              </thead>
+              <tbody id="gloBody">
+                <tr><td colspan="5" class="text-muted text-center py-4">جاري التحميل…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="tabPaneMatrix" class="ilo-tab-pane d-none">
       <div class="card shadow-sm">
         <div class="card-header bg-light d-flex justify-content-between align-items-center flex-wrap gap-2">
@@ -164,10 +260,18 @@
         <div class="card-body">
           <div class="small text-muted mb-2">
             انقر الخلية للتدوير: فارغ → <strong>I</strong> تقديم → <strong>R</strong> تعميق → <strong>M</strong> إتقان/تقييم.
+            لا يُفترض أن يغطي كل مقرر كل المجالات — حدّد I/R/M حسب الحاجة.
             <span class="ilo-legend cov-i">I</span>
             <span class="ilo-legend cov-r">R</span>
             <span class="ilo-legend cov-m">M</span>
             <span class="ilo-legend ilo-col-op">عمود تشغيلي *</span>
+          </div>
+          <div id="matrixDomainLegend" class="d-flex flex-wrap gap-1 mb-2"></div>
+          <div class="mb-2 d-flex flex-wrap gap-2 align-items-center">
+            <label class="small text-muted mb-0">عرض مخرجات مجال:</label>
+            <select id="matrixDomainFilter" class="form-select form-select-sm" style="max-width:16rem">
+              <option value="">كل المخرجات (PLO)</option>
+            </select>
           </div>
           <div id="matrixWrap" class="table-responsive ilo-matrix-wrap">
             <p class="text-muted small p-3 mb-0">حمّل بيانات البرنامج أولاً.</p>
@@ -278,12 +382,7 @@
           <div class="row g-2 mb-2">
             <div class="col-md-4">
               <label class="form-label small">المجال</label>
-              <select class="form-select" id="outcomeDomain">
-                <option value="knowledge">معرفة</option>
-                <option value="skills" selected>مهارات</option>
-                <option value="values">قيم</option>
-                <option value="professional">مهنية</option>
-              </select>
+              <select class="form-select" id="outcomeDomain"></select>
             </div>
             <div class="col-md-4">
               <label class="form-label small">بلوم</label>
@@ -353,8 +452,120 @@
     </div>
   </div>
 
+  <div class="modal fade" id="gloModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="gloModalTitle">مخرج الكلية (GLO)</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="gloEditId" value="">
+          <div class="mb-2">
+            <label class="form-label small">الرمز (مثل GLO9)</label>
+            <input type="text" class="form-control" id="gloCode" maxlength="32" placeholder="GLO9">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">العنوان بالعربية</label>
+            <input type="text" class="form-control" id="gloTitle" maxlength="300">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">العنوان بالإنجليزية</label>
+            <input type="text" class="form-control" id="gloTitleEn" maxlength="300">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">المجال</label>
+            <select class="form-select" id="gloDomain"></select>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">الوصف</label>
+            <textarea class="form-control" id="gloDesc" rows="3" maxlength="4000"></textarea>
+          </div>
+          <div class="row g-2">
+            <div class="col-6">
+              <label class="form-label small">ترتيب</label>
+              <input type="number" class="form-control" id="gloSort" value="0" min="0" max="999">
+            </div>
+            <div class="col-6">
+              <label class="form-label small">الحوكمة</label>
+              <select class="form-select" id="gloGov">
+                <option value="draft">مسودة</option>
+                <option value="approved" selected>معتمد</option>
+                <option value="retired">موقوف</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-check mt-2">
+            <input class="form-check-input" type="checkbox" id="gloActive" checked>
+            <label class="form-check-label small" for="gloActive">نشط</label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+          <button type="button" class="btn btn-primary" id="btnSaveGlo">حفظ</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="goalModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="goalModalTitle">هدف البرنامج</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="goalEditId" value="">
+          <div class="mb-2">
+            <label class="form-label small">الرمز (مثل PG1)</label>
+            <input type="text" class="form-control" id="goalCode" maxlength="32" placeholder="PG1">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">العنوان بالعربية</label>
+            <input type="text" class="form-control" id="goalTitle" maxlength="300">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">العنوان بالإنجليزية</label>
+            <input type="text" class="form-control" id="goalTitleEn" maxlength="300">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">الوصف</label>
+            <textarea class="form-control" id="goalDesc" rows="4" maxlength="4000"></textarea>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">هدف الكلية المرتبط (IG)</label>
+            <input type="text" class="form-control" id="goalParentIg" maxlength="16" placeholder="مثل IG2">
+          </div>
+          <div class="row g-2">
+            <div class="col-6">
+              <label class="form-label small">ترتيب</label>
+              <input type="number" class="form-control" id="goalSort" value="0" min="0" max="999">
+            </div>
+            <div class="col-6">
+              <label class="form-label small">الحوكمة</label>
+              <select class="form-select" id="goalGov">
+                <option value="draft">مسودة</option>
+                <option value="approved">معتمد</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-check mt-2">
+            <input class="form-check-input" type="checkbox" id="goalActive" checked>
+            <label class="form-check-label small" for="goalActive">نشط</label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+          <button type="button" class="btn btn-primary" id="btnSaveGoal">حفظ</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <style>
     .ilo-link-box { max-height: 220px; overflow-y: auto; }
+    .ilo-matrix-cell.goal-on { background: #d1e7dd; font-weight: 700; color: #0f5132; }
     .ilo-link-box label { cursor: pointer; padding: 0.15rem 0; }
     .plo-desc { font-size: 0.8rem; color: var(--bs-secondary-color); }
     .plo-inactive { opacity: 0.55; }
@@ -383,15 +594,62 @@
     .ilo-legend.ilo-cell-master { background: #fff3cd; }
     .ilo-legend.ilo-cell-both { background: #d1e7dd; }
     .ilo-legend.ilo-col-op { background: #f8f9fa; border: 1px dashed #adb5bd; }
+    .ilo-matrix-wrap th.ilo-domain-row { border-inline-end: 4px solid #6c757d; }
+    .ilo-domain-dot { display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; margin-inline-end: 0.25rem; vertical-align: middle; }
   </style>
 
   <script>
+    const DOMAIN_LABELS = {{ domain_labels|tojson }};
+    const DOMAIN_ORDER = {{ domain_order|tojson }};
+    const DOMAIN_COLORS = {{ domain_colors|tojson }};
+    const DEFAULT_OUTCOME_DOMAIN = 'technical_skills';
+
+    function fillDomainSelect(sel, selected) {
+      if (!sel) return;
+      const v = selected || DEFAULT_OUTCOME_DOMAIN;
+      sel.innerHTML = DOMAIN_ORDER.map(k =>
+        `<option value="${k}"${k === v ? ' selected' : ''}>${escapeHtml(DOMAIN_LABELS[k] || k)}</option>`
+      ).join('');
+    }
+    function fillDomainFilterSelect(sel, withAll) {
+      if (!sel) return;
+      let html = withAll ? '<option value="">الكل</option>' : '<option value="">كل المخرجات (PLO)</option>';
+      html += DOMAIN_ORDER.map(k => `<option value="${k}">${escapeHtml(DOMAIN_LABELS[k] || k)}</option>`).join('');
+      sel.innerHTML = html;
+    }
+    function domainBadge(domain) {
+      const k = domain || '';
+      const label = DOMAIN_LABELS[k] || k;
+      const color = DOMAIN_COLORS[k] || '#6c757d';
+      return `<span class="badge" style="background:${color};color:#fff;font-size:0.7rem">${escapeHtml(label)}</span>`;
+    }
+    function domainDot(domain) {
+      const color = DOMAIN_COLORS[domain] || '#6c757d';
+      return `<span class="ilo-domain-dot" style="background:${color}"></span>`;
+    }
+    function initDomainUi() {
+      fillDomainSelect(document.getElementById('outcomeDomain'), DEFAULT_OUTCOME_DOMAIN);
+      fillDomainSelect(document.getElementById('gloDomain'), DEFAULT_OUTCOME_DOMAIN);
+      fillDomainFilterSelect(document.getElementById('gloDomainFilter'), true);
+      fillDomainFilterSelect(document.getElementById('matrixDomainFilter'), false);
+      const leg = document.getElementById('matrixDomainLegend');
+      if (leg) {
+        leg.innerHTML = DOMAIN_ORDER.map(k =>
+          `<span class="badge" style="background:${DOMAIN_COLORS[k]};color:#fff">${escapeHtml(DOMAIN_LABELS[k])}</span>`
+        ).join('');
+      }
+    }
+    initDomainUi();
+
     let currentProgramId = null;
     let outcomesCache = [];
+    let goalsCache = [];
+    let goalMatrixCache = null;
     let courseGroupsCache = null;
     let matrixCache = null;
     let unplannedCache = [];
     let gloCache = [];
+    let gloCanEdit = false;
 
     function escapeHtml(s) {
       return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -489,7 +747,7 @@
           <td>
             <div class="fw-semibold">${escapeHtml(x.title_ar)}</div>
             ${glo ? `<span class="badge bg-light text-dark border">${escapeHtml(glo)}</span> ` : ''}
-            ${(x.domain || '') ? `<span class="badge bg-info text-dark">${escapeHtml(x.domain)}</span>` : ''}
+            ${(x.domain || '') ? domainBadge(x.domain) : ''}
             ${desc ? `<div class="plo-desc">${escapeHtml(desc)}</div>` : ''}
           </td>
           <td class="text-muted">${x.sort_order ?? 0}</td>
@@ -510,19 +768,25 @@
       currentProgramId = pid;
       showMsg('جاري التحميل…', 'info');
       try {
-        const [oR, cR, sR] = await Promise.all([
+        const [oR, cR, sR, gR] = await Promise.all([
           fetch('/academic_quality/ilo/api/programs/' + pid + '/outcomes', { credentials: 'include' }),
           fetch('/academic_quality/ilo/api/programs/' + pid + '/courses', { credentials: 'include' }),
           fetch('/academic_quality/ilo/api/programs/' + pid + '/summary', { credentials: 'include' }),
+          fetch('/academic_quality/ilo/api/programs/' + pid + '/goals', { credentials: 'include' }),
         ]);
         const oJ = await oR.json().catch(() => ({}));
         const cJ = await cR.json().catch(() => ({}));
         const sJ = await sR.json().catch(() => ({}));
+        const gJ = await gR.json().catch(() => ({}));
         if (!oR.ok) {
           showMsg(oJ.message || 'تعذّر تحميل المخرجات', 'danger');
           return;
         }
         renderOutcomes(oJ.items || []);
+        renderGoals(gJ.items || []);
+        if (gR.ok) {
+          document.getElementById('statGoals').textContent = (gJ.items || []).filter(x => Number(x.is_active) !== 0).length;
+        }
         courseGroupsCache = cJ.groups || null;
         renderCourseSelect(cJ);
         if (sR.ok) {
@@ -661,8 +925,118 @@
       loadClosForCourse();
     }
 
+    function renderGoals(items) {
+      goalsCache = items || [];
+      const tbody = document.getElementById('goalsBody');
+      if (!goalsCache.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center py-4">لا أهداف — أضف هدفاً أو استخدم «تحميل وثيقة ميكانيك».</td></tr>';
+        return;
+      }
+      tbody.innerHTML = goalsCache.map(g => {
+        const inactive = Number(g.is_active) === 0;
+        const desc = (g.description || '').slice(0, 120);
+        return `<tr class="${inactive ? 'plo-inactive' : ''}">
+          <td><code>${escapeHtml(g.code)}</code></td>
+          <td><div class="fw-semibold">${escapeHtml(g.title_ar)}</div>
+            ${(g.parent_ig_code || '') ? `<span class="badge bg-secondary">${escapeHtml(g.parent_ig_code)}</span> ` : ''}
+            <div class="plo-desc">${escapeHtml(desc)}${(g.description||'').length > 120 ? '…' : ''}</div></td>
+          <td>${g.sort_order ?? 0}</td>
+          <td class="text-nowrap">
+            <button type="button" class="btn btn-sm btn-outline-primary btn-edit-goal" data-id="${g.id}">تعديل</button>
+            <button type="button" class="btn btn-sm btn-outline-danger btn-del-goal" data-id="${g.id}">حذف</button>
+          </td></tr>`;
+      }).join('');
+    }
+
+    async function loadGoals() {
+      if (!currentProgramId) return;
+      const r = await fetch('/academic_quality/ilo/api/programs/' + currentProgramId + '/goals', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        renderGoals(j.items || []);
+        document.getElementById('statGoals').textContent = (j.items || []).filter(x => Number(x.is_active) !== 0).length;
+      }
+    }
+
+    function openGoalModal(editRow) {
+      document.getElementById('goalEditId').value = editRow ? editRow.id : '';
+      document.getElementById('goalCode').value = editRow ? editRow.code : '';
+      document.getElementById('goalCode').disabled = !!editRow;
+      document.getElementById('goalTitle').value = editRow ? editRow.title_ar : '';
+      document.getElementById('goalTitleEn').value = editRow ? (editRow.title_en || '') : '';
+      document.getElementById('goalDesc').value = editRow ? (editRow.description || '') : '';
+      document.getElementById('goalParentIg').value = editRow ? (editRow.parent_ig_code || '') : '';
+      document.getElementById('goalSort').value = editRow ? (editRow.sort_order ?? 0) : 0;
+      document.getElementById('goalGov').value = editRow ? (editRow.governance_status || 'draft') : 'draft';
+      document.getElementById('goalActive').checked = editRow ? Number(editRow.is_active) !== 0 : true;
+      document.getElementById('goalModalTitle').textContent = editRow ? 'تعديل هدف' : 'إضافة هدف';
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('goalModal')).show();
+    }
+
+    async function loadGoalMatrix() {
+      if (!currentProgramId) return;
+      const r = await fetch('/academic_quality/ilo/api/programs/' + currentProgramId + '/goal_outcome_matrix', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        document.getElementById('goalMatrixWrap').innerHTML = '<p class="text-danger small p-3">' + escapeHtml(j.message || 'خطأ') + '</p>';
+        return;
+      }
+      goalMatrixCache = j;
+      renderGoalMatrix(j);
+    }
+
+    function renderGoalMatrix(data) {
+      const wrap = document.getElementById('goalMatrixWrap');
+      const goals = data.goals || [];
+      const outcomes = data.outcomes || [];
+      if (!goals.length || !outcomes.length) {
+        wrap.innerHTML = '<p class="text-muted small p-3">أضف أهدافاً ومخرجات أولاً.</p>';
+        return;
+      }
+      const linked = new Set((data.cells || []).map(c => c.goal_id + '|' + c.outcome_id));
+      let html = '<table class="table table-bordered table-sm mb-0"><thead><tr><th class="ilo-sticky-col">الهدف</th>';
+      outcomes.forEach(o => {
+        html += '<th title="' + escapeHtml(o.title_ar || '') + '"><code>' + escapeHtml(o.code) + '</code></th>';
+      });
+      html += '</tr></thead><tbody>';
+      goals.forEach(g => {
+        html += '<tr><td class="ilo-sticky-col"><code>' + escapeHtml(g.code) + '</code><br><span class="small">' + escapeHtml((g.title_ar||'').slice(0,40)) + '</span></td>';
+        outcomes.forEach(o => {
+          const on = linked.has(g.id + '|' + o.id);
+          html += '<td class="ilo-matrix-cell goal-matrix-cell ' + (on ? 'goal-on' : 'off') + '" data-gid="' + g.id + '" data-oid="' + o.id + '">' + (on ? '✓' : '') + '</td>';
+        });
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+      wrap.innerHTML = html;
+    }
+
+    async function toggleGoalMatrixCell(gid, oid) {
+      if (!goalMatrixCache || !currentProgramId) return;
+      const cells = goalMatrixCache.cells || [];
+      const set = new Set(cells.map(c => c.goal_id + '|' + c.outcome_id));
+      const key = gid + '|' + oid;
+      const wasOn = set.has(key);
+      const goal = (goalMatrixCache.goals || []).find(g => String(g.id) === String(gid));
+      if (!goal) return;
+      const outcomeIds = cells.filter(c => String(c.goal_id) === String(gid)).map(c => c.outcome_id);
+      let nextIds;
+      if (wasOn) {
+        nextIds = outcomeIds.filter(x => String(x) !== String(oid));
+      } else {
+        nextIds = [...new Set([...outcomeIds, parseInt(oid, 10)])];
+      }
+      const r = await fetch('/academic_quality/ilo/api/programs/' + currentProgramId + '/goal_outcome_links', {
+        method: 'PUT', credentials: 'include', headers: hdr(),
+        body: JSON.stringify({ goal_id: parseInt(gid, 10), outcome_ids: nextIds }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { showMsg(j.message || 'فشل الحفظ', 'danger'); return; }
+      await loadGoalMatrix();
+    }
+
     function enableProgramTools(on) {
-      ['benchmarkSelect','btnImportBenchmark','btnShowGlo','btnShowAnalytics'].forEach(id => {
+      ['benchmarkSelect','btnImportBenchmark','btnShowGlo','btnShowAnalytics','btnImportMechProfile'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.disabled = !on;
       });
@@ -682,21 +1056,104 @@
       if (tpl && currentProgramId) {
         tpl.href = '/academic_quality/ilo/api/programs/' + currentProgramId + '/outcomes/template.xlsx';
       }
+      const prof = document.getElementById('btnExportProfileXlsx');
+      if (prof && currentProgramId) {
+        prof.href = '/academic_quality/ilo/api/programs/' + currentProgramId + '/export_profile.xlsx';
+        prof.style.pointerEvents = '';
+        prof.style.opacity = '';
+      }
       const imp = document.getElementById('btnImportPloXlsx');
       if (imp) imp.disabled = !on;
       document.getElementById('btnAddClo').disabled = !on || !document.getElementById('courseSelect').value || String(document.getElementById('courseSelect').value).startsWith('cm:');
     }
 
     async function loadGloOptions() {
-      const r = await fetch('/academic_quality/ilo/api/glo', { credentials: 'include' });
+      const r = await fetch('/academic_quality/ilo/api/glo?active_only=1', { credentials: 'include' });
       const j = await r.json().catch(() => ({}));
       gloCache = j.items || [];
+      gloCanEdit = !!j.can_edit;
       const sel = document.getElementById('outcomeGlo');
       if (sel) {
         sel.innerHTML = '<option value="">—</option>' + gloCache.map(g =>
           `<option value="${escapeHtml(g.code)}">${escapeHtml(g.code)} — ${escapeHtml(g.title_ar)}</option>`
         ).join('');
       }
+      const btnAdd = document.getElementById('btnAddGlo');
+      if (btnAdd) btnAdd.classList.toggle('d-none', !gloCanEdit);
+      document.querySelectorAll('.glo-edit-col').forEach(el => {
+        el.style.display = gloCanEdit ? '' : 'none';
+      });
+      const hint = document.getElementById('gloPermHint');
+      if (hint) {
+        hint.textContent = gloCanEdit
+          ? 'يمكنك إضافة وتعديل وحذف مخرجات الكلية. تُربط PLO/SO بـ GLO من نموذج المخرج.'
+          : 'عرض فقط — التعديل لمسؤول النظام/الكلية. تُربط PLO/SO بـ GLO من نموذج المخرج.';
+      }
+    }
+
+    function renderGloTable(items) {
+      const tbody = document.getElementById('gloBody');
+      const filt = (document.getElementById('gloDomainFilter') || {}).value || '';
+      const list = filt ? (items || []).filter(g => (g.domain || '') === filt) : (items || []);
+      if (!list.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-4">لا مخرجات — ' +
+          (gloCanEdit ? 'أضف GLO جديداً.' : '') + (filt ? ' (فلتر المجال)' : '') + '</td></tr>';
+        return;
+      }
+      tbody.innerHTML = list.map(g => {
+        const inactive = Number(g.is_active) === 0;
+        const editBtns = gloCanEdit
+          ? `<button type="button" class="btn btn-sm btn-outline-primary btn-edit-glo" data-id="${g.id}">تعديل</button>
+             <button type="button" class="btn btn-sm btn-outline-danger btn-del-glo" data-id="${g.id}">حذف</button>`
+          : '';
+        return `<tr class="${inactive ? 'plo-inactive' : ''}">
+          <td><code>${escapeHtml(g.code)}</code></td>
+          <td><div class="fw-semibold">${escapeHtml(g.title_ar)}</div>
+            <div class="plo-desc">${escapeHtml((g.description||'').slice(0,150))}</div></td>
+          <td class="small">${domainBadge(g.domain)}</td>
+          <td>${g.sort_order ?? 0}</td>
+          <td class="text-nowrap glo-edit-col">${editBtns}</td></tr>`;
+      }).join('');
+    }
+
+    async function loadGloTable() {
+      const r = await fetch('/academic_quality/ilo/api/glo?active_only=0', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        document.getElementById('gloBody').innerHTML =
+          '<tr><td colspan="5" class="text-danger text-center py-3">' + escapeHtml(j.message || 'خطأ') + '</td></tr>';
+        return;
+      }
+      gloCanEdit = !!j.can_edit;
+      gloCache = j.items || [];
+      renderGloTable(gloCache);
+      const sel = document.getElementById('outcomeGlo');
+      if (sel) {
+        const active = gloCache.filter(g => Number(g.is_active) !== 0);
+        sel.innerHTML = '<option value="">—</option>' + active.map(g =>
+          `<option value="${escapeHtml(g.code)}">${escapeHtml(g.code)} — ${escapeHtml(g.title_ar)}</option>`
+        ).join('');
+      }
+      const btnAdd = document.getElementById('btnAddGlo');
+      if (btnAdd) btnAdd.classList.toggle('d-none', !gloCanEdit);
+      document.querySelectorAll('.glo-edit-col').forEach(el => {
+        el.style.display = gloCanEdit ? '' : 'none';
+      });
+    }
+
+    function openGloModal(editRow) {
+      document.getElementById('gloEditId').value = editRow ? editRow.id : '';
+      document.getElementById('gloCode').value = editRow ? editRow.code : '';
+      document.getElementById('gloCode').disabled = !!editRow;
+      document.getElementById('gloTitle').value = editRow ? editRow.title_ar : '';
+      document.getElementById('gloTitleEn').value = editRow ? (editRow.title_en || '') : '';
+      fillDomainSelect(document.getElementById('gloDomain'), editRow ? (editRow.domain || DEFAULT_OUTCOME_DOMAIN) : DEFAULT_OUTCOME_DOMAIN);
+      document.getElementById('gloDesc').value = editRow ? (editRow.description || '') : '';
+      document.getElementById('gloSort').value = editRow ? (editRow.sort_order ?? 0) : 0;
+      document.getElementById('gloGov').value = editRow ? (editRow.governance_status || 'approved') : 'draft';
+      document.getElementById('gloActive').checked = editRow ? Number(editRow.is_active) !== 0 : true;
+      document.getElementById('gloModalTitle').textContent = editRow ? 'تعديل GLO' : 'إضافة GLO';
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('gloModal')).show();
     }
 
     async function loadBenchmarkTemplates() {
@@ -743,7 +1200,7 @@
       document.getElementById('outcomeTitle').value = editRow ? editRow.title_ar : '';
       document.getElementById('outcomeTitleEn').value = editRow ? (editRow.title_en || '') : '';
       document.getElementById('outcomeDesc').value = editRow ? (editRow.description || '') : '';
-      document.getElementById('outcomeDomain').value = editRow ? (editRow.domain || 'skills') : 'skills';
+      fillDomainSelect(document.getElementById('outcomeDomain'), editRow ? (editRow.domain || DEFAULT_OUTCOME_DOMAIN) : DEFAULT_OUTCOME_DOMAIN);
       document.getElementById('outcomeBloom').value = editRow ? (editRow.bloom_level || '') : '';
       document.getElementById('outcomeGlo').value = editRow ? (editRow.parent_glo_code || '') : '';
       document.getElementById('outcomePerf').value = editRow ? (editRow.performance_indicator || '') : '';
@@ -791,13 +1248,13 @@
       }
       const delBtn = e.target.closest('.btn-del-outcome');
       if (!delBtn) return;
-      if (!confirm('حذف هذا المخرج؟ سيُزال ربطه بكل المقررات.')) return;
+      if (!confirm('حذف/تعطيل هذا المخرج؟ إن وُجد ربط بمقررات يُعطّل فقط.')) return;
       const r = await fetch('/academic_quality/ilo/api/outcomes/' + delBtn.dataset.id, {
         method: 'DELETE', credentials: 'include', headers: hdr(),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { showMsg(j.message || 'فشل الحذف', 'danger'); return; }
-      showMsg('تم الحذف.', 'success');
+      showMsg(j.message || (j.soft_deleted ? 'تم التعطيل.' : 'تم الحذف.'), j.soft_deleted ? 'warning' : 'success');
       loadOutcomes();
     });
     document.getElementById('btnSaveOutcome').addEventListener('click', async () => {
@@ -853,13 +1310,16 @@
     });
 
     function switchIloTab(name) {
-      const paneMap = { manage: 'Manage', matrix: 'Matrix', clo: 'Clo', reports: 'Reports', unplanned: 'Unplanned' };
+      const paneMap = { manage: 'Manage', goals: 'Goals', goalMatrix: 'GoalMatrix', glo: 'Glo', matrix: 'Matrix', clo: 'Clo', reports: 'Reports', unplanned: 'Unplanned' };
       document.querySelectorAll('#iloMainTabs .nav-link').forEach(b => {
         b.classList.toggle('active', b.dataset.iloTab === name);
       });
       document.querySelectorAll('.ilo-tab-pane').forEach(p => p.classList.add('d-none'));
       const pane = document.getElementById('tabPane' + (paneMap[name] || 'Manage'));
       if (pane) pane.classList.remove('d-none');
+      if (name === 'goals' && currentProgramId) loadGoals();
+      if (name === 'goalMatrix' && currentProgramId) loadGoalMatrix();
+      if (name === 'glo') loadGloTable();
       if (name === 'matrix' && currentProgramId) loadCoverageMatrix();
       if (name === 'unplanned' && currentProgramId) renderUnplannedTable();
       if (name === 'clo') loadClosForCourse();
@@ -881,7 +1341,9 @@
     function renderCoverageMatrix(data) {
       matrixCache = data;
       const wrap = document.getElementById('matrixWrap');
-      const outcomes = data.outcomes || [];
+      const domFilt = (document.getElementById('matrixDomainFilter') || {}).value || '';
+      let outcomes = data.outcomes || [];
+      if (domFilt) outcomes = outcomes.filter(o => (o.domain || '') === domFilt);
       const columns = data.columns || [];
       if (!outcomes.length) {
         wrap.innerHTML = '<p class="text-muted small p-3">لا مخرجات — أضف مخرجات للبرنامج أولاً.</p>';
@@ -904,7 +1366,13 @@
       });
       html += '</tr></thead><tbody>';
       outcomes.forEach(o => {
-        html += '<tr><th class="ilo-sticky-col" title="' + escapeHtml(o.title_ar) + '"><code>' + escapeHtml(o.code) + '</code></th>';
+        const dom = o.domain || '';
+        const border = DOMAIN_COLORS[dom] || '#6c757d';
+        const dlab = o.domain_label || DOMAIN_LABELS[dom] || dom;
+        html += '<tr><th class="ilo-sticky-col ilo-domain-row" style="border-inline-end-color:' + border + '" title="' +
+          escapeHtml(o.title_ar) + ' — ' + escapeHtml(dlab) + '">' +
+          domainDot(dom) + '<code>' + escapeHtml(o.code) + '</code> ' +
+          (dom ? domainBadge(dom) : '') + '</th>';
         columns.forEach(col => {
           const key = o.id + '|' + col.col_key;
           const cell = cellMap[key] || { linked: false, link_source: '' };
@@ -1062,11 +1530,55 @@
       loadOutcomes();
     });
     document.getElementById('btnShowGlo').addEventListener('click', () => {
-      const body = document.getElementById('reportsBody');
-      body.innerHTML = '<h6 class="mb-2">مخرجات الخريج — كلية الهندسة (8)</h6><ul class="list-group list-group-flush">' +
-        gloCache.map(g => `<li class="list-group-item py-2"><code>${escapeHtml(g.code)}</code> <strong>${escapeHtml(g.title_ar)}</strong><br><span class="small text-muted">${escapeHtml(g.description || '')}</span></li>`).join('') +
-        '</ul><p class="small text-muted mt-2">اربط كل PLO بـ GLO من قائمة «GLO الكلية» عند تعريف المخرج.</p>';
-      switchIloTab('reports');
+      document.getElementById('iloMainTabs').classList.remove('d-none');
+      switchIloTab('glo');
+    });
+    document.getElementById('btnAddGlo').addEventListener('click', () => {
+      if (!gloCanEdit) { showMsg('التعديل لمسؤول الكلية فقط.', 'warning'); return; }
+      openGloModal(null);
+    });
+    document.getElementById('gloBody').addEventListener('click', async e => {
+      const editBtn = e.target.closest('.btn-edit-glo');
+      if (editBtn) {
+        const row = gloCache.find(x => String(x.id) === editBtn.dataset.id);
+        if (row) openGloModal(row);
+        return;
+      }
+      const delBtn = e.target.closest('.btn-del-glo');
+      if (!delBtn) return;
+      if (!confirm('حذف/تعطيل هذا GLO؟ إن وُجد ربط بمخرجات برامج يُعطّل فقط.')) return;
+      const r = await fetch('/academic_quality/ilo/api/glo/' + delBtn.dataset.id, {
+        method: 'DELETE', credentials: 'include', headers: hdr(),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { showMsg(j.message || 'فشل', 'danger'); return; }
+      showMsg(j.message || (j.soft_deleted ? 'تم التعطيل.' : 'تم الحذف.'), j.soft_deleted ? 'warning' : 'success');
+      loadGloTable();
+    });
+    document.getElementById('btnSaveGlo').addEventListener('click', async () => {
+      const id = document.getElementById('gloEditId').value;
+      const code = document.getElementById('gloCode').value.trim().toUpperCase();
+      const title_ar = document.getElementById('gloTitle').value.trim();
+      if (!title_ar) { showMsg('العنوان مطلوب.', 'warning'); return; }
+      if (!id && !code) { showMsg('الرمز مطلوب.', 'warning'); return; }
+      const body = {
+        code, title_ar,
+        title_en: document.getElementById('gloTitleEn').value.trim(),
+        description: document.getElementById('gloDesc').value.trim(),
+        domain: document.getElementById('gloDomain').value,
+        sort_order: parseInt(document.getElementById('gloSort').value, 10) || 0,
+        governance_status: document.getElementById('gloGov').value,
+        is_active: document.getElementById('gloActive').checked,
+      };
+      const url = id ? '/academic_quality/ilo/api/glo/' + id : '/academic_quality/ilo/api/glo';
+      const r = await fetch(url, {
+        method: id ? 'PUT' : 'POST', credentials: 'include', headers: hdr(), body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { showMsg(j.message || 'فشل الحفظ', 'danger'); return; }
+      bootstrap.Modal.getInstance(document.getElementById('gloModal'))?.hide();
+      showMsg('تم حفظ GLO.', 'success');
+      loadGloTable();
     });
     document.getElementById('btnShowAnalytics').addEventListener('click', async () => {
       if (!currentProgramId) return;
@@ -1074,14 +1586,24 @@
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { showMsg(j.message || 'خطأ', 'danger'); return; }
       let html = `<p class="small">مخرجات: <strong>${j.outcomes_count}</strong> | مقررات الخطة: <strong>${j.courses_count}</strong> | CLO: <strong>${j.clo_count}</strong> | معتمد: <strong>${j.approved_outcomes}</strong></p>`;
-      html += '<table class="table table-sm"><thead><tr><th>PLO</th><th>I</th><th>R</th><th>M</th><th>% تقييم (M)</th></tr></thead><tbody>';
+      if ((j.domain_summary || []).length) {
+        html += '<div class="d-flex flex-wrap gap-1 mb-2">' +
+          j.domain_summary.map(s => domainBadge(s.domain)).join('') + '</div>';
+        html += '<table class="table table-sm mb-3"><thead><tr><th>المجال</th><th>PLO</th><th>فجوات</th></tr></thead><tbody>';
+        j.domain_summary.forEach(s => {
+          html += `<tr><td>${domainBadge(s.domain)}</td><td>${s.plo_count}</td><td>${s.gap_count || 0}</td></tr>`;
+        });
+        html += '</tbody></table>';
+      }
+      html += '<table class="table table-sm"><thead><tr><th>PLO</th><th>المجال</th><th>I</th><th>R</th><th>M</th><th>% تقييم (M)</th></tr></thead><tbody>';
       (j.coverage_by_outcome || []).forEach(row => {
-        html += `<tr><td><code>${escapeHtml(row.code)}</code></td><td>${row.introduce_count}</td><td>${row.reinforce_count}</td><td>${row.assess_count}</td><td>${row.assess_coverage_percent}%</td></tr>`;
+        html += `<tr><td><code>${escapeHtml(row.code)}</code></td><td>${row.domain ? domainBadge(row.domain) : '—'}</td>` +
+          `<td>${row.introduce_count}</td><td>${row.reinforce_count}</td><td>${row.assess_count}</td><td>${row.assess_coverage_percent}%</td></tr>`;
       });
       html += '</tbody></table>';
       if ((j.gaps || []).length) {
         html += '<div class="alert alert-warning small"><strong>فجوات:</strong><ul class="mb-0">' +
-          j.gaps.map(g => `<li>${escapeHtml(g.code)}: ${escapeHtml(g.reason)}</li>`).join('') + '</ul></div>';
+          j.gaps.map(g => `<li><code>${escapeHtml(g.code)}</code> ${g.domain_label ? domainBadge(g.domain) : ''}: ${escapeHtml(g.reason)}</li>`).join('') + '</ul></div>';
       } else {
         html += '<div class="alert alert-success small">لا فجوات حرجة وفق المعايير الحالية (≥3 مقررات M).</div>';
       }
@@ -1110,6 +1632,92 @@
       if (!confirm('حذف CLO؟')) return;
       await fetch('/academic_quality/ilo/api/clos/' + btn.dataset.id, { method: 'DELETE', credentials: 'include', headers: hdr() });
       loadClosForCourse();
+    });
+
+    document.getElementById('btnAddGoal').addEventListener('click', () => {
+      if (!currentProgramId) { showMsg('حمّل برنامجاً أولاً.', 'warning'); return; }
+      openGoalModal(null);
+    });
+    document.getElementById('goalsBody').addEventListener('click', async e => {
+      const editBtn = e.target.closest('.btn-edit-goal');
+      if (editBtn) {
+        const row = goalsCache.find(x => String(x.id) === editBtn.dataset.id);
+        if (row) openGoalModal(row);
+        return;
+      }
+      const delBtn = e.target.closest('.btn-del-goal');
+      if (!delBtn) return;
+      if (!confirm('حذف/تعطيل هذا الهدف؟')) return;
+      const r = await fetch('/academic_quality/ilo/api/goals/' + delBtn.dataset.id, {
+        method: 'DELETE', credentials: 'include', headers: hdr(),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { showMsg(j.message || 'فشل', 'danger'); return; }
+      showMsg(j.message || (j.soft_deleted ? 'تم التعطيل.' : 'تم الحذف.'), j.soft_deleted ? 'warning' : 'success');
+      loadGoals();
+      loadGoalMatrix();
+    });
+    document.getElementById('btnSaveGoal').addEventListener('click', async () => {
+      const id = document.getElementById('goalEditId').value;
+      const code = document.getElementById('goalCode').value.trim();
+      const title_ar = document.getElementById('goalTitle').value.trim();
+      if (!title_ar) { showMsg('العنوان مطلوب.', 'warning'); return; }
+      if (!id && !code) { showMsg('الرمز مطلوب.', 'warning'); return; }
+      const body = {
+        code, title_ar,
+        title_en: document.getElementById('goalTitleEn').value.trim(),
+        description: document.getElementById('goalDesc').value.trim(),
+        parent_ig_code: document.getElementById('goalParentIg').value.trim(),
+        sort_order: parseInt(document.getElementById('goalSort').value, 10) || 0,
+        governance_status: document.getElementById('goalGov').value,
+        is_active: document.getElementById('goalActive').checked,
+      };
+      const url = id
+        ? '/academic_quality/ilo/api/goals/' + id
+        : '/academic_quality/ilo/api/programs/' + currentProgramId + '/goals';
+      const r = await fetch(url, {
+        method: id ? 'PUT' : 'POST', credentials: 'include', headers: hdr(), body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { showMsg(j.message || 'فشل الحفظ', 'danger'); return; }
+      bootstrap.Modal.getInstance(document.getElementById('goalModal'))?.hide();
+      showMsg('تم حفظ الهدف.', 'success');
+      loadGoals();
+      loadGoalMatrix();
+    });
+    document.getElementById('btnRefreshGoalMatrix').addEventListener('click', () => loadGoalMatrix());
+    document.getElementById('goalMatrixWrap').addEventListener('click', e => {
+      const cell = e.target.closest('.goal-matrix-cell');
+      if (!cell) return;
+      toggleGoalMatrixCell(cell.dataset.gid, cell.dataset.oid);
+    });
+    document.getElementById('btnImportMechProfile').addEventListener('click', async () => {
+      if (!currentProgramId) return;
+      const propagate = confirm(
+        'تحميل وثيقة ميكانيك (4 أهداف + 6 مخرجات + ربط PG↔SO)؟\n\n' +
+        'اضغط OK لنسخ نفس الحزمة لشعب MECH-PWR/MFG/DES أيضاً.\n' +
+        'إلغاء = البرنامج الحالي فقط.'
+      );
+      const r = await fetch('/academic_quality/ilo/api/programs/' + currentProgramId + '/import_mech_profile', {
+        method: 'POST', credentials: 'include', headers: hdr(),
+        body: JSON.stringify({ merge: true, propagate_tracks: propagate }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { showMsg(j.message || 'فشل التحميل', 'danger'); return; }
+      const g = j.goals || {};
+      const o = j.outcomes || {};
+      showMsg(
+        'أهداف: +' + (g.inserted||0) + ' / تحديث ' + (g.updated||0) +
+        ' | مخرجات: +' + (o.inserted||0) + ' / تحديث ' + (o.updated||0) +
+        ' | روابط: ' + (j.links_synced||0),
+        'success'
+      );
+      loadOutcomes();
+    });
+
+    document.getElementById('gloDomainFilter')?.addEventListener('change', () => renderGloTable(gloCache));
+    document.getElementById('matrixDomainFilter')?.addEventListener('change', () => {
+      if (matrixCache) renderCoverageMatrix(matrixCache);
     });
 
     loadGloOptions();

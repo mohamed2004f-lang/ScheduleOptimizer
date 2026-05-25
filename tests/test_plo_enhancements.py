@@ -32,6 +32,10 @@ def test_benchmark_templates_for_mech_department(db_conn):
     items = templates_for_program(cur, pid)
     codes = {x["code"] for x in items}
     assert "abet_v7" in codes
+    assert "mech_sos_2026" in codes
+    recommended = [x["code"] for x in items if x.get("recommended")]
+    if recommended:
+        assert "mech_sos_2026" in recommended or "abet_v7" in recommended
 
 
 def test_import_abet_template(app, db_conn):

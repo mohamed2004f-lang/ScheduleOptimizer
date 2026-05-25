@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import logging
 
-from backend.database.database import fetch_table_columns, is_postgresql
+from backend.database.database import conn_is_postgresql, fetch_table_columns, is_postgresql
 
 logger = logging.getLogger(__name__)
 
 PLO_EXTRA_COLUMNS: tuple[tuple[str, str], ...] = (
     ("title_en", "TEXT DEFAULT ''"),
-    ("domain", "TEXT DEFAULT 'skills'"),
+    ("domain", "TEXT DEFAULT 'technical_skills'"),
     ("bloom_level", "TEXT DEFAULT ''"),
     ("performance_indicator", "TEXT DEFAULT ''"),
     ("accreditation_tag", "TEXT DEFAULT ''"),
@@ -71,6 +71,55 @@ NEW_TABLES_SQLITE: tuple[tuple[str, str], ...] = (
         )
         """,
     ),
+    (
+        "program_goals",
+        """
+        CREATE TABLE IF NOT EXISTS program_goals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            program_id INTEGER NOT NULL,
+            code TEXT NOT NULL,
+            title_ar TEXT NOT NULL,
+            title_en TEXT DEFAULT '',
+            description TEXT DEFAULT '',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            governance_status TEXT NOT NULL DEFAULT 'draft',
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (program_id, code),
+            FOREIGN KEY (program_id) REFERENCES programs(id) ON DELETE CASCADE
+        )
+        """,
+    ),
+    (
+        "program_goal_outcome_links",
+        """
+        CREATE TABLE IF NOT EXISTS program_goal_outcome_links (
+            goal_id INTEGER NOT NULL,
+            outcome_id INTEGER NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (goal_id, outcome_id),
+            FOREIGN KEY (goal_id) REFERENCES program_goals(id) ON DELETE CASCADE,
+            FOREIGN KEY (outcome_id) REFERENCES program_learning_outcomes(id) ON DELETE CASCADE
+        )
+        """,
+    ),
+    (
+        "college_graduate_outcomes",
+        """
+        CREATE TABLE IF NOT EXISTS college_graduate_outcomes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL UNIQUE,
+            title_ar TEXT NOT NULL,
+            title_en TEXT DEFAULT '',
+            description TEXT DEFAULT '',
+            domain TEXT NOT NULL DEFAULT 'technical_skills',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            governance_status TEXT NOT NULL DEFAULT 'approved',
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+    ),
 )
 
 NEW_TABLES_PG: tuple[tuple[str, str], ...] = (
@@ -124,6 +173,58 @@ NEW_TABLES_PG: tuple[tuple[str, str], ...] = (
         )
         """,
     ),
+    (
+        "program_goals",
+        """
+        CREATE TABLE IF NOT EXISTS program_goals (
+            id BIGSERIAL PRIMARY KEY,
+            program_id BIGINT NOT NULL,
+            code TEXT NOT NULL,
+            title_ar TEXT NOT NULL,
+            title_en TEXT DEFAULT '',
+            description TEXT DEFAULT '',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            governance_status TEXT NOT NULL DEFAULT 'draft',
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (program_id, code),
+            CONSTRAINT pg_program_fk FOREIGN KEY (program_id)
+                REFERENCES programs(id) ON DELETE CASCADE
+        )
+        """,
+    ),
+    (
+        "program_goal_outcome_links",
+        """
+        CREATE TABLE IF NOT EXISTS program_goal_outcome_links (
+            goal_id BIGINT NOT NULL,
+            outcome_id BIGINT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (goal_id, outcome_id),
+            CONSTRAINT pgl_goal_fk FOREIGN KEY (goal_id)
+                REFERENCES program_goals(id) ON DELETE CASCADE,
+            CONSTRAINT pgl_outcome_fk FOREIGN KEY (outcome_id)
+                REFERENCES program_learning_outcomes(id) ON DELETE CASCADE
+        )
+        """,
+    ),
+    (
+        "college_graduate_outcomes",
+        """
+        CREATE TABLE IF NOT EXISTS college_graduate_outcomes (
+            id BIGSERIAL PRIMARY KEY,
+            code TEXT NOT NULL UNIQUE,
+            title_ar TEXT NOT NULL,
+            title_en TEXT DEFAULT '',
+            description TEXT DEFAULT '',
+            domain TEXT NOT NULL DEFAULT 'technical_skills',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            governance_status TEXT NOT NULL DEFAULT 'approved',
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+    ),
 )
 
 PG_ALTER_PLO = [
@@ -150,7 +251,7 @@ def _sqlite_add_column(conn, cur, table: str, col: str, ddl: str) -> None:
 def ensure_plo_enhancement_schema(conn) -> None:
     """يُستدعى بعد إنشاء الجداول الأساسية."""
     cur = conn.cursor()
-    pg = is_postgresql()
+    pg = conn_is_postgresql(conn)
     if pg:
         for stmt in PG_ALTER_PLO + PG_ALTER_LINKS:
             try:
@@ -167,6 +268,15 @@ def ensure_plo_enhancement_schema(conn) -> None:
                 "CREATE INDEX IF NOT EXISTS idx_clo_program_course ON course_learning_outcomes(program_course_id, is_active)"
             )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_plor_outcome ON plo_revision_log(outcome_id)")
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_program_goals_program ON program_goals(program_id, is_active)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pgl_goal ON program_goal_outcome_links(goal_id)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_college_glo_active ON college_graduate_outcomes(is_active, sort_order)"
+            )
         except Exception:
             pass
     else:
@@ -183,12 +293,36 @@ def ensure_plo_enhancement_schema(conn) -> None:
         for idx in (
             "CREATE INDEX IF NOT EXISTS idx_clo_program_course ON course_learning_outcomes(program_course_id, is_active)",
             "CREATE INDEX IF NOT EXISTS idx_plor_outcome ON plo_revision_log(outcome_id)",
+            "CREATE INDEX IF NOT EXISTS idx_program_goals_program ON program_goals(program_id, is_active)",
+            "CREATE INDEX IF NOT EXISTS idx_pgl_goal ON program_goal_outcome_links(goal_id)",
+            "CREATE INDEX IF NOT EXISTS idx_college_glo_active ON college_graduate_outcomes(is_active, sort_order)",
         ):
             try:
                 cur.execute(idx)
             except Exception:
                 pass
     try:
+        from backend.core.outcome_assessment_schema import ensure_outcome_assessment_schema
+
+        ensure_outcome_assessment_schema(conn)
+    except Exception as e:
+        logger.debug("outcome assessment schema skipped: %s", e)
+    try:
+        from backend.core.plo_glo import migrate_outcome_domains
+
+        migrate_outcome_domains(conn)
+    except Exception as e:
+        logger.debug("outcome domain migration skipped: %s", e)
+    try:
+        from backend.core.college_identity_schema import ensure_college_identity_schema
+
+        ensure_college_identity_schema(conn)
+    except Exception as e:
+        logger.debug("college identity schema skipped: %s", e)
+    try:
         conn.commit()
     except Exception:
-        pass
+        try:
+            conn.rollback()
+        except Exception:
+            pass

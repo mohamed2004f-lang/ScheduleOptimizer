@@ -3470,3 +3470,59 @@ def delete_course():
 
     return jsonify({"status": "ok", "message": f"تم حذف سجل المقرر {course_name}", "deleted": 1}), 200
 
+
+@grades_bp.route("/drafts/<int:draft_id>/outcome-assessment", methods=["GET", "POST"])
+@role_required(*_GRADE_DRAFT_SELF_SERVICE_ROLES)
+def draft_outcome_assessment(draft_id: int):
+    """بنود تقييم CLO ودرجات الطلاب المرتبطة بمسودة الدرجات."""
+    if _is_supervisor_role():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+    from backend.core.outcome_assessment_schema import ensure_outcome_assessment_schema
+    from backend.core.plo_schema import ensure_plo_enhancement_schema
+    from backend.services.outcome_assessment import (
+        get_scores_matrix,
+        list_assessment_items,
+        list_clos_for_section,
+        recompute_clo_mastery,
+        save_assessment_items,
+        save_student_scores,
+    )
+
+    with get_connection() as conn:
+        _sync_schedule_pk_col(conn)
+        cur = conn.cursor()
+        ensure_plo_enhancement_schema(conn)
+        ensure_outcome_assessment_schema(conn)
+        d_row = cur.execute("SELECT * FROM grade_drafts WHERE id = ?", (int(draft_id),)).fetchone()
+        if not d_row:
+            return jsonify({"status": "error", "message": "draft not found"}), 404
+        if not _instructor_can_access_draft(conn, d_row):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        d = dict(d_row) if hasattr(d_row, "keys") else {}
+        section_id = int(d.get("section_id") or 0)
+        semester = (d.get("semester") or "").strip()
+        if not section_id:
+            return jsonify({"status": "error", "message": "لا توجد شعبة مرتبطة بالمسودة"}), 400
+        if request.method == "GET":
+            clos = list_clos_for_section(cur, section_id, conn)
+            matrix = get_scores_matrix(cur, section_id, semester)
+            return jsonify({
+                "status": "ok",
+                "section_id": section_id,
+                "semester": semester,
+                "clos": clos,
+                "assessment_items": matrix.get("items") or [],
+                "scores": matrix.get("scores") or [],
+            })
+        if (d.get("status") or "") not in ("Draft", "Rejected"):
+            return jsonify({"status": "error", "message": "لا يمكن تعديل بنود المخرجات بعد الإرسال"}), 400
+        data = request.get_json(force=True) or {}
+        if "items" in data:
+            save_assessment_items(cur, section_id, semester, data.get("items") or [])
+        if "scores" in data:
+            save_student_scores(cur, data.get("scores") or [])
+        recompute_clo_mastery(cur, section_id, semester)
+        conn.commit()
+        matrix = get_scores_matrix(cur, section_id, semester)
+    return jsonify({"status": "ok", "assessment_items": matrix.get("items") or [], "scores": matrix.get("scores") or []})
+

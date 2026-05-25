@@ -170,9 +170,15 @@
         '<div class="mc-ann-list mt-1 text-muted" data-section="' + sectionId + '"></div>' +
         '</div>' +
         '<div class="mt-2 p-2 border rounded">' +
-        '<div class="fw-semibold mb-1">تقييم مخرجات التعلم (ILO)</div>' +
+        '<div class="fw-semibold mb-1">تقييم مخرجات البرنامج (PLO)</div>' +
         '<div class="mc-ilo-list small" data-section="' + sectionId + '"></div>' +
-        '<button type="button" class="btn btn-sm btn-outline-success mc-save-ilo" data-section="' + sectionId + '">حفظ تقييم المخرجات</button>' +
+        '<button type="button" class="btn btn-sm btn-outline-success mc-save-ilo" data-section="' + sectionId + '">حفظ تقييم PLO</button>' +
+        '</div>' +
+        '<div class="mt-2 p-2 border rounded bg-light-subtle">' +
+        '<div class="fw-semibold mb-1">تقييم مخرجات المقرر (CLO)</div>' +
+        '<div class="mc-clo-list small" data-section="' + sectionId + '"></div>' +
+        '<button type="button" class="btn btn-sm btn-outline-success mc-save-clo" data-section="' + sectionId + '">حفظ تقييم CLO</button>' +
+        '<a class="btn btn-sm btn-link" href="/grade_drafts">بنود التقييم في مسودة الدرجات</a>' +
         '</div>' +
 
         '<div class="mt-2 p-2 border rounded bg-light-subtle">' +
@@ -357,6 +363,7 @@
           if (ref) ref.value = cr.reflection_text || '';
           if (st) st.textContent = cr.status ? ('حالة التقرير: ' + cr.status) : 'حالة التقرير: draft';
           loadSectionIlo(sectionId).catch(() => {});
+          loadSectionClo(sectionId).catch(() => {});
         }
 
         async function loadSectionIlo(sectionId) {
@@ -373,6 +380,24 @@
             '<div class="mb-1 border-bottom pb-1">' +
             '<label class="fw-semibold">' + (o.code || '') + ' — ' + (o.title_ar || '') + '</label>' +
             '<input type="number" class="form-control form-control-sm mc-ilo-pct" data-section="' + sectionId + '" data-oid="' + o.id + '" min="0" max="100" value="' + (o.achievement_percent ?? '') + '" placeholder="% تحقيق">' +
+            '</div>'
+          )).join('');
+        }
+
+        async function loadSectionClo(sectionId) {
+          const box = document.querySelector('.mc-clo-list[data-section="' + sectionId + '"]');
+          if (!box) return;
+          const r = await fetch('/academic_quality/ilo/api/sections/' + sectionId + '/clo-assessments', { credentials: 'include' });
+          const j = await r.json().catch(() => ({}));
+          const items = j.clos || [];
+          if (!items.length) {
+            box.innerHTML = '<span class="text-muted">لا CLO — يعرّفها رئيس القسم في كتالوج المخرجات.</span>';
+            return;
+          }
+          box.innerHTML = items.map((c) => (
+            '<div class="mb-1 border-bottom pb-1">' +
+            '<label class="fw-semibold">' + esc(c.code || '') + ' — ' + esc(c.title_ar || '') + '</label>' +
+            '<input type="number" class="form-control form-control-sm mc-clo-pct" data-section="' + sectionId + '" data-clo="' + c.clo_id + '" min="0" max="100" value="' + (c.achievement_percent ?? '') + '" placeholder="% تحقيق الشعبة">' +
             '</div>'
           )).join('');
         }
@@ -527,6 +552,56 @@
           }
           await refreshCourseAdmin(sectionId);
         }
+
+        document.querySelectorAll('.mc-save-ilo').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const sectionId = parseInt(btn.getAttribute('data-section') || '0', 10);
+            const assessments = [];
+            document.querySelectorAll('.mc-ilo-pct[data-section="' + sectionId + '"]').forEach((inp) => {
+              const oid = parseInt(inp.getAttribute('data-oid') || '0', 10);
+              const v = inp.value;
+              if (!oid || v === '') return;
+              assessments.push({ outcome_id: oid, achievement_percent: parseInt(v, 10) });
+            });
+            const r = await fetch('/academic_quality/ilo/api/sections/' + sectionId + '/ilo', {
+              method: 'POST',
+              credentials: 'include',
+              headers: jsonPostHeaders(),
+              body: JSON.stringify({ assessments }),
+            });
+            if (!r.ok) {
+              alert('تعذر حفظ تقييم PLO');
+              return;
+            }
+            alert('تم حفظ تقييم مخرجات البرنامج');
+            await loadSectionIlo(sectionId);
+          });
+        });
+
+        document.querySelectorAll('.mc-save-clo').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const sectionId = parseInt(btn.getAttribute('data-section') || '0', 10);
+            const assessments = [];
+            document.querySelectorAll('.mc-clo-pct[data-section="' + sectionId + '"]').forEach((inp) => {
+              const cloId = parseInt(inp.getAttribute('data-clo') || '0', 10);
+              const v = inp.value;
+              if (!cloId || v === '') return;
+              assessments.push({ clo_id: cloId, achievement_percent: parseInt(v, 10) });
+            });
+            const r = await fetch('/academic_quality/ilo/api/sections/' + sectionId + '/clo-assessments', {
+              method: 'POST',
+              credentials: 'include',
+              headers: jsonPostHeaders(),
+              body: JSON.stringify({ assessments }),
+            });
+            if (!r.ok) {
+              alert('تعذر حفظ تقييم CLO');
+              return;
+            }
+            alert('تم حفظ تقييم مخرجات المقرر');
+            await loadSectionClo(sectionId);
+          });
+        });
 
         document.querySelectorAll('.mc-save-close-draft').forEach((btn) => {
           btn.addEventListener('click', async () => {

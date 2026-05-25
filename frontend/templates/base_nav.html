@@ -132,6 +132,11 @@
             <i class="fa-solid fa-star ms-1"></i> تقييم المقررات
           </a>
         </li>
+        <li class="nav-item" id="navStudentLearningOutcomesWrap" style="display:none;">
+          <a class="nav-link" id="navStudentLearningOutcomes" href="/academic_quality/ilo/student/learning-outcomes">
+            <i class="fa-solid fa-bullseye ms-1"></i> مخرجاتي التعليمية
+          </a>
+        </li>
 
         <!-- شؤون الطلبة -->
         <li class="nav-item dropdown" id="navStudentAffairsWrap">
@@ -230,7 +235,10 @@
             <li><a class="dropdown-item" id="navAccreditationMap" href="/academic_quality/accreditation/map" style="display:none;">خريطة الامتثال المؤسسي</a></li>
             <li><a class="dropdown-item" id="navSurveysResults" href="/academic_quality/surveys/results" style="display:none;">نتائج الاستبيانات (مجمّعة)</a></li>
             <li><a class="dropdown-item" id="navEvaluationSurveyAdmin" href="/academic_quality/survey_admin" style="display:none;">إعداد بنود الاستبيانات</a></li>
+            <li><a class="dropdown-item" id="navCollegeProfile" href="/academic_quality/college" style="display:none;">هوية الكلية</a></li>
+            <li><a class="dropdown-item" id="navProgramsPortal" href="/academic_quality/programs" style="display:none;">برامج الكلية</a></li>
             <li><a class="dropdown-item" id="navIloCatalog" href="/ilo_catalog_page" style="display:none;">كتالوج مخرجات التعلم</a></li>
+            <li><a class="dropdown-item" id="navDepartmentLoDashboard" href="/academic_quality/ilo/department/dashboard" style="display:none;">لوحة مخرجات القسم</a></li>
           </ul>
         </li>
         <li class="nav-item dropdown" id="navAdminSettingsWrap">
@@ -344,7 +352,7 @@
       // إخفاء بعض الروابط — يُفضّل capabilities من الخادم؛ احتياطياً منطق الأدوار القديم
       let navUsers = false, navSup = false, navRules = false, navCollegeCatalog = false;
       let showCourseReg = false, showScheduleVersions = false, showExamArch = false, showGradeDrafts = false;
-      let showClosureReports = false, showFacultyScorecards = false, showFacultyDossier = false, showQualityDash = false, showSurveyAdmin = false, showIloCatalog = false, showSupQuality = false, showStudentEvals = false, showSurveysHub = false, showSurveysResults = false;
+      let showClosureReports = false, showFacultyScorecards = false, showFacultyDossier = false, showQualityDash = false, showSurveyAdmin = false, showIloCatalog = false, showDeptLoDash = false, showCollegeProfile = false, showProgramsPortal = false, showSupQuality = false, showStudentEvals = false, showStudentLo = false, showSurveysHub = false, showSurveysResults = false;
       let canDeptScope = false;
       let isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(data.is_supervisor || 0) === 1);
       const isStudentUi = (caps && caps.v >= 1) ? !!caps.is_student : (role === 'student');
@@ -363,8 +371,12 @@
         showQualityDash = !!caps.nav_academic_quality_dashboard;
         showSurveyAdmin = !!caps.nav_evaluation_survey_admin;
         showIloCatalog = !!caps.nav_ilo_catalog;
+        showDeptLoDash = !!caps.nav_department_lo_dashboard;
+        showCollegeProfile = !!caps.nav_college_profile;
+        showProgramsPortal = !!caps.nav_programs_portal;
         showSupQuality = !!caps.nav_supervisor_quality_report;
         showStudentEvals = !!caps.nav_student_course_evaluations;
+        showStudentLo = !!caps.nav_student_learning_outcomes;
         showSurveysHub = !!caps.nav_surveys_hub;
         showSurveysResults = !!caps.nav_surveys_results;
         isSupervisor = !!caps.is_supervisor_effective;
@@ -384,8 +396,12 @@
         showQualityDash = showCourseReg;
         showSurveyAdmin = showCourseReg;
         showIloCatalog = showCourseReg;
+        showDeptLoDash = showCourseReg;
+        showCollegeProfile = true;
+        showProgramsPortal = true;
         showSupQuality = isSupervisor;
         showStudentEvals = role === 'student';
+        showStudentLo = role === 'student';
         showSurveysHub = ['student', 'instructor', 'staff', 'head_of_department'].includes(role || '');
         showSurveysResults = ['admin', 'admin_main', 'head_of_department'].includes(role || '');
         canDeptScope = (role === 'admin' || role === 'admin_main');
@@ -395,6 +411,8 @@
       if (wrapMy) wrapMy.style.display = showMyCourses ? '' : 'none';
       const wrapEvals = document.getElementById('navStudentEvaluationsWrap');
       if (wrapEvals) wrapEvals.style.display = showStudentEvals ? '' : 'none';
+      const wrapStudentLo = document.getElementById('navStudentLearningOutcomesWrap');
+      if (wrapStudentLo) wrapStudentLo.style.display = showStudentLo ? '' : 'none';
 
       if (!navUsers) {
         const elUsers = document.getElementById('navUsersAdmin');
@@ -450,8 +468,14 @@
       if (elSurveyAdmin) elSurveyAdmin.style.display = showSurveyAdmin ? '' : 'none';
       const elSurveysResults = document.getElementById('navSurveysResults');
       if (elSurveysResults) elSurveysResults.style.display = showSurveysResults ? '' : 'none';
+      const elCollegeProf = document.getElementById('navCollegeProfile');
+      if (elCollegeProf) elCollegeProf.style.display = showCollegeProfile ? '' : 'none';
+      const elProgramsPortal = document.getElementById('navProgramsPortal');
+      if (elProgramsPortal) elProgramsPortal.style.display = showProgramsPortal ? '' : 'none';
       const elIlo = document.getElementById('navIloCatalog');
       if (elIlo) elIlo.style.display = showIloCatalog ? '' : 'none';
+      const elDeptLo = document.getElementById('navDepartmentLoDashboard');
+      if (elDeptLo) elDeptLo.style.display = showDeptLoDash ? '' : 'none';
       const elSupQ = document.getElementById('navSupervisorQualityReport');
       if (elSupQ) elSupQ.style.display = showSupQuality ? '' : 'none';
       if (!isSupervisor) {
@@ -746,7 +770,7 @@
       }
 
       // ضمان الجودة والاعتماد (بعد فلاتر الأدوار — لا يُخفى بـ d-none فقط)
-      let showQualityMenu = showQualityDash || showSurveyAdmin || showIloCatalog || showSurveysHub || showSurveysResults;
+      let showQualityMenu = showQualityDash || showSurveyAdmin || showIloCatalog || showDeptLoDash || showCollegeProfile || showProgramsPortal || showSurveysHub || showSurveysResults;
       if (!showQualityMenu) {
         const amQ = (data.active_mode || '').trim().toLowerCase();
         const hodHeadMode = role === 'head_of_department'
@@ -818,6 +842,8 @@
         ['/academic_quality/surveys','navSurveysHub'],
         ['/academic_quality/surveys/results','navSurveysResults'],
         ['/students/evaluations','navStudentEvaluations'],
+        ['/academic_quality/college','navCollegeProfile'],
+        ['/academic_quality/programs','navProgramsPortal'],
         ['/ilo_catalog_page','navIloCatalog'],
         ['/academic_quality/ilo/catalog','navIloCatalog'],
         ['/supervisor_quality_report_page','navSupervisorQualityReport'],

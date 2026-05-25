@@ -1,0 +1,302 @@
+<!doctype html>
+
+<html lang="ar" dir="rtl">
+
+<head>
+
+  <meta charset="utf-8">
+
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+
+  <title>لوحة مخرجات القسم</title>
+
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+
+  <link rel="stylesheet" href="/static/styles.css">
+
+  <style>
+
+    .dom-bar { height: 1.25rem; border-radius: 0.2rem; min-width: 2px; }
+
+    .dom-row td:first-child { white-space: nowrap; }
+
+  </style>
+
+</head>
+
+<body>
+
+  {% include "base_nav.html" %}
+
+  <main class="container-main container-1100 theme-formal">
+
+    <div class="page-header d-flex justify-content-between flex-wrap gap-2">
+
+      <div>
+
+        <h1 class="page-title">لوحة مخرجات القسم</h1>
+
+        <p class="page-subtitle">تحقيق المجالات (عبر PLO ومصفوفة I/R/M)، GLO، المقررات الضعيفة، وتوصيات التحسين</p>
+
+      </div>
+
+      <a href="/academic_quality/ilo/catalog" class="btn btn-outline-primary btn-sm">كتالوج المخرجات</a>
+
+    </div>
+
+    <div id="loadState" class="text-muted">جاري التحميل…</div>
+
+    <div id="contentWrap" class="d-none">
+
+      <div class="row g-3 mb-3">
+
+        <div class="col-12">
+
+          <div class="card">
+
+            <div class="card-header fw-semibold d-flex flex-wrap justify-content-between align-items-center gap-2">
+
+              <span>خريطة المجالات السبعة (تحقيق عبر PLO ← CLO)</span>
+
+              <select id="domainFilter" class="form-select form-select-sm" style="max-width:14rem">
+
+                <option value="">كل المجالات</option>
+
+              </select>
+
+            </div>
+
+            <div class="card-body" id="domainHeatmap"></div>
+
+          </div>
+
+        </div>
+
+      </div>
+
+      <div class="row g-3">
+
+        <div class="col-lg-6">
+
+          <div class="card h-100">
+
+            <div class="card-header fw-semibold">نسب تحقيق المخرجات الكلية (GLO عبر PLO)</div>
+
+            <div class="card-body p-0" id="gloTable"></div>
+
+          </div>
+
+        </div>
+
+        <div class="col-lg-6">
+
+          <div class="card h-100">
+
+            <div class="card-header fw-semibold">مقررات ضعيفة في الإتقان</div>
+
+            <div class="card-body p-0" id="weakTable"></div>
+
+          </div>
+
+        </div>
+
+        <div class="col-12">
+
+          <div class="card">
+
+            <div class="card-header fw-semibold">توصيات التحسين</div>
+
+            <div class="card-body" id="recBox"></div>
+
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+  </main>
+
+  <script>
+
+    function esc(s) {
+
+      const d = document.createElement('div');
+
+      d.textContent = s == null ? '' : String(s);
+
+      return d.innerHTML;
+
+    }
+
+    let dashboardData = null;
+
+    let domainLabels = {};
+
+    let domainColors = {};
+
+
+
+    function fillDomainFilter() {
+
+      const sel = document.getElementById('domainFilter');
+
+      if (!sel) return;
+
+      let html = '<option value="">كل المجالات</option>';
+
+      const order = Object.keys(domainLabels);
+
+      order.forEach(k => {
+
+        html += '<option value="' + esc(k) + '">' + esc(domainLabels[k] || k) + '</option>';
+
+      });
+
+      sel.innerHTML = html;
+
+    }
+
+
+
+    function renderDomainHeatmap(filt) {
+
+      const box = document.getElementById('domainHeatmap');
+
+      const rows = (dashboardData && dashboardData.domain_heatmap) || [];
+
+      const list = filt ? rows.filter(r => r.domain === filt) : rows;
+
+      if (!list.length) {
+
+        box.innerHTML = '<p class="text-muted mb-0">لا بيانات مجالات بعد — عرّف PLO ومصفوفة التغطية وأدخل تقييمات CLO.</p>';
+
+        return;
+
+      }
+
+      let html = '<table class="table table-sm mb-0 dom-row"><thead><tr><th>المجال</th><th>متوسط %</th><th>PLO</th><th>عينات</th><th style="width:40%">مؤشر</th></tr></thead><tbody>';
+
+      list.forEach(r => {
+
+        const color = domainColors[r.domain] || '#6c757d';
+
+        const pct = r.achievement_percent;
+
+        const barW = pct != null ? Math.min(100, Math.max(0, pct)) : 0;
+
+        const barCls = pct == null ? 'bg-secondary' : (pct < 70 ? 'bg-danger' : 'bg-success');
+
+        html += '<tr><td><span class="badge" style="background:' + color + ';color:#fff">' +
+
+          esc(r.domain_label || domainLabels[r.domain] || r.domain) + '</span></td>' +
+
+          '<td>' + (pct != null ? esc(pct) + '%' : '—') + '</td>' +
+
+          '<td>' + esc(r.plo_count) + '</td>' +
+
+          '<td>' + esc(r.sample_count) + '</td>' +
+
+          '<td><div class="dom-bar ' + barCls + '" style="width:' + barW + '%" title="' + (pct != null ? pct + '%' : '') + '"></div></td></tr>';
+
+      });
+
+      html += '</tbody></table>';
+
+      box.innerHTML = html;
+
+    }
+
+
+
+    (async function () {
+
+      const load = document.getElementById('loadState');
+
+      try {
+
+        const r = await fetch('/academic_quality/ilo/api/department/outcomes-dashboard', { credentials: 'include' });
+
+        const j = await r.json().catch(() => ({}));
+
+        if (!r.ok) {
+
+          load.textContent = j.message || 'تعذر تحميل اللوحة';
+
+          return;
+
+        }
+
+        dashboardData = j;
+
+        domainLabels = j.domain_labels || {};
+
+        domainColors = j.domain_colors || {};
+
+        load.classList.add('d-none');
+
+        document.getElementById('contentWrap').classList.remove('d-none');
+
+        fillDomainFilter();
+
+        renderDomainHeatmap('');
+
+        document.getElementById('domainFilter').addEventListener('change', e => {
+
+          renderDomainHeatmap(e.target.value);
+
+        });
+
+        const glo = j.glo_achievement || [];
+
+        document.getElementById('gloTable').innerHTML = glo.length
+
+          ? '<table class="table table-sm mb-0"><thead><tr><th>GLO</th><th>متوسط %</th><th>عينات</th></tr></thead><tbody>' +
+
+            glo.map(g => '<tr><td>' + esc(g.glo_code) + '</td><td>' + (g.achievement_percent != null ? g.achievement_percent + '%' : '—') + '</td><td>' + esc(g.sample_count) + '</td></tr>').join('') +
+
+            '</tbody></table>'
+
+          : '<p class="p-3 text-muted mb-0">لا بيانات GLO بعد — يحتاج الأستاذ إدخال تقييمات CLO (عبر PLO).</p>';
+
+        const weak = j.weak_courses || [];
+
+        document.getElementById('weakTable').innerHTML = weak.length
+
+          ? '<table class="table table-sm mb-0"><thead><tr><th>المقرر</th><th>شعبة</th><th>متوسط إتقان</th></tr></thead><tbody>' +
+
+            weak.map(w => '<tr><td>' + esc(w.course_name) + '</td><td>' + esc(w.section_id) + '</td><td class="text-danger">' + esc(w.avg_mastery_percent) + '%</td></tr>').join('') +
+
+            '</tbody></table>'
+
+          : '<p class="p-3 text-muted mb-0">لا مقررات تحت عتبة 70% حالياً.</p>';
+
+        const recs = j.recommendations || [];
+
+        document.getElementById('recBox').innerHTML = recs.length
+
+          ? '<ul class="mb-0">' + recs.map(r => {
+
+              const pri = r.priority === 'high' ? 'text-danger' : '';
+
+              return '<li class="mb-1 ' + pri + '">' + esc(r.message_ar) + '</li>';
+
+            }).join('') + '</ul>'
+
+          : '<p class="text-muted mb-0">لا توصيات حالياً — الوضع ضمن المستهدف.</p>';
+
+      } catch (e) {
+
+        load.textContent = 'خطأ في الاتصال';
+
+      }
+
+    })();
+
+  </script>
+
+</body>
+
+</html>
+

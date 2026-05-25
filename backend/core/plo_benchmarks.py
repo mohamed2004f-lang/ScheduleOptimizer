@@ -7,6 +7,13 @@ from typing import Any
 # (template_code, name_ar, framework, department_codes, track_groups, outcomes)
 # track_groups: فارغ = كل الشعب؛ أو ["PWR","MFG"] إلخ
 
+def _mech_sos_2026() -> list[dict[str, Any]]:
+    """مخرجات طالب برنامج ميكانيك — 6 SO (وثيقة القسم)."""
+    from backend.core.program_goals import MECH_STUDENT_OUTCOMES
+
+    return list(MECH_STUDENT_OUTCOMES)
+
+
 def _abet7() -> list[dict[str, Any]]:
     """ABET Student Outcomes — الإصدار السبعة (مرجع لكل أقسام الهندسة)."""
     return [
@@ -366,6 +373,15 @@ def _general_foundation() -> list[dict[str, Any]]:
 
 BENCHMARK_TEMPLATES: tuple[dict[str, Any], ...] = (
     {
+        "code": "mech_sos_2026",
+        "name_ar": "ميكانيك — أهداف البرنامج + 6 مخرجات (SO)",
+        "name_en": "MECH Program Goals + 6 Student Outcomes",
+        "framework": "MECH",
+        "department_codes": ["MECH"],
+        "track_groups": [],
+        "outcomes": _mech_sos_2026(),
+    },
+    {
         "code": "abet_v7",
         "name_ar": "ABET — مخرجات الطالب (7) — أساس كل الأقسام",
         "name_en": "ABET Student Outcomes (7)",
@@ -569,7 +585,7 @@ def templates_for_program(cur, program_id: int) -> list[dict[str, Any]]:
             "framework": tpl.get("framework", ""),
             "outcome_count": len(tpl.get("outcomes") or []),
             "requires_base": tpl.get("requires_base"),
-            "recommended": tpl["code"] == "abet_v7"
+            "recommended": tpl["code"] == "mech_sos_2026"
             and dept == "MECH"
             and not tg,
         }

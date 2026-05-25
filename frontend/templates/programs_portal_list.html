@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>برامج الكلية</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-900 theme-formal">
+    <div class="page-header d-flex justify-content-between flex-wrap gap-2">
+      <div>
+        <h1 class="page-title">برامج الكلية</h1>
+        <p class="page-subtitle">صفحة تعريفية لكل برنامج: رسالة، أهداف، مخرجات، وأداء</p>
+      </div>
+      <a href="/academic_quality/college" class="btn btn-outline-primary btn-sm">هوية الكلية</a>
+    </div>
+    <div id="listBox" class="text-muted">جاري التحميل…</div>
+  </main>
+  <script>
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s == null ? '' : String(s);
+      return d.innerHTML;
+    }
+    (async function () {
+      const r = await fetch('/academic_quality/api/programs/list', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      const box = document.getElementById('listBox');
+      if (!r.ok) { box.textContent = j.message || 'خطأ'; return; }
+      const items = j.items || [];
+      if (!items.length) {
+        box.innerHTML = '<p class="text-muted">لا برامج متاحة لحسابك.</p>';
+        return;
+      }
+      box.innerHTML = '<div class="list-group">' + items.map(p =>
+        '<a class="list-group-item list-group-item-action" href="/academic_quality/programs/' + p.id + '/profile">' +
+        '<div class="fw-semibold">' + esc(p.name) + ' <code class="small">' + esc(p.code) + '</code></div>' +
+        '<div class="small text-muted">' + esc(p.department_name) + '</div></a>'
+      ).join('') + '</div>';
+    })();
+  </script>
+</body>
+</html>

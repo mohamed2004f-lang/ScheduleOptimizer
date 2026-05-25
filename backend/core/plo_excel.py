@@ -7,6 +7,8 @@ from typing import Any
 
 import pandas as pd
 
+from backend.core.plo_glo import VALID_PLO_DOMAINS as _VALID_DOMAINS, normalize_outcome_domain
+
 PLO_EXPORT_COLUMNS: tuple[tuple[str, str], ...] = (
     ("code", "الرمز"),
     ("title_ar", "العنوان_عربي"),
@@ -29,7 +31,6 @@ for field, ar in PLO_EXPORT_COLUMNS:
     _HEADER_TO_FIELD[ar] = field
     _HEADER_TO_FIELD[ar.replace("_", " ")] = field
 
-_VALID_DOMAINS = frozenset({"knowledge", "skills", "values", "professional"})
 _VALID_GOV = frozenset({"draft", "approved", "retired"})
 
 
@@ -52,7 +53,7 @@ def template_xlsx_bytes() -> bytes:
         "code": "PLO1",
         "title_ar": "مثال: حل المشكلات الهندسية",
         "title_en": "Engineering Problem Solving",
-        "domain": "skills",
+        "domain": "technical_skills",
         "bloom_level": "analyze",
         "performance_indicator": "يحقق ≥80% في التقييم",
         "accreditation_tag": "ABET-1",
@@ -73,7 +74,7 @@ def template_xlsx_bytes() -> bytes:
         wb = writer.book
         ws = writer.sheets["PLO"]
         note = wb.add_worksheet("تعليمات")
-        note.write(0, 0, "المجال: knowledge | skills | values | professional")
+        note.write(0, 0, "المجال: program_knowledge | technical_skills | general_skills | values_orientation | ethical_values | social_responsibility | environmental_values (أو القديم: knowledge/skills/values/professional)")
         note.write(1, 0, "حوكمة: draft | approved | retired")
         note.write(2, 0, "الرمز فريد لكل برنامج — الصفوف الفارغة تُتخطى")
     return buf.getvalue()
@@ -114,9 +115,10 @@ def import_outcomes_from_xlsx(
         if not code or not title_ar:
             skipped += 1
             continue
-        domain = str(row.get("domain") or "skills").strip().lower() or "skills"
-        if domain not in _VALID_DOMAINS:
-            domain = "skills"
+        domain = normalize_outcome_domain(
+            str(row.get("domain") or ""),
+            glo_code=str(row.get("parent_glo_code") or ""),
+        )
         gov = str(row.get("governance_status") or "draft").strip().lower() or "draft"
         if gov not in _VALID_GOV:
             gov = "draft"

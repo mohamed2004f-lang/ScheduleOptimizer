@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8">
@@ -87,6 +87,25 @@
             </table>
           </div>
           <div id="editorFeedback" class="small text-danger mt-2"></div>
+        </div>
+      </div>
+
+      <div id="outcomeAssessmentCard" class="card mt-3 d-none border-success">
+        <div class="card-header fw-semibold bg-success-subtle d-flex justify-content-between flex-wrap gap-2">
+          <span>تقييم المخرجات (CLO) — بنود ودرجات</span>
+          <button type="button" class="btn btn-sm btn-outline-success" id="btnSaveOutcomeAssessment">حفظ بنود المخرجات</button>
+        </div>
+        <div class="card-body">
+          <p class="small text-muted">عرّف بنود التقييم (سؤال/نشاط) واربط كل بنداً بمخرج مقرر (CLO). أدخل درجة كل طالب لحساب الإتقان تلقائياً.</p>
+          <div class="row g-2 mb-2">
+            <div class="col-md-3"><select id="oaNewClo" class="form-select form-select-sm"></select></div>
+            <div class="col-md-3"><input id="oaNewLabel" class="form-control form-control-sm" placeholder="وصف البند (مثلاً: س1 نصفي)"></div>
+            <div class="col-md-2"><select id="oaNewType" class="form-select form-select-sm"><option value="midterm">نصفي</option><option value="final">نهائي</option><option value="coursework">أعمال</option><option value="quiz">quiz</option><option value="other">أخرى</option></select></div>
+            <div class="col-md-2"><input id="oaNewMax" type="number" class="form-control form-control-sm" value="10" min="1" placeholder="الدرجة العظمى"></div>
+            <div class="col-md-2"><button type="button" class="btn btn-sm btn-outline-primary w-100" id="btnAddOaItem">إضافة بند</button></div>
+          </div>
+          <div id="oaItemsList" class="small mb-3"></div>
+          <div class="table-responsive" id="oaScoresWrap"></div>
         </div>
       </div>
 
@@ -856,11 +875,137 @@
         updateAssessmentAdvisory();
 
         document.getElementById('editorCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        await loadOutcomeAssessment(isReadOnly);
       } catch (e) {
         console.error(e);
         document.getElementById('editorFeedback').textContent = 'خطأ أثناء التحميل.';
       }
     }
+
+    state.oaItems = [];
+    state.oaClos = [];
+    state.oaScores = {};
+
+    async function loadOutcomeAssessment(readOnly) {
+      const card = document.getElementById('outcomeAssessmentCard');
+      if (!state.draftId || !card) return;
+      card.classList.remove('d-none');
+      const r = await fetch('/grades/drafts/' + state.draftId + '/outcome-assessment', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        document.getElementById('oaItemsList').innerHTML = '<span class="text-muted">' + (j.message || 'تعذر تحميل بنود المخرجات') + '</span>';
+        return;
+      }
+      state.oaClos = j.clos || [];
+      state.oaItems = j.assessment_items || [];
+      state.oaScores = {};
+      (j.scores || []).forEach(s => {
+        const k = s.assessment_item_id + '::' + s.student_id;
+        state.oaScores[k] = s;
+      });
+      const cloSel = document.getElementById('oaNewClo');
+      if (cloSel) {
+        cloSel.innerHTML = state.oaClos.map(c => '<option value="' + c.id + '">' + (c.code || '') + ' — ' + (c.title_ar || '') + '</option>').join('') ||
+          '<option value="">لا CLO</option>';
+      }
+      renderOaItems(readOnly);
+      renderOaScoresMatrix(readOnly);
+    }
+
+    function renderOaItems(readOnly) {
+      const el = document.getElementById('oaItemsList');
+      if (!state.oaItems.length) {
+        el.innerHTML = '<div class="text-muted">لا بنود بعد — أضف بنداً مرتبطاً بـ CLO.</div>';
+        return;
+      }
+      el.innerHTML = state.oaItems.map((it, idx) =>
+        '<div class="border rounded p-1 mb-1 d-flex justify-content-between">' +
+        '<span><strong>' + (it.label || '') + '</strong> — ' + (it.clo_code || '') + ' (' + (it.assessment_type || '') + ', من ' + (it.max_score || 100) + ')</span>' +
+        (readOnly ? '' : '<button type="button" class="btn btn-sm btn-link text-danger oa-del-item" data-idx="' + idx + '">حذف</button>') +
+        '</div>'
+      ).join('');
+      if (!readOnly) {
+        el.querySelectorAll('.oa-del-item').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const i = parseInt(btn.getAttribute('data-idx'), 10);
+            state.oaItems.splice(i, 1);
+            renderOaItems(readOnly);
+            renderOaScoresMatrix(readOnly);
+          });
+        });
+      }
+    }
+
+    function renderOaScoresMatrix(readOnly) {
+      const wrap = document.getElementById('oaScoresWrap');
+      if (!state.oaItems.length || !state.roster.length) {
+        wrap.innerHTML = '<p class="text-muted small mb-0">أضف بنوداً وافتح المسودة لعرض جدول الدرجات.</p>';
+        return;
+      }
+      let html = '<table class="table table-sm table-bordered"><thead><tr><th>الطالب</th>';
+      state.oaItems.forEach(it => { html += '<th class="small">' + (it.label || it.clo_code) + '</th>'; });
+      html += '</tr></thead><tbody>';
+      state.roster.forEach(st => {
+        html += '<tr><td class="small">' + st.student_id + '</td>';
+        state.oaItems.forEach(it => {
+          const k = it.id + '::' + st.student_id;
+          const ex = state.oaScores[k] || {};
+          const v = ex.score != null ? ex.score : '';
+          html += '<td><input type="number" step="0.01" min="0" class="form-control form-control-sm oa-score-inp" data-item="' + it.id + '" data-student="' + st.student_id + '" value="' + v + '"' + (readOnly ? ' disabled' : '') + '></td>';
+        });
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+      wrap.innerHTML = html;
+    }
+
+    document.getElementById('btnAddOaItem')?.addEventListener('click', () => {
+      const cloId = parseInt(document.getElementById('oaNewClo')?.value || '0', 10);
+      const label = (document.getElementById('oaNewLabel')?.value || '').trim();
+      const assessment_type = document.getElementById('oaNewType')?.value || 'other';
+      const max_score = parseFloat(document.getElementById('oaNewMax')?.value || '10');
+      if (!cloId || !label) {
+        window.showToast && window.showToast('اختر CLO ووصف البند', 'warning');
+        return;
+      }
+      const clo = state.oaClos.find(c => Number(c.id) === cloId);
+      state.oaItems.push({
+        clo_id: cloId,
+        label,
+        assessment_type,
+        max_score,
+        weight_percent: 0,
+        clo_code: clo ? clo.code : '',
+      });
+      document.getElementById('oaNewLabel').value = '';
+      renderOaItems(false);
+      renderOaScoresMatrix(false);
+    });
+
+    document.getElementById('btnSaveOutcomeAssessment')?.addEventListener('click', async () => {
+      if (!state.draftId) return;
+      const scores = [];
+      document.querySelectorAll('.oa-score-inp').forEach(inp => {
+        const itemId = parseInt(inp.getAttribute('data-item'), 10);
+        const sid = inp.getAttribute('data-student');
+        const v = inp.value;
+        if (!itemId || !sid || v === '') return;
+        scores.push({ assessment_item_id: itemId, student_id: sid, score: Number(v) });
+      });
+      const r = await fetch('/grades/drafts/' + state.draftId + '/outcome-assessment', {
+        method: 'POST',
+        credentials: 'include',
+        headers: soJsonHeaders(),
+        body: JSON.stringify({ items: state.oaItems, scores }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        window.showToast && window.showToast('تم حفظ تقييم المخرجات', 'success');
+        await loadOutcomeAssessment(false);
+      } else {
+        window.showToast && window.showToast(j.message || 'فشل الحفظ', 'danger');
+      }
+    });
 
     document.getElementById('btnSaveDraft')?.addEventListener('click', async () => {
       const st = (state.draft && state.draft.status) ? String(state.draft.status).trim() : '';

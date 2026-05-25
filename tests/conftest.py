@@ -679,6 +679,91 @@ CREATE TABLE IF NOT EXISTS program_learning_outcomes (
     UNIQUE (program_id, code)
 );
 
+CREATE TABLE IF NOT EXISTS program_goals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    program_id INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    title_ar TEXT NOT NULL,
+    title_en TEXT DEFAULT '',
+    description TEXT DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    governance_status TEXT NOT NULL DEFAULT 'draft',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (program_id, code)
+);
+
+CREATE TABLE IF NOT EXISTS program_goal_outcome_links (
+    goal_id INTEGER NOT NULL,
+    outcome_id INTEGER NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (goal_id, outcome_id)
+);
+
+CREATE TABLE IF NOT EXISTS college_graduate_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    title_ar TEXT NOT NULL,
+    title_en TEXT DEFAULT '',
+    description TEXT DEFAULT '',
+    domain TEXT NOT NULL DEFAULT 'skills',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    governance_status TEXT NOT NULL DEFAULT 'approved',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS college_identity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    intro_ar TEXT DEFAULT '',
+    mission_ar TEXT NOT NULL DEFAULT '',
+    vision_ar TEXT NOT NULL DEFAULT '',
+    values_json TEXT NOT NULL DEFAULT '[]',
+    effective_from TEXT DEFAULT '',
+    governance_status TEXT NOT NULL DEFAULT 'approved',
+    approved_by TEXT DEFAULT '',
+    approved_at TEXT DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS college_strategic_goals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    parent_code TEXT DEFAULT '',
+    title_ar TEXT NOT NULL,
+    title_en TEXT DEFAULT '',
+    description TEXT DEFAULT '',
+    pillar TEXT DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    governance_status TEXT NOT NULL DEFAULT 'approved',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS college_goal_glo_links (
+    goal_code TEXT NOT NULL,
+    glo_code TEXT NOT NULL,
+    alignment TEXT NOT NULL DEFAULT 'primary',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (goal_code, glo_code)
+);
+
+CREATE TABLE IF NOT EXISTS goal_kpi (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goal_code TEXT NOT NULL,
+    name_ar TEXT NOT NULL,
+    target_value REAL,
+    actual_value REAL,
+    unit TEXT DEFAULT '',
+    frequency TEXT DEFAULT 'annual',
+    data_source TEXT NOT NULL DEFAULT 'manual',
+    period_label TEXT DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    notes TEXT DEFAULT '',
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS program_course_learning_outcomes (
     program_course_id INTEGER NOT NULL,
     outcome_id INTEGER NOT NULL,
@@ -704,6 +789,53 @@ CREATE TABLE IF NOT EXISTS section_ilo_assessments (
     notes TEXT DEFAULT '',
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (section_id, instructor_id, semester, outcome_id)
+);
+
+CREATE TABLE IF NOT EXISTS section_assessment_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    section_id INTEGER NOT NULL,
+    semester TEXT NOT NULL,
+    clo_id INTEGER NOT NULL,
+    label TEXT NOT NULL,
+    assessment_type TEXT NOT NULL DEFAULT 'other',
+    max_score REAL NOT NULL DEFAULT 100,
+    weight_percent REAL NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS student_assessment_scores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assessment_item_id INTEGER NOT NULL,
+    student_id TEXT NOT NULL,
+    score REAL,
+    is_absent INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (assessment_item_id, student_id)
+);
+
+CREATE TABLE IF NOT EXISTS student_clo_mastery (
+    student_id TEXT NOT NULL,
+    section_id INTEGER NOT NULL,
+    semester TEXT NOT NULL,
+    clo_id INTEGER NOT NULL,
+    mastery_percent REAL,
+    source TEXT NOT NULL DEFAULT 'computed',
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (student_id, section_id, semester, clo_id)
+);
+
+CREATE TABLE IF NOT EXISTS section_clo_assessments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    section_id INTEGER NOT NULL,
+    instructor_id INTEGER NOT NULL,
+    semester TEXT NOT NULL,
+    clo_id INTEGER NOT NULL,
+    achievement_percent INTEGER,
+    notes TEXT DEFAULT '',
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (section_id, instructor_id, semester, clo_id)
 );
 
 CREATE TABLE IF NOT EXISTS system_settings (
@@ -1131,6 +1263,8 @@ def _setup_shared_db():
         "backend.services.academic_rules",
         "backend.services.instructors",
         "backend.services.academic_quality",
+        "backend.services.college_identity_portal",
+        "backend.services.learning_outcomes",
         "backend.services.institutional_accreditation",
         "backend.services.course_equivalences",
         "backend.services.college_catalog",

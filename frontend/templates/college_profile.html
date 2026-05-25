@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>هوية الكلية — ضمان الجودة</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .ig-glo-cell.cursor-pointer { cursor: pointer; }
+    .college-edit-bar { display: none; }
+    body.college-edit-mode .college-edit-bar { display: flex; }
+  </style>
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal">
+    <div class="page-header d-flex justify-content-between flex-wrap gap-2">
+      <div>
+        <h1 class="page-title">هوية الكلية</h1>
+        <p class="page-subtitle">إدارة الرسالة والرؤية والقيم وأهداف IG ومخرجات GLO — <span class="text-muted">admin_main</span></p>
+      </div>
+      <div class="d-flex flex-wrap gap-2 align-items-center">
+        <a href="/academic_quality/programs" class="btn btn-outline-primary btn-sm">برامج الكلية</a>
+        {% if can_edit %}
+        <button type="button" class="btn btn-outline-primary btn-sm" id="btnToggleEditMode">وضع التحرير</button>
+        {% endif %}
+        <a href="/academic_quality/export/college-strategic" class="btn btn-outline-secondary btn-sm" target="_blank">تقرير HTML</a>
+        <a href="/academic_quality/export/college-strategic.pdf" class="btn btn-outline-secondary btn-sm">تقرير PDF</a>
+      </div>
+    </div>
+    <div id="loadState" class="text-muted">جاري التحميل…</div>
+    <div id="mainWrap" class="d-none">
+      <ul class="nav nav-tabs mb-3" id="collegeTabs">
+        <li class="nav-item"><button class="nav-link active" data-tab="intro">مقدمة</button></li>
+        <li class="nav-item"><button class="nav-link" data-tab="identity">رسالة ورؤية</button></li>
+        <li class="nav-item"><button class="nav-link" data-tab="values">القيم</button></li>
+        <li class="nav-item"><button class="nav-link" data-tab="goals">أهداف IG</button></li>
+        <li class="nav-item"><button class="nav-link" data-tab="glo">GLO</button></li>
+        <li class="nav-item"><button class="nav-link" data-tab="matrix">مصفوفة IG↔GLO</button></li>
+        <li class="nav-item"><button class="nav-link" data-tab="kpi">مؤشرات الأداء</button></li>
+      </ul>
+      <div id="paneIntro" class="tab-pane-c"></div>
+      <div id="paneIdentity" class="tab-pane-c d-none"></div>
+      <div id="paneValues" class="tab-pane-c d-none"></div>
+      <div id="paneGoals" class="tab-pane-c d-none"></div>
+      <div id="paneGlo" class="tab-pane-c d-none"></div>
+      <div id="paneMatrix" class="tab-pane-c d-none"></div>
+      <div id="paneKpi" class="tab-pane-c d-none"></div>
+    </div>
+  </main>
+
+  <!-- 4: هوية موحّدة -->
+  <div class="modal fade" id="identityModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">تعديل مقدمة / رسالة / رؤية</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+          <label class="form-label small">مقدمة عامة</label>
+          <textarea class="form-control mb-2" id="editIntro" rows="3"></textarea>
+          <label class="form-label small">الرسالة</label>
+          <textarea class="form-control mb-2" id="editMission" rows="3"></textarea>
+          <label class="form-label small">الرؤية</label>
+          <textarea class="form-control mb-2" id="editVision" rows="3"></textarea>
+          <label class="form-label small">ساري من (فصل/سنة)</label>
+          <input type="text" class="form-control" id="editEffective" placeholder="2025-2026">
+          <p class="small text-muted mt-2 mb-0">يُحفظ نسخة معتمدة جديدة مع الإبقاء على القيم الحالية.</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-primary" id="btnSaveIdentity">حفظ نسخة معتمدة</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 1: قيمة -->
+  <div class="modal fade" id="valueModal" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title" id="valueModalTitle">قيمة</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+          <input type="hidden" id="valueEditIdx" value="-1">
+          <label class="form-label small">الرمز</label>
+          <input type="text" class="form-control mb-2" id="valueCode" maxlength="16" placeholder="CV1">
+          <label class="form-label small">العنوان</label>
+          <input type="text" class="form-control mb-2" id="valueTitle" maxlength="120">
+          <label class="form-label small">الوصف</label>
+          <textarea class="form-control" id="valueDesc" rows="3"></textarea>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-primary" id="btnSaveValue">حفظ القيم</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2: IG -->
+  <div class="modal fade" id="igModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title" id="igModalTitle">هدف استراتيجي</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+          <input type="hidden" id="igEditMode" value="create">
+          <div class="row g-2">
+            <div class="col-md-4">
+              <label class="form-label small">الرمز</label>
+              <input type="text" class="form-control" id="igCode" maxlength="16" placeholder="IG9 أو IG2.6">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label small">هدف أب (فارغ = رئيسي)</label>
+              <select class="form-select" id="igParent"></select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label small">المحور</label>
+              <select class="form-select" id="igPillar">
+                <option value="">—</option>
+                <option value="education">تعليم</option>
+                <option value="skills">مهارات</option>
+                <option value="research">بحث</option>
+                <option value="infrastructure">بنية</option>
+                <option value="faculty">هيئة تدريس</option>
+                <option value="partnerships">شراكات</option>
+                <option value="quality">جودة</option>
+                <option value="sustainability">استدامة</option>
+              </select>
+            </div>
+            <div class="col-12">
+              <label class="form-label small">العنوان عربي</label>
+              <input type="text" class="form-control" id="igTitle" maxlength="300">
+            </div>
+            <div class="col-12">
+              <label class="form-label small">الوصف</label>
+              <textarea class="form-control" id="igDesc" rows="3"></textarea>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label small">ترتيب</label>
+              <input type="number" class="form-control" id="igSort" value="0" min="0">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-primary" id="btnSaveIg">حفظ</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3: GLO -->
+  <div class="modal fade" id="gloModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title" id="gloModalTitle">GLO</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+          <input type="hidden" id="gloEditId" value="">
+          <div class="row g-2">
+            <div class="col-md-3">
+              <label class="form-label small">الرمز</label>
+              <input type="text" class="form-control" id="gloCode" maxlength="16">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">المجال</label>
+              <select class="form-select" id="gloDomain"></select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">ترتيب</label>
+              <input type="number" class="form-control" id="gloSort" value="0">
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="gloActive" checked>
+                <label class="form-check-label small" for="gloActive">نشط</label>
+              </div>
+            </div>
+            <div class="col-12">
+              <label class="form-label small">العنوان عربي</label>
+              <input type="text" class="form-control" id="gloTitle" maxlength="300">
+            </div>
+            <div class="col-12">
+              <label class="form-label small">الوصف</label>
+              <textarea class="form-control" id="gloDesc" rows="3"></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-primary" id="btnSaveGlo">حفظ</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5: KPI -->
+  <div class="modal fade" id="kpiModal" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title" id="kpiModalTitle">مؤشر أداء</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+          <input type="hidden" id="kpiEditId" value="">
+          <label class="form-label small">هدف IG</label>
+          <input type="text" class="form-control mb-2" id="kpiGoalCode" placeholder="IG1">
+          <label class="form-label small">اسم المؤشر</label>
+          <input type="text" class="form-control mb-2" id="kpiName" maxlength="300">
+          <div class="row g-2 mb-2">
+            <div class="col-6">
+              <label class="form-label small">مستهدف</label>
+              <input type="number" step="any" class="form-control" id="kpiTarget">
+            </div>
+            <div class="col-6">
+              <label class="form-label small">فعلي</label>
+              <input type="number" step="any" class="form-control" id="kpiActual">
+            </div>
+          </div>
+          <label class="form-label small">الوحدة</label>
+          <input type="text" class="form-control mb-2" id="kpiUnit" placeholder="%">
+          <label class="form-label small">المصدر</label>
+          <select class="form-select mb-2" id="kpiSource">
+            <option value="manual">يدوي</option>
+            <option value="system">من النظام</option>
+            <option value="survey">استبيان</option>
+          </select>
+          <label class="form-label small">الفترة</label>
+          <input type="text" class="form-control" id="kpiPeriod" placeholder="2025-2026">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-primary" id="btnSaveKpi">حفظ</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+  <script>
+    const CAN_EDIT = {{ 'true' if can_edit else 'false' }};
+    const CAN_EDIT_KPI = {{ 'true' if can_edit_kpi else 'false' }};
+    const DOMAIN_LABELS = {{ domain_labels|tojson }};
+    const DOMAIN_ORDER = {{ domain_order|tojson }};
+    let profileData = null;
+    let editMode = false;
+    let valuesDraft = [];
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s == null ? '' : String(s);
+      return d.innerHTML;
+    }
+    function hdr() {
+      return { 'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name=csrf-token]')?.content || '' };
+    }
+    function editOn() { return CAN_EDIT && editMode; }
+    function editBar(html) {
+      return editOn() ? '<div class="college-edit-bar flex-wrap gap-2 mb-2">' + html + '</div>' : '';
+    }
+
+    function showTab(name) {
+      document.querySelectorAll('#collegeTabs .nav-link').forEach(b => {
+        b.classList.toggle('active', b.dataset.tab === name);
+      });
+      document.querySelectorAll('.tab-pane-c').forEach(p => p.classList.add('d-none'));
+      const map = { intro: 'paneIntro', identity: 'paneIdentity', values: 'paneValues', goals: 'paneGoals', glo: 'paneGlo', matrix: 'paneMatrix', kpi: 'paneKpi' };
+      document.getElementById(map[name])?.classList.remove('d-none');
+    }
+
+    function fillDomainSelect(sel, val) {
+      if (!sel) return;
+      sel.innerHTML = DOMAIN_ORDER.map(k =>
+        '<option value="' + k + '"' + (k === val ? ' selected' : '') + '>' + esc(DOMAIN_LABELS[k] || k) + '</option>'
+      ).join('');
+    }
+
+    function fillIgParentSelect(selected) {
+      const sel = document.getElementById('igParent');
+      const roots = profileData?.ig_roots || [];
+      let html = '<option value="">— هدف رئيسي —</option>';
+      roots.forEach(r => {
+        html += '<option value="' + esc(r.code) + '"' + (r.code === selected ? ' selected' : '') + '>' + esc(r.code) + ' — ' + esc(r.title_ar) + '</option>';
+      });
+      sel.innerHTML = html;
+    }
+
+    function renderAll() {
+      const id = profileData.identity || {};
+      valuesDraft = JSON.parse(JSON.stringify(id.values || []));
+      const st = profileData.stats || {};
+      document.getElementById('paneIntro').innerHTML =
+        editBar('<button type="button" class="btn btn-sm btn-primary btn-edit-identity">تعديل المقدمة والرسالة والرؤية</button>') +
+        '<div class="card"><div class="card-body"><p>' + esc(id.intro_ar || '—') + '</p>' +
+        '<p class="small text-muted mb-0">ساري من: ' + esc(id.effective_from || '—') + ' | برامج: ' + esc(st.programs_count) + '</p></div></div>';
+      document.getElementById('paneIdentity').innerHTML =
+        editBar('<button type="button" class="btn btn-sm btn-primary btn-edit-identity">تعديل</button>') +
+        '<div class="card mb-3"><div class="card-header fw-semibold">الرسالة</div><div class="card-body">' + esc(id.mission_ar) + '</div></div>' +
+        '<div class="card"><div class="card-header fw-semibold">الرؤية</div><div class="card-body">' + esc(id.vision_ar) + '</div></div>';
+      renderValues();
+      renderGoals();
+      renderGlos();
+      renderMatrix();
+      renderKpis();
+      bindEditButtons();
+    }
+
+    function renderValues() {
+      const bar = editBar('<button type="button" class="btn btn-sm btn-success" id="btnAddValue">+ قيمة</button>');
+      let html = bar + '<table class="table table-sm"><thead><tr><th>رمز</th><th>عنوان</th><th>وصف</th>';
+      if (editOn()) html += '<th></th>';
+      html += '</tr></thead><tbody>';
+      valuesDraft.forEach((v, i) => {
+        html += '<tr><td><code>' + esc(v.code) + '</code></td><td>' + esc(v.title_ar) + '</td><td class="small">' + esc(v.description) + '</td>';
+        if (editOn()) {
+          html += '<td class="text-nowrap"><button type="button" class="btn btn-sm btn-outline-primary btn-edit-value" data-idx="' + i + '">تعديل</button> ' +
+            '<button type="button" class="btn btn-sm btn-outline-danger btn-del-value" data-idx="' + i + '">حذف</button></td>';
+        }
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+      if (!valuesDraft.length) html += '<p class="text-muted small">لا قيم.</p>';
+      document.getElementById('paneValues').innerHTML = html;
+    }
+
+    function renderGoals() {
+      const bar = editBar(
+        '<button type="button" class="btn btn-sm btn-success" id="btnAddIgRoot">+ هدف رئيسي</button> ' +
+        '<button type="button" class="btn btn-sm btn-outline-success" id="btnAddIgChild">+ فرعي</button>'
+      );
+      const tree = profileData.goals_tree || [];
+      let ghtml = bar;
+      tree.forEach(ig => {
+        ghtml += '<div class="card mb-2"><div class="card-header py-2 d-flex justify-content-between align-items-center">' +
+          '<span><strong>' + esc(ig.code) + '</strong> — ' + esc(ig.title_ar) + '</span>';
+        if (editOn()) {
+          ghtml += '<span><button type="button" class="btn btn-sm btn-outline-primary btn-edit-ig" data-code="' + esc(ig.code) + '">تعديل</button> ' +
+            '<button type="button" class="btn btn-sm btn-outline-danger btn-del-ig" data-code="' + esc(ig.code) + '">حذف</button></span>';
+        }
+        ghtml += '</div><ul class="list-group list-group-flush">';
+        (ig.children || []).forEach(ch => {
+          ghtml += '<li class="list-group-item small d-flex justify-content-between"><span>' + esc(ch.code) + ': ' + esc(ch.title_ar) + '</span>';
+          if (editOn()) {
+            ghtml += '<span><button type="button" class="btn btn-sm btn-link py-0 btn-edit-ig" data-code="' + esc(ch.code) + '">تعديل</button> ' +
+              '<button type="button" class="btn btn-sm btn-link py-0 text-danger btn-del-ig" data-code="' + esc(ch.code) + '">حذف</button></span>';
+          }
+          ghtml += '</li>';
+        });
+        ghtml += '</ul></div>';
+      });
+      document.getElementById('paneGoals').innerHTML = ghtml || (bar + '<p class="text-muted">لا أهداف.</p>');
+    }
+
+    function renderGlos() {
+      const bar = editBar('<button type="button" class="btn btn-sm btn-success" id="btnAddGlo">+ GLO</button>');
+      const glos = profileData.glos || [];
+      let html = bar + '<table class="table table-sm"><thead><tr><th>رمز</th><th>عنوان</th><th>مجال</th><th>نشط</th>';
+      if (editOn()) html += '<th></th>';
+      html += '</tr></thead><tbody>';
+      glos.forEach(g => {
+        const inactive = Number(g.is_active) === 0;
+        html += '<tr class="' + (inactive ? 'table-secondary' : '') + '"><td><code>' + esc(g.code) + '</code></td><td>' + esc(g.title_ar) + '</td>' +
+          '<td>' + esc(DOMAIN_LABELS[g.domain] || g.domain) + '</td><td>' + (inactive ? 'لا' : 'نعم') + '</td>';
+        if (editOn()) {
+          html += '<td class="text-nowrap"><button type="button" class="btn btn-sm btn-outline-primary btn-edit-glo" data-id="' + g.id + '">تعديل</button> ' +
+            '<button type="button" class="btn btn-sm btn-outline-danger btn-del-glo" data-id="' + g.id + '">حذف</button></td>';
+        }
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+      document.getElementById('paneGlo').innerHTML = html;
+    }
+
+    function renderMatrix() {
+      const m = profileData.ig_glo_matrix || {};
+      const goals = m.goals || [];
+      const glos = m.glos || [];
+      const cells = m.cells || [];
+      const cellMap = {};
+      cells.forEach(c => { cellMap[c.goal_code + '|' + c.glo_code] = c.linked; });
+      let html = '<div class="table-responsive"><table class="table table-bordered table-sm"><thead><tr><th>IG \\ GLO</th>';
+      glos.forEach(g => { html += '<th class="small"><code>' + esc(g.code) + '</code></th>'; });
+      html += '</tr></thead><tbody>';
+      goals.forEach(ig => {
+        html += '<tr><th class="small">' + esc(ig.code) + '</th>';
+        glos.forEach(glo => {
+          const k = ig.code + '|' + glo.code;
+          const on = cellMap[k];
+          html += '<td class="text-center ig-glo-cell' + (editOn() ? ' cursor-pointer' : '') + '" data-ig="' + esc(ig.code) + '" data-glo="' + esc(glo.code) + '" style="background:' + (on ? '#d1e7dd' : '#f8f9fa') + '">' + (on ? '●' : '·') + '</td>';
+        });
+        html += '</tr>';
+      });
+      html += '</tbody></table></div>';
+      if (!editOn()) html += '<p class="small text-muted">انقر الخلايا في وضع التحرير لربط IG بـ GLO.</p>';
+      document.getElementById('paneMatrix').innerHTML = html;
+      if (editOn()) {
+        document.getElementById('paneMatrix').querySelectorAll('.ig-glo-cell').forEach(td => {
+          td.onclick = async () => {
+            const r = await fetch('/academic_quality/api/college/ig-glo/toggle', {
+              method: 'POST', credentials: 'include', headers: hdr(),
+              body: JSON.stringify({ goal_code: td.dataset.ig, glo_code: td.dataset.glo }),
+            });
+            const j = await r.json().catch(() => ({}));
+            if (r.ok) loadProfile(); else alert(j.message || 'فشل');
+          };
+        });
+      }
+    }
+
+    function renderKpis() {
+      const kpis = profileData.kpis || [];
+      const bar = editOn()
+        ? '<div class="college-edit-bar flex-wrap gap-2 mb-2"><button type="button" class="btn btn-sm btn-success" id="btnAddKpi">+ مؤشر</button></div>'
+        : '';
+      let html = bar + '<table class="table table-sm"><thead><tr><th>هدف</th><th>المؤشر</th><th>مستهدف</th><th>فعلي</th><th>مصدر</th>';
+      if (editOn() || CAN_EDIT_KPI) html += '<th></th>';
+      html += '</tr></thead><tbody>';
+      kpis.forEach(k => {
+        const actual = k.actual_value != null ? k.actual_value : (k.computed_value != null ? k.computed_value + ' (محسوب)' : '—');
+        html += '<tr><td>' + esc(k.goal_code) + '</td><td>' + esc(k.name_ar) + '</td><td>' + esc(k.target_value) + ' ' + esc(k.unit) + '</td><td>' + esc(actual) + '</td><td>' + esc(k.data_source) + '</td>';
+        if (editOn()) {
+          html += '<td class="text-nowrap"><button type="button" class="btn btn-sm btn-outline-primary btn-edit-kpi" data-id="' + k.id + '">تعديل</button> ' +
+            '<button type="button" class="btn btn-sm btn-outline-danger btn-del-kpi" data-id="' + k.id + '">حذف</button></td>';
+        } else if (CAN_EDIT_KPI && !CAN_EDIT) {
+          html += '<td><button type="button" class="btn btn-sm btn-outline-secondary btn-edit-kpi-actual" data-id="' + k.id + '">تحديث فعلي</button></td>';
+        }
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+      document.getElementById('paneKpi').innerHTML = html;
+    }
+
+    function bindEditButtons() {
+      document.querySelectorAll('.btn-edit-identity').forEach(b => b.onclick = openIdentityModal);
+      document.getElementById('btnAddValue')?.addEventListener('click', () => openValueModal(-1));
+      document.querySelectorAll('.btn-edit-value').forEach(b => b.onclick = () => openValueModal(parseInt(b.dataset.idx, 10)));
+      document.querySelectorAll('.btn-del-value').forEach(b => b.onclick = () => {
+        valuesDraft.splice(parseInt(b.dataset.idx, 10), 1);
+        renderValues();
+      });
+      document.getElementById('btnAddIgRoot')?.addEventListener('click', () => openIgModal('create', null, ''));
+      document.getElementById('btnAddIgChild')?.addEventListener('click', () => {
+        const roots = profileData?.ig_roots || [];
+        const p = roots.length ? roots[0].code : '';
+        openIgModal('create', null, p);
+      });
+      document.querySelectorAll('.btn-edit-ig').forEach(b => b.onclick = () => openIgModal('edit', b.dataset.code, null));
+      document.querySelectorAll('.btn-del-ig').forEach(b => b.onclick = () => deleteIg(b.dataset.code));
+      document.getElementById('btnAddGlo')?.addEventListener('click', () => openGloModal(null));
+      document.querySelectorAll('.btn-edit-glo').forEach(b => b.onclick = () => {
+        const g = (profileData.glos || []).find(x => String(x.id) === b.dataset.id);
+        if (g) openGloModal(g);
+      });
+      document.querySelectorAll('.btn-del-glo').forEach(b => b.onclick = () => deleteGlo(parseInt(b.dataset.id, 10)));
+      document.getElementById('btnAddKpi')?.addEventListener('click', () => openKpiModal(null));
+      document.querySelectorAll('.btn-edit-kpi').forEach(b => b.onclick = () => {
+        const k = (profileData.kpis || []).find(x => String(x.id) === b.dataset.id);
+        if (k) openKpiModal(k);
+      });
+      document.querySelectorAll('.btn-del-kpi').forEach(b => b.onclick = () => deleteKpi(parseInt(b.dataset.id, 10)));
+      document.querySelectorAll('.btn-edit-kpi-actual').forEach(b => b.onclick = async () => {
+        const k = (profileData.kpis || []).find(x => String(x.id) === b.dataset.id);
+        if (!k) return;
+        const v = prompt('القيمة الفعلية:', k.actual_value != null ? k.actual_value : '');
+        if (v === null) return;
+        await fetch('/academic_quality/api/college/kpis/' + k.id, {
+          method: 'PUT', credentials: 'include', headers: hdr(),
+          body: JSON.stringify({ actual_value: parseFloat(v) || 0 }),
+        });
+        loadProfile();
+      });
+    }
+
+    function openIdentityModal() {
+      const id = profileData.identity || {};
+      document.getElementById('editIntro').value = id.intro_ar || '';
+      document.getElementById('editMission').value = id.mission_ar || '';
+      document.getElementById('editVision').value = id.vision_ar || '';
+      document.getElementById('editEffective').value = id.effective_from || '';
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('identityModal')).show();
+    }
+
+    function openValueModal(idx) {
+      document.getElementById('valueEditIdx').value = String(idx);
+      const v = idx >= 0 ? valuesDraft[idx] : null;
+      document.getElementById('valueCode').value = v ? v.code : '';
+      document.getElementById('valueCode').disabled = idx >= 0;
+      document.getElementById('valueTitle').value = v ? v.title_ar : '';
+      document.getElementById('valueDesc').value = v ? (v.description || '') : '';
+      document.getElementById('valueModalTitle').textContent = idx >= 0 ? 'تعديل قيمة' : 'إضافة قيمة';
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('valueModal')).show();
+    }
+
+    function findIg(code) {
+      const tree = profileData.goals_tree || [];
+      for (const ig of tree) {
+        if (ig.code === code) return ig;
+        for (const ch of ig.children || []) if (ch.code === code) return ch;
+      }
+      return null;
+    }
+
+    function openIgModal(mode, code, defaultParent) {
+      document.getElementById('igEditMode').value = mode;
+      fillIgParentSelect('');
+      const row = code ? findIg(code) : null;
+      document.getElementById('igCode').value = row ? row.code : '';
+      document.getElementById('igCode').disabled = mode === 'edit';
+      document.getElementById('igParent').value = row ? (row.parent_code || '') : (defaultParent || '');
+      document.getElementById('igParent').disabled = mode === 'edit';
+      document.getElementById('igTitle').value = row ? row.title_ar : '';
+      document.getElementById('igDesc').value = row ? (row.description || '') : '';
+      document.getElementById('igPillar').value = row ? (row.pillar || '') : '';
+      document.getElementById('igSort').value = row ? (row.sort_order ?? 0) : 0;
+      document.getElementById('igModalTitle').textContent = mode === 'edit' ? 'تعديل IG' : 'إضافة IG';
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('igModal')).show();
+    }
+
+    function openGloModal(row) {
+      fillDomainSelect(document.getElementById('gloDomain'), row?.domain || DOMAIN_ORDER[1]);
+      document.getElementById('gloEditId').value = row ? row.id : '';
+      document.getElementById('gloCode').value = row ? row.code : '';
+      document.getElementById('gloCode').disabled = !!row;
+      document.getElementById('gloTitle').value = row ? row.title_ar : '';
+      document.getElementById('gloDesc').value = row ? (row.description || '') : '';
+      document.getElementById('gloSort').value = row ? (row.sort_order ?? 0) : 0;
+      document.getElementById('gloActive').checked = row ? Number(row.is_active) !== 0 : true;
+      document.getElementById('gloModalTitle').textContent = row ? 'تعديل GLO' : 'إضافة GLO';
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('gloModal')).show();
+    }
+
+    function openKpiModal(row) {
+      document.getElementById('kpiEditId').value = row ? row.id : '';
+      document.getElementById('kpiGoalCode').value = row ? row.goal_code : '';
+      document.getElementById('kpiName').value = row ? row.name_ar : '';
+      document.getElementById('kpiTarget').value = row?.target_value ?? '';
+      document.getElementById('kpiActual').value = row?.actual_value ?? '';
+      document.getElementById('kpiUnit').value = row ? (row.unit || '') : '';
+      document.getElementById('kpiSource').value = row ? (row.data_source || 'manual') : 'manual';
+      document.getElementById('kpiPeriod').value = row ? (row.period_label || '') : '';
+      document.getElementById('kpiModalTitle').textContent = row ? 'تعديل مؤشر' : 'إضافة مؤشر';
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('kpiModal')).show();
+    }
+
+    async function loadProfile() {
+      const r = await fetch('/academic_quality/api/college/profile', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        document.getElementById('loadState').textContent = j.message || 'تعذر التحميل';
+        return;
+      }
+      profileData = j;
+      document.getElementById('loadState').classList.add('d-none');
+      document.getElementById('mainWrap').classList.remove('d-none');
+      renderAll();
+    }
+
+    document.getElementById('btnToggleEditMode')?.addEventListener('click', () => {
+      editMode = !editMode;
+      document.body.classList.toggle('college-edit-mode', editMode);
+      document.getElementById('btnToggleEditMode').classList.toggle('btn-primary', editMode);
+      document.getElementById('btnToggleEditMode').classList.toggle('btn-outline-primary', !editMode);
+      document.getElementById('btnToggleEditMode').textContent = editMode ? 'إنهاء وضع التحرير' : 'وضع التحرير';
+      renderAll();
+    });
+
+    document.getElementById('btnSaveIdentity')?.addEventListener('click', async () => {
+      const r = await fetch('/academic_quality/api/college/identity', {
+        method: 'PUT', credentials: 'include', headers: hdr(),
+        body: JSON.stringify({
+          intro_ar: document.getElementById('editIntro').value,
+          mission_ar: document.getElementById('editMission').value,
+          vision_ar: document.getElementById('editVision').value,
+          effective_from: document.getElementById('editEffective').value,
+          values: valuesDraft,
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(j.message || 'فشل'); return; }
+      bootstrap.Modal.getInstance(document.getElementById('identityModal'))?.hide();
+      loadProfile();
+    });
+
+    document.getElementById('btnSaveValue')?.addEventListener('click', async () => {
+      const idx = parseInt(document.getElementById('valueEditIdx').value, 10);
+      const item = {
+        code: document.getElementById('valueCode').value.trim(),
+        title_ar: document.getElementById('valueTitle').value.trim(),
+        description: document.getElementById('valueDesc').value.trim(),
+      };
+      if (!item.code || !item.title_ar) { alert('الرمز والعنوان مطلوبان'); return; }
+      if (idx >= 0) valuesDraft[idx] = item; else valuesDraft.push(item);
+      const r = await fetch('/academic_quality/api/college/values', {
+        method: 'PUT', credentials: 'include', headers: hdr(),
+        body: JSON.stringify({ values: valuesDraft }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(j.message || 'فشل'); return; }
+      bootstrap.Modal.getInstance(document.getElementById('valueModal'))?.hide();
+      loadProfile();
+    });
+
+    document.getElementById('btnSaveIg')?.addEventListener('click', async () => {
+      const mode = document.getElementById('igEditMode').value;
+      const body = {
+        code: document.getElementById('igCode').value.trim(),
+        parent_code: document.getElementById('igParent').value.trim(),
+        title_ar: document.getElementById('igTitle').value.trim(),
+        description: document.getElementById('igDesc').value.trim(),
+        pillar: document.getElementById('igPillar').value,
+        sort_order: parseInt(document.getElementById('igSort').value, 10) || 0,
+      };
+      let url = '/academic_quality/api/college/strategic-goals';
+      let method = 'POST';
+      if (mode === 'edit') {
+        url += '/' + encodeURIComponent(body.code);
+        method = 'PUT';
+      }
+      const r = await fetch(url, { method, credentials: 'include', headers: hdr(), body: JSON.stringify(body) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(j.message || 'فشل'); return; }
+      bootstrap.Modal.getInstance(document.getElementById('igModal'))?.hide();
+      loadProfile();
+    });
+
+    async function deleteIg(code) {
+      if (!confirm('حذف/تعطيل ' + code + '؟')) return;
+      const r = await fetch('/academic_quality/api/college/strategic-goals/' + encodeURIComponent(code), {
+        method: 'DELETE', credentials: 'include', headers: hdr(),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) alert(j.message || 'فشل'); else loadProfile();
+    }
+
+    document.getElementById('btnSaveGlo')?.addEventListener('click', async () => {
+      const id = document.getElementById('gloEditId').value;
+      const body = {
+        code: document.getElementById('gloCode').value.trim(),
+        title_ar: document.getElementById('gloTitle').value.trim(),
+        description: document.getElementById('gloDesc').value.trim(),
+        domain: document.getElementById('gloDomain').value,
+        sort_order: parseInt(document.getElementById('gloSort').value, 10) || 0,
+        is_active: document.getElementById('gloActive').checked,
+      };
+      const url = id ? '/academic_quality/api/college/glo/' + id : '/academic_quality/api/college/glo';
+      const r = await fetch(url, {
+        method: id ? 'PUT' : 'POST', credentials: 'include', headers: hdr(), body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(j.message || 'فشل'); return; }
+      bootstrap.Modal.getInstance(document.getElementById('gloModal'))?.hide();
+      loadProfile();
+    });
+
+    async function deleteGlo(id) {
+      if (!confirm('حذف أو تعطيل GLO؟')) return;
+      const r = await fetch('/academic_quality/api/college/glo/' + id, { method: 'DELETE', credentials: 'include', headers: hdr() });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) alert(j.message || 'فشل'); else loadProfile();
+    }
+
+    document.getElementById('btnSaveKpi')?.addEventListener('click', async () => {
+      const id = document.getElementById('kpiEditId').value;
+      const body = {
+        goal_code: document.getElementById('kpiGoalCode').value.trim(),
+        name_ar: document.getElementById('kpiName').value.trim(),
+        target_value: document.getElementById('kpiTarget').value === '' ? null : parseFloat(document.getElementById('kpiTarget').value),
+        actual_value: document.getElementById('kpiActual').value === '' ? null : parseFloat(document.getElementById('kpiActual').value),
+        unit: document.getElementById('kpiUnit').value.trim(),
+        data_source: document.getElementById('kpiSource').value,
+        period_label: document.getElementById('kpiPeriod').value.trim(),
+      };
+      const url = id ? '/academic_quality/api/college/kpis/' + id : '/academic_quality/api/college/kpis';
+      const r = await fetch(url, {
+        method: id ? 'PUT' : 'POST', credentials: 'include', headers: hdr(), body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(j.message || 'فشل'); return; }
+      bootstrap.Modal.getInstance(document.getElementById('kpiModal'))?.hide();
+      loadProfile();
+    });
+
+    async function deleteKpi(id) {
+      if (!confirm('حذف المؤشر؟')) return;
+      const r = await fetch('/academic_quality/api/college/kpis/' + id, { method: 'DELETE', credentials: 'include', headers: hdr() });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.message || 'فشل'); return; }
+      loadProfile();
+    }
+
+    document.querySelectorAll('#collegeTabs .nav-link').forEach(btn => {
+      btn.addEventListener('click', () => showTab(btn.dataset.tab));
+    });
+
+    fillDomainSelect(document.getElementById('gloDomain'), DOMAIN_ORDER[1] || 'technical_skills');
+    loadProfile();
+  </script>
+</body>
+</html>

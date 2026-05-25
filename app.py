@@ -27,6 +27,7 @@ from backend.services.index_portal import index_portal_bp
 from backend.services.academic_quality import academic_quality_bp
 from backend.services.course_evaluations import course_evaluations_bp
 from backend.services.learning_outcomes import learning_outcomes_bp
+from backend.services.college_identity_portal import college_portal_bp
 
 # Core modules
 from backend.core.exceptions import register_error_handlers
@@ -182,6 +183,7 @@ app.register_blueprint(performance_bp, url_prefix="/performance")
 app.register_blueprint(students_api_bp)
 app.register_blueprint(index_portal_bp, url_prefix="/index")
 app.register_blueprint(academic_quality_bp, url_prefix="/academic_quality")
+app.register_blueprint(college_portal_bp, url_prefix="/academic_quality")
 app.register_blueprint(learning_outcomes_bp, url_prefix="/academic_quality/ilo")
 app.register_blueprint(course_evaluations_bp, url_prefix="/students/evaluations")
 

@@ -6,11 +6,14 @@ import csv
 import io
 from typing import Any
 
+from backend.core.plo_glo import DOMAIN_LABELS_AR, normalize_outcome_domain
+
 
 def program_plo_analytics(cur, program_id: int) -> dict[str, Any]:
     outcomes = cur.execute(
         """
-        SELECT id, code, title_ar, governance_status, parent_glo_code
+        SELECT id, code, title_ar, governance_status, parent_glo_code,
+               COALESCE(domain,'') AS domain
         FROM program_learning_outcomes
         WHERE program_id = ? AND COALESCE(is_active, 1) = 1
         ORDER BY sort_order, code
@@ -29,8 +32,16 @@ def program_plo_analytics(cur, program_id: int) -> dict[str, Any]:
                     "title_ar": o[2],
                     "governance_status": o[3],
                     "parent_glo_code": o[4],
+                    "domain": o[5],
                 }
             )
+    for oc in outcome_rows:
+        dom = normalize_outcome_domain(
+            oc.get("domain"),
+            glo_code=oc.get("parent_glo_code"),
+        )
+        oc["domain"] = dom
+        oc["domain_label"] = DOMAIN_LABELS_AR.get(dom, dom)
     course_count = int(
         cur.execute(
             """
@@ -72,6 +83,8 @@ def program_plo_analytics(cur, program_id: int) -> dict[str, Any]:
             "outcome_id": oid,
             "code": oc["code"],
             "title_ar": oc["title_ar"],
+            "domain": oc.get("domain"),
+            "domain_label": oc.get("domain_label"),
             "introduce_count": i_cnt,
             "reinforce_count": r_cnt,
             "assess_count": m_cnt,
@@ -83,6 +96,8 @@ def program_plo_analytics(cur, program_id: int) -> dict[str, Any]:
             gaps.append(
                 {
                     "code": oc["code"],
+                    "domain": oc.get("domain"),
+                    "domain_label": oc.get("domain_label"),
                     "reason": "أقل من 3 مقررات بمستوى إتقان/تقييم (M)",
                     "assess_count": m_cnt,
                 }
@@ -100,10 +115,48 @@ def program_plo_analytics(cur, program_id: int) -> dict[str, Any]:
             gaps.append(
                 {
                     "code": oc["code"],
+                    "domain": oc.get("domain"),
+                    "domain_label": oc.get("domain_label"),
                     "reason": f"متوسط تحقق الشعب {float(avg_ach):.0f}% أقل من 70%",
                     "assess_count": m_cnt,
                 }
             )
+    domain_stats: dict[str, dict[str, Any]] = {}
+    for oc in outcome_rows:
+        dom = oc.get("domain") or ""
+        if not dom:
+            continue
+        bucket = domain_stats.setdefault(
+            dom,
+            {
+                "domain": dom,
+                "domain_label": oc.get("domain_label"),
+                "plo_count": 0,
+                "assess_m_total": 0,
+                "low_achievement_count": 0,
+            },
+        )
+        bucket["plo_count"] += 1
+        cov = next((x for x in coverage_by_outcome if x["outcome_id"] == int(oc["id"])), None)
+        if cov:
+            bucket["assess_m_total"] += int(cov.get("assess_count") or 0)
+    for g in gaps:
+        dom = g.get("domain") or ""
+        if dom in domain_stats:
+            domain_stats[dom]["low_achievement_count"] = (
+                int(domain_stats[dom].get("low_achievement_count") or 0) + 1
+            )
+    domain_summary = []
+    for dom in sorted(domain_stats.keys(), key=lambda d: DOMAIN_LABELS_AR.get(d, d)):
+        st = domain_stats[dom]
+        domain_summary.append(
+            {
+                "domain": dom,
+                "domain_label": st.get("domain_label"),
+                "plo_count": st["plo_count"],
+                "gap_count": int(st.get("low_achievement_count") or 0),
+            }
+        )
     clo_count = 0
     try:
         clo_count = int(
@@ -129,6 +182,7 @@ def program_plo_analytics(cur, program_id: int) -> dict[str, Any]:
         "clo_count": clo_count,
         "approved_outcomes": approved,
         "coverage_by_outcome": coverage_by_outcome,
+        "domain_summary": domain_summary,
         "gaps": gaps,
         "target_assess_courses_per_plo": 3,
     }
