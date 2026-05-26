@@ -2844,18 +2844,40 @@ def get_registrations():
                     return _json_no_cache([])
 
                 rows = cur.execute(
-                    "SELECT course_name FROM registrations WHERE student_id = ?",
+                    """SELECT r.course_name,
+                              COALESCE(c.course_code, pc.course_code, '') AS course_code,
+                              COALESCE(c.units, pc.units_override, cm.default_units, 0) AS units,
+                              r.registered_at
+                       FROM registrations r
+                       LEFT JOIN courses c ON LOWER(TRIM(c.course_name)) = LOWER(TRIM(r.course_name))
+                       LEFT JOIN program_courses pc ON pc.id = r.program_course_id
+                       LEFT JOIN course_master cm ON cm.id = pc.course_master_id
+                       WHERE r.student_id = ?""",
                     (student_id,),
                 ).fetchall()
-                return _json_no_cache([r[0] for r in rows])
+                return _json_no_cache([
+                    {"course_name": r[0], "course_code": r[1], "units": r[2], "registered_at": r[3]}
+                    for r in rows
+                ])
 
             # unrestricted (admin/admin_main)
             if student_id:
                 rows = cur.execute(
-                    "SELECT course_name FROM registrations WHERE student_id = ?",
+                    """SELECT r.course_name,
+                              COALESCE(c.course_code, pc.course_code, '') AS course_code,
+                              COALESCE(c.units, pc.units_override, cm.default_units, 0) AS units,
+                              r.registered_at
+                       FROM registrations r
+                       LEFT JOIN courses c ON LOWER(TRIM(c.course_name)) = LOWER(TRIM(r.course_name))
+                       LEFT JOIN program_courses pc ON pc.id = r.program_course_id
+                       LEFT JOIN course_master cm ON cm.id = pc.course_master_id
+                       WHERE r.student_id = ?""",
                     (student_id,),
                 ).fetchall()
-                return _json_no_cache([r[0] for r in rows])
+                return _json_no_cache([
+                    {"course_name": r[0], "course_code": r[1], "units": r[2], "registered_at": r[3]}
+                    for r in rows
+                ])
 
             rows = cur.execute(
                 "SELECT student_id, course_name FROM registrations",

@@ -15,11 +15,19 @@
         <h1 class="page-title h4 mb-1"><i class="fa-solid fa-award text-primary"></i> كتالوج مخرجات التعلم (PLO)</h1>
         <p class="text-muted small mb-0">أهداف البرنامج (PG) ومخرجات تعلم الطالب (SO/PLO) وربطها بمقررات الخطة.</p>
       </div>
-      <a href="/academic_quality/dashboard" class="btn btn-outline-secondary btn-sm">لوحة الجودة</a>
+      <div class="d-flex gap-2">
+        <button class="btn btn-outline-info btn-sm" onclick="PageGuide.open()">❓ دليل الاستخدام</button>
+        <a href="/academic_quality/dashboard" class="btn btn-outline-secondary btn-sm">لوحة الجودة</a>
+      </div>
     </div>
 
     <div id="iloMsg" class="mb-2" aria-live="polite"></div>
 
+    {% if not can_edit %}
+    <div class="alert alert-info py-2 small mb-3">
+      <i class="fa-solid fa-eye"></i> <strong>وضع القراءة فقط</strong> — يمكنك الاطلاع على أهداف ومخرجات البرنامج. التعديل متاح فقط لرئيس القسم.
+    </div>
+    {% endif %}
     <div class="card shadow-sm mb-3">
       <div class="card-body">
         <div class="row g-2 align-items-end">
@@ -27,7 +35,7 @@
             <label class="form-label small mb-1">البرنامج الأكاديمي</label>
             <select id="programSelect" class="form-select"></select>
           </div>
-          <div class="col-md-3">
+          <div class="col-md-3 ilo-edit-only" {% if not can_edit %}style="display:none"{% endif %}>
             <label class="form-label small mb-1">قالب مخرجات (كلية الهندسة)</label>
             <select id="benchmarkSelect" class="form-select" disabled>
               <option value="">— حمّل البرنامج —</option>
@@ -37,18 +45,18 @@
             <button type="button" class="btn btn-primary flex-grow-1" id="btnLoadOutcomes">
               <i class="fa-solid fa-rotate"></i> تحميل
             </button>
-            <button type="button" class="btn btn-outline-success" id="btnImportBenchmark" disabled title="استيراد قالب">
+            <button type="button" class="btn btn-outline-success ilo-edit-only" id="btnImportBenchmark" disabled title="استيراد قالب" {% if not can_edit %}style="display:none"{% endif %}>
               <i class="fa-solid fa-file-import"></i>
             </button>
           </div>
         </div>
-        <div class="d-flex flex-wrap gap-2 mt-2 align-items-center">
+        <div class="d-flex flex-wrap gap-2 mt-2 align-items-center" id="iloToolbar">
           <a class="btn btn-sm btn-outline-secondary" id="btnExportMatrix" href="#" style="pointer-events:none;opacity:.6">مصفوفة CSV</a>
           <a class="btn btn-sm btn-outline-success" id="btnExportPloXlsx" href="#" style="pointer-events:none;opacity:.6">تصدير PLO Excel</a>
-          <a class="btn btn-sm btn-outline-secondary" id="btnPloTemplate" href="/academic_quality/ilo/api/programs/0/outcomes/template.xlsx">قالب Excel</a>
-          <button type="button" class="btn btn-sm btn-outline-primary" id="btnImportPloXlsx" disabled>استيراد Excel</button>
+          <a class="btn btn-sm btn-outline-secondary ilo-edit-only" id="btnPloTemplate" href="/academic_quality/ilo/api/programs/0/outcomes/template.xlsx" {% if not can_edit %}style="display:none"{% endif %}>قالب Excel</a>
+          <button type="button" class="btn btn-sm btn-outline-primary ilo-edit-only" id="btnImportPloXlsx" disabled {% if not can_edit %}style="display:none"{% endif %}>استيراد Excel</button>
           <input type="file" id="ploExcelFile" accept=".xlsx,.xls" class="d-none">
-          <button type="button" class="btn btn-sm btn-outline-danger" id="btnImportMechProfile" disabled title="4 أهداف + 6 مخرجات ميكانيك">تحميل وثيقة ميكانيك</button>
+          <button type="button" class="btn btn-sm btn-outline-danger ilo-edit-only" id="btnImportMechProfile" disabled title="4 أهداف + 6 مخرجات ميكانيك" {% if not can_edit %}style="display:none"{% endif %}>تحميل وثيقة ميكانيك</button>
           <a class="btn btn-sm btn-outline-success" id="btnExportProfileXlsx" href="#" style="pointer-events:none;opacity:.6">تصدير أهداف+مخرجات</a>
           <button type="button" class="btn btn-sm btn-outline-info" id="btnShowGlo" disabled>مخرجات الكلية (GLO)</button>
           <button type="button" class="btn btn-sm btn-outline-warning" id="btnShowAnalytics" disabled>تحليلات وفجوات</button>
@@ -123,7 +131,7 @@
         <div class="card shadow-sm">
           <div class="card-header bg-light d-flex justify-content-between align-items-center flex-wrap gap-2">
             <span class="fw-semibold">مخرجات البرنامج</span>
-            <button type="button" class="btn btn-sm btn-success" id="btnAddOutcome">
+            <button type="button" class="btn btn-sm btn-success ilo-edit-only" id="btnAddOutcome" {% if not can_edit %}style="display:none"{% endif %}>
               <i class="fa-solid fa-plus"></i> إضافة مخرج
             </button>
           </div>
@@ -147,18 +155,18 @@
 
       <div class="col-lg-5">
         <div class="card shadow-sm">
-          <div class="card-header bg-light fw-semibold">ربط مقرر بالمخرجات</div>
+          <div class="card-header bg-light fw-semibold">{% if can_edit %}ربط مقرر بالمخرجات{% else %}ربط المقرر بالمخرجات (للقراءة){% endif %}</div>
           <div class="card-body">
             <label class="form-label small mb-1">المقرر</label>
             <select id="courseSelect" class="form-select mb-2"></select>
             <div id="operationalHint" class="alert alert-warning py-2 small d-none mb-2"></div>
             <div id="courseLinkMeta" class="small text-muted mb-2"></div>
-            <div class="d-flex flex-wrap gap-1 mb-2">
+            <div class="d-flex flex-wrap gap-1 mb-2 ilo-edit-only" {% if not can_edit %}style="display:none"{% endif %}>
               <button type="button" class="btn btn-outline-secondary btn-sm" id="btnLinkAll">تحديد الكل</button>
               <button type="button" class="btn btn-outline-secondary btn-sm" id="btnLinkNone">إلغاء الكل</button>
             </div>
             <div id="linkChecks" class="border rounded p-2 small ilo-link-box"></div>
-            <button type="button" class="btn btn-primary btn-sm mt-2 w-100" id="btnSaveLinks">
+            <button type="button" class="btn btn-primary btn-sm mt-2 w-100 ilo-edit-only" id="btnSaveLinks" {% if not can_edit %}style="display:none"{% endif %}>
               <i class="fa-solid fa-floppy-disk"></i> حفظ ربط المقرر
             </button>
           </div>
@@ -174,7 +182,7 @@
       <div class="card shadow-sm">
         <div class="card-header bg-light d-flex justify-content-between align-items-center flex-wrap gap-2">
           <span class="fw-semibold">أهداف البرنامج (Program Goals)</span>
-          <button type="button" class="btn btn-sm btn-success" id="btnAddGoal">
+          <button type="button" class="btn btn-sm btn-success ilo-edit-only" id="btnAddGoal" {% if not can_edit %}style="display:none"{% endif %}>
             <i class="fa-solid fa-plus"></i> إضافة هدف
           </button>
         </div>
@@ -577,7 +585,7 @@
     }
     .ilo-matrix-wrap th.ilo-sticky-col { z-index: 3; }
     .ilo-matrix-cell {
-      width: 2rem; height: 2rem; min-width: 2rem; padding: 0; cursor: pointer; text-align: center;
+      width: 2rem; height: 2rem; min-width: 2rem; padding: 0; cursor: {% if can_edit %}pointer{% else %}default{% endif %}; text-align: center;
       vertical-align: middle; border: 1px solid #dee2e6;
     }
     .ilo-matrix-cell:hover { filter: brightness(0.95); }
@@ -603,6 +611,7 @@
     const DOMAIN_ORDER = {{ domain_order|tojson }};
     const DOMAIN_COLORS = {{ domain_colors|tojson }};
     const DEFAULT_OUTCOME_DOMAIN = 'technical_skills';
+    let CAN_EDIT = {{ 'true' if can_edit else 'false' }};
 
     function fillDomainSelect(sel, selected) {
       if (!sel) return;
@@ -670,10 +679,16 @@
     async function loadPrograms() {
       const r = await fetch('/academic_quality/ilo/api/programs', { credentials: 'include' });
       const j = await r.json().catch(() => ({}));
+      if (j.can_edit !== undefined) CAN_EDIT = !!j.can_edit;
+      applyEditPermissions();
       const sel = document.getElementById('programSelect');
       const items = j.items || [];
       sel.innerHTML = '<option value="">— اختر برنامجاً —</option>' +
         items.map(p => `<option value="${p.id}">${escapeHtml(p.department_name)} / ${escapeHtml(p.code)} — ${escapeHtml(p.name_ar)}</option>`).join('');
+      if (!CAN_EDIT && items.length >= 1) {
+        sel.value = String(items[0].id);
+        sel.disabled = true;
+      }
       const usp = new URLSearchParams(location.search);
       const deepPid = usp.get('program_id');
       const deepCm = usp.get('course_master_id');
@@ -689,6 +704,27 @@
       } else if (items.length === 1) {
         sel.value = String(items[0].id);
         loadOutcomes();
+      }
+    }
+
+    function applyEditPermissions() {
+      const editOnlyEls = [
+        'btnAddOutcome', 'btnAddGoal', 'btnSaveLinks', 'btnLinkAll', 'btnLinkNone',
+        'btnImportBenchmark', 'btnImportMechProfile', 'btnImportPloXlsx', 'btnAddClo'
+      ];
+      const toolbarEls = [
+        'benchmarkSelect'
+      ];
+      if (!CAN_EDIT) {
+        editOnlyEls.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.classList.add('d-none');
+        });
+        toolbarEls.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.closest('.col-md-3')?.classList.add('d-none');
+        });
+        document.querySelectorAll('.ilo-readonly-hide').forEach(el => el.classList.add('d-none'));
       }
     }
 
@@ -742,6 +778,10 @@
         const gov = (x.governance_status || 'draft');
         const glo = (x.parent_glo_code || '').trim();
         const govCls = gov === 'approved' ? 'success' : (gov === 'retired' ? 'secondary' : 'warning');
+        const actBtns = CAN_EDIT
+          ? `<button type="button" class="btn btn-sm btn-outline-primary btn-edit-outcome" data-id="${x.id}">تعديل</button>
+             <button type="button" class="btn btn-sm btn-outline-danger btn-del-outcome" data-id="${x.id}">حذف</button>`
+          : '';
         return `<tr class="${inactive ? 'plo-inactive' : ''}" data-id="${x.id}">
           <td><code>${escapeHtml(x.code)}</code><br><span class="badge bg-${govCls}">${escapeHtml(gov)}</span></td>
           <td>
@@ -751,10 +791,7 @@
             ${desc ? `<div class="plo-desc">${escapeHtml(desc)}</div>` : ''}
           </td>
           <td class="text-muted">${x.sort_order ?? 0}</td>
-          <td class="text-nowrap">
-            <button type="button" class="btn btn-sm btn-outline-primary btn-edit-outcome" data-id="${x.id}">تعديل</button>
-            <button type="button" class="btn btn-sm btn-outline-danger btn-del-outcome" data-id="${x.id}">حذف</button>
-          </td>
+          <td class="text-nowrap">${actBtns}</td>
         </tr>`;
       }).join('');
     }
@@ -918,8 +955,9 @@
         box.innerHTML = '<span class="text-muted">عرّف مخرجات للبرنامج أولاً من الجدول على اليسار.</span>';
         return;
       }
+      const disabledAttr = CAN_EDIT ? '' : ' disabled';
       box.innerHTML = all.map(o =>
-        `<label class="d-block"><input type="checkbox" class="form-check-input me-1 link-outcome-cb" value="${o.id}" ${linked.has(o.id) ? 'checked' : ''}> ` +
+        `<label class="d-block"><input type="checkbox" class="form-check-input me-1 link-outcome-cb" value="${o.id}" ${linked.has(o.id) ? 'checked' : ''}${disabledAttr}> ` +
         `<strong>${escapeHtml(o.code)}</strong> — ${escapeHtml(o.title_ar)}</label>`
       ).join('');
       loadClosForCourse();
@@ -935,16 +973,17 @@
       tbody.innerHTML = goalsCache.map(g => {
         const inactive = Number(g.is_active) === 0;
         const desc = (g.description || '').slice(0, 120);
+        const actBtns = CAN_EDIT
+          ? `<button type="button" class="btn btn-sm btn-outline-primary btn-edit-goal" data-id="${g.id}">تعديل</button>
+             <button type="button" class="btn btn-sm btn-outline-danger btn-del-goal" data-id="${g.id}">حذف</button>`
+          : '';
         return `<tr class="${inactive ? 'plo-inactive' : ''}">
           <td><code>${escapeHtml(g.code)}</code></td>
           <td><div class="fw-semibold">${escapeHtml(g.title_ar)}</div>
             ${(g.parent_ig_code || '') ? `<span class="badge bg-secondary">${escapeHtml(g.parent_ig_code)}</span> ` : ''}
             <div class="plo-desc">${escapeHtml(desc)}${(g.description||'').length > 120 ? '…' : ''}</div></td>
           <td>${g.sort_order ?? 0}</td>
-          <td class="text-nowrap">
-            <button type="button" class="btn btn-sm btn-outline-primary btn-edit-goal" data-id="${g.id}">تعديل</button>
-            <button type="button" class="btn btn-sm btn-outline-danger btn-del-goal" data-id="${g.id}">حذف</button>
-          </td></tr>`;
+          <td class="text-nowrap">${actBtns}</td></tr>`;
       }).join('');
     }
 
@@ -1012,7 +1051,7 @@
     }
 
     async function toggleGoalMatrixCell(gid, oid) {
-      if (!goalMatrixCache || !currentProgramId) return;
+      if (!goalMatrixCache || !currentProgramId || !CAN_EDIT) return;
       const cells = goalMatrixCache.cells || [];
       const set = new Set(cells.map(c => c.goal_id + '|' + c.outcome_id));
       const key = gid + '|' + oid;
@@ -1189,7 +1228,7 @@
       tbody.innerHTML = items.map(c =>
         `<tr><td><code>${escapeHtml(c.code)}</code></td><td>${escapeHtml(c.title_ar)}</td>` +
         `<td>${(c.plo_codes || []).map(p => '<code>' + escapeHtml(p) + '</code>').join(' ')}</td>` +
-        `<td><button type="button" class="btn btn-sm btn-outline-danger btn-del-clo" data-id="${c.id}">حذف</button></td></tr>`
+        `<td>${CAN_EDIT ? `<button type="button" class="btn btn-sm btn-outline-danger btn-del-clo" data-id="${c.id}">حذف</button>` : ''}</td></tr>`
       ).join('');
     }
 
@@ -1411,7 +1450,7 @@
 
     document.getElementById('matrixWrap').addEventListener('click', async e => {
       const td = e.target.closest('.ilo-matrix-cell');
-      if (!td || !currentProgramId) return;
+      if (!td || !currentProgramId || !CAN_EDIT) return;
       const outcomeId = parseInt(td.dataset.oid, 10);
       const colKey = td.dataset.col;
       td.style.opacity = '0.5';

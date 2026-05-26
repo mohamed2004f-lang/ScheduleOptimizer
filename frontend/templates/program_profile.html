@@ -107,7 +107,6 @@
     </div>
   </div>
 
-  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
   <script>
     const PROGRAM_ID = {{ program_id }};
     let CAN_EDIT = false;
@@ -248,15 +247,19 @@
     }
 
     async function load() {
-      const r = await fetch('/academic_quality/api/programs/' + PROGRAM_ID + '/profile', { credentials: 'include' });
+      const r = await fetch('/academic_quality/api/programs/' + PROGRAM_ID + '/profile', { credentials: 'include', cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
         document.getElementById('loadState').textContent = j.message || 'تعذر التحميل';
         return;
       }
       data = j;
-      CAN_EDIT = true;
-      document.getElementById('btnEditProg')?.classList.remove('d-none');
+      CAN_EDIT = !!j.can_edit_profile;
+      if (CAN_EDIT) {
+        document.getElementById('btnEditProg')?.classList.remove('d-none');
+      } else {
+        document.getElementById('btnEditProg')?.classList.add('d-none');
+      }
       document.getElementById('loadState').classList.add('d-none');
       document.getElementById('mainWrap').classList.remove('d-none');
       render();

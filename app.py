@@ -509,6 +509,14 @@ def analytics_dashboard_page():
 def student_view(student_id=None):
     return render_template("student_view.html", student_id=student_id)
 
+
+@app.route("/my_registrations")
+@login_required
+@role_required("student")
+def my_registrations_page():
+    return render_template("student_registrations.html")
+
+
 @app.route("/prereqs_form")
 @login_required
 @role_required("admin", "admin_main", "head_of_department", "supervisor")
@@ -905,7 +913,7 @@ def academic_quality_dashboard_page():
 
 @app.route("/ilo_catalog_page")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def ilo_catalog_page_redirect():
     return redirect(url_for("learning_outcomes.ilo_catalog_page"))
 

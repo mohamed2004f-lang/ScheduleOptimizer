@@ -120,6 +120,18 @@ NEW_TABLES_SQLITE: tuple[tuple[str, str], ...] = (
         )
         """,
     ),
+    (
+        "program_ig_alignment",
+        """
+        CREATE TABLE IF NOT EXISTS program_ig_alignment (
+            program_id INTEGER NOT NULL,
+            ig_code TEXT NOT NULL,
+            alignment_type TEXT NOT NULL DEFAULT 'supports',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (program_id, ig_code)
+        )
+        """,
+    ),
 )
 
 NEW_TABLES_PG: tuple[tuple[str, str], ...] = (
@@ -222,6 +234,18 @@ NEW_TABLES_PG: tuple[tuple[str, str], ...] = (
             governance_status TEXT NOT NULL DEFAULT 'approved',
             is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+    ),
+    (
+        "program_ig_alignment",
+        """
+        CREATE TABLE IF NOT EXISTS program_ig_alignment (
+            program_id BIGINT NOT NULL,
+            ig_code TEXT NOT NULL,
+            alignment_type TEXT NOT NULL DEFAULT 'supports',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (program_id, ig_code)
         )
         """,
     ),

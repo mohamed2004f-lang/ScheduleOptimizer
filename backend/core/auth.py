@@ -363,7 +363,7 @@ def compute_capabilities(
             "nav_evaluation_survey_admin": staff_quality,
             "nav_college_profile": True,
             "nav_programs_portal": True,
-            "nav_ilo_catalog": staff_quality,
+            "nav_ilo_catalog": True,
             "nav_department_lo_dashboard": staff_quality,
             "nav_supervisor_quality_report": bool(is_supervisor_effective),
             "nav_student_course_evaluations": False,
@@ -387,6 +387,7 @@ def compute_capabilities(
     show_grade_drafts = role in ("admin", "admin_main", "head_of_department")
     staff_quality = role in ("admin", "admin_main", "head_of_department")
     show_faculty_scorecards = staff_quality or role == "instructor"
+    show_ilo_catalog = staff_quality or role in ("instructor", "supervisor")
 
     return {
         "v": 1,
@@ -406,11 +407,12 @@ def compute_capabilities(
         "nav_evaluation_survey_admin": staff_quality,
         "nav_college_profile": True,
         "nav_programs_portal": True,
-        "nav_ilo_catalog": staff_quality,
+        "nav_ilo_catalog": show_ilo_catalog,
         "nav_department_lo_dashboard": staff_quality,
         "nav_supervisor_quality_report": bool(is_supervisor_effective),
         "nav_student_learning_outcomes": role == "student",
         "nav_student_course_evaluations": role == "student",
+        "nav_student_registrations": role == "student",
         "nav_surveys_hub": role in ("student", "instructor", "staff", "head_of_department"),
         "nav_surveys_results": staff_quality,
         "nav_dashboard": role != "student",

@@ -5,9 +5,14 @@
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/css/theme-mechanical-engineering.css">
 <link rel="stylesheet" href="/static/css/ui-consistency.css">
+<link rel="stylesheet" href="/static/css/page-guide.css">
+<link rel="stylesheet" href="/static/css/page-hints.css">
 <link rel="stylesheet" href="/static/vendor/fontawesome/all.min.css">
 <meta name="csrf-token" content="{{ csrf_token() }}">
 <script src="/static/js/common.js?v=20260520"></script>
+<script src="/static/js/guide-catalog.js"></script>
+<script src="/static/js/page-guide.js"></script>
+<script src="/static/js/page-hints.js"></script>
 
 <!-- Loading Overlay -->
 <div class="loading-overlay" id="loadingOverlay" aria-hidden="true">
@@ -135,6 +140,11 @@
         <li class="nav-item" id="navStudentLearningOutcomesWrap" style="display:none;">
           <a class="nav-link" id="navStudentLearningOutcomes" href="/academic_quality/ilo/student/learning-outcomes">
             <i class="fa-solid fa-bullseye ms-1"></i> مخرجاتي التعليمية
+          </a>
+        </li>
+        <li class="nav-item" id="navStudentRegistrationsWrap" style="display:none;">
+          <a class="nav-link" id="navStudentRegistrations" href="/my_registrations">
+            <i class="fa-solid fa-clipboard-list ms-1"></i> تسجيلاتي
           </a>
         </li>
 
@@ -352,7 +362,7 @@
       // إخفاء بعض الروابط — يُفضّل capabilities من الخادم؛ احتياطياً منطق الأدوار القديم
       let navUsers = false, navSup = false, navRules = false, navCollegeCatalog = false;
       let showCourseReg = false, showScheduleVersions = false, showExamArch = false, showGradeDrafts = false;
-      let showClosureReports = false, showFacultyScorecards = false, showFacultyDossier = false, showQualityDash = false, showSurveyAdmin = false, showIloCatalog = false, showDeptLoDash = false, showCollegeProfile = false, showProgramsPortal = false, showSupQuality = false, showStudentEvals = false, showStudentLo = false, showSurveysHub = false, showSurveysResults = false;
+      let showClosureReports = false, showFacultyScorecards = false, showFacultyDossier = false, showQualityDash = false, showSurveyAdmin = false, showIloCatalog = false, showDeptLoDash = false, showCollegeProfile = false, showProgramsPortal = false, showSupQuality = false, showStudentEvals = false, showStudentLo = false, showStudentRegs = false, showSurveysHub = false, showSurveysResults = false;
       let canDeptScope = false;
       let isSupervisor = (role === 'supervisor') || (role === 'instructor' && Number(data.is_supervisor || 0) === 1);
       const isStudentUi = (caps && caps.v >= 1) ? !!caps.is_student : (role === 'student');
@@ -377,6 +387,7 @@
         showSupQuality = !!caps.nav_supervisor_quality_report;
         showStudentEvals = !!caps.nav_student_course_evaluations;
         showStudentLo = !!caps.nav_student_learning_outcomes;
+        showStudentRegs = !!caps.nav_student_registrations;
         showSurveysHub = !!caps.nav_surveys_hub;
         showSurveysResults = !!caps.nav_surveys_results;
         isSupervisor = !!caps.is_supervisor_effective;
@@ -402,6 +413,7 @@
         showSupQuality = isSupervisor;
         showStudentEvals = role === 'student';
         showStudentLo = role === 'student';
+        showStudentRegs = role === 'student';
         showSurveysHub = ['student', 'instructor', 'staff', 'head_of_department'].includes(role || '');
         showSurveysResults = ['admin', 'admin_main', 'head_of_department'].includes(role || '');
         canDeptScope = (role === 'admin' || role === 'admin_main');
@@ -413,6 +425,8 @@
       if (wrapEvals) wrapEvals.style.display = showStudentEvals ? '' : 'none';
       const wrapStudentLo = document.getElementById('navStudentLearningOutcomesWrap');
       if (wrapStudentLo) wrapStudentLo.style.display = showStudentLo ? '' : 'none';
+      const wrapStudentRegs = document.getElementById('navStudentRegistrationsWrap');
+      if (wrapStudentRegs) wrapStudentRegs.style.display = showStudentRegs ? '' : 'none';
 
       if (!navUsers) {
         const elUsers = document.getElementById('navUsersAdmin');
@@ -789,8 +803,15 @@
       }
 
       // إخفاء قائمة Dropdown بالكامل إذا صارت كل عناصرها مخفية
+      const skipAutoShow = new Set(['navQualityAccreditationWrap']);
+      if (isStudentUi) {
+        skipAutoShow.add('navStudentAffairsWrap');
+        skipAutoShow.add('navCatalogWrap');
+        skipAutoShow.add('navFacultySupervisionWrap');
+        skipAutoShow.add('navAdminSettingsWrap');
+      }
       document.querySelectorAll('.nav-item.dropdown').forEach(dd => {
-        if (dd.id === 'navQualityAccreditationWrap') return;
+        if (skipAutoShow.has(dd.id)) return;
         const items = dd.querySelectorAll('.dropdown-item');
         if (!items.length) return;
         const hasVisible = Array.from(items).some(it => it.style.display !== 'none');
@@ -842,6 +863,7 @@
         ['/academic_quality/surveys','navSurveysHub'],
         ['/academic_quality/surveys/results','navSurveysResults'],
         ['/students/evaluations','navStudentEvaluations'],
+        ['/my_registrations','navStudentRegistrations'],
         ['/academic_quality/college','navCollegeProfile'],
         ['/academic_quality/programs','navProgramsPortal'],
         ['/ilo_catalog_page','navIloCatalog'],

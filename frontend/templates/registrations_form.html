@@ -59,13 +59,17 @@ const WITHDRAWN_MODE = {{ 'true' if withdrawn_mode else 'false' }};
         {% endif %}
       </p>
     </div>
-    {% if withdrawn_mode %}
-      <a href="/registrations_form" class="btn btn-outline-primary btn-sm">العودة إلى قائمة التسجيلات</a>
-    {% else %}
-      <a href="/withdrawn_file_list" class="btn btn-outline-secondary btn-sm">قائمة سحب الملف</a>
-    {% endif %}
+    <div class="d-flex gap-2">
+      <button class="btn btn-outline-info btn-sm" onclick="PageGuide.open()">❓ دليل الاستخدام</button>
+      {% if withdrawn_mode %}
+        <a href="/registrations_form" class="btn btn-outline-primary btn-sm">العودة إلى قائمة التسجيلات</a>
+      {% else %}
+        <a href="/withdrawn_file_list" class="btn btn-outline-secondary btn-sm">قائمة سحب الملف</a>
+      {% endif %}
+    </div>
   </div>
 
+  <span data-hint="يمكنك استيراد ملف Excel للتسجيل الجماعي، أو إضافة تسجيلات يدوياً لكل طالب. استخدم البحث والتصفية للوصول السريع لأي طالب." data-hint-id="reg_admin" data-hint-icon="💡" data-for-role="admin_main,head_of_department,staff"></span>
   <div id="registrationsAdmin">
     <!-- الفصل الحالي (للتسجيلات والترحيل) -->
     <div class="card mb-3">

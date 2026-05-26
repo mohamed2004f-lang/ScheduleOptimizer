@@ -2368,6 +2368,14 @@ def _ensure_tables_postgresql() -> None:
             except Exception:
                 pass
         try:
+            cur.execute("ALTER TABLE faculty_course_plans ADD COLUMN linked_clo TEXT DEFAULT ''")
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        try:
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS faculty_course_announcements (

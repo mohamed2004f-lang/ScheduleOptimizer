@@ -2197,15 +2197,35 @@ def _axis_status_map_for_sections(cur, instructor_db_id: int, section_ids: list)
 
 def _course_admin_payload(cur, instructor_id: int, section_id: int) -> dict:
     """تحميل بيانات إدارة المقرر (الخطة الأسبوعية + الإعلانات + المفردات) لشعبة واحدة."""
-    plan_rows = cur.execute(
-        """
-        SELECT week_no, COALESCE(week_topic,''), COALESCE(lecture_status,'planned'), COALESCE(resources_text,'')
-        FROM faculty_course_plans
-        WHERE section_id = ? AND instructor_id = ?
-        ORDER BY week_no
-        """,
-        (section_id, instructor_id),
-    ).fetchall()
+    try:
+        cur.execute("SAVEPOINT sp_plan_clo")
+        plan_rows = cur.execute(
+            """
+            SELECT week_no, COALESCE(week_topic,''), COALESCE(lecture_status,'planned'), COALESCE(resources_text,''), COALESCE(linked_clo,'')
+            FROM faculty_course_plans
+            WHERE section_id = ? AND instructor_id = ?
+            ORDER BY week_no
+            """,
+            (section_id, instructor_id),
+        ).fetchall()
+        cur.execute("RELEASE SAVEPOINT sp_plan_clo")
+    except Exception:
+        try:
+            cur.execute("ROLLBACK TO SAVEPOINT sp_plan_clo")
+        except Exception:
+            pass
+        try:
+            plan_rows = cur.execute(
+                """
+                SELECT week_no, COALESCE(week_topic,''), COALESCE(lecture_status,'planned'), COALESCE(resources_text,'')
+                FROM faculty_course_plans
+                WHERE section_id = ? AND instructor_id = ?
+                ORDER BY week_no
+                """,
+                (section_id, instructor_id),
+            ).fetchall()
+        except Exception:
+            plan_rows = []
     ann_rows = cur.execute(
         """
         SELECT id, COALESCE(title,''), COALESCE(body,''), COALESCE(announcement_type,'general'),
@@ -2247,6 +2267,7 @@ def _course_admin_payload(cur, instructor_id: int, section_id: int) -> dict:
                 "week_topic": r[1] or "",
                 "lecture_status": r[2] or "planned",
                 "resources_text": r[3] or "",
+                "linked_clo": (r[4] if len(r) > 4 else "") or "",
             }
             for r in (plan_rows or [])
         ],
@@ -2394,6 +2415,75 @@ def my_assigned_sections():
             "axis_catalog": axis_labels_for_api(),
         }
     )
+
+
+@schedule_bp.route("/my_dashboard_summary", methods=["GET"])
+@login_required
+def my_dashboard_summary():
+    """ملخص المهام والإحصائيات للأستاذ — يغذّي لوحة الإشعارات والإحصائيات."""
+    if not _is_instructor_effective_session():
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    inst_name, instructor_id = _instructor_display_name_for_session()
+    if not inst_name or not instructor_id:
+        return jsonify({"sections_count": 0, "students_count": 0, "action_items": [], "axes_done": 0, "axes_total": 0, "clo_avg": None})
+    iid = int(instructor_id)
+    with get_connection() as conn:
+        cur = conn.cursor()
+        tuples = _assigned_section_rows(cur, iid, inst_name)
+        section_ids = [t[0] for t in tuples]
+        sections_count = len(section_ids)
+        if not sections_count:
+            return jsonify({"sections_count": 0, "students_count": 0, "action_items": [], "axes_done": 0, "axes_total": 0, "clo_avg": None})
+        axis_map = _axis_status_map_for_sections(cur, iid, section_ids)
+        axes_total = sections_count * len(FACULTY_AXIS_KEYS)
+        axes_done = sum(1 for sid_axes in axis_map.values() for v in sid_axes.values() if v in ("done", "na"))
+        students_count = 0
+        try:
+            course_names = list({t[1] for t in tuples if t[1]})
+            if course_names:
+                ph = ",".join(["?"] * len(course_names))
+                row = cur.execute(
+                    f"SELECT COUNT(DISTINCT student_id) FROM registrations WHERE LOWER(TRIM(course_name)) IN ({ph})",
+                    tuple(cn.strip().lower() for cn in course_names),
+                ).fetchone()
+                students_count = int(row[0]) if row else 0
+        except Exception:
+            pass
+        clo_avg = None
+        try:
+            ph = ",".join(["?"] * len(section_ids))
+            row = cur.execute(f"SELECT AVG(achievement_percent) FROM section_clo_assessments WHERE section_id IN ({ph})", tuple(section_ids)).fetchone()
+            if row and row[0] is not None:
+                clo_avg = round(float(row[0]), 1)
+        except Exception:
+            pass
+        action_items = []
+        for t in tuples:
+            sid, cn = t[0], t[1]
+            try:
+                clo_count = cur.execute("SELECT COUNT(*) FROM section_clo_assessments WHERE section_id = ? AND achievement_percent IS NOT NULL", (sid,)).fetchone()
+                if not clo_count or clo_count[0] == 0:
+                    action_items.append({"type": "clo_missing", "section_id": sid, "course": cn, "message": f"لم تُقيّم CLOs لشعبة {cn} بعد"})
+            except Exception:
+                pass
+            try:
+                closure = cur.execute("SELECT status FROM course_closure_reports WHERE section_id = ? AND instructor_id = ? ORDER BY id DESC LIMIT 1", (sid, iid)).fetchone()
+                if not closure or closure[0] == "draft":
+                    action_items.append({"type": "closure_pending", "section_id": sid, "course": cn, "message": f"تقرير إقفال {cn} لم يُرسل بعد"})
+            except Exception:
+                pass
+            sid_axes = axis_map.get(int(sid), {})
+            pending_axes = [k for k in FACULTY_AXIS_KEYS if sid_axes.get(k, "pending") == "pending"]
+            if len(pending_axes) >= 4:
+                action_items.append({"type": "axes_pending", "section_id": sid, "course": cn, "message": f"محاور {cn}: {len(pending_axes)} محاور لم تُحدَّث"})
+    return jsonify({
+        "sections_count": sections_count,
+        "students_count": students_count,
+        "axes_done": axes_done,
+        "axes_total": axes_total,
+        "clo_avg": clo_avg,
+        "action_items": action_items,
+    })
 
 
 @schedule_bp.route("/faculty_assignments", methods=["GET"])
@@ -2757,6 +2847,7 @@ def save_my_course_plan():
         return jsonify({"status": "error", "message": "lecture_status غير صالح"}), 400
     week_topic = (data.get("week_topic") or "").strip()
     resources_text = (data.get("resources_text") or "").strip()
+    linked_clo = (data.get("linked_clo") or "").strip()
 
     inst_name, instructor_id = _instructor_display_name_for_session()
     if not instructor_id:
@@ -2773,19 +2864,28 @@ def save_my_course_plan():
         allowed_ids = {int(t[0]) for t in tuples}
         if section_id not in allowed_ids:
             return jsonify({"status": "error", "message": "هذه الشعبة غير مكلَّفة لحسابك"}), 403
+        try:
+            cur.execute("ALTER TABLE faculty_course_plans ADD COLUMN linked_clo TEXT DEFAULT ''")
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         cur.execute(
             """
-            INSERT INTO faculty_course_plans
-                (section_id, instructor_id, week_no, week_topic, lecture_status, resources_text, updated_at, updated_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT into faculty_course_plans
+                (section_id, instructor_id, week_no, week_topic, lecture_status, resources_text, linked_clo, updated_at, updated_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (section_id, instructor_id, week_no)
             DO UPDATE SET week_topic = EXCLUDED.week_topic,
                           lecture_status = EXCLUDED.lecture_status,
                           resources_text = EXCLUDED.resources_text,
+                          linked_clo = EXCLUDED.linked_clo,
                           updated_at = EXCLUDED.updated_at,
                           updated_by = EXCLUDED.updated_by
             """,
-            (section_id, iid, week_no, week_topic, lecture_status, resources_text, ts, actor),
+            (section_id, iid, week_no, week_topic, lecture_status, resources_text, linked_clo, ts, actor),
         )
         conn.commit()
         payload = _course_admin_payload(cur, iid, section_id)

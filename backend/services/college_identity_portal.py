@@ -555,6 +555,8 @@ def api_update_college_values():
 @college_portal_bp.route("/api/college/strategic-goals", methods=["POST"])
 @login_required
 def api_create_strategic_goal():
+    if not _can_edit_college():
+        return jsonify({"status": "error", "message": "غير مصرح — صلاحية العميد فقط"}), 403
     data = request.get_json(force=True) or {}
     code = (data.get("code") or "").strip().upper()
     title_ar = (data.get("title_ar") or "").strip()
@@ -602,6 +604,8 @@ def api_create_strategic_goal():
 @college_portal_bp.route("/api/college/strategic-goals/<path:goal_code>", methods=["PUT", "DELETE"])
 @login_required
 def api_strategic_goal_by_code(goal_code: str):
+    if not _can_edit_college():
+        return jsonify({"status": "error", "message": "غير مصرح — صلاحية العميد فقط"}), 403
     code = (goal_code or "").strip().upper()
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
@@ -680,7 +684,9 @@ def api_strategic_goal_by_code(goal_code: str):
 @college_portal_bp.route("/api/college/glo", methods=["GET", "POST"])
 @login_required
 def api_college_glo_crud():
-    """GLO CRUD لصفحة الكلية — admin_main فقط."""
+    """GLO CRUD لصفحة الكلية — admin_main فقط للتعديل."""
+    if request.method == "POST" and not _can_edit_college():
+        return jsonify({"status": "error", "message": "غير مصرح — صلاحية العميد فقط"}), 403
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
         cur = conn.cursor()
@@ -726,6 +732,8 @@ def api_college_glo_crud():
 @college_portal_bp.route("/api/college/glo/<int:glo_id>", methods=["PUT", "DELETE"])
 @login_required
 def api_college_glo_by_id(glo_id: int):
+    if not _can_edit_college():
+        return jsonify({"status": "error", "message": "غير مصرح — صلاحية العميد فقط"}), 403
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
         cur = conn.cursor()
@@ -792,6 +800,8 @@ def api_college_glo_by_id(glo_id: int):
 @college_portal_bp.route("/api/college/identity", methods=["PUT"])
 @login_required
 def api_update_college_identity():
+    if not _can_edit_college():
+        return jsonify({"status": "error", "message": "غير مصرح بالتعديل — صلاحية العميد فقط"}), 403
     data = request.get_json(force=True) or {}
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
@@ -817,6 +827,8 @@ def api_update_college_identity():
 @college_portal_bp.route("/api/college/ig-glo/toggle", methods=["POST"])
 @login_required
 def api_toggle_ig_glo():
+    if not _can_edit_college():
+        return jsonify({"status": "error", "message": "غير مصرح — صلاحية العميد فقط"}), 403
     data = request.get_json(force=True) or {}
     gc = (data.get("goal_code") or "").strip().upper()
     glo = (data.get("glo_code") or "").strip().upper()
@@ -850,6 +862,8 @@ def api_toggle_ig_glo():
 @college_portal_bp.route("/api/college/kpis", methods=["GET", "POST"])
 @login_required
 def api_college_kpis():
+    if request.method == "POST" and not _can_edit_college():
+        return jsonify({"status": "error", "message": "غير مصرح — صلاحية العميد فقط"}), 403
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
         cur = conn.cursor()
@@ -889,6 +903,8 @@ def api_college_kpis():
 @college_portal_bp.route("/api/college/kpis/<int:kpi_id>", methods=["PUT", "DELETE"])
 @login_required
 def api_update_kpi(kpi_id: int):
+    if not _can_edit_college():
+        return jsonify({"status": "error", "message": "غير مصرح — صلاحية العميد فقط"}), 403
     data = request.get_json(force=True) or {}
     if request.method == "DELETE":
         with get_connection() as conn:
@@ -949,8 +965,24 @@ def api_programs_list_portal():
 @login_required
 def api_program_profile(program_id: int):
     """GET: قراءة تعريفية لجميع الأدوار. PUT: تعديل نصوص البرنامج + ربط IG."""
+
+    def _can_edit_this_program(conn) -> bool:
+        role = _session_role()
+        import logging
+        active_mode = (session.get("active_mode") or "").strip().lower()
+        logging.getLogger("app").info(
+            f"[EDIT CHECK] role={role!r}, active_mode={active_mode!r}, program_id={program_id}"
+        )
+        if role == "head_of_department":
+            if active_mode and active_mode not in ("head", "hod", "department_head"):
+                return False
+            return _program_in_scope(conn, program_id)
+        return False
+
     if request.method == "PUT":
         with get_connection() as conn:
+            if not _can_edit_this_program(conn):
+                return jsonify({"status": "error", "message": "غير مصرح بالتعديل"}), 403
             data = request.get_json(force=True) or {}
             cur = conn.cursor()
             cur.execute(
@@ -982,12 +1014,15 @@ def api_program_profile(program_id: int):
         payload = program_profile_payload(conn, program_id)
         if not payload:
             return jsonify({"status": "error", "message": "البرنامج غير موجود"}), 404
-    can_edit = _can_edit_college() or _can_edit_program_goals()
-    return jsonify({
+        can_edit = _can_edit_this_program(conn)
+    resp = jsonify({
         "status": "ok",
         "can_edit_profile": can_edit,
         **payload,
     })
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 
 @college_portal_bp.route("/export/college-strategic")

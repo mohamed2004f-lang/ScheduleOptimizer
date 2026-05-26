@@ -156,7 +156,68 @@ def _scope_program_ids(conn) -> list[int] | None:
             (int(dep_id),),
         ).fetchall()
         return [int(r[0] if not hasattr(r, "keys") else r["id"]) for r in rows]
+    if role in ("instructor", "supervisor"):
+        dep_id = _resolve_instructor_department(conn)
+        if dep_id is None:
+            return []
+        cur = conn.cursor()
+        rows = cur.execute(
+            "SELECT id FROM programs WHERE department_id = ? AND COALESCE(is_active,1)=1",
+            (int(dep_id),),
+        ).fetchall()
+        return [int(r[0] if not hasattr(r, "keys") else r["id"]) for r in rows]
     return []
+
+
+def _resolve_instructor_department(conn) -> int | None:
+    """استنتاج قسم الأستاذ/المشرف من users.department_id أو instructors.department_id."""
+    cur = conn.cursor()
+    uname = (session.get("user") or session.get("username") or "").strip()
+    if uname:
+        try:
+            row = cur.execute(
+                "SELECT department_id FROM users WHERE lower(username)=lower(?) LIMIT 1",
+                (uname,),
+            ).fetchone()
+            if row:
+                dep = row[0] if not hasattr(row, "keys") else row["department_id"]
+                if dep not in (None, ""):
+                    return int(dep)
+        except Exception:
+            pass
+    try:
+        inst_id = int(session.get("instructor_id") or 0)
+    except (TypeError, ValueError):
+        inst_id = 0
+    if inst_id:
+        try:
+            row = cur.execute(
+                "SELECT department_id FROM instructors WHERE id = ? LIMIT 1",
+                (inst_id,),
+            ).fetchone()
+            if row:
+                dep = row[0] if not hasattr(row, "keys") else row["department_id"]
+                if dep not in (None, ""):
+                    return int(dep)
+        except Exception:
+            pass
+    return None
+
+
+def _can_edit_ilo(conn, program_id: int = 0) -> bool:
+    """هل المستخدم الحالي يملك صلاحية التعديل على أهداف/مخرجات الكتالوج؟"""
+    from backend.core.auth import SESSION_ACTIVE_MODE
+    role = _normalize_role((session.get("user_role") or "").strip())
+    active_mode = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower()
+    if role in ("admin", "admin_main"):
+        return True
+    if role == "head_of_department":
+        if active_mode and active_mode not in ("head", "hod", "department_head", ""):
+            return False
+        if program_id:
+            return _program_in_scope(conn, program_id)
+        return True
+    return False
 
 
 def _program_in_scope(conn, program_id: int) -> bool:
@@ -192,10 +253,11 @@ def _courses_table_exists(conn) -> bool:
 
 @learning_outcomes_bp.route("/catalog")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def ilo_catalog_page():
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
+        can_edit = _can_edit_ilo(conn)
     return render_template(
         "ilo_catalog.html",
         domain_labels=DOMAIN_LABELS_AR,
@@ -204,6 +266,7 @@ def ilo_catalog_page():
         bloom_labels=BLOOM_LABELS_AR,
         governance_labels=GOVERNANCE_LABELS_AR,
         coverage_labels=COVERAGE_LABELS_AR,
+        can_edit=can_edit,
     )
 
 
@@ -215,10 +278,11 @@ def api_outcome_domains():
 
 @learning_outcomes_bp.route("/api/programs")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def list_programs():
     with get_connection() as conn:
         allowed = _scope_program_ids(conn)
+        can_edit = _can_edit_ilo(conn)
         cur = conn.cursor()
         if allowed is None:
             rows = cur.execute(
@@ -244,12 +308,12 @@ def list_programs():
                 """,
                 tuple(allowed),
             ).fetchall()
-    return jsonify({"status": "ok", "items": _rows_to_dicts(cur, rows)})
+    return jsonify({"status": "ok", "items": _rows_to_dicts(cur, rows), "can_edit": can_edit})
 
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/outcomes", methods=["GET", "POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def program_outcomes(program_id: int):
     with get_connection() as conn:
         if not _program_in_scope(conn, program_id):
@@ -266,8 +330,10 @@ def program_outcomes(program_id: int):
                 """,
                 (program_id,),
             ).fetchall()
-            return jsonify({"status": "ok", "items": _rows_to_dicts(cur, rows)})
+            return jsonify({"status": "ok", "items": _rows_to_dicts(cur, rows), "can_edit": _can_edit_ilo(conn, program_id)})
 
+        if not _can_edit_ilo(conn, program_id):
+            return jsonify({"status": "error", "message": "غير مصرح بالتعديل"}), 403
         data = request.get_json(force=True) or {}
         code = (data.get("code") or "").strip()
         title_ar = (data.get("title_ar") or "").strip()
@@ -319,8 +385,8 @@ def update_outcome(outcome_id: int):
         if not row:
             return jsonify({"status": "error", "message": "غير موجود"}), 404
         pid = int(row[0] if not hasattr(row, "keys") else row["program_id"])
-        if not _program_in_scope(conn, pid):
-            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        if not _can_edit_ilo(conn, pid):
+            return jsonify({"status": "error", "message": "غير مصرح بالتعديل"}), 403
         if request.method == "DELETE":
             force = (request.args.get("force") or "").strip().lower() in (
                 "1",
@@ -418,7 +484,7 @@ def update_outcome(outcome_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/summary")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def program_ilo_summary(program_id: int):
     with get_connection() as conn:
         if not _program_in_scope(conn, program_id):
@@ -513,7 +579,7 @@ def program_ilo_summary(program_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/courses")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def program_courses_for_ilo(program_id: int):
     """
     مقررات قابلة للربط بمخرجات البرنامج المحدد:
@@ -649,7 +715,7 @@ def program_courses_for_ilo(program_id: int):
 
 @learning_outcomes_bp.route("/api/program_courses/<int:program_course_id>/outcomes", methods=["GET", "PUT"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def course_outcome_links(program_course_id: int):
     with get_connection() as conn:
         cur = conn.cursor()
@@ -662,6 +728,8 @@ def course_outcome_links(program_course_id: int):
         pc_program_id = int(prow[0] if not hasattr(prow, "keys") else prow["program_id"])
         if not _program_in_scope(conn, pc_program_id):
             return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        if request.method == "PUT" and not _can_edit_ilo(conn, pc_program_id):
+            return jsonify({"status": "error", "message": "غير مصرح بالتعديل"}), 403
         for_program_id = request.args.get("for_program_id") if request.method == "GET" else None
         if request.method == "PUT":
             body = request.get_json(force=True) or {}
@@ -757,12 +825,14 @@ def course_outcome_links(program_course_id: int):
     methods=["GET", "PUT"],
 )
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def course_master_outcome_links(program_id: int, course_master_id: int):
     """ربط مخرجات البرنامج مباشرة على course_master دون المرور بـ program_courses."""
     with get_connection() as conn:
         if not _program_in_scope(conn, program_id):
             return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        if request.method == "PUT" and not _can_edit_ilo(conn, program_id):
+            return jsonify({"status": "error", "message": "غير مصرح بالتعديل"}), 403
         cur = conn.cursor()
         cm = cur.execute(
             "SELECT id FROM course_master WHERE id = ?",
@@ -916,7 +986,7 @@ def _matrix_columns_for_program(cur, program_id: int, dept_id: int | None) -> tu
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/coverage_matrix")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def coverage_matrix(program_id: int):
     with get_connection() as conn:
         if not _program_in_scope(conn, program_id):
@@ -981,6 +1051,9 @@ def coverage_matrix(program_id: int):
 @login_required
 @role_required("admin", "admin_main", "head_of_department")
 def coverage_matrix_toggle(program_id: int):
+    with get_connection() as conn:
+        if not _can_edit_ilo(conn, program_id):
+            return jsonify({"status": "error", "message": "غير مصرح بالتعديل"}), 403
     data = request.get_json(force=True) or {}
     try:
         outcome_id = int(data.get("outcome_id"))
@@ -1073,6 +1146,9 @@ def coverage_matrix_toggle(program_id: int):
 @role_required("admin", "admin_main", "head_of_department")
 def add_operational_course_to_plan(program_id: int):
     """إضافة مقرر تشغيلي إلى خطة البرنامج + ربط مخرجات (اختياري)."""
+    with get_connection() as conn:
+        if not _can_edit_ilo(conn, program_id):
+            return jsonify({"status": "error", "message": "غير مصرح بالتعديل"}), 403
     data = request.get_json(force=True) or {}
     course_name = (data.get("course_name") or "").strip()
     course_code = (data.get("course_code") or "").strip()
@@ -1491,7 +1567,7 @@ def sync_closure_ilo_from_assessments(conn, section_id: int, instructor_id: int,
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/goals", methods=["GET", "POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def program_goals(program_id: int):
     with get_connection() as conn:
         if not _program_in_scope(conn, program_id):
@@ -1515,6 +1591,8 @@ def program_goals(program_id: int):
             rows = cur.execute(sql, tuple(params)).fetchall()
             return jsonify({"status": "ok", "items": _rows_to_dicts(cur, rows)})
 
+        if not _can_edit_ilo(conn, program_id):
+            return jsonify({"status": "error", "message": "غير مصرح بالتعديل"}), 403
         data = request.get_json(force=True) or {}
         code = (data.get("code") or "").strip()
         title_ar = (data.get("title_ar") or "").strip()
@@ -1563,8 +1641,8 @@ def update_goal(goal_id: int):
         if not row:
             return jsonify({"status": "error", "message": "غير موجود"}), 404
         pid = int(row[0] if not hasattr(row, "keys") else row["program_id"])
-        if not _program_in_scope(conn, pid):
-            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        if not _can_edit_ilo(conn, pid):
+            return jsonify({"status": "error", "message": "غير مصرح بالتعديل"}), 403
         if request.method == "DELETE":
             force = (request.args.get("force") or "").strip().lower() in (
                 "1",
@@ -1625,7 +1703,7 @@ def update_goal(goal_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/goal_outcome_matrix")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def goal_outcome_matrix(program_id: int):
     with get_connection() as conn:
         if not _program_in_scope(conn, program_id):
@@ -1690,8 +1768,8 @@ def save_goal_outcome_links(program_id: int):
     if goal_id is None or outcome_ids is None:
         return jsonify({"status": "error", "message": "goal_id و outcome_ids مطلوبان"}), 400
     with get_connection() as conn:
-        if not _program_in_scope(conn, program_id):
-            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        if not _can_edit_ilo(conn, program_id):
+            return jsonify({"status": "error", "message": "غير مصرح بالتعديل"}), 403
         cur = conn.cursor()
         ensure_plo_enhancement_schema(conn)
         grow = cur.execute(
@@ -1762,7 +1840,7 @@ def import_mech_profile(program_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/export_profile.xlsx")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def export_program_profile_xlsx(program_id: int):
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
@@ -1850,7 +1928,7 @@ def _can_edit_college_glo() -> bool:
 
 @learning_outcomes_bp.route("/api/glo", methods=["GET", "POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def college_glo_api():
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
@@ -2025,7 +2103,7 @@ def update_college_glo(glo_id: int):
 
 @learning_outcomes_bp.route("/api/benchmark_templates")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def benchmark_templates_api():
     program_id = request.args.get("program_id")
     if not program_id:
@@ -2049,8 +2127,8 @@ def import_benchmark(program_id: int):
         return jsonify({"status": "error", "message": "template_code مطلوب"}), 400
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
-        if not _program_in_scope(conn, program_id):
-            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        if not _can_edit_ilo(conn, program_id):
+            return jsonify({"status": "error", "message": "غير مصرح بالتعديل"}), 403
         cur = conn.cursor()
         result = import_template(
             cur,
@@ -2067,7 +2145,7 @@ def import_benchmark(program_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/outcomes/template.xlsx")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def plo_excel_template(program_id: int):
     with get_connection() as conn:
         if not _program_in_scope(conn, program_id):
@@ -2082,7 +2160,7 @@ def plo_excel_template(program_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/outcomes/export.xlsx")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def plo_excel_export(program_id: int):
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
@@ -2122,8 +2200,8 @@ def plo_excel_import(program_id: int):
     merge = (request.form.get("merge") or "1").strip().lower() not in ("0", "false", "no")
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
-        if not _program_in_scope(conn, program_id):
-            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        if not _can_edit_ilo(conn, program_id):
+            return jsonify({"status": "error", "message": "غير مصرح بالتعديل"}), 403
         cur = conn.cursor()
         result = import_outcomes_from_xlsx(cur, program_id, raw, merge=merge)
         if result.get("status") != "ok":
@@ -2134,7 +2212,7 @@ def plo_excel_import(program_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/analytics")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def program_analytics(program_id: int):
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
@@ -2147,7 +2225,7 @@ def program_analytics(program_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/export_matrix.csv")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def export_matrix_csv(program_id: int):
     with get_connection() as conn:
         if not _program_in_scope(conn, program_id):
@@ -2202,7 +2280,7 @@ def export_matrix_csv(program_id: int):
 
 @learning_outcomes_bp.route("/api/program_courses/<int:program_course_id>/clos", methods=["GET", "POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
 def course_clos(program_course_id: int):
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
@@ -2216,6 +2294,8 @@ def course_clos(program_course_id: int):
         pid = int(prow[0] if not hasattr(prow, "keys") else prow["program_id"])
         if not _program_in_scope(conn, pid):
             return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        if request.method == "POST" and not _can_edit_ilo(conn, pid):
+            return jsonify({"status": "error", "message": "غير مصرح بالتعديل"}), 403
         if request.method == "GET":
             rows = cur.execute(
                 """

@@ -14,8 +14,12 @@
   <main class="container-main theme-formal schedule-wide">
     <div class="d-flex justify-content-between align-items-center mb-3">
       <h4 class="page-title mb-0">صفحة الطالب</h4>
-      <div id="alertsArea"></div>
+      <div class="d-flex gap-2 align-items-center">
+        <button type="button" class="btn btn-outline-info btn-sm" onclick="PageGuide.open()" title="دليل استخدام الصفحة">❓ دليل الاستخدام</button>
+        <div id="alertsArea"></div>
+      </div>
     </div>
+    <span data-hint="هذه صفحتك الرئيسية — تجد فيها جدولك الحالي والمقررات المسجلة والإشعارات المهمة. يمكنك الانتقال للسجل الأكاديمي أو خطة التسجيل من الروابط المتاحة." data-hint-id="sv_main" data-hint-icon="💡" data-for-role="student"></span>
 
     <div class="row g-3">
       <div class="col-md-4">

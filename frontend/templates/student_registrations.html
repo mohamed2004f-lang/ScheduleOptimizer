@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>تسجيلاتي</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .stat-card { border-radius: .75rem; padding: 1rem; text-align: center; }
+    .stat-card .stat-value { font-size: 1.5rem; font-weight: 700; }
+    .stat-card .stat-label { font-size: 0.8rem; color: var(--bs-secondary-color); }
+    .plan-status-badge { font-size: 0.85rem; padding: 0.35em 0.75em; }
+    .course-check-list { max-height: 320px; overflow-y: auto; }
+    .course-check-list label { cursor: pointer; padding: 0.3rem 0; border-bottom: 1px solid #f0f0f0; }
+    .course-check-list label:last-child { border-bottom: none; }
+  </style>
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal mt-4">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+      <div>
+        <h1 class="page-title h4 mb-1"><i class="fa-solid fa-clipboard-list text-primary"></i> تسجيلاتي</h1>
+        <p class="text-muted small mb-0">المقررات المسجلة للفصل الحالي وخطط التسجيل</p>
+      </div>
+      <div class="d-flex gap-2">
+        <a href="/student_view" class="btn btn-outline-secondary btn-sm">الرئيسية</a>
+        <a href="/transcript_page" class="btn btn-outline-secondary btn-sm">كشف الدرجات</a>
+      </div>
+    </div>
+
+    <div id="loadingState" class="text-center py-5">
+      <div class="spinner-border text-primary" role="status"></div>
+      <p class="mt-2 text-muted">جاري التحميل...</p>
+    </div>
+
+    <div id="mainContent" class="d-none">
+      <!-- Summary Bar -->
+      <div class="row g-3 mb-4" id="summaryBar">
+        <div class="col-6 col-md-3">
+          <div class="stat-card bg-light border">
+            <div class="stat-value text-primary" id="statTerm">—</div>
+            <div class="stat-label">الفصل الحالي</div>
+          </div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="stat-card bg-light border">
+            <div class="stat-value text-success" id="statUnits">0</div>
+            <div class="stat-label">وحدات مسجلة</div>
+          </div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="stat-card bg-light border">
+            <div class="stat-value text-info" id="statGPA">—</div>
+            <div class="stat-label">المعدل التراكمي</div>
+          </div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="stat-card bg-light border">
+            <div class="stat-value" id="statPlanStatus">—</div>
+            <div class="stat-label">حالة خطة التسجيل</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Current Registrations -->
+      <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light d-flex justify-content-between align-items-center">
+          <span class="fw-semibold"><i class="fa-solid fa-book-open text-success"></i> المقررات المسجلة حالياً</span>
+          <span class="badge bg-primary" id="regCount">0</span>
+        </div>
+        <div class="card-body p-0">
+          <div id="regEmpty" class="text-center text-muted py-4 d-none">لا توجد مقررات مسجلة للفصل الحالي.</div>
+          <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0 align-middle" id="regTable">
+              <thead class="table-light">
+                <tr>
+                  <th>#</th>
+                  <th>اسم المقرر</th>
+                  <th>رمز المقرر</th>
+                  <th>الوحدات</th>
+                </tr>
+              </thead>
+              <tbody id="regBody"></tbody>
+              <tfoot class="table-light">
+                <tr>
+                  <td colspan="3" class="fw-bold">المجموع</td>
+                  <td class="fw-bold" id="regTotalUnits">0</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Enrollment Plan -->
+      <div class="card shadow-sm mb-4">
+        <div class="card-header bg-light d-flex justify-content-between align-items-center">
+          <span class="fw-semibold"><i class="fa-solid fa-file-circle-check text-warning"></i> خطة التسجيل</span>
+          <span class="badge plan-status-badge" id="planBadge">—</span>
+        </div>
+        <div class="card-body">
+          <!-- Existing Plan View -->
+          <div id="planExistingView" class="d-none">
+            <div class="mb-3">
+              <strong>الفصل:</strong> <span id="planSemester"></span>
+              <span class="mx-2">|</span>
+              <strong>الحالة:</strong> <span id="planStatusText"></span>
+            </div>
+            <div id="planRejectionBox" class="alert alert-danger py-2 small d-none">
+              <strong>سبب الرفض:</strong> <span id="planRejectionReason"></span>
+            </div>
+            <div class="mb-3">
+              <strong>المقررات في الخطة:</strong>
+              <ul class="list-group list-group-flush mt-2" id="planCoursesList"></ul>
+            </div>
+            <div class="d-flex gap-2" id="planActions">
+              <button class="btn btn-warning btn-sm" id="btnEditPlan">تعديل الخطة</button>
+              <button class="btn btn-success btn-sm" id="btnSubmitPlan">إرسال للمراجعة</button>
+            </div>
+          </div>
+
+          <!-- Plan Editor -->
+          <div id="planEditorView" class="d-none">
+            <div class="mb-3">
+              <label class="form-label small fw-semibold">الفصل الدراسي</label>
+              <input type="text" class="form-control" id="planSemesterInput" placeholder="مثال: خريف 25-26">
+            </div>
+            <div class="mb-3">
+              <label class="form-label small fw-semibold">اختر المقررات</label>
+              <div class="input-group input-group-sm mb-2">
+                <input type="text" class="form-control" id="courseFilter" placeholder="بحث عن مقرر...">
+              </div>
+              <div class="border rounded p-2 course-check-list" id="courseCheckList">
+                <p class="text-muted text-center py-3">جاري تحميل المقررات المتاحة...</p>
+              </div>
+              <div class="d-flex justify-content-between mt-2">
+                <small class="text-muted">المحدد: <strong id="selectedCount">0</strong> مقرر | <strong id="selectedUnits">0</strong> وحدة</small>
+                <small class="text-muted" id="unitLimitHint"></small>
+              </div>
+            </div>
+            <div id="prereqWarnings" class="d-none mb-3"></div>
+            <div class="d-flex gap-2">
+              <button class="btn btn-primary btn-sm" id="btnSaveDraft"><i class="fa-solid fa-floppy-disk"></i> حفظ كمسودة</button>
+              <button class="btn btn-success btn-sm" id="btnSaveAndSubmit"><i class="fa-solid fa-paper-plane"></i> حفظ وإرسال للمراجعة</button>
+              <button class="btn btn-outline-secondary btn-sm" id="btnCancelEdit">إلغاء</button>
+            </div>
+          </div>
+
+          <!-- No Plan State -->
+          <div id="planNoneView">
+            <p class="text-muted mb-3">لا توجد خطة تسجيل للفصل الحالي. يمكنك إنشاء خطة جديدة وتقديمها للمشرف الأكاديمي.</p>
+            <button class="btn btn-primary btn-sm" id="btnCreatePlan"><i class="fa-solid fa-plus"></i> إنشاء خطة تسجيل</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    let studentId = '';
+    let currentTerm = '';
+    let coursesMap = {};
+    let eligibleCourses = [];
+    let currentPlan = null;
+    let allPlans = [];
+
+    function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+    function hdr() {
+      const c = document.querySelector('meta[name=csrf-token]')?.content || '';
+      const h = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+      if (c) h['X-CSRFToken'] = c;
+      return h;
+    }
+
+    async function init() {
+      const authR = await fetch('/auth/check', { credentials: 'include' });
+      const authJ = await authR.json().catch(() => ({}));
+      studentId = authJ.student_id || authJ.user || '';
+      if (!studentId) {
+        document.getElementById('loadingState').innerHTML = '<p class="text-danger">تعذر تحديد هوية الطالب.</p>';
+        return;
+      }
+
+      await Promise.all([loadTerm(), loadCourses(), loadRegistrations(), loadTranscript(), loadPlans()]);
+      document.getElementById('loadingState').classList.add('d-none');
+      document.getElementById('mainContent').classList.remove('d-none');
+    }
+
+    async function loadTerm() {
+      try {
+        const r = await fetch('/admin/settings/current_term', { credentials: 'include' });
+        const j = await r.json().catch(() => ({}));
+        const name = j.term_name || '';
+        const year = j.term_year || '';
+        currentTerm = (name + ' ' + year).trim();
+        document.getElementById('statTerm').textContent = currentTerm || '—';
+        document.getElementById('planSemesterInput').value = currentTerm;
+      } catch(e) {}
+    }
+
+    async function loadCourses() {
+      try {
+        const r = await fetch('/list_courses', { credentials: 'include' });
+        const j = await r.json().catch(() => []);
+        const list = Array.isArray(j) ? j : (j.courses || j.items || []);
+        list.forEach(c => {
+          const name = c.course_name || c.name || '';
+          if (name) coursesMap[name] = { code: c.course_code || c.code || '', units: parseInt(c.units || c.credit_hours || 0, 10) };
+        });
+      } catch(e) {}
+    }
+
+    async function loadRegistrations() {
+      try {
+        const r = await fetch('/students/get_registrations?student_id=' + encodeURIComponent(studentId), { credentials: 'include' });
+        const j = await r.json().catch(() => []);
+        const courses = Array.isArray(j) ? j : (j.registrations || []);
+        const tbody = document.getElementById('regBody');
+        if (!courses.length) {
+          document.getElementById('regEmpty').classList.remove('d-none');
+          document.getElementById('regTable').classList.add('d-none');
+          document.getElementById('regCount').textContent = '0';
+          document.getElementById('statUnits').textContent = '0';
+          return;
+        }
+        document.getElementById('regEmpty').classList.add('d-none');
+        document.getElementById('regTable').classList.remove('d-none');
+        let totalUnits = 0;
+        tbody.innerHTML = courses.map((c, i) => {
+          const isObj = typeof c === 'object' && c !== null;
+          const name = isObj ? (c.course_name || '') : String(c);
+          const code = isObj ? (c.course_code || '') : (coursesMap[name]?.code || '');
+          const units = isObj ? (parseInt(c.units, 10) || 0) : (coursesMap[name]?.units || 0);
+          totalUnits += units;
+          return `<tr><td>${i+1}</td><td>${esc(name)}</td><td><code>${esc(code || '—')}</code></td><td>${units}</td></tr>`;
+        }).join('');
+        document.getElementById('regTotalUnits').textContent = totalUnits;
+        document.getElementById('regCount').textContent = courses.length;
+        document.getElementById('statUnits').textContent = totalUnits;
+      } catch(e) {}
+    }
+
+    async function loadTranscript() {
+      try {
+        const r = await fetch('/grades/transcript/' + encodeURIComponent(studentId), { credentials: 'include' });
+        const j = await r.json().catch(() => ({}));
+        const gpa = j.cumulative_average ?? j.gpa ?? j.cumulative_gpa ?? null;
+        document.getElementById('statGPA').textContent = gpa != null ? Number(gpa).toFixed(2) : '—';
+      } catch(e) {}
+    }
+
+    async function loadPlans() {
+      try {
+        const r = await fetch('/enrollment/plans?student_id=' + encodeURIComponent(studentId), { credentials: 'include' });
+        const j = await r.json().catch(() => ({}));
+        allPlans = j.plans || [];
+        currentPlan = allPlans.find(p => p.status !== 'Archived') || null;
+        renderPlanView();
+      } catch(e) {}
+    }
+
+    function renderPlanView() {
+      const existing = document.getElementById('planExistingView');
+      const editor = document.getElementById('planEditorView');
+      const none = document.getElementById('planNoneView');
+      const badge = document.getElementById('planBadge');
+      const statEl = document.getElementById('statPlanStatus');
+
+      existing.classList.add('d-none');
+      editor.classList.add('d-none');
+      none.classList.add('d-none');
+
+      if (!currentPlan) {
+        none.classList.remove('d-none');
+        badge.textContent = 'لا توجد خطة';
+        badge.className = 'badge plan-status-badge bg-secondary';
+        statEl.textContent = '—';
+        statEl.className = 'stat-value text-secondary';
+        return;
+      }
+
+      const status = currentPlan.status || 'Draft';
+      const statusMap = {
+        'Draft': { label: 'مسودة', cls: 'bg-warning text-dark', color: 'text-warning' },
+        'Pending': { label: 'بانتظار الموافقة', cls: 'bg-info', color: 'text-info' },
+        'Approved': { label: 'مُعتمدة', cls: 'bg-success', color: 'text-success' },
+        'Rejected': { label: 'مرفوضة', cls: 'bg-danger', color: 'text-danger' },
+      };
+      const sm = statusMap[status] || { label: status, cls: 'bg-secondary', color: 'text-secondary' };
+      badge.textContent = sm.label;
+      badge.className = 'badge plan-status-badge ' + sm.cls;
+      statEl.textContent = sm.label;
+      statEl.className = 'stat-value ' + sm.color;
+
+      existing.classList.remove('d-none');
+      document.getElementById('planSemester').textContent = currentPlan.semester || '—';
+      document.getElementById('planStatusText').textContent = sm.label;
+
+      const courses = currentPlan.courses || [];
+      document.getElementById('planCoursesList').innerHTML = courses.map(c =>
+        `<li class="list-group-item py-1 px-2 small">${esc(c)}</li>`
+      ).join('') || '<li class="list-group-item text-muted py-1 px-2 small">لا مقررات</li>';
+
+      const rejBox = document.getElementById('planRejectionBox');
+      if (status === 'Rejected' && currentPlan.rejection_reason) {
+        rejBox.classList.remove('d-none');
+        document.getElementById('planRejectionReason').textContent = currentPlan.rejection_reason;
+      } else {
+        rejBox.classList.add('d-none');
+      }
+
+      const actions = document.getElementById('planActions');
+      const canEdit = status === 'Draft' || status === 'Rejected';
+      document.getElementById('btnEditPlan').classList.toggle('d-none', !canEdit);
+      document.getElementById('btnSubmitPlan').classList.toggle('d-none', status !== 'Draft');
+    }
+
+    async function loadEligibleCourses() {
+      try {
+        const r = await fetch('/students/eligible_courses?student_id=' + encodeURIComponent(studentId), { credentials: 'include' });
+        const j = await r.json().catch(() => ({}));
+        eligibleCourses = j.eligible || j.courses || [];
+        renderCourseCheckList();
+      } catch(e) {
+        document.getElementById('courseCheckList').innerHTML = '<p class="text-danger small">تعذر تحميل المقررات.</p>';
+      }
+    }
+
+    function renderCourseCheckList(filter) {
+      const box = document.getElementById('courseCheckList');
+      const f = (filter || '').trim().toLowerCase();
+      let list = eligibleCourses;
+      if (f) list = list.filter(c => (c.course_name || '').toLowerCase().includes(f) || (c.course_code || '').toLowerCase().includes(f));
+      const planCourses = (currentPlan && (currentPlan.status === 'Draft' || currentPlan.status === 'Rejected')) ? new Set(currentPlan.courses || []) : new Set();
+      box.innerHTML = list.map(c => {
+        const name = c.course_name || c.name || '';
+        const code = c.course_code || c.code || '';
+        const units = c.units || c.credit_hours || 0;
+        const checked = planCourses.has(name) ? ' checked' : '';
+        return `<label class="d-block"><input type="checkbox" class="form-check-input me-1 plan-course-cb" value="${esc(name)}" data-units="${units}"${checked}> <strong>${esc(name)}</strong> <code class="ms-1">${esc(code)}</code> <span class="text-muted">(${units} و)</span></label>`;
+      }).join('') || '<p class="text-muted text-center small py-2">لا مقررات متاحة.</p>';
+      updateSelectedCount();
+    }
+
+    function updateSelectedCount() {
+      const cbs = document.querySelectorAll('.plan-course-cb:checked');
+      let units = 0;
+      cbs.forEach(cb => { units += parseInt(cb.dataset.units || 0, 10); });
+      document.getElementById('selectedCount').textContent = cbs.length;
+      document.getElementById('selectedUnits').textContent = units;
+    }
+
+    function showEditor() {
+      document.getElementById('planExistingView').classList.add('d-none');
+      document.getElementById('planNoneView').classList.add('d-none');
+      document.getElementById('planEditorView').classList.remove('d-none');
+      if (!eligibleCourses.length) loadEligibleCourses();
+      else renderCourseCheckList();
+      document.getElementById('planSemesterInput').value = currentPlan?.semester || currentTerm;
+    }
+
+    async function savePlan(andSubmit) {
+      const semester = document.getElementById('planSemesterInput').value.trim();
+      if (!semester) { alert('أدخل اسم الفصل الدراسي.'); return; }
+      const courses = [...document.querySelectorAll('.plan-course-cb:checked')].map(cb => cb.value);
+      if (!courses.length) { alert('اختر مقرراً واحداً على الأقل.'); return; }
+
+      const body = { student_id: studentId, semester, courses };
+      const r = await fetch('/enrollment/plans', {
+        method: 'POST', credentials: 'include', headers: hdr(), body: JSON.stringify(body)
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(j.message || 'فشل الحفظ'); return; }
+
+      if (andSubmit && j.plan_id) {
+        const sr = await fetch('/enrollment/plans/' + j.plan_id + '/submit', {
+          method: 'POST', credentials: 'include', headers: hdr(), body: JSON.stringify({})
+        });
+        const sj = await sr.json().catch(() => ({}));
+        if (!sr.ok) { alert(sj.message || 'فشل الإرسال'); }
+      }
+
+      await loadPlans();
+      document.getElementById('planEditorView').classList.add('d-none');
+    }
+
+    // Event Listeners
+    document.getElementById('btnCreatePlan').addEventListener('click', showEditor);
+    document.getElementById('btnEditPlan').addEventListener('click', showEditor);
+    document.getElementById('btnCancelEdit').addEventListener('click', () => {
+      document.getElementById('planEditorView').classList.add('d-none');
+      renderPlanView();
+    });
+    document.getElementById('btnSaveDraft').addEventListener('click', () => savePlan(false));
+    document.getElementById('btnSaveAndSubmit').addEventListener('click', () => savePlan(true));
+    document.getElementById('btnSubmitPlan').addEventListener('click', async () => {
+      if (!currentPlan || !currentPlan.id) return;
+      if (!confirm('هل تريد إرسال الخطة للمراجعة؟')) return;
+      const r = await fetch('/enrollment/plans/' + currentPlan.id + '/submit', {
+        method: 'POST', credentials: 'include', headers: hdr(), body: JSON.stringify({})
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(j.message || 'فشل'); return; }
+      await loadPlans();
+    });
+    document.getElementById('courseFilter').addEventListener('input', e => {
+      renderCourseCheckList(e.target.value);
+    });
+    document.getElementById('courseCheckList').addEventListener('change', updateSelectedCount);
+
+    init();
+  </script>
+</body>
+</html>
