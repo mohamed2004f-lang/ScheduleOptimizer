@@ -22,11 +22,13 @@
         <h4 class="mb-1"><i class="fa-solid fa-pen-to-square text-primary"></i> تعبئة الاستبيانات</h4>
         <p class="text-muted small mb-1">
           الفصل: <strong>{{ semester }}</strong> —
-          تظهر هنا فقط الاستبيانات التي <strong>يُفترض أن تملأها أنت</strong> حسب دورك الحالي.
+          الاستبيانات المعروضة حسب <strong>الوضع الحالي</strong> من شريط الأدوار أعلى الصفحة.
         </p>
         <span class="badge bg-primary">{{ respondent_label }}</span>
-        {% if user_role == 'head_of_department' and user_role != respondent_role %}
-        <span class="badge bg-secondary ms-1">حساب: رئيس قسم · تعبئة كـ {{ respondent_label }}</span>
+        {% if user_role == 'head_of_department' and respondent_role == 'instructor' %}
+        <span class="badge bg-secondary ms-1">حساب: رئيس قسم · تعبئة كعضو هيئة تدريس</span>
+        {% elif user_role == 'head_of_department' and respondent_role == 'supervisor' %}
+        <span class="badge bg-secondary ms-1">حساب: رئيس قسم · وضع المشرف الأكاديمي</span>
         {% endif %}
       </div>
       {% if show_results_link %}
@@ -36,10 +38,22 @@
       {% endif %}
     </div>
 
+    {% if supervisor_effective %}
+    <div class="alert alert-secondary border-start border-secondary border-4 small mb-3">
+      <strong>وضع المشرف الأكاديمي:</strong>
+      استبيانات المشرف <em>منفصلة</em> عن استبيانات عضو هيئة التدريس (رئيس القسم، العميد، العملية التعليمية).
+      التعبئة تُحفظ مرة واحدة لكل فصل حسب <code>instructor_id</code> — تبديل الوضع لا يُعيد طلب نفس الاستبيان.
+    </div>
+    {% elif user_role in ('instructor', 'head_of_department') and respondent_role == 'instructor' %}
+    <div class="alert alert-light border small mb-3">
+      <strong>ملاحظة:</strong> إذا كنت مشرفاً أكاديمياً أيضاً، انتقل إلى <strong>وضع المشرف</strong> من الشريط العلوي لاستبيانات الإرشاد والتنسيق.
+    </div>
+    {% endif %}
+
     <div class="alert alert-info border-start border-info border-4 small mb-4">
       <strong>ليست هذه الصفحة:</strong>
       <ul class="mb-2 ps-3">
-        <li><strong>نتائج الاستبيانات</strong> — عرض تجميعي سري بعد عدد كافٍ من الإجابات (لرئيس القسم/الإدارة).</li>
+        <li><strong>نتائج الاستبيانات</strong> — عرض تجميعي سري (لرئيس القسم/الإدارة).</li>
         <li><strong>إعداد بنود الاستبيانات</strong> — تحرير أسئلة القوالب (منسق جودة / إدارة).</li>
       </ul>
       {% if fill_guide %}
@@ -52,13 +66,97 @@
       <div class="card-body d-flex justify-content-between align-items-center flex-wrap gap-2">
         <div>
           <strong>١ — تقييم المقررات والأساتذة</strong>
-          <div class="small text-muted">استبيان منفصل لكل شعبة دراسية مسجّل بها — يُحسب في مؤشر رضا الطلاب</div>
+          <div class="small text-muted">استبيان منفصل لكل شعبة — يُحسب في مؤشر رضا الطلاب</div>
         </div>
         <a href="{{ course_eval_link }}" class="btn btn-primary">فتح تقييم المقررات</a>
       </div>
     </div>
     {% endif %}
 
+    {% if supervisor_effective %}
+    <h6 class="fw-semibold mt-2 mb-2">
+      {% if course_eval_link %}٢ — {% else %}١ — {% endif %}استبيانات المشرف الأكاديمي (نوعي)
+    </h6>
+    <p class="small text-muted mb-2">
+      تُدمج في <strong>لوحة الجودة</strong> ضمن مؤشرات
+      <code>supervisor_advising</code> و <code>supervisor_coordination</code>
+      — مكمّلة لتقرير الإرشاد الكمي أدناه.
+    </p>
+
+    {% if dept_missing %}
+    <div class="alert alert-warning mb-3">
+      لم يُحدد قسم لحسابك؛ استبيانات المشرف مرتبطة بالقسم. راجع ربط <code>department_id</code> في حسابك أو سجل المدرّس.
+    </div>
+    {% endif %}
+
+    {% if pending %}
+    <div class="list-group mb-3">
+      {% for p in pending %}
+      <a href="{{ p.fill_url }}?semester={{ semester|urlencode }}" class="list-group-item list-group-item-action">
+        <div class="d-flex justify-content-between align-items-center gap-2">
+          <div>
+            <span class="fw-semibold">{{ p.title_ar }}</span>
+            <div class="small text-muted">تقييم سري (1–5) — {{ p.code }}</div>
+          </div>
+          <span class="badge bg-warning text-dark">لم يُرسل بعد</span>
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+    {% elif supervisor_template_count > 0 and not dept_missing %}
+    <div class="alert alert-success mb-3">
+      أكملت جميع استبيانات <strong>المشرف الأكاديمي</strong> لهذا الفصل — شكراً لمشاركتك.
+    </div>
+    {% elif supervisor_template_count == 0 %}
+    <div class="alert alert-secondary mb-3">
+      لم تُفعّل قوالب استبيان المشرف بعد في النظام. تواصل مع منسق الجودة.
+    </div>
+    {% endif %}
+
+    <div class="card mb-4 border-info">
+      <div class="card-body d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div>
+          <strong>تقرير الإرشاد الكمي (فصل {{ semester }})</strong>
+          <div class="small text-muted">
+            عدد المتعثرين، الإجراءات، نسبة نجاح التدخلات — يُخزَّن في
+            <code>supervisor_quality_reports</code> ويظهر في لوحة الجودة.
+          </div>
+          {% if supervisor_report.submitted %}
+          <span class="badge bg-success mt-1">مُرسل{% if supervisor_report.submitted_at %} — {{ supervisor_report.submitted_at[:10] }}{% endif %}</span>
+          {% else %}
+          <span class="badge bg-warning text-dark mt-1">لم يُرسل بعد</span>
+          {% endif %}
+        </div>
+        <a href="/academic_quality/supervisor_report_page" class="btn btn-outline-info btn-sm">فتح تقرير الإرشاد</a>
+      </div>
+    </div>
+
+    {% if show_instructor_cross %}
+    <h6 class="fw-semibold mb-2">استبيانات عضو هيئة التدريس (دور منفصل)</h6>
+    <div class="card mb-4">
+      <div class="card-body">
+        <p class="small text-muted mb-2">
+          تقييم رئيس القسم، العميد، والعملية التعليمية — تُعبَّأ في <strong>وضع الأستاذ</strong>، وليس في وضع المشرف.
+        </p>
+        {% if instructor_all_done %}
+        <div class="alert alert-success mb-0 py-2 small">
+          ✓ أكملت استبيانات عضو هيئة التدريس لهذا الفصل (أو لا ينطبق عليك).
+        </div>
+        {% else %}
+        <p class="mb-2 small">متبقٍ <strong>{{ instructor_pending|length }}</strong> استبيان(ات):</p>
+        <ul class="small mb-2">
+          {% for p in instructor_pending %}
+          <li>{{ p.title_ar }}</li>
+          {% endfor %}
+        </ul>
+        <p class="mb-0 small text-muted">بدّل إلى <strong>وضع الأستاذ</strong> من الشريط العلوي ثم عد إلى هذه الصفحة للتعبئة.</p>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% else %}
+    {# ——— وضع الطالب / الأستاذ / الموظف ——— #}
     <h6 class="mt-2 mb-2">
       {% if course_eval_link %}٢ — {% endif %}استبيانات عامة مطلوبة مني
     </h6>
@@ -83,9 +181,13 @@
       راجع <a href="/academic_quality/surveys/results">نتائج الاستبيانات</a>
       أو <a href="/academic_quality/survey_admin">إعداد البنود</a>.
       {% else %}
-      أكملت جميع الاستبيانات المطلوبة منك لهذا الفصل — شكراً لمشاركتك.
+      أكملت جميع الاستبيانات المطلوبة منك <strong>في هذا الدور</strong> لهذا الفصل — شكراً لمشاركتك.
+      {% if user_role in ('instructor', 'head_of_department') %}
+      <span class="d-block mt-1 small">إن كنت مشرفاً أيضاً، راجع استبيانات المشرف من <strong>وضع المشرف</strong>.</span>
+      {% endif %}
       {% endif %}
     </div>
+    {% endif %}
     {% endif %}
   </main>
 </body>

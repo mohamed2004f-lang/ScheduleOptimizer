@@ -132,6 +132,27 @@
             <i class="fa-solid fa-chalkboard-user ms-1"></i> مقرراتي
           </a>
         </li>
+        <li class="nav-item" id="navInstructorGradeDraftsWrap" style="display:none;">
+          <a class="nav-link" id="navInstructorGradeDrafts" href="/grade_drafts">
+            <i class="fa-solid fa-file-pen ms-1"></i> مسودات الدرجات
+          </a>
+        </li>
+        <li class="nav-item dropdown" id="navInstructorMoreWrap" style="display:none;">
+          <a class="nav-link dropdown-toggle" href="#" id="instructorMoreMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="fa-solid fa-ellipsis ms-1"></i> المزيد
+          </a>
+          <ul class="dropdown-menu" aria-labelledby="instructorMoreMenu">
+            <li><a class="dropdown-item" id="navInsSchedule" href="/schedule_form">الجدول الدراسي</a></li>
+            <li><a class="dropdown-item" id="navInsCalendar" href="/academic_calendar_page">التقويم الأكاديمي</a></li>
+            <li><a class="dropdown-item" id="navInsMidterms" href="/exams/midterms">امتحانات جزئية</a></li>
+            <li><a class="dropdown-item" id="navInsFinals" href="/exams/finals">امتحانات نهائية</a></li>
+            <li><a class="dropdown-item" id="navInsAttendance" href="/attendance_export">الحضور والغياب</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" id="navInsSurveys" href="/academic_quality/surveys">الاستبيانات</a></li>
+            <li><a class="dropdown-item" id="navInsIloCatalog" href="/ilo_catalog_page">كتالوج المخرجات</a></li>
+            <li><a class="dropdown-item" id="navInsStudentLo" href="/academic_quality/ilo/student/learning-outcomes" style="display:none;">مخرجاتي التعليمية</a></li>
+          </ul>
+        </li>
         <li class="nav-item" id="navStudentEvaluationsWrap" style="display:none;">
           <a class="nav-link" id="navStudentEvaluations" href="/students/evaluations/">
             <i class="fa-solid fa-star ms-1"></i> تقييم المقررات
@@ -533,6 +554,26 @@
         });
       }
 
+      const activeModeNav = (data.active_mode != null && data.active_mode !== '')
+        ? String(data.active_mode).toLowerCase()
+        : (role === 'head_of_department' ? 'head' : 'instructor');
+      const instructorSlimNav = !!showMyCourses && (
+        role === 'instructor' ||
+        (role === 'head_of_department' && activeModeNav === 'instructor')
+      );
+      const wrapInsGd = document.getElementById('navInstructorGradeDraftsWrap');
+      const wrapInsMore = document.getElementById('navInstructorMoreWrap');
+      if (wrapInsGd) wrapInsGd.style.display = instructorSlimNav ? '' : 'none';
+      if (wrapInsMore) wrapInsMore.style.display = instructorSlimNav ? '' : 'none';
+      if (instructorSlimNav) {
+        ['navPlanningMenuWrap', 'navAcademicRecordsMenuWrap', 'navStudentAffairsWrap'].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = 'none';
+        });
+        const elInsIlo = document.getElementById('navInsIloCatalog');
+        if (elInsIlo) elInsIlo.style.display = (showIloCatalog || role === 'instructor') ? '' : 'none';
+      }
+
       let showTranscriptNav = true;
       let saAttendanceOnly = false;
       if (caps && caps.v >= 1) {
@@ -827,6 +868,8 @@
       const path = (window.location.pathname || '/').toLowerCase();
       const map = [
         ['/my_courses','navMyCourses'],
+        ['/grade_drafts','navInstructorGradeDrafts'],
+        ['/grade_drafts','navGradeDrafts'],
         ['/dashboard','navDashboard'],
         ['/analytics','navAnalytics'],
         ['/academic_calendar_page','navAcademicCalendar'],

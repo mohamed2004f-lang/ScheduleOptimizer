@@ -6,6 +6,7 @@ from backend.services.coverage_insights import (
     normalize_coverage_course_key,
     registered_distinct_course_names,
     registration_course_student_counts,
+    schedule_course_primary_assignments,
     schedule_distinct_course_names_for_coverage,
 )
 from backend.database.database import is_postgresql, fetch_table_columns
@@ -1354,7 +1355,13 @@ def available_courses():
                 courses = [r[0] for r in rows]
             except Exception:
                 courses = []
-    return jsonify({"courses": courses})
+        assignments = schedule_course_primary_assignments(
+            conn,
+            cur,
+            term_label,
+            dept_scope_id=int(dep) if dept_scoped_user else None,
+        )
+    return jsonify({"courses": courses, "assignments": assignments})
 
 
 @exams_bp.route('/<exam_type>/export')

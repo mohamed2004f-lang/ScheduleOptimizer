@@ -42,6 +42,15 @@
     .axes-progress .bar{height:100%;transition:width .4s ease;}
     .axis-saved{position:absolute;top:-4px;right:-4px;font-size:.6rem;background:#198754;color:#fff;border-radius:50%;width:14px;height:14px;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .3s;}
     .axis-saved.show{opacity:1;}
+    .hub-tile{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:.75rem .5rem;border:1px solid #dee2e6;border-radius:.5rem;text-decoration:none;color:inherit;transition:transform .15s,box-shadow .15s,border-color .15s;min-height:88px;position:relative;}
+    .hub-tile:hover{transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,0,0,.08);border-color:var(--bs-primary);}
+    .hub-tile .hub-icon{font-size:1.35rem;line-height:1;margin-bottom:.25rem;}
+    .hub-tile .hub-badge{position:absolute;top:6px;left:6px;}
+    .action-item-link{cursor:pointer;}
+    .action-item-link:hover{background:rgba(255,193,7,.12);}
+    .dept-row-mine{background:rgba(13,110,253,.06)!important;}
+    [data-bs-theme="dark"] .hub-tile{background:#212529;border-color:#373b3e;color:#dee2e6;}
+    [data-bs-theme="dark"] .dept-row-mine{background:rgba(13,110,253,.15)!important;}
   </style>
 </head>
 <body>
@@ -51,12 +60,23 @@
       <div>
         <h1 class="page-title">مقرراتي</h1>
         <p class="page-subtitle">المقررات والشعب المكلَّف بها في الجدول الدراسي (كما يحددها رئيس القسم أو الإدارة)</p>
+        <p class="small text-muted mb-0 d-none" id="termContextLine"></p>
       </div>
       <div class="d-flex gap-2 flex-wrap align-items-center">
-        <a href="/schedule_form" class="btn btn-outline-secondary btn-sm">الجدول الدراسي</a>
-        <a href="/grade_drafts" class="btn btn-outline-primary btn-sm">مسودات الدرجات</a>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="btnRefreshPortal" title="تحديث البيانات">↻ تحديث</button>
         <button type="button" class="btn btn-outline-info btn-sm" onclick="PageGuide.open()" title="دليل استخدام الصفحة">❓ دليل الاستخدام</button>
         <span class="text-muted small" id="instructorLabel"></span>
+      </div>
+    </div>
+
+    <!-- بوابة سريعة -->
+    <div class="card mb-3 d-none" id="hubCard">
+      <div class="card-body py-2">
+        <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-1">
+          <span class="small fw-semibold">اختصارات سريعة</span>
+          <span class="small text-muted" id="hubDeptLabel"></span>
+        </div>
+        <div class="row g-2" id="hubLinks"></div>
       </div>
     </div>
 
@@ -133,6 +153,7 @@
       <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tabOutcomes" role="tab" data-tab-tip="لوحة تحقق مخرجات التعلم (CLO) لكل مقرر">مخرجات التعلم</a></li>
       <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tabPlans" role="tab" data-tab-tip="عرض الخطط الأسبوعية مع نسبة التنفيذ وربط CLO">الخطط الأسبوعية</a></li>
       <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tabReports" role="tab" data-tab-tip="تقارير الإقفال والتكليفات الرسمية (لجان/إشراف)">التقارير والتكليفات</a></li>
+      <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tabDeptSchedule" role="tab" id="tabDeptScheduleLink" data-tab-tip="جدول قسمك للفصل الحالي (قراءة فقط)">جدول القسم</a></li>
     </ul>
     <div class="tab-content border border-top-0 rounded-bottom p-3 mb-3">
 
@@ -172,6 +193,23 @@
           <hr>
           <h6 class="fw-semibold mt-3">تقارير إقفال المقررات</h6>
           <div id="closureReportsContent" class="text-muted small">جاري التحميل…</div>
+        </div>
+      </div>
+
+      <!-- تبويب: جدول القسم -->
+      <div class="tab-pane fade" id="tabDeptSchedule" role="tabpanel">
+        <span data-hint="عرض جدول القسم للفصل الحالي. الصفوف المميزة بخلفية فاتحة هي شُعبك." data-hint-id="mc_dept_sched" data-hint-icon="📅" data-for-role="instructor"></span>
+        <div id="deptScheduleHint" class="alert alert-info small d-none mb-2"></div>
+        <p class="small text-muted mb-2 d-none" id="deptScheduleMeta"></p>
+        <div id="deptScheduleLoad" class="text-muted small">اختر هذا التبويب لتحميل جدول القسم…</div>
+        <div id="deptScheduleEmpty" class="alert alert-secondary d-none mb-0">لا توجد صفوف جدول للفصل الحالي.</div>
+        <div class="table-responsive d-none" id="deptScheduleWrap">
+          <table class="table table-sm table-striped align-middle mb-0">
+            <thead class="table-light">
+              <tr><th>اليوم</th><th>الوقت</th><th>المقرر</th><th>القاعة</th><th>الأستاذ</th></tr>
+            </thead>
+            <tbody id="deptScheduleBody"></tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -239,72 +277,194 @@
       if (saved === 'true') document.getElementById('btnDarkMode').textContent = '☀️';
     })();
 
-    // === Semester Timeline ===
-    function renderTimeline() {
+    const DAY_ORDER = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
+
+    // === Global State ===
+    let G_ROWS = [];
+    let G_DATA = {};
+    let G_BULK = {};
+    let G_PORTAL = {};
+    let G_AXIS_CATALOG = [];
+    const TABS_LOADED = { outcomes: false, plans: false, reports: false, deptSchedule: false };
+
+    function mapTermNameToCalendar(tn) {
+      const t = (tn || '').trim();
+      if (t.includes('ربيع')) return 'spring';
+      if (t.includes('خريف')) return 'fall';
+      if (t.includes('صيف')) return 'summer';
+      return 'fall';
+    }
+    function mapTermYearToAcademicYear(ty) {
+      const m = String(ty || '').trim().match(/^(\d{2})-(\d{2})$/);
+      if (m) return '20' + m[1] + '/20' + m[2];
+      return String(ty || '').trim();
+    }
+
+    async function renderTimelineFromTerm(termName, termYear) {
       const card = document.getElementById('timelineCard');
       const now = new Date();
-      const semStart = new Date(now.getFullYear(), 0, 19);
-      const semEnd = new Date(now.getFullYear(), 4, 29);
-      if (now.getMonth() >= 8) { semStart.setMonth(8, 1); semEnd.setMonth(11, 20); }
+      let semStart = null, semEnd = null;
+      try {
+        const ay = mapTermYearToAcademicYear(termYear);
+        const term = mapTermNameToCalendar(termName);
+        if (ay && term) {
+          const r = await fetch('/academic_calendar/items?academic_year=' + encodeURIComponent(ay) + '&term=' + encodeURIComponent(term), { credentials: 'include' });
+          const j = await r.json().catch(() => ({}));
+          const items = (j.items || []).filter(it => it.event_date && !it.is_deleted);
+          const dates = items.map(it => new Date(it.event_date)).filter(d => !isNaN(d));
+          if (dates.length) {
+            semStart = new Date(Math.min(...dates));
+            semEnd = new Date(Math.max(...dates));
+          }
+        }
+      } catch(e) {}
+      if (!semStart || !semEnd) {
+        semStart = new Date(now.getFullYear(), 0, 19);
+        semEnd = new Date(now.getFullYear(), 4, 29);
+        if (now.getMonth() >= 8) { semStart.setMonth(8, 1); semEnd.setMonth(11, 20); }
+      }
       const total = semEnd - semStart;
       const elapsed = now - semStart;
-      const pct = Math.max(0, Math.min(100, Math.round((elapsed / total) * 100)));
+      const pct = total > 0 ? Math.max(0, Math.min(100, Math.round((elapsed / total) * 100))) : 0;
       document.getElementById('timelineFill').style.width = pct + '%';
       document.getElementById('timelineLabel').textContent = pct + '% من الفصل';
       document.getElementById('timelineStart').textContent = semStart.toLocaleDateString('ar');
       document.getElementById('timelineEnd').textContent = semEnd.toLocaleDateString('ar');
       card.classList.remove('d-none');
     }
-    renderTimeline();
 
-    // === Global State ===
-    let G_ROWS = [];
-    let G_DATA = {};
-    let G_BULK = {};
-    let G_AXIS_CATALOG = [];
-    const TABS_LOADED = { outcomes: false, plans: false, reports: false };
+    function renderHubLinks(d) {
+      const hub = document.getElementById('hubCard');
+      const links = document.getElementById('hubLinks');
+      const deptLbl = document.getElementById('hubDeptLabel');
+      const tiles = [
+        { href: '/grade_drafts', icon: '📝', label: 'مسودات الدرجات', badge: d.grade_drafts_draft || 0 },
+        { href: '/attendance_export', icon: '✓', label: 'الحضور والغياب', badge: 0 },
+        { href: '/exams/midterms', icon: '📋', label: 'امتحانات جزئية', badge: 0 },
+        { href: '/academic_quality/surveys', icon: '📊', label: 'الاستبيانات', badge: 0 },
+        { href: '#tabDeptSchedule', icon: '📅', label: 'جدول القسم', badge: 0, tab: true },
+        { href: '/schedule_form', icon: '🗓', label: 'الجدول الدراسي', badge: 0 },
+      ];
+      links.innerHTML = tiles.map(t => {
+        const badge = t.badge > 0 ? '<span class="badge bg-danger hub-badge">' + t.badge + '</span>' : '';
+        const cls = t.tab ? 'hub-tile hub-open-tab' : 'hub-tile';
+        const extra = t.tab ? ' data-tab="#tabDeptSchedule"' : '';
+        return '<div class="col-4 col-md-2"><a class="' + cls + '" href="' + t.href + '"' + extra + '>' + badge +
+          '<span class="hub-icon">' + t.icon + '</span><span class="small fw-semibold">' + esc(t.label) + '</span></a></div>';
+      }).join('');
+      hub.classList.remove('d-none');
+      if (deptLbl) deptLbl.textContent = d.department_name ? ('قسم: ' + d.department_name) : '';
+      links.querySelectorAll('.hub-open-tab').forEach(el => {
+        el.addEventListener('click', e => {
+          e.preventDefault();
+          const sel = el.getAttribute('data-tab');
+          const tabEl = document.querySelector('#mainTabs a[href="' + sel + '"]');
+          if (tabEl) bootstrap.Tab.getOrCreateInstance(tabEl).show();
+        });
+      });
+    }
 
-    // === Dashboard Summary ===
-    (async function loadDashboard() {
+    function renderPortalSummary(d) {
+      G_PORTAL = d || {};
+      if (d.term_label) {
+        const tl = document.getElementById('termContextLine');
+        if (tl) { tl.textContent = 'الفصل الحالي: ' + d.term_label; tl.classList.remove('d-none'); }
+      }
+      if (d.sections_count > 0) {
+        document.getElementById('statsBar').style.display = '';
+        document.getElementById('statSections').textContent = d.sections_count;
+        document.getElementById('statStudents').textContent = d.students_count || 0;
+        document.getElementById('statCloAvg').textContent = d.clo_avg != null ? d.clo_avg + '%' : '—';
+        document.getElementById('statAxes').textContent = d.axes_done + '/' + d.axes_total;
+      }
+      renderHubLinks(d);
+      renderTimelineFromTerm(d.term_name, d.term_year);
+      const items = d.action_items || [];
+      const actionCard = document.getElementById('actionItemsCard');
+      if (items.length) {
+        actionCard.classList.remove('d-none');
+        document.getElementById('actionCount').textContent = items.length;
+        const icons = { clo_missing: '⚠️', closure_pending: '📋', axes_pending: '📊', grade_draft_missing: '📝' };
+        document.getElementById('actionItemsList').innerHTML = items.map((a, i) =>
+          '<div class="d-flex align-items-center gap-2 py-1 border-bottom action-item-link" role="button" tabindex="0" data-action-idx="' + i + '">' +
+          '<span>' + (icons[a.type] || '⚠') + '</span>' +
+          '<span class="small">' + esc(a.message) + '</span></div>'
+        ).join('');
+        document.getElementById('actionItemsList').querySelectorAll('.action-item-link').forEach(el => {
+          const idx = parseInt(el.getAttribute('data-action-idx') || '0', 10);
+          const go = () => openActionItem(items[idx]);
+          el.addEventListener('click', go);
+          el.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); go(); } });
+        });
+      } else {
+        actionCard.classList.add('d-none');
+      }
+    }
+
+    function openActionItem(item) {
+      if (!item) return;
+      const tab = item.tab || 'sections';
+      const tabMap = { sections: '#tabSections', reports: '#tabReports', outcomes: '#tabOutcomes', plans: '#tabPlans' };
+      const href = tabMap[tab] || '#tabSections';
+      const tabEl = document.querySelector('#mainTabs a[href="' + href + '"]');
+      if (tabEl) bootstrap.Tab.getOrCreateInstance(tabEl).show();
+      if (item.section_id) {
+        setTimeout(() => {
+          const collapse = document.getElementById('sec_' + item.section_id);
+          if (collapse) {
+            bootstrap.Collapse.getOrCreateInstance(collapse, { toggle: false }).show();
+            collapse.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+          const focus = (item.focus || '').trim();
+          if (focus === 'clo') {
+            const btn = document.querySelector('.mc-show-clos[data-section="' + item.section_id + '"]');
+            if (btn) btn.click();
+          } else if (focus === 'grades') {
+            const cn = (item.course || G_ROWS.find(r => r.section_id == item.section_id)?.course_name || '').trim();
+            window.location.href = '/grade_drafts' + (cn ? '?course_name=' + encodeURIComponent(cn) : '');
+          }
+        }, 200);
+      } else if (item.type === 'grade_draft_missing') {
+        window.location.href = '/grade_drafts';
+      }
+    }
+
+    async function loadPortalSummary() {
       try {
-        const r = await fetch('/schedule/my_dashboard_summary', { credentials: 'include' });
+        const r = await fetch('/schedule/instructor_portal_summary', { credentials: 'include' });
         if (!r.ok) return;
-        const d = await r.json();
-        if (d.sections_count > 0) {
-          document.getElementById('statsBar').style.display = '';
-          document.getElementById('statSections').textContent = d.sections_count;
-          document.getElementById('statStudents').textContent = d.students_count || 0;
-          document.getElementById('statCloAvg').textContent = d.clo_avg != null ? d.clo_avg + '%' : '—';
-          document.getElementById('statAxes').textContent = d.axes_done + '/' + d.axes_total;
-        }
-        const items = d.action_items || [];
-        if (items.length) {
-          document.getElementById('actionItemsCard').classList.remove('d-none');
-          document.getElementById('actionCount').textContent = items.length;
-          const icons = { clo_missing: '⚠️', closure_pending: '📋', axes_pending: '📊' };
-          document.getElementById('actionItemsList').innerHTML = items.map(a =>
-            '<div class="d-flex align-items-center gap-2 py-1 border-bottom">' +
-            '<span>' + (icons[a.type] || '⚠') + '</span>' +
-            '<span class="small">' + esc(a.message) + '</span></div>'
-          ).join('');
-        }
+        renderPortalSummary(await r.json());
       } catch(e) {}
-    })();
+    }
 
-    // === Bulk API ===
-    async function fetchBulkAdmin(sectionIds) {
-      const cached = cacheGet('bulk');
-      if (cached) { G_BULK = cached; return cached; }
+    // === Bulk API (طلب واحد) ===
+    async function fetchBulkAdmin(sectionIds, skipCache) {
+      const cacheKey = 'bulk_' + sectionIds.join(',');
+      if (!skipCache) {
+        const cached = cacheGet(cacheKey);
+        if (cached) { G_BULK = cached; return cached; }
+      }
       const result = {};
-      await Promise.all(sectionIds.map(async sid => {
-        try {
-          const r = await fetch('/schedule/my_course_admin?section_id=' + encodeURIComponent(sid), { credentials: 'include' });
-          if (r.ok) result[sid] = await r.json();
-        } catch(e) {}
-      }));
+      if (!sectionIds.length) { G_BULK = result; return result; }
+      try {
+        const r = await fetch('/schedule/my_courses_bulk?section_ids=' + encodeURIComponent(sectionIds.join(',')), { credentials: 'include' });
+        const j = await r.json().catch(() => ({}));
+        const sections = j.sections || {};
+        sectionIds.forEach(sid => {
+          if (sections[String(sid)] != null) result[sid] = sections[String(sid)];
+        });
+      } catch(e) {}
       G_BULK = result;
-      cacheSet('bulk', result);
+      cacheSet(cacheKey, result);
       return result;
+    }
+
+    function clearPortalCaches() {
+      try {
+        Object.keys(sessionStorage).forEach(k => {
+          if (k.startsWith(CACHE_KEY + '_bulk')) sessionStorage.removeItem(k);
+        });
+      } catch(e) {}
     }
 
     // === Main Data Load ===
@@ -334,12 +494,12 @@
         if (data.instructor_name) {
           document.getElementById('instructorLabel').textContent = data.instructor_name;
         }
+        loadPortalSummary();
 
         G_AXIS_CATALOG = data.axis_catalog || [];
         G_ROWS = data.rows || [];
         if (!G_ROWS.length) { emptyState.classList.remove('d-none'); return; }
 
-        // Fetch bulk data for all sections in parallel
         const sectionIds = G_ROWS.map(r => r.section_id);
         await fetchBulkAdmin(sectionIds);
 
@@ -359,7 +519,8 @@
             '<button class="accordion-button' + (idx > 0 ? ' collapsed' : '') + '" type="button" data-bs-toggle="collapse" data-bs-target="#sec_' + sid + '">' +
             '<div class="d-flex w-100 justify-content-between align-items-center flex-wrap gap-2">' +
             '<span>' + esc(r.course_name) + ' <small class="text-muted">(' + esc(r.day) + ' ' + esc(r.time) + ' - ' + esc(r.room) + ')</small></span>' +
-            '<span class="d-flex gap-1">' +
+            '<span class="d-flex gap-1 flex-wrap">' +
+            (r.student_count != null ? '<span class="badge bg-success section-badge" title="مسجّلون">' + r.student_count + ' طالب</span>' : '') +
             '<span class="badge bg-primary section-badge">' + esc(r.semester) + '</span>' +
             '<span class="badge bg-' + (planPct >= 80 ? 'success' : planPct >= 40 ? 'warning text-dark' : 'secondary') + ' section-badge">خطة: ' + planPct + '%</span>' +
             '<span class="badge bg-' + (axesDone === axesTotal ? 'success' : 'warning text-dark') + ' section-badge">محاور: ' + axesDone + '/' + axesTotal + '</span>' +
@@ -501,7 +662,7 @@
           const savedEl = chip.parentElement.querySelector('.axis-saved');
           try {
             await fetch('/schedule/my_axis_status', { method: 'POST', credentials: 'include', headers: jsonPostHeaders(), body: JSON.stringify({ section_id: sid, axis_key: axisKey, status: next }) });
-            cacheClear('bulk');
+            cacheClear('bulk_' + (G_ROWS.map(r => r.section_id).join(',') || ''));
             if (savedEl) { savedEl.classList.add('show'); setTimeout(() => savedEl.classList.remove('show'), 1500); }
             // Update progress bar
             const container = chip.closest('.accordion-body');
@@ -525,7 +686,7 @@
           const txt = document.querySelector('.mc-syllabus[data-section="' + sid + '"]')?.value || '';
           const r = await fetch('/schedule/my_course_syllabus', { method: 'POST', credentials: 'include', headers: jsonPostHeaders(), body: JSON.stringify({ section_id: sid, syllabus_text: txt }) });
           if (!r.ok) alert('تعذر حفظ المفردات');
-          else { cacheClear('bulk'); btn.textContent = '✓ تم'; setTimeout(() => btn.textContent = 'حفظ', 2000); }
+          else { cacheClear('bulk_' + (G_ROWS.map(r => r.section_id).join(',') || '')); btn.textContent = '✓ تم'; setTimeout(() => btn.textContent = 'حفظ', 2000); }
         });
       });
 
@@ -540,7 +701,7 @@
           if (!weekNo) { alert('أدخل رقم الأسبوع'); return; }
           const r = await fetch('/schedule/my_course_plan', { method: 'POST', credentials: 'include', headers: jsonPostHeaders(), body: JSON.stringify({ section_id: sid, week_no: weekNo, lecture_status: lectureStatus, week_topic: weekTopic, linked_clo: linkedClo, resources_text: '' }) });
           if (!r.ok) { alert('تعذر حفظ الأسبوع'); return; }
-          cacheClear('bulk');
+          cacheClear('bulk_' + (G_ROWS.map(r => r.section_id).join(',') || ''));
           const j = await r.json().catch(() => ({}));
           if (j.weekly_plan) { G_BULK[sid] = { ...(G_BULK[sid] || {}), weekly_plan: j.weekly_plan }; }
           refreshSectionPlan(sid);
@@ -554,7 +715,7 @@
           const w = parseInt(btn.getAttribute('data-week') || '0', 10);
           if (!confirm('حذف الأسبوع ' + w + '؟')) return;
           await fetch('/schedule/my_course_plan/delete', { method: 'POST', credentials: 'include', headers: jsonPostHeaders(), body: JSON.stringify({ section_id: sid, week_no: w }) });
-          cacheClear('bulk');
+          cacheClear('bulk_' + (G_ROWS.map(r => r.section_id).join(',') || ''));
           const bulk = G_BULK[sid];
           if (bulk && bulk.weekly_plan) { bulk.weekly_plan = bulk.weekly_plan.filter(p => p.week_no !== w); }
           refreshSectionPlan(sid);
@@ -568,7 +729,7 @@
           const body = document.querySelector('.mc-ann-body[data-section="' + sid + '"]')?.value || '';
           if (!body.trim()) { alert('اكتب نص الإعلان'); return; }
           const r = await fetch('/schedule/my_course_announcement', { method: 'POST', credentials: 'include', headers: jsonPostHeaders(), body: JSON.stringify({ section_id: sid, title: '', body, announcement_type: 'general', lecture_date: '', published_to_students: true }) });
-          if (r.ok) { document.querySelector('.mc-ann-body[data-section="' + sid + '"]').value = ''; cacheClear('bulk'); }
+          if (r.ok) { document.querySelector('.mc-ann-body[data-section="' + sid + '"]').value = ''; cacheClear('bulk_' + (G_ROWS.map(r => r.section_id).join(',') || '')); }
           else alert('تعذر نشر الإعلان');
         });
       });
@@ -719,6 +880,103 @@
       } catch(e) { box.innerHTML = '<span class="text-danger small">خطأ</span>'; }
     }
 
+    async function loadDeptScheduleTab(force) {
+      if (TABS_LOADED.deptSchedule && !force) return;
+      const loadEl = document.getElementById('deptScheduleLoad');
+      const emptyEl = document.getElementById('deptScheduleEmpty');
+      const wrap = document.getElementById('deptScheduleWrap');
+      const hintEl = document.getElementById('deptScheduleHint');
+      const body = document.getElementById('deptScheduleBody');
+      loadEl.classList.remove('d-none');
+      emptyEl.classList.add('d-none');
+      wrap.classList.add('d-none');
+      try {
+        const r = await fetch('/schedule/instructor_department_schedule', { credentials: 'include' });
+        const d = await r.json().catch(() => ({}));
+        loadEl.classList.add('d-none');
+        if (d.hint) {
+          hintEl.textContent = d.hint;
+          hintEl.classList.remove('d-none');
+        } else {
+          hintEl.classList.add('d-none');
+        }
+        const term = d.term_label || G_PORTAL.term_label || '';
+        const dept = d.department_name || G_PORTAL.department_name || '';
+        const metaEl = document.getElementById('deptScheduleMeta');
+        if (metaEl && (term || dept)) {
+          metaEl.textContent = (dept ? dept + ' — ' : '') + (term || '');
+          metaEl.classList.remove('d-none');
+        } else if (metaEl) {
+          metaEl.classList.add('d-none');
+        }
+        const rows = d.rows || [];
+        if (!rows.length) {
+          emptyEl.classList.remove('d-none');
+          TABS_LOADED.deptSchedule = true;
+          return;
+        }
+        const sorted = rows.slice().sort((a, b) => {
+          const da = DAY_ORDER.indexOf(a.day || '');
+          const db = DAY_ORDER.indexOf(b.day || '');
+          if (da !== db) return (da < 0 ? 99 : da) - (db < 0 ? 99 : db);
+          return String(a.time || '').localeCompare(String(b.time || ''), 'ar');
+        });
+        body.innerHTML = sorted.map(row => {
+          const mine = row.is_mine ? ' dept-row-mine' : '';
+          const badge = row.is_mine ? ' <span class="badge bg-primary section-badge">شعبتي</span>' : '';
+          return '<tr class="' + mine.trim() + '"><td>' + esc(row.day) + '</td><td>' + esc(row.time) + '</td><td>' + esc(row.course_name) + badge + '</td><td>' + esc(row.room) + '</td><td>' + esc(row.instructor) + '</td></tr>';
+        }).join('');
+        wrap.classList.remove('d-none');
+        TABS_LOADED.deptSchedule = true;
+      } catch(e) {
+        loadEl.textContent = 'تعذر تحميل جدول القسم.';
+      }
+    }
+
+    document.getElementById('btnRefreshPortal')?.addEventListener('click', async () => {
+      const btn = document.getElementById('btnRefreshPortal');
+      if (btn) btn.disabled = true;
+      clearPortalCaches();
+      TABS_LOADED.deptSchedule = false;
+      TABS_LOADED.outcomes = false;
+      TABS_LOADED.plans = false;
+      await loadPortalSummary();
+      if (G_ROWS.length) {
+        await fetchBulkAdmin(G_ROWS.map(r => r.section_id), true);
+        const accordion = document.getElementById('sectionsAccordion');
+        if (accordion && !accordion.classList.contains('d-none')) {
+          accordion.innerHTML = G_ROWS.map((r, idx) => {
+            const sid = r.section_id;
+            const adminData = G_BULK[sid] || {};
+            const planRows = adminData.weekly_plan || [];
+            const planDone = planRows.filter(p => p.lecture_status === 'done').length;
+            const planPct = planRows.length ? Math.round((planDone / planRows.length) * 100) : 0;
+            const axes = r.axes || {};
+            const axesDone = Object.values(axes).filter(v => v === 'done' || v === 'na').length;
+            const axesTotal = G_AXIS_CATALOG.length;
+            return (
+              '<div class="accordion-item">' +
+              '<h2 class="accordion-header">' +
+              '<button class="accordion-button' + (idx > 0 ? ' collapsed' : '') + '" type="button" data-bs-toggle="collapse" data-bs-target="#sec_' + sid + '">' +
+              '<div class="d-flex w-100 justify-content-between align-items-center flex-wrap gap-2">' +
+              '<span>' + esc(r.course_name) + ' <small class="text-muted">(' + esc(r.day) + ' ' + esc(r.time) + ' - ' + esc(r.room) + ')</small></span>' +
+              '<span class="d-flex gap-1 flex-wrap">' +
+              (r.student_count != null ? '<span class="badge bg-success section-badge">' + r.student_count + ' طالب</span>' : '') +
+              '<span class="badge bg-primary section-badge">' + esc(r.semester) + '</span>' +
+              '<span class="badge bg-' + (planPct >= 80 ? 'success' : planPct >= 40 ? 'warning text-dark' : 'secondary') + ' section-badge">خطة: ' + planPct + '%</span>' +
+              '<span class="badge bg-' + (axesDone === axesTotal ? 'success' : 'warning text-dark') + ' section-badge">محاور: ' + axesDone + '/' + axesTotal + '</span>' +
+              '</span></div></button></h2>' +
+              '<div id="sec_' + sid + '" class="accordion-collapse collapse' + (idx === 0 ? ' show' : '') + '" data-section="' + sid + '">' +
+              '<div class="accordion-body">' + renderSectionBody(r, adminData) + '</div></div></div>'
+            );
+          }).join('');
+          attachSectionEvents();
+        }
+      }
+      if (document.querySelector('#tabDeptSchedule.tab-pane.active')) loadDeptScheduleTab(true);
+      if (btn) btn.disabled = false;
+    });
+
     // === Lazy Loading Tabs ===
     document.querySelectorAll('#mainTabs a[data-bs-toggle="tab"]').forEach(tab => {
       tab.addEventListener('shown.bs.tab', e => {
@@ -726,6 +984,7 @@
         if (target === '#tabOutcomes' && !TABS_LOADED.outcomes) { loadOutcomesTab(); TABS_LOADED.outcomes = true; }
         if (target === '#tabPlans' && !TABS_LOADED.plans) { loadPlansTab(); TABS_LOADED.plans = true; }
         if (target === '#tabReports' && !TABS_LOADED.reports) { loadReportsTab(); TABS_LOADED.reports = true; }
+        if (target === '#tabDeptSchedule') loadDeptScheduleTab(false);
       });
     });
 

@@ -2390,10 +2390,29 @@ def my_assigned_sections():
         tuples = _assigned_section_rows(cur, iid, inst_name)
         section_ids = [t[0] for t in tuples]
         axis_map = _axis_status_map_for_sections(cur, iid, section_ids)
+        reg_counts: dict[str, int] = {}
+        try:
+            course_names = list({(t[1] or "").strip() for t in tuples if (t[1] or "").strip()})
+            if course_names:
+                ph = ",".join(["?"] * len(course_names))
+                keys = tuple(cn.strip().lower() for cn in course_names)
+                reg_rows = cur.execute(
+                    f"""
+                    SELECT LOWER(TRIM(course_name)) AS ck, COUNT(DISTINCT student_id) AS cnt
+                    FROM registrations
+                    WHERE LOWER(TRIM(course_name)) IN ({ph})
+                    GROUP BY LOWER(TRIM(course_name))
+                    """,
+                    keys,
+                ).fetchall()
+                reg_counts = {r[0]: int(r[1] or 0) for r in reg_rows if r and r[0]}
+        except Exception:
+            reg_counts = {}
         out = []
         for t in tuples:
             sid, cn, day, tim, room, inst_txt, sem = t
             merged_axes = {**default_axes, **axis_map.get(int(sid), {})}
+            ck = (cn or "").strip().lower()
             out.append(
                 {
                     "section_id": sid,
@@ -2404,6 +2423,7 @@ def my_assigned_sections():
                     "instructor": inst_txt,
                     "semester": sem,
                     "axes": merged_axes,
+                    "student_count": reg_counts.get(ck, 0),
                 }
             )
     return jsonify(
@@ -2484,6 +2504,338 @@ def my_dashboard_summary():
         "clo_avg": clo_avg,
         "action_items": action_items,
     })
+
+
+@schedule_bp.route("/instructor_portal_summary", methods=["GET"])
+@login_required
+def instructor_portal_summary():
+    """ملخص بوابة الأستاذ: إحصائيات + مهام + مسودات درجات + سياق الفصل والقسم."""
+    if not _is_instructor_effective_session():
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    inst_name, instructor_id = _instructor_display_name_for_session()
+    base = {
+        "sections_count": 0,
+        "students_count": 0,
+        "axes_done": 0,
+        "axes_total": 0,
+        "clo_avg": None,
+        "action_items": [],
+        "term_label": "",
+        "term_name": "",
+        "term_year": "",
+        "schedule_published": False,
+        "department_id": None,
+        "department_name": "",
+        "grade_drafts_total": 0,
+        "grade_drafts_draft": 0,
+        "grade_drafts_pending_submit": 0,
+        "sections_without_draft": 0,
+        "instructor_name": inst_name,
+    }
+    if not inst_name or not instructor_id:
+        return jsonify(base)
+    iid = int(instructor_id)
+    with get_connection() as conn:
+        cur = conn.cursor()
+        term_name, term_year = get_current_term(conn=conn)
+        term_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip() or SEMESTER_LABEL
+        published_at = get_schedule_published_at(conn)
+        dept_id = _resolve_actor_department_id(conn)
+        dept_name = ""
+        if dept_id is not None:
+            try:
+                dr = cur.execute(
+                    "SELECT COALESCE(name_ar, code, '') FROM departments WHERE id = ? LIMIT 1",
+                    (int(dept_id),),
+                ).fetchone()
+                dept_name = (dr[0] if dr else "") or ""
+            except Exception:
+                dept_name = ""
+        tuples = _assigned_section_rows(cur, iid, inst_name)
+        section_ids = [t[0] for t in tuples]
+        sections_count = len(section_ids)
+        axis_map = _axis_status_map_for_sections(cur, iid, section_ids)
+        axes_total = sections_count * len(FACULTY_AXIS_KEYS)
+        axes_done = sum(
+            1 for sid_axes in axis_map.values() for v in sid_axes.values() if v in ("done", "na")
+        )
+        students_count = 0
+        course_names = list({(t[1] or "").strip() for t in tuples if (t[1] or "").strip()})
+        if course_names:
+            try:
+                ph = ",".join(["?"] * len(course_names))
+                row = cur.execute(
+                    f"SELECT COUNT(DISTINCT student_id) FROM registrations WHERE LOWER(TRIM(course_name)) IN ({ph})",
+                    tuple(cn.strip().lower() for cn in course_names),
+                ).fetchone()
+                students_count = int(row[0]) if row else 0
+            except Exception:
+                pass
+        clo_avg = None
+        if section_ids:
+            try:
+                ph = ",".join(["?"] * len(section_ids))
+                row = cur.execute(
+                    f"SELECT AVG(achievement_percent) FROM section_clo_assessments WHERE section_id IN ({ph})",
+                    tuple(section_ids),
+                ).fetchone()
+                if row and row[0] is not None:
+                    clo_avg = round(float(row[0]), 1)
+            except Exception:
+                pass
+        action_items = []
+        for t in tuples:
+            sid, cn = t[0], t[1]
+            try:
+                clo_count = cur.execute(
+                    "SELECT COUNT(*) FROM section_clo_assessments WHERE section_id = ? AND achievement_percent IS NOT NULL",
+                    (sid,),
+                ).fetchone()
+                if not clo_count or clo_count[0] == 0:
+                    action_items.append(
+                        {
+                            "type": "clo_missing",
+                            "section_id": sid,
+                            "course": cn,
+                            "tab": "sections",
+                            "focus": "clo",
+                            "message": f"لم تُقيّم CLOs لشعبة {cn} بعد",
+                        }
+                    )
+            except Exception:
+                pass
+            try:
+                closure = cur.execute(
+                    "SELECT status FROM course_closure_reports WHERE section_id = ? AND instructor_id = ? ORDER BY id DESC LIMIT 1",
+                    (sid, iid),
+                ).fetchone()
+                if not closure or closure[0] == "draft":
+                    action_items.append(
+                        {
+                            "type": "closure_pending",
+                            "section_id": sid,
+                            "course": cn,
+                            "tab": "reports",
+                            "focus": "",
+                            "message": f"تقرير إقفال {cn} لم يُرسل بعد",
+                        }
+                    )
+            except Exception:
+                pass
+            sid_axes = axis_map.get(int(sid), {})
+            pending_axes = [k for k in FACULTY_AXIS_KEYS if sid_axes.get(k, "pending") == "pending"]
+            if len(pending_axes) >= 4:
+                action_items.append(
+                    {
+                        "type": "axes_pending",
+                        "section_id": sid,
+                        "course": cn,
+                        "tab": "sections",
+                        "focus": "axes",
+                        "message": f"محاور {cn}: {len(pending_axes)} محاور لم تُحدَّث",
+                    }
+                )
+        grade_drafts_total = 0
+        grade_drafts_draft = 0
+        sections_with_draft: set[str] = set()
+        try:
+            gd_rows = cur.execute(
+                """
+                SELECT id, status, course_name, section_id
+                FROM grade_drafts
+                WHERE instructor_id = ? AND semester = ?
+                """,
+                (iid, term_label),
+            ).fetchall()
+            grade_drafts_total = len(gd_rows)
+            for gr in gd_rows:
+                st = (gr[1] or "").strip().lower()
+                if st in ("draft", ""):
+                    grade_drafts_draft += 1
+                cn = (gr[2] or "").strip().lower()
+                if cn:
+                    sections_with_draft.add(cn)
+        except Exception:
+            pass
+        sections_without_draft = len(
+            {(t[1] or "").strip().lower() for t in tuples if (t[1] or "").strip().lower() not in sections_with_draft}
+        )
+        if sections_without_draft > 0:
+            action_items.append(
+                {
+                    "type": "grade_draft_missing",
+                    "section_id": None,
+                    "course": "",
+                    "tab": "sections",
+                    "focus": "grades",
+                    "message": f"{sections_without_draft} مقرر(ات) بلا مسودة درجات للفصل الحالي",
+                }
+            )
+    return jsonify(
+        {
+            **base,
+            "sections_count": sections_count,
+            "students_count": students_count,
+            "axes_done": axes_done,
+            "axes_total": axes_total,
+            "clo_avg": clo_avg,
+            "action_items": action_items,
+            "term_label": term_label,
+            "term_name": term_name or "",
+            "term_year": term_year or "",
+            "schedule_published": published_at is not None,
+            "department_id": dept_id,
+            "department_name": dept_name,
+            "grade_drafts_total": grade_drafts_total,
+            "grade_drafts_draft": grade_drafts_draft,
+            "grade_drafts_pending_submit": max(0, grade_drafts_total - grade_drafts_draft),
+            "sections_without_draft": sections_without_draft,
+        }
+    )
+
+
+@schedule_bp.route("/my_courses_bulk", methods=["GET"])
+@login_required
+def my_courses_bulk():
+    """بيانات إدارة المقرر لعدة شُعب في طلب واحد."""
+    if not _is_instructor_effective_session():
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    raw = (request.args.get("section_ids") or "").strip()
+    if not raw:
+        return jsonify({"status": "ok", "sections": {}})
+    try:
+        requested = [int(x.strip()) for x in raw.split(",") if x.strip()]
+    except ValueError:
+        return jsonify({"status": "error", "message": "section_ids غير صالح"}), 400
+    inst_name, instructor_id = _instructor_display_name_for_session()
+    if not instructor_id:
+        return jsonify({"status": "error", "message": "لا يوجد ربط بعضو هيئة التدريس"}), 400
+    iid = int(instructor_id)
+    with get_connection() as conn:
+        cur = conn.cursor()
+        tuples = _assigned_section_rows(cur, iid, inst_name or "")
+        allowed_ids = {int(t[0]) for t in tuples}
+        sections_out = {}
+        for sid in requested:
+            if sid not in allowed_ids:
+                continue
+            sections_out[str(sid)] = _course_admin_payload(cur, iid, sid)
+    return jsonify({"status": "ok", "sections": sections_out})
+
+
+@schedule_bp.route("/instructor_department_schedule", methods=["GET"])
+@login_required
+def instructor_department_schedule():
+    """جدول القسم للفصل الحالي — قراءة فقط للأستاذ (شُعبه مميزة)."""
+    if not _is_instructor_effective_session():
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    inst_name, instructor_id = _instructor_display_name_for_session()
+    if not instructor_id:
+        return jsonify(
+            {
+                "rows": [],
+                "term_label": "",
+                "department_name": "",
+                "hint": "لا يوجد ربط بعضو هيئة التدريس.",
+            }
+        )
+    iid = int(instructor_id)
+    with get_connection() as conn:
+        cur = conn.cursor()
+        term_name, term_year = get_current_term(conn=conn)
+        term_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip() or SEMESTER_LABEL
+        dept_id = _resolve_actor_department_id(conn)
+        dept_name = ""
+        if dept_id is not None:
+            try:
+                dr = cur.execute(
+                    "SELECT COALESCE(name_ar, code, '') FROM departments WHERE id = ? LIMIT 1",
+                    (int(dept_id),),
+                ).fetchone()
+                dept_name = (dr[0] if dr else "") or ""
+            except Exception:
+                pass
+        my_tuples = _assigned_section_rows(cur, iid, inst_name or "")
+        my_section_ids = {int(t[0]) for t in my_tuples}
+        try:
+            scols = fetch_table_columns(conn, "schedule")
+        except Exception:
+            scols = []
+        has_dept = "department_id" in scols
+        pk = SCHEDULE_PK_COL
+        sql = f"""
+            SELECT s.{pk}, s.course_name, s.day, s.time, s.room, s.instructor, s.semester, s.instructor_id
+            FROM schedule s
+            WHERE COALESCE(TRIM(s.course_name), '') <> ''
+        """
+        params: list = []
+        if has_dept and dept_id is not None:
+            sql += " AND COALESCE(s.department_id, -1) = ? "
+            params.append(int(dept_id))
+        sql += f" ORDER BY s.day, s.time, s.course_name"
+        rows = cur.execute(sql, tuple(params)).fetchall()
+        out = []
+        for r in rows:
+            sid, cn, day, tim, room, inst_txt, sem, row_iid = (
+                r[0],
+                r[1],
+                r[2],
+                r[3],
+                r[4],
+                r[5],
+                r[6],
+                r[7] if len(r) > 7 else None,
+            )
+            if term_label and not schedule_semester_matches_current_term(sem, term_label):
+                continue
+            is_mine = int(sid) in my_section_ids
+            if not is_mine and not has_dept:
+                continue
+            if not has_dept and not is_mine:
+                continue
+            out.append(
+                {
+                    "section_id": sid,
+                    "course_name": cn,
+                    "day": _canonical_schedule_day_label(day),
+                    "time": tim,
+                    "room": room,
+                    "instructor": inst_txt,
+                    "semester": sem,
+                    "is_mine": is_mine,
+                }
+            )
+        if not has_dept and not out:
+            for t in my_tuples:
+                sid, cn, day, tim, room, inst_txt, sem = t
+                if term_label and not schedule_semester_matches_current_term(sem, term_label):
+                    continue
+                out.append(
+                    {
+                        "section_id": sid,
+                        "course_name": cn,
+                        "day": _canonical_schedule_day_label(day),
+                        "time": tim,
+                        "room": room,
+                        "instructor": inst_txt,
+                        "semester": sem,
+                        "is_mine": True,
+                    }
+                )
+            hint = "عرض شُعبك فقط — لم يُحدد قسم في حسابك أو في الجدولة."
+        elif not dept_id:
+            hint = "عرض شُعبك فقط — لم يُربط حسابك بقسم في النظام."
+        else:
+            hint = ""
+        return jsonify(
+            {
+                "rows": out,
+                "term_label": term_label,
+                "department_name": dept_name,
+                "department_id": dept_id,
+                "hint": hint,
+            }
+        )
 
 
 @schedule_bp.route("/faculty_assignments", methods=["GET"])

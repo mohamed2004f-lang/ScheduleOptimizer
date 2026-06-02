@@ -40,7 +40,7 @@ def ensure_survey_templates_seeded(conn) -> None:
     cur = conn.cursor()
     n = cur.execute("SELECT COUNT(*) FROM survey_templates").fetchone()
     if int((n[0] if n else 0) or 0) > 0:
-        _upgrade_platform_questions_from_seed(conn)
+        _ensure_missing_templates_from_seed(conn)
         return
     now = datetime.datetime.utcnow().isoformat()
     for t in SURVEY_TEMPLATE_SEED:
@@ -69,6 +69,45 @@ def ensure_survey_templates_seeded(conn) -> None:
     _seed_questions_for_templates(conn)
     _upgrade_platform_questions_from_seed(conn)
     logger.info("Seeded %s survey templates", len(SURVEY_TEMPLATE_SEED))
+
+
+def _ensure_missing_templates_from_seed(conn) -> None:
+    """إضافة قوالب جديدة (مثل استبيانات المشرف) دون مسح القوالب الحالية."""
+    if not table_exists(conn, "survey_templates"):
+        return
+    cur = conn.cursor()
+    now = datetime.datetime.utcnow().isoformat()
+    added = False
+    for t in SURVEY_TEMPLATE_SEED:
+        if _template_id_by_code(cur, t["code"]):
+            continue
+        cur.execute(
+            """
+            INSERT INTO survey_templates (
+                code, title_ar, respondent_role, subject_type,
+                is_anonymous, min_aggregate, department_scoped,
+                legacy_course_eval, is_active, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,1,?,?)
+            """,
+            (
+                t["code"],
+                t["title_ar"],
+                t["respondent_role"],
+                t["subject_type"],
+                int(t.get("is_anonymous", 1)),
+                int(t.get("min_aggregate", 3)),
+                int(t.get("department_scoped", 0)),
+                int(t.get("legacy_course_eval", 0)),
+                now,
+                now,
+            ),
+        )
+        added = True
+    if added:
+        conn.commit()
+        logger.info("Added missing survey templates from seed")
+        _seed_questions_for_templates(conn)
+    _upgrade_platform_questions_from_seed(conn)
 
 
 def _seed_questions_for_templates(conn) -> None:
@@ -198,7 +237,7 @@ def _respondent_key(role: str, session_data: dict) -> tuple[str, str]:
     if role == "student":
         sid = (session_data.get("student_id") or session_data.get("user") or "").strip()
         return role, sid
-    if role in ("instructor", "head_of_department"):
+    if role in ("instructor", "head_of_department", "supervisor"):
         iid = session_data.get("instructor_id")
         if iid is not None:
             return role, str(int(iid))
@@ -216,7 +255,12 @@ def _resolve_subject(
     subject_id_arg: int | None,
 ) -> tuple[str, int]:
     st = (template.get("subject_type") or "").strip()
-    if st == "department_head" or st == "educational_process":
+    if st in (
+        "department_head",
+        "educational_process",
+        "supervision",
+        "supervision_coordination",
+    ):
         dept = int(department_id or subject_id_arg or 0)
         return st, dept
     if st == "dean":
@@ -260,28 +304,35 @@ def has_submitted(
     return row is not None
 
 
-def survey_respondent_role(user_role: str) -> str:
-    """دور المُقيِّم في الاستبيان (رئيس القسم يُقيِّم كعضو هيئة تدريس)."""
+def survey_respondent_role(user_role: str, active_mode: str | None = None) -> str:
+    """دور المُقيِّم في الاستبيان — يعتمد على الدور في الجلسة ووضع الشريط (active_mode)."""
     r = (user_role or "").strip()
+    am = (active_mode or "").strip().lower()
+    if r == "supervisor":
+        return "supervisor"
     if r == "head_of_department":
+        if am == "supervisor":
+            return "supervisor"
         return "instructor"
+    if r == "instructor" and am == "supervisor":
+        return "supervisor"
     return r
 
 
-def list_pending_for_user(
+def list_pending_for_respondent_role(
     conn,
     *,
-    user_role: str,
+    respondent_role: str,
     session_data: dict,
     semester: str | None = None,
     department_id: int | None = None,
 ) -> list[dict]:
-    """استبيانات مطلوبة من المستخدم (غير المكتملة وغير المسار القديم للمقرر)."""
+    """استبيانات معلّقة لدور مُقيِّم محدد (instructor / supervisor / staff …)."""
     ensure_survey_templates_seeded(conn)
     sem = (semester or "").strip() or term_label_from_conn(conn)
-    resp_role = survey_respondent_role(user_role)
+    resp_role = (respondent_role or "").strip()
     resp_role, resp_id = _respondent_key(resp_role, session_data)
-    if not resp_id and user_role != "student":
+    if not resp_id:
         return []
 
     templates = [
@@ -291,7 +342,10 @@ def list_pending_for_user(
     ]
     pending: list[dict] = []
     for t in templates:
-        if int(t.get("department_scoped") or 0) and department_id is None and user_role == "instructor":
+        if int(t.get("department_scoped") or 0) and department_id is None and resp_role in (
+            "instructor",
+            "supervisor",
+        ):
             continue
         subj_type, subj_id = _resolve_subject(
             conn, t, department_id=department_id, subject_id_arg=department_id
@@ -316,6 +370,26 @@ def list_pending_for_user(
             }
         )
     return pending
+
+
+def list_pending_for_user(
+    conn,
+    *,
+    user_role: str,
+    session_data: dict,
+    semester: str | None = None,
+    department_id: int | None = None,
+    active_mode: str | None = None,
+) -> list[dict]:
+    """استبيانات مطلوبة من المستخدم (غير المكتملة وغير المسار القديم للمقرر)."""
+    resp_role = survey_respondent_role(user_role, active_mode)
+    return list_pending_for_respondent_role(
+        conn,
+        respondent_role=resp_role,
+        session_data=session_data,
+        semester=semester,
+        department_id=department_id,
+    )
 
 
 def submit_survey_response(
@@ -541,6 +615,8 @@ def survey_metrics_for_quality(conn, semester: str, department_id: int | None = 
         "faculty_hod",
         "faculty_dean",
         "faculty_educational_process",
+        "supervisor_advising",
+        "supervisor_coordination",
         "staff_workplace",
         "staff_student_services",
     ]

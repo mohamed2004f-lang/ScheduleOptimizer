@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 {% set _exam_entry = (initial_exam_type | default('midterm') | string | lower) %}
 <html lang="ar" dir="rtl">
 <head>
@@ -136,6 +136,7 @@
               <select id="newInstructor" class="form-select">
                 <option value="">-- اختر أستاذ --</option>
               </select>
+              <div id="scheduleAssignHint" class="form-text text-muted d-none"></div>
             </div>
             <div class="col-12">
               <button type="submit" class="btn btn-primary btn-sm">إضافة</button>
@@ -176,6 +177,8 @@ let currentConflicts = [];
 let currentManageDate = '';
 let currentManageTime = '';
 let INSTRUCTORS = [];
+/** اسم المقرر → { instructor_id, instructor, room } من الجدول الدراسي */
+let SCHEDULE_ASSIGNMENTS = {};
 let manageExamModalBs = null;
 /** إظهار/إخفاء أزرار «إدارة المقرر» داخل الخلايا (لمن يملك صلاحية التعديل فقط) */
 let EXAM_SLOT_MANAGE_VISIBLE = false;
@@ -235,6 +238,10 @@ function openManageExamModal(dateStr, timeStr){
   const tl = document.getElementById('modalExamTimeLabel');
   if (dl) dl.textContent = currentManageDate ? `${fmtDate(currentManageDate)} (${currentManageDate})` : '—';
   if (tl) tl.textContent = currentManageTime || '—';
+  const addForm = document.getElementById('addCourseForm');
+  if(addForm) addForm.reset();
+  const hint = document.getElementById('scheduleAssignHint');
+  if(hint){ hint.classList.add('d-none'); hint.textContent = ''; }
   renderManageList();
   const modalEl = document.getElementById('manageExamModal');
   if (!modalEl || typeof bootstrap === 'undefined') return;
@@ -317,28 +324,109 @@ async function initPermissions(){
 }
 
 async function loadCourses(){
-  const r=await fetch('/exams/available_courses');
-  const j=r.ok?await r.json():{courses:[]};
+  const r=await fetch('/exams/available_courses', { credentials: 'include' });
+  const j=r.ok?await r.json():{courses:[], assignments:{}};
   const list=Array.isArray(j.courses)?j.courses:[];
+  SCHEDULE_ASSIGNMENTS = (j.assignments && typeof j.assignments === 'object') ? j.assignments : {};
   const sel=document.getElementById('newCourseSelect');
   if (!sel) return;
   sel.innerHTML='<option value="">-- اختر مقرر --</option>';
   list.forEach(c=>{ const o=document.createElement('option'); o.value=c; o.textContent=c; sel.appendChild(o); });
 }
+
+function normInst(s){
+  return String(s||'').replace(/\u00a0/g,' ').replace(/[\u200f\u200e]/g,'').replace(/\s+/g,' ').trim().toLowerCase();
+}
+function lookupScheduleAssignment(courseName){
+  if(!courseName) return null;
+  if(SCHEDULE_ASSIGNMENTS[courseName]) return SCHEDULE_ASSIGNMENTS[courseName];
+  const nk = norm(courseName);
+  if(SCHEDULE_ASSIGNMENTS[nk]) return SCHEDULE_ASSIGNMENTS[nk];
+  const key = Object.keys(SCHEDULE_ASSIGNMENTS).find(k => norm(k) === nk);
+  return key ? SCHEDULE_ASSIGNMENTS[key] : null;
+}
+function ensureInstructorOption(instSel, instId, label){
+  if(!instSel || instId == null || instId === '') return false;
+  const idStr = String(instId);
+  let opt = [...instSel.options].find(o => o.value === idStr);
+  if(!opt){
+    opt = document.createElement('option');
+    opt.value = idStr;
+    opt.textContent = (label || '').trim() || ('أستاذ #' + idStr);
+    instSel.appendChild(opt);
+  }
+  instSel.value = idStr;
+  return true;
+}
+function pickInstructorForAssignment(a){
+  const instSel = document.getElementById('newInstructor');
+  if(!instSel || !a) return false;
+  if(a.instructor_id != null && a.instructor_id !== ''){
+    if(ensureInstructorOption(instSel, a.instructor_id, a.instructor)) return true;
+  }
+  if(a.instructor){
+    const target = normInst(a.instructor);
+    let opt = [...instSel.options].find(o => normInst(o.textContent) === target);
+    if(opt){ instSel.value = opt.value; return true; }
+    opt = [...instSel.options].find(o => {
+      const t = normInst(o.textContent);
+      return t && (t.includes(target) || target.includes(t));
+    });
+    if(opt){ instSel.value = opt.value; return true; }
+    const fromList = INSTRUCTORS.find(i => {
+      const n = normInst(i?.name);
+      return n === target || (n && (n.includes(target) || target.includes(n)));
+    });
+    if(fromList) return ensureInstructorOption(instSel, fromList.id, fromList.name);
+  }
+  return false;
+}
+function applyScheduleDefaultsForCourse(courseName){
+  const hint = document.getElementById('scheduleAssignHint');
+  const instSel = document.getElementById('newInstructor');
+  const roomInp = document.getElementById('newRoom');
+  if(!courseName){
+    if(hint){ hint.classList.add('d-none'); hint.textContent = ''; }
+    return;
+  }
+  const a = lookupScheduleAssignment(courseName);
+  if(!a){
+    if(hint){ hint.classList.add('d-none'); hint.textContent = ''; }
+    return;
+  }
+  const matched = pickInstructorForAssignment(a);
+  if(hint){
+    if(a.instructor || matched){
+      let msg = 'من الجدول الدراسي: ' + (a.instructor || '—');
+      if(a.room) msg += ' · القاعة: ' + a.room;
+      if(a.instructor && !matched) msg += ' — لم يُعثر على الاسم في قائمة الأساتذة؛ عيّنه يدوياً';
+      hint.textContent = msg;
+      hint.classList.remove('d-none');
+    } else {
+      hint.textContent = 'لا يوجد أستاذ مرتبط بهذا المقرر في الجدول الدراسي' + (a.room ? ' · القاعة: ' + a.room : '');
+      hint.classList.remove('d-none');
+    }
+  }
+  if(roomInp && a.room) roomInp.value = a.room;
+  if(instSel && !matched) instSel.value = '';
+}
 async function loadInstructors(){
-  const r=await fetch('/instructors/list');
+  const r=await fetch('/instructors/list', { credentials: 'include' });
   const data=r.ok?await r.json():{};
   INSTRUCTORS = Array.isArray(data.instructors)?data.instructors:[];
   const sel=document.getElementById('newInstructor');
   if (!sel) return;
   sel.innerHTML='<option value="">-- اختر أستاذ --</option>';
   INSTRUCTORS.forEach(inst=>{
-    if(!inst?.is_active) return;
+    if(!inst?.id) return;
     const o=document.createElement('option');
     o.value=String(inst.id);
-    o.textContent=(inst.name||'').trim();
+    const nm = (inst.name||'').trim();
+    o.textContent = inst.is_active ? nm : (nm + ' (غير نشط)');
     sel.appendChild(o);
   });
+  const courseSel = document.getElementById('newCourseSelect');
+  if(courseSel?.value) applyScheduleDefaultsForCourse(courseSel.value);
 }
 
 function buildConflictIndex(conflicts){
@@ -531,6 +619,10 @@ async function loadExamSchedule(){
   }
 }
 
+const newCourseSelectEl = document.getElementById('newCourseSelect');
+if (newCourseSelectEl) {
+  newCourseSelectEl.addEventListener('change', () => applyScheduleDefaultsForCourse(newCourseSelectEl.value));
+}
 const addCourseFormEl = document.getElementById('addCourseForm');
 if (addCourseFormEl) {
   addCourseFormEl.addEventListener('submit', async (e)=>{
@@ -560,6 +652,8 @@ if (addCourseFormEl) {
       showModalExamMsg('تمت الإضافة','success');
       setTimeout(()=> showModalExamMsg(''), 1800);
       e.target.reset();
+      const hint = document.getElementById('scheduleAssignHint');
+      if(hint){ hint.classList.add('d-none'); hint.textContent = ''; }
       await loadExamSchedule();
       renderManageList();
     } else {
@@ -623,8 +717,8 @@ window.addEventListener('load', async ()=>{
   updateExportLinks();
   updateExamSlotManageToggleButton();
   if(!EXAM_READONLY){
-    await loadCourses();
     await loadInstructors();
+    await loadCourses();
   }
   await loadExamSchedule();
   updateScheduleViewToggleButton();

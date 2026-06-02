@@ -67,6 +67,48 @@ def test_staff_pending_and_quality_metrics(db_conn):
     assert "staff_workplace" in sm
 
 
+def test_supervisor_templates_upgraded(db_conn):
+    from backend.services.multi_surveys import _ensure_missing_templates_from_seed
+
+    ensure_survey_templates_seeded(db_conn)
+    _ensure_missing_templates_from_seed(db_conn)
+    codes = {t["code"] for t in list_templates(db_conn)}
+    assert "supervisor_advising" in codes
+    assert "supervisor_coordination" in codes
+
+
+def test_supervisor_pending_uses_active_mode(db_conn):
+    ensure_survey_templates_seeded(db_conn)
+    sem = term_label_from_conn(db_conn)
+    pending = list_pending_for_user(
+        db_conn,
+        user_role="instructor",
+        session_data={"user": "sup1", "instructor_id": 9001},
+        semester=sem,
+        department_id=1,
+        active_mode="supervisor",
+    )
+    codes = {p["code"] for p in pending}
+    assert "supervisor_advising" in codes
+    assert "faculty_hod" not in codes
+
+
+def test_instructor_pending_separate_from_supervisor(db_conn):
+    ensure_survey_templates_seeded(db_conn)
+    sem = term_label_from_conn(db_conn)
+    inst = list_pending_for_user(
+        db_conn,
+        user_role="head_of_department",
+        session_data={"user": "hod1", "instructor_id": 9002},
+        semester=sem,
+        department_id=1,
+        active_mode="instructor",
+    )
+    inst_codes = {p["code"] for p in inst}
+    assert "faculty_hod" in inst_codes
+    assert "supervisor_advising" not in inst_codes
+
+
 def test_surveys_hub_route(app):
     with app.test_client() as c:
         c.post("/auth/login", json={"username": "admin-test", "password": "TestP@ssw0rd!"})

@@ -8,6 +8,7 @@ from __future__ import annotations
 from flask import session
 
 from backend.core import department_scope_policy as dept_scope_policy
+from backend.core.faculty_axes import normalize_instructor_name
 from backend.database.database import fetch_table_columns
 
 
@@ -106,6 +107,158 @@ def schedule_distinct_course_names_for_coverage(
             used_filter = "none"
 
     return names, used_filter
+
+
+def _resolve_schedule_instructor(cur, instructor_id, instructor_text: str) -> tuple[int | None, str]:
+    """ربط instructor_id / النص في schedule بسجل instructors."""
+    iid: int | None = None
+    try:
+        if instructor_id is not None:
+            iid = int(instructor_id)
+    except (TypeError, ValueError):
+        iid = None
+    if iid:
+        row = cur.execute(
+            "SELECT id, COALESCE(TRIM(name), '') FROM instructors WHERE id = ? LIMIT 1",
+            (iid,),
+        ).fetchone()
+        if row:
+            return int(row[0]), (row[1] or "").strip() or (instructor_text or "").strip()
+    name = normalize_instructor_name(instructor_text)
+    if not name:
+        return None, (instructor_text or "").strip()
+    try:
+        rows = cur.execute(
+            "SELECT id, COALESCE(TRIM(name), '') FROM instructors WHERE COALESCE(TRIM(name), '') <> ''"
+        ).fetchall()
+    except Exception:
+        return None, name
+    for rid, rname in rows:
+        if normalize_instructor_name(rname) == name:
+            return int(rid), (rname or "").strip()
+    for rid, rname in rows:
+        rn = normalize_instructor_name(rname)
+        if name in rn or rn in name:
+            return int(rid), (rname or "").strip()
+    return None, name
+
+
+def schedule_course_primary_assignments(
+    conn,
+    cur,
+    term_label: str,
+    *,
+    dept_scope_id: int | None = None,
+) -> dict[str, dict]:
+    """
+    لكل مقرر في الجدول الدراسي (الفصل الحالي): الأستاذ والقاعة الأكثر تكراراً في schedule.
+    المفتاح: اسم المقرر كما يظهر في القائمة (course_name).
+    """
+    from collections import defaultdict
+
+    tl = (term_label or "").strip()
+    dept = dept_scope_id
+    scols = fetch_table_columns(conn, "schedule")
+    try:
+        ccols = fetch_table_columns(conn, "courses")
+    except Exception:
+        ccols = []
+    sched_has_dept = "department_id" in scols
+    courses_have_owning = "owning_department_id" in ccols
+    has_iid = "instructor_id" in scols
+
+    join_owner = ""
+    dept_params: tuple = ()
+    dept_sql_frag = ""
+    if dept is not None:
+        if sched_has_dept:
+            dept_sql_frag = " AND COALESCE(s.department_id, -987654321) = ? "
+            dept_params = (int(dept),)
+        elif courses_have_owning:
+            join_owner = """
+                INNER JOIN courses ccov_dep
+                  ON lower(trim(ccov_dep.course_name)) = lower(trim(s.course_name))
+                 AND COALESCE(ccov_dep.owning_department_id, -1) = ?
+            """
+            dept_params = (int(dept),)
+        else:
+            return {}
+
+    iid_expr = "s.instructor_id" if has_iid else "NULL"
+
+    def _fetch_rows(use_term: bool) -> list:
+        term_frag = ""
+        params: tuple = dept_params
+        if use_term and tl:
+            term_frag = """
+              AND (
+                  COALESCE(TRIM(s.semester), '') = ''
+                  OR LOWER(TRIM(COALESCE(s.semester,''))) = LOWER(TRIM(?))
+              )
+            """
+            params = (tl,) + dept_params
+        try:
+            return cur.execute(
+                f"""
+                SELECT TRIM(s.course_name),
+                       {iid_expr},
+                       TRIM(COALESCE(s.instructor, '')),
+                       TRIM(COALESCE(s.room, ''))
+                FROM schedule s
+                {join_owner}
+                WHERE COALESCE(TRIM(s.course_name), '') <> ''
+                  {term_frag}
+                  {dept_sql_frag}
+                """,
+                params,
+            ).fetchall()
+        except Exception:
+            return []
+
+    rows = _fetch_rows(bool(tl))
+    if not rows and tl:
+        rows = _fetch_rows(False)
+
+    sig_counts: dict[str, dict[tuple, int]] = defaultdict(lambda: defaultdict(int))
+    display_names: dict[str, str] = {}
+
+    for r in rows:
+        cname = (r[0] or "").strip()
+        if not cname:
+            continue
+        ck = normalize_coverage_course_key(cname)
+        try:
+            iid = int(r[1]) if r[1] is not None else None
+        except (TypeError, ValueError):
+            iid = None
+        inst = (r[2] or "").strip()
+        room = (r[3] or "").strip()
+        sig = (iid, inst, room)
+        sig_counts[ck][sig] += 1
+        if ck not in display_names:
+            display_names[ck] = cname
+
+    out: dict[str, dict] = {}
+    for ck, counts in sig_counts.items():
+        best = max(
+            counts.keys(),
+            key=lambda s: (
+                counts[s],
+                1 if (s[0] or (s[1] or "").strip()) else 0,
+                1 if s[0] else 0,
+                len((s[1] or "").strip()),
+            ),
+        )
+        iid, inst, room = best
+        resolved_id, resolved_name = _resolve_schedule_instructor(cur, iid, inst)
+        display = display_names.get(ck, ck)
+        out[display] = {
+            "instructor_id": resolved_id,
+            "instructor": resolved_name or inst,
+            "room": room,
+        }
+        out[ck] = out[display]
+    return out
 
 
 def registered_distinct_course_names(cur, conn, *, actor_username: str | None = None) -> list[str]:

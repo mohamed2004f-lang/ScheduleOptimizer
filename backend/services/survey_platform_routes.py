@@ -5,8 +5,10 @@ from __future__ import annotations
 from flask import jsonify, redirect, render_template, request, session, url_for
 
 from backend.core.auth import (
+    SESSION_ACTIVE_MODE,
     _normalize_role,
     get_admin_department_scope_id,
+    is_supervisor_effective_session,
     login_required,
     role_required,
 )
@@ -15,6 +17,7 @@ from backend.core.survey_platform import RESPONDENT_ROLE_LABELS, ROLE_SURVEY_FIL
 from backend.services.multi_surveys import (
     aggregate_template,
     get_template_by_code,
+    list_pending_for_respondent_role,
     list_pending_for_user,
     list_template_questions,
     list_templates,
@@ -61,7 +64,7 @@ def _user_department_id(conn) -> int | None:
         except (TypeError, ValueError):
             pass
     iid = session.get("instructor_id")
-    if iid and role in ("instructor", "head_of_department"):
+    if iid and role in ("instructor", "head_of_department", "supervisor"):
         try:
             iid_i = int(iid)
         except (TypeError, ValueError):
@@ -76,27 +79,100 @@ def _user_department_id(conn) -> int | None:
     return None
 
 
+def _session_active_mode(role: str) -> str:
+    am = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower()
+    if role == "head_of_department":
+        return am if am in ("head", "instructor", "supervisor") else "head"
+    if role == "instructor":
+        return am if am in ("instructor", "supervisor") else "instructor"
+    return am
+
+
+def _active_mode_label_ar(role: str, active_mode: str, supervisor_effective: bool) -> str:
+    if supervisor_effective:
+        return "المشرف الأكاديمي"
+    if role == "head_of_department" and active_mode in ("", "head", "hod", "department_head"):
+        return "رئيس القسم (استبيانات الأستاذ)"
+    if role == "head_of_department" and active_mode == "instructor":
+        return "رئيس القسم — وضع الأستاذ"
+    return RESPONDENT_ROLE_LABELS.get(
+        survey_respondent_role(role, active_mode), role
+    )
+
+
+def _supervisor_report_status(conn, instructor_id, semester: str) -> dict:
+    if not instructor_id:
+        return {"submitted": False, "submitted_at": None}
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT submitted_at FROM supervisor_quality_reports
+        WHERE supervisor_instructor_id = ? AND semester = ?
+        LIMIT 1
+        """,
+        (int(instructor_id), semester),
+    ).fetchone()
+    if not row:
+        return {"submitted": False, "submitted_at": None}
+    return {"submitted": True, "submitted_at": row[0]}
+
+
+def _count_supervisor_templates(conn) -> int:
+    return sum(
+        1
+        for t in list_templates(conn)
+        if (t.get("respondent_role") or "") == "supervisor"
+        and not int(t.get("legacy_course_eval") or 0)
+    )
+
+
 def register_survey_platform_routes(bp) -> None:
     @bp.route("/surveys")
     @login_required
     def surveys_hub():
         role = _normalize_role((session.get("user_role") or "").strip())
+        active_mode = _session_active_mode(role)
+        is_supervisor_db = session.get("is_supervisor")
+        supervisor_effective = is_supervisor_effective_session(role, is_supervisor_db, active_mode)
         with get_connection() as conn:
             sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
             dept_id = _user_department_id(conn)
+            sess = _session_payload()
             pending = list_pending_for_user(
                 conn,
                 user_role=role,
-                session_data=_session_payload(),
+                session_data=sess,
                 semester=sem,
                 department_id=dept_id,
+                active_mode=active_mode,
             )
             course_eval_link = None
             if role == "student":
                 course_eval_link = "/students/evaluations/"
-            eff = survey_respondent_role(role)
+            eff = survey_respondent_role(role, active_mode)
             fill_guide = ROLE_SURVEY_FILL_GUIDE.get(role) or ROLE_SURVEY_FILL_GUIDE.get(eff, "")
-            respondent_label = RESPONDENT_ROLE_LABELS.get(eff, role)
+            respondent_label = _active_mode_label_ar(role, active_mode, supervisor_effective)
+
+            instructor_pending: list = []
+            show_instructor_cross = False
+            instructor_all_done = False
+            if supervisor_effective and session.get("instructor_id"):
+                instructor_pending = list_pending_for_respondent_role(
+                    conn,
+                    respondent_role="instructor",
+                    session_data=sess,
+                    semester=sem,
+                    department_id=dept_id,
+                )
+                show_instructor_cross = True
+                instructor_all_done = len(instructor_pending) == 0
+
+            supervisor_report = _supervisor_report_status(
+                conn, session.get("instructor_id"), sem
+            )
+            supervisor_template_count = _count_supervisor_templates(conn) if supervisor_effective else 0
+            dept_missing = supervisor_effective and dept_id is None and supervisor_template_count > 0
+
         return render_template(
             "survey_hub.html",
             pending=pending,
@@ -107,18 +183,28 @@ def register_survey_platform_routes(bp) -> None:
             fill_guide=fill_guide,
             course_eval_link=course_eval_link,
             show_results_link=role in ("admin", "admin_main", "head_of_department"),
+            supervisor_effective=supervisor_effective,
+            active_mode=active_mode,
+            show_instructor_cross=show_instructor_cross,
+            instructor_pending=instructor_pending,
+            instructor_all_done=instructor_all_done,
+            supervisor_report=supervisor_report,
+            supervisor_template_count=supervisor_template_count,
+            dept_missing=dept_missing,
+            department_id=dept_id,
         )
 
     @bp.route("/surveys/fill/<template_code>", methods=["GET"])
     @login_required
     def survey_fill_page(template_code: str):
         role = _normalize_role((session.get("user_role") or "").strip())
+        active_mode = _session_active_mode(role)
         with get_connection() as conn:
             template = get_template_by_code(conn, template_code)
             if not template:
                 return jsonify({"status": "error", "message": "الاستبيان غير موجود"}), 404
             allowed = (template.get("respondent_role") or "").strip()
-            eff = survey_respondent_role(role)
+            eff = survey_respondent_role(role, active_mode)
             if eff != allowed and not (role in ("admin", "admin_main") and request.args.get("preview")):
                 return jsonify({"status": "error", "message": "غير مصرح بهذا الاستبيان"}), 403
             sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
@@ -142,6 +228,7 @@ def register_survey_platform_routes(bp) -> None:
     @login_required
     def survey_submit():
         role = _normalize_role((session.get("user_role") or "").strip())
+        active_mode = _session_active_mode(role)
         data = request.get_json(force=True) if request.is_json else request.form
         code = (data.get("template_code") or "").strip()
         sem = (data.get("semester") or "").strip()
@@ -157,7 +244,7 @@ def register_survey_platform_routes(bp) -> None:
             template = get_template_by_code(conn, code)
             if not template:
                 return jsonify({"status": "error", "message": "الاستبيان غير موجود"}), 404
-            eff = survey_respondent_role(role)
+            eff = survey_respondent_role(role, active_mode)
             if eff != (template.get("respondent_role") or "").strip():
                 return jsonify({"status": "error", "message": "غير مصرح"}), 403
             dept_id = _user_department_id(conn)
@@ -253,6 +340,7 @@ def register_survey_platform_routes(bp) -> None:
     @login_required
     def api_surveys_pending():
         role = _normalize_role((session.get("user_role") or "").strip())
+        active_mode = _session_active_mode(role)
         with get_connection() as conn:
             sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
             dept_id = _user_department_id(conn)
@@ -262,6 +350,7 @@ def register_survey_platform_routes(bp) -> None:
                 session_data=_session_payload(),
                 semester=sem,
                 department_id=dept_id,
+                active_mode=active_mode,
             )
         return jsonify({"status": "ok", "semester": sem, "pending": pending})
 
