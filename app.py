@@ -112,15 +112,25 @@ print("ACTIVE DATABASE:", ("PostgreSQL — " + tail) if is_postgresql() else tai
 ensure_tables()
 try:
     from backend.services.utilities import get_connection
-    from backend.services.multi_surveys import ensure_survey_templates_seeded
+    from backend.services.multi_surveys import ensure_survey_platform_tables
 
     with get_connection() as _conn:
-        ensure_survey_templates_seeded(_conn)
+        ensure_survey_platform_tables(_conn)
         from backend.services.evaluation_survey import ensure_survey_questions_seeded
 
         ensure_survey_questions_seeded(_conn)
+        from backend.core.college_identity_schema import ensure_college_identity_schema
+
+        ensure_college_identity_schema(_conn)
 except Exception as _survey_seed_exc:
     logging.getLogger(__name__).warning("Survey platform seed skipped: %s", _survey_seed_exc)
+
+try:
+    from backend.core.quality_glossary import write_static_glossary_json
+
+    write_static_glossary_json()
+except Exception as _glossary_exc:
+    logging.getLogger(__name__).warning("Quality glossary JSON sync skipped: %s", _glossary_exc)
 
 # إغلاق connection pool عند إيقاف التطبيق
 atexit.register(close_pool)
@@ -229,6 +239,24 @@ def _is_instructor_or_supervisor_role() -> bool:
     if role == "instructor":
         return True
     return False
+
+
+def _instructor_portal_ui_allowed() -> bool:
+    """بوابة الأستاذ (مقرراتي، مسودات، جدولي…) — أستاذ أو رئيس قسم في وضع الأستاذ."""
+    role = (session.get("user_role") or "").strip()
+    try:
+        db_sup = int(session.get("is_supervisor") or 0) == 1
+    except (TypeError, ValueError):
+        db_sup = False
+    if role == "head_of_department":
+        active_m = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
+    else:
+        active_m = (session.get(SESSION_ACTIVE_MODE) or "instructor").strip().lower()
+    has_instructor = bool(session.get("instructor_id"))
+    return has_instructor and (
+        (role == "instructor" and (not db_sup or active_m == "instructor"))
+        or (role == "head_of_department" and active_m == "instructor")
+    )
 
 
 def _resolve_actor_department_id(conn) -> int | None:
@@ -489,6 +517,34 @@ def health_ready():
 def my_courses_page():
     """مقرراتي: الشعب المكلَّف بها في الجدول (حسب ربط الحساب بجدول instructors)."""
     return render_template("my_courses.html", active_page="my_courses")
+
+
+@app.route("/my_schedule")
+@login_required
+def my_schedule_page():
+    if not _instructor_portal_ui_allowed():
+        return redirect(url_for("transcript_page"))
+    return render_template("my_schedule.html", active_page="my_schedule")
+
+
+@app.route("/my_exams")
+@login_required
+def my_exams_page():
+    if not _instructor_portal_ui_allowed():
+        return redirect(url_for("transcript_page"))
+    return render_template("my_exams.html", active_page="my_exams")
+
+
+@app.route("/my_attendance")
+@login_required
+def my_attendance_page():
+    if not _instructor_portal_ui_allowed():
+        return redirect(url_for("transcript_page"))
+    return render_template(
+        "attendance_export.html",
+        active_page="my_attendance",
+        portal_mode="instructor",
+    )
 
 
 @app.route("/dashboard")

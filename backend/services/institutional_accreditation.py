@@ -10,15 +10,31 @@ import os
 from flask import jsonify, render_template, request, send_file, session
 
 from backend.core.accreditation_catalog import (
+    ACCREDITATION_MAP_SCOPES,
     CATALOG_VERSION,
+    CATALOG_VERSION_LABELS,
     COMPLIANCE_STATUS_LABELS,
     DOMAIN_LABELS,
+    QAA_AXIS_OPTIONS,
     SOURCE_TYPE_LABELS,
+    catalog_scope_label,
     ensure_accreditation_catalog,
     list_active_catalog_versions,
+    map_scope_meta,
     resolve_catalog_version,
+    resolve_map_catalog_scope,
 )
-from backend.core.auth import role_required
+from backend.core.accreditation_evidence_types import (
+    EVIDENCE_CATEGORY_LABELS,
+    LINK_MODE_LABELS,
+)
+from backend.core.auth import (
+    accreditation_catalog_editor_required,
+    accreditation_evidence_binder_required,
+    can_bind_accreditation_evidence,
+    can_edit_accreditation_catalog,
+    role_required,
+)
 from backend.services.quality_metrics import term_label_from_conn
 from backend.services.utilities import get_connection
 
@@ -74,6 +90,8 @@ def _ensure_accreditation_tables(conn) -> None:
                 "accreditation_evidence",
                 "accreditation_manual_inputs",
                 "accreditation_improvement_plans",
+                "accreditation_evidence_types",
+                "accreditation_indicator_evidence_rules",
             ):
                 ddl = TABLES_SCHEMA.get(key)
                 if ddl:
@@ -99,6 +117,18 @@ def build_compliance_map(
     from backend.services.accreditation_evidence import evidence_counts_by_indicator
 
     ev_counts = evidence_counts_by_indicator(conn, sem, department_id)
+    from backend.services.accreditation_evidence_matrix import (
+        build_indicator_evidence_coverage_map,
+    )
+
+    coverage_map = build_indicator_evidence_coverage_map(
+        conn,
+        semester=sem,
+        department_id=department_id,
+        catalog_version=cat_ver,
+        assessments=assessments,
+        ev_counts=ev_counts,
+    )
 
     standards = _rows(
         cur,
@@ -113,7 +143,8 @@ def build_compliance_map(
     indicators = _rows(
         cur,
         """
-        SELECT i.id, i.standard_id, i.code, i.title_ar, i.source_type, i.target_hint_ar
+        SELECT i.id, i.standard_id, i.code, i.title_ar, i.source_type, i.target_hint_ar,
+               i.sort_order
         FROM accreditation_indicators i
         INNER JOIN accreditation_standards s ON s.id = i.standard_id
         WHERE s.catalog_version = ? AND COALESCE(i.is_active, 1) = 1 AND COALESCE(s.is_active, 1) = 1
@@ -139,6 +170,7 @@ def build_compliance_map(
                 "target_hint_ar": ind.get("target_hint_ar") or "",
                 "is_auto_computable": (ind.get("source_type") or "") in ("auto", "hybrid"),
                 "evidence_count": ev_counts.get(iid, 0),
+                "evidence_coverage": coverage_map.get(iid),
                 "assessment": (
                     {
                         "id": asm.get("id"),
@@ -176,8 +208,18 @@ def build_compliance_map(
         dc = str(st.get("domain_code") or "other")
         by_domain.setdefault(dc, [])
         inds = by_standard.get(int(st["id"]), [])
+        numbered_inds: list[dict[str, Any]] = []
+        for seq, ind in enumerate(inds, start=1):
+            sort_ord = ind.get("sort_order")
+            try:
+                seq_n = int(sort_ord) if sort_ord else seq
+            except (TypeError, ValueError):
+                seq_n = seq
+            if seq_n <= 0:
+                seq_n = seq
+            numbered_inds.append({**ind, "seq": seq_n})
         counts = {k: 0 for k in ("met", "partial", "in_progress", "gap", "not_started")}
-        for ind in inds:
+        for ind in numbered_inds:
             summary["indicators_total"] += 1
             st_key = ind["assessment"]["compliance_status"]
             if st_key in counts:
@@ -191,7 +233,8 @@ def build_compliance_map(
                 "title_ar": st.get("title_ar"),
                 "description": st.get("description") or "",
                 "weight_percent": st.get("weight_percent"),
-                "indicators": inds,
+                "indicators": numbered_inds,
+                "indicator_count": len(numbered_inds),
                 "counts": counts,
             }
         )
@@ -217,7 +260,8 @@ def build_compliance_map(
         "catalog_version": cat_ver,
         "semester": sem,
         "department_id": department_id,
-        "scope_label_ar": "مؤسسي (كلية)" if department_id is None else f"قسم #{department_id}",
+        "scope_label_ar": catalog_scope_label(cat_ver, department_id),
+        "catalog_version_label_ar": CATALOG_VERSION_LABELS.get(cat_ver, cat_ver),
         "domains": domains_out,
         "summary": {**summary, "documented_progress_percent": progress_pct},
     }
@@ -227,6 +271,19 @@ def _dept_scope(conn):
     from backend.services.academic_quality import _resolve_department_scope
 
     return _resolve_department_scope(conn)
+
+
+def _resolve_binding_department(conn, payload: dict) -> int | None:
+    """نطاق القسم لربط الأدلة — يُلزم رئيس القسم بقسمه."""
+    scoped = _dept_scope(conn)
+    if scoped is not None:
+        return int(scoped)
+    if can_edit_accreditation_catalog():
+        raw = payload.get("department_id")
+        if raw in (None, "", "null"):
+            return None
+        return int(raw)
+    return None
 
 
 def register_institutional_accreditation_routes(bp) -> None:
@@ -249,6 +306,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         )
 
         semester = (request.args.get("semester") or "").strip()
+        scope_param = (request.args.get("scope") or "").strip() or None
         catalog_param = (request.args.get("catalog_version") or "").strip() or None
         checklist: list = []
         manual_bundle: dict = {"sections": MANUAL_SECTIONS, "values": {}}
@@ -272,17 +330,27 @@ def register_institutional_accreditation_routes(bp) -> None:
             },
         }
 
+        active_scope_key = "inst"
+        page_title_ar = "خريطة امتثال — اعتماد مؤسسي"
         try:
             with get_connection() as conn:
                 dept_id = _dept_scope(conn)
                 if not semester:
                     semester = term_label_from_conn(conn)
                 catalog_versions = list_active_catalog_versions(conn)
+                resolved_catalog, active_scope_key = resolve_map_catalog_scope(
+                    conn,
+                    scope=scope_param,
+                    catalog_version=catalog_param,
+                )
                 data = build_compliance_map(
                     conn,
                     semester=semester,
                     department_id=dept_id,
-                    catalog_version=catalog_param,
+                    catalog_version=resolved_catalog,
+                )
+                page_title_ar = map_scope_meta(active_scope_key).get(
+                    "page_title_ar", page_title_ar
                 )
                 checklist = build_checklist_status(conn, semester, dept_id)
                 manual_bundle = get_manual_inputs(conn, semester, dept_id)
@@ -295,6 +363,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         from backend.core.auth import _normalize_role
 
         user_role = _normalize_role((session.get("user_role") or "").strip())
+        show_evidence_matrix_tab = can_edit_accreditation_catalog(user_role)
         return render_template(
             "accreditation_compliance_map.html",
             map_data=data,
@@ -308,8 +377,18 @@ def register_institutional_accreditation_routes(bp) -> None:
             qaa_url=QAA_HIGHER_ED_URL,
             coordinator_roles=ACCREDITATION_COORDINATOR_ROLES,
             catalog_versions=catalog_versions,
+            catalog_version_labels=CATALOG_VERSION_LABELS,
+            qaa_axis_options=QAA_AXIS_OPTIONS,
             user_role=user_role,
             is_admin_main=user_role in ("admin", "admin_main"),
+            can_edit_accreditation_catalog=can_edit_accreditation_catalog(user_role),
+            can_bind_accreditation_sources=can_bind_accreditation_evidence(user_role),
+            show_evidence_matrix_tab=show_evidence_matrix_tab,
+            link_mode_labels=LINK_MODE_LABELS,
+            evidence_category_labels=EVIDENCE_CATEGORY_LABELS,
+            map_scopes=ACCREDITATION_MAP_SCOPES,
+            active_scope_key=active_scope_key,
+            page_title_ar=page_title_ar,
             page_error=None if data.get("status") == "ok" else (data.get("message") or "خطأ في التحميل"),
         )
 
@@ -317,16 +396,22 @@ def register_institutional_accreditation_routes(bp) -> None:
     @role_required("admin", "admin_main", "head_of_department")
     def accreditation_compliance_map_api():
         semester = (request.args.get("semester") or "").strip() or None
+        scope_param = (request.args.get("scope") or "").strip() or None
         catalog_param = (request.args.get("catalog_version") or "").strip() or None
         ensure = (request.args.get("ensure") or "1").strip() != "0"
         with get_connection() as conn:
             dept_id = _dept_scope(conn)
+            resolved_catalog, _scope_key = resolve_map_catalog_scope(
+                conn,
+                scope=scope_param,
+                catalog_version=catalog_param,
+            )
             data = build_compliance_map(
                 conn,
                 semester=semester,
                 department_id=dept_id,
                 ensure_seed=ensure,
-                catalog_version=catalog_param,
+                catalog_version=resolved_catalog,
             )
         return jsonify(data), 200
 
@@ -336,7 +421,14 @@ def register_institutional_accreditation_routes(bp) -> None:
         with get_connection() as conn:
             versions = list_active_catalog_versions(conn)
             active = resolve_catalog_version(conn)
-        return jsonify({"status": "ok", "versions": versions, "active": active}), 200
+        return jsonify(
+            {
+                "status": "ok",
+                "versions": versions,
+                "labels": {v: CATALOG_VERSION_LABELS.get(v, v) for v in versions},
+                "active": active,
+            }
+        ), 200
 
     @bp.route("/api/accreditation/meta", methods=["GET"])
     @role_required("admin", "admin_main", "head_of_department")
@@ -473,6 +565,192 @@ def register_institutional_accreditation_routes(bp) -> None:
                     (sem, int(dept_id), int(indicator_id), score, status, notes, now, actor),
                 )
             conn.commit()
+        return jsonify({"status": "ok"}), 200
+
+    @bp.route("/api/accreditation/evidence/types", methods=["GET"])
+    @role_required("admin", "admin_main", "head_of_department")
+    def accreditation_evidence_types_api():
+        from backend.services.accreditation_evidence_matrix import list_evidence_types
+
+        with get_connection() as conn:
+            items = list_evidence_types(conn)
+        return jsonify({"status": "ok", "items": items}), 200
+
+    @bp.route("/api/accreditation/evidence/matrix", methods=["GET"])
+    @role_required("admin", "admin_main", "head_of_department")
+    def accreditation_evidence_matrix_api():
+        from backend.services.accreditation_evidence_matrix import build_evidence_matrix
+
+        catalog_param = (request.args.get("catalog_version") or "").strip() or None
+        with get_connection() as conn:
+            dept_id = _dept_scope(conn)
+            sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
+            data = build_evidence_matrix(
+                conn,
+                semester=sem,
+                department_id=dept_id,
+                catalog_version=catalog_param,
+            )
+        return jsonify(data), 200
+
+    @bp.route("/api/accreditation/evidence/rules", methods=["GET"])
+    @role_required("admin", "admin_main", "head_of_department")
+    def accreditation_evidence_rules_list():
+        from backend.services.accreditation_evidence_matrix import list_evidence_rules
+
+        catalog_param = (request.args.get("catalog_version") or "").strip() or None
+        iid = request.args.get("indicator_id")
+        with get_connection() as conn:
+            items = list_evidence_rules(
+                conn,
+                catalog_version=catalog_param,
+                indicator_id=int(iid) if iid else None,
+            )
+        return jsonify({"status": "ok", "items": items}), 200
+
+    @bp.route("/api/accreditation/evidence/permissions", methods=["GET"])
+    @role_required("admin", "admin_main", "head_of_department")
+    def accreditation_evidence_permissions_api():
+        from backend.core.auth import can_bind_accreditation_evidence
+
+        return jsonify({
+            "status": "ok",
+            "can_edit_catalog": can_edit_accreditation_catalog(),
+            "can_bind_sources": can_bind_accreditation_evidence(),
+        }), 200
+
+    @bp.route("/api/accreditation/evidence/bindable-sources", methods=["GET"])
+    @accreditation_evidence_binder_required
+    def accreditation_evidence_bindable_sources_api():
+        from backend.services.accreditation_evidence_bindings import build_bindable_sources
+
+        iid = request.args.get("indicator_id")
+        if not iid:
+            return jsonify({"status": "error", "message": "indicator_id مطلوب"}), 400
+        catalog_param = (request.args.get("catalog_version") or "").strip() or None
+        etid = request.args.get("evidence_type_id")
+        with get_connection() as conn:
+            dept_id = _resolve_binding_department(conn, dict(request.args))
+            sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
+            data = build_bindable_sources(
+                conn,
+                indicator_id=int(iid),
+                semester=sem,
+                department_id=dept_id,
+                catalog_version=catalog_param,
+                evidence_type_id=int(etid) if etid else None,
+            )
+        return jsonify(data), 200
+
+    @bp.route("/api/accreditation/evidence/bindings", methods=["GET"])
+    @accreditation_evidence_binder_required
+    def accreditation_evidence_bindings_list_api():
+        from backend.services.accreditation_evidence_bindings import list_bindings
+
+        with get_connection() as conn:
+            dept_id = _resolve_binding_department(conn, dict(request.args))
+            sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
+            iid = request.args.get("indicator_id")
+            etid = request.args.get("evidence_type_id")
+            items = list_bindings(
+                conn,
+                semester=sem,
+                department_id=dept_id,
+                indicator_id=int(iid) if iid else None,
+                evidence_type_id=int(etid) if etid else None,
+            )
+        return jsonify({"status": "ok", "semester": sem, "items": items}), 200
+
+    @bp.route("/api/accreditation/evidence/bindings", methods=["POST"])
+    @accreditation_evidence_binder_required
+    def accreditation_evidence_bindings_save_api():
+        from backend.services.accreditation_evidence_bindings import save_binding
+
+        data = request.get_json(force=True) or {}
+        try:
+            with get_connection() as conn:
+                data["department_id"] = _resolve_binding_department(conn, data)
+                result = save_binding(
+                    conn, data, actor=(session.get("user") or "").strip()
+                )
+        except ValueError as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 400
+        return jsonify(result), 200
+
+    @bp.route("/api/accreditation/evidence/bindings/<int:binding_id>", methods=["DELETE"])
+    @accreditation_evidence_binder_required
+    def accreditation_evidence_bindings_delete_api(binding_id: int):
+        from backend.services.accreditation_evidence_bindings import deactivate_binding
+
+        with get_connection() as conn:
+            ok = deactivate_binding(conn, binding_id)
+        if not ok:
+            return jsonify({"status": "error", "message": "لم يُعثر على الربط"}), 404
+        return jsonify({"status": "ok"}), 200
+
+    @bp.route("/api/accreditation/evidence/indicators", methods=["GET"])
+    @accreditation_catalog_editor_required
+    def accreditation_evidence_indicators_api():
+        from backend.services.accreditation_evidence_matrix import list_catalog_indicators
+
+        catalog_param = (request.args.get("catalog_version") or "").strip() or None
+        with get_connection() as conn:
+            items = list_catalog_indicators(conn, catalog_param)
+        return jsonify({"status": "ok", "items": items}), 200
+
+    @bp.route("/api/accreditation/evidence/types", methods=["POST"])
+    @accreditation_catalog_editor_required
+    def accreditation_evidence_types_save():
+        from backend.services.accreditation_evidence_matrix import save_evidence_type
+
+        data = request.get_json(force=True) or {}
+        try:
+            with get_connection() as conn:
+                result = save_evidence_type(
+                    conn, data, actor=(session.get("user") or "").strip()
+                )
+        except ValueError as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 400
+        return jsonify(result), 200
+
+    @bp.route("/api/accreditation/evidence/types/<int:type_id>", methods=["DELETE"])
+    @accreditation_catalog_editor_required
+    def accreditation_evidence_types_delete(type_id: int):
+        from backend.services.accreditation_evidence_matrix import deactivate_evidence_type
+
+        try:
+            with get_connection() as conn:
+                ok = deactivate_evidence_type(conn, type_id)
+        except ValueError as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 400
+        if not ok:
+            return jsonify({"status": "error", "message": "لم يُعثر على نوع الدليل"}), 404
+        return jsonify({"status": "ok"}), 200
+
+    @bp.route("/api/accreditation/evidence/rules", methods=["POST"])
+    @accreditation_catalog_editor_required
+    def accreditation_evidence_rules_save():
+        from backend.services.accreditation_evidence_matrix import save_evidence_rule
+
+        data = request.get_json(force=True) or {}
+        try:
+            with get_connection() as conn:
+                result = save_evidence_rule(
+                    conn, data, actor=(session.get("user") or "").strip()
+                )
+        except ValueError as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 400
+        return jsonify(result), 200
+
+    @bp.route("/api/accreditation/evidence/rules/<int:rule_id>", methods=["DELETE"])
+    @accreditation_catalog_editor_required
+    def accreditation_evidence_rules_delete(rule_id: int):
+        from backend.services.accreditation_evidence_matrix import deactivate_evidence_rule
+
+        with get_connection() as conn:
+            ok = deactivate_evidence_rule(conn, rule_id)
+        if not ok:
+            return jsonify({"status": "error", "message": "لم يُعثر على القاعدة"}), 404
         return jsonify({"status": "ok"}), 200
 
     @bp.route("/api/accreditation/evidence/checklist", methods=["GET"])

@@ -34,10 +34,10 @@
         <li class="nav-item"><button class="nav-link active" data-tab="intro">مقدمة</button></li>
         <li class="nav-item"><button class="nav-link" data-tab="identity">رسالة ورؤية</button></li>
         <li class="nav-item"><button class="nav-link" data-tab="values">القيم</button></li>
-        <li class="nav-item"><button class="nav-link" data-tab="goals">أهداف IG</button></li>
-        <li class="nav-item"><button class="nav-link" data-tab="glo">GLO</button></li>
-        <li class="nav-item"><button class="nav-link" data-tab="matrix">مصفوفة IG↔GLO</button></li>
-        <li class="nav-item"><button class="nav-link" data-tab="kpi">مؤشرات الأداء</button></li>
+        <li class="nav-item"><button class="nav-link" data-tab="goals"><span data-term="ig">الأهداف الاستراتيجية للكلية</span></button></li>
+        <li class="nav-item"><button class="nav-link" data-tab="glo"><span data-term="glo">مخرجات تعلم الخريج</span></button></li>
+        <li class="nav-item"><button class="nav-link" data-tab="matrix">مصفوفة الأهداف والمخرجات</button></li>
+        <li class="nav-item"><button class="nav-link" data-tab="kpi"><span data-term="kpi">مؤشرات قياس الأداء</span></button></li>
       </ul>
       <div id="paneIntro" class="tab-pane-c"></div>
       <div id="paneIdentity" class="tab-pane-c d-none"></div>
@@ -53,11 +53,13 @@
   <div class="modal fade" id="identityModal" tabindex="-1">
     <div class="modal-dialog modal-lg">
       <div class="modal-content">
-        <div class="modal-header"><h5 class="modal-title">تعديل مقدمة / رسالة / رؤية</h5>
+        <div class="modal-header"><h5 class="modal-title">تعديل مقدمة / رسالة / رؤية / الخطة</h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <div class="modal-body">
           <label class="form-label small">مقدمة عامة</label>
           <textarea class="form-control mb-2" id="editIntro" rows="3"></textarea>
+          <label class="form-label small">ملخص الخطة الاستراتيجية</label>
+          <textarea class="form-control mb-2" id="editStrategicPlan" rows="4" placeholder="أولويات الخطة للسنوات القادمة — يُعرض في استشارة القطاع"></textarea>
           <label class="form-label small">الرسالة</label>
           <textarea class="form-control mb-2" id="editMission" rows="3"></textarea>
           <label class="form-label small">الرؤية</label>
@@ -290,7 +292,8 @@
       document.getElementById('paneIdentity').innerHTML =
         editBar('<button type="button" class="btn btn-sm btn-primary btn-edit-identity">تعديل</button>') +
         '<div class="card mb-3"><div class="card-header fw-semibold">الرسالة</div><div class="card-body">' + esc(id.mission_ar) + '</div></div>' +
-        '<div class="card"><div class="card-header fw-semibold">الرؤية</div><div class="card-body">' + esc(id.vision_ar) + '</div></div>';
+        '<div class="card mb-3"><div class="card-header fw-semibold">الرؤية</div><div class="card-body">' + esc(id.vision_ar) + '</div></div>' +
+        '<div class="card"><div class="card-header fw-semibold">ملخص الخطة الاستراتيجية</div><div class="card-body">' + esc(id.strategic_plan_summary_ar || '—') + '</div></div>';
       renderValues();
       renderGoals();
       renderGlos();
@@ -469,6 +472,7 @@
     function openIdentityModal() {
       const id = profileData.identity || {};
       document.getElementById('editIntro').value = id.intro_ar || '';
+      document.getElementById('editStrategicPlan').value = id.strategic_plan_summary_ar || '';
       document.getElementById('editMission').value = id.mission_ar || '';
       document.getElementById('editVision').value = id.vision_ar || '';
       document.getElementById('editEffective').value = id.effective_from || '';
@@ -569,6 +573,7 @@
         method: 'PUT', credentials: 'include', headers: hdr(),
         body: JSON.stringify({
           intro_ar: document.getElementById('editIntro').value,
+          strategic_plan_summary_ar: document.getElementById('editStrategicPlan').value,
           mission_ar: document.getElementById('editMission').value,
           vision_ar: document.getElementById('editVision').value,
           effective_from: document.getElementById('editEffective').value,

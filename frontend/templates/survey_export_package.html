@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }}</title>
+  {% include "survey_export_pdf_styles.html" %}
+</head>
+<body>
+  <h1>{{ title }}</h1>
+  <p class="meta">
+    {% if is_external_report %}
+    الدورة: <strong>{{ cycle_label or semester }}</strong> —
+    النطاق: <strong>{{ department_label }}</strong> —
+    {% else %}
+    الفصل الدراسي: <strong>{{ semester }}</strong> —
+    النطاق: <strong>{{ department_label }}</strong> —
+    {% endif %}
+    تاريخ التصدير: <strong>{{ generated_at }}</strong>
+  </p>
+
+  {% if narrative_paragraphs %}
+  <div class="narrative">
+    {% for p in narrative_paragraphs %}
+    <p>{{ p }}</p>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <h2>ملخص تنفيذي</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>الاستبيان</th>
+        <th>الفئة</th>
+        <th>إجابات</th>
+        <th>التجميع</th>
+        <th>النتيجة %</th>
+        <th>الامتثال</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in executive_summary %}
+      <tr>
+        <td>{{ row['الاستبيان'] }}</td>
+        <td>{{ row['الفئة'] }}</td>
+        <td>{{ row['عدد_الإجابات'] }} / {{ row['الحد_الأدنى'] }}</td>
+        <td>{{ row['حالة_التجميع'] }}</td>
+        <td>{{ row['النتيجة_%'] if row['النتيجة_%'] is not none else '—' }}</td>
+        <td>{{ row['حالة_الامتثال'] or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if top_surveys or bottom_surveys %}
+  <h2>أعلى وأضعف النتائج</h2>
+  <table>
+    <thead><tr><th>التصنيف</th><th>الاستبيان</th><th>النتيجة %</th></tr></thead>
+    <tbody>
+      {% for r in top_surveys %}
+      <tr><td>أعلى</td><td>{{ r.title_ar }}</td><td>{{ r.overall_score_percent }}</td></tr>
+      {% endfor %}
+      {% for r in bottom_surveys %}
+      <tr><td>أضعف</td><td>{{ r.title_ar }}</td><td>{{ r.overall_score_percent }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <h2>ربط معايير الاعتماد</h2>
+  {% if accreditation_rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>الاستبيان</th>
+        <th>المعيار</th>
+        <th>المؤشر</th>
+        <th>عنوان المؤشر</th>
+        <th>نوع الربط</th>
+        <th>نتيجة %</th>
+        <th>الامتثال</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in accreditation_rows %}
+      <tr>
+        <td>{{ row['الاستبيان'] }}</td>
+        <td>{{ row['المعيار'] }}</td>
+        <td>{{ row['المؤشر'] }}</td>
+        <td>{{ row['عنوان_المؤشر'] }}</td>
+        <td>{{ row['نوع_الربط'] }}</td>
+        <td>{{ row['نتيجة_الاستبيان_%'] if row['نتيجة_الاستبيان_%'] is not none else '—' }}</td>
+        <td>{{ row['حالة_الامتثال'] or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>لا توجد بيانات ربط.</p>
+  {% endif %}
+
+  <h2>تحليل مقارن</h2>
+  {% if comparative_rows %}
+  <table>
+    <thead><tr><th>نوع التحليل</th><th>الفئة</th><th>القيمة</th><th>التفاصيل</th></tr></thead>
+    <tbody>
+      {% for row in comparative_rows %}
+      <tr>
+        <td>{{ row['نوع_التحليل'] }}</td>
+        <td>{{ row['الفئة'] }}</td>
+        <td>{{ row['القيمة'] if row['القيمة'] is not none else '—' }}</td>
+        <td>{{ row['التفاصيل'] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <div class="page-break"></div>
+  <h2>تفاصيل الاستبيانات</h2>
+  {% for report in reports %}
+    {% include "survey_export_report_section.html" %}
+  {% endfor %}
+
+  {% if course_eval %}
+    {% set report = course_eval %}
+    {% include "survey_export_report_section.html" %}
+  {% endif %}
+
+  {% if course_eval_sections %}
+  <div class="page-break"></div>
+  <h2>ملخص تقييم المقررات — الشعب</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>المقرر</th>
+        <th>الأستاذ</th>
+        <th>الشعبة</th>
+        <th>إجابات</th>
+        <th>مسجّلون</th>
+        <th>التجميع</th>
+        <th>النتيجة %</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in course_eval_sections %}
+      <tr>
+        <td>{{ s.course_name }}</td>
+        <td>{{ s.instructor_name }}</td>
+        <td>{{ s.section_id }}</td>
+        <td>{{ s.response_count }} / {{ s.min_aggregate }}</td>
+        <td>{{ s.enrolled_count or '—' }}</td>
+        <td>{% if s.aggregated %}مكتمل{% else %}ناقص{% endif %}</td>
+        <td>{{ s.overall_score_percent if s.overall_score_percent is not none else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <h2>بيانات وصفية ومنهجية</h2>
+  <table>
+    <tbody>
+      {% for row in metadata_rows %}
+      <tr><th style="width:35%">{{ row['البند'] }}</th><td>{{ row['القيمة'] }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <p class="footer-note">أُنشئ من نظام ScheduleOptimizer — ضمان الجودة والاعتماد. لا تُعرض إجابات فردية في هذا التقرير.</p>
+  {% if not for_pdf %}
+  <button class="btn btn-primary no-print" onclick="window.print()" style="margin-top:12px;padding:8px 16px;">طباعة</button>
+  {% endif %}
+</body>
+</html>

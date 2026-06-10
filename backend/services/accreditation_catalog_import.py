@@ -76,6 +76,208 @@ def template_rows() -> list[dict[str, Any]]:
     ]
 
 
+def import_catalog_rows(
+    conn,
+    rows_parsed: list[dict[str, Any]],
+    *,
+    actor: str = "",
+) -> dict[str, Any]:
+    """إدراج/تحديث معايير ومؤشرات من صفوف مُهيكلة."""
+    if not rows_parsed:
+        raise ValueError("لا توجد صفوف للاستيراد")
+
+    versions: set[str] = set()
+    for item in rows_parsed:
+        ver = str(item.get("catalog_version") or "").strip()
+        domain = str(item.get("domain_code") or "").strip()
+        if not ver:
+            continue
+        if domain not in DOMAIN_LABELS:
+            raise ValueError(f"محور غير معروف: {domain}")
+        versions.add(ver)
+
+    if len(versions) != 1:
+        raise ValueError("يجب أن يكون catalog_version واحداً لكل الدفعة")
+
+    catalog_version = next(iter(versions))
+    cur = conn.cursor()
+    pg = is_postgresql()
+
+    standards = 0
+    indicators = 0
+    std_sort_cache: dict[str, int] = {}
+
+    for item in rows_parsed:
+        ver = str(item.get("catalog_version") or "").strip()
+        if not ver:
+            continue
+        std_code = str(item.get("standard_code") or "").strip()
+        ind_code = str(item.get("indicator_code") or "").strip()
+        if not std_code or not ind_code:
+            continue
+
+        sort_std = int(item.get("sort_order_std") or 0)
+        if not sort_std:
+            sort_std = std_sort_cache.get(std_code, len(std_sort_cache) + 1)
+        std_sort_cache.setdefault(std_code, sort_std)
+
+        src = str(item.get("source_type") or "manual").strip().lower() or "manual"
+        if src not in SOURCE_TYPE_LABELS:
+            src = "manual"
+
+        weight = 0.0
+        try:
+            weight = float(item.get("weight_percent") or 0)
+        except (TypeError, ValueError):
+            weight = 0.0
+
+        ind_sort = int(item.get("sort_order_ind") or 0)
+
+        if pg:
+            cur.execute(
+                """
+                INSERT INTO accreditation_standards
+                (catalog_version, domain_code, code, title_ar, description, weight_percent, sort_order, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                ON CONFLICT (catalog_version, code) DO UPDATE SET
+                    title_ar = EXCLUDED.title_ar,
+                    description = EXCLUDED.description,
+                    weight_percent = EXCLUDED.weight_percent,
+                    domain_code = EXCLUDED.domain_code,
+                    sort_order = EXCLUDED.sort_order,
+                    is_active = 1
+                RETURNING id
+                """,
+                (
+                    ver,
+                    item["domain_code"],
+                    std_code,
+                    item.get("standard_title_ar") or "",
+                    item.get("standard_description") or "",
+                    weight,
+                    sort_std,
+                ),
+            )
+            row = cur.fetchone()
+            std_id = int(row[0]) if row else None
+            if std_id is None:
+                cur.execute(
+                    "SELECT id FROM accreditation_standards WHERE catalog_version = ? AND code = ?",
+                    (ver, std_code),
+                )
+                r2 = cur.fetchone()
+                std_id = int(r2[0]) if r2 else None
+        else:
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO accreditation_standards
+                (catalog_version, domain_code, code, title_ar, description, weight_percent, sort_order, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                """,
+                (
+                    ver,
+                    item["domain_code"],
+                    std_code,
+                    item.get("standard_title_ar") or "",
+                    item.get("standard_description") or "",
+                    weight,
+                    sort_std,
+                ),
+            )
+            cur.execute(
+                "SELECT id FROM accreditation_standards WHERE catalog_version = ? AND code = ?",
+                (ver, std_code),
+            )
+            r2 = cur.fetchone()
+            std_id = int(r2[0]) if r2 else None
+            if std_id:
+                cur.execute(
+                    """
+                    UPDATE accreditation_standards SET
+                        title_ar = ?, description = ?, weight_percent = ?,
+                        domain_code = ?, sort_order = ?, is_active = 1
+                    WHERE id = ?
+                    """,
+                    (
+                        item.get("standard_title_ar") or "",
+                        item.get("standard_description") or "",
+                        weight,
+                        item["domain_code"],
+                        sort_std,
+                        std_id,
+                    ),
+                )
+        if not std_id:
+            continue
+        standards += 1
+
+        if pg:
+            cur.execute(
+                """
+                INSERT INTO accreditation_indicators
+                (standard_id, code, title_ar, source_type, target_hint_ar, sort_order, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, 1)
+                ON CONFLICT (standard_id, code) DO UPDATE SET
+                    title_ar = EXCLUDED.title_ar,
+                    source_type = EXCLUDED.source_type,
+                    target_hint_ar = EXCLUDED.target_hint_ar,
+                    sort_order = EXCLUDED.sort_order,
+                    is_active = 1
+                """,
+                (
+                    std_id,
+                    ind_code,
+                    item.get("indicator_title_ar") or "",
+                    src,
+                    item.get("target_hint_ar") or "",
+                    ind_sort,
+                ),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO accreditation_indicators
+                (standard_id, code, title_ar, source_type, target_hint_ar, sort_order, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, 1)
+                """,
+                (
+                    std_id,
+                    ind_code,
+                    item.get("indicator_title_ar") or "",
+                    src,
+                    item.get("target_hint_ar") or "",
+                    ind_sort,
+                ),
+            )
+            cur.execute(
+                """
+                UPDATE accreditation_indicators SET
+                    title_ar = ?, source_type = ?, target_hint_ar = ?,
+                    sort_order = ?, is_active = 1
+                WHERE standard_id = ? AND code = ?
+                """,
+                (
+                    item.get("indicator_title_ar") or "",
+                    src,
+                    item.get("target_hint_ar") or "",
+                    ind_sort,
+                    std_id,
+                    ind_code,
+                ),
+            )
+        indicators += 1
+
+    conn.commit()
+    return {
+        "status": "ok",
+        "catalog_version": catalog_version,
+        "standards_upserted": standards,
+        "indicators_upserted": indicators,
+        "rows_processed": len(rows_parsed),
+        "imported_by": actor,
+    }
+
+
 def import_catalog_from_excel(
     conn,
     raw: bytes,
@@ -149,154 +351,12 @@ def import_catalog_from_excel(
         raise ValueError("يجب أن يكون catalog_version واحداً لكل الملف")
 
     catalog_version = next(iter(versions))
-    cur = conn.cursor()
-    pg = is_postgresql()
-
     if deactivate_previous:
+        cur = conn.cursor()
         cur.execute(
             "UPDATE accreditation_standards SET is_active = 0 WHERE catalog_version <> ?",
             (catalog_version,),
         )
+        conn.commit()
 
-    standards = 0
-    indicators = 0
-    sort_std = 0
-
-    for item in rows_parsed:
-        sort_std += 1
-        if pg:
-            cur.execute(
-                """
-                INSERT INTO accreditation_standards
-                (catalog_version, domain_code, code, title_ar, description, weight_percent, sort_order, is_active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-                ON CONFLICT (catalog_version, code) DO UPDATE SET
-                    title_ar = EXCLUDED.title_ar,
-                    description = EXCLUDED.description,
-                    weight_percent = EXCLUDED.weight_percent,
-                    domain_code = EXCLUDED.domain_code,
-                    is_active = 1
-                RETURNING id
-                """,
-                (
-                    item["catalog_version"],
-                    item["domain_code"],
-                    item["standard_code"],
-                    item["standard_title_ar"],
-                    item["standard_description"],
-                    item["weight_percent"],
-                    sort_std,
-                ),
-            )
-            row = cur.fetchone()
-            std_id = int(row[0]) if row else None
-            if std_id is None:
-                cur.execute(
-                    "SELECT id FROM accreditation_standards WHERE catalog_version = ? AND code = ?",
-                    (item["catalog_version"], item["standard_code"]),
-                )
-                r2 = cur.fetchone()
-                std_id = int(r2[0]) if r2 else None
-        else:
-            cur.execute(
-                """
-                INSERT OR IGNORE INTO accreditation_standards
-                (catalog_version, domain_code, code, title_ar, description, weight_percent, sort_order, is_active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-                """,
-                (
-                    item["catalog_version"],
-                    item["domain_code"],
-                    item["standard_code"],
-                    item["standard_title_ar"],
-                    item["standard_description"],
-                    item["weight_percent"],
-                    sort_std,
-                ),
-            )
-            cur.execute(
-                "SELECT id FROM accreditation_standards WHERE catalog_version = ? AND code = ?",
-                (item["catalog_version"], item["standard_code"]),
-            )
-            r2 = cur.fetchone()
-            std_id = int(r2[0]) if r2 else None
-            if std_id:
-                cur.execute(
-                    """
-                    UPDATE accreditation_standards SET
-                        title_ar = ?, description = ?, weight_percent = ?,
-                        domain_code = ?, is_active = 1
-                    WHERE id = ?
-                    """,
-                    (
-                        item["standard_title_ar"],
-                        item["standard_description"],
-                        item["weight_percent"],
-                        item["domain_code"],
-                        std_id,
-                    ),
-                )
-        if not std_id:
-            continue
-        standards += 1
-
-        if pg:
-            cur.execute(
-                """
-                INSERT INTO accreditation_indicators
-                (standard_id, code, title_ar, source_type, target_hint_ar, sort_order, is_active)
-                VALUES (?, ?, ?, ?, ?, 0, 1)
-                ON CONFLICT (standard_id, code) DO UPDATE SET
-                    title_ar = EXCLUDED.title_ar,
-                    source_type = EXCLUDED.source_type,
-                    target_hint_ar = EXCLUDED.target_hint_ar,
-                    is_active = 1
-                """,
-                (
-                    std_id,
-                    item["indicator_code"],
-                    item["indicator_title_ar"],
-                    item["source_type"],
-                    item["target_hint_ar"],
-                ),
-            )
-        else:
-            cur.execute(
-                """
-                INSERT OR IGNORE INTO accreditation_indicators
-                (standard_id, code, title_ar, source_type, target_hint_ar, sort_order, is_active)
-                VALUES (?, ?, ?, ?, ?, 0, 1)
-                """,
-                (
-                    std_id,
-                    item["indicator_code"],
-                    item["indicator_title_ar"],
-                    item["source_type"],
-                    item["target_hint_ar"],
-                ),
-            )
-            cur.execute(
-                """
-                UPDATE accreditation_indicators SET
-                    title_ar = ?, source_type = ?, target_hint_ar = ?, is_active = 1
-                WHERE standard_id = ? AND code = ?
-                """,
-                (
-                    item["indicator_title_ar"],
-                    item["source_type"],
-                    item["target_hint_ar"],
-                    std_id,
-                    item["indicator_code"],
-                ),
-            )
-        indicators += 1
-
-    conn.commit()
-    return {
-        "status": "ok",
-        "catalog_version": catalog_version,
-        "standards_upserted": standards,
-        "indicators_upserted": indicators,
-        "rows_processed": len(rows_parsed),
-        "imported_by": actor,
-    }
+    return import_catalog_rows(conn, rows_parsed, actor=actor)

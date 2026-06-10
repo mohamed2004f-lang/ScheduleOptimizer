@@ -5,10 +5,16 @@ from __future__ import annotations
 # (checklist_key, title_ar, description_ar, qaa_doc_hint)
 INSTITUTIONAL_EVIDENCE_CHECKLIST: list[tuple[str, str, str, str]] = [
     (
-        "standards_pdf",
-        "معايير الاعتماد المؤسسي والبرامجي",
-        "نسخة أو مرجع معتمد من دليل معايير المركز.",
-        "معايير-الاعتماد-المؤسسي-والبرامجي",
+        "institutional_standards_pdf",
+        "دليل معايير الاعتماد المؤسسي (المركز)",
+        "نسخة معتمدة من معايير الاعتماد المؤسسي — إصدار المركز الرابع 2023.",
+        "معايير-الاعتماد-المؤسسي",
+    ),
+    (
+        "program_standards_pdf",
+        "دليل معايير الاعتماد البرامجي (المركز)",
+        "نسخة معتمدة من معايير اعتماد البرامج الجامعية — إصدار المركز الرابع 2023.",
+        "معايير-الاعتماد-البرامجي",
     ),
     (
         "audit_docs_list",

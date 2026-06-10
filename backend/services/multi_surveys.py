@@ -30,8 +30,73 @@ def ensure_survey_platform_tables(conn) -> None:
     """يُستدعى عبر ensure_tables في database.py — هنا للتأكد من البذر."""
     if not table_exists(conn, "survey_templates"):
         return
+    from backend.services.survey_snapshots import ensure_survey_snapshot_tables
+
+    ensure_survey_snapshot_tables(conn)
+    from backend.services.survey_invites import ensure_survey_invite_schema
+
+    ensure_survey_invite_schema(conn)
     ensure_survey_templates_seeded(conn)
+    _sync_template_titles_from_seed(conn)
     _upgrade_platform_questions_from_seed(conn)
+
+
+def _sync_template_titles_from_seed(conn) -> None:
+    """مزامنة عنوان القالب من البذرة عند تغيير التسمية (مثل faculty_dean)."""
+    if not table_exists(conn, "survey_templates"):
+        return
+    cur = conn.cursor()
+    now = datetime.datetime.utcnow().isoformat()
+    updated = False
+    for t in SURVEY_TEMPLATE_SEED:
+        code = t["code"]
+        title = (t.get("title_ar") or "").strip()
+        if not code or not title:
+            continue
+        row = cur.execute(
+            "SELECT id, title_ar FROM survey_templates WHERE code = ? LIMIT 1",
+            (code,),
+        ).fetchone()
+        if not row:
+            continue
+        current = ((row[1] if not hasattr(row, "keys") else row["title_ar"]) or "").strip()
+        if current == title:
+            continue
+        tid = int(row[0] if not hasattr(row, "keys") else row["id"])
+        cur.execute(
+            "UPDATE survey_templates SET title_ar = ?, updated_at = ? WHERE id = ?",
+            (title, now, tid),
+        )
+        updated = True
+    if updated:
+        conn.commit()
+        logger.info("Synced survey template titles from seed")
+
+    _sync_question_label(
+        conn,
+        "faculty_dean",
+        "التقييم الإجمالي للقيادة على مستوى العميد/الإدارة",
+        "التقييم الإجمالي للإدارة والسياسات الأكاديمية على مستوى الكلية",
+    )
+
+
+def _sync_question_label(conn, template_code: str, old_label: str, new_label: str) -> None:
+    cur = conn.cursor()
+    tid = _template_id_by_code(cur, template_code)
+    if not tid:
+        return
+    now = datetime.datetime.utcnow().isoformat()
+    cur.execute(
+        """
+        UPDATE survey_questions
+        SET label_ar = ?, updated_at = ?
+        WHERE template_id = ? AND label_ar = ?
+        """,
+        (new_label, now, tid, old_label),
+    )
+    if cur.rowcount:
+        conn.commit()
+        logger.info("Updated survey question label for %s", template_code)
 
 
 def ensure_survey_templates_seeded(conn) -> None:
@@ -41,6 +106,7 @@ def ensure_survey_templates_seeded(conn) -> None:
     n = cur.execute("SELECT COUNT(*) FROM survey_templates").fetchone()
     if int((n[0] if n else 0) or 0) > 0:
         _ensure_missing_templates_from_seed(conn)
+        _sync_template_titles_from_seed(conn)
         return
     now = datetime.datetime.utcnow().isoformat()
     for t in SURVEY_TEMPLATE_SEED:

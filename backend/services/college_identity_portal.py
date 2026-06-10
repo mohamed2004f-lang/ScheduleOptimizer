@@ -133,8 +133,9 @@ def _program_in_scope(conn, program_id: int) -> bool:
 def _active_identity(cur) -> dict:
     row = cur.execute(
         """
-        SELECT id, intro_ar, mission_ar, vision_ar, values_json,
-               effective_from, governance_status, approved_by, approved_at
+        SELECT id, intro_ar, mission_ar, vision_ar,
+               COALESCE(strategic_plan_summary_ar, '') AS strategic_plan_summary_ar,
+               values_json, effective_from, governance_status, approved_by, approved_at
         FROM college_identity
         WHERE COALESCE(is_active, 1) = 1
         ORDER BY id DESC LIMIT 1
@@ -263,6 +264,7 @@ def _compute_system_kpi(conn, kpi: dict) -> float | None:
 
 def college_profile_payload(conn, *, department_id: int | None = None) -> dict[str, Any]:
     ensure_plo_enhancement_schema(conn)
+    ensure_college_identity_schema(conn)
     cur = conn.cursor()
     identity = _active_identity(cur)
     goals_tree = _strategic_goals_tree(cur)
@@ -457,6 +459,7 @@ def program_profile_page(program_id: int):
 def api_college_profile():
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
+        ensure_college_identity_schema(conn)
         dep_id = None
         role = _session_role()
         if role == "head_of_department":
@@ -479,6 +482,7 @@ def _save_identity_version(
     intro_ar: str,
     mission_ar: str,
     vision_ar: str,
+    strategic_plan_summary_ar: str = "",
     values: list,
     effective_from: str,
     actor: str,
@@ -488,14 +492,15 @@ def _save_identity_version(
     cur.execute(
         """
         INSERT INTO college_identity (
-            intro_ar, mission_ar, vision_ar, values_json,
+            intro_ar, mission_ar, vision_ar, strategic_plan_summary_ar, values_json,
             effective_from, governance_status, approved_by, approved_at, is_active
-        ) VALUES (?, ?, ?, ?, ?, 'approved', ?, ?, 1)
+        ) VALUES (?, ?, ?, ?, ?, ?, 'approved', ?, ?, 1)
         """,
         (
             intro_ar,
             mission_ar,
             vision_ar,
+            strategic_plan_summary_ar,
             json.dumps(values, ensure_ascii=False),
             effective_from,
             actor,
@@ -539,6 +544,7 @@ def api_update_college_values():
                 intro_ar="",
                 mission_ar="",
                 vision_ar="",
+                strategic_plan_summary_ar="",
                 values=cleaned,
                 effective_from="",
                 actor=actor,
@@ -816,6 +822,10 @@ def api_update_college_identity():
             intro_ar=(data.get("intro_ar") or "").strip(),
             mission_ar=(data.get("mission_ar") or "").strip(),
             vision_ar=(data.get("vision_ar") or "").strip(),
+            strategic_plan_summary_ar=(
+                (data.get("strategic_plan_summary_ar") or active.get("strategic_plan_summary_ar") or "")
+                .strip()
+            ),
             values=values if isinstance(values, list) else [],
             effective_from=(data.get("effective_from") or active.get("effective_from") or "").strip(),
             actor=actor,
@@ -1011,6 +1021,7 @@ def api_program_profile(program_id: int):
         return jsonify({"status": "ok"})
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
+        ensure_college_identity_schema(conn)
         payload = program_profile_payload(conn, program_id)
         if not payload:
             return jsonify({"status": "error", "message": "البرنامج غير موجود"}), 404

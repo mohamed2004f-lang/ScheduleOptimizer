@@ -58,6 +58,25 @@ def _quality_scope_label(conn, department_id: int | None) -> str:
     return f"قسم: {name}"
 
 
+@academic_quality_bp.route("/glossary")
+@login_required
+def quality_glossary_page():
+    from backend.core.quality_glossary import glossary_by_category
+
+    return render_template(
+        "quality_glossary.html",
+        glossary_groups=glossary_by_category(),
+    )
+
+
+@academic_quality_bp.route("/api/glossary")
+@login_required
+def quality_glossary_api():
+    from backend.core.quality_glossary import glossary_json_for_client
+
+    return jsonify(glossary_json_for_client())
+
+
 @academic_quality_bp.route("/dashboard")
 @login_required
 @role_required("admin", "admin_main", "head_of_department")
@@ -70,6 +89,7 @@ def quality_dashboard():
     critical: list = []
     scope_label = ""
     survey_cards: list = []
+    external_survey_cards: list = []
     try:
         with get_connection() as conn:
             dept_id = _resolve_department_scope(conn)
@@ -90,6 +110,18 @@ def quality_dashboard():
                         "score_percent": item.get("score_percent"),
                         "response_count": int(item.get("response_count") or 0),
                         "aggregated": bool(item.get("aggregated")),
+                    }
+                )
+            ext = metrics.get("external_survey_metrics") or {}
+            for code, info in (ext.get("templates") or {}).items():
+                external_survey_cards.append(
+                    {
+                        "code": code,
+                        "label_ar": info.get("title_ar") or code,
+                        "cycle_label": info.get("latest_cycle"),
+                        "score_percent": info.get("overall_score_percent"),
+                        "response_count": int(info.get("response_count") or 0),
+                        "aggregated": bool(info.get("aggregated")),
                     }
                 )
     except Exception:
@@ -120,6 +152,7 @@ def quality_dashboard():
         critical_courses=critical,
         scope_label=scope_label,
         survey_cards=survey_cards,
+        external_survey_cards=external_survey_cards,
         page_error=page_error,
     )
 
@@ -302,10 +335,16 @@ def export_program_report():
         dept_id = _resolve_department_scope(conn)
         metrics = compute_quality_metrics(conn, department_id=dept_id)
         critical = list_critical_courses(conn, metrics["semester"], dept_id)
+        from backend.services.survey_accreditation import build_program_survey_summary
+
+        survey_summary = build_program_survey_summary(
+            conn, semester=metrics["semester"], department_id=dept_id
+        )
     return render_template(
         "academic_quality_export_program.html",
         metrics=metrics,
         critical_courses=critical,
+        survey_summary=survey_summary,
         title="تقرير الاعتماد البرامجي",
     )
 
@@ -318,10 +357,16 @@ def export_program_report_pdf():
         dept_id = _resolve_department_scope(conn)
         metrics = compute_quality_metrics(conn, department_id=dept_id)
         critical = list_critical_courses(conn, metrics["semester"], dept_id)
+        from backend.services.survey_accreditation import build_program_survey_summary
+
+        survey_summary = build_program_survey_summary(
+            conn, semester=metrics["semester"], department_id=dept_id
+        )
     html = render_template(
         "academic_quality_export_program.html",
         metrics=metrics,
         critical_courses=critical,
+        survey_summary=survey_summary,
         title="تقرير الاعتماد البرامجي",
         for_pdf=True,
     )

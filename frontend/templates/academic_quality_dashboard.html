@@ -81,7 +81,8 @@
           <div class="card-body small">
             <h6 class="fw-bold mb-2"><i class="fa-solid fa-bolt text-warning"></i> إجراءات سريعة</h6>
             <div class="d-grid gap-2">
-              <a href="/academic_quality/accreditation/map" class="btn btn-primary btn-sm">خريطة الامتثال المؤسسي</a>
+              <a href="/academic_quality/accreditation/map?scope=inst" class="btn btn-primary btn-sm">امتثال مؤسسي</a>
+              <a href="/academic_quality/accreditation/map?scope=prog" class="btn btn-outline-primary btn-sm">امتثال برامجي</a>
               <a href="/academic_quality/surveys/results?semester={{ metrics.semester|urlencode }}" class="btn btn-outline-primary btn-sm">نتائج الاستبيانات</a>
               <a href="/academic_quality/survey_admin" class="btn btn-outline-secondary btn-sm">إعداد بنود الاستبيانات</a>
             </div>
@@ -103,8 +104,13 @@
         </a>
       </div>
       <div class="col-6 col-md-3">
-        <a href="/academic_quality/surveys/export.xlsx?semester={{ metrics.semester|urlencode }}" class="action-tile">
-          <div class="card p-3 text-center small"><i class="fa-solid fa-file-excel text-success d-block mb-1 fs-5"></i>تصدير استبيانات</div>
+        <a href="/academic_quality/surveys/export/package.xlsx?semester={{ metrics.semester|urlencode }}" class="action-tile">
+          <div class="card p-3 text-center small"><i class="fa-solid fa-file-excel text-success d-block mb-1 fs-5"></i>تصدير استبيانات (Excel)</div>
+        </a>
+      </div>
+      <div class="col-6 col-md-3">
+        <a href="/academic_quality/surveys/export/package.pdf?semester={{ metrics.semester|urlencode }}" class="action-tile">
+          <div class="card p-3 text-center small"><i class="fa-solid fa-file-pdf text-danger d-block mb-1 fs-5"></i>تقرير استبيانات PDF</div>
         </a>
       </div>
       <div class="col-6 col-md-3">
@@ -279,6 +285,33 @@
         <div class="mt-2">
           <a href="/academic_quality/surveys/results?semester={{ metrics.semester|urlencode }}" class="btn btn-outline-primary btn-sm">تفاصيل النتائج المجمّعة</a>
         </div>
+        {% if external_survey_cards %}
+        <hr class="my-3">
+        <h6 class="text-muted mb-2">استبيانات خارجية (دورات دعوة)</h6>
+        <div class="row g-3">
+          {% for s in external_survey_cards %}
+          <div class="col-sm-6 col-lg-4">
+            <div class="card kpi-card h-100 border-info {% if not s.aggregated %}border-secondary{% endif %}">
+              <div class="card-body">
+                <small class="text-muted d-block mb-1">{{ s.label_ar }}</small>
+                <small class="text-info d-block mb-1">{{ s.cycle_label or '—' }}</small>
+                {% if s.aggregated and s.score_percent is not none %}
+                <div class="kpi-value text-success">{{ s.score_percent }}%</div>
+                <small>{{ s.response_count }} إجابة</small>
+                {% else %}
+                <div class="kpi-value text-muted fs-6">—</div>
+                <small class="text-warning">{{ s.response_count }} / حد أدنى — بانتظار إجابات</small>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        <div class="mt-2">
+          <a href="/academic_quality/surveys/results?view=external" class="btn btn-outline-info btn-sm">نتائج الدورات الخارجية</a>
+          <a href="/academic_quality/surveys/invites" class="btn btn-outline-secondary btn-sm">إدارة الدعوات</a>
+        </div>
+        {% endif %}
       </div>
     </div>
   </main>

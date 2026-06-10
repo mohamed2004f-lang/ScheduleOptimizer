@@ -1755,6 +1755,69 @@ TABLES_SCHEMA = {
         )
     """,
 
+    'accreditation_evidence_types': """
+        CREATE TABLE IF NOT EXISTS accreditation_evidence_types (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL UNIQUE,
+            title_ar TEXT NOT NULL,
+            description_ar TEXT DEFAULT '',
+            category TEXT NOT NULL DEFAULT 'file',
+            source_module TEXT DEFAULT '',
+            source_ref TEXT DEFAULT '',
+            is_system INTEGER NOT NULL DEFAULT 0,
+            is_editable INTEGER NOT NULL DEFAULT 1,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """,
+
+    'accreditation_indicator_evidence_rules': """
+        CREATE TABLE IF NOT EXISTS accreditation_indicator_evidence_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            catalog_version TEXT NOT NULL,
+            indicator_id INTEGER NOT NULL,
+            evidence_type_id INTEGER NOT NULL,
+            link_mode TEXT NOT NULL DEFAULT 'evidence',
+            is_required INTEGER NOT NULL DEFAULT 1,
+            weight_percent REAL DEFAULT 0,
+            config_json TEXT DEFAULT '',
+            notes_ar TEXT DEFAULT '',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_by TEXT DEFAULT '',
+            UNIQUE (catalog_version, indicator_id, evidence_type_id),
+            FOREIGN KEY (indicator_id) REFERENCES accreditation_indicators(id) ON DELETE CASCADE,
+            FOREIGN KEY (evidence_type_id) REFERENCES accreditation_evidence_types(id) ON DELETE CASCADE
+        )
+    """,
+
+    'accreditation_evidence_bindings': """
+        CREATE TABLE IF NOT EXISTS accreditation_evidence_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            semester TEXT NOT NULL,
+            department_id INTEGER,
+            indicator_id INTEGER NOT NULL,
+            evidence_type_id INTEGER NOT NULL,
+            rule_id INTEGER,
+            binding_kind TEXT NOT NULL,
+            source_ref TEXT NOT NULL DEFAULT '',
+            label_ar TEXT DEFAULT '',
+            notes_ar TEXT DEFAULT '',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            created_by TEXT DEFAULT '',
+            updated_by TEXT DEFAULT '',
+            UNIQUE (semester, department_id, indicator_id, evidence_type_id),
+            FOREIGN KEY (indicator_id) REFERENCES accreditation_indicators(id) ON DELETE CASCADE,
+            FOREIGN KEY (evidence_type_id) REFERENCES accreditation_evidence_types(id) ON DELETE CASCADE,
+            FOREIGN KEY (rule_id) REFERENCES accreditation_indicator_evidence_rules(id) ON DELETE SET NULL
+        )
+    """,
+
     'program_learning_outcomes': """
         CREATE TABLE IF NOT EXISTS program_learning_outcomes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1916,6 +1979,9 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_accred_ev_sem ON accreditation_evidence(semester, department_id, indicator_id)",
     "CREATE INDEX IF NOT EXISTS idx_accred_manual_sem ON accreditation_manual_inputs(semester, department_id)",
     "CREATE INDEX IF NOT EXISTS idx_accred_plan_sem ON accreditation_improvement_plans(semester, department_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_accred_ev_rule_cat ON accreditation_indicator_evidence_rules(catalog_version, indicator_id)",
+    "CREATE INDEX IF NOT EXISTS idx_accred_ev_type_cat ON accreditation_evidence_types(category, is_active)",
+    "CREATE INDEX IF NOT EXISTS idx_accred_ev_bind_sem ON accreditation_evidence_bindings(semester, department_id, indicator_id)",
     "CREATE INDEX IF NOT EXISTS idx_plo_program ON program_learning_outcomes(program_id, is_active)",
     "CREATE INDEX IF NOT EXISTS idx_pclo_course ON program_course_learning_outcomes(program_course_id)",
     "CREATE INDEX IF NOT EXISTS idx_plo_cm_master ON plo_course_master_links(program_id, course_master_id)",
@@ -1999,6 +2065,7 @@ def _ensure_tables_postgresql() -> None:
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS department_id BIGINT",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_supervisor INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_college_quality_lead INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE courses ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'required'",
         "ALTER TABLE courses ADD COLUMN IF NOT EXISTS grading_mode TEXT NOT NULL DEFAULT 'partial_final'",
         "ALTER TABLE courses ADD COLUMN IF NOT EXISTS assessment_type TEXT NOT NULL DEFAULT 'theoretical'",
@@ -2913,6 +2980,80 @@ def _ensure_tables_postgresql() -> None:
                 """,
             ),
             (
+                "accreditation_evidence_types",
+                """
+                CREATE TABLE IF NOT EXISTS accreditation_evidence_types (
+                    id BIGSERIAL PRIMARY KEY,
+                    code TEXT NOT NULL UNIQUE,
+                    title_ar TEXT NOT NULL,
+                    description_ar TEXT DEFAULT '',
+                    category TEXT NOT NULL DEFAULT 'file',
+                    source_module TEXT DEFAULT '',
+                    source_ref TEXT DEFAULT '',
+                    is_system INTEGER NOT NULL DEFAULT 0,
+                    is_editable INTEGER NOT NULL DEFAULT 1,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
+            ),
+            (
+                "accreditation_indicator_evidence_rules",
+                """
+                CREATE TABLE IF NOT EXISTS accreditation_indicator_evidence_rules (
+                    id BIGSERIAL PRIMARY KEY,
+                    catalog_version TEXT NOT NULL,
+                    indicator_id BIGINT NOT NULL,
+                    evidence_type_id BIGINT NOT NULL,
+                    link_mode TEXT NOT NULL DEFAULT 'evidence',
+                    is_required INTEGER NOT NULL DEFAULT 1,
+                    weight_percent REAL DEFAULT 0,
+                    config_json TEXT DEFAULT '',
+                    notes_ar TEXT DEFAULT '',
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_by TEXT DEFAULT '',
+                    UNIQUE (catalog_version, indicator_id, evidence_type_id),
+                    CONSTRAINT accred_ev_rule_ind_fk FOREIGN KEY (indicator_id)
+                        REFERENCES accreditation_indicators(id) ON DELETE CASCADE,
+                    CONSTRAINT accred_ev_rule_type_fk FOREIGN KEY (evidence_type_id)
+                        REFERENCES accreditation_evidence_types(id) ON DELETE CASCADE
+                )
+                """,
+            ),
+            (
+                "accreditation_evidence_bindings",
+                """
+                CREATE TABLE IF NOT EXISTS accreditation_evidence_bindings (
+                    id BIGSERIAL PRIMARY KEY,
+                    semester TEXT NOT NULL,
+                    department_id BIGINT,
+                    indicator_id BIGINT NOT NULL,
+                    evidence_type_id BIGINT NOT NULL,
+                    rule_id BIGINT,
+                    binding_kind TEXT NOT NULL,
+                    source_ref TEXT NOT NULL DEFAULT '',
+                    label_ar TEXT DEFAULT '',
+                    notes_ar TEXT DEFAULT '',
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    created_by TEXT DEFAULT '',
+                    updated_by TEXT DEFAULT '',
+                    UNIQUE (semester, department_id, indicator_id, evidence_type_id),
+                    CONSTRAINT accred_bind_ind_fk FOREIGN KEY (indicator_id)
+                        REFERENCES accreditation_indicators(id) ON DELETE CASCADE,
+                    CONSTRAINT accred_bind_type_fk FOREIGN KEY (evidence_type_id)
+                        REFERENCES accreditation_evidence_types(id) ON DELETE CASCADE,
+                    CONSTRAINT accred_bind_rule_fk FOREIGN KEY (rule_id)
+                        REFERENCES accreditation_indicator_evidence_rules(id) ON DELETE SET NULL
+                )
+                """,
+            ),
+            (
                 "program_learning_outcomes",
                 """
                 CREATE TABLE IF NOT EXISTS program_learning_outcomes (
@@ -3214,6 +3355,7 @@ def ensure_tables(db_file=None):
             "ALTER TABLE users ADD COLUMN instructor_id INTEGER",
             "ALTER TABLE users ADD COLUMN is_supervisor INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE users ADD COLUMN is_college_quality_lead INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN department_id INTEGER",
             "ALTER TABLE grade_drafts ADD COLUMN section_id INTEGER",
             "ALTER TABLE grade_draft_items ADD COLUMN coursework REAL",

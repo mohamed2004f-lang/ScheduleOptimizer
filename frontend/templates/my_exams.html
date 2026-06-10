@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>امتحاناتي</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">امتحاناتي</h1>
+        <p class="page-subtitle" id="termLine">امتحانات مقرراتك للفصل الحالي</p>
+      </div>
+      <div>
+        <a href="/my_courses" class="btn btn-outline-secondary btn-sm">مقرراتي</a>
+      </div>
+    </div>
+
+    <ul class="nav nav-pills mb-3" id="examTabs">
+      <li class="nav-item"><button type="button" class="nav-link active" data-filter="all">الكل <span class="badge bg-secondary ms-1" id="badgeAll">0</span></button></li>
+      <li class="nav-item"><button type="button" class="nav-link" data-filter="midterm">جزئية <span class="badge bg-secondary ms-1" id="badgeMid">0</span></button></li>
+      <li class="nav-item"><button type="button" class="nav-link" data-filter="final">نهائية <span class="badge bg-secondary ms-1" id="badgeFinal">0</span></button></li>
+    </ul>
+
+    <div id="loadState" class="text-muted small py-3">جاري التحميل…</div>
+    <div id="emptyState" class="alert alert-info small d-none">لا توجد امتحانات مسجّلة لمقرراتك بعد.</div>
+
+    <div class="card d-none" id="examsCard">
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-striped mb-0 align-middle">
+            <thead>
+              <tr>
+                <th>المقرر</th>
+                <th>النوع</th>
+                <th>التاريخ</th>
+                <th>الوقت</th>
+                <th>القاعة</th>
+              </tr>
+            </thead>
+            <tbody id="examsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+  <script>
+    let G_ROWS = [];
+    let G_FILTER = 'all';
+
+    function esc(s) {
+      return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+    }
+
+    const TYPE_LABELS = { midterm: 'جزئي', final: 'نهائي' };
+
+    function renderTable() {
+      const body = document.getElementById('examsBody');
+      const filtered = G_FILTER === 'all' ? G_ROWS : G_ROWS.filter(r => r.exam_type === G_FILTER);
+      body.innerHTML = filtered.map(r =>
+        '<tr><td>' + esc(r.course_name) + '</td>' +
+        '<td><span class="badge bg-' + (r.exam_type === 'final' ? 'primary' : 'info text-dark') + '">' +
+        esc(TYPE_LABELS[r.exam_type] || r.exam_type) + '</span></td>' +
+        '<td>' + esc(r.exam_date || '—') + '</td>' +
+        '<td>' + esc(r.exam_time || '—') + '</td>' +
+        '<td>' + esc(r.room || '—') + '</td></tr>'
+      ).join('');
+    }
+
+    document.getElementById('examTabs').addEventListener('click', e => {
+      const btn = e.target.closest('[data-filter]');
+      if (!btn) return;
+      G_FILTER = btn.getAttribute('data-filter') || 'all';
+      document.querySelectorAll('#examTabs .nav-link').forEach(el => el.classList.remove('active'));
+      btn.classList.add('active');
+      renderTable();
+    });
+
+    (async function () {
+      const loadState = document.getElementById('loadState');
+      const emptyState = document.getElementById('emptyState');
+      const card = document.getElementById('examsCard');
+      try {
+        const r = await fetch('/schedule/instructor_exams', { credentials: 'include' });
+        const j = r.ok ? await r.json().catch(() => ({})) : {};
+        loadState.classList.add('d-none');
+        if (j.term_label) document.getElementById('termLine').textContent = 'الفصل: ' + j.term_label;
+        G_ROWS = Array.isArray(j.rows) ? j.rows : [];
+        document.getElementById('badgeAll').textContent = G_ROWS.length;
+        document.getElementById('badgeMid').textContent = j.midterm_count || 0;
+        document.getElementById('badgeFinal').textContent = j.final_count || 0;
+        if (!G_ROWS.length) {
+          emptyState.classList.remove('d-none');
+          return;
+        }
+        card.classList.remove('d-none');
+        renderTable();
+      } catch (e) {
+        loadState.textContent = 'تعذر تحميل الامتحانات.';
+        loadState.classList.remove('d-none');
+      }
+    })();
+  </script>
+</body>
+</html>

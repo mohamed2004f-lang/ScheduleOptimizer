@@ -2530,6 +2530,7 @@ def instructor_portal_summary():
         "grade_drafts_draft": 0,
         "grade_drafts_pending_submit": 0,
         "sections_without_draft": 0,
+        "grade_drafts_by_section": {},
         "instructor_name": inst_name,
     }
     if not inst_name or not instructor_id:
@@ -2637,6 +2638,7 @@ def instructor_portal_summary():
                 )
         grade_drafts_total = 0
         grade_drafts_draft = 0
+        grade_drafts_by_section: dict[str, dict] = {}
         sections_with_draft: set[str] = set()
         try:
             gd_rows = cur.execute(
@@ -2655,6 +2657,16 @@ def instructor_portal_summary():
                 cn = (gr[2] or "").strip().lower()
                 if cn:
                     sections_with_draft.add(cn)
+                sid_raw = gr[3] if len(gr) > 3 else None
+                if sid_raw not in (None, ""):
+                    try:
+                        grade_drafts_by_section[str(int(sid_raw))] = {
+                            "draft_id": int(gr[0]),
+                            "status": (gr[1] or "").strip(),
+                            "course_name": (gr[2] or "").strip(),
+                        }
+                    except (TypeError, ValueError):
+                        pass
         except Exception:
             pass
         sections_without_draft = len(
@@ -2690,6 +2702,7 @@ def instructor_portal_summary():
             "grade_drafts_draft": grade_drafts_draft,
             "grade_drafts_pending_submit": max(0, grade_drafts_total - grade_drafts_draft),
             "sections_without_draft": sections_without_draft,
+            "grade_drafts_by_section": grade_drafts_by_section,
         }
     )
 
@@ -3997,3 +4010,65 @@ def instructor_timetable():
                 }
             )
     return jsonify({"rows": out, "published": True})
+
+
+@schedule_bp.route("/instructor_exams")
+@login_required
+def instructor_exams():
+    """امتحانات (جزئية/نهائية) لمقررات الأستاذ في الفصل الحالي."""
+    if not _is_instructor_effective_session():
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    inst_name, instructor_id = _instructor_display_name_for_session()
+    if not inst_name or not instructor_id:
+        return jsonify({"rows": [], "term_label": "", "midterm_count": 0, "final_count": 0})
+    iid = int(instructor_id)
+    with get_connection() as conn:
+        cur = conn.cursor()
+        term_name, term_year = get_current_term(conn=conn)
+        term_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip() or SEMESTER_LABEL
+        tuples = _assigned_section_rows(cur, iid, inst_name)
+        course_keys = {(t[1] or "").strip().lower() for t in tuples if (t[1] or "").strip()}
+        if not course_keys:
+            return jsonify({"rows": [], "term_label": term_label, "midterm_count": 0, "final_count": 0})
+        try:
+            exam_rows = cur.execute(
+                """
+                SELECT id, course_name, exam_date, exam_time, room, instructor, exam_type
+                FROM exams
+                WHERE exam_type IN ('midterm', 'final')
+                ORDER BY exam_date, exam_time, course_name
+                """
+            ).fetchall()
+        except Exception:
+            exam_rows = []
+        out = []
+        midterm_count = 0
+        final_count = 0
+        for r in exam_rows or []:
+            cn = (r[1] or "").strip().lower()
+            if cn not in course_keys:
+                continue
+            et = (r[6] or "").strip().lower()
+            if et == "midterm":
+                midterm_count += 1
+            elif et == "final":
+                final_count += 1
+            out.append(
+                {
+                    "exam_id": r[0],
+                    "course_name": r[1],
+                    "exam_date": r[2],
+                    "exam_time": r[3],
+                    "room": r[4],
+                    "instructor": r[5],
+                    "exam_type": et,
+                }
+            )
+    return jsonify(
+        {
+            "rows": out,
+            "term_label": term_label,
+            "midterm_count": midterm_count,
+            "final_count": final_count,
+        }
+    )

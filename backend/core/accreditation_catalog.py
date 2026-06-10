@@ -19,14 +19,111 @@ DOMAIN_LABELS = {
     "quality_assurance": "ضمان الجودة وتحسين الأداء",
     "student_services": "الطلبة والخدمات الطلابية",
     "community_research": "المجتمع والبحث",
+    # دليل المركز الوطني — إصدار 4 (2023)
+    "qaa_mq": "جودة الإدارة (معايير المركز)",
+    "qaa_inst": "الاعتماد المؤسسي (معايير المركز)",
+    "qaa_prog_ug": "الاعتماد البرامجي — بكالوريوس (معايير المركز)",
 }
+
+CATALOG_VERSION_LABELS = {
+    CATALOG_VERSION: "كتالوج مختصر (داخلي)",
+    "QAA-2023.4-INST": "معايير المركز — اعتماد مؤسسي (إصدار 4، 2023)",
+    "QAA-2023.4-PROG-UG": "معايير المركز — اعتماد برامجي بكالوريوس (إصدار 4، 2023)",
+}
+
+# تبويبات خريطة الامتثال — مؤسسي / برامجي / داخلي
+ACCREDITATION_MAP_SCOPES: list[dict[str, str]] = [
+    {
+        "key": "inst",
+        "catalog_version": "QAA-2023.4-INST",
+        "title_ar": "اعتماد مؤسسي",
+        "page_title_ar": "خريطة امتثال — اعتماد مؤسسي",
+        "nav_label_ar": "امتثال مؤسسي",
+        "indicator_hint_ar": "202 مؤشر",
+    },
+    {
+        "key": "prog",
+        "catalog_version": "QAA-2023.4-PROG-UG",
+        "title_ar": "اعتماد برامجي — بكالوريوس",
+        "page_title_ar": "خريطة امتثال — اعتماد برامجي",
+        "nav_label_ar": "امتثال برامجي",
+        "indicator_hint_ar": "139 مؤشر",
+    },
+    {
+        "key": "internal",
+        "catalog_version": CATALOG_VERSION,
+        "title_ar": "كتالوج داخلي (تجريبي)",
+        "page_title_ar": "خريطة امتثال — كتالوج داخلي",
+        "nav_label_ar": "امتثال (داخلي)",
+        "indicator_hint_ar": "15 مؤشر",
+    },
+]
+
+
+def resolve_map_catalog_scope(
+    conn,
+    *,
+    scope: str | None = None,
+    catalog_version: str | None = None,
+) -> tuple[str, str]:
+    """يُرجع (catalog_version, scope_key) لصفحة خريطة الامتثال."""
+    explicit = (catalog_version or "").strip()
+    if explicit:
+        for item in ACCREDITATION_MAP_SCOPES:
+            if item["catalog_version"] == explicit:
+                return explicit, item["key"]
+        return explicit, "custom"
+    sk = (scope or "").strip().lower()
+    for item in ACCREDITATION_MAP_SCOPES:
+        if item["key"] == sk:
+            return item["catalog_version"], item["key"]
+    return "QAA-2023.4-INST", "inst"
+
+
+def map_scope_meta(scope_key: str) -> dict[str, str]:
+    for item in ACCREDITATION_MAP_SCOPES:
+        if item["key"] == scope_key:
+            return dict(item)
+    return dict(ACCREDITATION_MAP_SCOPES[0])
+
+
+def catalog_scope_label(catalog_version: str, department_id: int | None = None) -> str:
+    """وصف نطاق الكتالوج للواجهة."""
+    ver_label = CATALOG_VERSION_LABELS.get(catalog_version, catalog_version)
+    if catalog_version.startswith("QAA-2023.4-PROG"):
+        scope = "برنامجي (برنامج أكاديمي)"
+    elif catalog_version.startswith("QAA-2023.4-INST"):
+        scope = "مؤسسي (كلية)"
+    else:
+        scope = "مؤسسي (كلية)" if department_id is None else f"قسم #{department_id}"
+    return f"{ver_label} · {scope}"
 
 SOURCE_TYPE_LABELS = {
     "auto": "آلي من النظام",
     "manual": "إدخال يدوي",
     "hybrid": "مختلط (آلي + مراجعة)",
     "document": "وثيقة / دليل",
+    "qaa_center": "مركز ضمان الجودة الليبي",
 }
+
+# محاور دليل المركز — للفلترة عبر المؤسسي والبرامجي
+QAA_AXIS_OPTIONS: list[dict[str, str]] = [
+    {
+        "catalog_version": "QAA-2023.4-INST",
+        "domain_code": "qaa_mq",
+        "label": DOMAIN_LABELS["qaa_mq"],
+    },
+    {
+        "catalog_version": "QAA-2023.4-INST",
+        "domain_code": "qaa_inst",
+        "label": DOMAIN_LABELS["qaa_inst"],
+    },
+    {
+        "catalog_version": "QAA-2023.4-PROG-UG",
+        "domain_code": "qaa_prog_ug",
+        "label": DOMAIN_LABELS["qaa_prog_ug"],
+    },
+]
 
 COMPLIANCE_STATUS_LABELS = {
     "not_started": "لم يبدأ",
@@ -232,7 +329,13 @@ def list_active_catalog_versions(conn) -> list[str]:
         ).fetchall()
         out = []
         for r in rows or []:
-            v = r[0] if not hasattr(r, "keys") else r.get("catalog_version")
+            if hasattr(r, "keys"):
+                try:
+                    v = r["catalog_version"]
+                except (KeyError, IndexError, TypeError):
+                    v = r[0] if len(r) else None
+            else:
+                v = r[0]
             if v:
                 out.append(str(v).strip())
         return out
@@ -241,20 +344,21 @@ def list_active_catalog_versions(conn) -> list[str]:
 
 
 def resolve_catalog_version(conn, explicit: str | None = None) -> str:
-    """إصدار الكتالوج النشط — صريح، أو الإصدار الافتراضي إن كان نشطاً، وإلا الأحدث."""
+    """إصدار الكتالوج النشط — صريح، أو معايير المركز المؤسسية إن وُجدت، وإلا الافتراضي الداخلي."""
     if (explicit or "").strip():
         return explicit.strip()
     cur = conn.cursor()
-    row = cur.execute(
-        """
-        SELECT 1 FROM accreditation_standards
-        WHERE catalog_version = ? AND COALESCE(is_active, 1) = 1
-        LIMIT 1
-        """,
-        (CATALOG_VERSION,),
-    ).fetchone()
-    if row:
-        return CATALOG_VERSION
+    for preferred in ("QAA-2023.4-INST", CATALOG_VERSION):
+        row = cur.execute(
+            """
+            SELECT 1 FROM accreditation_standards
+            WHERE catalog_version = ? AND COALESCE(is_active, 1) = 1
+            LIMIT 1
+            """,
+            (preferred,),
+        ).fetchone()
+        if row:
+            return preferred
     row = cur.execute(
         """
         SELECT catalog_version FROM accreditation_standards
@@ -355,8 +459,19 @@ def ensure_accreditation_catalog(conn) -> dict[str, int]:
         indicators_upserted += 1
 
     conn.commit()
+    qaa_stats: dict[str, int] = {}
+    try:
+        from backend.core.qaa_catalog_seed import ensure_qaa_catalog
+
+        qaa_stats = ensure_qaa_catalog(conn)
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception("ensure_qaa_catalog failed")
+
     return {
         "catalog_version": CATALOG_VERSION,
         "standards": standards_upserted,
         "indicators": indicators_upserted,
+        "qaa_catalog": qaa_stats,
     }

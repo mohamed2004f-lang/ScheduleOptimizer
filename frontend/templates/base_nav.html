@@ -7,12 +7,14 @@
 <link rel="stylesheet" href="/static/css/ui-consistency.css">
 <link rel="stylesheet" href="/static/css/page-guide.css">
 <link rel="stylesheet" href="/static/css/page-hints.css">
+<link rel="stylesheet" href="/static/css/term-help.css">
 <link rel="stylesheet" href="/static/vendor/fontawesome/all.min.css">
 <meta name="csrf-token" content="{{ csrf_token() }}">
 <script src="/static/js/common.js?v=20260520"></script>
 <script src="/static/js/guide-catalog.js"></script>
 <script src="/static/js/page-guide.js"></script>
 <script src="/static/js/page-hints.js"></script>
+<script src="/static/js/term-help.js"></script>
 
 <!-- Loading Overlay -->
 <div class="loading-overlay" id="loadingOverlay" aria-hidden="true">
@@ -142,6 +144,10 @@
             <i class="fa-solid fa-ellipsis ms-1"></i> المزيد
           </a>
           <ul class="dropdown-menu" aria-labelledby="instructorMoreMenu">
+            <li><a class="dropdown-item" id="navInsMySchedule" href="/my_schedule">جدولي</a></li>
+            <li><a class="dropdown-item" id="navInsMyExams" href="/my_exams">امتحاناتي</a></li>
+            <li><a class="dropdown-item" id="navInsMyAttendance" href="/my_attendance">حضور مقرراتي</a></li>
+            <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item" id="navInsSchedule" href="/schedule_form">الجدول الدراسي</a></li>
             <li><a class="dropdown-item" id="navInsCalendar" href="/academic_calendar_page">التقويم الأكاديمي</a></li>
             <li><a class="dropdown-item" id="navInsMidterms" href="/exams/midterms">امتحانات جزئية</a></li>
@@ -154,8 +160,8 @@
           </ul>
         </li>
         <li class="nav-item" id="navStudentEvaluationsWrap" style="display:none;">
-          <a class="nav-link" id="navStudentEvaluations" href="/students/evaluations/">
-            <i class="fa-solid fa-star ms-1"></i> تقييم المقررات
+          <a class="nav-link" id="navStudentEvaluations" href="/academic_quality/surveys">
+            <i class="fa-solid fa-star ms-1"></i> الاستبيانات وتقييم المقررات
           </a>
         </li>
         <li class="nav-item" id="navStudentLearningOutcomesWrap" style="display:none;">
@@ -263,8 +269,12 @@
           <ul class="dropdown-menu" aria-labelledby="qualityAccreditationMenu">
             <li><a class="dropdown-item" id="navAcademicQuality" href="/academic_quality/dashboard" style="display:none;">لوحة الجودة</a></li>
             <li><a class="dropdown-item" id="navSurveysHub" href="/academic_quality/surveys" style="display:none;">تعبئة الاستبيانات (دوري)</a></li>
-            <li><a class="dropdown-item" id="navAccreditationMap" href="/academic_quality/accreditation/map" style="display:none;">خريطة الامتثال المؤسسي</a></li>
+            <li><a class="dropdown-item" id="navAccreditationMap" href="/academic_quality/accreditation/map?scope=inst" style="display:none;">امتثال — اعتماد مؤسسي</a></li>
+            <li><a class="dropdown-item" id="navAccreditationMapProg" href="/academic_quality/accreditation/map?scope=prog" style="display:none;">امتثال — اعتماد برامجي</a></li>
+            <li><a class="dropdown-item" id="navQualityGlossary" href="/academic_quality/glossary">دليل المصطلحات</a></li>
             <li><a class="dropdown-item" id="navSurveysResults" href="/academic_quality/surveys/results" style="display:none;">نتائج الاستبيانات (مجمّعة)</a></li>
+            <li><a class="dropdown-item" id="navSurveysTrends" href="/academic_quality/surveys/trends" style="display:none;">اتجاهات الاستبيانات</a></li>
+            <li><a class="dropdown-item" id="navSurveysInvites" href="/academic_quality/surveys/invites" style="display:none;">دعوات الاستبيانات الخارجية</a></li>
             <li><a class="dropdown-item" id="navEvaluationSurveyAdmin" href="/academic_quality/survey_admin" style="display:none;">إعداد بنود الاستبيانات</a></li>
             <li><a class="dropdown-item" id="navCollegeProfile" href="/academic_quality/college" style="display:none;">هوية الكلية</a></li>
             <li><a class="dropdown-item" id="navProgramsPortal" href="/academic_quality/programs" style="display:none;">برامج الكلية</a></li>
@@ -497,12 +507,18 @@
       if (elQuality) elQuality.style.display = showQualityDash ? '' : 'none';
       const elAccredMap = document.getElementById('navAccreditationMap');
       if (elAccredMap) elAccredMap.style.display = showQualityDash ? '' : 'none';
+      const elAccredMapProg = document.getElementById('navAccreditationMapProg');
+      if (elAccredMapProg) elAccredMapProg.style.display = showQualityDash ? '' : 'none';
       const elSurveysHub = document.getElementById('navSurveysHub');
       if (elSurveysHub) elSurveysHub.style.display = showSurveysHub ? '' : 'none';
       const elSurveyAdmin = document.getElementById('navEvaluationSurveyAdmin');
       if (elSurveyAdmin) elSurveyAdmin.style.display = showSurveyAdmin ? '' : 'none';
       const elSurveysResults = document.getElementById('navSurveysResults');
       if (elSurveysResults) elSurveysResults.style.display = showSurveysResults ? '' : 'none';
+      const elSurveysTrends = document.getElementById('navSurveysTrends');
+      if (elSurveysTrends) elSurveysTrends.style.display = showSurveysResults ? '' : 'none';
+      const elSurveysInvites = document.getElementById('navSurveysInvites');
+      if (elSurveysInvites) elSurveysInvites.style.display = showSurveysResults ? '' : 'none';
       const elCollegeProf = document.getElementById('navCollegeProfile');
       if (elCollegeProf) elCollegeProf.style.display = showCollegeProfile ? '' : 'none';
       const elProgramsPortal = document.getElementById('navProgramsPortal');
@@ -826,6 +842,7 @@
 
       // ضمان الجودة والاعتماد (بعد فلاتر الأدوار — لا يُخفى بـ d-none فقط)
       let showQualityMenu = showQualityDash || showSurveyAdmin || showIloCatalog || showDeptLoDash || showCollegeProfile || showProgramsPortal || showSurveysHub || showSurveysResults;
+      // trends + invites تستخدم نفس صلاحية نتائج الاستبيانات
       if (!showQualityMenu) {
         const amQ = (data.active_mode || '').trim().toLowerCase();
         const hodHeadMode = role === 'head_of_department'
@@ -868,6 +885,9 @@
       const path = (window.location.pathname || '/').toLowerCase();
       const map = [
         ['/my_courses','navMyCourses'],
+        ['/my_schedule','navInsMySchedule'],
+        ['/my_exams','navInsMyExams'],
+        ['/my_attendance','navInsMyAttendance'],
         ['/grade_drafts','navInstructorGradeDrafts'],
         ['/grade_drafts','navGradeDrafts'],
         ['/dashboard','navDashboard'],
@@ -885,6 +905,7 @@
         ['/enrollment_plans','navEnrollmentPlans'],
         ['/schedule_form','navScheduleForm'],
         ['/attendance_export','navAttendance'],
+        ['/my_attendance','navInsMyAttendance'],
         ['/exams/midterms','navExamsMidterms'],
         ['/exams/finals','navExamsFinals'],
         ['/exams/conflicts','navExamsConflicts'],
@@ -902,10 +923,13 @@
         ['/faculty_final_dossier_page','navFacultyFinalDossier'],
         ['/academic_quality/dashboard','navAcademicQuality'],
         ['/academic_quality/accreditation/map','navAccreditationMap'],
+        ['/academic_quality/accreditation/map?scope=prog','navAccreditationMapProg'],
         ['/academic_quality/survey_admin','navEvaluationSurveyAdmin'],
         ['/academic_quality/surveys','navSurveysHub'],
         ['/academic_quality/surveys/results','navSurveysResults'],
-        ['/students/evaluations','navStudentEvaluations'],
+        ['/academic_quality/surveys/trends','navSurveysTrends'],
+        ['/academic_quality/surveys/invites','navSurveysInvites'],
+        ['/academic_quality/surveys','navStudentEvaluations'],
         ['/my_registrations','navStudentRegistrations'],
         ['/academic_quality/college','navCollegeProfile'],
         ['/academic_quality/programs','navProgramsPortal'],
@@ -922,8 +946,15 @@
         ['/college_catalog_page','navCollegeCatalog'],
         ['/college_catalog_page','navCollegeCatalogCourses'],
       ];
+      const urlScope = new URL(window.location.href).searchParams.get('scope') || '';
+      const accredProgActive = path.startsWith('/academic_quality/accreditation/map') && urlScope === 'prog';
       map.forEach(([prefix, id])=>{
-        if (path === prefix || (prefix !== '/' && path.startsWith(prefix))) {
+        if (prefix === '/academic_quality/accreditation/map?scope=prog') {
+          if (!accredProgActive) return;
+        } else if (prefix === '/academic_quality/accreditation/map') {
+          if (accredProgActive) return;
+        }
+        if (path === prefix || (prefix !== '/' && path.startsWith(prefix.split('?')[0]))) {
           const el = document.getElementById(id);
           if (el) {
             el.classList.add('active');

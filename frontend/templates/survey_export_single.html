@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }}</title>
+  {% include "survey_export_pdf_styles.html" %}
+</head>
+<body>
+  <h1>{{ title }}</h1>
+
+  <h2>بيانات التقرير</h2>
+  <table>
+    <tbody>
+      {% for row in metadata_rows %}
+      <tr><th style="width:35%">{{ row['البند'] }}</th><td>{{ row['القيمة'] if row['القيمة'] is not none else '—' }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% set report = report %}
+  {% include "survey_export_report_section.html" %}
+
+  <p class="footer-note">أُنشئ من نظام ScheduleOptimizer — ضمان الجودة والاعتماد. لا تُعرض إجابات فردية في هذا التقرير.</p>
+  {% if not for_pdf %}
+  <button class="no-print" onclick="window.print()" style="margin-top:12px;padding:8px 16px;">طباعة</button>
+  {% endif %}
+</body>
+</html>

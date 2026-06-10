@@ -12,10 +12,10 @@
   <main class="container mt-4" style="max-width:720px;">
     {% if error %}
     <div class="alert alert-warning">{{ error }}</div>
-    <a href="/students/evaluations/" class="btn btn-outline-secondary mt-2">العودة للقائمة</a>
+    <a href="/academic_quality/surveys" class="btn btn-outline-secondary mt-2">العودة للقائمة</a>
     {% elif already_done %}
     <div class="alert alert-success">تم إرسال تقييمك. شكراً لمشاركتك.</div>
-    <a href="/students/evaluations/" class="btn btn-outline-secondary mt-2">العودة</a>
+    <a href="/academic_quality/surveys" class="btn btn-outline-secondary mt-2">العودة</a>
     {% else %}
     <div class="card shadow-sm border-start border-primary border-4">
       <div class="card-header bg-primary text-white">
@@ -69,7 +69,7 @@
         });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) { alert(j.message || 'تعذر الإرسال'); return; }
-        window.location.href = '/students/evaluations/';
+        window.location.href = '/academic_quality/surveys';
       });
     }
   </script>

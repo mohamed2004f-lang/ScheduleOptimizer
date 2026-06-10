@@ -47,7 +47,7 @@
       <!-- مصفوفة التوافق مع أهداف الكلية -->
       <div class="card mb-3">
         <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
-          <span>مصفوفة توافق البرنامج مع أهداف الكلية (IG)</span>
+          <span>مصفوفة توافق البرنامج مع <span data-term="ig">الأهداف الاستراتيجية للكلية</span></span>
           <span class="badge bg-info" id="coverageBadge"></span>
         </div>
         <div class="card-body p-0" id="boxAlignmentMatrix"></div>
@@ -55,21 +55,26 @@
 
       <!-- مصفوفة PG ← IG -->
       <div class="card mb-3">
-        <div class="card-header fw-semibold">ربط أهداف البرنامج (PG) ← أهداف الكلية (IG)</div>
+        <div class="card-header fw-semibold">ربط <span data-term="pg">أهداف البرنامج</span> ← <span data-term="ig">الأهداف الاستراتيجية للكلية</span></div>
         <div class="card-body p-0" id="boxPgIgMatrix"></div>
       </div>
 
       <!-- مصفوفة PLO ← GLO -->
       <div class="card mb-3">
-        <div class="card-header fw-semibold">ربط مخرجات البرنامج (PLO) ← مخرجات الكلية (GLO)</div>
+        <div class="card-header fw-semibold">ربط <span data-term="plo">مخرجات البرنامج</span> ← <span data-term="glo">مخرجات تعلم الخريج على مستوى الكلية</span></div>
         <div class="card-body p-0" id="boxPloGloMatrix"></div>
       </div>
 
-      <div class="card mb-3"><div class="card-header fw-semibold">أهداف البرنامج (PG) وربط IG</div><div class="card-body p-0" id="boxGoals"></div></div>
-      <div class="card mb-3"><div class="card-header fw-semibold">مخرجات البرنامج (PLO)</div><div class="card-body p-0" id="boxOutcomes"></div></div>
+      <div class="card mb-3"><div class="card-header fw-semibold"><span data-term="pg">أهداف البرنامج</span> وربط الأهداف الاستراتيجية</div><div class="card-body p-0" id="boxGoals"></div></div>
+      <div class="card mb-3"><div class="card-header fw-semibold"><span data-term="plo">مخرجات تعلم البرنامج</span></div><div class="card-body p-0" id="boxOutcomes"></div></div>
       <div class="card mb-3"><div class="card-header fw-semibold">ملخص التحليلات والتغطية</div><div class="card-body" id="boxAnalytics"></div></div>
       <div class="alert alert-light small mb-0">
-        <strong>سلسلة ضمان الجودة:</strong> أهداف الكلية (IG) → GLO → PG → PLO → CLO في المقررات (عبر مصفوفة I/R/M). لا ربط مباشر CLO↔GLO.
+        <strong>سلسلة ضمان الجودة:</strong>
+        <span data-term="ig">الأهداف الاستراتيجية</span> →
+        <span data-term="glo">مخرجات الخريج</span> →
+        <span data-term="pg">أهداف البرنامج</span> →
+        <span data-term="plo">مخرجات البرنامج</span> →
+        <span data-term="clo">مخرجات المقرر</span> (عبر مصفوفة التغطية). لا ربط مباشر بين مخرجات المقرر ومخرجات الخريج.
       </div>
     </div>
   </main>
@@ -183,7 +188,7 @@
         document.getElementById('boxPloGloMatrix').innerHTML = '<p class="p-3 text-muted mb-0">لا بيانات كافية لعرض المصفوفة.</p>';
         return;
       }
-      let html = '<div class="table-responsive"><table class="table table-sm table-bordered matrix-table mb-0"><thead><tr><th>PLO \\ GLO</th>';
+      let html = '<div class="table-responsive"><table class="table table-sm table-bordered matrix-table mb-0"><thead><tr><th>مخرج البرنامج \\ GLO</th>';
       cGlos.forEach(g => { html += '<th><small>' + esc(g.code) + '</small></th>'; });
       html += '</tr></thead><tbody>';
       outs.forEach(plo => {
@@ -217,7 +222,7 @@
           '</tbody></table>' : '<p class="p-3 text-muted mb-0">لا أهداف — أضفها من كتالوج المخرجات.</p>';
       const outs = data.outcomes || [];
       document.getElementById('boxOutcomes').innerHTML = outs.length
-        ? '<table class="table table-sm mb-0"><thead><tr><th>PLO</th><th>عنوان</th><th>GLO</th><th>مجال</th></tr></thead><tbody>' +
+        ? '<table class="table table-sm mb-0"><thead><tr><th>الرمز</th><th>عنوان</th><th>GLO</th><th>مجال</th></tr></thead><tbody>' +
           outs.map(o => '<tr><td><code>' + esc(o.code) + '</code></td><td>' + esc(o.title_ar) +
             '</td><td>' + esc(o.parent_glo_code) + '</td><td>' + esc(o.domain) + '</td></tr>').join('') +
           '</tbody></table>' : '<p class="p-3 text-muted mb-0">لا مخرجات.</p>';

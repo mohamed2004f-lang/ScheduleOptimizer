@@ -61,7 +61,7 @@
     '/academic_quality/ilo/department/dashboard': 'department_lo_dashboard',
     '/academic_quality/ilo/student/learning-outcomes': 'student_learning_outcomes',
     '/academic_quality/accreditation/map': 'accreditation_map',
-    '/students/evaluations/': 'student_evaluations',
+    '/students/evaluations/form': 'student_evaluations',
   };
 
   let _role = '';

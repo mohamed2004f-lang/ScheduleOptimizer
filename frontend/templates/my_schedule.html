@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>جدولي — الفصل الحالي</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal schedule-wide">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">جدولي</h1>
+        <p class="page-subtitle" id="termLine">حصصك للفصل الحالي</p>
+      </div>
+      <div>
+        <a href="/my_courses" class="btn btn-outline-secondary btn-sm">مقرراتي</a>
+      </div>
+    </div>
+
+    <div id="loadState" class="text-muted small py-3">جاري التحميل…</div>
+    <div id="unpublishedNote" class="alert alert-warning small d-none"></div>
+
+    <div class="card mb-3 d-none" id="listCard">
+      <div class="card-header fw-semibold">قائمة الشعب (قبل اعتماد الجدول)</div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-striped mb-0 align-middle">
+            <thead><tr><th>المقرر</th><th>اليوم</th><th>الوقت</th><th>القاعة</th></tr></thead>
+            <tbody id="sectionsList"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card d-none" id="timetableCard">
+      <div class="card-header fw-semibold">الجدول الأسبوعي المعتمد</div>
+      <div class="card-body">
+        <div id="timetableWrap" class="timetable-wrapper text-muted small"></div>
+      </div>
+    </div>
+  </main>
+  <script>
+    function esc(s) {
+      return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+    }
+
+    (async function () {
+      const loadState = document.getElementById('loadState');
+      const unpublishedNote = document.getElementById('unpublishedNote');
+      const listCard = document.getElementById('listCard');
+      const timetableCard = document.getElementById('timetableCard');
+      try {
+        const [secRes, ttRes] = await Promise.all([
+          fetch('/schedule/my_assigned_sections', { credentials: 'include' }),
+          fetch('/schedule/instructor_timetable', { credentials: 'include' })
+        ]);
+        const sec = secRes.ok ? await secRes.json().catch(() => ({})) : {};
+        const tt = ttRes.ok ? await ttRes.json().catch(() => ({})) : {};
+        loadState.classList.add('d-none');
+
+        const rows = Array.isArray(sec.rows) ? sec.rows : [];
+        const term = (rows[0] && rows[0].semester) || '';
+        if (term) document.getElementById('termLine').textContent = 'الفصل: ' + term;
+
+        if (!rows.length) {
+          loadState.textContent = 'لا توجد شعب مسندة لك في الفصل الحالي.';
+          loadState.classList.remove('d-none');
+          return;
+        }
+
+        if (!tt.published) {
+          unpublishedNote.textContent = 'الجدول الدراسي غير معتمد بعد — يظهر أدناه تكليفك من الجدول الحالي (قراءة فقط).';
+          unpublishedNote.classList.remove('d-none');
+          document.getElementById('sectionsList').innerHTML = rows.map(r =>
+            '<tr><td>' + esc(r.course_name) + ' <span class="text-muted small">#' + esc(r.section_id) + '</span></td>' +
+            '<td>' + esc(r.day) + '</td><td>' + esc(r.time) + '</td><td>' + esc(r.room) + '</td></tr>'
+          ).join('');
+          listCard.classList.remove('d-none');
+        }
+
+        const ttRows = Array.isArray(tt.rows) ? tt.rows : [];
+        if (tt.published && ttRows.length) {
+          timetableCard.classList.remove('d-none');
+          const wrap = document.getElementById('timetableWrap');
+          if (typeof buildPublishedTimetableHtml === 'function') {
+            wrap.innerHTML = buildPublishedTimetableHtml(ttRows, {});
+          } else {
+            wrap.innerHTML = '<p class="mb-0">تعذر عرض الجدول.</p>';
+          }
+        } else if (tt.published && !ttRows.length) {
+          unpublishedNote.textContent = (unpublishedNote.textContent ? unpublishedNote.textContent + ' ' : '') +
+            'الجدول معتمد لكن لا توجد حصص مطابقة لفصلك الحالي — راجع يوم/وقت الحصة في «الجدول الدراسي».';
+          unpublishedNote.classList.remove('d-none');
+          listCard.classList.remove('d-none');
+          document.getElementById('sectionsList').innerHTML = rows.map(r =>
+            '<tr><td>' + esc(r.course_name) + '</td><td>' + esc(r.day) + '</td><td>' + esc(r.time) + '</td><td>' + esc(r.room) + '</td></tr>'
+          ).join('');
+        }
+      } catch (e) {
+        loadState.textContent = 'تعذر تحميل الجدول.';
+        loadState.classList.remove('d-none');
+      }
+    })();
+  </script>
+</body>
+</html>

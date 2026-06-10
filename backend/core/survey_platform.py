@@ -14,14 +14,34 @@ RESPONDENT_ROLE_LABELS: dict[str, str] = {
     "instructor": "عضو هيئة التدريس",
     "supervisor": "المشرف الأكاديمي",
     "staff": "الموظف الإداري",
+    "alumni": "الخريج",
+    "employer": "جهة العمل / القطاع",
+    "partner": "الشريك المجتمعي",
 }
+
+EXTERNAL_SURVEY_CODES: frozenset[str] = frozenset({
+    "employer_strategic",
+    "alumni",
+})
+
+EMPLOYER_ORG_TYPES: tuple[tuple[str, str], ...] = (
+    ("government", "قطاع حكومي"),
+    ("private", "شركة خاصة"),
+    ("state_owned", "شركة عامة (مملوكة للدولة)"),
+    ("mixed", "قطاع مختلط"),
+    ("nonprofit", "منظمة غير ربحية"),
+    ("other", "أخرى"),
+)
+
+ALUMNI_OPEN_COMMENT_LABEL = "أهم نقطة تحسين واحدة (اختياري)"
+EMPLOYER_OPEN_COMMENT_LABEL = "أهم ثلاث توصيات لتحسين الخطة الاستراتيجية أو مخرجات التعلم (اختياري)"
 
 # ما يُفترض أن يملأه كل دور في صفحة «تعبئة الاستبيانات»
 SURVEY_METRIC_LABELS: dict[str, str] = {
     "student_services": "رضا الطالب — خدمات الشؤون",
     "student_facilities": "رضا الطالب — المرافق",
     "faculty_hod": "تقييم الأستاذ — رئيس القسم",
-    "faculty_dean": "تقييم الأستاذ — العميد",
+    "faculty_dean": "تقييم الأستاذ — الإدارة والسياسات",
     "faculty_educational_process": "تقييم العملية التعليمية",
     "supervisor_advising": "المشرف — جودة الإرشاد والمتابعة",
     "supervisor_coordination": "المشرف — التنسيق مع القسم والخدمات",
@@ -29,9 +49,184 @@ SURVEY_METRIC_LABELS: dict[str, str] = {
     "staff_student_services": "جودة خدمة الطالب (موظف)",
 }
 
+# ربط كل استبيان بمعايير الاعتماد (شاهد / آلي / هجين)
+SURVEY_ACCREDITATION_MAP: dict[str, list[dict[str, str]]] = {
+    "student_course": [
+        {
+            "standard_code": "SS-01",
+            "indicator_code": "SS-01-1",
+            "indicator_title_ar": "رضا الطلبة (استبيان المقرر)",
+            "link_type": "evidence",
+            "usage_ar": "شاهد اختياري — يُربط يدوياً من واجهة إدارة الامتثال.",
+        },
+    ],
+    "student_services": [
+        {
+            "standard_code": "SS-01",
+            "indicator_code": "SS-01-1",
+            "indicator_title_ar": "رضا الطلبة",
+            "link_type": "evidence",
+            "usage_ar": "شاهد داعم على جودة خدمات الشؤون والتسجيل.",
+        },
+        {
+            "standard_code": "SS-02",
+            "indicator_code": "SS-02-1",
+            "indicator_title_ar": "معدل التخرج التقريبي",
+            "link_type": "evidence",
+            "usage_ar": "شاهد على تجربة الطالب وخدمات الدعم الأكاديمي.",
+        },
+    ],
+    "student_facilities": [
+        {
+            "standard_code": "FF-01",
+            "indicator_code": "FF-01-1",
+            "indicator_title_ar": "تقييم البنية التحتية",
+            "link_type": "hybrid",
+            "usage_ar": "يُكمّل أو يستبدل الإدخال اليدوي لـ FF-01-1 (مقترح).",
+        },
+    ],
+    "faculty_hod": [
+        {
+            "standard_code": "GV-02",
+            "indicator_code": "GV-02-1",
+            "indicator_title_ar": "اعتماد السياسات الأكاديمية",
+            "link_type": "evidence",
+            "usage_ar": "دليل على قيادة القسم والمشاركة في صنع القرار.",
+        },
+    ],
+    "faculty_dean": [
+        {
+            "standard_code": "GV-01",
+            "indicator_code": "GV-01-1",
+            "indicator_title_ar": "هيكل الحوكمة",
+            "link_type": "evidence",
+            "usage_ar": "دليل على وضوح السياسات والحوكمة على مستوى الكلية.",
+        },
+        {
+            "standard_code": "FF-02",
+            "indicator_code": "FF-02-1",
+            "indicator_title_ar": "خطة مالية للتعليم",
+            "link_type": "evidence",
+            "usage_ar": "شاهد على عدالة توزيع الموارد والشفافية.",
+        },
+    ],
+    "faculty_educational_process": [
+        {
+            "standard_code": "QA-02",
+            "indicator_code": "QA-02-1",
+            "indicator_title_ar": "نسبة اكتمال تقارير الإقفال",
+            "link_type": "evidence",
+            "usage_ar": "شاهد مكمّل على رضا الأساتذة عن إجراءات الإقفال.",
+        },
+        {
+            "standard_code": "QA-03",
+            "indicator_code": "QA-03-1",
+            "indicator_title_ar": "متوسط تحقق مخرجات التعلم",
+            "link_type": "evidence",
+            "usage_ar": "شاهد على وضوح التقويم والربط بمخرجات البرنامج.",
+        },
+    ],
+    "supervisor_advising": [
+        {
+            "standard_code": "SS-02",
+            "indicator_code": "SS-02-1",
+            "indicator_title_ar": "معدل التخرج التقريبي",
+            "link_type": "evidence",
+            "usage_ar": "شاهد على جودة الإرشاد الأكاديمي والمتابعة.",
+        },
+    ],
+    "supervisor_coordination": [
+        {
+            "standard_code": "SS-01",
+            "indicator_code": "SS-01-1",
+            "indicator_title_ar": "رضا الطلبة",
+            "link_type": "evidence",
+            "usage_ar": "شاهد على تنسيق المشرف مع القسم وشؤون الطلبة.",
+        },
+        {
+            "standard_code": "QA-01",
+            "indicator_code": "QA-01-1",
+            "indicator_title_ar": "لقطات مؤشرات الجودة",
+            "link_type": "evidence",
+            "usage_ar": "يُرفع ضمن ملف ضمان الجودة كشاهد نوعي.",
+        },
+    ],
+    "staff_workplace": [
+        {
+            "standard_code": "HR-01",
+            "indicator_code": "HR-01-1",
+            "indicator_title_ar": "نسبة المؤهلات العليا",
+            "link_type": "evidence",
+            "usage_ar": "شاهد على بيئة العمل ودعم الموظفين.",
+        },
+        {
+            "standard_code": "HR-02",
+            "indicator_code": "HR-02-1",
+            "indicator_title_ar": "نسبة طالب : أستاذ",
+            "link_type": "evidence",
+            "usage_ar": "شاهد مكمّل على كفاءة الخدمات الإدارية.",
+        },
+    ],
+    "staff_student_services": [
+        {
+            "standard_code": "SS-01",
+            "indicator_code": "SS-01-1",
+            "indicator_title_ar": "رضا الطلبة",
+            "link_type": "evidence",
+            "usage_ar": "منظور الموظف لجودة خدمة الطالب.",
+        },
+    ],
+    "employer_strategic": [
+        {
+            "standard_code": "GV-01",
+            "indicator_code": "GV-01-1",
+            "indicator_title_ar": "هيكل الحوكمة",
+            "link_type": "evidence",
+            "usage_ar": "استشارة القطاع في الرؤية والخطة الاستراتيجية.",
+        },
+        {
+            "standard_code": "QA-03",
+            "indicator_code": "QA-03-1",
+            "indicator_title_ar": "متوسط تحقق مخرجات التعلم",
+            "link_type": "evidence",
+            "usage_ar": "رأي القطاع في مخرجات تعلم الخريج على مستوى الكلية.",
+        },
+        {
+            "standard_code": "CR",
+            "indicator_code": "CR-01",
+            "indicator_title_ar": "الشراكات المجتمعية",
+            "link_type": "evidence",
+            "usage_ar": "استعداد القطاع للشراكة مع الكلية.",
+        },
+    ],
+    "alumni": [
+        {
+            "standard_code": "QA-03",
+            "indicator_code": "QA-03-1",
+            "indicator_title_ar": "متوسط تحقق مخرجات التعلم",
+            "link_type": "evidence",
+            "usage_ar": "رضا الخريج عن جودة التعليم والجاهزية المهنية.",
+        },
+        {
+            "standard_code": "SS-02",
+            "indicator_code": "SS-02-1",
+            "indicator_title_ar": "معدل التخرج التقريبي",
+            "link_type": "evidence",
+            "usage_ar": "شاهد على تجربة الخريج طويلة المدى.",
+        },
+    ],
+}
+
+LINK_TYPE_LABELS_AR: dict[str, str] = {
+    "auto": "آلي",
+    "hybrid": "هجين",
+    "evidence": "شاهد",
+    "manual": "يدوي",
+}
+
 ROLE_SURVEY_FILL_GUIDE: dict[str, str] = {
     "student": "تقييم كل مقرر مسجّل به، ثم استبيانات الخدمات والمرافق.",
-    "instructor": "تقييم رئيس القسم، العميد/الإدارة الكلية، والعملية التعليمية في القسم.",
+    "instructor": "تقييم رئيس القسم، الإدارة والسياسات العامة، والعملية التعليمية في القسم.",
     "head_of_department": "كعضو هيئة تدريس: نفس استبيانات الأستاذ (يُنصح بوضع «أستاذ» من شريط الأدوار إن وُجد).",
     "supervisor": "استبيانان للمشرف (إرشاد ومتابعة + تنسيق مع القسم)، وتقرير إرشاد كمي منفصل.",
     "staff": "استبيان بيئة العمل وجودة خدمة الطالب من منظور الموظف.",
@@ -79,7 +274,7 @@ SURVEY_TEMPLATE_SEED: list[dict[str, Any]] = [
     },
     {
         "code": "faculty_dean",
-        "title_ar": "تقييم الأستاذ للعميد / الإدارة الكلية",
+        "title_ar": "تقييم الأستاذ للإدارة والسياسات العامة",
         "respondent_role": "instructor",
         "subject_type": "dean",
         "is_anonymous": 1,
@@ -129,6 +324,24 @@ SURVEY_TEMPLATE_SEED: list[dict[str, Any]] = [
         "subject_type": "student_services",
         "is_anonymous": 1,
         "min_aggregate": 3,
+        "department_scoped": 0,
+    },
+    {
+        "code": "employer_strategic",
+        "title_ar": "استشارة القطاع — الرؤية والخطة والمخرجات",
+        "respondent_role": "employer",
+        "subject_type": "sector_consultation",
+        "is_anonymous": 1,
+        "min_aggregate": 5,
+        "department_scoped": 0,
+    },
+    {
+        "code": "alumni",
+        "title_ar": "استبيان الخريج",
+        "respondent_role": "alumni",
+        "subject_type": "alumni_feedback",
+        "is_anonymous": 1,
+        "min_aggregate": 5,
         "department_scoped": 0,
     },
 ]
@@ -181,7 +394,7 @@ QUESTION_SEED: dict[str, list[tuple[str, int]]] = {
         ("تطوير البرامج الأكاديمية ومواءمتها لسوق العمل", 70),
         ("بيئة عمل محفّزة ومحترمة على مستوى الكلية", 80),
         ("تمثيل الكلية أمام الجامعة والشركاء", 90),
-        ("التقييم الإجمالي للقيادة على مستوى العميد/الإدارة", 100),
+        ("التقييم الإجمالي للإدارة والسياسات الأكاديمية على مستوى الكلية", 100),
     ],
     "faculty_educational_process": [
         ("وضوح معايير إقفال المقررات وتقاريرها", 10),
@@ -230,6 +443,22 @@ QUESTION_SEED: dict[str, list[tuple[str, int]]] = {
         ("الإلمام بلوائح الانتقال والمسارات والبرامج", 80),
         ("المساهمة في تحسين مؤشرات نجاح الطلبة في القسم", 90),
         ("الرضا الإجمالي عن التنسيق المؤسسي للإشراف", 100),
+    ],
+    "employer_strategic": [
+        ("وضوح رسالة الكلية وهويتها المهنية لدى قطاعكم", 10),
+        ("ملاءمة رؤية الكلية لاحتياجات سوق العمل والتنمية", 20),
+        ("ملاءمة الأهداف الاستراتيجية للكلية لأولويات قطاعكم", 30),
+        ("ملاءمة مخرجات تعلم الخريج على مستوى الكلية لمتطلبات العمل الفعلية", 40),
+        ("وضوح أولويات الخطة الاستراتيجية للكلية من منظوركم الخارجي", 50),
+        ("استعدادكم للشراكة مع الكلية (تدريب تعاوني، مشاريع مشتركة، لقاء أو ورشة)", 60),
+    ],
+    "alumni": [
+        ("جودة التعليم في الكلية بشكل عام", 10),
+        ("جاهزيتي المهنية عند التخرج", 20),
+        ("ملاءمة المقررات لسوق العمل", 30),
+        ("تطوير المهارات العامة (تواصل، عمل جماعي)", 40),
+        ("دعم الكلية للتدريب والتوجيه المهني", 50),
+        ("أنصح بالكلية كخيار دراسي", 60),
     ],
     "staff_student_services": [
         ("وضوح إجراءات خدمة الطالب للموظفين", 10),

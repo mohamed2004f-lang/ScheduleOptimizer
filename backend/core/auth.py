@@ -194,6 +194,65 @@ def _normalize_role(role: str) -> str:
     return r
 
 
+def _fetch_user_session_row(cur, username: str):
+    """قراءة صف المستخدم مع دعم قواعد بيانات قبل إضافة is_college_quality_lead."""
+    params = (username,)
+    try:
+        return cur.execute(
+            """
+            SELECT role, COALESCE(is_supervisor,0), student_id, instructor_id,
+                   COALESCE(is_college_quality_lead,0)
+            FROM users WHERE lower(username) = lower(?)
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+    except Exception:
+        try:
+            cur.connection.rollback()
+        except Exception:
+            pass
+        return cur.execute(
+            """
+            SELECT role, COALESCE(is_supervisor,0), student_id, instructor_id, 0
+            FROM users WHERE lower(username) = lower(?)
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+
+
+def _fetch_user_login_row(cur, username: str):
+    """قراءة صف تسجيل الدخول مع دعم ترقية العمود الجديد."""
+    params = (username,)
+    try:
+        return cur.execute(
+            """
+            SELECT username, password_hash, role, student_id, instructor_id,
+                   COALESCE(is_active,1) AS is_active,
+                   COALESCE(is_supervisor,0) AS is_supervisor,
+                   COALESCE(is_college_quality_lead,0) AS is_college_quality_lead
+            FROM users WHERE lower(username) = lower(?)
+            """,
+            params,
+        ).fetchone()
+    except Exception:
+        try:
+            cur.connection.rollback()
+        except Exception:
+            pass
+        return cur.execute(
+            """
+            SELECT username, password_hash, role, student_id, instructor_id,
+                   COALESCE(is_active,1) AS is_active,
+                   COALESCE(is_supervisor,0) AS is_supervisor,
+                   0 AS is_college_quality_lead
+            FROM users WHERE lower(username) = lower(?)
+            """,
+            params,
+        ).fetchone()
+
+
 def _sync_user_session_from_db(username: str | None) -> None:
     """
     يزامن role و is_supervisor و instructor_id من جدول users إلى الجلسة.
@@ -205,29 +264,29 @@ def _sync_user_session_from_db(username: str | None) -> None:
     try:
         with get_connection() as conn:
             cur = conn.cursor()
-            row = cur.execute(
-                """
-                SELECT role, COALESCE(is_supervisor,0), student_id, instructor_id
-                FROM users WHERE lower(username) = lower(?)
-                LIMIT 1
-                """,
-                (un,),
-            ).fetchone()
+            row = _fetch_user_session_row(cur, un)
         if not row:
             return
         db_role_raw = row[0]
         db_sup = row[1]
         db_student = row[2] if len(row) > 2 else None
         db_inst = row[3] if len(row) > 3 else None
+        db_cq_lead = row[4] if len(row) > 4 else 0
 
         role_n = _normalize_role(str(db_role_raw or "").strip())
         try:
             sup_i = int(db_sup or 0)
         except (TypeError, ValueError):
             sup_i = 0
+        try:
+            cq_lead = int(db_cq_lead or 0)
+        except (TypeError, ValueError):
+            cq_lead = 0
 
         session["user_role"] = role_n
         session["is_supervisor"] = 1 if sup_i == 1 else 0
+        session["is_college_quality_lead"] = 1 if cq_lead == 1 else 0
+        session["is_platform_admin"] = 1 if str(db_role_raw or "").strip().lower() == "admin" else 0
         if db_inst is not None:
             try:
                 session["instructor_id"] = int(db_inst)
@@ -411,7 +470,7 @@ def compute_capabilities(
         "nav_department_lo_dashboard": staff_quality,
         "nav_supervisor_quality_report": bool(is_supervisor_effective),
         "nav_student_learning_outcomes": role == "student",
-        "nav_student_course_evaluations": role == "student",
+        "nav_student_course_evaluations": False,
         "nav_student_registrations": role == "student",
         "nav_surveys_hub": role in ("student", "instructor", "staff", "head_of_department"),
         "nav_surveys_results": staff_quality,
@@ -719,6 +778,99 @@ def role_required(*roles):
     return decorator
 
 
+def is_college_quality_lead_session() -> bool:
+    """رئيس ضمان الجودة بالكلية (علم في جدول users)."""
+    try:
+        return int(session.get("is_college_quality_lead") or 0) == 1
+    except (TypeError, ValueError):
+        return False
+
+
+def can_edit_accreditation_catalog(user_role: str | None = None) -> bool:
+    """
+    تعديل مصفوفة الأدلة الثابتة (أنواع + قواعد) — مستوى المؤسسة.
+    admin دائماً؛ admin_main فقط إن عُيّن كرئيس جودة بالكلية.
+    """
+    try:
+        if int(session.get("is_platform_admin") or 0) == 1:
+            return True
+    except (TypeError, ValueError):
+        pass
+    role = _normalize_role((user_role or session.get("user_role") or "").strip())
+    if role == "admin_main" and is_college_quality_lead_session():
+        return True
+    return False
+
+
+def can_bind_accreditation_evidence(user_role: str | None = None) -> bool:
+    """ربط المصادر الفعلية — رئيس قسم، منسق جودة، أو مسؤول/رئيس جودة الكلية."""
+    if can_edit_accreditation_catalog(user_role):
+        return True
+    role = _normalize_role((user_role or session.get("user_role") or "").strip())
+    if role in ("admin", "admin_main"):
+        return True
+    if role == "head_of_department":
+        return True
+    if role == "instructor" and session.get("is_dept_quality_coordinator"):
+        return True
+    return False
+
+
+def accreditation_evidence_binder_required(f):
+    """ديكوراتور: ربط مصادر الأدلة (ب2–ب3)."""
+
+    @wraps(f)
+    def wrapped(*args, **kwargs):
+        is_logged_in = bool(session.get(SESSION_KEY, False))
+        if not is_logged_in:
+            return jsonify({
+                "status": "error",
+                "message": "يجب تسجيل الدخول للوصول إلى هذه الصفحة",
+                "code": "UNAUTHORIZED",
+            }), 401
+        if not can_bind_accreditation_evidence():
+            return jsonify({
+                "status": "error",
+                "message": "ربط الأدلة محصور على رئيس القسم أو منسق الجودة أو إدارة الكلية",
+                "code": "FORBIDDEN",
+            }), 403
+        return f(*args, **kwargs)
+
+    return wrapped
+
+
+def accreditation_catalog_editor_required(f):
+    """ديكوراتور: تعديل كتالوج مصفوفة الأدلة (admin أو رئيس جودة الكلية)."""
+
+    @wraps(f)
+    def wrapped(*args, **kwargs):
+        is_logged_in = bool(session.get(SESSION_KEY, False))
+        if not is_logged_in:
+            accept = (request.headers.get("Accept") or "").lower()
+            is_api_request = (
+                request.is_json
+                or "application/json" in accept
+                or request.path.startswith("/api/")
+                or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+            )
+            if is_api_request:
+                return jsonify({
+                    "status": "error",
+                    "message": "يجب تسجيل الدخول للوصول إلى هذه الصفحة",
+                    "code": "UNAUTHORIZED",
+                }), 401
+            return redirect("/login")
+        if not can_edit_accreditation_catalog():
+            return jsonify({
+                "status": "error",
+                "message": "تعديل مصفوفة الأدلة محصور على المسؤول أو رئيس ضمان الجودة بالكلية",
+                "code": "FORBIDDEN",
+            }), 403
+        return f(*args, **kwargs)
+
+    return wrapped
+
+
 def init_auth(app):
     """تهيئة نظام المصادقة"""
     # استخدام المفتاح السري من الإعدادات
@@ -795,20 +947,29 @@ def init_auth(app):
 
                     # دعم تسجيل الدخول بـ username أو student_id أو instructor_id
                     # مطابقة اسم المستخدم بدون حساسية لحالة الأحرف (متوافقة مع _sync_user_session_from_db)
-                    row = cur.execute(
-                        "SELECT username, password_hash, role, student_id, instructor_id, "
-                        "COALESCE(is_active,1) AS is_active, COALESCE(is_supervisor,0) AS is_supervisor "
-                        "FROM users WHERE lower(username) = lower(?)",
-                        (username,),
-                    ).fetchone()
+                    row = _fetch_user_login_row(cur, username)
                     if not row:
                         # fallback: student_id or instructor_id
-                        row = cur.execute(
-                            "SELECT username, password_hash, role, student_id, instructor_id, "
-                            "COALESCE(is_active,1) AS is_active, COALESCE(is_supervisor,0) AS is_supervisor "
-                            "FROM users WHERE student_id = ? OR CAST(instructor_id AS TEXT) = ?",
-                            (username, username),
-                        ).fetchone()
+                        try:
+                            row = cur.execute(
+                                "SELECT username, password_hash, role, student_id, instructor_id, "
+                                "COALESCE(is_active,1) AS is_active, COALESCE(is_supervisor,0) AS is_supervisor, "
+                                "COALESCE(is_college_quality_lead,0) AS is_college_quality_lead "
+                                "FROM users WHERE student_id = ? OR CAST(instructor_id AS TEXT) = ?",
+                                (username, username),
+                            ).fetchone()
+                        except Exception:
+                            try:
+                                cur.connection.rollback()
+                            except Exception:
+                                pass
+                            row = cur.execute(
+                                "SELECT username, password_hash, role, student_id, instructor_id, "
+                                "COALESCE(is_active,1) AS is_active, COALESCE(is_supervisor,0) AS is_supervisor, "
+                                "0 AS is_college_quality_lead "
+                                "FROM users WHERE student_id = ? OR CAST(instructor_id AS TEXT) = ?",
+                                (username, username),
+                            ).fetchone()
                     if row:
                         # فهرس ثابت يعمل مع sqlite3.Row و psycopg (dict_row)
                         pw_hash = row[1]
@@ -817,6 +978,7 @@ def init_auth(app):
                         db_instructor_id = row[4]
                         db_is_active = row[5]
                         db_is_supervisor = row[6]
+                        db_college_quality_lead = row[7] if len(row) > 7 else 0
                         if int(db_is_active or 1) == 0:
                             return jsonify({
                                 'status': 'error',
@@ -844,6 +1006,10 @@ def init_auth(app):
                                 is_supervisor_flag = int(db_is_supervisor or 0)
                             except Exception:
                                 is_supervisor_flag = 0
+                            try:
+                                college_quality_lead_flag = int(db_college_quality_lead or 0)
+                            except Exception:
+                                college_quality_lead_flag = 0
             except Exception:
                 logger.exception("login: failed to query users table")
                 if users_count is None:
@@ -885,6 +1051,14 @@ def init_auth(app):
         session[SESSION_USER] = canonical_user
         session['user_role'] = role
         session['is_supervisor'] = 1 if int(is_supervisor_flag or 0) == 1 else 0
+        try:
+            session['is_college_quality_lead'] = 1 if int(college_quality_lead_flag or 0) == 1 else 0
+        except NameError:
+            session['is_college_quality_lead'] = 0
+        try:
+            session['is_platform_admin'] = 1 if str(db_role or '').strip().lower() == 'admin' else 0
+        except NameError:
+            session['is_platform_admin'] = 1 if role == 'admin' else 0
         session.pop(SESSION_ACTIVE_MODE, None)
         if role == "supervisor":
             session[SESSION_ACTIVE_MODE] = "supervisor"

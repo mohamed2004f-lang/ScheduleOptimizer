@@ -32,6 +32,9 @@
         {% endif %}
       </div>
       {% if show_results_link %}
+      <a href="/academic_quality/surveys/invites" class="btn btn-outline-dark btn-sm">
+        <i class="fa-solid fa-link"></i> دعوات خارجية
+      </a>
       <a href="/academic_quality/surveys/results?semester={{ semester|urlencode }}" class="btn btn-outline-secondary btn-sm">
         نتائج مجمّعة (إدارة)
       </a>
@@ -41,7 +44,7 @@
     {% if supervisor_effective %}
     <div class="alert alert-secondary border-start border-secondary border-4 small mb-3">
       <strong>وضع المشرف الأكاديمي:</strong>
-      استبيانات المشرف <em>منفصلة</em> عن استبيانات عضو هيئة التدريس (رئيس القسم، العميد، العملية التعليمية).
+      استبيانات المشرف <em>منفصلة</em> عن استبيانات عضو هيئة التدريس (رئيس القسم، الإدارة والسياسات العامة، العملية التعليمية).
       التعبئة تُحفظ مرة واحدة لكل فصل حسب <code>instructor_id</code> — تبديل الوضع لا يُعيد طلب نفس الاستبيان.
     </div>
     {% elif user_role in ('instructor', 'head_of_department') and respondent_role == 'instructor' %}
@@ -61,21 +64,9 @@
       {% endif %}
     </div>
 
-    {% if course_eval_link %}
-    <div class="card mb-3 border-primary">
-      <div class="card-body d-flex justify-content-between align-items-center flex-wrap gap-2">
-        <div>
-          <strong>١ — تقييم المقررات والأساتذة</strong>
-          <div class="small text-muted">استبيان منفصل لكل شعبة — يُحسب في مؤشر رضا الطلاب</div>
-        </div>
-        <a href="{{ course_eval_link }}" class="btn btn-primary">فتح تقييم المقررات</a>
-      </div>
-    </div>
-    {% endif %}
-
     {% if supervisor_effective %}
     <h6 class="fw-semibold mt-2 mb-2">
-      {% if course_eval_link %}٢ — {% else %}١ — {% endif %}استبيانات المشرف الأكاديمي (نوعي)
+      ١ — استبيانات المشرف الأكاديمي (نوعي)
     </h6>
     <p class="small text-muted mb-2">
       تُدمج في <strong>لوحة الجودة</strong> ضمن مؤشرات
@@ -96,7 +87,13 @@
         <div class="d-flex justify-content-between align-items-center gap-2">
           <div>
             <span class="fw-semibold">{{ p.title_ar }}</span>
-            <div class="small text-muted">تقييم سري (1–5) — {{ p.code }}</div>
+            <div class="small text-muted">
+              {% if p.pending_kind == 'course_eval' %}
+              تقييم مقرر وشعبة — {{ p.code }}
+              {% else %}
+              تقييم سري (1–5) — {{ p.code }}
+              {% endif %}
+            </div>
           </div>
           <span class="badge bg-warning text-dark">لم يُرسل بعد</span>
         </div>
@@ -136,7 +133,7 @@
     <div class="card mb-4">
       <div class="card-body">
         <p class="small text-muted mb-2">
-          تقييم رئيس القسم، العميد، والعملية التعليمية — تُعبَّأ في <strong>وضع الأستاذ</strong>، وليس في وضع المشرف.
+          تقييم رئيس القسم، الإدارة والسياسات العامة، والعملية التعليمية — تُعبَّأ في <strong>وضع الأستاذ</strong>، وليس في وضع المشرف.
         </p>
         {% if instructor_all_done %}
         <div class="alert alert-success mb-0 py-2 small">
@@ -157,9 +154,7 @@
 
     {% else %}
     {# ——— وضع الطالب / الأستاذ / الموظف ——— #}
-    <h6 class="mt-2 mb-2">
-      {% if course_eval_link %}٢ — {% endif %}استبيانات عامة مطلوبة مني
-    </h6>
+    <h6 class="mt-2 mb-2">استبيانات وتقييمات مطلوبة مني</h6>
     {% if pending %}
     <div class="list-group mb-4">
       {% for p in pending %}
@@ -167,7 +162,13 @@
         <div class="d-flex justify-content-between align-items-center gap-2">
           <div>
             <span class="fw-semibold">{{ p.title_ar }}</span>
-            <div class="small text-muted">اضغط للتعبئة — تقييم سري (1–5)</div>
+            <div class="small text-muted">
+              {% if p.pending_kind == 'course_eval' %}
+              تقييم مقرر وشعبة — {{ p.course_name or p.code }}
+              {% else %}
+              اضغط للتعبئة — تقييم سري (1–5)
+              {% endif %}
+            </div>
           </div>
           <span class="badge bg-warning text-dark">لم يُرسل بعد</span>
         </div>

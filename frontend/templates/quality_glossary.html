@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>دليل المصطلحات — ضمان الجودة</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/css/term-help.css">
+  <style>
+    .glossary-table th { white-space: nowrap; }
+    .glossary-symbol {
+      display: inline-block;
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 0.82rem;
+      font-weight: 600;
+      padding: 0.15rem 0.45rem;
+      border-radius: 0.25rem;
+      background: #e7f1ff;
+      color: #0a58ca;
+      border: 1px solid #b6d4fe;
+      direction: ltr;
+      unicode-bidi: isolate;
+    }
+    .glossary-table tbody tr:hover { background: rgba(13, 110, 253, 0.04); }
+  </style>
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-fluid mt-4 px-3" style="max-width:1100px;">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+      <div>
+        <h4 class="mb-1"><i class="fa-solid fa-book-open text-primary"></i> دليل المصطلحات</h4>
+        <p class="text-muted small mb-0">
+          مرجع ل<strong>رموز</strong> الجودة والمصطلحات العربية — محدّث وفق المنظومة الحالية.
+        </p>
+      </div>
+      <a href="/academic_quality/dashboard" class="btn btn-outline-secondary btn-sm">لوحة الجودة</a>
+    </div>
+
+    <div class="mb-3">
+      <input type="search" class="form-control" id="glossarySearch" placeholder="ابحث بالرمز أو المصطلح أو التعريف…" autocomplete="off">
+    </div>
+
+    <div id="glossaryRoot">
+      <div class="text-center text-muted py-4" id="glossaryLoading">جاري تحميل المصطلحات…</div>
+    </div>
+
+    <div class="alert alert-light border small mt-3">
+      <strong>سياسة العرض:</strong>
+      <ul class="mb-2 ps-3">
+        <li>في <strong>واجهات التعبئة</strong> (طلاب، خريجون، قطاع) تُستخدم عناوين عربية كاملة دون اختصارات.</li>
+        <li>في <strong>خريطة الامتثال</strong> تظهر رموز QAA (INST / PROG-UG) للجنة الجودة؛ ربط الاستبيانات بالمؤشرات <em>يدوي واختياري</em>.</li>
+        <li>«احسب من النظام» يحدّث درجة المؤشر من البيانات — منفصل عن رفع الشواهد وربطها.</li>
+      </ul>
+      <p class="mb-0">للتلميحات السريعة في الصفحات، استخدم أيقونة ⓘ بجانب المصطلحات (IG، GLO، PLO…).</p>
+    </div>
+  </main>
+  <script>
+  (function() {
+    var GLOSSARY_URL = '/static/data/quality_glossary.json?v=20260611';
+
+    function esc(s) {
+      return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function symbolBadge(sym) {
+      var s = String(sym || '').trim();
+      if (!s || s === '—') {
+        return '<span class="text-muted small">—</span>';
+      }
+      return '<code class="glossary-symbol">' + esc(s) + '</code>';
+    }
+
+    function buildTable(groups) {
+      var root = document.getElementById('glossaryRoot');
+      if (!root) return;
+      var html = '';
+      (groups || []).forEach(function(group) {
+        html += '<section class="mb-4 glossary-category" data-category="' + esc(group.category_ar) + '">';
+        html += '<h5 class="text-primary border-bottom pb-2 mb-3">' + esc(group.category_ar) + '</h5>';
+        html += '<div class="table-responsive"><table class="table table-sm table-bordered table-hover glossary-table mb-0 align-middle">';
+        html += '<thead class="table-light"><tr>';
+        html += '<th style="width:11rem">الرمز / الاختصار</th>';
+        html += '<th style="width:16rem">المصطلح</th><th>التعريف</th></tr></thead><tbody>';
+        (group.terms || []).forEach(function(term) {
+          var sym = term.symbol || '';
+          var search = (sym + ' ' + (term.title_ar || '') + ' ' + (term.definition_ar || '')).toLowerCase();
+          html += '<tr class="glossary-row" data-search="' + esc(search) + '">';
+          html += '<td>' + symbolBadge(sym) + '</td>';
+          html += '<td class="fw-semibold">' + esc(term.title_ar) + '</td>';
+          html += '<td class="small text-muted mb-0">' + esc(term.definition_ar) + '</td>';
+          html += '</tr>';
+        });
+        html += '</tbody></table></div></section>';
+      });
+      root.innerHTML = html || '<div class="alert alert-warning">لا توجد مصطلحات.</div>';
+      bindSearch();
+    }
+
+    function bindSearch() {
+      var inp = document.getElementById('glossarySearch');
+      if (!inp || inp._glossaryBound) return;
+      inp._glossaryBound = true;
+      inp.addEventListener('input', function() {
+        var q = (inp.value || '').trim().toLowerCase();
+        document.querySelectorAll('.glossary-row').forEach(function(row) {
+          var hay = row.getAttribute('data-search') || '';
+          row.style.display = !q || hay.indexOf(q) >= 0 ? '' : 'none';
+        });
+        document.querySelectorAll('.glossary-category').forEach(function(sec) {
+          var visible = sec.querySelectorAll('.glossary-row:not([style*="display: none"])').length;
+          sec.style.display = visible ? '' : 'none';
+        });
+      });
+    }
+
+    function loadGlossary() {
+      fetch(GLOSSARY_URL, { credentials: 'same-origin', cache: 'no-cache' })
+        .then(function(r) {
+          if (!r.ok) throw new Error('glossary fetch');
+          return r.json();
+        })
+        .then(function(data) {
+          if (data.groups && data.groups.length) {
+            buildTable(data.groups);
+            return;
+          }
+          var terms = data.terms || {};
+          var cats = {};
+          Object.keys(terms).forEach(function(id) {
+            var t = terms[id];
+            var cat = t.category_ar || 'عام';
+            if (!cats[cat]) cats[cat] = [];
+            cats[cat].push(t);
+          });
+          var order = data.category_order || Object.keys(cats).sort();
+          var groups = order.filter(function(c) { return cats[c]; }).map(function(c) {
+            return { category_ar: c, terms: cats[c] };
+          });
+          buildTable(groups);
+        })
+        .catch(function() {
+          fetch('/academic_quality/api/glossary', { credentials: 'include', cache: 'no-cache' })
+            .then(function(r) { return r.ok ? r.json() : Promise.reject(); })
+            .then(function(data) { buildTable(data.groups || []); })
+            .catch(function() {
+              var root = document.getElementById('glossaryRoot');
+              if (root) {
+                root.innerHTML = '<div class="alert alert-danger">تعذر تحميل المصطلحات — أعد تشغيل الخادم ثم حدّث الصفحة (Ctrl+F5).</div>';
+              }
+            });
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', loadGlossary);
+  })();
+  </script>
+</body>
+</html>

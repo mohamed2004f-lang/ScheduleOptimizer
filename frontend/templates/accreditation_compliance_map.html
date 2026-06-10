@@ -3,39 +3,74 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>خريطة امتثال الاعتماد المؤسسي</title>
+  <title>{{ page_title_ar | default('خريطة امتثال الاعتماد') }}</title>
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body class="page-accreditation-map">
   {% include "base_nav.html" %}
+  {% set is_qaa = map_data.catalog_version.startswith('QAA-') %}
   <main class="container-main container-1100 theme-formal mt-4">
     {% if page_error %}
     <div class="alert alert-danger">{{ page_error }}</div>
     {% endif %}
     <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
       <div>
-        <h1 class="page-title h4 mb-1"><i class="fa-solid fa-map text-primary"></i> خريطة امتثال الاعتماد المؤسسي</h1>
+        <h1 class="page-title h4 mb-1" id="pageTitle">
+          <i class="fa-solid fa-map text-primary"></i> {{ page_title_ar | default('خريطة امتثال الاعتماد') }}
+        </h1>
         <p class="text-muted small mb-0">
           إصدار الكتالوج: <strong id="headerCatalogVersion">{{ map_data.catalog_version }}</strong> —
           الفصل: <strong>{{ map_data.semester }}</strong> —
           {{ map_data.scope_label_ar }}
         </p>
-        <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
-          <label class="small text-muted mb-0">إصدار المعايير:</label>
-          <select class="form-select form-select-sm" id="catalogVersionSelect" style="max-width:10rem;">
-            {% for ver in catalog_versions %}
-            <option value="{{ ver }}" {% if ver == map_data.catalog_version %}selected{% endif %}>{{ ver }}</option>
-            {% endfor %}
-          </select>
-        </div>
+        <select class="d-none" id="catalogVersionSelect" aria-hidden="true">
+          {% for ver in catalog_versions %}
+          <option value="{{ ver }}" {% if ver == map_data.catalog_version %}selected{% endif %}>
+            {{ (catalog_version_labels | default({})).get(ver, ver) }}
+          </option>
+          {% endfor %}
+        </select>
       </div>
       <div class="d-flex flex-wrap gap-2">
         <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/dashboard">لوحة الجودة</a>
         <a class="btn btn-outline-success btn-sm" id="btnExportXlsx" href="#">Excel دفتر (هـ-5)</a>
         <a class="btn btn-outline-danger btn-sm" id="btnExportPdf" href="#" target="_blank">PDF دفتر</a>
-        <button type="button" class="btn btn-success btn-sm" id="btnComputeAuto">احسب من النظام (هـ-2)</button>
+        <button type="button" class="btn btn-success btn-sm" id="btnComputeAuto"
+          title="يملأ المؤشرات الرقمية الآلية من قاعدة البيانات (معدلات، أعداد…) — لا يربط استبيانات">
+          احسب من النظام (هـ-2)
+        </button>
         <button type="button" class="btn btn-outline-primary btn-sm" id="btnRefreshMap">تحديث</button>
+      </div>
+    </div>
+
+    <ul class="nav nav-pills nav-fill mb-3 gap-1" id="catalogScopeTabs" role="tablist">
+      {% for sc in map_scopes | default([]) %}
+      <li class="nav-item" role="presentation">
+        <button type="button"
+          class="nav-link {% if sc.key == active_scope_key %}active{% endif %}{% if sc.key == 'internal' and not is_admin_main %} d-none{% endif %}"
+          data-scope="{{ sc.key }}"
+          data-catalog="{{ sc.catalog_version }}"
+          role="tab">
+          {{ sc.title_ar }}
+          <span class="badge bg-light text-dark border ms-1">{{ sc.indicator_hint_ar }}</span>
+        </button>
+      </li>
+      {% endfor %}
+    </ul>
+
+    <div class="card mb-3 border-0 bg-light">
+      <div class="card-body py-2 small">
+        <div class="row g-2">
+          <div class="col-md-6">
+            <strong><i class="fa-solid fa-calculator text-success"></i> «احسب من النظام»</strong>
+            <p class="text-muted mb-0">يملأ <em>المؤشرات الرقمية الآلية</em> من بيانات النظام (معدلات تخرج، أعداد طلاب، نسب…). لا يربط استبيانات ولا يرفع ملفات.</p>
+          </div>
+          <div class="col-md-6">
+            <strong><i class="fa-solid fa-link text-primary"></i> زر «إدارة» في عمود الأدلة</strong>
+            <p class="text-muted mb-0">ربط <em>اختياري يدوي</em>: اختر استبياناً أو تقريراً أو ارفع ملفاً شاهداً للمؤشر — عند الحاجة فقط.</p>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -60,10 +95,13 @@
     </div>
 
     <div class="alert alert-info small mb-3">
-      <strong>المرجع الرسمي:</strong>
-      <a href="{{ qaa_url }}" target="_blank" rel="noopener">المركز الوطني — التعليم الجامعي (اعتماد مؤسسي/برامجي)</a>
-      — معايير ومستندات الدراسة الذاتية وفق أدلة المركز.
-      <span class="d-block mt-1 text-muted">الكتالوج الحالي seed مبني على محاور المركز؛ يُحدَّث لاحقاً من PDF المعايير الرسمية (هـ-5).</span>
+      <strong>المرجع الرسمي — مركز ضمان الجودة الليبي</strong>
+      (<a href="{{ qaa_url }}" target="_blank" rel="noopener">المركز الوطني للتعليم الجامعي</a>):
+      معايير الاعتماد — الإصدار الرابع 2023.
+      <span class="d-block mt-1 text-muted">
+        استخدم التبويبات أعلاه للتبديل بين <strong>الاعتماد المؤسسي</strong> و<strong>الاعتماد البرامجي</strong>.
+        الكتالوج الداخلي المختصر (15 مؤشر) للتجربة فقط.
+      </span>
     </div>
 
     <div class="card mb-3 border-0 bg-light">
@@ -83,7 +121,9 @@
 
     <ul class="nav nav-tabs mb-3" id="accredMainTabs" role="tablist">
       <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tabCompliance" type="button">امتثال</button></li>
-      <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabEvidence" type="button">أدلة</button></li>
+      {% if show_evidence_matrix_tab | default(false) %}
+      <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabEvidence" type="button">تقرير تغطية الأدلة</button></li>
+      {% endif %}
       <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabPlans" type="button">خطط التحسين</button></li>
       <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabManual" type="button">إدخال يدوي</button></li>
       <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabAdmin" type="button">إدارة</button></li>
@@ -91,8 +131,8 @@
 
     <div class="tab-content" id="accredTabContent">
       <div class="tab-pane fade show active" id="tabCompliance" role="tabpanel">
-        <p class="alert alert-success small py-2">
-          <strong>هـ-2:</strong> «احسب من النظام» يملأ المؤشرات الآلية — دون استبدال التقييم اليدوي السابق.
+        <p class="alert alert-success small py-2 mb-2">
+          <strong>تبويب الامتثال:</strong> راجع حالة كل مؤشر، اضغط <strong>تقييم</strong> للحالة اليدوية، أو <strong>إدارة</strong> لربط شاهد/استبيان اختياري.
         </p>
         <div class="card mb-3 border-0 bg-light">
           <div class="card-body py-2">
@@ -101,9 +141,16 @@
                 <label class="form-label small mb-0">المحور</label>
                 <select class="form-select form-select-sm" id="filterDomain">
                   <option value="">الكل</option>
-                  {% for code, label in domain_labels.items() %}
-                  <option value="{{ code }}">{{ label }}</option>
+                  {% for axis in qaa_axis_options | default([]) %}
+                  <option value="{{ axis.domain_code }}" data-catalog-version="{{ axis.catalog_version }}">
+                    {{ axis.label }}
+                  </option>
                   {% endfor %}
+                  {% if not qaa_axis_options %}
+                  {% for domain in map_data.domains %}
+                  <option value="{{ domain.code }}">{{ domain.label }}</option>
+                  {% endfor %}
+                  {% endif %}
                 </select>
               </div>
               <div class="col-md-3">
@@ -138,8 +185,8 @@
         <div class="border-bottom p-3 standard-block">
           <div class="d-flex flex-wrap justify-content-between gap-1 mb-2">
             <div>
-              <code class="small">{{ st.code }}</code>
-              <strong class="ms-1">{{ st.title_ar }}</strong>
+              <strong>{{ st.title_ar }}</strong>
+              <span class="text-muted small">({{ st.indicator_count or st.indicators|length }} مؤشر)</span>
               {% if st.weight_percent %}<span class="badge bg-secondary ms-1">{{ st.weight_percent }}%</span>{% endif %}
             </div>
             <span class="small text-muted">
@@ -153,7 +200,7 @@
                 <tr>
                   <th>المؤشر</th>
                   <th>المصدر</th>
-                  <th>الهدف</th>
+                  {% if not is_qaa %}<th>الهدف</th>{% endif %}
                   <th>الحالة</th>
                   <th>الدرجة</th>
                   <th>أدلة</th>
@@ -164,13 +211,15 @@
                 {% for ind in st.indicators %}
                 <tr class="indicator-row"
                   data-status="{{ ind.assessment.compliance_status }}"
-                  data-search="{{ (ind.code ~ ' ' ~ ind.title_ar)|lower }}">
+                  data-search="{{ ind.title_ar|lower }}"
+                  data-indicator-code="{{ ind.code }}">
                   <td>
-                    <code>{{ ind.code }}</code> {{ ind.title_ar }}
+                    <div><span class="fw-semibold text-secondary">{{ ind.seq }}.</span> {{ ind.title_ar }}</div>
+                    <code class="small text-muted">{{ ind.code }}</code>
                     {% if ind.is_auto_computable %}<span class="badge bg-primary ms-1">آلي</span>{% endif %}
                   </td>
                   <td>{{ ind.source_type_label }}</td>
-                  <td class="text-muted">{{ ind.target_hint_ar }}</td>
+                  {% if not is_qaa %}<td class="text-muted">{{ ind.target_hint_ar }}</td>{% endif %}
                   <td>
                     <span class="badge rounded-pill
                       {% if ind.assessment.compliance_status == 'met' %}bg-success
@@ -183,10 +232,13 @@
                   </td>
                   <td>{% if ind.assessment.score_percent is not none %}{{ ind.assessment.score_percent }}%{% else %}—{% endif %}</td>
                   <td>
-                    {% if ind.evidence_count %}
-                    <span class="badge bg-success">{{ ind.evidence_count }}</span>
+                    {% if ind.evidence_coverage and ind.evidence_coverage.label_ar %}
+                    <span class="badge bg-success"
+                      title="{{ ind.evidence_coverage.detail_ar }}">{{ ind.evidence_coverage.label_ar }}</span>
+                    {% elif ind.evidence_count %}
+                    <span class="badge bg-success" title="شواهد مرفوعة">{{ ind.evidence_count }} شاهد</span>
                     {% else %}
-                    <span class="text-muted">0</span>
+                    <span class="text-muted small">—</span>
                     {% endif %}
                     <button type="button" class="btn btn-link btn-sm p-0 btn-evidence"
                       data-indicator-id="{{ ind.id }}"
@@ -213,12 +265,10 @@
     </div>
     {% endfor %}
         </div>
-      </div>
 
-      <div class="tab-pane fade" id="tabEvidence" role="tabpanel">
-        <div class="card mb-3 border-start border-warning border-4" id="evidenceChecklistCard">
+        <div class="card mb-3 border-start border-warning border-4 mt-3" id="evidenceChecklistCard">
           <div class="card-header bg-light">
-            <strong><i class="fa-solid fa-folder-open text-warning"></i> قائمة تحقق مستندات الاعتماد (هـ-3)</strong>
+            <strong><i class="fa-solid fa-folder-open text-warning"></i> مستندات مرجعية (مستوى الكلية)</strong>
           </div>
           <div class="card-body p-0">
             <div class="table-responsive">
@@ -252,6 +302,52 @@
         </div>
       </div>
 
+      {% if show_evidence_matrix_tab | default(false) %}
+      <div class="tab-pane fade" id="tabEvidence" role="tabpanel">
+        <div class="card mb-3 border-start border-primary border-4">
+          <div class="card-header bg-light d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <strong><i class="fa-solid fa-table text-primary"></i> مصفوفة أدلة المؤشرات (المتوقع مقابل الموجود)</strong>
+            <button type="button" class="btn btn-outline-primary btn-sm" id="btnReloadEvidenceMatrix">تحديث المصفوفة</button>
+          </div>
+          <div class="card-body">
+            <p class="small text-muted mb-2">
+              كل صف = نوع دليل متوقّع لمؤشر في كتالوج <strong id="evMatrixCatalog">{{ map_data.catalog_version }}</strong>.
+              الربط: <span class="badge bg-primary">آلي</span>
+              <span class="badge bg-info text-dark">هجين</span>
+              <span class="badge bg-secondary">شاهد</span>
+              <span class="badge bg-dark">يدوي</span>
+            </p>
+            <div class="d-flex flex-wrap gap-2 mb-3 small" id="evMatrixSummary">
+              <span class="badge bg-secondary">قواعد: —</span>
+            </div>
+            <div class="row g-2 mb-2">
+              <div class="col-md-4">
+                <select class="form-select form-select-sm" id="evMatrixFilterMode">
+                  <option value="">كل أنماط الربط</option>
+                  <option value="auto">آلي</option>
+                  <option value="hybrid">هجين</option>
+                  <option value="evidence">شاهد</option>
+                  <option value="manual">يدوي</option>
+                </select>
+              </div>
+              <div class="col-md-4">
+                <select class="form-select form-select-sm" id="evMatrixFilterStatus">
+                  <option value="">كل الحالات</option>
+                  <option value="met">مكتمل</option>
+                  <option value="partial">جزئي</option>
+                  <option value="missing">ناقص</option>
+                </select>
+              </div>
+              <div class="col-md-4">
+                <input type="search" class="form-control form-control-sm" id="evMatrixSearch" placeholder="بحث مؤشر أو دليل…">
+              </div>
+            </div>
+            <div id="evMatrixHost" class="text-muted small">افتح التبويب أو اضغط تحديث لتحميل المصفوفة.</div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
       <div class="tab-pane fade" id="tabPlans" role="tabpanel">
         <div class="card mb-3 border-start border-secondary border-4">
           <div class="card-header bg-light d-flex flex-wrap justify-content-between align-items-center gap-2">
@@ -270,7 +366,7 @@
                   {% for p in improvement_plans %}
                   <tr>
                     <td>{{ p.title_ar }}</td>
-                    <td><code>{{ p.indicator_code or '—' }}</code></td>
+                    <td>{{ p.indicator_title_ar or p.indicator_code or '—' }}</td>
                     <td>{{ p.status_label }}</td>
                     <td>{{ p.priority_label }}</td>
                     <td>{{ p.target_date or '—' }}</td>
@@ -305,7 +401,7 @@
             <button type="button" class="btn btn-primary btn-sm" id="btnSaveManual">حفظ الإدخالات</button>
           </div>
           <div class="card-body">
-            <p class="small text-muted">يُحدَّث تلقائياً: FF-01-1 (المرافق)، FF-02-1 (الميزانية)، CR-01-1 (أنشطة مجتمعية)، CR-02-1 (بحث)، GV-01-1 (حوكمة).</p>
+            <p class="small text-muted">يُحدَّث تلقائياً من هذا التبويب: تقييم المرافق، تنفيذ الميزانية، الأنشطة المجتمعية، المخرجات البحثية، اجتماعات الحوكمة.</p>
             <div class="row g-3">
               {% for sec in (manual_bundle.sections if manual_bundle is defined else []) %}
               <div class="col-md-6">
@@ -332,8 +428,8 @@
 
       <div class="tab-pane fade" id="tabAdmin" role="tabpanel">
         <div class="alert alert-secondary small mb-3">
-          <strong>دور تبويب «إدارة»:</strong> إعدادات الاعتماد على مستوى النظام والكتالوج — وليس تقييم المؤشرات (ذلك في تبويب <em>امتثال</em>)
-          أو الأدلة (<em>أدلة</em>). التقييمات اليومية في <em>إدخال يدوي</em> و<em>خطط التحسين</em>.
+          <strong>دور تبويب «إدارة»:</strong> إعدادات الاعتماد على مستوى النظام والكتالوج — وليس تقييم المؤشرات (ذلك في تبويب <em>امتثال</em>).
+          التقييمات اليومية في <em>إدخال يدوي</em> و<em>خطط التحسين</em>.
         </div>
 
         <div class="row g-3 mb-3">
@@ -343,8 +439,11 @@
               <div class="card-body small d-flex flex-column gap-2">
                 <a class="btn btn-outline-primary btn-sm" href="/academic_quality/surveys?semester={{ map_data.semester|urlencode }}">تعبئة الاستبيانات (دوري)</a>
                 <a class="btn btn-outline-primary btn-sm" href="/academic_quality/surveys/results?semester={{ map_data.semester|urlencode }}">نتائج الاستبيانات (مجمّعة)</a>
+                <a class="btn btn-outline-info btn-sm" href="/academic_quality/surveys/results?view=external">نتائج خارجية (دورات)</a>
+                <a class="btn btn-outline-info btn-sm" href="/academic_quality/surveys/invites">دعوات خارجية</a>
                 <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/survey_admin">إعداد بنود الاستبيانات</a>
                 <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/dashboard">لوحة الجودة الأكاديمية</a>
+                <a class="btn btn-outline-info btn-sm" href="/academic_quality/glossary">دليل المصطلحات</a>
               </div>
             </div>
           </div>
@@ -364,6 +463,46 @@
             </div>
           </div>
         </div>
+
+        {% if can_edit_accreditation_catalog %}
+        <div class="card mb-3 border-start border-success border-4" id="catalogMatrixAdminCard">
+          <div class="card-header bg-light d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <strong><i class="fa-solid fa-table-list text-success"></i> إعداد مصفوفة الأدلة (مستوى المؤسسة — ب1)</strong>
+            <span class="badge bg-success">مسؤول / رئيس جودة الكلية</span>
+          </div>
+          <div class="card-body small">
+            <p class="text-muted mb-2">
+              تعريف أنواع الأدلة المتوقعة وقواعد ربطها بالمؤشرات في كتالوج
+              <strong id="catalogMatrixVer">{{ map_data.catalog_version }}</strong>.
+              ربط المصادر الفعلية (استبيانات/شواهد) يتم لاحقاً من تبويب <em>امتثال</em> — المرحلة ب3–ب4.
+            </p>
+            <ul class="nav nav-pills mb-3" id="catalogMatrixSubTabs" role="tablist">
+              <li class="nav-item">
+                <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#catalogTypesPane" type="button">أنواع الأدلة</button>
+              </li>
+              <li class="nav-item">
+                <button class="nav-link" data-bs-toggle="pill" data-bs-target="#catalogRulesPane" type="button">قواعد الربط بالمؤشرات</button>
+              </li>
+            </ul>
+            <div class="tab-content">
+              <div class="tab-pane fade show active" id="catalogTypesPane">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                  <span class="text-muted">أنواع قابلة للإضافة؛ الأنواع النظامية لا تُحذف.</span>
+                  <button type="button" class="btn btn-outline-success btn-sm" id="btnAddEvidenceType">نوع جديد</button>
+                </div>
+                <div id="catalogTypesHost" class="text-muted">جاري التحميل…</div>
+              </div>
+              <div class="tab-pane fade" id="catalogRulesPane">
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                  <input type="search" class="form-control form-control-sm" id="catalogRulesSearch" placeholder="بحث مؤشر أو دليل…" style="max-width:16rem;">
+                  <button type="button" class="btn btn-outline-primary btn-sm" id="btnAddEvidenceRule">قاعدة جديدة</button>
+                </div>
+                <div id="catalogRulesHost" class="text-muted">افتح التبويب لتحميل القواعد.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        {% endif %}
 
         {% if is_admin_main %}
         <div class="card mb-3 border-start border-dark border-4" id="importCatalogCard">
@@ -395,7 +534,7 @@
   </main>
 
   <div class="modal fade" id="evidenceModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
+    <div class="modal-dialog modal-xl">
       <div class="modal-content">
         <div class="modal-header">
           <h6 class="modal-title">أدلة الاعتماد</h6>
@@ -405,23 +544,34 @@
           <p class="small text-muted mb-2" id="evidenceHdr"></p>
           <input type="hidden" id="evidenceIndicatorId">
           <input type="hidden" id="evidenceChecklistKey">
-          <ul class="list-group list-group-flush small mb-3" id="evidenceList"></ul>
-          <div class="border rounded p-2 bg-light">
-            <div class="mb-2">
-              <label class="form-label small mb-0">رفع ملف (PDF/Word/Excel/صورة — حد 15MB)</label>
-              <input type="file" class="form-control form-control-sm" id="evidenceFile">
+          <div id="evidenceBindingsPanel" class="mb-3 d-none">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <h6 class="small fw-bold mb-0"><i class="fa-solid fa-link text-primary"></i> ربط مصدر (اختياري)</h6>
+              <span class="badge bg-light text-dark border" id="evidenceBindingsCatalog"></span>
             </div>
-            <div class="mb-2">
-              <label class="form-label small mb-0">عنوان (اختياري)</label>
-              <input type="text" class="form-control form-control-sm" id="evidenceTitle">
+            <p class="text-muted small mb-2">اربط استبياناً أو تقريراً أو شاهداً مرفوعاً بهذا المؤشر عند الحاجة — لا يوجد ربط آلي أو إلزامي.</p>
+            <div id="evidenceBindingsHost" class="text-muted small">جاري التحميل…</div>
+          </div>
+          <div id="evidenceWitnessSection">
+            <h6 class="small fw-bold mb-2" id="evidenceWitnessTitle">شواهد مرفوعة</h6>
+            <ul class="list-group list-group-flush small mb-3" id="evidenceList"></ul>
+            <div class="border rounded p-2 bg-light">
+              <div class="mb-2">
+                <label class="form-label small mb-0">رفع ملف شاهد (PDF/Word/Excel/صورة — حد 15MB)</label>
+                <input type="file" class="form-control form-control-sm" id="evidenceFile">
+              </div>
+              <div class="mb-2">
+                <label class="form-label small mb-0">عنوان (اختياري)</label>
+                <input type="text" class="form-control form-control-sm" id="evidenceTitle">
+              </div>
+              <button type="button" class="btn btn-primary btn-sm" id="btnUploadEvidence">رفع</button>
+              <hr class="my-2">
+              <div class="mb-2">
+                <label class="form-label small mb-0">أو رابط خارجي</label>
+                <input type="url" class="form-control form-control-sm" id="evidenceUrl" placeholder="https://...">
+              </div>
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="btnLinkEvidence">إضافة رابط</button>
             </div>
-            <button type="button" class="btn btn-primary btn-sm" id="btnUploadEvidence">رفع</button>
-            <hr class="my-2">
-            <div class="mb-2">
-              <label class="form-label small mb-0">أو رابط خارجي</label>
-              <input type="url" class="form-control form-control-sm" id="evidenceUrl" placeholder="https://...">
-            </div>
-            <button type="button" class="btn btn-outline-secondary btn-sm" id="btnLinkEvidence">إضافة رابط</button>
           </div>
         </div>
       </div>
@@ -488,6 +638,110 @@
     </div>
   </div>
 
+  <div class="modal fade" id="evidenceTypeModal" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h6 class="modal-title">نوع دليل</h6>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="evTypeId">
+          <div class="mb-2">
+            <label class="form-label small">الرمز (إنجليزي)</label>
+            <input type="text" class="form-control form-control-sm" id="evTypeCode" placeholder="custom_report_xyz">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">العنوان</label>
+            <input type="text" class="form-control form-control-sm" id="evTypeTitle">
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">الوصف</label>
+            <textarea class="form-control form-control-sm" id="evTypeDesc" rows="2"></textarea>
+          </div>
+          <div class="row g-2">
+            <div class="col-6">
+              <label class="form-label small">التصنيف</label>
+              <select class="form-select form-select-sm" id="evTypeCategory">
+                {% for key, label in evidence_category_labels.items() %}
+                <option value="{{ key }}">{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-6">
+              <label class="form-label small">الترتيب</label>
+              <input type="number" class="form-control form-control-sm" id="evTypeSort" value="500">
+            </div>
+          </div>
+          <div class="row g-2 mt-1">
+            <div class="col-6">
+              <label class="form-label small">وحدة المصدر (اختياري)</label>
+              <input type="text" class="form-control form-control-sm" id="evTypeModule" placeholder="multi_surveys">
+            </div>
+            <div class="col-6">
+              <label class="form-label small">مرجع المصدر (اختياري)</label>
+              <input type="text" class="form-control form-control-sm" id="evTypeRef" placeholder="student_course">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">إلغاء</button>
+          <button class="btn btn-primary btn-sm" id="btnSaveEvidenceType">حفظ</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="evidenceRuleModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h6 class="modal-title">قاعدة ربط دليل بمؤشر</h6>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="evRuleId">
+          <div class="mb-2">
+            <label class="form-label small">المؤشر</label>
+            <select class="form-select form-select-sm" id="evRuleIndicator"></select>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">نوع الدليل</label>
+            <select class="form-select form-select-sm" id="evRuleTypeCode"></select>
+          </div>
+          <div class="row g-2">
+            <div class="col-md-4">
+              <label class="form-label small">نمط الربط</label>
+              <select class="form-select form-select-sm" id="evRuleLinkMode">
+                {% for key, label in link_mode_labels.items() %}
+                <option value="{{ key }}">{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label small">الترتيب</label>
+              <input type="number" class="form-control form-control-sm" id="evRuleSort" value="0">
+            </div>
+            <div class="col-md-4 d-flex align-items-end">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="evRuleRequired" checked>
+                <label class="form-check-label small" for="evRuleRequired">إلزامي</label>
+              </div>
+            </div>
+          </div>
+          <div class="mb-2 mt-2">
+            <label class="form-label small">ملاحظات</label>
+            <textarea class="form-control form-control-sm" id="evRuleNotes" rows="2"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">إلغاء</button>
+          <button class="btn btn-primary btn-sm" id="btnSaveEvidenceRule">حفظ</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="modal fade" id="assessModal" tabindex="-1">
     <div class="modal-dialog">
       <div class="modal-content">
@@ -527,14 +781,24 @@
     window.ACCRED_PAGE = {
       semester: {{ map_data.semester | tojson }},
       catalogVersion: {{ map_data.catalog_version | tojson }},
+      activeScopeKey: {{ active_scope_key | default('inst') | tojson }},
+      mapScopes: {{ (map_scopes | default([])) | tojson }},
+      pageTitleAr: {{ page_title_ar | default('خريطة امتثال الاعتماد') | tojson }},
+      catalogVersionLabels: {{ (catalog_version_labels | default({})) | tojson }},
+      qaaAxisOptions: {{ (qaa_axis_options | default([])) | tojson }},
       domainLabels: {{ domain_labels | tojson }},
       statusLabels: {{ status_labels | tojson }},
       planStatusLabels: {{ plan_status_labels | tojson }},
       planPriorityLabels: {{ plan_priority_labels | tojson }},
       userRole: {{ user_role | tojson }},
       isAdminMain: {{ is_admin_main | tojson }},
+      canEditAccreditationCatalog: {{ can_edit_accreditation_catalog | tojson }},
+      canBindSources: {{ can_bind_accreditation_sources | default(false) | tojson }},
+      showEvidenceMatrixTab: {{ show_evidence_matrix_tab | default(false) | tojson }},
+      linkModeLabels: {{ link_mode_labels | tojson }},
+      evidenceCategoryLabels: {{ evidence_category_labels | tojson }},
     };
   </script>
-  <script src="/static/js/accreditation_compliance_map.js?v=20260522"></script>
+  <script src="/static/js/accreditation_compliance_map.js?v=20260610b"></script>
 </body>
 </html>

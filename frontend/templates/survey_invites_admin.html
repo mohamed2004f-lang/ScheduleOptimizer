@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>دعوات الاستبيانات الخارجية</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-fluid mt-4 px-3" style="max-width:1000px;">
+    <nav aria-label="breadcrumb" class="mb-2">
+      <ol class="breadcrumb small mb-0">
+        <li class="breadcrumb-item">ضمان الجودة</li>
+        <li class="breadcrumb-item"><a href="/academic_quality/surveys">الاستبيانات</a></li>
+        <li class="breadcrumb-item active">دعوات خارجية</li>
+      </ol>
+    </nav>
+
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+      <h4 class="mb-0">دعوات الاستبيانات الخارجية</h4>
+      <div class="d-flex gap-2">
+        <a href="/academic_quality/surveys/results?view=external" class="btn btn-outline-primary btn-sm">نتائج خارجية</a>
+        <a href="/academic_quality/surveys" class="btn btn-outline-secondary btn-sm">مركز الاستبيانات</a>
+      </div>
+    </div>
+
+    <div class="card shadow-sm mb-4">
+      <div class="card-header fw-semibold">إنشاء دعوة جديدة</div>
+      <div class="card-body">
+        <form id="createInviteForm" class="row g-3">
+          <div class="col-md-4">
+            <label class="form-label">الاستبيان</label>
+            <select class="form-select" name="template_code" required>
+              {% for t in templates %}
+              <option value="{{ t.code }}" {% if selected_template == t.code %}selected{% endif %}>{{ t.title_ar }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">اسم الدورة</label>
+            <input type="text" class="form-control" name="cycle_label" required placeholder="استشارة قطاع 2026">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">تسمية الحملة (اختياري)</label>
+            <input type="text" class="form-control" name="label_ar" placeholder="حملة جهات التوظيف">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">نوع الرابط</label>
+            <select class="form-select" name="invite_kind">
+              <option value="campaign">حملة عامة (عدة مستجيبين)</option>
+              <option value="personal">شخصي (رد واحد)</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">صلاحية (يوم)</label>
+            <input type="number" class="form-control" name="expires_days" value="90" min="7" max="365">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">حد الاستخدام (0 = بلا حد)</label>
+            <input type="number" class="form-control" name="max_uses" value="0" min="0">
+          </div>
+          <div class="col-md-3 d-flex align-items-end">
+            <button type="submit" class="btn btn-primary w-100">إنشاء الرابط</button>
+          </div>
+        </form>
+        <div id="newInviteBox" class="alert alert-success mt-3 d-none">
+          <div class="fw-semibold mb-1">تم إنشاء الرابط:</div>
+          <div class="input-group">
+            <input type="text" class="form-control" id="newInviteUrl" readonly>
+            <button type="button" class="btn btn-outline-secondary" id="btnCopyInvite">نسخ</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">الدعوات الحالية</div>
+      <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0">
+          <thead>
+            <tr>
+              <th>الاستبيان</th>
+              <th>الدورة</th>
+              <th>النوع</th>
+              <th>الاستخدام</th>
+              <th>الصلاحية</th>
+              <th>الرابط</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for inv in invites %}
+            <tr>
+              <td>{{ inv.title_ar or inv.template_code }}</td>
+              <td>{{ inv.cycle_label }}</td>
+              <td>{{ 'حملة' if inv.invite_kind == 'campaign' else 'شخصي' }}</td>
+              <td>{{ inv.use_count or 0 }}{% if inv.max_uses and inv.max_uses > 0 %} / {{ inv.max_uses }}{% endif %}</td>
+              <td class="small">{{ (inv.expires_at or '')[:10] }}</td>
+              <td>
+                <button type="button" class="btn btn-sm btn-outline-primary btn-copy" data-url="/academic_quality/surveys/invite/{{ inv.token }}">نسخ</button>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="text-muted text-center py-4">لا توجد دعوات بعد</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+  <script>
+    function fullUrl(path) {
+      return window.location.origin + path;
+    }
+    document.getElementById('createInviteForm')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const body = Object.fromEntries(fd.entries());
+      body.expires_days = parseInt(body.expires_days, 10) || 90;
+      body.max_uses = parseInt(body.max_uses, 10) || 0;
+      const r = await fetch('/academic_quality/surveys/api/invites', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(j.message || 'فشل'); return; }
+      document.getElementById('newInviteUrl').value = j.invite_url || '';
+      document.getElementById('newInviteBox').classList.remove('d-none');
+      setTimeout(() => location.reload(), 1500);
+    });
+    document.getElementById('btnCopyInvite')?.addEventListener('click', () => {
+      const el = document.getElementById('newInviteUrl');
+      el.select();
+      navigator.clipboard?.writeText(el.value);
+    });
+    document.querySelectorAll('.btn-copy').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const url = fullUrl(btn.dataset.url);
+        navigator.clipboard?.writeText(url);
+        btn.textContent = 'تم النسخ';
+        setTimeout(() => { btn.textContent = 'نسخ'; }, 1200);
+      });
+    });
+  </script>
+</body>
+</html>

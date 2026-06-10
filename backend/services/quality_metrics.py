@@ -289,7 +289,14 @@ def compute_quality_metrics(
     faculty_qual = _faculty_qualifications(cur, department_id, sem)
     ratio = _student_faculty_ratio(cur, department_id)
     inst = _institutional_inputs(cur, sem, department_id)
-    infra = float(inst.get("infrastructure_rating") or 75.0)
+    try:
+        from backend.services.survey_accreditation import compute_hybrid_infrastructure_rating
+
+        infra, _infra_detail = compute_hybrid_infrastructure_rating(
+            conn, semester=sem, department_id=department_id
+        )
+    except Exception:
+        infra = float(inst.get("infrastructure_rating") or 75.0)
 
     program_score = (
         satisfaction * 0.25
@@ -308,6 +315,7 @@ def compute_quality_metrics(
     eval_count = int(_row_val(eval_count_row, 0) or 0)
 
     survey_metrics: dict[str, Any] = {}
+    external_survey_metrics: dict[str, Any] = {}
     try:
         from backend.services.multi_surveys import survey_metrics_for_quality
 
@@ -315,6 +323,13 @@ def compute_quality_metrics(
             survey_metrics = survey_metrics_for_quality(conn, sem, department_id)
     except Exception:
         survey_metrics = {}
+    try:
+        from backend.services.survey_external_analytics import survey_external_metrics_summary
+
+        if table_exists(conn, "survey_responses"):
+            external_survey_metrics = survey_external_metrics_summary(conn)
+    except Exception:
+        external_survey_metrics = {}
 
     return {
         "semester": sem,
@@ -334,6 +349,7 @@ def compute_quality_metrics(
         "evaluation_count": eval_count,
         "institutional_inputs": inst,
         "survey_metrics": survey_metrics,
+        "external_survey_metrics": external_survey_metrics,
     }
 
 

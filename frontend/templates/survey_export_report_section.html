@@ -1,0 +1,76 @@
+{# مقطع استبيان واحد — يُستخدم في PDF الموحّد والمفرد #}
+<div class="section-block">
+  <h2>{{ report.title_ar }}{% if report.template_code %} <span class="text-muted" style="font-size:11px;">({{ report.template_code }})</span>{% endif %}</h2>
+  {% if report.course_name %}
+  <p class="meta"><strong>المقرر:</strong> {{ report.course_name }}{% if report.instructor_name %} — <strong>الأستاذ:</strong> {{ report.instructor_name }}{% endif %}{% if report.section_id %} — <strong>الشعبة:</strong> {{ report.section_id }}{% endif %}</p>
+  {% endif %}
+  <table>
+    <tbody>
+      <tr><th style="width:28%">فئة المستجيب</th><td>{{ report.respondent_label or '—' }}</td></tr>
+      <tr><th>عدد الإجابات / الحد الأدنى</th><td>{{ report.response_count or 0 }} / {{ report.min_aggregate or '—' }}</td></tr>
+      <tr><th>حالة التجميع</th><td>{% if report.aggregated %}مكتمل{% else %}ناقص — لا تُعرض بنود تفصيلية{% endif %}</td></tr>
+      <tr><th>النتيجة الإجمالية</th><td>{% if report.overall_score_percent is not none %}{{ report.overall_score_percent }}%{% else %}—{% endif %}</td></tr>
+      <tr><th>حالة الامتثال</th><td>{{ report.compliance_status_ar or '—' }}</td></tr>
+      <tr><th>معيار الاعتماد الرئيسي</th><td>{{ report.primary_accreditation or '—' }}</td></tr>
+      <tr><th>أضعف / أقوى بند</th><td>{{ report.weakest_item or '—' }} / {{ report.strongest_item or '—' }}</td></tr>
+    </tbody>
+  </table>
+  {% if report.interpretation_ar %}
+  <p class="interpret">{{ report.interpretation_ar }}</p>
+  {% endif %}
+
+  {% if report.aggregated and report.questions %}
+  <h3>تفصيل البنود</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>البند</th>
+        <th>متوسط 1–5</th>
+        <th>النسبة %</th>
+        <th>التصنيف</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for q in report.questions %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>{{ q.label_ar or '—' }}</td>
+        <td>{{ q.avg_rating if q.avg_rating is not none else '—' }}</td>
+        <td>{{ q.score_percent if q.score_percent is not none else '—' }}</td>
+        <td><span class="badge-score cls-{{ q.classification or 'pending' }}">{{ q.classification_ar or '—' }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if report.accreditation_links %}
+  <h3>ربط معايير الاعتماد</h3>
+  <table>
+    <thead>
+      <tr><th>المعيار</th><th>المؤشر</th><th>العنوان</th><th>نوع الربط</th><th>الاستفادة</th></tr>
+    </thead>
+    <tbody>
+      {% for link in report.accreditation_links %}
+      <tr>
+        <td>{{ link.standard_code }}</td>
+        <td>{{ link.indicator_code }}</td>
+        <td>{{ link.indicator_title_ar }}</td>
+        <td>{{ link.link_type_ar if link.link_type_ar is defined else link.link_type }}</td>
+        <td>{{ link.usage_ar }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if report.recommendations %}
+  <h3>توصيات آلية</h3>
+  <ul class="rec-list">
+    {% for rec in report.recommendations %}
+    <li>{{ rec }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>

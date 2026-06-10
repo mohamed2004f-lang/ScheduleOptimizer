@@ -284,6 +284,7 @@
     let G_DATA = {};
     let G_BULK = {};
     let G_PORTAL = {};
+    let G_DRAFTS = {};
     let G_AXIS_CATALOG = [];
     const TABS_LOADED = { outcomes: false, plans: false, reports: false, deptSchedule: false };
 
@@ -339,11 +340,11 @@
       const deptLbl = document.getElementById('hubDeptLabel');
       const tiles = [
         { href: '/grade_drafts', icon: '📝', label: 'مسودات الدرجات', badge: d.grade_drafts_draft || 0 },
-        { href: '/attendance_export', icon: '✓', label: 'الحضور والغياب', badge: 0 },
-        { href: '/exams/midterms', icon: '📋', label: 'امتحانات جزئية', badge: 0 },
+        { href: '/my_schedule', icon: '📅', label: 'جدولي', badge: 0 },
+        { href: '/my_exams', icon: '📋', label: 'امتحاناتي', badge: 0 },
+        { href: '/my_attendance', icon: '✓', label: 'حضوري', badge: 0 },
         { href: '/academic_quality/surveys', icon: '📊', label: 'الاستبيانات', badge: 0 },
-        { href: '#tabDeptSchedule', icon: '📅', label: 'جدول القسم', badge: 0, tab: true },
-        { href: '/schedule_form', icon: '🗓', label: 'الجدول الدراسي', badge: 0 },
+        { href: '#tabDeptSchedule', icon: '🏫', label: 'جدول القسم', badge: 0, tab: true },
       ];
       links.innerHTML = tiles.map(t => {
         const badge = t.badge > 0 ? '<span class="badge bg-danger hub-badge">' + t.badge + '</span>' : '';
@@ -420,13 +421,60 @@
             const btn = document.querySelector('.mc-show-clos[data-section="' + item.section_id + '"]');
             if (btn) btn.click();
           } else if (focus === 'grades') {
-            const cn = (item.course || G_ROWS.find(r => r.section_id == item.section_id)?.course_name || '').trim();
-            window.location.href = '/grade_drafts' + (cn ? '?course_name=' + encodeURIComponent(cn) : '');
+            const row = G_ROWS.find(r => r.section_id == item.section_id);
+            const cn = (item.course || row?.course_name || '').trim();
+            const sid = item.section_id || row?.section_id || '';
+            const draft = draftForSection(row || { section_id: sid, course_name: cn });
+            window.location.href = gradeDraftUrl({ course_name: cn, section_id: sid }, draft);
           }
         }, 200);
       } else if (item.type === 'grade_draft_missing') {
         window.location.href = '/grade_drafts';
       }
+    }
+
+    function draftForSection(r) {
+      if (!r) return null;
+      const sid = r.section_id;
+      if (sid != null && G_DRAFTS[sid]) return G_DRAFTS[sid];
+      const key = String(r.course_name || '') + '::' + String(sid || '');
+      return G_DRAFTS[key] || null;
+    }
+
+    function draftStatusBadge(d) {
+      if (!d) return '<span class="badge bg-light text-dark section-badge" title="لم تُنشأ مسودة">بلا مسودة</span>';
+      const colors = { Draft: 'warning text-dark', Submitted: 'info', Approved: 'success', Rejected: 'danger' };
+      const labels = { Draft: 'مسودة', Submitted: 'مرسلة', Approved: 'معتمدة', Rejected: 'مرفوضة' };
+      const st = d.status || '';
+      return '<span class="badge bg-' + (colors[st] || 'secondary') + ' section-badge" title="مسودة الدرجات">' + esc(labels[st] || st) + '</span>';
+    }
+
+    function gradeDraftUrl(r, draft) {
+      const cn = encodeURIComponent(r.course_name || '');
+      const sid = r.section_id || '';
+      if (draft && draft.id) {
+        return '/grade_drafts?section_id=' + encodeURIComponent(sid) + '&action=open&draft_id=' + draft.id;
+      }
+      return '/grade_drafts?course_name=' + cn + '&section_id=' + encodeURIComponent(sid) + '&action=create';
+    }
+
+    async function loadGradeDraftsMap() {
+      G_DRAFTS = {};
+      try {
+        const portalMap = G_PORTAL.grade_drafts_by_section || {};
+        Object.keys(portalMap).forEach(sid => {
+          const d = portalMap[sid];
+          if (d) G_DRAFTS[sid] = { id: d.draft_id, status: d.status, course_name: d.course_name, section_id: sid };
+        });
+        const r = await fetch('/grades/drafts/mine', { credentials: 'include' });
+        if (!r.ok) return;
+        const j = await r.json().catch(() => ({}));
+        (j.drafts || []).forEach(d => {
+          if (d.section_id != null) G_DRAFTS[d.section_id] = d;
+          const key = String(d.course_name || '') + '::' + String(d.section_id || '');
+          G_DRAFTS[key] = d;
+        });
+      } catch (e) {}
     }
 
     async function loadPortalSummary() {
@@ -500,6 +548,8 @@
         G_ROWS = data.rows || [];
         if (!G_ROWS.length) { emptyState.classList.remove('d-none'); return; }
 
+        await loadGradeDraftsMap();
+
         const sectionIds = G_ROWS.map(r => r.section_id);
         await fetchBulkAdmin(sectionIds);
 
@@ -513,6 +563,7 @@
           const axes = r.axes || {};
           const axesDone = Object.values(axes).filter(v => v === 'done' || v === 'na').length;
           const axesTotal = G_AXIS_CATALOG.length;
+          const draft = draftForSection(r);
           return (
             '<div class="accordion-item">' +
             '<h2 class="accordion-header">' +
@@ -521,6 +572,7 @@
             '<span>' + esc(r.course_name) + ' <small class="text-muted">(' + esc(r.day) + ' ' + esc(r.time) + ' - ' + esc(r.room) + ')</small></span>' +
             '<span class="d-flex gap-1 flex-wrap">' +
             (r.student_count != null ? '<span class="badge bg-success section-badge" title="مسجّلون">' + r.student_count + ' طالب</span>' : '') +
+            draftStatusBadge(draft) +
             '<span class="badge bg-primary section-badge">' + esc(r.semester) + '</span>' +
             '<span class="badge bg-' + (planPct >= 80 ? 'success' : planPct >= 40 ? 'warning text-dark' : 'secondary') + ' section-badge">خطة: ' + planPct + '%</span>' +
             '<span class="badge bg-' + (axesDone === axesTotal ? 'success' : 'warning text-dark') + ' section-badge">محاور: ' + axesDone + '/' + axesTotal + '</span>' +
@@ -548,10 +600,12 @@
     function renderSectionBody(r, adminData) {
       const sid = r.section_id;
       const cn = r.course_name || '';
-      const q = encodeURIComponent(cn);
+      const draft = draftForSection(r);
+      const gdHref = gradeDraftUrl(r, draft);
+      const gdLabel = draft ? (draft.status === 'Draft' || draft.status === 'Rejected' ? 'متابعة المسودة' : 'عرض المسودة') : 'بدء مسودة';
       const links =
-        '<a class="btn btn-sm btn-outline-primary py-0 mb-1" href="/grade_drafts?course_name=' + q + '">مسودات الدرجات</a> ' +
-        '<a class="btn btn-sm btn-outline-secondary py-0 mb-1" href="/exams/midterms">امتحانات جزئية</a> ' +
+        '<a class="btn btn-sm btn-outline-primary py-0 mb-1" href="' + gdHref + '">' + gdLabel + '</a> ' +
+        '<a class="btn btn-sm btn-outline-secondary py-0 mb-1" href="/my_exams">امتحاناتي</a> ' +
         '<button type="button" class="btn btn-sm btn-outline-info py-0 mb-1 mc-show-clos" data-section="' + sid + '" data-course="' + esc(cn) + '">مخرجات المقرر</button>';
 
       const axes = r.axes || {};

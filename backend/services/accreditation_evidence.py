@@ -25,8 +25,41 @@ def evidence_upload_dir() -> str:
     return base
 
 
+def _migrate_standards_pdf_checklist_keys(conn) -> None:
+    """ترحيل المفتاح الموحّد القديم إلى مفتاحي المؤسسي والبرامجي."""
+    if not table_exists(conn, "accreditation_evidence"):
+        return
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE accreditation_evidence
+        SET checklist_key = 'program_standards_pdf'
+        WHERE checklist_key = 'standards_pdf'
+          AND (
+            stored_path LIKE '%d198421%'
+            OR COALESCE(original_name, '') LIKE '%برامج%'
+            OR COALESCE(title_ar, '') LIKE '%برامج%'
+          )
+        """
+    )
+    cur.execute(
+        """
+        UPDATE accreditation_evidence
+        SET checklist_key = 'institutional_standards_pdf'
+        WHERE checklist_key = 'standards_pdf'
+          AND (
+            stored_path LIKE '%592730%'
+            OR COALESCE(original_name, '') LIKE '%مؤسس%'
+            OR COALESCE(title_ar, '') LIKE '%مؤسس%'
+          )
+        """
+    )
+    conn.commit()
+
+
 def _ensure_evidence_table(conn) -> None:
     if table_exists(conn, "accreditation_evidence"):
+        _migrate_standards_pdf_checklist_keys(conn)
         return
     from backend.database.database import SCHEMA
 
@@ -34,6 +67,7 @@ def _ensure_evidence_table(conn) -> None:
     if ddl and hasattr(conn, "executescript"):
         conn.executescript(ddl)
         conn.commit()
+    _migrate_standards_pdf_checklist_keys(conn)
 
 
 def _row_dict(row, keys: list[str] | None = None) -> dict[str, Any]:

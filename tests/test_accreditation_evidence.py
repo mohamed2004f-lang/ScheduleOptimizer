@@ -2,7 +2,7 @@
 
 import io
 
-from backend.core.accreditation_catalog import ensure_accreditation_catalog
+from backend.core.accreditation_catalog import CATALOG_VERSION, ensure_accreditation_catalog
 from backend.services.accreditation_evidence import (
     build_checklist_status,
     evidence_counts_by_indicator,
@@ -17,7 +17,7 @@ from backend.services.institutional_accreditation import build_compliance_map
 def test_build_checklist_status_empty(db_conn):
     ensure_accreditation_catalog(db_conn)
     items = build_checklist_status(db_conn, "ev-sem", None)
-    assert len(items) >= 6
+    assert len(items) >= 7
     assert all("checklist_key" in x and "has_evidence" in x for x in items)
     assert not any(x["has_evidence"] for x in items)
 
@@ -59,7 +59,13 @@ def test_evidence_upload_link_and_map_count(db_conn):
     counts = evidence_counts_by_indicator(db_conn, "ev-sem", None)
     assert counts.get(int(ind_id), 0) >= 1
 
-    data = build_compliance_map(db_conn, semester="ev-sem", department_id=None, ensure_seed=False)
+    data = build_compliance_map(
+        db_conn,
+        semester="ev-sem",
+        department_id=None,
+        catalog_version=CATALOG_VERSION,
+        ensure_seed=False,
+    )
     found = False
     for dom in data.get("domains") or []:
         for st in dom.get("standards") or []:
@@ -86,7 +92,7 @@ def test_evidence_api_routes(app, db_conn, auth_client):
         "/academic_quality/api/accreditation/evidence/checklist?semester=api-ev"
     )
     assert chk.status_code == 200
-    assert len((chk.get_json() or {}).get("items") or []) >= 6
+    assert len((chk.get_json() or {}).get("items") or []) >= 7
 
     data = {
         "semester": "api-ev",

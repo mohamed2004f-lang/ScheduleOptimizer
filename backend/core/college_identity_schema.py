@@ -16,6 +16,10 @@ PROGRAM_PROFILE_COLUMNS: tuple[tuple[str, str], ...] = (
 
 GOAL_IG_COLUMN = ("parent_ig_code", "TEXT DEFAULT ''")
 
+COLLEGE_IDENTITY_EXTRA_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("strategic_plan_summary_ar", "TEXT DEFAULT ''"),
+)
+
 PROGRAM_IG_ALIGNMENT_SQLITE = (
     "program_ig_alignment",
     """
@@ -183,6 +187,25 @@ COLLEGE_TABLES_PG: tuple[tuple[str, str], ...] = (
 )
 
 
+def _commit_schema_step(conn, label: str = "") -> None:
+    """يُثبّت DDL قبل البذرة؛ يمنع تراجع PostgreSQL عن ALTER عند فشل لاحق."""
+    try:
+        conn.commit()
+    except Exception as e:
+        logger.warning("college identity schema commit%s: %s", f" ({label})" if label else "", e)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+
+def _pg_recover_transaction(conn) -> None:
+    try:
+        conn.rollback()
+    except Exception:
+        pass
+
+
 def _sqlite_add_column(conn, cur, table: str, col: str, ddl: str) -> None:
     cols = fetch_table_columns(conn, table)
     if col in cols:
@@ -213,23 +236,41 @@ def ensure_college_identity_schema(conn) -> None:
                 cur.execute(f"ALTER TABLE programs ADD COLUMN IF NOT EXISTS {col} {typ}")
             except Exception as e:
                 logger.debug("pg programs.%s: %s", col, e)
+                _pg_recover_transaction(conn)
         try:
             cur.execute(
                 f"ALTER TABLE program_goals ADD COLUMN IF NOT EXISTS {GOAL_IG_COLUMN[0]} {GOAL_IG_COLUMN[1]}"
             )
         except Exception as e:
             logger.debug("pg program_goals.parent_ig_code: %s", e)
+            _pg_recover_transaction(conn)
+        identity_cols = {c.lower() for c in fetch_table_columns(conn, "college_identity")}
+        for col, typ in COLLEGE_IDENTITY_EXTRA_COLUMNS:
+            if col.lower() in identity_cols:
+                continue
+            try:
+                cur.execute(f"ALTER TABLE college_identity ADD COLUMN {col} {typ}")
+                identity_cols.add(col.lower())
+                logger.info("college_identity: added column %s", col)
+            except Exception as e:
+                logger.warning("pg college_identity.%s: %s", col, e)
+                _pg_recover_transaction(conn)
+        _commit_schema_step(conn, "ddl columns")
         try:
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_csg_parent ON college_strategic_goals(parent_code, is_active)"
             )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_gkpi_goal ON goal_kpi(goal_code)")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("college identity indexes: %s", e)
+            _pg_recover_transaction(conn)
     else:
         for col, typ in PROGRAM_PROFILE_COLUMNS:
             _sqlite_add_column(conn, cur, "programs", col, typ)
         _sqlite_add_column(conn, cur, "program_goals", GOAL_IG_COLUMN[0], GOAL_IG_COLUMN[1])
+        for col, typ in COLLEGE_IDENTITY_EXTRA_COLUMNS:
+            _sqlite_add_column(conn, cur, "college_identity", col, typ)
+        _commit_schema_step(conn, "ddl columns")
         for idx in (
             "CREATE INDEX IF NOT EXISTS idx_csg_parent ON college_strategic_goals(parent_code, is_active)",
             "CREATE INDEX IF NOT EXISTS idx_gkpi_goal ON goal_kpi(goal_code)",
@@ -244,10 +285,4 @@ def ensure_college_identity_schema(conn) -> None:
         seed_college_identity_defaults(conn)
     except Exception as e:
         logger.debug("college identity seed skipped: %s", e)
-    try:
-        conn.commit()
-    except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
+    _commit_schema_step(conn, "seed")

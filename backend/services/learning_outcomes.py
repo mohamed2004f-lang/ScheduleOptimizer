@@ -41,6 +41,11 @@ from backend.core.plo_glo import (
     outcome_domains_payload,
 )
 from backend.core.plo_schema import ensure_plo_enhancement_schema
+from backend.core.outcome_symbol_audit import (
+    audit_all_programs,
+    audit_program_outcome_symbols,
+    cleanup_mech_stray_outcomes,
+)
 from backend.core.program_goals import (
     goal_has_active_links,
     import_mech_program_profile,
@@ -330,7 +335,15 @@ def program_outcomes(program_id: int):
                 """,
                 (program_id,),
             ).fetchall()
-            return jsonify({"status": "ok", "items": _rows_to_dicts(cur, rows), "can_edit": _can_edit_ilo(conn, program_id)})
+            audit = audit_program_outcome_symbols(cur, program_id)
+            return jsonify(
+                {
+                    "status": "ok",
+                    "items": _rows_to_dicts(cur, rows),
+                    "can_edit": _can_edit_ilo(conn, program_id),
+                    "symbol_audit": audit,
+                }
+            )
 
         if not _can_edit_ilo(conn, program_id):
             return jsonify({"status": "error", "message": "غير مصرح بالتعديل"}), 403
@@ -1804,6 +1817,45 @@ def save_goal_outcome_links(program_id: int):
                 )
         conn.commit()
     return jsonify({"status": "ok"})
+
+
+@learning_outcomes_bp.route("/api/programs/<int:program_id>/fix_outcome_symbols", methods=["POST"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def fix_outcome_symbols(program_id: int):
+    """إصلاح خلط PLO/SO — ميكانيك: إيقاف PLO زائدة + إعادة تطبيق قالب SO."""
+    with get_connection() as conn:
+        ensure_plo_enhancement_schema(conn)
+        if not _program_in_scope(conn, program_id):
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        cur = conn.cursor()
+        actor = (session.get("user") or "").strip()
+        mech = import_mech_program_profile(
+            cur, program_id, merge=True, sync_links=True, actor=actor
+        )
+        if mech.get("status") != "ok":
+            return jsonify(mech), 400
+        cleanup = cleanup_mech_stray_outcomes(cur, program_id)
+        audit = audit_program_outcome_symbols(cur, program_id)
+        conn.commit()
+    return jsonify(
+        {
+            "status": "ok",
+            "mech_profile": mech,
+            "cleanup": cleanup,
+            "symbol_audit": audit,
+        }
+    )
+
+
+@learning_outcomes_bp.route("/api/outcome_symbols/audit", methods=["GET"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def outcome_symbols_audit_all():
+    with get_connection() as conn:
+        ensure_plo_enhancement_schema(conn)
+        reports = audit_all_programs(conn.cursor())
+    return jsonify({"status": "ok", "programs_with_issues": reports})
 
 
 @learning_outcomes_bp.route(

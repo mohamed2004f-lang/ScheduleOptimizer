@@ -1,0 +1,557 @@
+"""دعوات الاستبيانات الخارجية (خريجون، جهات عمل) عبر رابط."""
+
+from __future__ import annotations
+
+import datetime
+import hashlib
+import json
+import secrets
+from typing import Any
+
+from backend.core.survey_platform import (
+    ALUMNI_OPEN_COMMENT_LABEL,
+    EMPLOYER_OPEN_COMMENT_LABEL,
+    EMPLOYER_ORG_TYPES,
+    EXTERNAL_SURVEY_CODES,
+)
+from backend.database.database import conn_is_postgresql, fetch_table_columns, is_postgresql, table_exists
+from backend.services.multi_surveys import (
+    get_template_by_code,
+    list_template_questions,
+    parse_answers_payload,
+)
+from backend.services.evaluation_survey import likert_labels_ar
+
+logger = __import__("logging").getLogger(__name__)
+
+
+def _row_dict(row) -> dict:
+    if row is None:
+        return {}
+    if hasattr(row, "keys"):
+        return dict(row)
+    return {}
+
+
+def ensure_survey_invite_schema(conn) -> None:
+    """جداول الدعوات وأعمدة الاستجابة الخارجية."""
+    if not table_exists(conn, "survey_templates"):
+        return
+    cur = conn.cursor()
+    pg = conn_is_postgresql(conn)
+
+    if not table_exists(conn, "survey_invites"):
+        if pg:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS survey_invites (
+                    id BIGSERIAL PRIMARY KEY,
+                    token TEXT NOT NULL UNIQUE,
+                    template_code TEXT NOT NULL,
+                    cycle_label TEXT NOT NULL,
+                    invite_kind TEXT NOT NULL DEFAULT 'campaign',
+                    label_ar TEXT DEFAULT '',
+                    expires_at TEXT,
+                    max_uses INTEGER NOT NULL DEFAULT 0,
+                    use_count INTEGER NOT NULL DEFAULT 0,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_by TEXT DEFAULT '',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    notes TEXT DEFAULT ''
+                )
+                """
+            )
+        else:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS survey_invites (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token TEXT NOT NULL UNIQUE,
+                    template_code TEXT NOT NULL,
+                    cycle_label TEXT NOT NULL,
+                    invite_kind TEXT NOT NULL DEFAULT 'campaign',
+                    label_ar TEXT DEFAULT '',
+                    expires_at TEXT,
+                    max_uses INTEGER NOT NULL DEFAULT 0,
+                    use_count INTEGER NOT NULL DEFAULT 0,
+                    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+                    created_by TEXT DEFAULT '',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    notes TEXT DEFAULT ''
+                )
+                """
+            )
+        try:
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_survey_invites_template "
+                "ON survey_invites(template_code, is_active)"
+            )
+        except Exception:
+            pass
+
+    resp_cols = fetch_table_columns(conn, "survey_responses") if table_exists(conn, "survey_responses") else {}
+    if resp_cols:
+        if "respondent_profile_json" not in resp_cols:
+            ddl = "TEXT DEFAULT ''" if not pg else "TEXT DEFAULT ''"
+            try:
+                if pg:
+                    cur.execute(
+                        "ALTER TABLE survey_responses "
+                        "ADD COLUMN IF NOT EXISTS respondent_profile_json TEXT DEFAULT ''"
+                    )
+                else:
+                    cur.execute(
+                        f"ALTER TABLE survey_responses ADD COLUMN respondent_profile_json {ddl}"
+                    )
+            except Exception as e:
+                logger.debug("respondent_profile_json: %s", e)
+        if "invite_id" not in resp_cols:
+            try:
+                if pg:
+                    cur.execute(
+                        "ALTER TABLE survey_responses ADD COLUMN IF NOT EXISTS invite_id BIGINT"
+                    )
+                else:
+                    cur.execute("ALTER TABLE survey_responses ADD COLUMN invite_id INTEGER")
+            except Exception as e:
+                logger.debug("invite_id: %s", e)
+    try:
+        conn.commit()
+    except Exception:
+        pass
+
+
+def generate_invite_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def create_survey_invite(
+    conn,
+    *,
+    template_code: str,
+    cycle_label: str,
+    invite_kind: str = "campaign",
+    label_ar: str = "",
+    expires_days: int = 90,
+    max_uses: int = 0,
+    created_by: str = "",
+    notes: str = "",
+) -> dict:
+    ensure_survey_invite_schema(conn)
+    code = (template_code or "").strip()
+    if code not in EXTERNAL_SURVEY_CODES:
+        raise ValueError("قالب الاستبيان غير مدعوم للدعوات الخارجية")
+    if not get_template_by_code(conn, code):
+        raise ValueError("قالب الاستبيان غير موجود")
+    cycle = (cycle_label or "").strip()
+    if not cycle:
+        raise ValueError("اسم الدورة مطلوب")
+    kind = (invite_kind or "campaign").strip().lower()
+    if kind not in ("campaign", "personal"):
+        raise ValueError("نوع الدعوة غير صالح")
+    if kind == "personal" and max_uses <= 0:
+        max_uses = 1
+
+    token = generate_invite_token()
+    now = datetime.datetime.utcnow()
+    expires_at = (now + datetime.timedelta(days=max(1, int(expires_days)))).isoformat()
+    created_at = now.isoformat()
+    cur = conn.cursor()
+    if is_postgresql():
+        cur.execute(
+            """
+            INSERT INTO survey_invites (
+                token, template_code, cycle_label, invite_kind, label_ar,
+                expires_at, max_uses, use_count, is_active, created_by, created_at, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?)
+            RETURNING id
+            """,
+            (
+                token,
+                code,
+                cycle,
+                kind,
+                (label_ar or "").strip(),
+                expires_at,
+                int(max_uses),
+                (created_by or "").strip(),
+                created_at,
+                (notes or "").strip(),
+            ),
+        )
+        invite_id = int(cur.fetchone()[0])
+    else:
+        cur.execute(
+            """
+            INSERT INTO survey_invites (
+                token, template_code, cycle_label, invite_kind, label_ar,
+                expires_at, max_uses, use_count, is_active, created_by, created_at, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?)
+            """,
+            (
+                token,
+                code,
+                cycle,
+                kind,
+                (label_ar or "").strip(),
+                expires_at,
+                int(max_uses),
+                (created_by or "").strip(),
+                created_at,
+                (notes or "").strip(),
+            ),
+        )
+        invite_id = int(cur.lastrowid or 0)
+    return get_invite_by_token(conn, token) or {"id": invite_id, "token": token}
+
+
+def list_survey_invites(conn, *, template_code: str | None = None, limit: int = 200) -> list[dict]:
+    ensure_survey_invite_schema(conn)
+    if not table_exists(conn, "survey_invites"):
+        return []
+    cur = conn.cursor()
+    params: list[Any] = []
+    sql = "SELECT * FROM survey_invites WHERE 1=1"
+    if template_code:
+        sql += " AND template_code = ?"
+        params.append(template_code.strip())
+    sql += " ORDER BY id DESC LIMIT ?"
+    params.append(int(limit))
+    rows = cur.execute(sql, tuple(params)).fetchall()
+    return [_row_dict(r) for r in rows or []]
+
+
+def get_invite_by_token(conn, token: str) -> dict | None:
+    ensure_survey_invite_schema(conn)
+    if not table_exists(conn, "survey_invites"):
+        return None
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT * FROM survey_invites WHERE token = ? LIMIT 1",
+        ((token or "").strip(),),
+    ).fetchone()
+    return _row_dict(row) if row else None
+
+
+def validate_invite(conn, token: str) -> dict:
+    invite = get_invite_by_token(conn, token)
+    if not invite:
+        raise ValueError("رابط الدعوة غير صالح")
+    if not int(invite.get("is_active") or 0):
+        raise ValueError("انتهت صلاحية هذه الدعوة")
+    expires = (invite.get("expires_at") or "").strip()
+    if expires:
+        try:
+            exp_dt = datetime.datetime.fromisoformat(expires.replace("Z", "+00:00"))
+            if exp_dt.tzinfo:
+                exp_dt = exp_dt.replace(tzinfo=None)
+            if datetime.datetime.utcnow() > exp_dt:
+                raise ValueError("انتهت صلاحية رابط الدعوة")
+        except ValueError:
+            raise
+        except Exception:
+            pass
+    max_uses = int(invite.get("max_uses") or 0)
+    use_count = int(invite.get("use_count") or 0)
+    if max_uses > 0 and use_count >= max_uses:
+        raise ValueError("تم استخدام هذا الرابط بالكامل")
+    template = get_template_by_code(conn, invite.get("template_code") or "")
+    if not template:
+        raise ValueError("قالب الاستبيان غير متاح")
+    return invite
+
+
+def _phone_hash(phone: str) -> str:
+    normalized = "".join(ch for ch in (phone or "") if ch.isdigit())
+    if not normalized:
+        return ""
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:32]
+
+
+def _validate_alumni_profile(profile: dict) -> dict:
+    year = profile.get("graduation_year")
+    try:
+        grad_year = int(year)
+    except (TypeError, ValueError):
+        raise ValueError("سنة التخرج مطلوبة")
+    current_year = datetime.datetime.utcnow().year
+    if grad_year < 1980 or grad_year > current_year + 1:
+        raise ValueError("سنة التخرج غير صالحة")
+    dept_id = profile.get("department_id")
+    dept_label = (profile.get("department_label") or "").strip()
+    if dept_id in (None, "", "other"):
+        if not dept_label:
+            raise ValueError("القسم مطلوب")
+    else:
+        try:
+            dept_id = int(dept_id)
+        except (TypeError, ValueError):
+            raise ValueError("القسم غير صالح")
+    return {
+        "graduation_year": grad_year,
+        "department_id": dept_id if isinstance(dept_id, int) else None,
+        "department_label": dept_label,
+        "track_code": (profile.get("track_code") or "").strip(),
+        "track_label": (profile.get("track_label") or "").strip(),
+        "current_role_text": (profile.get("current_role_text") or "").strip(),
+        "phone_hash": _phone_hash(profile.get("phone") or ""),
+    }
+
+
+def _validate_employer_profile(profile: dict) -> dict:
+    org_type = (profile.get("org_type") or "").strip()
+    valid_types = {k for k, _ in EMPLOYER_ORG_TYPES}
+    if org_type not in valid_types:
+        raise ValueError("نوع الجهة مطلوب")
+    org_name = (profile.get("org_name") or "").strip()
+    if not org_name:
+        raise ValueError("اسم الجهة مطلوب")
+    hires = (profile.get("hires_graduates") or "").strip().lower()
+    if hires not in ("yes", "no", "sometimes"):
+        raise ValueError("يرجى الإجابة: هل توظّفون خريجين من الكلية؟")
+    org_type_label = dict(EMPLOYER_ORG_TYPES).get(org_type, org_type)
+    return {
+        "org_type": org_type,
+        "org_type_label": org_type_label,
+        "org_name": org_name,
+        "sector_label": (profile.get("sector_label") or "").strip(),
+        "position_text": (profile.get("position_text") or "").strip(),
+        "hires_graduates": hires,
+    }
+
+
+def validate_respondent_profile(template_code: str, profile: dict) -> dict:
+    code = (template_code or "").strip()
+    if code == "alumni":
+        return _validate_alumni_profile(profile or {})
+    if code == "employer_strategic":
+        return _validate_employer_profile(profile or {})
+    raise ValueError("قالب غير مدعوم")
+
+
+def _check_duplicate_submission(conn, invite: dict, profile: dict) -> None:
+    invite_id = int(invite.get("id") or 0)
+    kind = (invite.get("invite_kind") or "").strip()
+    if kind == "personal" and int(invite.get("use_count") or 0) > 0:
+        raise ValueError("تم استخدام هذا الرابط مسبقاً")
+    phone_hash = profile.get("phone_hash") or ""
+    if not phone_hash:
+        return
+    cycle = (invite.get("cycle_label") or "").strip()
+    code = (invite.get("template_code") or "").strip()
+    cur = conn.cursor()
+    rows = cur.execute(
+        """
+        SELECT respondent_profile_json FROM survey_responses
+        WHERE template_code = ? AND semester = ? AND status = 'submitted'
+        """,
+        (code, cycle),
+    ).fetchall()
+    for row in rows or []:
+        raw = row[0] if not hasattr(row, "keys") else row["respondent_profile_json"]
+        try:
+            existing = json.loads(raw or "{}")
+        except Exception:
+            existing = {}
+        if existing.get("phone_hash") == phone_hash:
+            raise ValueError("تم تسجيل رد بهذا الرقم في هذه الحملة مسبقاً")
+
+
+def submit_invite_survey(
+    conn,
+    *,
+    token: str,
+    profile: dict,
+    answers_payload: dict,
+    comments: str = "",
+) -> int:
+    invite = validate_invite(conn, token)
+    template_code = (invite.get("template_code") or "").strip()
+    cleaned_profile = validate_respondent_profile(template_code, profile)
+    _check_duplicate_submission(conn, invite, cleaned_profile)
+
+    template = get_template_by_code(conn, template_code)
+    assert template
+    questions = list_template_questions(conn, int(template["id"]))
+    answers = parse_answers_payload(dict(answers_payload), questions)
+
+    cycle = (invite.get("cycle_label") or "").strip()
+    respondent_role = (template.get("respondent_role") or "").strip()
+    respondent_id = f"invite:{invite['id']}:{secrets.token_hex(6)}"
+    subject_type = (template.get("subject_type") or "external").strip()
+    invite_id = int(invite.get("id") or 0)
+
+    now = datetime.datetime.utcnow().isoformat()
+    cur = conn.cursor()
+    tid = int(template["id"])
+    profile_json = json.dumps(cleaned_profile, ensure_ascii=False)
+
+    if is_postgresql():
+        cur.execute(
+            """
+            INSERT INTO survey_responses (
+                template_id, template_code, semester,
+                respondent_role, respondent_id,
+                subject_type, subject_id, department_id,
+                comments, status, submitted_by, created_at, submitted_at,
+                respondent_profile_json, invite_id
+            ) VALUES (?,?,?,?,?,?,?,?,?,'submitted',?,?,?,?,?)
+            RETURNING id
+            """,
+            (
+                tid,
+                template_code,
+                cycle,
+                respondent_role,
+                respondent_id,
+                subject_type,
+                0,
+                cleaned_profile.get("department_id"),
+                (comments or "").strip(),
+                f"invite:{token[:12]}",
+                now,
+                now,
+                profile_json,
+                invite_id,
+            ),
+        )
+        rid = int(cur.fetchone()[0])
+    else:
+        cur.execute(
+            """
+            INSERT INTO survey_responses (
+                template_id, template_code, semester,
+                respondent_role, respondent_id,
+                subject_type, subject_id, department_id,
+                comments, status, submitted_by, created_at, submitted_at,
+                respondent_profile_json, invite_id
+            ) VALUES (?,?,?,?,?,?,?,?,?,'submitted',?,?,?,?,?)
+            """,
+            (
+                tid,
+                template_code,
+                cycle,
+                respondent_role,
+                respondent_id,
+                subject_type,
+                0,
+                cleaned_profile.get("department_id"),
+                (comments or "").strip(),
+                f"invite:{token[:12]}",
+                now,
+                now,
+                profile_json,
+                invite_id,
+            ),
+        )
+        rid = int(cur.lastrowid or 0)
+
+    for qid, rating in answers.items():
+        cur.execute(
+            "INSERT INTO survey_answers (response_id, question_id, rating) VALUES (?, ?, ?)",
+            (rid, int(qid), int(rating)),
+        )
+
+    cur.execute(
+        "UPDATE survey_invites SET use_count = COALESCE(use_count, 0) + 1 WHERE id = ?",
+        (invite_id,),
+    )
+    return rid
+
+
+def invite_fill_context(conn, token: str) -> dict[str, Any]:
+    invite = validate_invite(conn, token)
+    template_code = (invite.get("template_code") or "").strip()
+    template = get_template_by_code(conn, template_code)
+    if not template:
+        raise ValueError("قالب الاستبيان غير متاح")
+    questions = list_template_questions(conn, int(template["id"]))
+    open_label = ALUMNI_OPEN_COMMENT_LABEL
+    if template_code == "employer_strategic":
+        open_label = EMPLOYER_OPEN_COMMENT_LABEL
+
+    ctx: dict[str, Any] = {
+        "invite": invite,
+        "template": template,
+        "questions": questions,
+        "likert_labels": likert_labels_ar(),
+        "open_comment_label": open_label,
+        "template_code": template_code,
+        "cycle_label": invite.get("cycle_label"),
+    }
+    if template_code == "employer_strategic":
+        from backend.services.survey_identity_context import build_employer_identity_panel
+
+        ctx["identity_panel"] = build_employer_identity_panel(conn)
+    elif template_code == "alumni":
+        ctx["alumni_intro_ar"] = (
+            "يرجى إدخال بياناتكم كخريج ثم الإجابة على أسئلة الاستبيان. "
+            "جميع الردود مجمّعة ولا تُنشر أسماء الأفراد."
+        )
+    return ctx
+
+
+def list_external_cycles(conn, template_code: str | None = None) -> list[str]:
+    if not table_exists(conn, "survey_responses"):
+        return []
+    cur = conn.cursor()
+    params: list[Any] = list(EXTERNAL_SURVEY_CODES)
+    placeholders = ",".join("?" for _ in EXTERNAL_SURVEY_CODES)
+    sql = f"""
+        SELECT DISTINCT semester FROM survey_responses
+        WHERE template_code IN ({placeholders}) AND status = 'submitted'
+    """
+    if template_code:
+        sql += " AND template_code = ?"
+        params.append(template_code.strip())
+    sql += " ORDER BY semester DESC"
+    rows = cur.execute(sql, tuple(params)).fetchall()
+    out: list[str] = []
+    for row in rows or []:
+        val = row[0] if not hasattr(row, "keys") else row["semester"]
+        if val and str(val).strip():
+            out.append(str(val).strip())
+    return out
+
+
+def list_public_departments(conn) -> list[dict]:
+    if not table_exists(conn, "departments"):
+        return []
+    cur = conn.cursor()
+    rows = cur.execute(
+        """
+        SELECT id, code, COALESCE(name_ar, name_en, code) AS name_ar
+        FROM departments
+        WHERE COALESCE(is_active, 1) = 1
+        ORDER BY name_ar, code
+        """
+    ).fetchall()
+    return [_row_dict(r) for r in rows or []]
+
+
+def list_public_tracks_for_department(conn, department_id: int) -> list[dict]:
+    if not table_exists(conn, "programs"):
+        return []
+    cur = conn.cursor()
+    rows = cur.execute(
+        """
+        SELECT DISTINCT COALESCE(p.track_group, '') AS track_group,
+               COALESCE(p.name_ar, p.code) AS program_name
+        FROM programs p
+        WHERE p.department_id = ? AND COALESCE(p.is_active, 1) = 1
+          AND COALESCE(p.track_group, '') != ''
+        ORDER BY track_group
+        """,
+        (int(department_id),),
+    ).fetchall()
+    items: list[dict] = []
+    seen: set[str] = set()
+    for row in rows or []:
+        d = _row_dict(row)
+        tg = (d.get("track_group") or "").strip()
+        if not tg or tg in seen:
+            continue
+        seen.add(tg)
+        label = (d.get("program_name") or tg).strip()
+        items.append({"track_code": tg, "track_label": label})
+    return items

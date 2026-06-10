@@ -17,6 +17,45 @@
     <tr><td>تحقيق مخرجات التعلم</td><td>{{ metrics.program_ilo_achievement }}%</td></tr>
     <tr><td>معدل التخرج (تقريبي)</td><td>{{ metrics.program_graduation_rate }}%</td></tr>
   </tbody></table>
+  {% if survey_summary and survey_summary.rows %}
+  <h2>ملخص الاستبيانات المجمّعة</h2>
+  <p class="text-muted small">
+    الفصل: {{ survey_summary.semester }} —
+    مجمّع: {{ survey_summary.aggregated_count }} / {{ survey_summary.total_count }}
+    {% if survey_summary.department_label %}— {{ survey_summary.department_label }}{% endif %}
+  </p>
+  <table class="table table-sm table-bordered">
+    <thead><tr><th>الاستبيان</th><th>الفئة</th><th>إجابات</th><th>النتيجة</th><th>يرتبط بمؤشر</th></tr></thead>
+    <tbody>
+      {% for row in survey_summary.rows %}
+      <tr>
+        <td>{{ row.title_ar }}</td>
+        <td>{{ row.respondent_label or '—' }}</td>
+        <td>{{ row.response_count or 0 }} / {{ row.min_aggregate or '—' }}</td>
+        <td>{% if row.aggregated and row.overall_score_percent is not none %}{{ row.overall_score_percent }}%{% else %}—{% endif %}</td>
+        <td>{{ row.primary_indicator_title or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if survey_summary and survey_summary.external_rows %}
+  <h2>استبيانات خارجية (أحدث دورة)</h2>
+  <table class="table table-sm table-bordered">
+    <thead><tr><th>الاستبيان</th><th>الدورة</th><th>إجابات</th><th>النتيجة</th><th>مؤشر الاعتماد</th></tr></thead>
+    <tbody>
+      {% for row in survey_summary.external_rows %}
+      <tr>
+        <td>{{ row.title_ar }}</td>
+        <td>{{ row.cycle_label or '—' }}</td>
+        <td>{{ row.response_count or 0 }} / {{ row.min_aggregate or '—' }}</td>
+        <td>{% if row.aggregated and row.overall_score_percent is not none %}{{ row.overall_score_percent }}%{% else %}—{% endif %}</td>
+        <td>{{ row.primary_indicator_title or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
   {% if critical_courses %}
   <h2>مقررات حرجة</h2>
   <table class="table table-sm table-bordered"><thead><tr><th>المقرر</th><th>الأستاذ</th><th>رسوب %</th></tr></thead>

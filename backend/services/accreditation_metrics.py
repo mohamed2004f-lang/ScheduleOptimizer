@@ -194,19 +194,61 @@ def compute_indicator_auto(
     elif code == "QA-02-1":
         score = _reports_completion(conn, cur, sem, department_id)
         detail = f"اكتمال تقارير إقفال المقررات: {score:.1f}%"
+        try:
+            from backend.services.survey_accreditation import survey_supplementary_notes
+
+            extra = survey_supplementary_notes(
+                conn, semester=sem, department_id=department_id, indicator_code=code
+            )
+            if extra:
+                detail += f" — استبيانات داعمة: {extra}"
+        except Exception:
+            pass
     elif code == "QA-03-1":
         score = _avg_ilo(conn, cur, sem, department_id)
         detail = f"متوسط تحقق مخرجات التعلم: {score:.1f}%"
+        try:
+            from backend.services.survey_accreditation import survey_supplementary_notes
+
+            extra = survey_supplementary_notes(
+                conn, semester=sem, department_id=department_id, indicator_code=code
+            )
+            if extra:
+                detail += f" — استبيانات داعمة: {extra}"
+        except Exception:
+            pass
     elif code == "SS-01-1":
         score = _avg_eval_score(conn, cur, sem, department_id)
         detail = f"رضا الطلبة (استبيان المقرر): {score:.1f}%"
+        try:
+            from backend.services.survey_accreditation import survey_supplementary_notes
+
+            extra = survey_supplementary_notes(
+                conn, semester=sem, department_id=department_id, indicator_code=code
+            )
+            if extra:
+                detail += f" — استبيانات داعمة: {extra}"
+        except Exception:
+            pass
     elif code == "SS-02-1":
         score = _graduation_proxy(cur, department_id)
         detail = f"مؤشر التقدم الأكاديمي (تقريبي): {score:.1f}%"
+        try:
+            from backend.services.survey_accreditation import survey_supplementary_notes
+
+            extra = survey_supplementary_notes(
+                conn, semester=sem, department_id=department_id, indicator_code=code
+            )
+            if extra:
+                detail += f" — استبيانات داعمة: {extra}"
+        except Exception:
+            pass
     elif code == "FF-01-1":
-        metrics = compute_quality_metrics(conn, semester=sem, department_id=department_id)
-        score = float(metrics.get("institutional_infrastructure_rating") or 0)
-        detail = f"تقييم البنية التحتية من إدخالات الجودة: {score:.1f}%"
+        from backend.services.survey_accreditation import compute_hybrid_infrastructure_rating
+
+        score, detail = compute_hybrid_infrastructure_rating(
+            conn, semester=sem, department_id=department_id
+        )
 
     status = suggest_compliance_status(
         score, met=th["met"], partial=th["partial"]

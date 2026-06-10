@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ template.title_ar }}</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .identity-panel .accordion-button { font-size: 0.95rem; }
+    .step-badge { width: 1.75rem; height: 1.75rem; display: inline-flex; align-items: center; justify-content: center; }
+  </style>
+</head>
+<body class="bg-light">
+  <main class="container py-4" style="max-width:820px;">
+    <div class="card shadow-sm mb-3">
+      <div class="card-header bg-primary text-white">
+        <h5 class="mb-0">{{ template.title_ar }}</h5>
+        <small>دورة: {{ cycle_label }} — تعبئة عبر رابط دعوة</small>
+      </div>
+    </div>
+
+    <form id="inviteSurveyForm">
+      <!-- الخطوة 1: بطاقة التعريف -->
+      <div class="card shadow-sm mb-3">
+        <div class="card-header fw-semibold">
+          <span class="badge bg-secondary rounded-pill step-badge me-1">1</span>
+          {% if template_code == 'employer_strategic' %}بيانات جهة العمل{% else %}بياناتك كخريج{% endif %}
+        </div>
+        <div class="card-body">
+          {% if template_code == 'employer_strategic' %}
+          <div class="mb-3">
+            <label class="form-label">نوع الجهة <span class="text-danger">*</span></label>
+            <select class="form-select" name="org_type" id="org_type" required>
+              <option value="">— اختر —</option>
+              {% for val, label in employer_org_types %}
+              <option value="{{ val }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">اسم الجهة <span class="text-danger">*</span></label>
+            <input type="text" class="form-control" name="org_name" required maxlength="200">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">القطاع / المجال</label>
+            <input type="text" class="form-control" name="sector_label" maxlength="120" placeholder="مثال: صناعة، طاقة، مقاولات">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">المنصب أو الدور</label>
+            <input type="text" class="form-control" name="position_text" maxlength="120">
+          </div>
+          <div class="mb-0">
+            <label class="form-label">هل توظّفون خريجين من الكلية؟ <span class="text-danger">*</span></label>
+            <select class="form-select" name="hires_graduates" required>
+              <option value="">— اختر —</option>
+              <option value="yes">نعم</option>
+              <option value="sometimes">أحياناً</option>
+              <option value="no">لا</option>
+            </select>
+          </div>
+          {% else %}
+          <p class="text-muted small">{{ alumni_intro_ar }}</p>
+          <div class="row g-2">
+            <div class="col-md-6">
+              <label class="form-label">سنة التخرج <span class="text-danger">*</span></label>
+              <select class="form-select" name="graduation_year" id="graduation_year" required></select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">القسم <span class="text-danger">*</span></label>
+              <select class="form-select" name="department_id" id="department_id" required>
+                <option value="">— جاري التحميل —</option>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">الشعبة / المسار</label>
+              <select class="form-select" name="track_code" id="track_code" disabled>
+                <option value="">— اختر القسم أولاً —</option>
+              </select>
+              <input type="hidden" name="track_label" id="track_label" value="">
+            </div>
+            <div class="col-md-6" id="deptOtherWrap" style="display:none;">
+              <label class="form-label">اسم القسم (أخرى / غير متذكر)</label>
+              <input type="text" class="form-control" name="department_label" id="department_label" maxlength="120">
+            </div>
+            <div class="col-12">
+              <label class="form-label">العمل أو المنصب الحالي</label>
+              <input type="text" class="form-control" name="current_role_text" maxlength="200">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">رقم الهاتف (اختياري — لمنع التكرار في الحملة)</label>
+              <input type="tel" class="form-control" name="phone" maxlength="20" placeholder="آخر 4 أرقام أو الرقم كاملاً">
+            </div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if template_code == 'employer_strategic' and identity_panel %}
+      <!-- لوحة هوية الكلية -->
+      <div class="card shadow-sm mb-3 identity-panel">
+        <div class="card-header fw-semibold">
+          <span class="badge bg-secondary rounded-pill step-badge me-1">2</span>
+          هوية الكلية والخطة الاستراتيجية <span class="text-muted fw-normal small">(قراءة فقط)</span>
+        </div>
+        <div class="card-body">
+          <p class="text-muted">{{ identity_panel.intro_note_ar }}</p>
+          <div class="mb-3">
+            <h6 class="fw-bold">الرؤية</h6>
+            <p class="mb-0">{{ identity_panel.vision_ar or '—' }}</p>
+          </div>
+          <div class="mb-3">
+            <h6 class="fw-bold">الرسالة</h6>
+            <p class="mb-0">{{ identity_panel.mission_ar or '—' }}</p>
+          </div>
+          {% if identity_panel.core_values %}
+          <div class="mb-3">
+            <h6 class="fw-bold">القيم الأساسية</h6>
+            <ul class="mb-0">
+              {% for v in identity_panel.core_values %}
+              <li><strong>{{ v.title_ar }}</strong>{% if v.description_ar %} — {{ v.description_ar }}{% endif %}</li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+          <div class="mb-3">
+            <h6 class="fw-bold">ملخص الخطة الاستراتيجية</h6>
+            <p class="mb-0">{{ identity_panel.strategic_plan_summary_ar or '—' }}</p>
+          </div>
+          <div class="accordion mb-3" id="goalsAccordion">
+            <div class="accordion-item">
+              <h2 class="accordion-header">
+                <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#goalsCollapse">
+                  الأهداف الاستراتيجية للكلية
+                </button>
+              </h2>
+              <div id="goalsCollapse" class="accordion-collapse collapse show">
+                <div class="accordion-body">
+                  <ol class="mb-0">
+                    {% for g in identity_panel.strategic_goals %}
+                    <li class="mb-2">
+                      <strong>{{ g.title_ar }}</strong>
+                      {% if g.description_ar %}<div class="small text-muted">{{ g.description_ar }}</div>{% endif %}
+                      {% if g.children %}
+                      <ul class="small mt-1">
+                        {% for ch in g.children %}
+                        <li>{{ ch.title_ar }}</li>
+                        {% endfor %}
+                      </ul>
+                      {% endif %}
+                    </li>
+                    {% endfor %}
+                  </ol>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div>
+            <h6 class="fw-bold">مخرجات تعلم الخريج على مستوى الكلية</h6>
+            <ul class="mb-0">
+              {% for o in identity_panel.graduate_outcomes %}
+              <li>{{ o.title_ar }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- الأسئلة -->
+      <div class="card shadow-sm mb-3">
+        <div class="card-header fw-semibold">
+          <span class="badge bg-secondary rounded-pill step-badge me-1">{% if template_code == 'employer_strategic' %}3{% else %}2{% endif %}</span>
+          أسئلة الاستبيان
+        </div>
+        <div class="card-body">
+          {% for q in questions %}
+          <div class="mb-4">
+            <label class="form-label fw-bold">{{ loop.index }}. {{ q.label_ar }}</label>
+            <div class="d-flex flex-wrap gap-1" role="group">
+              {% for v, t in likert_labels %}
+              <input type="radio" class="btn-check" name="q_{{ q.id }}" value="{{ v }}" id="q{{ q.id }}_{{ v }}" required>
+              <label class="btn btn-outline-secondary btn-sm" for="q{{ q.id }}_{{ v }}">{{ t }} ({{ v }})</label>
+              {% endfor %}
+            </div>
+          </div>
+          {% endfor %}
+          <div class="mb-3">
+            <label class="form-label">{{ open_comment_label }}</label>
+            <textarea class="form-control" name="comments" rows="3"></textarea>
+          </div>
+          <button type="submit" class="btn btn-success btn-lg w-100">إرسال الاستبيان</button>
+        </div>
+      </div>
+    </form>
+
+    <div id="successBox" class="alert alert-success d-none shadow-sm">
+      <h5 class="alert-heading">شكراً لمشاركتكم</h5>
+      <p class="mb-0">تم تسجيل إجاباتكم بنجاح.</p>
+    </div>
+  </main>
+
+  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+  <script>
+    const TOKEN = {{ invite.token|tojson }};
+    const TEMPLATE = {{ template_code|tojson }};
+
+    async function loadDepartments() {
+      const sel = document.getElementById('department_id');
+      if (!sel) return;
+      const r = await fetch('/academic_quality/surveys/api/public/departments');
+      const j = await r.json().catch(() => ({}));
+      let html = '<option value="">— اختر القسم —</option>';
+      (j.items || []).forEach(d => {
+        html += `<option value="${d.id}">${d.name_ar}</option>`;
+      });
+      html += '<option value="other">قسم آخر / غير متذكر</option>';
+      sel.innerHTML = html;
+    }
+
+    function fillGradYears() {
+      const sel = document.getElementById('graduation_year');
+      if (!sel) return;
+      const y = new Date().getFullYear();
+      let html = '<option value="">— اختر —</option>';
+      for (let i = y; i >= 1980; i--) {
+        html += `<option value="${i}">${i}</option>`;
+      }
+      sel.innerHTML = html;
+    }
+
+    async function loadTracks(deptId) {
+      const sel = document.getElementById('track_code');
+      if (!sel) return;
+      if (!deptId || deptId === 'other') {
+        sel.innerHTML = '<option value="">— لا ينطبق —</option><option value="unknown">غير متذكر</option>';
+        sel.disabled = false;
+        return;
+      }
+      sel.disabled = true;
+      sel.innerHTML = '<option value="">— جاري التحميل —</option>';
+      const r = await fetch('/academic_quality/surveys/api/public/tracks?department_id=' + encodeURIComponent(deptId));
+      const j = await r.json().catch(() => ({}));
+      let html = '<option value="">— لا توجد شعبة / لا ينطبق —</option>';
+      (j.items || []).forEach(t => {
+        html += `<option value="${t.track_code}" data-label="${t.track_label}">${t.track_label}</option>`;
+      });
+      html += '<option value="unknown" data-label="غير متذكر">غير متذكر</option>';
+      sel.innerHTML = html;
+      sel.disabled = false;
+    }
+
+    document.getElementById('department_id')?.addEventListener('change', (e) => {
+      const v = e.target.value;
+      const wrap = document.getElementById('deptOtherWrap');
+      if (wrap) wrap.style.display = v === 'other' ? 'block' : 'none';
+      loadTracks(v);
+    });
+
+    document.getElementById('track_code')?.addEventListener('change', (e) => {
+      const opt = e.target.selectedOptions[0];
+      const lbl = document.getElementById('track_label');
+      if (lbl) lbl.value = opt ? (opt.dataset.label || opt.textContent || '') : '';
+    });
+
+    document.getElementById('inviteSurveyForm')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const profile = {};
+      const answers = {};
+      for (const [k, v] of fd.entries()) {
+        if (k.startsWith('q_')) answers[k.slice(2)] = v;
+        else if (k !== 'comments') profile[k] = v;
+      }
+      const body = {
+        profile,
+        answers,
+        comments: fd.get('comments') || '',
+      };
+      const r = await fetch('/academic_quality/surveys/api/invite/' + encodeURIComponent(TOKEN) + '/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        alert(j.message || 'تعذر الإرسال');
+        return;
+      }
+      e.target.classList.add('d-none');
+      document.getElementById('successBox')?.classList.remove('d-none');
+      window.scrollTo(0, 0);
+    });
+
+    if (TEMPLATE === 'alumni') {
+      fillGradYears();
+      loadDepartments();
+    }
+  </script>
+</body>
+</html>

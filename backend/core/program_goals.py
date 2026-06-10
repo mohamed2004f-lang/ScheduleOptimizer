@@ -370,12 +370,21 @@ def import_mech_program_profile(
     if sync_links:
         links_count = _sync_goal_outcome_links(cur, program_id)
 
+    cleanup_stats: dict[str, Any] = {}
+    try:
+        from backend.core.outcome_symbol_audit import cleanup_mech_stray_outcomes
+
+        cleanup_stats = cleanup_mech_stray_outcomes(cur, program_id)
+    except Exception:
+        cleanup_stats = {}
+
     return {
         "status": "ok",
         "program_id": program_id,
         "goals": goals_stats,
         "outcomes": outcomes_stats,
         "links_synced": links_count,
+        "symbol_cleanup": cleanup_stats,
         "actor": actor,
     }
 

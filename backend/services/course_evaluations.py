@@ -152,6 +152,44 @@ def _student_evaluable_sections(conn, student_id: str, semester: str) -> list[di
     return out
 
 
+def list_pending_course_evaluations(
+    conn,
+    student_id: str,
+    *,
+    semester: str | None = None,
+) -> list[dict]:
+    """مقررات الطالب التي لم يُقيّمها بعد — للعرض في hub الاستبيانات."""
+    sid = (student_id or "").strip()
+    if not sid:
+        return []
+    sem = (semester or "").strip() or term_label_from_conn(conn)
+    sections = _student_evaluable_sections(conn, sid, sem)
+    cur = conn.cursor()
+    pending: list[dict] = []
+    for s in sections:
+        sec_id = int(s["section_id"])
+        if _already_evaluated(conn, cur, sid, sec_id, sem):
+            continue
+        cname = (s.get("course_name") or "").strip() or "—"
+        iname = (s.get("instructor_name") or "").strip()
+        title = f"تقييم مقرر: {cname}"
+        if iname:
+            title += f" — {iname}"
+        pending.append(
+            {
+                "code": "student_course",
+                "title_ar": title,
+                "semester": sem,
+                "fill_url": f"/students/evaluations/form/{sec_id}",
+                "pending_kind": "course_eval",
+                "section_id": sec_id,
+                "course_name": cname,
+                "instructor_name": iname,
+            }
+        )
+    return pending
+
+
 def _already_evaluated(conn, cur, student_id: str, section_id: int, semester: str) -> bool:
     if not table_exists(conn, "course_evaluations"):
         return False
@@ -170,36 +208,8 @@ def _already_evaluated(conn, cur, student_id: str, section_id: int, semester: st
 @login_required
 @role_required("student")
 def evaluations_home():
-    sid = _student_id_from_session()
-    if not sid:
-        return redirect(url_for("login_page"))
-    try:
-        with get_connection() as conn:
-            sem = term_label_from_conn(conn)
-            sections = _student_evaluable_sections(conn, sid, sem)
-            cur = conn.cursor()
-            for s in sections:
-                s["evaluated"] = _already_evaluated(conn, cur, sid, int(s["section_id"]), sem)
-    except Exception:
-        logger.exception("evaluations_home failed for student %s", sid)
-        return render_template(
-            "student_evaluations_list.html",
-            sections=[],
-            semester="",
-            error="تعذر تحميل قائمة المقررات. تأكد من تشغيل ترحيل قاعدة البيانات ثم أعد المحاولة.",
-        )
-    empty_hint = ""
-    if not sections:
-        empty_hint = (
-            "تأكد من تطابق اسم المقرر بين التسجيل والجدول الدراسي، "
-            "وأن شعبة الجدول تحمل اسم أستاذ مسجّل في النظام (أو معرّف أستاذ في الجدول)."
-        )
-    return render_template(
-        "student_evaluations_list.html",
-        sections=sections,
-        semester=sem,
-        empty_hint=empty_hint,
-    )
+    """إعادة توجيه — قائمة التقييمات مدمجة في hub الاستبيانات."""
+    return redirect(url_for("academic_quality.surveys_hub"))
 
 
 @course_evaluations_bp.route("/form/<int:section_id>")
@@ -318,7 +328,7 @@ def submit_evaluation():
 
     if request.is_json:
         return jsonify({"status": "ok"})
-    return redirect(url_for("course_evaluations.evaluations_home"))
+    return redirect(url_for("academic_quality.surveys_hub"))
 
 
 @course_evaluations_bp.route("/api/pending")
@@ -330,11 +340,5 @@ def pending_api():
         return jsonify({"status": "error"}), 403
     with get_connection() as conn:
         sem = term_label_from_conn(conn)
-        sections = _student_evaluable_sections(conn, sid, sem)
-        cur = conn.cursor()
-        pending = [
-            s
-            for s in sections
-            if not _already_evaluated(conn, cur, sid, int(s["section_id"]), sem)
-        ]
+        pending = list_pending_course_evaluations(conn, sid, semester=sem)
     return jsonify({"status": "ok", "semester": sem, "pending": pending, "count": len(pending)})

@@ -23,6 +23,13 @@ DEFAULT_VISION_AR = (
     "وفق معايير الجودة الوطنية."
 )
 
+DEFAULT_STRATEGIC_PLAN_SUMMARY_AR = (
+    "تركز الخطة الاستراتيجية للكلية على تحسين جودة التعليم الهندسي ومواءمة المناهج مع "
+    "احتياجات سوق العمل، وتطوير مهارات الطلاب الشاملة، وتعزيز البحث والابتكار، وتطوير "
+    "البنية التحتية والموارد، وبناء شراكات فعّالة مع القطاع الصناعي والمجتمع، مع التزام "
+    "مؤسسي بضمان الجودة والمسؤولية الاجتماعية والاستدامة."
+)
+
 CORE_VALUES: list[dict[str, str]] = [
     {"code": "CV1", "title_ar": "التميز الأكاديمي", "description": "السعي لأعلى معايير الجودة في التعليم والبحث."},
     {"code": "CV2", "title_ar": "الابتكار والإبداع", "description": "تشجيع الفكر الناقد والابتكار في حل المشكلات."},
@@ -128,14 +135,15 @@ def seed_college_identity_defaults(conn) -> dict[str, int]:
         cur.execute(
             """
             INSERT INTO college_identity (
-                intro_ar, mission_ar, vision_ar, values_json,
+                intro_ar, mission_ar, vision_ar, strategic_plan_summary_ar, values_json,
                 effective_from, governance_status, is_active
-            ) VALUES (?, ?, ?, ?, ?, 'approved', 1)
+            ) VALUES (?, ?, ?, ?, ?, ?, 'approved', 1)
             """,
             (
                 DEFAULT_INTRO_AR,
                 DEFAULT_MISSION_AR,
                 DEFAULT_VISION_AR,
+                DEFAULT_STRATEGIC_PLAN_SUMMARY_AR,
                 json.dumps(CORE_VALUES, ensure_ascii=False),
                 "2025-2026",
             ),
@@ -214,7 +222,10 @@ def seed_college_identity_defaults(conn) -> dict[str, int]:
     try:
         conn.commit()
     except Exception:
-        pass
+        try:
+            conn.rollback()
+        except Exception:
+            pass
     return stats
 
 

@@ -302,6 +302,38 @@ def excel_response_from_df(df, filename_prefix="export"):
                      download_name=fname)
 
 
+def _sanitize_excel_sheet_name(name, used):
+    invalid_chars = set('[]:*?/\\')
+    cleaned = "".join(("-" if ch in invalid_chars else ch) for ch in (name or "Sheet")).strip()
+    if not cleaned:
+        cleaned = "Sheet"
+    base = cleaned[:31]
+    candidate = base
+    counter = 1
+    while candidate in used:
+        suffix = f"_{counter}"
+        candidate = (base[:31 - len(suffix)] + suffix) if len(base) + len(suffix) > 31 else base + suffix
+        counter += 1
+    used.add(candidate)
+    return candidate
+
+
+def excel_bytes_from_frames(frames) -> bytes:
+    """توليد بايتات Excel متعدد الأوراق (بدون استجابة Flask)."""
+    if not frames:
+        frames = [("Sheet1", pd.DataFrame())]
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        used_names = set()
+        for sheet_name, df in frames:
+            safe_name = _sanitize_excel_sheet_name(sheet_name, used_names)
+            (df if isinstance(df, pd.DataFrame) else pd.DataFrame(df)).to_excel(
+                writer, index=False, sheet_name=safe_name
+            )
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def excel_response_from_frames(frames, filename_prefix="export"):
     """
     توليد ملف Excel يحتوي على عدة أوراق.
@@ -311,34 +343,11 @@ def excel_response_from_frames(frames, filename_prefix="export"):
     if not frames:
         frames = [("Sheet1", pd.DataFrame())]
 
-    buf = io.BytesIO()
     now = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     fname = f"{filename_prefix}_{now}.xlsx"
-
-    def _sanitize_sheet_name(name, used):
-        invalid_chars = set('[]:*?/\\')
-        cleaned = "".join(("-" if ch in invalid_chars else ch) for ch in (name or "Sheet")).strip()
-        if not cleaned:
-            cleaned = "Sheet"
-        base = cleaned[:31]
-        candidate = base
-        counter = 1
-        while candidate in used:
-            suffix = f"_{counter}"
-            candidate = (base[:31 - len(suffix)] + suffix) if len(base) + len(suffix) > 31 else base + suffix
-            counter += 1
-        used.add(candidate)
-        return candidate
-
-    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-        used_names = set()
-        for sheet_name, df in frames:
-            safe_name = _sanitize_sheet_name(sheet_name, used_names)
-            (df if isinstance(df, pd.DataFrame) else pd.DataFrame(df)).to_excel(writer, index=False, sheet_name=safe_name)
-
-    buf.seek(0)
+    raw = excel_bytes_from_frames(frames)
     return send_file(
-        buf,
+        io.BytesIO(raw),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         as_attachment=True,
         download_name=fname,
@@ -398,42 +407,47 @@ def _pdf_available():
     # رسالة واضحة إن لم يوجد
     return False, "البرنامج wkhtmltopdf غير مثبت أو غير موجود في PATH. نزّله وثبتّه من https://wkhtmltopdf.org/ ثم أعد التشغيل."
 
-def pdf_response_from_html(html, filename_prefix="export"):
-    """
-    إرجاع ملف PDF للتحميل من HTML.
-    يولد ملفًا مؤقتًا لأن بعض بيئات Windows لا تدعم كتابة البايت-ستريم مباشرة عبر pdfkit.
-    """
+def pdf_bytes_from_html(html: str) -> tuple[bytes | None, str | None]:
+    """توليد بايتات PDF من HTML. يُرجع (None, رسالة خطأ) عند الفشل."""
     ok, info = _pdf_available()
     if not ok:
-        return jsonify({"status": "error", "message": str(info)}), 500
-
+        return None, str(info)
     try:
-        # بناء config إن لزم
         config = PDFKIT_CONFIG if PDFKIT_CONFIG is not None else None
         if config is None:
             wkpath = info.get("wkhtmltopdf") if isinstance(info, dict) else shutil.which("wkhtmltopdf")
             if wkpath:
                 config = pdfkit.configuration(wkhtmltopdf=wkpath)
-
-        options = {'enable-local-file-access': None, 'encoding': "UTF-8"}
-
-        # أنشئ ملفًا مؤقتًا للـ PDF
+        options = {"enable-local-file-access": None, "encoding": "UTF-8"}
         tmpf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
         tmp_path = tmpf.name
         tmpf.close()
-
         try:
-            # اطلب من pdfkit توليد الملف فعليًا إلى المسار المؤقت
             pdfkit.from_string(html, tmp_path, options=options, configuration=config)
-            now = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-            fname = f"{filename_prefix}_{now}.pdf"
-            return send_file(tmp_path,
-                             mimetype="application/pdf",
-                             as_attachment=True,
-                             download_name=fname)
+            with open(tmp_path, "rb") as f:
+                return f.read(), None
         finally:
-            # نترك الملف كما هو أثناء الإرسال؛ إن رغبت بتنظيف لاحق يمكنك حذف الملفات المؤقتة عبر مهمة خلفية أو cron
-            pass
-
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
     except Exception as e:
-        return jsonify({"status": "error", "message": f"فشل توليد PDF: {str(e)}"}), 500
+        return None, f"فشل توليد PDF: {e}"
+
+
+def pdf_response_from_html(html, filename_prefix="export"):
+    """
+    إرجاع ملف PDF للتحميل من HTML.
+    يولد ملفًا مؤقتًا لأن بعض بيئات Windows لا تدعم كتابة البايت-ستريم مباشرة عبر pdfkit.
+    """
+    raw, err = pdf_bytes_from_html(html)
+    if raw is None:
+        return jsonify({"status": "error", "message": err or "فشل توليد PDF"}), 500
+    now = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    fname = f"{filename_prefix}_{now}.pdf"
+    return send_file(
+        io.BytesIO(raw),
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=fname,
+    )

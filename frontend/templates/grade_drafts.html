@@ -70,6 +70,11 @@
         </div>
         <div class="card-body">
           <p class="small text-muted" id="editorModeHint"></p>
+          <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+            <input type="search" id="rosterFilter" class="form-control form-control-sm" style="max-width:18rem" placeholder="بحث بالاسم أو الرقم…" autocomplete="off">
+            <span class="small text-muted" id="rosterCount"></span>
+            <span class="small text-muted ms-auto" id="autoSaveStatus"></span>
+          </div>
           <div class="table-responsive">
             <table class="table table-sm table-striped align-middle">
               <thead>
@@ -737,10 +742,136 @@
           btn.addEventListener('click', () => openDraft(Number(btn.getAttribute('data-open-draft'))));
         });
         setupInstructorSpecialCasesUI();
+        await handleGradeDraftDeepLink(bySection, blocking, wrap);
       } catch (e) {
         console.error(e);
         wrap.textContent = 'فشل تحميل البيانات.';
       }
+    }
+
+    async function handleGradeDraftDeepLink(bySection, blocking, wrap) {
+      let params;
+      try { params = new URLSearchParams(window.location.search); } catch (e) { return; }
+      const action = (params.get('action') || '').trim().toLowerCase();
+      if (!action) return;
+      const sectionId = Number(params.get('section_id') || '0');
+      let draftId = Number(params.get('draft_id') || '0');
+      const courseParam = (params.get('course_name') || '').trim();
+
+      if (action === 'open') {
+        if (!draftId && sectionId) {
+          const sec = (instructorSections || []).find(x => Number(x.section_id) === sectionId);
+          if (sec) {
+            const key = String(sec.course_name) + '::' + String(sectionId);
+            draftId = Number((bySection[key] || {}).id || 0);
+          }
+        }
+        if (draftId) {
+          await openDraft(draftId);
+        }
+        return;
+      }
+      if (action === 'create' && courseParam && !blocking) {
+        let btn = null;
+        if (sectionId) {
+          btn = wrap.querySelector('.js-new-draft[data-section-id="' + sectionId + '"]');
+        }
+        if (!btn) {
+          wrap.querySelectorAll('.js-new-draft').forEach(b => {
+            if (btn) return;
+            const c = decodeURIComponent(b.getAttribute('data-new-course') || '');
+            if (c === courseParam) btn = b;
+          });
+        }
+        if (btn && !btn.disabled) btn.click();
+      }
+    }
+
+    let autoSaveTimer = null;
+
+    async function persistDraftItems(silent) {
+      const st = (state.draft && state.draft.status) ? String(state.draft.status).trim() : '';
+      if (!state.draftId || (st !== 'Draft' && st !== 'Rejected')) return false;
+      const payload = {
+        items: state.items.map(r => ({
+          student_id: r.student_id,
+          coursework: r.coursework === '' || r.coursework === null ? null : Number(r.coursework),
+          midterm: r.midterm === '' || r.midterm === null ? null : Number(r.midterm),
+          final_exam: r.final_exam === '' || r.final_exam === null ? null : Number(r.final_exam),
+          absent_midterm: !!r.absent_midterm,
+          absent_final_exam: !!r.absent_final_exam,
+          partial: r.partial === '' || r.partial === null ? null : Number(r.partial),
+          final: r.final === '' || r.final === null ? null : Number(r.final),
+          total: r.total === '' || r.total === null ? null : Number(r.total)
+        }))
+      };
+      const r = await fetch('/grades/drafts/' + state.draftId + '/items', {
+        method: 'POST',
+        credentials: 'include',
+        headers: soJsonHeaders(),
+        body: JSON.stringify(payload)
+      });
+      const j = await r.json().catch(() => ({}));
+      const statusEl = document.getElementById('autoSaveStatus');
+      if (r.ok) {
+        if (!silent) window.showToast && window.showToast('تم الحفظ', 'success');
+        if (statusEl) statusEl.textContent = 'آخر حفظ: ' + new Date().toLocaleTimeString('ar');
+        return true;
+      }
+      const msg = j.message || 'فشل الحفظ';
+      if (!silent) {
+        if (r.status === 423) {
+          window.showToast && window.showToast(msg + ' (دورة الفصل مغلقة)', 'warning');
+        } else {
+          window.showToast && window.showToast(msg, 'danger');
+        }
+      }
+      if (statusEl) statusEl.textContent = 'فشل الحفظ التلقائي';
+      return false;
+    }
+
+    function scheduleAutoSave() {
+      const st = (state.draft && state.draft.status) ? String(state.draft.status).trim() : '';
+      if (!state.draftId || (st !== 'Draft' && st !== 'Rejected')) return;
+      const statusEl = document.getElementById('autoSaveStatus');
+      if (statusEl) statusEl.textContent = 'تغييرات غير محفوظة…';
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = setTimeout(() => { persistDraftItems(true); }, 2500);
+    }
+
+    function applyRosterFilter() {
+      const q = (document.getElementById('rosterFilter')?.value || '').trim().toLowerCase();
+      const tbody = document.getElementById('editorBody');
+      if (!tbody) return;
+      let visible = 0;
+      tbody.querySelectorAll('tr').forEach(tr => {
+        const sid = (tr.getAttribute('data-student-id') || '').toLowerCase();
+        const name = (tr.getAttribute('data-student-name') || '').toLowerCase();
+        const show = !q || sid.includes(q) || name.includes(q);
+        tr.style.display = show ? '' : 'none';
+        if (show) visible += 1;
+      });
+      const countEl = document.getElementById('rosterCount');
+      if (countEl) {
+        const total = state.items ? state.items.length : 0;
+        countEl.textContent = q ? (visible + ' / ' + total + ' طالب') : (total + ' طالب');
+      }
+    }
+
+    function setupGradeInputKeyboardNav(tbody) {
+      if (!tbody) return;
+      const inputs = Array.from(tbody.querySelectorAll('input[type="number"]:not([disabled])'));
+      inputs.forEach((inp, idx) => {
+        inp.addEventListener('keydown', ev => {
+          if (ev.key !== 'Enter') return;
+          ev.preventDefault();
+          const next = inputs[idx + 1];
+          if (next) {
+            next.focus();
+            next.select();
+          }
+        });
+      });
     }
 
     async function openDraft(draftId) {
@@ -787,7 +918,7 @@
           };
         });
 
-        document.getElementById('editorTitle').textContent = 'مسودة: ' + courseName + (sectionId ? (' (شعبة #' + sectionId + ')') : '');
+        document.getElementById('editorTitle').textContent = 'مسودة: ' + courseName + (sectionId ? (' (شعبة #' + sectionId + ')') : '') + ' — ' + roster.length + ' طالب';
         const st = (dj.draft.status || '').trim();
         document.getElementById('editorStatus').textContent = st;
         const canEdit = (st === 'Draft' || st === 'Rejected');
@@ -825,6 +956,8 @@
         tbody.innerHTML = '';
         state.items.forEach((row, idx) => {
           const tr = document.createElement('tr');
+          tr.setAttribute('data-student-id', row.student_id || '');
+          tr.setAttribute('data-student-name', row.student_name || '');
           const effectiveMid = row.absent_midterm ? 0 : row.midterm;
           const effectiveFinal = row.absent_final_exam ? 0 : row.final_exam;
           const comp = computeTotal(row.coursework, effectiveMid, effectiveFinal, row.partial, row.final, row.total);
@@ -840,6 +973,14 @@
           ].join('');
           tbody.appendChild(tr);
         });
+
+        const rosterFilter = document.getElementById('rosterFilter');
+        if (rosterFilter) {
+          rosterFilter.value = '';
+          rosterFilter.oninput = applyRosterFilter;
+        }
+        applyRosterFilter();
+        setupGradeInputKeyboardNav(tbody);
 
         tbody.querySelectorAll('input').forEach(inp => {
           inp.addEventListener('input', () => {
@@ -871,6 +1012,7 @@
             const cell = tbody.querySelectorAll('tr')[i].querySelector('.comp-cell');
             if (cell) cell.textContent = fmtNum(c);
             updateAssessmentAdvisory();
+            scheduleAutoSave();
           });
         });
         updateAssessmentAdvisory();
@@ -1009,38 +1151,7 @@
     });
 
     document.getElementById('btnSaveDraft')?.addEventListener('click', async () => {
-      const st = (state.draft && state.draft.status) ? String(state.draft.status).trim() : '';
-      if (!state.draftId || (st !== 'Draft' && st !== 'Rejected')) return;
-      const payload = {
-        items: state.items.map(r => ({
-          student_id: r.student_id,
-          coursework: r.coursework === '' || r.coursework === null ? null : Number(r.coursework),
-          midterm: r.midterm === '' || r.midterm === null ? null : Number(r.midterm),
-          final_exam: r.final_exam === '' || r.final_exam === null ? null : Number(r.final_exam),
-          absent_midterm: !!r.absent_midterm,
-          absent_final_exam: !!r.absent_final_exam,
-          partial: r.partial === '' || r.partial === null ? null : Number(r.partial),
-          final: r.final === '' || r.final === null ? null : Number(r.final),
-          total: r.total === '' || r.total === null ? null : Number(r.total)
-        }))
-      };
-      const r = await fetch('/grades/drafts/' + state.draftId + '/items', {
-        method: 'POST',
-        credentials: 'include',
-        headers: soJsonHeaders(),
-        body: JSON.stringify(payload)
-      });
-      const j = await r.json().catch(() => ({}));
-      if (r.ok) {
-        window.showToast && window.showToast('تم الحفظ', 'success');
-      } else {
-        const msg = j.message || 'فشل الحفظ';
-        if (r.status === 423) {
-          window.showToast && window.showToast(msg + ' (دورة الفصل مغلقة)', 'warning');
-        } else {
-          window.showToast && window.showToast(msg, 'danger');
-        }
-      }
+      await persistDraftItems(false);
     });
 
     document.getElementById('btnSubmitDraft')?.addEventListener('click', async () => {

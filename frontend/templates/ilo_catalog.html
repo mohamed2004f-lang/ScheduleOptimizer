@@ -57,6 +57,7 @@
           <button type="button" class="btn btn-sm btn-outline-primary ilo-edit-only" id="btnImportPloXlsx" disabled {% if not can_edit %}style="display:none"{% endif %}>استيراد Excel</button>
           <input type="file" id="ploExcelFile" accept=".xlsx,.xls" class="d-none">
           <button type="button" class="btn btn-sm btn-outline-danger ilo-edit-only" id="btnImportMechProfile" disabled title="4 أهداف + 6 مخرجات ميكانيك" {% if not can_edit %}style="display:none"{% endif %}>تحميل وثيقة ميكانيك</button>
+          <button type="button" class="btn btn-sm btn-warning ilo-edit-only d-none" id="btnFixSymbols" title="إصلاح خلط PLO/SO" {% if not can_edit %}style="display:none"{% endif %}>إصلاح الرموز</button>
           <a class="btn btn-sm btn-outline-success" id="btnExportProfileXlsx" href="#" style="pointer-events:none;opacity:.6">تصدير أهداف+مخرجات</a>
           <button type="button" class="btn btn-sm btn-outline-info" id="btnShowGlo" disabled>مخرجات الكلية (GLO)</button>
           <button type="button" class="btn btn-sm btn-outline-warning" id="btnShowAnalytics" disabled>تحليلات وفجوات</button>
@@ -136,6 +137,7 @@
             </button>
           </div>
           <div class="card-body p-0">
+            <div id="symbolAuditBox" class="d-none border-bottom px-3 py-2 small"></div>
             <div class="table-responsive">
               <table class="table table-sm table-hover mb-0 align-middle">
                 <thead class="table-light">
@@ -376,8 +378,8 @@
         <div class="modal-body">
           <input type="hidden" id="outcomeEditId" value="">
           <div class="mb-2">
-            <label class="form-label small">الرمز (مثل PLO1)</label>
-            <input type="text" class="form-control" id="outcomeCode" maxlength="32" placeholder="PLO1">
+            <label class="form-label small">الرمز (مثل SO1 أو PLO1)</label>
+            <input type="text" class="form-control" id="outcomeCode" maxlength="32" placeholder="SO1">
           </div>
           <div class="mb-2">
             <label class="form-label small">العنوان بالعربية</label>
@@ -765,6 +767,71 @@
       document.getElementById('summaryRow').classList.remove('d-none');
     }
 
+    function renderSymbolAudit(audit) {
+      const box = document.getElementById('symbolAuditBox');
+      const fixBtn = document.getElementById('btnFixSymbols');
+      const codeInput = document.getElementById('outcomeCode');
+      if (!box) return;
+      const issues = (audit && audit.issues) || [];
+      const conv = (audit && audit.recommended_convention) || 'PLO';
+      if (codeInput && !codeInput.disabled) {
+        codeInput.placeholder = conv === 'SO' ? 'SO1' : 'PLO1';
+      }
+      if (!issues.length) {
+        box.classList.add('d-none');
+        box.innerHTML = '';
+        if (fixBtn) fixBtn.classList.add('d-none');
+        return;
+      }
+      const isMech = conv === 'SO';
+      const sevCls = s => (s === 'error' ? 'danger' : 'warning');
+      box.classList.remove('d-none');
+      box.innerHTML =
+        '<div class="alert alert-warning py-2 mb-0">' +
+        '<div class="fw-semibold mb-1"><i class="fa-solid fa-triangle-exclamation"></i> ملاحظات على رموز المخرجات</div>' +
+        '<ul class="mb-0 ps-3">' +
+        issues.map(i => '<li class="text-' + sevCls(i.severity) + '">' + escapeHtml(i.message_ar || '') + '</li>').join('') +
+        '</ul>' +
+        (isMech ? '<div class="mt-1 text-muted">برنامج ميكانيك: استخدم SO1–SO6 فقط (وليس PLO1–PLO7).</div>' : '') +
+        '</div>';
+      if (fixBtn && CAN_EDIT && isMech) {
+        fixBtn.classList.remove('d-none');
+      } else if (fixBtn) {
+        fixBtn.classList.add('d-none');
+      }
+    }
+
+    async function fixOutcomeSymbols() {
+      const pid = document.getElementById('programSelect').value;
+      if (!pid || !CAN_EDIT) return;
+      if (!confirm('سيتم إعادة تطبيق قالب ميكانيك (SO1–SO6) وإيقاف رموز PLO الزائدة ونقل الروابط. متابعة؟')) return;
+      showMsg('جاري إصلاح الرموز…', 'info');
+      try {
+        const r = await fetch('/academic_quality/ilo/api/programs/' + pid + '/fix_outcome_symbols', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          showMsg(j.message || 'تعذّر الإصلاح', 'danger');
+          return;
+        }
+        const retired = (j.cleanup && j.cleanup.retired_codes) || [];
+        showMsg(
+          retired.length
+            ? 'تم الإصلاح — أُوقفت: ' + retired.join(', ')
+            : 'تم التحقق — لا رموز زائدة',
+          'success'
+        );
+        await loadOutcomes();
+      } catch (e) {
+        console.error(e);
+        showMsg('خطأ في الاتصال', 'danger');
+      }
+    }
+
     function renderOutcomes(items) {
       outcomesCache = items || [];
       const tbody = document.getElementById('outcomesBody');
@@ -820,6 +887,7 @@
           return;
         }
         renderOutcomes(oJ.items || []);
+        renderSymbolAudit(oJ.symbol_audit || null);
         renderGoals(gJ.items || []);
         if (gR.ok) {
           document.getElementById('statGoals').textContent = (gJ.items || []).filter(x => Number(x.is_active) !== 0).length;
@@ -1753,6 +1821,7 @@
       );
       loadOutcomes();
     });
+    document.getElementById('btnFixSymbols')?.addEventListener('click', fixOutcomeSymbols);
 
     document.getElementById('gloDomainFilter')?.addEventListener('change', () => renderGloTable(gloCache));
     document.getElementById('matrixDomainFilter')?.addEventListener('change', () => {

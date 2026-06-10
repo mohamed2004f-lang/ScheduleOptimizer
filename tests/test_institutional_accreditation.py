@@ -22,11 +22,31 @@ def test_ensure_accreditation_catalog_seeds(db_conn):
 
 def test_build_compliance_map_structure(db_conn):
     ensure_accreditation_catalog(db_conn)
-    data = build_compliance_map(db_conn, semester="1447-1", department_id=None, ensure_seed=False)
+    data = build_compliance_map(
+        db_conn,
+        semester="1447-1",
+        department_id=None,
+        catalog_version=CATALOG_VERSION,
+        ensure_seed=False,
+    )
     assert data["status"] == "ok"
     assert len(data["domains"]) >= 7
     assert data["summary"]["indicators_total"] >= 15
     assert data["summary"]["not_started"] >= 1
+    first_ind = None
+    for dom in data["domains"]:
+        for st in dom.get("standards") or []:
+            if st.get("indicators"):
+                first_ind = st["indicators"][0]
+                break
+        if first_ind:
+            break
+    assert first_ind is not None
+    cov = first_ind.get("evidence_coverage")
+    if cov:
+        assert "label_ar" in cov
+        assert "bound" in cov
+        assert "rules_total" in cov
 
 
 def test_accreditation_map_page_and_assessment(app, db_conn, auth_client):
@@ -41,7 +61,13 @@ def test_accreditation_map_page_and_assessment(app, db_conn, auth_client):
     assert (body.get("summary") or {}).get("indicators_total", 0) >= 15
 
     ind_id = db_conn.cursor().execute(
-        "SELECT id FROM accreditation_indicators ORDER BY id LIMIT 1"
+        """
+        SELECT i.id FROM accreditation_indicators i
+        INNER JOIN accreditation_standards s ON s.id = i.standard_id
+        WHERE s.catalog_version = ?
+        ORDER BY i.id LIMIT 1
+        """,
+        (CATALOG_VERSION,),
     ).fetchone()[0]
     save = auth_client.post(
         "/academic_quality/api/accreditation/assessment/save",
@@ -55,7 +81,13 @@ def test_accreditation_map_page_and_assessment(app, db_conn, auth_client):
     )
     assert save.status_code == 200
 
-    data = build_compliance_map(db_conn, semester="test-sem", department_id=None, ensure_seed=False)
+    data = build_compliance_map(
+        db_conn,
+        semester="test-sem",
+        department_id=None,
+        catalog_version=CATALOG_VERSION,
+        ensure_seed=False,
+    )
     found = False
     for dom in data.get("domains") or []:
         for st in dom.get("standards") or []:

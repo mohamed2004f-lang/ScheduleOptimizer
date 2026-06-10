@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>تصدير سجلات الحضور والغياب</title>
+  <title>{% if portal_mode == 'instructor' %}حضور مقرراتي{% else %}تصدير سجلات الحضور والغياب{% endif %}</title>
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
@@ -13,8 +13,8 @@
   <main class="container-main container-1100">
     <div class="page-header">
       <div>
-        <h1 class="page-title">تصدير سجلات الحضور والغياب</h1>
-        <p class="page-subtitle">اختر المقررات وعدد الأسابيع — Excel لعدة مقررات؛ الطباعة الرسمية وPDF لمقرر واحد محدد</p>
+        <h1 class="page-title">{% if portal_mode == 'instructor' %}حضور مقرراتي{% else %}تصدير سجلات الحضور والغياب{% endif %}</h1>
+        <p class="page-subtitle">{% if portal_mode == 'instructor' %}تصدير وطباعة سجلات حضور مقرراتك للفصل الحالي{% else %}اختر المقررات وعدد الأسابيع — Excel لعدة مقررات؛ الطباعة الرسمية وPDF لمقرر واحد محدد{% endif %}</p>
       </div>
       <div class="text-muted small">
         الحد الأقصى للأسابيع: <strong class="text-primary">30</strong>
@@ -50,7 +50,7 @@
           </div>
 
           <div class="col-md-8">
-            <label for="courses-select" class="form-label fw-semibold">المقررات المتاحة</label>
+            <label for="courses-select" class="form-label fw-semibold">{% if portal_mode == 'instructor' %}مقرراتي{% else %}المقررات المتاحة{% endif %}</label>
             <select id="courses-select" class="form-select attendance-courses-select" name="course" multiple></select>
             <div class="form-text">
               استخدم مفتاح <kbd>Ctrl</kbd> (أو <kbd>⌘</kbd> في ماك) لتحديد أكثر من مقرر. اترك القائمة بدون اختيار لتصدير كل المقررات المسجل بها طلبة.
@@ -67,7 +67,7 @@
           <div class="col-12 d-flex justify-content-between align-items-center flex-wrap gap-2">
             <div id="form-feedback" class="text-danger small"></div>
             <div class="d-flex flex-wrap gap-2">
-              <a id="attendanceBackLink" href="/dashboard" class="btn btn-light">الرجوع للوحة القيادة</a>
+              <a id="attendanceBackLink" href="{% if portal_mode == 'instructor' %}/my_courses{% else %}/dashboard{% endif %}" class="btn btn-light">{% if portal_mode == 'instructor' %}مقرراتي{% else %}الرجوع للوحة القيادة{% endif %}</a>
               <button type="button" class="btn btn-outline-secondary" id="btn-attendance-print">معاينة للطباعة (مقرر واحد)</button>
               <button type="button" class="btn btn-outline-secondary" id="btn-attendance-pdf">تنزيل PDF (مقرر واحد)</button>
               <button type="submit" class="btn btn-primary">تنزيل Excel</button>
@@ -146,7 +146,8 @@
 
     document.addEventListener('DOMContentLoaded', () => {
       const backLink = document.getElementById('attendanceBackLink');
-      if (backLink) {
+      const portalInstructor = {{ 'true' if portal_mode == 'instructor' else 'false' }};
+      if (backLink && !portalInstructor) {
         fetch('/auth/check', { credentials: 'include' })
           .then(r => r.json())
           .then(auth => {

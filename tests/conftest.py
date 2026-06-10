@@ -256,7 +256,8 @@ CREATE TABLE IF NOT EXISTS users (
     instructor_id INTEGER,
     department_id INTEGER,
     is_supervisor INTEGER NOT NULL DEFAULT 0,
-    is_active INTEGER NOT NULL DEFAULT 1
+    is_active INTEGER NOT NULL DEFAULT 1,
+    is_college_quality_lead INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS student_exceptions (
@@ -653,6 +654,63 @@ CREATE TABLE IF NOT EXISTS accreditation_improvement_plans (
     updated_by TEXT DEFAULT '',
     is_active INTEGER NOT NULL DEFAULT 1,
     FOREIGN KEY (indicator_id) REFERENCES accreditation_indicators(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS accreditation_evidence_types (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    title_ar TEXT NOT NULL,
+    description_ar TEXT DEFAULT '',
+    category TEXT NOT NULL DEFAULT 'file',
+    source_module TEXT DEFAULT '',
+    source_ref TEXT DEFAULT '',
+    is_system INTEGER NOT NULL DEFAULT 0,
+    is_editable INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS accreditation_indicator_evidence_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    catalog_version TEXT NOT NULL,
+    indicator_id INTEGER NOT NULL,
+    evidence_type_id INTEGER NOT NULL,
+    link_mode TEXT NOT NULL DEFAULT 'evidence',
+    is_required INTEGER NOT NULL DEFAULT 1,
+    weight_percent REAL DEFAULT 0,
+    config_json TEXT DEFAULT '',
+    notes_ar TEXT DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT DEFAULT '',
+    UNIQUE (catalog_version, indicator_id, evidence_type_id),
+    FOREIGN KEY (indicator_id) REFERENCES accreditation_indicators(id) ON DELETE CASCADE,
+    FOREIGN KEY (evidence_type_id) REFERENCES accreditation_evidence_types(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS accreditation_evidence_bindings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    semester TEXT NOT NULL,
+    department_id INTEGER,
+    indicator_id INTEGER NOT NULL,
+    evidence_type_id INTEGER NOT NULL,
+    rule_id INTEGER,
+    binding_kind TEXT NOT NULL,
+    source_ref TEXT NOT NULL DEFAULT '',
+    label_ar TEXT DEFAULT '',
+    notes_ar TEXT DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    created_by TEXT DEFAULT '',
+    updated_by TEXT DEFAULT '',
+    UNIQUE (semester, department_id, indicator_id, evidence_type_id),
+    FOREIGN KEY (indicator_id) REFERENCES accreditation_indicators(id) ON DELETE CASCADE,
+    FOREIGN KEY (evidence_type_id) REFERENCES accreditation_evidence_types(id) ON DELETE CASCADE,
+    FOREIGN KEY (rule_id) REFERENCES accreditation_indicator_evidence_rules(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS quality_institutional_inputs (
