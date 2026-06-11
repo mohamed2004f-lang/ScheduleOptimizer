@@ -33,6 +33,7 @@ from backend.services.registration_policy import (
     check_program_prereqs,
     map_courses_to_program_courses,
 )
+from backend.services import teaching_groups as tg_svc
 from .attendance_export_core import (
     attendance_eligible_course_rows,
     build_schedule_semester_match,
@@ -2389,6 +2390,140 @@ def delete_student():
 # -----------------------------
 # التسجيلات
 # -----------------------------
+
+def _registrations_has_teaching_group_column(conn) -> bool:
+    try:
+        cols = {c.lower() for c in fetch_table_columns(conn, "registrations")}
+        return "teaching_group_id" in cols
+    except Exception:
+        return False
+
+
+def _normalize_registration_items(data: dict) -> list[dict]:
+    """[{course_name, teaching_group_id?}] من registrations أو registration_items."""
+    items_raw = data.get("registration_items")
+    if isinstance(items_raw, list) and items_raw:
+        out: list[dict] = []
+        for it in items_raw:
+            if isinstance(it, dict):
+                cn = (it.get("course_name") or "").strip()
+                if not cn:
+                    continue
+                tg = it.get("teaching_group_id")
+                out.append({
+                    "course_name": cn,
+                    "teaching_group_id": int(tg) if tg not in (None, "", 0) else None,
+                })
+            elif isinstance(it, str) and it.strip():
+                out.append({"course_name": it.strip(), "teaching_group_id": None})
+        return out
+    courses = data.get("courses")
+    if courses is None:
+        courses = data.get("registrations", [])
+    if not isinstance(courses, list):
+        return []
+    tg_map = data.get("teaching_groups") or data.get("registration_groups") or {}
+    out = []
+    seen: set[str] = set()
+    for c in courses:
+        if isinstance(c, dict):
+            cn = (c.get("course_name") or "").strip()
+            tg = c.get("teaching_group_id")
+        else:
+            cn = (c or "").strip()
+            tg = tg_map.get(cn) or tg_map.get(c)
+        if not cn or cn in seen:
+            continue
+        seen.add(cn)
+        out.append({
+            "course_name": cn,
+            "teaching_group_id": int(tg) if tg not in (None, "", 0) else None,
+        })
+    return out
+
+
+def _resolve_registration_teaching_groups(
+    conn,
+    *,
+    student_id: str,
+    items: list[dict],
+    semester: str,
+) -> list[dict]:
+    resolved: list[dict] = []
+    for item in items:
+        cname = item["course_name"]
+        tg_in = item.get("teaching_group_id")
+        try:
+            gid = tg_svc.resolve_teaching_group_for_registration(
+                conn,
+                student_id=student_id,
+                course_name=cname,
+                semester=semester,
+                teaching_group_id=tg_in,
+                require_explicit_for_split=True,
+            )
+        except ValueError as e:
+            raise ValueError(str(e)) from e
+        resolved.append({**item, "teaching_group_id": gid})
+    return resolved
+
+
+def _insert_registrations_rows(
+    cur,
+    conn,
+    *,
+    student_id: str,
+    items: list[dict],
+    course_pc_map: dict[str, int] | None = None,
+    semester: str = "",
+) -> None:
+    has_tg = _registrations_has_teaching_group_column(conn)
+    pc_map = course_pc_map or {}
+    for item in items:
+        cname = item["course_name"]
+        pcid = pc_map.get(cname)
+        gid = item.get("teaching_group_id")
+        if has_tg:
+            cur.execute(
+                """
+                INSERT INTO registrations (student_id, course_name, program_course_id, teaching_group_id)
+                VALUES (?, ?, ?, ?)
+                """,
+                (student_id, cname, pcid, gid),
+            )
+        elif pcid is not None:
+            cur.execute(
+                "INSERT INTO registrations (student_id, course_name, program_course_id) VALUES (?,?,?)",
+                (student_id, cname, pcid),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO registrations (student_id, course_name) VALUES (?,?)",
+                (student_id, cname),
+            )
+
+
+@students_bp.route("/teaching_group_options")
+@login_required
+def student_teaching_group_options():
+    """خيارات مجموعات التدريس لمقرر/طالب (واجهة التسجيل)."""
+    student_id = normalize_sid(request.args.get("student_id"))
+    course_name = (request.args.get("course_name") or "").strip()
+    if not student_id or not course_name:
+        return jsonify({"status": "error", "message": "student_id و course_name مطلوبان"}), 400
+    with get_connection() as conn:
+        tname, tyear = get_current_term(conn=conn)
+        sem = f"{(tname or '').strip()} {(tyear or '').strip()}".strip()
+        opts = tg_svc.list_registration_group_options(
+            conn, course_name=course_name, semester=sem, student_id=student_id
+        )
+    return jsonify({
+        "status": "ok",
+        "options": opts,
+        "needs_choice": len(opts) > 1,
+    })
+
+
 @students_bp.route("/save_registrations", methods=["POST"])
 @role_required("admin", "head_of_department")
 def save_registrations():
@@ -2420,12 +2555,14 @@ def save_registrations():
     courses = data.get("courses")
     if courses is None:
         courses = data.get("registrations", [])
-    if courses is None:
-        courses = []
+    reg_items = _normalize_registration_items(data)
+    if not reg_items and courses is not None:
+        reg_items = _normalize_registration_items({"registrations": courses})
     if not sid:
         return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
-    if not isinstance(courses, list):
+    if not isinstance(courses, list) and not reg_items:
         return jsonify({"status": "error", "message": "courses/registrations يجب أن تكون قائمة"}), 400
+    courses = [it["course_name"] for it in reg_items]
 
     old_courses = set()
     # منع تسجيل طالب غير فعّال (سحب ملف، موقوف قيده، خريج)
@@ -2454,12 +2591,14 @@ def save_registrations():
 
     # Deduplicate provided courses while preserving order to avoid inserting duplicates
     seen = set()
-    deduped = []
-    for c in courses:
-        if c not in seen:
-            seen.add(c)
-            deduped.append(c)
-    courses = deduped
+    deduped_items: list[dict] = []
+    for item in reg_items:
+        cn = item["course_name"]
+        if cn not in seen:
+            seen.add(cn)
+            deduped_items.append(item)
+    reg_items = deduped_items
+    courses = [it["course_name"] for it in reg_items]
 
     try:
         with get_connection() as conn:
@@ -2566,18 +2705,32 @@ def save_registrations():
                     ), 400
 
             try:
+                tname, tyear = get_current_term(conn=conn)
+                reg_semester = f"{(tname or '').strip()} {(tyear or '').strip()}".strip()
+            except Exception:
+                reg_semester = ""
+            try:
+                reg_items_resolved = _resolve_registration_teaching_groups(
+                    conn, student_id=sid, items=reg_items, semester=reg_semester
+                )
+            except ValueError as ve:
+                return jsonify({
+                    "status": "error",
+                    "code": "TEACHING_GROUP_REQUIRED",
+                    "message": str(ve),
+                }), 400
+
+            try:
                 cur.execute("DELETE FROM registrations WHERE student_id = ?", (sid,))
-                if courses:
-                    if course_pc_map:
-                        cur.executemany(
-                            "INSERT INTO registrations (student_id, course_name, program_course_id) VALUES (?,?,?)",
-                            [(sid, c, course_pc_map.get(c)) for c in courses],
-                        )
-                    else:
-                        cur.executemany(
-                            "INSERT INTO registrations (student_id, course_name) VALUES (?,?)",
-                            [(sid, c) for c in courses]
-                        )
+                if reg_items_resolved:
+                    _insert_registrations_rows(
+                        cur,
+                        conn,
+                        student_id=sid,
+                        items=reg_items_resolved,
+                        course_pc_map=course_pc_map if course_pc_map else None,
+                        semester=reg_semester,
+                    )
 
                 # حساب الفرق بين القديم والجديد لتسجيل سجل الإضافة/الإسقاط
                 new_courses = set(courses)
@@ -2806,6 +2959,45 @@ def _json_no_cache(payload, code: int = 200):
     return resp
 
 
+def _registration_row_dict(conn, row, labels_map: dict[int, str] | None = None) -> dict:
+    if hasattr(row, "keys"):
+        d = dict(row)
+    elif len(row) >= 5:
+        d = {
+            "course_name": row[0],
+            "course_code": row[1],
+            "units": row[2],
+            "registered_at": row[3],
+            "teaching_group_id": row[4],
+        }
+    elif len(row) == 3:
+        d = {"student_id": row[0], "course_name": row[1], "teaching_group_id": row[2]}
+    elif len(row) == 2:
+        d = {"student_id": row[0], "course_name": row[1]}
+    else:
+        d = {"course_name": row[0] if row else ""}
+    out: dict = {}
+    if d.get("student_id") is not None:
+        out["student_id"] = d.get("student_id")
+    out["course_name"] = d.get("course_name") or ""
+    if d.get("course_code") is not None:
+        out["course_code"] = d.get("course_code") or ""
+    if d.get("units") is not None:
+        out["units"] = d.get("units") or 0
+    if d.get("registered_at") is not None:
+        out["registered_at"] = d.get("registered_at")
+    tg = d.get("teaching_group_id")
+    if tg not in (None, "", 0):
+        gid = int(tg)
+        out["teaching_group_id"] = gid
+        lbl = (labels_map or {}).get(gid) if labels_map else None
+        if not lbl and conn and gid:
+            g = tg_svc.get_teaching_group(conn, gid)
+            lbl = (g or {}).get("display_label")
+        out["teaching_group_label"] = lbl or ""
+    return out
+
+
 @students_bp.route("/get_registrations")
 @login_required
 def get_registrations():
@@ -2813,6 +3005,10 @@ def get_registrations():
     try:
         with get_connection() as conn:
             cur = conn.cursor()
+            has_tg = _registrations_has_teaching_group_column(conn)
+            tg_col = ", teaching_group_id" if has_tg else ""
+            tg_sel = ", r.teaching_group_id" if has_tg else ""
+            labels_map = tg_svc.teaching_group_labels_map(conn) if has_tg else {}
 
             # Scope: تقييد الوصول حسب الدور
             user_role = session.get("user_role")
@@ -2835,19 +3031,21 @@ def get_registrations():
                         return _json_no_cache([])
                     placeholders = ",".join("?" for _ in allowed_student_ids)
                     rows = cur.execute(
-                        f"SELECT student_id, course_name FROM registrations WHERE student_id IN ({placeholders})",
+                        f"SELECT student_id, course_name{tg_col} FROM registrations WHERE student_id IN ({placeholders})",
                         list(allowed_student_ids),
                     ).fetchall()
-                    return _json_no_cache([{"student_id": r[0], "course_name": r[1]} for r in rows])
+                    return _json_no_cache([
+                        _registration_row_dict(conn, r, labels_map) for r in rows
+                    ])
 
                 if not allowed_student_ids or student_id not in allowed_student_ids:
                     return _json_no_cache([])
 
                 rows = cur.execute(
-                    """SELECT r.course_name,
+                    f"""SELECT r.course_name,
                               COALESCE(c.course_code, pc.course_code, '') AS course_code,
                               COALESCE(c.units, pc.units_override, cm.default_units, 0) AS units,
-                              r.registered_at
+                              r.registered_at{tg_sel}
                        FROM registrations r
                        LEFT JOIN courses c ON LOWER(TRIM(c.course_name)) = LOWER(TRIM(r.course_name))
                        LEFT JOIN program_courses pc ON pc.id = r.program_course_id
@@ -2856,17 +3054,16 @@ def get_registrations():
                     (student_id,),
                 ).fetchall()
                 return _json_no_cache([
-                    {"course_name": r[0], "course_code": r[1], "units": r[2], "registered_at": r[3]}
-                    for r in rows
+                    _registration_row_dict(conn, r, labels_map) for r in rows
                 ])
 
             # unrestricted (admin/admin_main)
             if student_id:
                 rows = cur.execute(
-                    """SELECT r.course_name,
+                    f"""SELECT r.course_name,
                               COALESCE(c.course_code, pc.course_code, '') AS course_code,
                               COALESCE(c.units, pc.units_override, cm.default_units, 0) AS units,
-                              r.registered_at
+                              r.registered_at{tg_sel}
                        FROM registrations r
                        LEFT JOIN courses c ON LOWER(TRIM(c.course_name)) = LOWER(TRIM(r.course_name))
                        LEFT JOIN program_courses pc ON pc.id = r.program_course_id
@@ -2875,14 +3072,15 @@ def get_registrations():
                     (student_id,),
                 ).fetchall()
                 return _json_no_cache([
-                    {"course_name": r[0], "course_code": r[1], "units": r[2], "registered_at": r[3]}
-                    for r in rows
+                    _registration_row_dict(conn, r, labels_map) for r in rows
                 ])
 
             rows = cur.execute(
-                "SELECT student_id, course_name FROM registrations",
+                f"SELECT student_id, course_name{tg_col} FROM registrations",
             ).fetchall()
-            return _json_no_cache([{"student_id": r[0], "course_name": r[1]} for r in rows])
+            return _json_no_cache([
+                _registration_row_dict(conn, r, labels_map) for r in rows
+            ])
     except Exception:
         current_app.logger.exception("get_registrations failed")
         return _json_no_cache([])
@@ -3035,8 +3233,20 @@ def import_registrations():
                         (sid, name),
                     )
                 cur.execute("DELETE FROM registrations WHERE student_id = ?", (sid,))
-                for c in regs:
-                    cur.execute("INSERT INTO registrations (student_id, course_name) VALUES (?,?)", (sid, c))
+                try:
+                    tname, tyear = get_current_term(conn=conn)
+                    reg_sem = f"{(tname or '').strip()} {(tyear or '').strip()}".strip()
+                except Exception:
+                    reg_sem = ""
+                items = [{"course_name": c, "teaching_group_id": None} for c in regs]
+                try:
+                    resolved = _resolve_registration_teaching_groups(
+                        conn, student_id=sid, items=items, semester=reg_sem
+                    )
+                    _insert_registrations_rows(cur, conn, student_id=sid, items=resolved, semester=reg_sem)
+                except ValueError:
+                    for c in regs:
+                        cur.execute("INSERT INTO registrations (student_id, course_name) VALUES (?,?)", (sid, c))
                 added += 1
             except Exception:
                 current_app.logger.exception("import_registrations failed for %s", sid)

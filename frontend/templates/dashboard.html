@@ -73,6 +73,28 @@
       </div>
     </section>
 
+    <section class="card mb-3" id="courseEvalRateSection" style="display:none;">
+      <div class="card-body">
+        <div class="page-header" style="margin:0 0 8px;">
+          <div>
+            <h2 class="page-title" style="font-size:16px;">إعدادات تقييم المقرر</h2>
+            <p class="page-subtitle">الحد الأدنى لإظهار نتائج تقييم المقرر مجمّعة (نسبة من المسجّلين)</p>
+          </div>
+        </div>
+        <div class="row g-2 align-items-end">
+          <div class="col-sm-4 col-md-3">
+            <label class="form-label small mb-1" for="courseEvalRateInput">نسبة الاستجابة المطلوبة (%)</label>
+            <input type="number" class="form-control form-control-sm" id="courseEvalRateInput" min="5" max="100" step="1">
+          </div>
+          <div class="col-auto">
+            <button type="button" class="btn btn-primary btn-sm" id="btnSaveCourseEvalRate">حفظ</button>
+          </div>
+        </div>
+        <p class="small text-muted mb-0 mt-2" id="courseEvalRateHint">الافتراضي: 50% من عدد الطلاب المسجّلين في الشعبة (مقرب للأعلى).</p>
+        <div id="courseEvalRateMsg" class="small mt-2"></div>
+      </div>
+    </section>
+
     <section class="card mb-3">
       <div class="card-body">
         <div class="page-header" style="margin:0 0 8px;">
@@ -372,7 +394,63 @@ function renderDashboardCharts(d, riskSummary, pendingCount) {
 document.getElementById('btnRefreshPending')?.addEventListener('click', async ()=>{
   await loadPendingPlans();
 });
+
+async function initCourseEvalRateSettings(){
+  const section = document.getElementById('courseEvalRateSection');
+  if(!section) return;
+  const auth = await fetchJSON('/auth/check');
+  const role = auth.ok ? (auth.json?.role || '') : '';
+  if(role !== 'admin' && role !== 'admin_main') return;
+  section.style.display = '';
+  const input = document.getElementById('courseEvalRateInput');
+  const hint = document.getElementById('courseEvalRateHint');
+  const msg = document.getElementById('courseEvalRateMsg');
+  try {
+    const res = await fetchJSON('/admin/settings/course_eval_response_rate');
+    if(res.ok && res.json){
+      const pct = Number(res.json.rate_percent);
+      const minP = Number(res.json.min_percent) || 5;
+      const maxP = Number(res.json.max_percent) || 100;
+      const defP = Number(res.json.default_percent) || 50;
+      if(input){
+        input.min = String(minP);
+        input.max = String(maxP);
+        input.value = String(pct);
+      }
+      if(hint){
+        hint.textContent = `النطاق المسموح: ${minP}–${maxP}% — الافتراضي ${defP}%.`;
+      }
+    }
+  } catch(e) {
+    console.warn('course eval rate load failed', e);
+  }
+  document.getElementById('btnSaveCourseEvalRate')?.addEventListener('click', async ()=>{
+    const pct = parseInt(input?.value || '', 10);
+    if(!Number.isFinite(pct)){
+      if(msg) msg.innerHTML = '<span class="text-danger">أدخل نسبة صحيحة.</span>';
+      return;
+    }
+    const res = await fetchJSON('/admin/settings/course_eval_response_rate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rate_percent: pct }),
+    });
+    if(res.ok){
+      const saved = res.json?.rate_percent ?? pct;
+      if(input) input.value = String(saved);
+      const okText = res.json?.message || `تم الحفظ: ${saved}%`;
+      if(msg) msg.innerHTML = '<span class="text-success">' + esc(okText) + '</span>';
+      if(window.showToast) window.showToast(okText, 'success');
+    } else {
+      const err = res.json?.message || `فشل الحفظ (${res.status})`;
+      if(msg) msg.innerHTML = '<span class="text-danger">' + esc(err) + '</span>';
+      if(window.showToast) window.showToast(err, 'danger');
+    }
+  });
+}
+
 loadDashboard();
+initCourseEvalRateSettings();
 </script>
 </body>
 </html>

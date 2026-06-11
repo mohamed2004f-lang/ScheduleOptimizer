@@ -39,6 +39,7 @@ from .utilities import (
     schedule_semester_matches_current_term,
 )
 from .students import compute_per_student_conflicts, recompute_conflict_report
+from . import teaching_groups as tg_svc
 
 logger = logging.getLogger(__name__)
 
@@ -446,6 +447,20 @@ def _effective_schedule_department_scope_id(conn) -> int | None:
     return None
 
 
+def _teaching_groups_role_ok() -> bool:
+    role_n = _normalize_role((session.get("user_role") or "").strip())
+    return role_n in ("admin", "admin_main", "head_of_department")
+
+
+def _teaching_groups_forbidden():
+    return jsonify({"status": "error", "message": "غير مصرح"}), 403
+
+
+def _teaching_groups_scope_department(conn) -> int | None:
+    """None = كل الأقسام (أدمن بدون نطاق)، وإلا قسم واحد."""
+    return _effective_schedule_department_scope_id(conn)
+
+
 def _build_schedule_matrix(rows: list, time_slots: list, include_empty: bool) -> dict:
     """
     يبني مصفوفة {day -> {time -> [rows]}} مع تقرير ملحق عن الأوقات الفارغة/غير المطابقة.
@@ -657,7 +672,38 @@ def list_schedule_rows():
             ):
                 dept_where = " AND s.department_id = ? "
                 dept_params = (scope,)
+            tg_join = ""
+            tg_select = ""
+            reg_join = "LEFT JOIN registrations r ON LOWER(TRIM(s.course_name)) = LOWER(TRIM(r.course_name))"
+            if "teaching_group_id" in scols and table_exists(conn, "teaching_groups"):
+                tg_join = """
+                LEFT JOIN teaching_groups tg ON tg.id = s.teaching_group_id AND tg.is_active = 1
+                LEFT JOIN departments td ON td.id = COALESCE(tg.department_id, s.department_id)
+                LEFT JOIN instructors ti ON ti.id = COALESCE(tg.instructor_id, s.instructor_id)
+                """
+                tg_select = """,
+                    s.teaching_group_id,
+                    s.department_id,
+                    COALESCE(tg.group_code, '—') AS tg_group_code,
+                    COALESCE(td.name_ar, td.code, '') AS tg_department_name,
+                    COALESCE(ti.name, s.instructor, '') AS tg_instructor_name
+                """
+                reg_cols = {c.lower() for c in fetch_table_columns(conn, "registrations")}
+                if "teaching_group_id" in reg_cols:
+                    reg_join = """
+                LEFT JOIN registrations r ON LOWER(TRIM(s.course_name)) = LOWER(TRIM(r.course_name))
+                    AND (
+                        s.teaching_group_id IS NULL
+                        OR r.teaching_group_id = s.teaching_group_id
+                    )
+                    """
             # استخدام JOIN لتحسين الأداء بدلاً من استعلامات منفصلة في loop
+            group_by_tg = ""
+            if tg_select:
+                group_by_tg = """,
+                    s.teaching_group_id, s.department_id,
+                    tg.group_code, td.name_ar, td.code, ti.name
+                """
             rows = cur.execute(
                 f"""
                 SELECT 
@@ -670,17 +716,21 @@ def list_schedule_rows():
                     s.semester,
                     s.instructor_id,
                     COUNT(DISTINCT r.student_id) AS student_count
+                    {tg_select}
                 FROM schedule s
-                LEFT JOIN registrations r ON LOWER(TRIM(s.course_name)) = LOWER(TRIM(r.course_name))
+                {reg_join}
+                {tg_join}
                 WHERE 1=1 {dept_where}
                 GROUP BY s.{SCHEDULE_PK_COL}, s.course_name, s.day, s.time, s.room, s.instructor, s.semester, s.instructor_id
+                    {group_by_tg}
                 ORDER BY s.{SCHEDULE_PK_COL}
                 """,
                 dept_params,
             ).fetchall()
             result = []
+            has_tg = "teaching_group_id" in scols and table_exists(conn, "teaching_groups")
             for r in rows:
-                result.append({
+                item = {
                     'section_id': r[0],
                     'course_name': r[1],
                     'day': r[2],
@@ -690,7 +740,17 @@ def list_schedule_rows():
                     'semester': r[6],
                     'instructor_id': r[7],
                     'student_count': r[8] or 0
-                })
+                }
+                if has_tg and len(r) > 9:
+                    item['teaching_group_id'] = r[9]
+                    item['department_id'] = r[10]
+                    item['teaching_group_label'] = tg_svc.format_teaching_group_label(
+                        course_name=str(r[1] or ""),
+                        department_name=str(r[12] or ""),
+                        group_code=str(r[11] or tg_svc.DEFAULT_GROUP_CODE),
+                        instructor_name=str(r[13] or r[5] or ""),
+                    )
+                result.append(item)
             resp = jsonify(result)
             try:
                 from backend.core.cache_setup import cache, list_cache_key
@@ -709,6 +769,301 @@ def list_schedule_rows():
 @login_required
 def list_schedule_rows_alias():
     return list_schedule_rows()
+
+
+# -----------------------------
+# مجموعات التدريس (المرحلة 1)
+# -----------------------------
+
+@schedule_bp.route("/teaching_groups")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def teaching_groups_list():
+    semester = (request.args.get("semester") or "").strip() or None
+    course_name = (request.args.get("course_name") or "").strip() or None
+    with get_connection() as conn:
+        scope = _teaching_groups_scope_department(conn)
+        groups = tg_svc.list_teaching_groups(
+            conn,
+            semester=semester,
+            department_id=scope,
+            course_name=course_name,
+        )
+    return jsonify({"status": "ok", "groups": groups, "semester": semester})
+
+
+@schedule_bp.route("/teaching_groups", methods=["POST"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def teaching_groups_create():
+    data = request.get_json(silent=True) or {}
+    with get_connection() as conn:
+        scope = _teaching_groups_scope_department(conn)
+        dept = int(data.get("department_id") or 0)
+        if scope is not None and dept != int(scope):
+            return jsonify({"status": "error", "message": "خارج نطاق القسم"}), 403
+        try:
+            rec = tg_svc.create_teaching_group(
+                conn,
+                course_name=str(data.get("course_name") or ""),
+                semester=str(data.get("semester") or _current_term_label_safe(conn)),
+                department_id=dept,
+                instructor_id=int(data.get("instructor_id") or 0),
+                group_code=str(data.get("group_code") or tg_svc.DEFAULT_GROUP_CODE),
+                group_kind=str(data.get("group_kind") or tg_svc.GROUP_KIND_SINGLE),
+                capacity_max=data.get("capacity_max"),
+                program_course_id=data.get("program_course_id"),
+                note=str(data.get("note") or ""),
+            )
+            section_ids = [int(x) for x in (data.get("section_ids") or []) if int(x) > 0]
+            if section_ids and rec.get("id"):
+                tg_svc.link_schedule_slots(conn, int(rec["id"]), section_ids)
+                rec = tg_svc.get_teaching_group(conn, int(rec["id"])) or rec
+        except ValueError as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
+        except Exception as e:
+            logger.error("teaching_groups_create: %s", e)
+            return jsonify({"status": "error", "message": "فشل الإنشاء"}), 500
+    return jsonify({"status": "ok", "group": rec})
+
+
+@schedule_bp.route("/teaching_groups/<int:group_id>", methods=["PATCH"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def teaching_groups_patch(group_id: int):
+    data = request.get_json(silent=True) or {}
+    with get_connection() as conn:
+        scope = _teaching_groups_scope_department(conn)
+        existing = tg_svc.get_teaching_group(conn, int(group_id))
+        if not existing:
+            return jsonify({"status": "error", "message": "غير موجود"}), 404
+        if scope is not None and int(existing.get("department_id") or 0) != int(scope):
+            return jsonify({"status": "error", "message": "خارج نطاق القسم"}), 403
+        try:
+            rec = tg_svc.update_teaching_group(
+                conn,
+                int(group_id),
+                instructor_id=data.get("instructor_id"),
+                group_kind=data.get("group_kind"),
+                capacity_max=data.get("capacity_max"),
+                note=data.get("note"),
+                is_active=data.get("is_active"),
+            )
+            section_ids = data.get("section_ids")
+            if section_ids is not None and rec:
+                tg_svc.link_schedule_slots(conn, int(group_id), [int(x) for x in section_ids if int(x) > 0])
+                rec = tg_svc.get_teaching_group(conn, int(group_id))
+        except ValueError as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
+        except Exception as e:
+            logger.error("teaching_groups_patch: %s", e)
+            return jsonify({"status": "error", "message": "فشل التحديث"}), 500
+    return jsonify({"status": "ok", "group": rec})
+
+
+@schedule_bp.route("/teaching_groups/setup")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def teaching_groups_setup_list():
+    semester = (request.args.get("semester") or "").strip() or None
+    with get_connection() as conn:
+        scope = _teaching_groups_scope_department(conn)
+        sem = semester or _current_term_label_safe(conn)
+        offerings = tg_svc.list_course_offerings_for_setup(
+            conn, semester=sem, department_id=scope
+        )
+        audit = tg_svc.audit_teaching_groups(conn, semester=sem, department_id=scope)
+    return jsonify({
+        "status": "ok",
+        "semester": sem,
+        "offerings": offerings,
+        "audit": {
+            "total_slots": audit.get("total_slots"),
+            "total_groups": audit.get("total_groups"),
+            "unlinked_count": audit.get("unlinked_count"),
+            "unlinked_slots": audit.get("unlinked_slots"),
+            "slots_without_instructor": audit.get("slots_without_instructor"),
+            "slots_without_department": audit.get("slots_without_department"),
+            "empty_groups": audit.get("empty_groups"),
+        },
+    })
+
+
+@schedule_bp.route("/teaching_groups/setup", methods=["POST"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def teaching_groups_setup_save():
+    data = request.get_json(silent=True) or {}
+    with get_connection() as conn:
+        scope = _teaching_groups_scope_department(conn)
+        dept = int(data.get("department_id") or 0)
+        if scope is not None and dept != int(scope):
+            return jsonify({"status": "error", "message": "خارج نطاق القسم"}), 403
+        try:
+            saved = tg_svc.setup_course_offering(
+                conn,
+                course_name=str(data.get("course_name") or ""),
+                semester=str(data.get("semester") or _current_term_label_safe(conn)),
+                department_id=dept,
+                group_kind=str(data.get("group_kind") or tg_svc.GROUP_KIND_SINGLE),
+                groups=list(data.get("groups") or []),
+            )
+            log_activity(
+                "teaching_groups_setup",
+                json.dumps(
+                    {
+                        "course_name": data.get("course_name"),
+                        "department_id": dept,
+                        "group_kind": data.get("group_kind"),
+                        "groups_count": len(saved),
+                    },
+                    ensure_ascii=False,
+                ),
+                actor=session.get("username") or "",
+            )
+        except ValueError as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
+        except Exception as e:
+            logger.error("teaching_groups_setup_save: %s", e)
+            return jsonify({"status": "error", "message": "فشل الحفظ"}), 500
+    return jsonify({"status": "ok", "groups": saved})
+
+
+@schedule_bp.route("/teaching_groups/backfill", methods=["POST"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def teaching_groups_backfill():
+    data = request.get_json(silent=True) or {}
+    semester = (data.get("semester") or request.args.get("semester") or "").strip() or None
+    with get_connection() as conn:
+        scope = _teaching_groups_scope_department(conn)
+        sem = semester or _current_term_label_safe(conn)
+        stats = tg_svc.backfill_teaching_groups_for_semester(
+            conn, semester=sem, department_id=scope
+        )
+    return jsonify({"status": "ok", "semester": sem, "stats": stats})
+
+
+@schedule_bp.route("/teaching_groups/audit")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def teaching_groups_audit():
+    semester = (request.args.get("semester") or "").strip() or None
+    with get_connection() as conn:
+        scope = _teaching_groups_scope_department(conn)
+        sem = semester or _current_term_label_safe(conn)
+        audit = tg_svc.audit_teaching_groups(conn, semester=sem, department_id=scope)
+    return jsonify({"status": "ok", **audit})
+
+
+@schedule_bp.route("/teaching_groups/registration_options")
+@login_required
+def teaching_groups_registration_options():
+    """خيارات مجموعات التدريس لتسجيل طالب — لكل مقرر أو مقرر واحد."""
+    student_id = (request.args.get("student_id") or "").strip()
+    course_name = (request.args.get("course_name") or "").strip() or None
+    semester = (request.args.get("semester") or "").strip() or None
+    if not student_id:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
+    with get_connection() as conn:
+        sem = semester or _current_term_label_safe(conn)
+        if course_name:
+            opts = tg_svc.list_registration_group_options(
+                conn, course_name=course_name, semester=sem, student_id=student_id
+            )
+            return jsonify({
+                "status": "ok",
+                "semester": sem,
+                "course_name": course_name,
+                "options": opts,
+                "needs_choice": len(opts) > 1,
+            })
+        courses: set[str] = set()
+        if table_exists(conn, "registrations"):
+            rows = conn.cursor().execute(
+                "SELECT DISTINCT course_name FROM registrations WHERE student_id = ?",
+                (student_id,),
+            ).fetchall()
+            courses.update((r[0] or "").strip() for r in rows if (r[0] or "").strip())
+        if table_exists(conn, "schedule"):
+            sdept = tg_svc.student_department_id(conn, student_id)
+            for slot in tg_svc._fetch_schedule_slots_for_semester(conn, sem):
+                if sdept > 0 and int(slot.get("department_id") or 0) not in (0, sdept):
+                    continue
+                cn = (slot.get("course_name") or "").strip()
+                if cn:
+                    courses.add(cn)
+        by_course: dict[str, list] = {}
+        for cn in sorted(courses):
+            opts = tg_svc.list_registration_group_options(
+                conn, course_name=cn, semester=sem, student_id=student_id
+            )
+            if opts:
+                by_course[cn] = opts
+        return jsonify({
+            "status": "ok",
+            "semester": sem,
+            "options_by_course": by_course,
+        })
+
+
+@schedule_bp.route("/teaching_groups/evaluations/backfill", methods=["POST"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def teaching_groups_evaluations_backfill():
+    data = request.get_json(silent=True) or {}
+    semester = (data.get("semester") or request.args.get("semester") or "").strip() or None
+    with get_connection() as conn:
+        sem = semester or _current_term_label_safe(conn)
+        stats = tg_svc.backfill_course_evaluations_teaching_groups(conn, semester=sem)
+    return jsonify({"status": "ok", "semester": sem, "stats": stats})
+
+
+@schedule_bp.route("/teaching_groups/registrations/backfill", methods=["POST"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def teaching_groups_registrations_backfill():
+    data = request.get_json(silent=True) or {}
+    semester = (data.get("semester") or request.args.get("semester") or "").strip() or None
+    with get_connection() as conn:
+        scope = _teaching_groups_scope_department(conn)
+        sem = semester or _current_term_label_safe(conn)
+        stats = tg_svc.backfill_registrations_teaching_groups(
+            conn, semester=sem, department_id=scope
+        )
+    return jsonify({"status": "ok", "semester": sem, "stats": stats})
+
+
+@schedule_bp.route("/teaching_groups/registrations/audit")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def teaching_groups_registrations_audit():
+    semester = (request.args.get("semester") or "").strip() or None
+    with get_connection() as conn:
+        scope = _teaching_groups_scope_department(conn)
+        sem = semester or _current_term_label_safe(conn)
+        audit = tg_svc.registration_teaching_groups_audit(
+            conn, semester=sem, department_id=scope
+        )
+    return jsonify({"status": "ok", **audit})
+
+
+@schedule_bp.route("/teaching_groups/enrollment_counts")
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def teaching_groups_enrollment_counts():
+    semester = (request.args.get("semester") or "").strip() or None
+    with get_connection() as conn:
+        scope = _teaching_groups_scope_department(conn)
+        sem = semester or _current_term_label_safe(conn)
+        audit = tg_svc.registration_teaching_groups_audit(
+            conn, semester=sem, department_id=scope
+        )
+    return jsonify({
+        "status": "ok",
+        "semester": sem,
+        "groups": audit.get("group_enrollment_counts") or [],
+    })
 
 
 @schedule_bp.route("/registration_coverage")
@@ -2178,6 +2533,47 @@ def _assigned_section_rows(cur, instructor_db_id: int, canonical_instructor_name
     return out
 
 
+def _group_assigned_tuples_by_course(tuples: list[tuple]) -> list[dict]:
+    """
+    دمج صفوف الجدول لنفس المقرر (محاضرات متعددة) في بطاقة واحدة للأستاذ.
+    يحفظ أصغر section_id كمعرّف رئيسي ويعرض كل الأوقات في schedule_slots.
+    """
+    grouped: dict[str, dict] = {}
+    for t in tuples:
+        sid, cn, day, tim, room, inst_txt, sem = t
+        ck = (cn or "").strip().lower()
+        if not ck:
+            continue
+        slot = {"day": day, "time": tim, "room": room, "section_id": int(sid)}
+        bucket = grouped.get(ck)
+        if not bucket:
+            grouped[ck] = {
+                "section_id": int(sid),
+                "section_ids": [int(sid)],
+                "course_name": (cn or "").strip(),
+                "day": day,
+                "time": tim,
+                "room": room,
+                "instructor": inst_txt,
+                "semester": sem,
+                "schedule_slots": [slot],
+            }
+            continue
+        bucket["section_ids"].append(int(sid))
+        bucket["schedule_slots"].append(slot)
+        bucket["section_id"] = min(bucket["section_ids"])
+        if len(bucket["schedule_slots"]) > 1:
+            bucket["day"] = " — ".join(
+                dict.fromkeys(
+                    f"{s.get('day') or ''} {s.get('time') or ''}".strip()
+                    for s in bucket["schedule_slots"]
+                )
+            )
+            rooms = [str(s.get("room") or "").strip() for s in bucket["schedule_slots"] if s.get("room")]
+            bucket["room"] = " / ".join(dict.fromkeys(r for r in rooms if r)) or room
+    return list(grouped.values())
+
+
 def _axis_status_map_for_sections(cur, instructor_db_id: int, section_ids: list) -> dict:
     """خريطة section_id -> {axis_key: status}."""
     if not section_ids:
@@ -2387,6 +2783,49 @@ def my_assigned_sections():
     default_axes = {k: "pending" for k in FACULTY_AXIS_KEYS}
     with get_connection() as conn:
         cur = conn.cursor()
+        tname, tyear = get_current_term(conn=conn)
+        sem_label = f"{(tname or '').strip()} {(tyear or '').strip()}".strip()
+        if sem_label and tg_svc.semester_has_teaching_groups(conn, sem_label):
+            tg_rows = tg_svc.list_instructor_assigned_groups(conn, iid, sem_label)
+            if tg_rows:
+                all_sids = [int(x) for g in tg_rows for x in (g.get("section_ids") or []) if int(x) > 0]
+                axis_map = _axis_status_map_for_sections(cur, iid, all_sids)
+                out = []
+                for item in tg_rows:
+                    sid = int(item.get("section_id") or 0)
+                    merged_axes = {**default_axes}
+                    for alt_sid in item.get("section_ids") or ([sid] if sid else []):
+                        merged_axes.update(axis_map.get(int(alt_sid), {}))
+                    out.append(
+                        {
+                            "section_id": sid,
+                            "section_ids": item.get("section_ids") or ([sid] if sid else []),
+                            "teaching_group_id": int(item.get("teaching_group_id") or 0) or None,
+                            "course_name": item.get("course_name"),
+                            "display_label": item.get("display_label") or item.get("course_name"),
+                            "group_code_label": item.get("group_code_label"),
+                            "group_kind": item.get("group_kind"),
+                            "department_name": item.get("department_name"),
+                            "day": item.get("day"),
+                            "time": item.get("time"),
+                            "room": item.get("room"),
+                            "instructor": item.get("instructor"),
+                            "semester": item.get("semester"),
+                            "schedule_slots": item.get("schedule_slots") or [],
+                            "axes": merged_axes,
+                            "student_count": int(item.get("student_count") or 0),
+                        }
+                    )
+                return jsonify(
+                    {
+                        "rows": out,
+                        "instructor_name": inst_name,
+                        "instructor_id": instructor_id,
+                        "schedule_published": published_at is not None,
+                        "axis_catalog": axis_labels_for_api(),
+                        "assignment_mode": "teaching_groups",
+                    }
+                )
         tuples = _assigned_section_rows(cur, iid, inst_name)
         section_ids = [t[0] for t in tuples]
         axis_map = _axis_status_map_for_sections(cur, iid, section_ids)
@@ -2409,19 +2848,24 @@ def my_assigned_sections():
         except Exception:
             reg_counts = {}
         out = []
-        for t in tuples:
-            sid, cn, day, tim, room, inst_txt, sem = t
-            merged_axes = {**default_axes, **axis_map.get(int(sid), {})}
+        for item in _group_assigned_tuples_by_course(tuples):
+            sid = int(item["section_id"])
+            cn = item["course_name"]
+            merged_axes = {**default_axes}
+            for alt_sid in item.get("section_ids") or [sid]:
+                merged_axes.update(axis_map.get(int(alt_sid), {}))
             ck = (cn or "").strip().lower()
             out.append(
                 {
                     "section_id": sid,
+                    "section_ids": item.get("section_ids") or [sid],
                     "course_name": cn,
-                    "day": day,
-                    "time": tim,
-                    "room": room,
-                    "instructor": inst_txt,
-                    "semester": sem,
+                    "day": item.get("day"),
+                    "time": item.get("time"),
+                    "room": item.get("room"),
+                    "instructor": item.get("instructor"),
+                    "semester": item.get("semester"),
+                    "schedule_slots": item.get("schedule_slots") or [],
                     "axes": merged_axes,
                     "student_count": reg_counts.get(ck, 0),
                 }

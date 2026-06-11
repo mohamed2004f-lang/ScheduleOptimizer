@@ -337,11 +337,7 @@
           : '';
         if(meta.backend === 'postgresql'){
           if(meta.storage_verbose && meta.storage_display){
-            let t = 'التخزين (PostgreSQL): ' + meta.storage_display;
-            if(meta.sqlite_legacy_path){
-              t += ' — ملف SQLite الظاهر: ' + meta.sqlite_legacy_path + ' (غير مستخدم للتشغيل الحالي)';
-            }
-            hint.textContent = t;
+            hint.textContent = 'التخزين (PostgreSQL): ' + meta.storage_display;
           } else if(meta.storage_brief_ar){
             hint.textContent = meta.storage_brief_ar;
           } else {
@@ -349,8 +345,7 @@
           }
         } else if(meta.storage_display){
           hint.classList.add('font-monospace');
-          hint.title = 'مسار ملف SQLite الحالي';
-          hint.textContent = 'التخزين (SQLite): ' + meta.storage_display;
+          hint.textContent = meta.storage_display;
         } else {
           hint.textContent = '';
         }

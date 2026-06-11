@@ -80,6 +80,7 @@
           <ul class="dropdown-menu dropdown-menu-end">
             <li><a class="dropdown-item" href="/academic_quality/surveys/export/student_course.xlsx?semester={{ semester|urlencode }}">تقييم المقرر والأستاذ (مجمّع)</a></li>
             <li><a class="dropdown-item" href="/academic_quality/surveys/export/course_eval_sections.xlsx?semester={{ semester|urlencode }}">جميع المقررات — ملخص الشعب</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/course_eval_missing_sections.xlsx?semester={{ semester|urlencode }}">تدقيق — شعب بلا تقييم</a></li>
             {% for agg in aggregates %}
             <li><a class="dropdown-item" href="/academic_quality/surveys/export/{{ agg.template_code }}.xlsx?semester={{ semester|urlencode }}">{{ agg.title_ar }}</a></li>
             {% endfor %}
@@ -283,7 +284,7 @@
       النتائج التفصيلية تظهر بعد بلوغ الحد الأدنى (خصوصية).
       {% if course_eval_count is defined %}
       تقييمات المقرر المسجّلة: <strong>{{ course_eval_count }}</strong>
-      (حد التجميع: 50% من المسجّلين بحد أدنى 3 إجابات لكل شعبة).
+      (حد التجميع: {{ course_eval_rate_percent|default(50) }}% من المسجّلين لكل شعبة).
       {% endif %}
     </p>
 
@@ -330,7 +331,8 @@
               <th>الشعبة</th>
               <th>الأستاذ</th>
               <th>القسم</th>
-              <th>مسجّلون</th>
+              <th>مسجّلون (تقدير)</th>
+              <th>إجمالي المقرر</th>
               <th>تقييمات</th>
               <th>الحد</th>
               <th>النتيجة</th>
@@ -345,6 +347,7 @@
               <td>{{ s.instructor_name }}</td>
               <td class="small">{{ s.department_name }}</td>
               <td>{{ s.enrolled_count or '—' }}</td>
+              <td>{{ s.course_registration_count if s.course_registration_count is defined else '—' }}</td>
               <td>
                 {{ s.response_count }}
                 {% if s.response_rate_percent is not none %}
@@ -376,10 +379,80 @@
         </table>
       </div>
       <div class="card-footer small text-muted">
-        يظهر التجميع عندما تبلغ الإجابات <strong>50% من المسجّلين</strong> في الشعبة (بحد أدنى <strong>3</strong> إجابات للخصوصية).
-        التسجيل يُقدَّر من سجلات التسجيل مقسّماً على عدد شعب المقرر — لا تُعرض إجابات فردية.
+        يظهر التجميع عندما تبلغ الإجابات <strong>{{ course_eval_rate_percent|default(50) }}% من المسجّلين</strong> في الشعبة.
+        «مسجّلون (تقدير)» = إجمالي مسجّلي المقرر ÷ مجموعات التدريس (مقرر + أستاذ) — «إجمالي المقرر» من سجلات التسجيل الفعلية.
       </div>
     </div>
+
+    {% if results_view != 'external' and course_eval_missing_audit is defined %}
+    <div class="card shadow-sm mb-4 border-warning">
+      <div class="card-header bg-light d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <strong><i class="fa-solid fa-clipboard-check text-warning"></i> تدقيق تقييم المقرر — شعب بلا تقييم</strong>
+        <a class="btn btn-sm btn-outline-success"
+           href="/academic_quality/surveys/export/course_eval_missing_sections.xlsx?semester={{ semester|urlencode }}">
+          <i class="fa-solid fa-file-excel"></i> تصدير التدقيق
+        </a>
+      </div>
+      <div class="card-body pb-2">
+        <p class="small text-muted mb-2">
+          الفصل: <strong>{{ course_eval_missing_audit.semester }}</strong> —
+          شعب الجدول: <strong>{{ course_eval_missing_audit.total_schedule_sections }}</strong>،
+          لديها تقييم: <strong class="text-success">{{ course_eval_missing_audit.evaluated_sections }}</strong>،
+          بلا أي تقييم: <strong class="text-warning">{{ course_eval_missing_audit.missing_sections }}</strong>.
+          الجدول أدناه يعرض شعب الجدول للفصل التي لم يُرسَل لها تقييم بعد (لذلك لا تظهر في جدول النتائج أعلاه).
+        </p>
+        {% if course_eval_missing_audit.missing_sections == 0 and course_eval_missing_audit.total_schedule_sections > 0 %}
+        <div class="alert alert-success py-2 small mb-0">
+          <i class="fa-solid fa-circle-check"></i> جميع شعب الجدول للفصل لديها تقييم واحد على الأقل.
+        </div>
+        {% elif course_eval_missing_audit.total_schedule_sections == 0 %}
+        <div class="alert alert-secondary py-2 small mb-0">
+          لا توجد شعب في الجدول مطابقة للفصل الحالي{% if course_eval_missing_audit.department_label %} ({{ course_eval_missing_audit.department_label }}){% endif %}.
+        </div>
+        {% else %}
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>المقرر</th>
+                <th>الشعبة</th>
+                <th>الأستاذ</th>
+                <th>القسم</th>
+                <th>مسجّلون (تقدير)</th>
+                <th>إجمالي المقرر</th>
+                <th>يظهر للطالب؟</th>
+                <th>أسباب الفجوة</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in course_eval_missing_audit.rows %}
+              <tr>
+                <td>{{ r.course_name }}</td>
+                <td><code>{{ r.section_id }}</code></td>
+                <td>{{ r.instructor_name }}</td>
+                <td class="small">{{ r.department_name }}</td>
+                <td>{{ r.enrolled_count or '—' }}</td>
+                <td>{{ r.course_registration_count or '—' }}</td>
+                <td>
+                  {% if r.eligible_for_student %}
+                  <span class="badge bg-success">نعم</span>
+                  {% else %}
+                  <span class="badge bg-secondary">لا</span>
+                  {% endif %}
+                </td>
+                <td class="small text-muted">{{ r.gap_reasons_ar }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+      </div>
+      <div class="card-footer small text-muted">
+        «يظهر للطالب» = مسجّلون + أستاذ معيّن في الجدول (قد لا يكفي لظهور الاستبيان إن اختلف اسم المقرر أو فصل الجدول).
+      </div>
+    </div>
+    {% endif %}
 
     {% if course_eval_by_course is defined and course_eval_by_course %}
     <div class="card shadow-sm mb-4">

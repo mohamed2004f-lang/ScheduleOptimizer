@@ -19,12 +19,13 @@
     {% else %}
     <div class="card shadow-sm border-start border-primary border-4">
       <div class="card-header bg-primary text-white">
-        <h5 class="mb-0"><i class="fa-solid fa-star"></i> استبيان: {{ course.course_name }}</h5>
+        <h5 class="mb-0"><i class="fa-solid fa-star"></i> استبيان: {{ course.display_label or course.course_name }}</h5>
         <small>تقييم سري — لن يؤثر على درجتك</small>
       </div>
       <div class="card-body">
         <form id="evaluationForm">
           <input type="hidden" name="section_id" value="{{ section_id }}">
+          {% if teaching_group_id %}<input type="hidden" name="teaching_group_id" value="{{ teaching_group_id }}">{% endif %}
           <input type="hidden" name="instructor_id" value="{{ course.instructor_id }}">
           <input type="hidden" name="semester" value="{{ semester }}">
           {% for q in questions %}

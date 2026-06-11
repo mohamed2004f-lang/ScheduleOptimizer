@@ -45,10 +45,11 @@ Stop the app:
 
 ## 4) Backup Before Major Updates
 
-Create a quick SQLite backup before risky changes:
+PostgreSQL (from project root):
 
 ```powershell
-Copy-Item "backend\database\mechanical.db" "backups\mechanical_$(Get-Date -Format yyyyMMdd_HHmmss).db"
+python scripts/pg_dump_via_env.py
+Copy-Item -Recurse backend\uploads "backups\uploads_$(Get-Date -Format yyyyMMdd)"
 ```
 
 ---

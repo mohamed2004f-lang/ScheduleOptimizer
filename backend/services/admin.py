@@ -75,6 +75,58 @@ def set_current_term():
     return jsonify({"status": "ok", "message": "تم حفظ الفصل الحالي", "term_name": name, "term_year": year})
 
 
+@admin_bp.route("/settings/course_eval_response_rate", methods=["GET"])
+@login_required
+@role_required("admin", "admin_main", "head_of_department")
+def get_course_eval_response_rate_setting():
+    """قراءة نسبة الاستجابة المطلوبة لإظهار نتائج تقييم المقرر."""
+    from backend.services.survey_analytics import (
+        COURSE_EVAL_DEFAULT_RATE_PERCENT,
+        COURSE_EVAL_RATE_MAX_PERCENT,
+        COURSE_EVAL_RATE_MIN_PERCENT,
+        get_course_eval_response_rate_percent,
+    )
+
+    with get_connection() as conn:
+        pct = get_course_eval_response_rate_percent(conn)
+    return jsonify(
+        {
+            "status": "ok",
+            "rate_percent": pct,
+            "default_percent": COURSE_EVAL_DEFAULT_RATE_PERCENT,
+            "min_percent": COURSE_EVAL_RATE_MIN_PERCENT,
+            "max_percent": COURSE_EVAL_RATE_MAX_PERCENT,
+        }
+    )
+
+
+@admin_bp.route("/settings/course_eval_response_rate", methods=["POST"])
+@role_required("admin", "admin_main")
+def set_course_eval_response_rate_setting():
+    """حفظ نسبة الاستجابة المطلوبة لإظهار نتائج تقييم المقرر."""
+    from backend.services.survey_analytics import set_course_eval_response_rate_percent
+
+    data = request.get_json(force=True) or {}
+    try:
+        pct = int(data.get("rate_percent"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "rate_percent مطلوب (رقم صحيح)"}), 400
+    with get_connection() as conn:
+        saved = set_course_eval_response_rate_percent(conn, pct)
+    log_activity(
+        session.get("user") or session.get("username") or "—",
+        "course_eval_response_rate",
+        f"rate_percent={saved}",
+    )
+    return jsonify(
+        {
+            "status": "ok",
+            "message": f"تم حفظ نسبة تجميع تقييم المقرر: {saved}%",
+            "rate_percent": saved,
+        }
+    )
+
+
 @admin_bp.route("/summary")
 @login_required
 def admin_summary():
@@ -331,10 +383,11 @@ def _ensure_auto_backup_dir() -> None:
 def _latest_auto_backup_info() -> dict:
     try:
         _ensure_auto_backup_dir()
+        exts = (".dump", ".sql") if is_postgresql() else (".db",)
         files = [
             os.path.join(AUTO_BACKUP_DIR, f)
             for f in os.listdir(AUTO_BACKUP_DIR)
-            if f.lower().endswith(".db")
+            if f.lower().endswith(exts)
         ]
         if not files:
             return {"exists": False, "name": "", "mtime_utc": None, "age_hours": None}
@@ -357,59 +410,51 @@ def _run_db_backup(kind: str = "manual") -> dict:
     safe_kind = (kind or "manual").strip().lower()
     if safe_kind not in ("manual", "daily", "weekly"):
         safe_kind = "manual"
-    if is_postgresql():
-        # pg_dump backup (requires pg_dump in PATH)
-        from config import DATABASE_URL
-        try:
-            from sqlalchemy.engine.url import make_url
-        except Exception as e:
-            raise RuntimeError("SQLAlchemy مطلوب لنسخ PostgreSQL الاحتياطي") from e
+    if not is_postgresql():
+        raise RuntimeError("النسخ الاحتياطي متاح لـ PostgreSQL فقط. عيّن DATABASE_URL.")
+    from config import DATABASE_URL
 
-        u = make_url(DATABASE_URL or "")
-        if u.get_backend_name() != "postgresql":
-            raise RuntimeError("DATABASE_URL يجب أن يشير إلى PostgreSQL")
-        host = u.host or "localhost"
-        port = int(u.port or 5432)
-        user = u.username or "postgres"
-        db = u.database or ""
-        password = u.password or ""
+    try:
+        from sqlalchemy.engine.url import make_url
+    except Exception as e:
+        raise RuntimeError("SQLAlchemy مطلوب لنسخ PostgreSQL الاحتياطي") from e
 
-        fname = f"{_now_stamp()}_{safe_kind}_{db}.dump"
-        dst = os.path.join(AUTO_BACKUP_DIR, fname)
+    u = make_url(DATABASE_URL or "")
+    if u.get_backend_name() != "postgresql":
+        raise RuntimeError("DATABASE_URL يجب أن يشير إلى PostgreSQL")
+    host = u.host or "localhost"
+    port = int(u.port or 5432)
+    user = u.username or "postgres"
+    db = u.database or ""
+    password = u.password or ""
 
-        env = os.environ.copy()
-        if password:
-            env["PGPASSWORD"] = password
-        cmd = [
-            "pg_dump",
-            "-h",
-            host,
-            "-p",
-            str(port),
-            "-U",
-            user,
-            "-d",
-            db,
-            "-F",
-            "c",
-            "-f",
-            dst,
-        ]
-        import subprocess
-
-        try:
-            subprocess.run(cmd, env=env, check=True)
-        except FileNotFoundError as e:
-            raise RuntimeError("لم يُعثر على pg_dump. أضف مجلد bin الخاص بـ PostgreSQL إلى PATH.") from e
-        return {"path": dst, "name": fname}
-
-    # SQLite legacy backup (kept for archival use only)
-    src = os.path.abspath(DB_FILE)
-    if not os.path.isfile(src):
-        raise FileNotFoundError("ملف قاعدة البيانات غير موجود")
-    fname = f"{_now_stamp()}_{safe_kind}_mechanical.db"
+    fname = f"{_now_stamp()}_{safe_kind}_{db}.dump"
     dst = os.path.join(AUTO_BACKUP_DIR, fname)
-    shutil.copy2(src, dst)
+
+    env = os.environ.copy()
+    if password:
+        env["PGPASSWORD"] = password
+    cmd = [
+        "pg_dump",
+        "-h",
+        host,
+        "-p",
+        str(port),
+        "-U",
+        user,
+        "-d",
+        db,
+        "-F",
+        "c",
+        "-f",
+        dst,
+    ]
+    import subprocess
+
+    try:
+        subprocess.run(cmd, env=env, check=True)
+    except FileNotFoundError as e:
+        raise RuntimeError("لم يُعثر على pg_dump. أضف مجلد bin الخاص بـ PostgreSQL إلى PATH.") from e
     return {"path": dst, "name": fname}
 
 

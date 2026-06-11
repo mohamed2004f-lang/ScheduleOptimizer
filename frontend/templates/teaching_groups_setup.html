@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>إعداد مجموعات التدريس</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main theme-formal">
+    <div class="page-header mb-3">
+      <div>
+        <h1 class="page-title">إعداد مجموعات التدريس</h1>
+        <p class="page-subtitle">فصل <strong>مجموعة الطلاب</strong> (A/B أو الكل) عن <strong>حصص الجدول</strong> (محاضرات متعددة لنفس المجموعة)</p>
+      </div>
+      <div class="d-flex gap-2 flex-wrap">
+        <a href="/schedule_form" class="btn btn-outline-secondary btn-sm">← الجدول الدراسي</a>
+        <button type="button" class="btn btn-outline-primary btn-sm" id="btnBackfill">ترحيل حصص (single)</button>
+        <button type="button" class="btn btn-outline-success btn-sm" id="btnRegBackfill">ترحيل تسجيلات → مجموعات</button>
+        <button type="button" class="btn btn-outline-warning btn-sm" id="btnEvalBackfill">ترحيل تقييمات → مجموعات</button>
+        <button type="button" class="btn btn-primary btn-sm" id="btnReload">تحديث</button>
+      </div>
+    </div>
+
+    <div id="tgMsg" class="mb-2" aria-live="polite"></div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="row g-2 align-items-center">
+          <div class="col-md-4">
+            <label class="form-label mb-0">الفصل الدراسي</label>
+            <input id="semesterInput" class="form-control form-control-sm" readonly>
+          </div>
+          <div class="col-md-8">
+            <div id="auditSummary" class="small text-muted"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="offeringsContainer"></div>
+  </main>
+
+  <script src="/static/js/common.js"></script>
+  <script>
+    let INSTRUCTORS = [];
+    let OFFERINGS = [];
+    let CURRENT_SEM = '';
+
+    function showMsg(text, type = 'info') {
+      const el = document.getElementById('tgMsg');
+      el.innerHTML = `<div class="alert alert-${type} py-2 mb-0">${text}</div>`;
+    }
+
+    function esc(s) {
+      return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    async function loadInstructors() {
+      const r = await fetch('/instructors/list', { credentials: 'include' });
+      const data = await r.json();
+      INSTRUCTORS = (data.instructors || []).filter(i => i.is_active !== false);
+    }
+
+    function instructorOptions(selectedId) {
+      const sid = Number(selectedId || 0);
+      return ['<option value="">— اختر أستاذاً —</option>']
+        .concat(INSTRUCTORS.map(i => {
+          const sel = Number(i.id) === sid ? ' selected' : '';
+          return `<option value="${i.id}"${sel}>${esc(i.name || '')}</option>`;
+        }))
+        .join('');
+    }
+
+    function slotCheckbox(offIdx, slot, groupKey, checked) {
+      const sid = slot.section_id;
+      const label = `${esc(slot.day || '')} ${esc(slot.time || '')} ${slot.room ? ' — ' + esc(slot.room) : ''}`;
+      const chk = checked ? ' checked' : '';
+      return `<label class="form-check form-check-inline me-2 mb-1">
+        <input type="checkbox" class="form-check-input slot-cb" data-off="${offIdx}" data-group="${groupKey}" data-sid="${sid}"${chk}>
+        <span class="form-check-label small">${label}</span>
+      </label>`;
+    }
+
+    function renderOffering(off, idx) {
+      const kind = off.group_kind || 'single';
+      const groups = off.groups || [];
+      const slots = off.slots || [];
+      const unlinked = (off.unlinked_slots || []).length;
+      const needs = off.needs_setup ? '<span class="badge bg-warning text-dark ms-1">يحتاج إكمال بيانات</span>' : '';
+      const unlinkedBadge = unlinked ? `<span class="badge bg-danger ms-1">${unlinked} حصة غير مربوطة</span>` : '';
+
+      let body = '';
+      if (kind === 'single' || groups.length === 0) {
+        const defaultInst = (groups[0] && groups[0].instructor_id) || (slots[0] && slots[0].instructor_id) || '';
+        const linkedIds = new Set((groups[0] && groups[0].section_ids) || slots.filter(s => s.teaching_group_id).map(s => s.section_id));
+        body = `
+          <div class="mb-2">
+            <label class="form-label small">الأستاذ (مجموعة واحدة — الكل)</label>
+            <select class="form-select form-select-sm tg-inst" data-off="${idx}" data-group="single" style="max-width:320px">${instructorOptions(defaultInst)}</select>
+          </div>
+          <div class="mb-2">
+            <div class="small fw-semibold mb-1">حصص الجدول (محاضرات)</div>
+            <div class="border rounded p-2 bg-light">${slots.map(s => slotCheckbox(idx, s, 'single', linkedIds.has(s.section_id) || !s.teaching_group_id)).join('') || '<span class="text-muted small">لا حصص</span>'}</div>
+          </div>`;
+      } else {
+        body = groups.map((g, gi) => {
+          const gkey = g.group_code || ('G' + gi);
+          const linked = new Set(g.section_ids || []);
+          return `
+            <div class="border rounded p-2 mb-2">
+              <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+                <span class="badge bg-primary">مجموعة ${esc(g.group_code_label || g.group_code || gkey)}</span>
+                <select class="form-select form-select-sm tg-inst" data-off="${idx}" data-group="${esc(gkey)}" style="max-width:280px">${instructorOptions(g.instructor_id)}</select>
+              </div>
+              <div>${slots.map(s => slotCheckbox(idx, s, gkey, linked.has(s.section_id))).join('')}</div>
+            </div>`;
+        }).join('');
+      }
+
+      const splitControls = `
+        <div class="btn-group btn-group-sm mb-2" role="group">
+          <input type="radio" class="btn-check" name="kind_${idx}" id="kind_single_${idx}" value="single" ${kind === 'single' ? 'checked' : ''}>
+          <label class="btn btn-outline-secondary" for="kind_single_${idx}">مجموعة واحدة (محاضرات متعددة)</label>
+          <input type="radio" class="btn-check" name="kind_${idx}" id="kind_split_${idx}" value="split" ${kind === 'split' ? 'checked' : ''}>
+          <label class="btn btn-outline-secondary" for="kind_split_${idx}">مجموعات A / B / C</label>
+        </div>
+        <div class="split-editor d-none mb-2" id="splitEditor_${idx}">
+          <div class="small text-muted mb-1">أضف مجموعات ثم عيّن الأستاذ والحصص لكل مجموعة</div>
+          <div id="splitGroups_${idx}"></div>
+          <button type="button" class="btn btn-outline-primary btn-sm mt-1 btn-add-group" data-off="${idx}">+ مجموعة</button>
+        </div>`;
+
+      return `
+        <div class="card mb-3 offering-card" data-off-idx="${idx}">
+          <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <div>
+              <strong>${esc(off.course_name)}</strong>
+              <span class="text-muted small"> — ${esc(off.department_name || 'قسم')}</span>
+              ${needs}${unlinkedBadge}
+            </div>
+            <button type="button" class="btn btn-success btn-sm btn-save-offering" data-off="${idx}">حفظ</button>
+          </div>
+          <div class="card-body">
+            ${splitControls}
+            <div class="offering-body" id="offBody_${idx}">${body}</div>
+          </div>
+        </div>`;
+    }
+
+    function collectGroupsForSave(idx) {
+      const off = OFFERINGS[idx];
+      const card = document.querySelector(`.offering-card[data-off-idx="${idx}"]`);
+      const kind = card.querySelector(`input[name="kind_${idx}"]:checked`)?.value || 'single';
+
+      if (kind === 'split') {
+        const groups = [];
+        card.querySelectorAll('.split-group-row').forEach(row => {
+          const gcode = row.querySelector('.split-code')?.value?.trim().toUpperCase();
+          const iid = Number(row.querySelector('.split-inst')?.value || 0);
+          const sectionIds = [...row.querySelectorAll('.slot-cb:checked')].map(cb => Number(cb.dataset.sid));
+          if (gcode && iid > 0) {
+            groups.push({ group_code: gcode, instructor_id: iid, section_ids: sectionIds });
+          }
+        });
+        return { group_kind: 'split', groups };
+      }
+
+      const iid = Number(card.querySelector('.tg-inst')?.value || 0);
+      const sectionIds = [...card.querySelectorAll('.slot-cb[data-group="single"]:checked')].map(cb => Number(cb.dataset.sid));
+      return { group_kind: 'single', groups: [{ instructor_id: iid, section_ids: sectionIds }] };
+    }
+
+    function bindOfferingEvents() {
+      document.querySelectorAll('.btn-save-offering').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const idx = Number(btn.dataset.off);
+          const off = OFFERINGS[idx];
+          const payload = collectGroupsForSave(idx);
+          if (!payload.groups.length || !payload.groups[0].instructor_id) {
+            showMsg('اختر الأستاذ لكل مجموعة قبل الحفظ', 'warning');
+            return;
+          }
+          btn.disabled = true;
+          try {
+            const r = await fetch('/schedule/teaching_groups/setup', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+              body: JSON.stringify({
+                course_name: off.course_name,
+                semester: CURRENT_SEM,
+                department_id: off.department_id,
+                group_kind: payload.group_kind,
+                groups: payload.groups,
+              }),
+            });
+            const j = await r.json();
+            if (!r.ok || j.status !== 'ok') throw new Error(j.message || 'فشل الحفظ');
+            showMsg(`تم حفظ إعداد «${off.course_name}»`, 'success');
+            await loadData(false);
+          } catch (e) {
+            showMsg(e.message || 'فشل الحفظ', 'danger');
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      });
+
+      document.querySelectorAll('input[name^="kind_"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+          const idx = radio.name.replace('kind_', '');
+          const isSplit = radio.value === 'split';
+          const editor = document.getElementById('splitEditor_' + idx);
+          const body = document.getElementById('offBody_' + idx);
+          if (editor) editor.classList.toggle('d-none', !isSplit);
+          if (body) body.classList.toggle('d-none', isSplit);
+          if (isSplit && editor && !editor.dataset.init) {
+            editor.dataset.init = '1';
+            initSplitEditor(Number(idx));
+          }
+        });
+      });
+
+      document.querySelectorAll('.btn-add-group').forEach(btn => {
+        btn.addEventListener('click', () => addSplitGroup(Number(btn.dataset.off)));
+      });
+    }
+
+    function initSplitEditor(idx) {
+      const off = OFFERINGS[idx];
+      const container = document.getElementById('splitGroups_' + idx);
+      container.innerHTML = '';
+      const existing = (off.groups || []).filter(g => (g.group_kind || off.group_kind) === 'split');
+      if (existing.length) {
+        existing.forEach(g => addSplitGroup(idx, g));
+      } else {
+        ['A', 'B'].forEach(code => addSplitGroup(idx, { group_code: code, instructor_id: off.slots[0]?.instructor_id, section_ids: [] }));
+      }
+    }
+
+    function addSplitGroup(idx, preset) {
+      const off = OFFERINGS[idx];
+      const container = document.getElementById('splitGroups_' + idx);
+      const row = document.createElement('div');
+      row.className = 'split-group-row border rounded p-2 mb-2';
+      const gcode = preset?.group_code || '';
+      const iid = preset?.instructor_id || '';
+      const linked = new Set(preset?.section_ids || []);
+      row.innerHTML = `
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+          <input class="form-control form-control-sm split-code" style="max-width:80px" placeholder="A" value="${esc(gcode)}">
+          <select class="form-select form-select-sm split-inst" style="max-width:280px">${instructorOptions(iid)}</select>
+        </div>
+        <div class="split-slots">${(off.slots || []).map(s => slotCheckbox(idx, s, 'split_' + (gcode || 'X'), linked.has(s.section_id))).join('')}</div>`;
+      container.appendChild(row);
+      row.querySelector('.split-code')?.addEventListener('input', () => {
+        row.querySelectorAll('.slot-cb').forEach(cb => { cb.dataset.group = 'split_' + row.querySelector('.split-code').value.trim().toUpperCase(); });
+      });
+    }
+
+    function renderAudit(audit) {
+      const el = document.getElementById('auditSummary');
+      if (!audit) { el.textContent = ''; return; }
+      el.innerHTML = `
+        <strong>ملخص:</strong>
+        ${audit.total_groups || 0} مجموعة تدريس —
+        ${audit.total_slots || 0} حصة جدول —
+        <span class="${audit.unlinked_count ? 'text-danger fw-semibold' : ''}">${audit.unlinked_count || 0} غير مربوطة</span>
+        ${(audit.slots_without_instructor || []).length ? ' — <span class="text-warning">حصص بلا أستاذ</span>' : ''}
+        ${(audit.slots_without_department || []).length ? ' — <span class="text-warning">حصص بلا قسم</span>' : ''}`;
+    }
+
+    async function loadData(runBackfill = true) {
+      showMsg('جاري التحميل…', 'info');
+      if (runBackfill) {
+        try {
+          await fetch('/schedule/teaching_groups/backfill', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          });
+        } catch (_) { /* ignore */ }
+      }
+      const r = await fetch('/schedule/teaching_groups/setup', { credentials: 'include' });
+      const j = await r.json();
+      if (!r.ok || j.status !== 'ok') throw new Error(j.message || 'فشل التحميل');
+      CURRENT_SEM = j.semester || '';
+      OFFERINGS = j.offerings || [];
+      document.getElementById('semesterInput').value = CURRENT_SEM;
+      renderAudit(j.audit);
+      const container = document.getElementById('offeringsContainer');
+      if (!OFFERINGS.length) {
+        container.innerHTML = '<div class="alert alert-secondary">لا مقررات في الجدول للفصل الحالي (أو لا أقسام/أساتذة مرتبطة).</div>';
+      } else {
+        container.innerHTML = OFFERINGS.map((o, i) => renderOffering(o, i)).join('');
+        bindOfferingEvents();
+        OFFERINGS.forEach((o, i) => {
+          if ((o.group_kind || '') === 'split') {
+            document.getElementById('splitEditor_' + i)?.classList.remove('d-none');
+            document.getElementById('offBody_' + i)?.classList.add('d-none');
+            initSplitEditor(i);
+            const ed = document.getElementById('splitEditor_' + i);
+            if (ed) ed.dataset.init = '1';
+          }
+        });
+      }
+      showMsg(`تم تحميل ${OFFERINGS.length} عرض مقرر`, 'success');
+    }
+
+    document.getElementById('btnReload').addEventListener('click', () => loadData(false));
+    document.getElementById('btnRegBackfill').addEventListener('click', async () => {
+      showMsg('جاري ترحيل التسجيلات…', 'info');
+      const r = await fetch('/schedule/teaching_groups/registrations/backfill', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      const j = await r.json();
+      const s = j.stats || {};
+      showMsg(`تسجيلات: رُبط ${s.linked || 0} — تُخطي ${s.skipped || 0} — يحتاج اختيار ${s.needs_choice || 0}`, 'success');
+      await loadData(false);
+    });
+
+    document.getElementById('btnEvalBackfill').addEventListener('click', async () => {
+      showMsg('جاري ترحيل التقييمات…', 'info');
+      const r = await fetch('/schedule/teaching_groups/evaluations/backfill', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      const j = await r.json();
+      const s = j.stats || {};
+      showMsg(`تقييمات: رُبط ${s.linked || 0} — تُخطي ${s.skipped || 0}`, 'success');
+      await loadData(false);
+    });
+
+    document.getElementById('btnBackfill').addEventListener('click', async () => {
+      showMsg('جاري الترحيل…', 'info');
+      const r = await fetch('/schedule/teaching_groups/backfill', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      const j = await r.json();
+      showMsg(`ترحيل: أُنشئ ${j.stats?.created || 0} — رُبط ${j.stats?.linked || 0} — تُخطي ${j.stats?.skipped || 0}`, 'success');
+      await loadData(false);
+    });
+
+    (async () => {
+      await loadInstructors();
+      await loadData(true);
+    })();
+  </script>
+</body>
+</html>

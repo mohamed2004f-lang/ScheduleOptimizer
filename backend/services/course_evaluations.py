@@ -10,6 +10,7 @@ from flask import Blueprint, jsonify, redirect, render_template, request, sessio
 from backend.core.auth import login_required, role_required, _normalize_role
 from backend.core.faculty_axes import normalize_instructor_name
 from backend.database.database import fetch_table_columns, is_postgresql, schedule_pk_column, table_exists
+from backend.services import teaching_groups as tg_svc
 from backend.services.evaluation_survey import (
     insert_evaluation_with_answers,
     likert_labels_ar,
@@ -94,13 +95,12 @@ def _row_to_section_dict(r) -> dict | None:
     return d
 
 
-def _student_evaluable_sections(conn, student_id: str, semester: str) -> list[dict]:
+def _student_evaluable_sections_legacy(conn, student_id: str, semester: str) -> list[dict]:
     if not table_exists(conn, "course_evaluations"):
         logger.warning("course_evaluations table missing — run ensure_tables / restart app")
     sid_expr = _schedule_section_id_expr(conn)
     cur = conn.cursor()
     name_map = _instructor_id_by_name_map(cur)
-    # لا نُصفّي بالفصل في SQL — صفوف الجدول قد تستخدم تسمية فصل مختلفة عن system_settings
     rows = cur.execute(
         f"""
         SELECT DISTINCT {sid_expr} AS section_id,
@@ -148,8 +148,41 @@ def _student_evaluable_sections(conn, student_id: str, semester: str) -> list[di
         seen_sections.add(sec_id)
         seen_course_inst.add(course_key)
         item["semester"] = term or sch_sem
+        item["teaching_group_id"] = None
         out.append(item)
     return out
+
+
+def _student_evaluable_sections(conn, student_id: str, semester: str) -> list[dict]:
+    """
+    مقررات قابلة للتقييم.
+    يفضّل مجموعات التدريس عند توفرها؛ وإلا المسار القديم (section_id).
+    """
+    sem = (semester or "").strip()
+    if tg_svc.semester_has_teaching_groups(conn, sem):
+        groups = tg_svc.list_student_evaluable_groups(conn, student_id, sem)
+        if groups:
+            return groups
+    return _student_evaluable_sections_legacy(conn, student_id, sem)
+
+
+def _find_evaluable_item(
+    sections: list[dict],
+    *,
+    section_id: int | None = None,
+    teaching_group_id: int | None = None,
+) -> dict | None:
+    if teaching_group_id and int(teaching_group_id) > 0:
+        return next(
+            (s for s in sections if int(s.get("teaching_group_id") or 0) == int(teaching_group_id)),
+            None,
+        )
+    if section_id and int(section_id) > 0:
+        return next(
+            (s for s in sections if int(s.get("section_id") or 0) == int(section_id)),
+            None,
+        )
+    return None
 
 
 def list_pending_course_evaluations(
@@ -167,41 +200,117 @@ def list_pending_course_evaluations(
     cur = conn.cursor()
     pending: list[dict] = []
     for s in sections:
-        sec_id = int(s["section_id"])
-        if _already_evaluated(conn, cur, sid, sec_id, sem):
+        tgid = int(s.get("teaching_group_id") or 0)
+        sec_id = int(s.get("section_id") or 0)
+        if _already_evaluated(
+            conn,
+            cur,
+            sid,
+            sem,
+            section_id=sec_id or None,
+            teaching_group_id=tgid or None,
+        ):
             continue
         cname = (s.get("course_name") or "").strip() or "—"
         iname = (s.get("instructor_name") or "").strip()
-        title = f"تقييم مقرر: {cname}"
-        if iname:
+        label = (s.get("display_label") or "").strip()
+        title = f"تقييم مقرر: {label or cname}"
+        if iname and iname not in title:
             title += f" — {iname}"
+        fill_url = (
+            f"/students/evaluations/form/tg/{tgid}"
+            if tgid > 0
+            else f"/students/evaluations/form/{sec_id}"
+        )
         pending.append(
             {
                 "code": "student_course",
                 "title_ar": title,
                 "semester": sem,
-                "fill_url": f"/students/evaluations/form/{sec_id}",
+                "fill_url": fill_url,
                 "pending_kind": "course_eval",
-                "section_id": sec_id,
+                "section_id": sec_id or None,
+                "teaching_group_id": tgid or None,
                 "course_name": cname,
                 "instructor_name": iname,
+                "display_label": label or None,
             }
         )
     return pending
 
 
-def _already_evaluated(conn, cur, student_id: str, section_id: int, semester: str) -> bool:
+def _already_evaluated(
+    conn,
+    cur,
+    student_id: str,
+    semester: str,
+    *,
+    section_id: int | None = None,
+    teaching_group_id: int | None = None,
+) -> bool:
     if not table_exists(conn, "course_evaluations"):
         return False
-    row = cur.execute(
-        """
-        SELECT 1 FROM course_evaluations
-        WHERE student_id = ? AND section_id = ? AND semester = ?
-        LIMIT 1
-        """,
-        (student_id, section_id, semester),
-    ).fetchone()
-    return row is not None
+    ce_cols = {c.lower() for c in fetch_table_columns(conn, "course_evaluations")}
+    tgid = int(teaching_group_id or 0)
+    if tgid > 0 and "teaching_group_id" in ce_cols:
+        row = cur.execute(
+            """
+            SELECT 1 FROM course_evaluations
+            WHERE student_id = ? AND teaching_group_id = ? AND semester = ?
+            LIMIT 1
+            """,
+            (student_id, tgid, semester),
+        ).fetchone()
+        if row is not None:
+            return True
+    sid = int(section_id or 0)
+    if sid > 0:
+        row = cur.execute(
+            """
+            SELECT 1 FROM course_evaluations
+            WHERE student_id = ? AND section_id = ? AND semester = ?
+            LIMIT 1
+            """,
+            (student_id, sid, semester),
+        ).fetchone()
+        return row is not None
+    return False
+
+
+def _render_evaluation_form(conn, sid: str, match: dict, *, section_id: int, teaching_group_id: int | None):
+    sem = term_label_from_conn(conn)
+    cur = conn.cursor()
+    tgid = int(teaching_group_id or match.get("teaching_group_id") or 0)
+    if _already_evaluated(
+        conn,
+        cur,
+        sid,
+        sem,
+        section_id=section_id,
+        teaching_group_id=tgid or None,
+    ):
+        return render_template(
+            "student_course_evaluation.html",
+            error="تم إرسال تقييمك لهذا المقرر مسبقاً.",
+            course=match,
+            already_done=True,
+        )
+    questions = list_survey_questions(conn, active_only=True)
+    if not questions:
+        return render_template(
+            "student_course_evaluation.html",
+            error="لم يُضبط استبيان التقييم بعد. تواصل مع الإدارة.",
+            course=match,
+        )
+    return render_template(
+        "student_course_evaluation.html",
+        course=match,
+        section_id=section_id,
+        teaching_group_id=tgid or None,
+        semester=sem,
+        questions=questions,
+        likert_options=likert_labels_ar(),
+    )
 
 
 @course_evaluations_bp.route("/")
@@ -223,38 +332,57 @@ def evaluation_form(section_id: int):
         with get_connection() as conn:
             sem = term_label_from_conn(conn)
             sections = _student_evaluable_sections(conn, sid, sem)
-            match = next((s for s in sections if int(s.get("section_id") or 0) == section_id), None)
+            match = _find_evaluable_item(sections, section_id=section_id)
             if not match:
                 return render_template(
                     "student_course_evaluation.html",
                     error="هذا المقرر غير مسجّل لديك في الفصل الحالي.",
                     course=None,
                 )
-            cur = conn.cursor()
-            if _already_evaluated(conn, cur, sid, section_id, sem):
-                return render_template(
-                    "student_course_evaluation.html",
-                    error="تم إرسال تقييمك لهذا المقرر مسبقاً.",
-                    course=match,
-                    already_done=True,
-                )
-            questions = list_survey_questions(conn, active_only=True)
-            if not questions:
-                return render_template(
-                    "student_course_evaluation.html",
-                    error="لم يُضبط استبيان التقييم بعد. تواصل مع الإدارة.",
-                    course=match,
-                )
-            return render_template(
-                "student_course_evaluation.html",
-                course=match,
+            return _render_evaluation_form(
+                conn,
+                sid,
+                match,
                 section_id=section_id,
-                semester=sem,
-                questions=questions,
-                likert_options=likert_labels_ar(),
+                teaching_group_id=int(match.get("teaching_group_id") or 0) or None,
             )
     except Exception:
         logger.exception("evaluation_form failed")
+        return render_template(
+            "student_course_evaluation.html",
+            error="حدث خطأ أثناء تحميل الاستبيان.",
+            course=None,
+        )
+
+
+@course_evaluations_bp.route("/form/tg/<int:teaching_group_id>")
+@login_required
+@role_required("student")
+def evaluation_form_teaching_group(teaching_group_id: int):
+    sid = _student_id_from_session()
+    if not sid:
+        return redirect(url_for("login_page"))
+    try:
+        with get_connection() as conn:
+            sem = term_label_from_conn(conn)
+            sections = _student_evaluable_sections(conn, sid, sem)
+            match = _find_evaluable_item(sections, teaching_group_id=teaching_group_id)
+            if not match:
+                return render_template(
+                    "student_course_evaluation.html",
+                    error="هذه المجموعة غير مسجّلة لديك في الفصل الحالي.",
+                    course=None,
+                )
+            sec_id = int(match.get("section_id") or 0) or teaching_group_id
+            return _render_evaluation_form(
+                conn,
+                sid,
+                match,
+                section_id=sec_id,
+                teaching_group_id=teaching_group_id,
+            )
+    except Exception:
+        logger.exception("evaluation_form_teaching_group failed")
         return render_template(
             "student_course_evaluation.html",
             error="حدث خطأ أثناء تحميل الاستبيان.",
@@ -272,9 +400,10 @@ def submit_evaluation():
     data = request.get_json(force=True) if request.is_json else request.form
     data = data or {}
     section_id = _safe_int(data.get("section_id"))
+    teaching_group_id = _safe_int(data.get("teaching_group_id"))
     instructor_id = _safe_int(data.get("instructor_id"))
-    if not section_id:
-        return jsonify({"status": "error", "message": "section_id غير صالح"}), 400
+    if not section_id and not teaching_group_id:
+        return jsonify({"status": "error", "message": "معرّف المقرر غير صالح"}), 400
     if not instructor_id:
         return jsonify({"status": "error", "message": "instructor_id غير صالح"}), 400
 
@@ -301,19 +430,33 @@ def submit_evaluation():
                 return jsonify({"status": "error", "message": str(ve)}), 400
             sem = (data.get("semester") or "").strip() or term_label_from_conn(conn)
             sections = _student_evaluable_sections(conn, sid, sem)
-            match = next((s for s in sections if int(s.get("section_id") or 0) == section_id), None)
+            match = _find_evaluable_item(
+                sections,
+                section_id=section_id,
+                teaching_group_id=teaching_group_id,
+            )
             if not match:
                 return jsonify({"status": "error", "message": "المقرر غير مسجّل لديك"}), 403
             if int(match.get("instructor_id") or 0) != instructor_id:
                 return jsonify({"status": "error", "message": "بيانات الأستاذ غير متطابقة"}), 400
+            sec_id = int(match.get("section_id") or section_id or 0)
+            tgid = int(match.get("teaching_group_id") or teaching_group_id or 0) or None
             cur = conn.cursor()
-            if _already_evaluated(conn, cur, sid, section_id, sem):
+            if _already_evaluated(
+                conn,
+                cur,
+                sid,
+                sem,
+                section_id=sec_id or None,
+                teaching_group_id=tgid,
+            ):
                 return jsonify({"status": "error", "message": "تم التقييم مسبقاً"}), 409
             course_name = (match.get("course_name") or "").strip()
             insert_evaluation_with_answers(
                 conn,
                 student_id=sid,
-                section_id=section_id,
+                section_id=sec_id,
+                teaching_group_id=tgid,
                 course_name=course_name,
                 instructor_id=instructor_id,
                 semester=sem,

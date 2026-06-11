@@ -50,7 +50,7 @@ ScheduleOptimizer is an academic operations platform for managing student data, 
 ## Technology Stack
 
 - Backend: Flask (Blueprint-based architecture)
-- Database: SQLite (`backend/database/mechanical.db`)
+- Database: PostgreSQL (`DATABASE_URL` in `.env`)
 - Frontend: HTML + Bootstrap + JS (fetch APIs)
 - Reports: Excel/PDF export
 
@@ -66,8 +66,9 @@ ScheduleOptimizer is an academic operations platform for managing student data, 
 <!-- AUTO_LATEST_CHANGES_START -->
 ## Latest Changes (Auto)
 
-_Last generated: 2026-06-11 00:33_
+_Last generated: 2026-06-12 02:02_
 
+- `21cc15e` (2026-06-11): & c:/Users/BARCODE/ScheduleOptimizer/.venv/Scripts/Activate.ps1
 - `74d3eff` (2026-06-03): & c:/Users/BARCODE/ScheduleOptimizer/.venv/Scripts/Activate.ps1
 - `6f47849` (2026-05-26): & c:/Users/BARCODE/ScheduleOptimizer/.venv/Scripts/Activate.ps1
 - `1819dbe` (2026-05-25): & c:/Users/BARCODE/ScheduleOptimizer/.venv/Scripts/Activate.ps1
@@ -77,6 +78,5 @@ _Last generated: 2026-06-11 00:33_
 - `a2cc901` (2026-05-22): & c:/Users/BARCODE/ScheduleOptimizer/.venv/Scripts/Activate.ps1
 - `149db1f` (2026-05-22): & c:/Users/BARCODE/ScheduleOptimizer/.venv/Scripts/Activate.ps1
 - `7e3e49b` (2026-05-22): & c:/Users/BARCODE/ScheduleOptimizer/.venv/Scripts/Activate.ps1
-- `247d45d` (2026-05-19): & c:/Users/BARCODE/ScheduleOptimizer/.venv/Scripts/Activate.ps1
 
 <!-- AUTO_LATEST_CHANGES_END -->

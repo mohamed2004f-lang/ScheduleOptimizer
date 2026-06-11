@@ -15,45 +15,34 @@ except ImportError:  # pragma: no cover - يُفضّل تثبيت SQLAlchemy (ا
 
 logger = logging.getLogger(__name__)
 
-# تحميل config أولاً لضمان قراءة .env (DATABASE_URL / DATABASE_PATH)
-try:
-    from config import DATABASE_PATH, DATABASE_URL, PG_POOL_MIN_SIZE, PG_POOL_MAX_SIZE
-except ImportError:
-    BASE_DIR = Path(__file__).parent
-    DATABASE_PATH = os.environ.get("DATABASE_PATH", str(BASE_DIR / "mechanical.db"))
-    DATABASE_URL = os.environ.get("DATABASE_URL") or f"sqlite:///{Path(DATABASE_PATH).resolve().as_posix()}"
-    PG_POOL_MIN_SIZE = int(os.environ.get("PG_POOL_MIN_SIZE", "2"))
-    PG_POOL_MAX_SIZE = int(os.environ.get("PG_POOL_MAX_SIZE", "10"))
-
 # جذر المشروع (ScheduleOptimizer): backend/database/database.py -> .. -> ..
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-
-def _resolve_config_database_path() -> Path:
-    """
-    يحل DATABASE_PATH إلى مسار مطلق ثابت نسبةً لجذر المشروع.
-    تجنّباً لملفات SQLite مختلفة عند تغيّر مجلد العمل (cwd) بين عمليات التشغيل.
-    """
-    dp = Path(DATABASE_PATH)
-    if not dp.is_absolute():
-        return (PROJECT_ROOT / dp).resolve()
-    return dp.resolve()
+# تحميل config — PostgreSQL للتشغيل؛ SQLite في الذاكرة للاختبارات فقط (conftest)
+try:
+    from config import DATABASE_URL, PG_POOL_MIN_SIZE, PG_POOL_MAX_SIZE
+except ImportError:
+    DATABASE_URL = os.environ.get("DATABASE_URL") or ""
+    PG_POOL_MIN_SIZE = int(os.environ.get("PG_POOL_MIN_SIZE", "2"))
+    PG_POOL_MAX_SIZE = int(os.environ.get("PG_POOL_MAX_SIZE", "10"))
 
 
 def _sqlite_db_file_path() -> str:
-    """مسار ملف SQLite الفعلي لاستخدامه مع sqlite3 (وليس لـ PostgreSQL)."""
+    """مسار SQLite للاختبارات فقط (DATABASE_URL=sqlite://…)."""
     if make_url is None:
-        return str(_resolve_config_database_path())
-    u = make_url(DATABASE_URL)
+        return ":memory:"
+    try:
+        u = make_url(DATABASE_URL)
+    except Exception:
+        return ":memory:"
     if u.get_backend_name() != "sqlite":
-        return str(_resolve_config_database_path())
-    if not u.database or u.database == ":memory:":
-        return str(_resolve_config_database_path())
-    p = Path(u.database)
+        return ""
+    db = (u.database or "").strip()
+    if not db or db == ":memory:":
+        return ":memory:"
+    p = Path(db)
     if not p.is_absolute():
         p = (PROJECT_ROOT / p).resolve()
-    else:
-        p = p.resolve()
     return str(p)
 
 
@@ -544,14 +533,12 @@ def get_connection(db_file=None):
             conn = psycopg.connect(_pg_conninfo(), row_factory=dict_row)
             return _PgConnectionWrapper(conn, pool=None)
 
-    allow_sqlite_legacy = (os.environ.get("ALLOW_SQLITE_LEGACY") or "").strip().lower() in ("1", "true", "yes")
-    if not allow_sqlite_legacy and not os.environ.get("PYTEST_CURRENT_TEST"):
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
         raise RuntimeError(
-            "SQLite runtime connection is disabled. "
-            "Set DATABASE_URL to PostgreSQL (recommended) or ALLOW_SQLITE_LEGACY=1 for temporary legacy tools."
+            "SQLite runtime is disabled. Set DATABASE_URL to PostgreSQL."
         )
 
-    db_path = db_file or DB_FILE
+    db_path = db_file or DB_FILE or ":memory:"
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -692,6 +679,31 @@ TABLES_SCHEMA = {
         )
     """,
 
+    'teaching_groups': """
+        CREATE TABLE IF NOT EXISTS teaching_groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            course_name TEXT NOT NULL,
+            semester TEXT NOT NULL,
+            department_id INTEGER NOT NULL,
+            group_code TEXT NOT NULL DEFAULT '—',
+            group_kind TEXT NOT NULL DEFAULT 'single' CHECK (group_kind IN ('single', 'split')),
+            instructor_id INTEGER NOT NULL,
+            capacity_max INTEGER,
+            program_course_id INTEGER,
+            note TEXT DEFAULT '',
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (course_name, semester, department_id, group_code),
+            FOREIGN KEY (course_name) REFERENCES courses(course_name)
+                ON DELETE CASCADE ON UPDATE CASCADE,
+            FOREIGN KEY (department_id) REFERENCES departments(id)
+                ON DELETE RESTRICT ON UPDATE CASCADE,
+            FOREIGN KEY (instructor_id) REFERENCES instructors(id)
+                ON DELETE RESTRICT ON UPDATE CASCADE
+        )
+    """,
+
     'students': """
         CREATE TABLE IF NOT EXISTS students (
             student_id TEXT PRIMARY KEY,
@@ -759,6 +771,7 @@ TABLES_SCHEMA = {
             instructor TEXT DEFAULT '',
             instructor_id INTEGER,
             semester TEXT DEFAULT '',
+            teaching_group_id INTEGER,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (course_name) REFERENCES courses(course_name) 
                 ON DELETE CASCADE ON UPDATE CASCADE,
@@ -775,6 +788,7 @@ TABLES_SCHEMA = {
             student_id TEXT NOT NULL,
             course_name TEXT NOT NULL,
             program_course_id INTEGER,
+            teaching_group_id INTEGER,
             registered_at TEXT DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (student_id, course_name),
             FOREIGN KEY (student_id) REFERENCES students(student_id) 
@@ -1113,6 +1127,7 @@ TABLES_SCHEMA = {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             plan_id INTEGER NOT NULL,
             course_name TEXT NOT NULL,
+            teaching_group_id INTEGER,
             FOREIGN KEY (plan_id) REFERENCES enrollment_plans(id) ON DELETE CASCADE
         )
     """,
@@ -1481,6 +1496,7 @@ TABLES_SCHEMA = {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             student_id TEXT NOT NULL,
             section_id INTEGER,
+            teaching_group_id INTEGER,
             course_name TEXT NOT NULL,
             instructor_id INTEGER NOT NULL,
             semester TEXT NOT NULL,
@@ -1965,6 +1981,7 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_course_eval_student_sem ON course_evaluations(student_id, semester)",
     "CREATE INDEX IF NOT EXISTS idx_course_eval_section_sem ON course_evaluations(section_id, semester)",
     "CREATE INDEX IF NOT EXISTS idx_course_eval_instructor_sem ON course_evaluations(instructor_id, semester)",
+    "CREATE INDEX IF NOT EXISTS idx_course_eval_teaching_group ON course_evaluations(teaching_group_id, semester)",
     "CREATE INDEX IF NOT EXISTS idx_eval_survey_q_sort ON evaluation_survey_questions(sort_order, is_active)",
     "CREATE INDEX IF NOT EXISTS idx_eval_survey_ans_eval ON evaluation_survey_answers(evaluation_id)",
     "CREATE INDEX IF NOT EXISTS idx_eval_survey_ans_q ON evaluation_survey_answers(question_id)",
@@ -2024,8 +2041,13 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_dept_grad_policy_dept_status ON department_graduation_policies(department_id, status)",
     "CREATE INDEX IF NOT EXISTS idx_schedule_program_course ON schedule(program_course_id)",
     "CREATE INDEX IF NOT EXISTS idx_schedule_department ON schedule(department_id)",
+    "CREATE INDEX IF NOT EXISTS idx_schedule_teaching_group ON schedule(teaching_group_id)",
+    "CREATE INDEX IF NOT EXISTS idx_teaching_groups_semester ON teaching_groups(semester)",
+    "CREATE INDEX IF NOT EXISTS idx_teaching_groups_course_sem ON teaching_groups(course_name, semester)",
+    "CREATE INDEX IF NOT EXISTS idx_teaching_groups_dept_sem ON teaching_groups(department_id, semester)",
     "CREATE INDEX IF NOT EXISTS idx_grades_program_course ON grades(program_course_id)",
     "CREATE INDEX IF NOT EXISTS idx_regs_program_course ON registrations(program_course_id)",
+    "CREATE INDEX IF NOT EXISTS idx_regs_teaching_group ON registrations(teaching_group_id)",
     "CREATE INDEX IF NOT EXISTS idx_student_supervisor_instructor ON student_supervisor(instructor_id)",
     "CREATE INDEX IF NOT EXISTS idx_reg_requests_status_created ON registration_requests(status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_reg_requests_student ON registration_requests(student_id)",
@@ -2081,7 +2103,36 @@ def _ensure_tables_postgresql() -> None:
         "ALTER TABLE schedule ADD COLUMN IF NOT EXISTS instructor_id INTEGER",
         "ALTER TABLE schedule ADD COLUMN IF NOT EXISTS program_course_id BIGINT",
         "ALTER TABLE schedule ADD COLUMN IF NOT EXISTS department_id BIGINT",
+        "ALTER TABLE schedule ADD COLUMN IF NOT EXISTS teaching_group_id BIGINT",
+        """
+        CREATE TABLE IF NOT EXISTS teaching_groups (
+            id BIGSERIAL PRIMARY KEY,
+            course_name TEXT NOT NULL,
+            semester TEXT NOT NULL,
+            department_id BIGINT NOT NULL REFERENCES departments(id),
+            group_code TEXT NOT NULL DEFAULT '—',
+            group_kind TEXT NOT NULL DEFAULT 'single' CHECK (group_kind IN ('single', 'split')),
+            instructor_id BIGINT NOT NULL REFERENCES instructors(id),
+            capacity_max INTEGER,
+            program_course_id BIGINT,
+            note TEXT DEFAULT '',
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (course_name, semester, department_id, group_code)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_schedule_teaching_group ON schedule(teaching_group_id)",
+        "CREATE INDEX IF NOT EXISTS idx_teaching_groups_semester ON teaching_groups(semester)",
+        "CREATE INDEX IF NOT EXISTS idx_teaching_groups_course_sem ON teaching_groups(course_name, semester)",
+        "CREATE INDEX IF NOT EXISTS idx_teaching_groups_dept_sem ON teaching_groups(department_id, semester)",
         "ALTER TABLE registrations ADD COLUMN IF NOT EXISTS program_course_id BIGINT",
+        "ALTER TABLE registrations ADD COLUMN IF NOT EXISTS teaching_group_id BIGINT",
+        "ALTER TABLE enrollment_plan_items ADD COLUMN IF NOT EXISTS teaching_group_id BIGINT",
+        "CREATE INDEX IF NOT EXISTS idx_regs_teaching_group ON registrations(teaching_group_id)",
+        "ALTER TABLE course_evaluations ADD COLUMN IF NOT EXISTS teaching_group_id BIGINT",
+        "CREATE INDEX IF NOT EXISTS idx_course_eval_teaching_group ON course_evaluations(teaching_group_id, semester)",
+        "ALTER TABLE grade_drafts ADD COLUMN IF NOT EXISTS teaching_group_id BIGINT",
         "ALTER TABLE grades ADD COLUMN IF NOT EXISTS program_course_id BIGINT",
         "ALTER TABLE grades ADD COLUMN IF NOT EXISTS course_master_id BIGINT",
         "ALTER TABLE program_courses ADD COLUMN IF NOT EXISTS plan_applicability TEXT NOT NULL DEFAULT 'both'",
@@ -3443,6 +3494,11 @@ def ensure_tables(db_file=None):
                 cur.execute("ALTER TABLE schedule ADD COLUMN department_id INTEGER")
             except Exception:
                 pass
+        if "teaching_group_id" not in scols:
+            try:
+                cur.execute("ALTER TABLE schedule ADD COLUMN teaching_group_id INTEGER")
+            except Exception:
+                pass
 
         try:
             rcols = [r[1] for r in cur.execute("PRAGMA table_info(registrations)").fetchall()]
@@ -3451,6 +3507,41 @@ def ensure_tables(db_file=None):
         if "program_course_id" not in rcols:
             try:
                 cur.execute("ALTER TABLE registrations ADD COLUMN program_course_id INTEGER")
+            except Exception:
+                pass
+        if "teaching_group_id" not in rcols:
+            try:
+                cur.execute("ALTER TABLE registrations ADD COLUMN teaching_group_id INTEGER")
+            except Exception:
+                pass
+
+        try:
+            epi_cols = [r[1] for r in cur.execute("PRAGMA table_info(enrollment_plan_items)").fetchall()]
+        except Exception:
+            epi_cols = []
+        if "teaching_group_id" not in epi_cols:
+            try:
+                cur.execute("ALTER TABLE enrollment_plan_items ADD COLUMN teaching_group_id INTEGER")
+            except Exception:
+                pass
+
+        try:
+            cecols = [r[1] for r in cur.execute("PRAGMA table_info(course_evaluations)").fetchall()]
+        except Exception:
+            cecols = []
+        if "teaching_group_id" not in cecols:
+            try:
+                cur.execute("ALTER TABLE course_evaluations ADD COLUMN teaching_group_id INTEGER")
+            except Exception:
+                pass
+
+        try:
+            gdcols = [r[1] for r in cur.execute("PRAGMA table_info(grade_drafts)").fetchall()]
+        except Exception:
+            gdcols = []
+        if "teaching_group_id" not in gdcols:
+            try:
+                cur.execute("ALTER TABLE grade_drafts ADD COLUMN teaching_group_id INTEGER")
             except Exception:
                 pass
 

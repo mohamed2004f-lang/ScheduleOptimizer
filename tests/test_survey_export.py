@@ -19,18 +19,23 @@ from backend.services.evaluation_survey import (
 from backend.services.survey_analytics import (
     build_combined_survey_report,
     build_course_eval_by_course_report,
+    build_course_eval_missing_sections_audit,
+    _course_teaching_group_count,
     build_course_eval_section_report,
     build_course_eval_sections_summary,
     build_survey_report,
+    course_eval_missing_audit_excel_frames,
     classify_item_score,
     course_eval_is_aggregated,
     course_eval_min_required,
     generate_executive_narrative_ar,
+    get_course_eval_response_rate_percent,
     interpret_overall_score_ar,
     list_course_eval_course_instructor_groups,
     package_excel_frames,
     prepare_combined_pdf_context,
     prepare_single_survey_pdf_context,
+    set_course_eval_response_rate_percent,
     single_survey_excel_frames,
 )
 
@@ -45,12 +50,23 @@ def test_survey_accreditation_map_defined():
 def test_course_eval_min_required_rate():
     assert course_eval_min_required(10) == 5
     assert course_eval_min_required(6) == 3
-    assert course_eval_min_required(4) == 3
-    assert course_eval_min_required(3) == 3
-    assert course_eval_min_required(2) == 3
+    assert course_eval_min_required(4) == 2
+    assert course_eval_min_required(3) == 2
+    assert course_eval_min_required(2) == 1
+    assert course_eval_min_required(1) == 1
+    assert course_eval_min_required(0) > 10**6
     assert course_eval_is_aggregated(3, 6) is True
     assert course_eval_is_aggregated(2, 6) is False
-    assert course_eval_is_aggregated(3, 4) is True
+    assert course_eval_is_aggregated(2, 4) is True
+    assert course_eval_is_aggregated(5, 0) is False
+
+
+def test_course_eval_response_rate_setting(db_conn):
+    saved = set_course_eval_response_rate_percent(db_conn, 40)
+    assert saved == 40
+    assert get_course_eval_response_rate_percent(db_conn) == 40
+    assert course_eval_min_required(10, conn=db_conn) == 4
+    set_course_eval_response_rate_percent(db_conn, 50)
 
 
 def test_classify_item_score():
@@ -160,10 +176,10 @@ def test_course_eval_per_section_export(db_conn):
     db_conn.commit()
 
     _seed_course_eval_for_section(
-        db_conn, section_id=sec_a, course_name="مقرر تصدير اختبار", instructor_id=1, sem=sem, n=5
+        db_conn, section_id=sec_a, course_name="مقرر تصدير اختبار", instructor_id=1, sem=sem, n=4
     )
     _seed_course_eval_for_section(
-        db_conn, section_id=sec_b, course_name="مقرر تصدير اختبار", instructor_id=1, sem=sem, n=3
+        db_conn, section_id=sec_b, course_name="مقرر تصدير اختبار", instructor_id=1, sem=sem, n=4
     )
 
     sections = build_course_eval_sections_summary(db_conn, semester=sem)
@@ -172,7 +188,10 @@ def test_course_eval_per_section_export(db_conn):
     assert rep_a and rep_a["aggregated"] is True
     rep_b = build_course_eval_section_report(db_conn, sec_b, semester=sem)
     assert rep_b and rep_b["aggregated"] is True
-    assert rep_b["min_aggregate"] == 3
+    assert _course_teaching_group_count(db_conn, "مقرر تصدير اختبار", sem, instructor_id=1) == 1
+    assert rep_a["course_registration_count"] == 8
+    assert rep_a["enrolled_count"] == 8
+    assert rep_b["min_aggregate"] == 4
 
     by_course = build_course_eval_by_course_report(
         db_conn, "مقرر تصدير اختبار", 1, semester=sem
@@ -185,6 +204,46 @@ def test_course_eval_per_section_export(db_conn):
     groups = list_course_eval_course_instructor_groups(db_conn, semester=sem)
     multi = [g for g in groups if int(g.get("section_count") or 0) > 1]
     assert multi
+
+    cur.execute(
+        "INSERT INTO schedule (course_name, day, time, room, instructor_id, semester) VALUES (?,?,?,?,?,?)",
+        ("مقرر بلا تقييم", "الثلاثاء", "12:00", "103", 1, sem),
+    )
+    db_conn.commit()
+    cur.execute("UPDATE schedule SET id = rowid WHERE id IS NULL")
+    db_conn.commit()
+    sec_missing = int(cur.execute("SELECT id FROM schedule ORDER BY rowid DESC LIMIT 1").fetchone()[0])
+    cur.execute(
+        "INSERT OR IGNORE INTO registrations (student_id, course_name) VALUES (?, ?)",
+        ("reg-stu-missing", "مقرر بلا تقييم"),
+    )
+    db_conn.commit()
+
+    audit_before = build_course_eval_missing_sections_audit(db_conn, semester=sem)
+    assert audit_before["total_schedule_sections"] >= 3
+    assert audit_before["evaluated_sections"] >= 2
+    assert audit_before["missing_sections"] >= 1
+    missing_ids = {int(r["section_id"]) for r in audit_before["rows"]}
+    assert sec_missing in missing_ids
+
+    cur.execute(
+        "INSERT INTO schedule (course_name, day, time, room, instructor_id, semester) VALUES (?,?,?,?,?,?)",
+        ("مقرر تصدير اختبار", "الأربعاء", "14:00", "104", 1, sem),
+    )
+    db_conn.commit()
+    cur.execute("UPDATE schedule SET id = rowid WHERE id IS NULL")
+    db_conn.commit()
+    sec_extra_slot = int(cur.execute("SELECT id FROM schedule ORDER BY rowid DESC LIMIT 1").fetchone()[0])
+    audit_sibling = build_course_eval_missing_sections_audit(db_conn, semester=sem)
+    sibling_ids = {int(r["section_id"]) for r in audit_sibling["rows"]}
+    assert sec_extra_slot not in sibling_ids
+
+    missing_row = next(r for r in audit_before["rows"] if int(r["section_id"]) == sec_missing)
+    assert missing_row["eligible_for_student"] is True
+    assert "لم يُرسَل أي تقييم" in missing_row["gap_reasons_ar"]
+
+    audit_frames = course_eval_missing_audit_excel_frames(audit_before)
+    assert any(name == "شعب_بلا_تقييم" for name, _ in audit_frames)
 
     combined = build_combined_survey_report(db_conn, semester=sem, include_course_eval=True)
     sheet_names = [n for n, _ in package_excel_frames(combined)]

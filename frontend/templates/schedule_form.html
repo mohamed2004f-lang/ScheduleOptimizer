@@ -57,6 +57,7 @@
               <a class="btn btn-outline-danger btn-sm" id="btnScheduleExportPdfTpl" href="/schedule/export/pdf?include_empty=1" target="_blank">قالب PDF</a>
               <button type="button" class="btn btn-outline-secondary btn-sm" id="btnSchedulePreview">👁️ عرض</button>
               <button type="button" class="btn btn-outline-dark btn-sm" id="btnSchedulePrintStudentStyle">🖨️ طباعة</button>
+              <a class="btn btn-outline-primary btn-sm d-none" id="btnTeachingGroupsSetup" href="/schedule_teaching_groups">📚 إعداد مجموعات المقررات</a>
             </div>
             <div id="publishScheduleWrap" class="d-none align-items-center gap-2">
               <span id="publishStatusText" class="small text-muted"></span>
@@ -1823,8 +1824,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!IS_ADMIN) {
       const importForm = document.getElementById('schedule-import-form');
       if (importForm) importForm.style.display = 'none';
+      const tgBtn = document.getElementById('btnTeachingGroupsSetup');
+      if (tgBtn) tgBtn.classList.add('d-none');
     } else {
       updateScheduleSlotManageToggleButton();
+      const tgBtn = document.getElementById('btnTeachingGroupsSetup');
+      if (tgBtn) tgBtn.classList.remove('d-none');
     }
 
     const btnPreviewRo = document.getElementById('btnSchedulePreviewRo');

@@ -54,6 +54,7 @@ from backend.services.survey_analytics import (
     build_course_eval_sections_summary,
     export_course_eval_by_course_xlsx,
     export_course_eval_section_xlsx,
+    export_course_eval_missing_sections_xlsx,
     export_course_eval_sections_xlsx,
     export_package_xlsx,
     export_single_survey_xlsx,
@@ -587,6 +588,15 @@ def register_survey_platform_routes(bp) -> None:
             cycle_closure = None
             if results_view == "external" and ext_cycle:
                 cycle_closure = get_cycle_closure(conn, ext_cycle)
+            from backend.services.survey_analytics import (
+                build_course_eval_missing_sections_audit,
+                get_course_eval_response_rate_percent,
+            )
+
+            course_eval_rate_percent = get_course_eval_response_rate_percent(conn)
+            course_eval_missing_audit = build_course_eval_missing_sections_audit(
+                conn, semester=sem, department_id=dept_id
+            )
         return render_template(
             "survey_results.html",
             aggregates=aggregates,
@@ -608,6 +618,8 @@ def register_survey_platform_routes(bp) -> None:
             compliance_map_url=(
                 f"/academic_quality/accreditation/map?semester={quote(sem, safe='')}"
             ),
+            course_eval_rate_percent=course_eval_rate_percent,
+            course_eval_missing_audit=course_eval_missing_audit,
         )
 
     @bp.route("/surveys/trends")
@@ -1107,6 +1119,18 @@ def register_survey_platform_routes(bp) -> None:
             sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
             dept_id = _user_department_id(conn)
             return export_course_eval_sections_xlsx(
+                conn, semester=sem, department_id=dept_id
+            )
+
+    @bp.route("/surveys/export/course_eval_missing_sections.xlsx")
+    @login_required
+    @role_required("admin", "admin_main", "head_of_department")
+    def surveys_export_course_eval_missing_sections_xlsx():
+        """تصدير تدقيق شعب الجدول التي لم يُرسَل لها أي تقييم مقرر."""
+        with get_connection() as conn:
+            sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
+            dept_id = _user_department_id(conn)
+            return export_course_eval_missing_sections_xlsx(
                 conn, semester=sem, department_id=dept_id
             )
 

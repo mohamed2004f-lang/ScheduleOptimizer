@@ -12,11 +12,11 @@ from backend.core.survey_platform import (
     LINK_TYPE_LABELS_AR,
     RESPONDENT_ROLE_LABELS,
 )
-from backend.database.database import schedule_pk_column, table_exists
+from backend.database.database import fetch_table_columns, schedule_pk_column, table_exists
 from backend.services.accreditation_metrics import suggest_compliance_status
 from backend.services.multi_surveys import aggregate_template, get_template_by_code, list_templates
 from backend.services.quality_metrics import _avg_eval_score, term_label_from_conn
-from backend.services.utilities import excel_response_from_frames
+from backend.services.utilities import excel_response_from_frames, schedule_semester_matches_current_term
 
 COMPLIANCE_STATUS_LABELS_AR: dict[str, str] = {
     "met": "متحقق",
@@ -33,10 +33,69 @@ SCORE_CLASS_LABELS_AR: dict[str, str] = {
     "pending": "بانتظار التجميع",
 }
 
-# حد التجميع لتقييم المقرر: 50% من المسجّلين مع حد أدنى 3 إجابات (خصوصية)
-COURSE_EVAL_RESPONSE_RATE = 0.50
-COURSE_EVAL_ABSOLUTE_FLOOR = 3
-COURSE_EVAL_FALLBACK_MIN = 5  # عند غياب بيانات التسجيل
+# حد التجميع لتقييم المقرر: نسبة من المسجّلين (افتراضي 50% — قابل للتعديل من لوحة القيادة)
+COURSE_EVAL_RESPONSE_RATE_SETTING_KEY = "course_eval_response_rate_percent"
+COURSE_EVAL_DEFAULT_RATE_PERCENT = 50
+COURSE_EVAL_RATE_MIN_PERCENT = 5
+COURSE_EVAL_RATE_MAX_PERCENT = 100
+# عند غياب بيانات التسجيل لا تُطبَّق النسبة — لا يُعرض التجميع
+COURSE_EVAL_NO_ENROLLMENT_MIN = 2**30
+
+
+def _read_system_setting(cur, key: str, default: str = "") -> str:
+    try:
+        row = cur.execute("SELECT value FROM system_settings WHERE key = ?", (key,)).fetchone()
+        return (row[0] or default) if row else default
+    except Exception:
+        return default
+
+
+def get_course_eval_response_rate_percent(conn=None) -> int:
+    """نسبة الاستجابة المطلوبة لإظهار نتيجة تقييم المقرر (5–100، افتراضي 50)."""
+    def _read(c):
+        raw = _read_system_setting(
+            c.cursor(),
+            COURSE_EVAL_RESPONSE_RATE_SETTING_KEY,
+            str(COURSE_EVAL_DEFAULT_RATE_PERCENT),
+        )
+        try:
+            pct = int(str(raw).strip())
+        except (TypeError, ValueError):
+            pct = COURSE_EVAL_DEFAULT_RATE_PERCENT
+        return max(COURSE_EVAL_RATE_MIN_PERCENT, min(COURSE_EVAL_RATE_MAX_PERCENT, pct))
+
+    if conn is not None:
+        return _read(conn)
+    from backend.services.utilities import get_connection
+
+    with get_connection() as c:
+        return _read(c)
+
+
+def get_course_eval_response_rate(conn=None) -> float:
+    return get_course_eval_response_rate_percent(conn) / 100.0
+
+
+def set_course_eval_response_rate_percent(conn, percent: int) -> int:
+    """يحفظ نسبة تجميع تقييم المقرر ويعيد القيمة المطبّقة."""
+    pct = max(
+        COURSE_EVAL_RATE_MIN_PERCENT,
+        min(COURSE_EVAL_RATE_MAX_PERCENT, int(percent)),
+    )
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO system_settings (key, value) VALUES (?, ?)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """,
+        (COURSE_EVAL_RESPONSE_RATE_SETTING_KEY, str(pct)),
+    )
+    conn.commit()
+    return pct
+
+
+def format_course_eval_aggregation_policy(conn=None) -> str:
+    return f"{get_course_eval_response_rate_percent(conn)}% من المسجّلين"
 
 RECOMMENDATION_BY_CLASS: dict[str, str] = {
     "excellent": "الحفاظ على الممارسة وتوثيقها كمثال يُحتذى به.",
@@ -246,21 +305,21 @@ def _course_eval_dept_filter(conn, department_id: int | None) -> tuple[str, list
     )
 
 
-def course_eval_min_required(enrolled: int, *, response_count: int = 0) -> int:
+def course_eval_min_required(enrolled: int, *, conn=None, response_count: int = 0) -> int:
     """
     الحد الأدنى لإظهار نتيجة تقييم المقرر:
-    - 50% من عدد الطلاب المسجّلين (مقرب للأعلى)
-    - لا يقل عن 3 إجابات أبداً (خصوصية)
-    - عند غياب بيانات التسجيل: 5 أو 3 أيهما أنسب
+    - نسبة قابلة للإعداد من المسجّلين (افتراضي 50%، مقرب للأعلى)
+    - عند غياب بيانات التسجيل: لا يُعرض التجميع
     """
+    del response_count  # متوافق مع استدعاءات قديمة
     if enrolled > 0:
-        rate_based = int(math.ceil(enrolled * COURSE_EVAL_RESPONSE_RATE))
-        return max(COURSE_EVAL_ABSOLUTE_FLOOR, rate_based)
-    return max(COURSE_EVAL_ABSOLUTE_FLOOR, min(COURSE_EVAL_FALLBACK_MIN, response_count or COURSE_EVAL_ABSOLUTE_FLOOR))
+        rate = get_course_eval_response_rate(conn)
+        return max(1, int(math.ceil(enrolled * rate)))
+    return COURSE_EVAL_NO_ENROLLMENT_MIN
 
 
-def course_eval_is_aggregated(response_count: int, enrolled: int) -> bool:
-    min_req = course_eval_min_required(enrolled, response_count=response_count)
+def course_eval_is_aggregated(response_count: int, enrolled: int, *, conn=None) -> bool:
+    min_req = course_eval_min_required(enrolled, conn=conn)
     return int(response_count) >= min_req
 
 
@@ -281,6 +340,7 @@ def _course_registration_count(conn, course_name: str) -> int:
 
 
 def _course_section_count(conn, course_name: str, semester: str) -> int:
+    """عدد صفوف الشعب في الجدول (قد يتضمن محاضرات متعددة لنفس الشعبة المنطقية)."""
     cname = (course_name or "").strip()
     if not cname or not table_exists(conn, "schedule"):
         return 1
@@ -297,6 +357,47 @@ def _course_section_count(conn, course_name: str, semester: str) -> int:
         (cname, sem, sem),
     ).fetchone()
     return max(1, int(_row_val(row, 0) or 0))
+
+
+def _course_teaching_group_count(
+    conn,
+    course_name: str,
+    semester: str,
+    *,
+    instructor_id: int | None = None,
+    department_id: int | None = None,
+) -> int:
+    """
+    عدد مجموعات التدريس في الفصل — من جدول teaching_groups عند توفره، وإلا تقدير قديم.
+    """
+    from backend.services import teaching_groups as tg_svc
+
+    cname = (course_name or "").strip().lower()
+    if not cname:
+        return 1
+    if tg_svc.semester_has_teaching_groups(conn, semester):
+        groups = tg_svc.list_teaching_groups(
+            conn,
+            semester=semester,
+            department_id=department_id,
+            course_name=(course_name or "").strip(),
+        )
+        if instructor_id is not None:
+            groups = [g for g in groups if int(g.get("instructor_id") or 0) == int(instructor_id)]
+        if groups:
+            return max(1, len(groups))
+    legacy_groups: set[tuple[str, int]] = set()
+    for sec in _list_schedule_sections_for_term(conn, semester, department_id=department_id):
+        if (sec.get("course_name") or "").strip().lower() != cname:
+            continue
+        iid = int(sec.get("instructor_id") or 0)
+        if instructor_id is not None and iid != int(instructor_id):
+            continue
+        if iid > 0:
+            legacy_groups.add((cname, iid))
+        else:
+            legacy_groups.add((cname, -int(sec.get("section_id") or 0)))
+    return max(1, len(legacy_groups))
 
 
 def _college_course_eval_enrolled(
@@ -344,11 +445,15 @@ def section_enrolled_count(
     semester: str,
     *,
     section_count: int = 1,
+    teaching_group_id: int | None = None,
 ) -> int:
     """
-    تقدير مسجّلي الشعبة: إجمالي مسجّلي المقرر ÷ عدد شعب المقرر في الفصل.
-    (التسجيل في النظام حسب اسم المقرر وليس section_id)
+    عدد مسجّلي الشعبة/المجموعة.
+    إن وُجد teaching_group_id يُستخدم COUNT الفعلي؛ وإلا تقدير قديم ÷ عدد الشعب.
     """
+    if teaching_group_id is not None and int(teaching_group_id) > 0:
+        from backend.services import teaching_groups as tg_svc
+        return tg_svc.count_registrations_for_teaching_group(conn, int(teaching_group_id))
     total = _course_registration_count(conn, course_name)
     if total <= 0:
         return 0
@@ -375,12 +480,19 @@ def _fetch_course_eval_section_groups(
     semester: str,
     department_id: int | None = None,
 ) -> list[dict[str, Any]]:
-    """مجموعات التقييم لكل شعبة (section_id + course + instructor)."""
+    """وحدات التقييم — مجموعة تدريس أو شعبة (section_id + course + instructor)."""
     if not table_exists(conn, "course_evaluations"):
         return []
     cur = conn.cursor()
     pk = schedule_pk_column(conn)
     dept_sql, dept_params = _course_eval_dept_filter(conn, department_id)
+    ce_cols = {c.lower() for c in fetch_table_columns(conn, "course_evaluations")}
+    has_tg = "teaching_group_id" in ce_cols and table_exists(conn, "teaching_groups")
+    tg_select = ""
+    tg_join = ""
+    if has_tg:
+        tg_select = ", COALESCE(MAX(e.teaching_group_id), 0) AS teaching_group_id, COALESCE(MAX(tg.group_code), '') AS group_code"
+        tg_join = " LEFT JOIN teaching_groups tg ON tg.id = e.teaching_group_id "
     rows = cur.execute(
         f"""
         SELECT e.section_id,
@@ -388,18 +500,22 @@ def _fetch_course_eval_section_groups(
                COALESCE(MAX(e.instructor_id), 0) AS instructor_id,
                COUNT(*) AS response_count,
                COALESCE(MAX(i.name), '') AS instructor_name,
-               COALESCE(MAX(d.name_ar), MAX(d.code), '') AS department_name
+               COALESCE(MAX(COALESCE(td.name_ar, td.code, d.name_ar, d.code)), '') AS department_name
+               {tg_select}
         FROM course_evaluations e
         LEFT JOIN schedule sch ON sch.{pk} = e.section_id
         LEFT JOIN departments d ON d.id = sch.department_id
         LEFT JOIN instructors i ON i.id = e.instructor_id
+        {tg_join}
+        LEFT JOIN departments td ON td.id = tg.department_id
         WHERE e.semester = ? {dept_sql}
-        GROUP BY e.section_id, e.course_name, e.instructor_id
+        GROUP BY COALESCE(NULLIF(e.teaching_group_id, 0), e.section_id), e.course_name, e.instructor_id
         ORDER BY course_name, instructor_name, e.section_id
         """,
         tuple([semester] + dept_params),
     ).fetchall()
     out: list[dict[str, Any]] = []
+    seen_tg: set[int] = set()
     for r in rows:
         if hasattr(r, "keys"):
             d = dict(r)
@@ -412,20 +528,347 @@ def _fetch_course_eval_section_groups(
                 "instructor_name": r[4],
                 "department_name": r[5],
             }
+            if has_tg and len(r) > 6:
+                d["teaching_group_id"] = r[6]
+                d["group_code"] = r[7]
         sid = int(d.get("section_id") or 0)
-        if not sid:
+        tgid = int(d.get("teaching_group_id") or 0)
+        if tgid > 0:
+            if tgid in seen_tg:
+                continue
+            seen_tg.add(tgid)
+            if not sid:
+                from backend.services import teaching_groups as tg_svc
+
+                sid = tg_svc.primary_section_id_for_group(conn, tgid)
+        if not sid and not tgid:
             continue
+        group_label = ""
+        if tgid > 0:
+            from backend.services import teaching_groups as tg_svc
+
+            group_label = tg_svc.group_code_label(d.get("group_code"))
         out.append(
             {
                 "section_id": sid,
+                "teaching_group_id": tgid or None,
                 "course_name": (d.get("course_name") or "").strip(),
                 "instructor_id": int(d.get("instructor_id") or 0),
                 "instructor_name": (d.get("instructor_name") or "").strip() or "—",
                 "department_name": (d.get("department_name") or "").strip() or "—",
+                "group_code_label": group_label or None,
                 "response_count": int(d.get("response_count") or 0),
             }
         )
     return out
+
+
+def _evaluated_section_ids(
+    conn,
+    semester: str,
+    *,
+    department_id: int | None = None,
+) -> set[int]:
+    """معرّفات الشعب التي وُجد لها تقييم واحد على الأقل في الفصل."""
+    if not table_exists(conn, "course_evaluations"):
+        return set()
+    cur = conn.cursor()
+    pk = schedule_pk_column(conn)
+    dept_sql = ""
+    params: list[Any] = [semester]
+    if department_id is not None:
+        dept_sql = f"""
+            AND EXISTS (
+                SELECT 1 FROM schedule sch
+                WHERE sch.{pk} = e.section_id AND sch.department_id = ?
+            )
+        """
+        params.append(int(department_id))
+    rows = cur.execute(
+        f"""
+        SELECT DISTINCT e.section_id
+        FROM course_evaluations e
+        WHERE e.semester = ? {dept_sql}
+        """,
+        tuple(params),
+    ).fetchall()
+    out: set[int] = set()
+    for row in rows:
+        sid = int(_row_val(row, 0, "section_id") or 0)
+        if sid:
+            out.add(sid)
+    return out
+
+
+def _list_schedule_sections_for_term(
+    conn,
+    semester: str,
+    *,
+    department_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """شعب الجدول المرتبطة بالفصل الدراسي (مع فلتر القسم اختيارياً)."""
+    if not table_exists(conn, "schedule"):
+        return []
+    from backend.services.course_evaluations import (
+        _instructor_id_by_name_map,
+        _resolve_schedule_instructor_id,
+        _schedule_section_id_expr,
+    )
+
+    sem = (semester or "").strip()
+    pk = schedule_pk_column(conn)
+    sid_expr = _schedule_section_id_expr(conn)
+    cur = conn.cursor()
+    name_map = _instructor_id_by_name_map(cur)
+    dept_sql = ""
+    dept_params: list[Any] = []
+    if department_id is not None:
+        dept_sql = " AND sch.department_id = ? "
+        dept_params = [int(department_id)]
+
+    rows = cur.execute(
+        f"""
+        SELECT {sid_expr} AS section_id,
+               COALESCE(MAX(sch.course_name), '') AS course_name,
+               COALESCE(MAX(sch.instructor_id), 0) AS instructor_id,
+               COALESCE(MAX(sch.instructor), '') AS instructor_name,
+               COALESCE(MAX(sch.semester), '') AS schedule_semester,
+               COALESCE(MAX(d.name_ar), MAX(d.code), '') AS department_name
+        FROM schedule sch
+        LEFT JOIN departments d ON d.id = sch.department_id
+        WHERE 1=1 {dept_sql}
+        GROUP BY {sid_expr}
+        ORDER BY course_name, section_id
+        """,
+        tuple(dept_params),
+    ).fetchall()
+
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if hasattr(row, "keys"):
+            d = dict(row)
+        else:
+            d = {
+                "section_id": row[0],
+                "course_name": row[1],
+                "instructor_id": row[2],
+                "instructor_name": row[3],
+                "schedule_semester": row[4],
+                "department_name": row[5],
+            }
+        sid = int(d.get("section_id") or 0)
+        if not sid:
+            continue
+        sch_sem = (d.get("schedule_semester") or "").strip()
+        if sch_sem and sem and not schedule_semester_matches_current_term(sch_sem, sem):
+            continue
+        iid = _resolve_schedule_instructor_id(
+            int(d.get("instructor_id") or 0),
+            str(d.get("instructor_name") or ""),
+            name_map,
+        )
+        cname = (d.get("course_name") or "").strip()
+        if not cname:
+            continue
+        out.append(
+            {
+                "section_id": sid,
+                "course_name": cname,
+                "instructor_id": iid,
+                "instructor_name": (d.get("instructor_name") or "").strip() or "—",
+                "schedule_semester": sch_sem,
+                "department_name": (d.get("department_name") or "").strip() or "—",
+            }
+        )
+    return out
+
+
+def _course_eval_gap_reasons(
+    *,
+    has_instructor: bool,
+    registration_count: int,
+    schedule_semester: str,
+    term: str,
+) -> list[str]:
+    reasons = ["لم يُرسَل أي تقييم"]
+    if not has_instructor:
+        reasons.append("بلا أستاذ معيّن في الجدول")
+    if registration_count <= 0:
+        reasons.append("بلا تسجيلات طلاب للمقرر")
+    if term and not (schedule_semester or "").strip():
+        reasons.append("حقل فصل الشعبة فارغ في الجدول")
+    return reasons
+
+
+def build_course_eval_missing_sections_audit(
+    conn,
+    *,
+    semester: str | None = None,
+    department_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    تدقيق شعب الجدول للفصل التي لم يُرسَل لها أي تقييم مقرر.
+    يُستخدم في صفحة النتائج لتبيين الفجوة بين الجدول والاستبيان.
+    """
+    sem = (semester or "").strip() or term_label_from_conn(conn)
+    from backend.services import teaching_groups as tg_svc
+
+    if tg_svc.semester_has_teaching_groups(conn, sem):
+        tg_audit = tg_svc.teaching_groups_without_evaluation_audit(
+            conn, semester=sem, department_id=department_id
+        )
+        rows = []
+        for r in tg_audit.get("rows") or []:
+            rows.append(
+                {
+                    "section_id": tg_svc.primary_section_id_for_group(
+                        conn, int(r.get("teaching_group_id") or 0)
+                    ),
+                    "teaching_group_id": r.get("teaching_group_id"),
+                    "course_name": r.get("course_name"),
+                    "instructor_id": r.get("instructor_id"),
+                    "instructor_name": r.get("instructor_name"),
+                    "department_name": r.get("department_name"),
+                    "group_code_label": r.get("group_code_label"),
+                    "display_label": r.get("display_label"),
+                    "schedule_semester": sem,
+                    "course_registration_count": r.get("enrolled_count"),
+                    "enrolled_count": r.get("enrolled_count"),
+                    "eligible_for_student": r.get("eligible_for_student"),
+                    "gap_reasons": r.get("gap_reasons"),
+                    "gap_reasons_ar": r.get("gap_reasons_ar"),
+                }
+            )
+        return {
+            "semester": sem,
+            "department_label": _department_label(conn, department_id),
+            "total_schedule_sections": tg_audit.get("total_teaching_groups"),
+            "evaluated_sections": tg_audit.get("evaluated_groups"),
+            "missing_sections": tg_audit.get("missing_groups"),
+            "rows": rows,
+            "audit_mode": "teaching_groups",
+        }
+    schedule_sections = _list_schedule_sections_for_term(conn, sem, department_id=department_id)
+    evaluated_ids = _evaluated_section_ids(conn, sem, department_id=department_id)
+    evaluated_course_instructor: set[tuple[str, int]] = set()
+    if table_exists(conn, "course_evaluations"):
+        cur = conn.cursor()
+        dept_sql = ""
+        params: list[Any] = [sem]
+        if department_id is not None:
+            pk = schedule_pk_column(conn)
+            dept_sql = f"""
+                AND EXISTS (
+                    SELECT 1 FROM schedule sch
+                    WHERE sch.{pk} = e.section_id AND sch.department_id = ?
+                )
+            """
+            params.append(int(department_id))
+        for row in cur.execute(
+            f"""
+            SELECT DISTINCT lower(trim(e.course_name)), e.instructor_id
+            FROM course_evaluations e
+            WHERE e.semester = ? {dept_sql}
+            """,
+            tuple(params),
+        ).fetchall():
+            ckey = (_row_val(row, 0) or "").strip().lower()
+            eiid = int(_row_val(row, 1, "instructor_id") or 0)
+            if ckey and eiid > 0:
+                evaluated_course_instructor.add((ckey, eiid))
+    missing_rows: list[dict[str, Any]] = []
+
+    for sec in schedule_sections:
+        sid = int(sec["section_id"])
+        if sid in evaluated_ids:
+            continue
+        cname = sec["course_name"]
+        reg_count = _course_registration_count(conn, cname)
+        iid = int(sec.get("instructor_id") or 0)
+        ckey = cname.strip().lower()
+        if iid > 0 and (ckey, iid) in evaluated_course_instructor:
+            continue
+        n_groups = _course_teaching_group_count(conn, cname, sem, instructor_id=iid or None)
+        enrolled = section_enrolled_count(conn, cname, sem, section_count=n_groups)
+        has_instructor = iid > 0
+        gap_reasons = _course_eval_gap_reasons(
+            has_instructor=has_instructor,
+            registration_count=reg_count,
+            schedule_semester=str(sec.get("schedule_semester") or ""),
+            term=sem,
+        )
+        eligible = has_instructor and reg_count > 0
+        missing_rows.append(
+            {
+                **sec,
+                "course_registration_count": reg_count,
+                "enrolled_count": enrolled,
+                "eligible_for_student": eligible,
+                "gap_reasons": gap_reasons,
+                "gap_reasons_ar": "؛ ".join(gap_reasons),
+            }
+        )
+
+    return {
+        "semester": sem,
+        "department_label": _department_label(conn, department_id),
+        "total_schedule_sections": len(schedule_sections),
+        "evaluated_sections": len(evaluated_ids & {int(s["section_id"]) for s in schedule_sections}),
+        "missing_sections": len(missing_rows),
+        "rows": missing_rows,
+    }
+
+
+def course_eval_missing_audit_excel_frames(audit: dict[str, Any]) -> list[tuple[str, pd.DataFrame]]:
+    """أوراق Excel لتقرير شعب بلا تقييم."""
+    rows = [
+        {
+            "المقرر": r.get("course_name"),
+            "الشعبة": r.get("section_id"),
+            "الأستاذ": r.get("instructor_name"),
+            "القسم": r.get("department_name"),
+            "فصل_الجدول": r.get("schedule_semester") or "—",
+            "مسجّلون_تقدير": r.get("enrolled_count"),
+            "إجمالي_تسجيل_المقرر": r.get("course_registration_count"),
+            "يظهر_للطالب": "نعم" if r.get("eligible_for_student") else "لا",
+            "أسباب_الفجوة": r.get("gap_reasons_ar"),
+        }
+        for r in audit.get("rows") or []
+    ]
+    summary = [
+        {"البند": "الفصل", "القيمة": audit.get("semester")},
+        {"البند": "النطاق", "القيمة": audit.get("department_label")},
+        {"البند": "شعب الجدول للفصل", "القيمة": audit.get("total_schedule_sections")},
+        {"البند": "شعب لديها تقييم", "القيمة": audit.get("evaluated_sections")},
+        {"البند": "شعب بلا أي تقييم", "القيمة": audit.get("missing_sections")},
+        {
+            "البند": "ملاحظة",
+            "القيمة": (
+                "الشعب المدرجة بلا تقييم لا تظهر في جدول النتائج المجمّعة "
+                "حتى يُرسَل تقييم واحد على الأقل."
+            ),
+        },
+    ]
+    return [
+        ("شعب_بلا_تقييم", pd.DataFrame(rows) if rows else pd.DataFrame(columns=["المقرر"])),
+        ("ملخص", pd.DataFrame(summary)),
+    ]
+
+
+def export_course_eval_missing_sections_xlsx(
+    conn,
+    *,
+    semester: str | None = None,
+    department_id: int | None = None,
+):
+    audit = build_course_eval_missing_sections_audit(
+        conn, semester=semester, department_id=department_id
+    )
+    sem_slug = (audit.get("semester") or "report").replace(" ", "_")[:40]
+    return excel_response_from_frames(
+        course_eval_missing_audit_excel_frames(audit),
+        filename_prefix=f"course_eval_missing_{sem_slug}",
+    )
 
 
 def _aggregate_course_eval_questions(
@@ -518,7 +961,8 @@ def _finalize_course_eval_unit_report(
             "template_code": "student_course",
             "title_ar": title,
             "min_aggregate": report.get("min_aggregate")
-            or course_eval_min_required(enrolled, response_count=resp_n),
+            or course_eval_min_required(enrolled, conn=conn),
+            "course_eval_policy_ar": format_course_eval_aggregation_policy(conn),
             "questions": questions,
             "weakest_item": weakest,
             "strongest_item": strongest,
@@ -545,12 +989,18 @@ def build_course_eval_section_report(
     department_id: int | None = None,
     course_name: str | None = None,
     instructor_id: int | None = None,
+    teaching_group_id: int | None = None,
 ) -> dict[str, Any] | None:
-    """تقرير تجميعي لتقييم شعبة واحدة."""
+    """تقرير تجميعي لتقييم شعبة أو مجموعة تدريس."""
     sem = (semester or "").strip() or term_label_from_conn(conn)
     sid = int(section_id)
+    tgid = int(teaching_group_id or 0)
     groups = _fetch_course_eval_section_groups(conn, sem, department_id)
-    group = next((g for g in groups if int(g["section_id"]) == sid), None)
+    group = None
+    if tgid > 0:
+        group = next((g for g in groups if int(g.get("teaching_group_id") or 0) == tgid), None)
+    if not group:
+        group = next((g for g in groups if int(g["section_id"]) == sid), None)
     if not group and course_name and instructor_id:
         group = {
             "section_id": sid,
@@ -564,14 +1014,28 @@ def build_course_eval_section_report(
         return None
 
     count = int(group["response_count"])
-    n_course_sections = _course_section_count(conn, group["course_name"], sem)
-    enrolled = section_enrolled_count(
-        conn, group["course_name"], sem, section_count=n_course_sections
+    iid = int(group["instructor_id"])
+    tgid = int(group.get("teaching_group_id") or 0)
+    reg_total = _course_registration_count(conn, group["course_name"])
+    n_groups = _course_teaching_group_count(
+        conn, group["course_name"], sem, instructor_id=iid
     )
-    min_req = course_eval_min_required(enrolled, response_count=count)
-    aggregated = course_eval_is_aggregated(count, enrolled)
-    where_sql = " AND e.section_id = ? AND e.course_name = ? AND e.instructor_id = ?"
-    params = [sid, group["course_name"], int(group["instructor_id"])]
+    enrolled = section_enrolled_count(
+        conn,
+        group["course_name"],
+        sem,
+        section_count=n_groups,
+        teaching_group_id=tgid or None,
+    )
+    min_req = course_eval_min_required(enrolled, conn=conn)
+    aggregated = course_eval_is_aggregated(count, enrolled, conn=conn)
+    ce_cols = {c.lower() for c in fetch_table_columns(conn, "course_evaluations")}
+    if tgid > 0 and "teaching_group_id" in ce_cols:
+        where_sql = " AND e.teaching_group_id = ? AND e.course_name = ? AND e.instructor_id = ?"
+        params = [tgid, group["course_name"], iid]
+    else:
+        where_sql = " AND e.section_id = ? AND e.course_name = ? AND e.instructor_id = ?"
+        params = [sid, group["course_name"], iid]
 
     questions: list[dict] = []
     overall = None
@@ -583,12 +1047,16 @@ def build_course_eval_section_report(
 
     report = {
         "section_id": sid,
+        "teaching_group_id": tgid or None,
+        "group_code_label": group.get("group_code_label"),
         "course_name": group["course_name"],
         "instructor_id": group["instructor_id"],
         "instructor_name": group["instructor_name"],
         "department_name": group["department_name"],
         "semester": sem,
         "enrolled_count": enrolled,
+        "course_registration_count": reg_total,
+        "teaching_group_count": n_groups,
         "min_aggregate": min_req,
         "response_rate_percent": round((count / enrolled) * 100.0, 1) if enrolled > 0 else None,
         "response_count": count,
@@ -634,8 +1102,8 @@ def build_course_eval_by_course_report(
 
     count = sum(int(g["response_count"]) for g in groups)
     enrolled = _course_registration_count(conn, cname)
-    min_req = course_eval_min_required(enrolled, response_count=count)
-    aggregated = course_eval_is_aggregated(count, enrolled)
+    min_req = course_eval_min_required(enrolled, conn=conn)
+    aggregated = course_eval_is_aggregated(count, enrolled, conn=conn)
     dept_sql, dept_params = _course_eval_dept_filter(conn, department_id)
     where_sql = (
         " AND lower(trim(e.course_name)) = lower(trim(?)) AND e.instructor_id = ?"
@@ -782,8 +1250,8 @@ def build_course_eval_report(
     ).fetchone()
     count = int((count_row[0] if count_row else 0) or 0)
     enrolled = _college_course_eval_enrolled(conn, sem, department_id)
-    min_n = course_eval_min_required(enrolled, response_count=count)
-    aggregated = course_eval_is_aggregated(count, enrolled)
+    min_n = course_eval_min_required(enrolled, conn=conn)
+    aggregated = course_eval_is_aggregated(count, enrolled, conn=conn)
     overall = _avg_eval_score(conn, cur, sem, department_id) if aggregated else None
 
     questions: list[dict] = []
@@ -834,6 +1302,7 @@ def build_course_eval_report(
             conn, "student_course", semester=sem, department_id=department_id
         ),
         "respondent_label": RESPONDENT_ROLE_LABELS.get("student", "الطالب"),
+        "course_eval_policy_ar": format_course_eval_aggregation_policy(conn),
     }
 
 
@@ -893,6 +1362,7 @@ def build_combined_survey_report(
         "total_survey_count": len(reports) + (1 if include_course_eval else 0),
         "top_surveys": top3,
         "bottom_surveys": bottom3,
+        "course_eval_policy_ar": format_course_eval_aggregation_policy(conn),
     }
 
 
@@ -1044,10 +1514,8 @@ def _metadata_rows(combined: dict) -> list[dict]:
         {"البند": "مقياس التقييم", "القيمة": "Likert 1–5 → نسبة = (متوسط/5)×100"},
         {
             "البند": "حد تجميع تقييم المقرر",
-            "القيمة": (
-                f"{int(COURSE_EVAL_RESPONSE_RATE * 100)}% من المسجّلين "
-                f"(حد أدنى {COURSE_EVAL_ABSOLUTE_FLOOR} إجابات)"
-            ),
+            "القيمة": combined.get("course_eval_policy_ar")
+            or format_course_eval_aggregation_policy(),
         },
     ]
 
@@ -1078,6 +1546,7 @@ def _course_eval_section_summary_rows(sections: list[dict]) -> list[dict]:
                 "الأستاذ": r.get("instructor_name"),
                 "القسم": r.get("department_name"),
                 "مسجّلون_تقدير": r.get("enrolled_count"),
+                "إجمالي_تسجيل_المقرر": r.get("course_registration_count"),
                 "عدد_التقييمات": r.get("response_count"),
                 "نسبة_المشاركة_%": r.get("response_rate_percent"),
                 "الحد_الأدنى": r.get("min_aggregate"),
@@ -1187,6 +1656,7 @@ def course_eval_sections_excel_frames(
     by_course: list[dict] | None = None,
     semester: str = "",
     department_label: str = "",
+    course_eval_policy_ar: str = "",
 ) -> list[tuple[str, pd.DataFrame]]:
     """أوراق Excel لتصدير تقييم المقررات حسب الشعبة."""
     frames: list[tuple[str, pd.DataFrame]] = [
@@ -1210,8 +1680,8 @@ def course_eval_sections_excel_frames(
         {
             "البند": "سياسة الخصوصية",
             "القيمة": (
-                f"تجميع الشعبة عند {int(COURSE_EVAL_RESPONSE_RATE * 100)}% من المسجّلين "
-                f"(حد أدنى {COURSE_EVAL_ABSOLUTE_FLOOR} إجابات) — لا أسماء طلاب."
+                f"تجميع الشعبة عند {course_eval_policy_ar or format_course_eval_aggregation_policy()} "
+                "— لا أسماء طلاب."
             ),
         },
     ]
@@ -1262,10 +1732,7 @@ def single_survey_excel_frames(report: dict[str, Any]) -> list[tuple[str, pd.Dat
         {"البند": "الحد الأدنى للتجميع", "القيمة": report.get("min_aggregate")},
         {
             "البند": "قاعدة التجميع",
-            "القيمة": (
-                f"{int(COURSE_EVAL_RESPONSE_RATE * 100)}% من المسجّلين "
-                f"مع حد أدنى {COURSE_EVAL_ABSOLUTE_FLOOR} إجابات"
-            ),
+            "القيمة": report.get("course_eval_policy_ar") or format_course_eval_aggregation_policy(),
         },
         {"البند": "الخصوصية", "القيمة": "لا تُعرض إجابات فردية في التصدير"},
     ]
@@ -1347,6 +1814,7 @@ def export_course_eval_sections_xlsx(
             by_course=by_course,
             semester=sem,
             department_label=_department_label(conn, department_id),
+            course_eval_policy_ar=format_course_eval_aggregation_policy(conn),
         ),
         filename_prefix=f"course_eval_sections_{sem_slug}",
     )
@@ -1470,9 +1938,9 @@ def generate_executive_narrative_ar(combined: dict[str, Any]) -> list[str]:
     ce_secs = combined.get("course_eval_sections") or []
     ce_agg = [s for s in ce_secs if s.get("aggregated")]
     if ce_agg:
+        policy = combined.get("course_eval_policy_ar") or format_course_eval_aggregation_policy()
         paragraphs.append(
-            f"تقييم المقررات: {len(ce_agg)} شعبة بلغت عتبة التجميع "
-            f"({int(COURSE_EVAL_RESPONSE_RATE * 100)}% من المسجّلين، حد أدنى {COURSE_EVAL_ABSOLUTE_FLOOR} إجابات)."
+            f"تقييم المقررات: {len(ce_agg)} شعبة بلغت عتبة التجميع ({policy})."
         )
     return paragraphs
 

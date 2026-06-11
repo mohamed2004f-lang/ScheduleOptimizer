@@ -5,13 +5,12 @@ import os
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Optional
 
 from flask import Blueprint, request, jsonify, session
 
 from backend.core.auth import role_required, hash_password
-from backend.database.database import DB_FILE, is_postgresql
+from backend.database.database import is_postgresql
 from backend.repositories import instructors_repo, students_repo, users_repo
 from backend.core.department_scope_policy import (
     assert_actor_may_manage_user_links,
@@ -33,10 +32,7 @@ def _clean_username(s: str) -> str:
     return _ZERO_WIDTH.sub("", (s or "").strip())
 
 
-_STORAGE_BRIEF_PG_AR = (
-    "البيانات الحية على PostgreSQL فقط؛ تجاهل ملف mechanical.db المحلي إن وُجد "
-    "(لا يعكس بيانات الخادم)."
-)
+_STORAGE_BRIEF_PG_AR = "البيانات الحية على PostgreSQL فقط."
 
 
 def _admin_storage_meta(*, verbose_storage_hint: bool = False) -> dict:
@@ -46,11 +42,6 @@ def _admin_storage_meta(*, verbose_storage_hint: bool = False) -> dict:
     عند ``True`` (تعريف صريح عبر ``SHOW_USER_LIST_STORAGE_DIAGNOSTICS=1`` ودور admin_main): مسارات وتفاصيل للتشخيص.
     """
     if is_postgresql():
-        sqlite_path = str(Path(DB_FILE).resolve())
-        note_long = (
-            "التطبيق يعمل على PostgreSQL: قائمة المستخدمين والحفظ من الخادم أعلاه. "
-            "ملف mechanical.db في المشروع (إن وُجد) قديم/احتياطي ولا يعكس البيانات الحية طالما DATABASE_URL مفعّل."
-        )
         try:
             from config import DATABASE_URL
             from sqlalchemy.engine.url import make_url
@@ -69,10 +60,11 @@ def _admin_storage_meta(*, verbose_storage_hint: bool = False) -> dict:
         }
         if verbose_storage_hint:
             base["storage_display"] = storage_display
-            base["sqlite_legacy_path"] = sqlite_path
-            base["note_ar"] = note_long
+            base["note_ar"] = (
+                "التطبيق يعمل على PostgreSQL: قائمة المستخدمين والحفظ من الخادم أعلاه."
+            )
         return base
-    return {"backend": "sqlite", "storage_display": str(Path(DB_FILE).resolve())}
+    return {"backend": "unknown", "storage_display": ""}
 
 
 def _user_dict_from_row(row) -> Optional[dict]:

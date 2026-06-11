@@ -102,8 +102,8 @@ def _allowed_courses_for_instructor_current_term(conn) -> list:
 
 def _allowed_sections_for_instructor_current_term(conn) -> list[dict]:
     """
-    الشعب المسندة للأستاذ في الفصل الحالي مع section_id/course_name.
-    يطابق منطق جدول الأستاذ الأسبوعي (تطبيع الاسم + instructor_id) ثم يحصر الفصل الحالي.
+    الشعب/مجموعات التدريس المسندة للأستاذ في الفصل الحالي.
+    يفضّل teaching_groups عند توفرها؛ وإلا دمج صفوف الجدول القديم.
     """
     instructor_id = session.get("instructor_id")
     if not instructor_id:
@@ -117,25 +117,57 @@ def _allowed_sections_for_instructor_current_term(conn) -> list[dict]:
     except (TypeError, ValueError):
         return []
 
+    from backend.services import teaching_groups as tg_svc
+
+    if tg_svc.semester_has_teaching_groups(conn, semester_label):
+        tg_rows = tg_svc.list_instructor_assigned_groups(conn, iid, semester_label)
+        if tg_rows:
+            out = [
+                {
+                    "section_id": int(item.get("section_id") or 0),
+                    "teaching_group_id": int(item.get("teaching_group_id") or 0) or None,
+                    "course_name": item.get("course_name"),
+                    "display_label": item.get("display_label") or item.get("course_name"),
+                    "group_code_label": item.get("group_code_label"),
+                }
+                for item in tg_rows
+            ]
+            out.sort(key=lambda x: (x.get("course_name") or "", x.get("group_code_label") or ""))
+            return out
+
     from backend.core.faculty_axes import normalize_instructor_name
-    from backend.services.schedule import _assigned_section_rows
+    from backend.services.schedule import _assigned_section_rows, _group_assigned_tuples_by_course
 
     cur = conn.cursor()
     canon = normalize_instructor_name(instructor_name)
     tuples = _assigned_section_rows(cur, iid, canon)
-    out = []
-    for t in tuples:
-        sid, cn, _day, _tim, _room, _inst_txt, sem = t
-        if not schedule_semester_matches_current_term(sem, semester_label):
-            continue
-        out.append({"section_id": int(sid), "course_name": (cn or "")})
+    term_tuples = [
+        t for t in tuples if schedule_semester_matches_current_term(t[6], semester_label)
+    ]
+    out = [
+        {"section_id": int(item["section_id"]), "course_name": item["course_name"]}
+        for item in _group_assigned_tuples_by_course(term_tuples)
+    ]
     out.sort(key=lambda x: (x["course_name"], x["section_id"]))
     return out
 
 
-def _resolve_assigned_section_for_course(conn, course_name: str, section_id: int | None = None):
+def _resolve_assigned_section_for_course(
+    conn,
+    course_name: str,
+    section_id: int | None = None,
+    teaching_group_id: int | None = None,
+):
     sections = _allowed_sections_for_instructor_current_term(conn)
     if not sections:
+        return None
+    tgid = int(teaching_group_id or 0)
+    if tgid > 0:
+        for s in sections:
+            if int(s.get("teaching_group_id") or 0) == tgid:
+                if str(s["course_name"] or "").strip() != str(course_name or "").strip():
+                    return None
+                return s
         return None
     if section_id is not None:
         for s in sections:
@@ -529,27 +561,44 @@ def draft_roster_for_course():
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     course_name = (request.args.get("course_name") or "").strip()
     section_id = request.args.get("section_id", type=int)
+    teaching_group_id = request.args.get("teaching_group_id", type=int)
     if not course_name:
         return jsonify({"status": "error", "message": "course_name مطلوب"}), 400
     with get_connection() as conn:
         _sync_schedule_pk_col(conn)
-        section_row = _resolve_assigned_section_for_course(conn, course_name, section_id)
+        section_row = _resolve_assigned_section_for_course(
+            conn, course_name, section_id, teaching_group_id=teaching_group_id
+        )
         if not section_row:
             return jsonify({"status": "error", "message": "المقرر غير مسند لك في الفصل الحالي"}), 403
         section_id = int(section_row["section_id"])
+        tgid = int(section_row.get("teaching_group_id") or teaching_group_id or 0)
         cur = conn.cursor()
-        rows = cur.execute(
-            f"""
-            SELECT DISTINCT r.student_id, COALESCE(s.student_name, '') AS student_name
-            FROM registrations r
-            JOIN schedule sc ON sc.course_name = r.course_name
-            LEFT JOIN students s ON s.student_id = r.student_id
-            WHERE r.course_name = ?
-              AND sc.{SCHEDULE_PK_COL} = ?
-            ORDER BY student_name, r.student_id
-            """,
-            (course_name, section_id),
-        ).fetchall()
+        reg_cols = {c.lower() for c in fetch_table_columns(conn, "registrations")}
+        if tgid > 0 and "teaching_group_id" in reg_cols:
+            rows = cur.execute(
+                """
+                SELECT DISTINCT r.student_id, COALESCE(s.student_name, '') AS student_name
+                FROM registrations r
+                LEFT JOIN students s ON s.student_id = r.student_id
+                WHERE r.teaching_group_id = ?
+                ORDER BY student_name, r.student_id
+                """,
+                (tgid,),
+            ).fetchall()
+        else:
+            rows = cur.execute(
+                f"""
+                SELECT DISTINCT r.student_id, COALESCE(s.student_name, '') AS student_name
+                FROM registrations r
+                JOIN schedule sc ON sc.course_name = r.course_name
+                LEFT JOIN students s ON s.student_id = r.student_id
+                WHERE r.course_name = ?
+                  AND sc.{SCHEDULE_PK_COL} = ?
+                ORDER BY student_name, r.student_id
+                """,
+                (course_name, section_id),
+            ).fetchall()
     roster = [{"student_id": r[0], "student_name": r[1] or ""} for r in rows] if rows else []
     return jsonify({"status": "ok", "roster": roster}), 200
 
@@ -639,10 +688,20 @@ def create_grade_draft():
         semester_label = _current_semester_label(conn)
         if _is_faculty_cycle_locked(conn, semester_label):
             return jsonify({"status": "error", "message": "تم إغلاق دورة أعضاء هيئة التدريس لهذا الفصل"}), 423
-        section_row = _resolve_assigned_section_for_course(conn, course_name, section_id)
+        tgid_raw = data.get("teaching_group_id")
+        teaching_group_id = None
+        if tgid_raw not in (None, ""):
+            try:
+                teaching_group_id = int(tgid_raw)
+            except (TypeError, ValueError):
+                return jsonify({"status": "error", "message": "teaching_group_id غير صالح"}), 400
+        section_row = _resolve_assigned_section_for_course(
+            conn, course_name, section_id, teaching_group_id=teaching_group_id
+        )
         if not section_row:
             return jsonify({"status": "error", "message": "المقرر غير مسند لك في الفصل الحالي"}), 403
         section_id = int(section_row["section_id"])
+        teaching_group_id = int(section_row.get("teaching_group_id") or teaching_group_id or 0) or None
         if not semester_label:
             return jsonify({"status": "error", "message": "لا يمكن تحديد الفصل الحالي"}), 400
 
@@ -700,30 +759,65 @@ def create_grade_draft():
 
         grading_mode = _course_grading_mode(conn, course_name)
         now = _now_iso_z()
+        gd_cols = {c.lower() for c in fetch_table_columns(conn, "grade_drafts")}
+        if teaching_group_id and "teaching_group_id" in gd_cols:
+            insert_cols = (
+                "semester, course_name, section_id, teaching_group_id, instructor_id, "
+                "grading_mode, status, created_at, updated_at"
+            )
+            insert_vals = "?,?,?,?,?,?, 'Draft', ?, ?"
+            insert_params = (
+                semester_label,
+                course_name,
+                section_id,
+                int(teaching_group_id),
+                int(instructor_id),
+                grading_mode,
+                now,
+                now,
+            )
+        else:
+            insert_cols = (
+                "semester, course_name, section_id, instructor_id, grading_mode, status, created_at, updated_at"
+            )
+            insert_vals = "?,?,?,?,?, 'Draft', ?, ?"
+            insert_params = (
+                semester_label,
+                course_name,
+                section_id,
+                int(instructor_id),
+                grading_mode,
+                now,
+                now,
+            )
         if is_postgresql():
             row_new = cur.execute(
-                """
-                INSERT INTO grade_drafts
-                (semester, course_name, section_id, instructor_id, grading_mode, status, created_at, updated_at)
-                VALUES (?,?,?,?,?, 'Draft', ?, ?)
+                f"""
+                INSERT INTO grade_drafts ({insert_cols})
+                VALUES ({insert_vals})
                 RETURNING id
                 """,
-                (semester_label, course_name, section_id, int(instructor_id), grading_mode, now, now),
+                insert_params,
             ).fetchone()
             draft_id = int(row_new[0]) if row_new else 0
         else:
             cur.execute(
-                """
-                INSERT INTO grade_drafts
-                (semester, course_name, section_id, instructor_id, grading_mode, status, created_at, updated_at)
-                VALUES (?,?,?,?,?, 'Draft', ?, ?)
+                f"""
+                INSERT INTO grade_drafts ({insert_cols})
+                VALUES ({insert_vals})
                 """,
-                (semester_label, course_name, section_id, int(instructor_id), grading_mode, now, now),
+                insert_params,
             )
             draft_id = int(cur.lastrowid or 0)
         conn.commit()
 
-    return jsonify({"status": "ok", "draft_id": int(draft_id), "grading_mode": grading_mode, "section_id": section_id}), 200
+    return jsonify({
+        "status": "ok",
+        "draft_id": int(draft_id),
+        "grading_mode": grading_mode,
+        "section_id": section_id,
+        "teaching_group_id": teaching_group_id,
+    }), 200
 
 
 @grades_bp.route("/drafts/<int:draft_id>", methods=["GET"])

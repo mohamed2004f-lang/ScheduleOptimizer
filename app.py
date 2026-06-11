@@ -637,6 +637,12 @@ def schedule_form():
     return render_template("schedule_form.html")
 
 
+@app.route("/schedule_teaching_groups")
+@role_required("admin", "admin_main", "head_of_department")
+def schedule_teaching_groups_page():
+    return render_template("teaching_groups_setup.html")
+
+
 @app.route("/exams/midterms")
 @login_required
 def exams_midterms():

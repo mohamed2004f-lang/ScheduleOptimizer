@@ -203,6 +203,7 @@ CREATE TABLE IF NOT EXISTS grade_drafts (
     semester TEXT NOT NULL,
     course_name TEXT NOT NULL,
     section_id INTEGER,
+    teaching_group_id INTEGER,
     instructor_id INTEGER NOT NULL,
     grading_mode TEXT NOT NULL DEFAULT 'partial_final',
     status TEXT NOT NULL DEFAULT 'Draft',
@@ -275,6 +276,7 @@ CREATE TABLE IF NOT EXISTS registrations (
     student_id TEXT NOT NULL,
     course_name TEXT NOT NULL,
     program_course_id INTEGER,
+    teaching_group_id INTEGER,
     registered_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (student_id, course_name)
 );
@@ -291,7 +293,25 @@ CREATE TABLE IF NOT EXISTS schedule (
     instructor TEXT DEFAULT '',
     instructor_id INTEGER,
     semester TEXT DEFAULT '',
+    teaching_group_id INTEGER,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS teaching_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    course_name TEXT NOT NULL,
+    semester TEXT NOT NULL,
+    department_id INTEGER NOT NULL,
+    group_code TEXT NOT NULL DEFAULT '—',
+    group_kind TEXT NOT NULL DEFAULT 'single' CHECK (group_kind IN ('single', 'split')),
+    instructor_id INTEGER NOT NULL,
+    capacity_max INTEGER,
+    program_course_id INTEGER,
+    note TEXT DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (course_name, semester, department_id, group_code)
 );
 
 CREATE TABLE IF NOT EXISTS conflict_report (
@@ -435,6 +455,7 @@ CREATE TABLE IF NOT EXISTS course_evaluations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id TEXT NOT NULL,
     section_id INTEGER,
+    teaching_group_id INTEGER,
     course_name TEXT NOT NULL,
     instructor_id INTEGER NOT NULL,
     semester TEXT NOT NULL,

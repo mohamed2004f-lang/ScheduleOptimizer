@@ -52,6 +52,10 @@
                 <span id="planUnitsHint" class="ms-2"></span>
               </div>
             </div>
+            <div id="planGroupPickers" class="mt-2 border rounded p-2 bg-light d-none">
+              <div class="small fw-semibold mb-1">مجموعات التدريس (A/B) للمقررات المقسّمة</div>
+              <div id="planGroupPickersBody" class="small"></div>
+            </div>
           </div>
         </div>
         <div class="mt-3 d-flex flex-wrap gap-2 align-items-center">
@@ -184,7 +188,69 @@
     let lastPrereqValidation = null;
     /** مقررات الخطة قبل التعديل (للتحقق من إسقاط متطلب مقترن) */
     let planCoursesBaseline = [];
+    let planGroupOptions = {};
+    let planGroupSelections = {};
     let prereqValidateTimer = null;
+
+    async function loadPlanGroupOptions(){
+      const sid = document.getElementById('studentSelect')?.value;
+      const sem = document.getElementById('semesterInput')?.value?.trim();
+      if (!sid) { planGroupOptions = {}; return; }
+      const url = '/schedule/teaching_groups/registration_options?student_id=' + encodeURIComponent(sid) + (sem ? ('&semester=' + encodeURIComponent(sem)) : '');
+      const res = await fetchJSON(url);
+      planGroupOptions = (res.ok && res.json?.options_by_course) ? res.json.options_by_course : {};
+    }
+
+    function refreshPlanGroupPickers(){
+      const sel = document.getElementById('planCoursesSelect');
+      const wrap = document.getElementById('planGroupPickers');
+      const body = document.getElementById('planGroupPickersBody');
+      if (!sel || !wrap || !body) return;
+      const selected = Array.from(sel.selectedOptions).map(o => o.value);
+      const needs = selected.filter(cn => (planGroupOptions[cn] || []).length > 1);
+      if (!needs.length){
+        wrap.classList.add('d-none');
+        body.innerHTML = '';
+        return;
+      }
+      wrap.classList.remove('d-none');
+      body.innerHTML = needs.map(cn => {
+        const opts = planGroupOptions[cn] || [];
+        const cur = planGroupSelections[cn] || '';
+        return `<div class="mb-2"><label class="form-label mb-0">${escPlain(cn)}</label>
+          <select class="form-select form-select-sm plan-tg-sel" data-course="${escPlain(cn)}">
+            <option value="">— اختر مجموعة —</option>
+            ${opts.map(o => {
+              const gid = o.teaching_group_id || o.id;
+              const selAttr = String(gid) === String(cur) ? ' selected' : '';
+              return `<option value="${gid}"${selAttr}>${escPlain(o.display_label || o.group_code_label || '')}</option>`;
+            }).join('')}
+          </select></div>`;
+      }).join('');
+      body.querySelectorAll('.plan-tg-sel').forEach(el => {
+        el.addEventListener('change', () => {
+          planGroupSelections[el.dataset.course] = el.value;
+        });
+      });
+    }
+
+    function buildPlanCourseItems(courses){
+      return courses.map(cn => ({
+        course_name: cn,
+        teaching_group_id: planGroupSelections[cn] ? Number(planGroupSelections[cn]) : null
+      }));
+    }
+
+    function validatePlanGroupSelections(courses){
+      for (const cn of courses) {
+        const opts = planGroupOptions[cn] || [];
+        if (opts.length > 1 && !planGroupSelections[cn]) {
+          setPlanMsg('warning', `اختر مجموعة التدريس للمقرر «${cn}» في الخطة.`);
+          return false;
+        }
+      }
+      return true;
+    }
 
     function escPlain(s){
       return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -545,11 +611,19 @@
       if (Number(plan.prereq_ack_by_student || 0) === 1 && plan.prereq_ack_reason){
         setPlanMsg('warning', `تم إرسال الخطة سابقاً مع إقرار مخالفة متطلبات: ${plan.prereq_ack_reason}`);
       }
+      await loadPlanGroupOptions();
       const sel = document.getElementById('planCoursesSelect');
       // إعادة التحديد
       Array.from(sel.options).forEach(o=>{
         o.selected = plan.courses.includes(o.value);
       });
+      planGroupSelections = {};
+      (plan.course_items || []).forEach(ci => {
+        if (ci.course_name && ci.teaching_group_id) {
+          planGroupSelections[ci.course_name] = String(ci.teaching_group_id);
+        }
+      });
+      refreshPlanGroupPickers();
       planCoursesBaseline = (plan.courses || []).slice();
       schedulePlanPrereqValidate();
       // تحديث مجموع الوحدات المعروضة
@@ -576,10 +650,12 @@
       }
       const okUnits = await validateUnitsLimitOrShowMessage();
       if(!okUnits) return;
+      await loadPlanGroupOptions();
+      if (!validatePlanGroupSelections(courses)) return;
       const res = await fetchJSON('/enrollment/plans', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({student_id:sid, semester:sem, courses})
+        body: JSON.stringify({student_id:sid, semester:sem, courses, course_items: buildPlanCourseItems(courses)})
       });
       if(res.ok){
         currentPlanId = res.json?.plan_id || currentPlanId;
@@ -981,20 +1057,24 @@
         planCoursesBaseline = [];
         refreshEligibleCourses();
       });
-      document.getElementById('studentSelect').addEventListener('change', (ev)=>{
+      document.getElementById('studentSelect').addEventListener('change', async (ev)=>{
         const sid = ev.target.value;
         if (sid) {
           loadStatusNoteForStudent(sid);
+          await loadPlanGroupOptions();
+          refreshPlanGroupPickers();
         } else {
           setPlanMsg('', '');
         }
       });
       const selPlanCourses = document.getElementById('planCoursesSelect');
       if (selPlanCourses){
-        selPlanCourses.addEventListener('change', ()=>{
+        selPlanCourses.addEventListener('change', async ()=>{
           const courses = Array.from(selPlanCourses.selectedOptions).map(o=>o.value);
           _calcUnitsSummary(courses);
           schedulePlanPrereqValidate();
+          await loadPlanGroupOptions();
+          refreshPlanGroupPickers();
         });
       }
       const btnPD = document.getElementById('btnPrereqDetails');

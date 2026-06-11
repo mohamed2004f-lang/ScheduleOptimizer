@@ -2,10 +2,8 @@
 
 ## المتغيرات
 
-- **`DATABASE_URL`**: عنوان SQLAlchemy الموحّد.
-  - تطوير (SQLite): `sqlite:///backend/database/mechanical.db` أو مسار مطلق.
-  - إنتاج (PostgreSQL): `postgresql+psycopg://USER:PASS@HOST:5432/DBNAME`
-- **`DATABASE_PATH`**: مسار ملف SQLite (توافق خلفي؛ يُستخدم عند عدم ضبط `DATABASE_URL` في `config.py`).
+- **`DATABASE_URL`**: عنوان SQLAlchemy — **PostgreSQL فقط** في التشغيل:
+  `postgresql+psycopg://USER:PASS@HOST:5432/DBNAME`
 
 ## الأوامر
 

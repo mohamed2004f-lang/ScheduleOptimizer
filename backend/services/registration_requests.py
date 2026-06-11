@@ -1,7 +1,7 @@
 import datetime
 from flask import Blueprint, request, jsonify, session
 
-from backend.database.database import is_postgresql
+from backend.database.database import is_postgresql, fetch_table_columns
 from backend.services.utilities import get_connection
 from backend.core.auth import login_required, role_required, current_supervisor_effective
 from backend.core.feature_flags import registration_program_course_mode
@@ -234,7 +234,31 @@ def _execute_registration_change(conn, student_id: str, course_name: str, action
             pcid = pc_map_one.get(course_name)
         else:
             pcid = None
-        if pcid is not None:
+        try:
+            from backend.services.utilities import get_current_term
+            tname, tyear = get_current_term(conn=conn)
+            reg_sem = f"{(tname or '').strip()} {(tyear or '').strip()}".strip()
+        except Exception:
+            reg_sem = ""
+        try:
+            from backend.services import teaching_groups as tg_svc
+            gid = tg_svc.resolve_teaching_group_for_registration(
+                conn,
+                student_id=sid,
+                course_name=course_name,
+                semester=reg_sem,
+                teaching_group_id=None,
+                require_explicit_for_split=True,
+            )
+        except ValueError as ve:
+            raise ValueError(f"TEACHING_GROUP_REQUIRED: {ve}") from ve
+        reg_cols = {c.lower() for c in fetch_table_columns(conn, "registrations")}
+        if "teaching_group_id" in reg_cols:
+            cur.execute(
+                "INSERT INTO registrations (student_id, course_name, program_course_id, teaching_group_id) VALUES (?,?,?,?) ON CONFLICT (student_id, course_name) DO NOTHING",
+                (sid, course_name, int(pcid) if pcid is not None else None, gid),
+            )
+        elif pcid is not None:
             cur.execute(
                 "INSERT INTO registrations (student_id, course_name, program_course_id) VALUES (?,?,?) ON CONFLICT (student_id, course_name) DO NOTHING",
                 (sid, course_name, int(pcid)),

@@ -1,7 +1,7 @@
 @echo off
 setlocal
 set ROOT=%~dp0..
-python "%ROOT%\scripts\backup_db.py" --kind manual
+python "%ROOT%\scripts\pg_dump_via_env.py"
 if errorlevel 1 (
   echo Backup failed.
   exit /b 1

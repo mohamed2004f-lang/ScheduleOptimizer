@@ -6,7 +6,7 @@ import datetime
 import logging
 from typing import Any
 
-from backend.database.database import is_postgresql, table_exists
+from backend.database.database import fetch_table_columns, is_postgresql, table_exists
 
 logger = logging.getLogger(__name__)
 
@@ -327,59 +327,73 @@ def insert_evaluation_with_answers(
     comments: str,
     answers: dict[int, int],
     active_questions: list[dict],
+    teaching_group_id: int | None = None,
 ) -> int:
     legacy = legacy_column_values(active_questions, answers)
     now = datetime.datetime.utcnow().isoformat()
     cur = conn.cursor()
+    ce_cols = {c.lower() for c in fetch_table_columns(conn, "course_evaluations")}
+    tg_val = int(teaching_group_id or 0) or None
+    if "teaching_group_id" in ce_cols:
+        cols = (
+            "student_id, section_id, teaching_group_id, course_name, instructor_id, semester, "
+            "instructor_punctuality, course_clarity, assessment_fairness, "
+            "material_relevance, communication_quality, comments, created_at"
+        )
+        vals = "?,?,?,?,?,?,?,?,?,?,?,?,?"
+        params = (
+            student_id,
+            section_id,
+            tg_val,
+            course_name,
+            instructor_id,
+            semester,
+            legacy.get("instructor_punctuality"),
+            legacy.get("course_clarity"),
+            legacy.get("assessment_fairness"),
+            legacy.get("material_relevance"),
+            legacy.get("communication_quality"),
+            comments,
+            now,
+        )
+    else:
+        cols = (
+            "student_id, section_id, course_name, instructor_id, semester, "
+            "instructor_punctuality, course_clarity, assessment_fairness, "
+            "material_relevance, communication_quality, comments, created_at"
+        )
+        vals = "?,?,?,?,?,?,?,?,?,?,?,?"
+        params = (
+            student_id,
+            section_id,
+            course_name,
+            instructor_id,
+            semester,
+            legacy.get("instructor_punctuality"),
+            legacy.get("course_clarity"),
+            legacy.get("assessment_fairness"),
+            legacy.get("material_relevance"),
+            legacy.get("communication_quality"),
+            comments,
+            now,
+        )
     if is_postgresql():
         cur.execute(
-            """
-            INSERT INTO course_evaluations (
-                student_id, section_id, course_name, instructor_id, semester,
-                instructor_punctuality, course_clarity, assessment_fairness,
-                material_relevance, communication_quality, comments, created_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            f"""
+            INSERT INTO course_evaluations ({cols})
+            VALUES ({vals})
             RETURNING id
             """,
-            (
-                student_id,
-                section_id,
-                course_name,
-                instructor_id,
-                semester,
-                legacy.get("instructor_punctuality"),
-                legacy.get("course_clarity"),
-                legacy.get("assessment_fairness"),
-                legacy.get("material_relevance"),
-                legacy.get("communication_quality"),
-                comments,
-                now,
-            ),
+            params,
         )
         eval_id = int(cur.fetchone()[0])
     else:
         cur.execute(
-            """
-            INSERT INTO course_evaluations (
-                student_id, section_id, course_name, instructor_id, semester,
-                instructor_punctuality, course_clarity, assessment_fairness,
-                material_relevance, communication_quality, comments, created_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            f"""
+            INSERT INTO course_evaluations ({cols})
+            VALUES ({vals})
             """,
-            (
-                student_id,
-                section_id,
-                course_name,
-                instructor_id,
-                semester,
-                legacy.get("instructor_punctuality"),
-                legacy.get("course_clarity"),
-                legacy.get("assessment_fairness"),
-                legacy.get("material_relevance"),
-                legacy.get("communication_quality"),
-                comments,
-                now,
-            ),
+            params,
         )
         eval_id = int(cur.lastrowid or 0)
 

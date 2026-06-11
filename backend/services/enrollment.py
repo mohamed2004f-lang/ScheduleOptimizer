@@ -24,8 +24,45 @@ from backend.services.prereg_helpers import (
 )
 from backend.database.database import is_postgresql, fetch_table_columns
 from backend.core.department_scope_policy import resolve_users_list_scope, student_matches_department
+from backend.services import teaching_groups as tg_svc
 
 DocxTemplate = None
+
+
+def _plan_items_has_teaching_group(cur) -> bool:
+    try:
+        cols = {c.lower() for c in fetch_table_columns(cur.connection, "enrollment_plan_items")}
+        return "teaching_group_id" in cols
+    except Exception:
+        return False
+
+
+def _normalize_plan_course_items(data: dict) -> list[dict]:
+    raw = data.get("course_items")
+    if isinstance(raw, list) and raw:
+        out = []
+        for it in raw:
+            if isinstance(it, dict):
+                cn = (it.get("course_name") or "").strip()
+                if cn:
+                    tg = it.get("teaching_group_id")
+                    out.append({
+                        "course_name": cn,
+                        "teaching_group_id": int(tg) if tg not in (None, "", 0) else None,
+                    })
+        return out
+    courses = data.get("courses") or []
+    tg_map = data.get("teaching_groups") or {}
+    out = []
+    seen: set[str] = set()
+    for c in courses:
+        cn = (c or "").strip() if isinstance(c, str) else (c.get("course_name") or "").strip()
+        if not cn or cn in seen:
+            continue
+        seen.add(cn)
+        tg = tg_map.get(cn)
+        out.append({"course_name": cn, "teaching_group_id": int(tg) if tg else None})
+    return out
 
 
 def _ensure_docxtpl():
@@ -514,10 +551,28 @@ def list_plans():
         plans = []
         for r in rows:
             plan_id = r[0]
-            items = cur.execute(
-                "SELECT id, course_name FROM enrollment_plan_items WHERE plan_id = ? ORDER BY id",
-                (plan_id,),
-            ).fetchall()
+            has_epi_tg = _plan_items_has_teaching_group(cur)
+            if has_epi_tg:
+                items = cur.execute(
+                    "SELECT id, course_name, teaching_group_id FROM enrollment_plan_items WHERE plan_id = ? ORDER BY id",
+                    (plan_id,),
+                ).fetchall()
+            else:
+                items = cur.execute(
+                    "SELECT id, course_name FROM enrollment_plan_items WHERE plan_id = ? ORDER BY id",
+                    (plan_id,),
+                ).fetchall()
+            labels = tg_svc.teaching_group_labels_map(conn) if has_epi_tg else {}
+            course_items = []
+            for it in items:
+                cn = it[1]
+                tg = it[2] if has_epi_tg and len(it) > 2 else None
+                ci = {"course_name": cn}
+                if tg not in (None, "", 0):
+                    gid = int(tg)
+                    ci["teaching_group_id"] = gid
+                    ci["teaching_group_label"] = labels.get(gid) or ""
+                course_items.append(ci)
             entry = {
                 "id": plan_id,
                 "student_id": r[1],
@@ -526,7 +581,8 @@ def list_plans():
                 "rejection_reason": r[4],
                 "created_at": r[5],
                 "updated_at": r[6],
-                "courses": [it[1] for it in items],
+                "courses": [ci["course_name"] for ci in course_items],
+                "course_items": course_items,
             }
             if has_pv:
                 entry["prereq_validation"] = _parse_prereq_validation_column(
@@ -702,6 +758,9 @@ def create_or_update_plan():
     student_id = (data.get("student_id") or "").strip()
     semester = (data.get("semester") or "").strip()
     courses = data.get("courses") or []
+    course_items = _normalize_plan_course_items(data)
+    if course_items:
+        courses = [it["course_name"] for it in course_items]
 
     if not student_id or not semester:
         return (
@@ -751,12 +810,14 @@ def create_or_update_plan():
 
     # إزالة التكرار مع الحفاظ على الترتيب
     seen = set()
-    dedup = []
-    for c in courses:
-        if c and c not in seen:
-            seen.add(c)
-            dedup.append(c)
-    courses = dedup
+    dedup_items: list[dict] = []
+    for item in course_items if course_items else [{"course_name": c, "teaching_group_id": None} for c in courses]:
+        cn = item["course_name"]
+        if cn and cn not in seen:
+            seen.add(cn)
+            dedup_items.append(item)
+    course_items = dedup_items
+    courses = [it["course_name"] for it in course_items]
 
     now = _now_iso()
 
@@ -859,14 +920,36 @@ def create_or_update_plan():
                 )
                 plan_id = int(cur.lastrowid or 0)
 
-        for cname in courses:
-            cur.execute(
-                """
-                INSERT INTO enrollment_plan_items (plan_id, course_name)
-                VALUES (?,?)
-                """,
-                (plan_id, cname),
-            )
+        for item in course_items:
+            cname = item["course_name"]
+            tg = item.get("teaching_group_id")
+            try:
+                gid = tg_svc.resolve_teaching_group_for_registration(
+                    conn,
+                    student_id=student_id,
+                    course_name=cname,
+                    semester=semester,
+                    teaching_group_id=tg,
+                    require_explicit_for_split=True,
+                )
+            except ValueError as ve:
+                return jsonify({"status": "error", "code": "TEACHING_GROUP_REQUIRED", "message": str(ve)}), 400
+            if _plan_items_has_teaching_group(cur):
+                cur.execute(
+                    """
+                    INSERT INTO enrollment_plan_items (plan_id, course_name, teaching_group_id)
+                    VALUES (?,?,?)
+                    """,
+                    (plan_id, cname, gid),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO enrollment_plan_items (plan_id, course_name)
+                    VALUES (?,?)
+                    """,
+                    (plan_id, cname),
+                )
 
         conn.commit()
 
@@ -1085,11 +1168,20 @@ def approve_plan(plan_id: int):
             )
 
         # جلب المقررات من الخطة
-        items = cur.execute(
-            "SELECT course_name FROM enrollment_plan_items WHERE plan_id = ?",
-            (plan_id,),
-        ).fetchall()
-        courses = [it[0] for it in items if it[0]]
+        has_epi_tg = _plan_items_has_teaching_group(cur)
+        if has_epi_tg:
+            items = cur.execute(
+                "SELECT course_name, teaching_group_id FROM enrollment_plan_items WHERE plan_id = ?",
+                (plan_id,),
+            ).fetchall()
+            plan_items = [{"course_name": it[0], "teaching_group_id": it[1]} for it in items if it[0]]
+        else:
+            items = cur.execute(
+                "SELECT course_name FROM enrollment_plan_items WHERE plan_id = ?",
+                (plan_id,),
+            ).fetchall()
+            plan_items = [{"course_name": it[0], "teaching_group_id": None} for it in items if it[0]]
+        courses = [it["course_name"] for it in plan_items]
 
         # التحقق من حد الوحدات قبل الاعتماد والترحيل (كحماية إضافية)
         try:
@@ -1134,10 +1226,24 @@ def approve_plan(plan_id: int):
             "DELETE FROM registrations WHERE student_id = ?",
             (student_id,),
         )
-        for cname in courses:
-            cur.execute(
-                "INSERT INTO registrations (student_id, course_name) VALUES (?,?)",
-                (student_id, cname),
+        from backend.services.students import _insert_registrations_rows
+        resolved_items = []
+        for item in plan_items:
+            try:
+                gid = tg_svc.resolve_teaching_group_for_registration(
+                    conn,
+                    student_id=student_id,
+                    course_name=item["course_name"],
+                    semester=semester,
+                    teaching_group_id=item.get("teaching_group_id"),
+                    require_explicit_for_split=True,
+                )
+            except ValueError as ve:
+                return jsonify({"status": "error", "code": "TEACHING_GROUP_REQUIRED", "message": str(ve)}), 400
+            resolved_items.append({**item, "teaching_group_id": gid})
+        if resolved_items:
+            _insert_registrations_rows(
+                cur, conn, student_id=student_id, items=resolved_items, semester=semester
             )
 
         # تحديث حالة الخطة
