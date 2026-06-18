@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     container_name: schedule-optimizer-db
     environment:
       POSTGRES_USER: schedule
@@ -22,6 +22,7 @@ services:
     build: .
     container_name: schedule-optimizer
     ports:
+      # للتجربة الداخلية. مع Caddy استخدم deploy/docker-compose.caddy.yml (يُخفى 5000)
       - "5000:5000"
     environment:
       - FLASK_ENV=production
@@ -32,6 +33,7 @@ services:
       # نفس كلمة مرور POSTGRES_PASSWORD في الخدمة db — يُفضّل أحرف بسيطة بدون @ : / في كلمة المرور
       - DATABASE_URL=postgresql+psycopg://schedule:${POSTGRES_PASSWORD}@db:5432/schedule_optimizer
     volumes:
+      - ./backend/uploads:/app/backend/uploads
       - ./logs:/app/logs
       - ./backups:/app/backups
     restart: unless-stopped

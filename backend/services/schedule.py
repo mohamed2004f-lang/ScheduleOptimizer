@@ -19,10 +19,13 @@ from backend.database.database import is_postgresql, schedule_pk_column, fetch_t
 from backend.core.exceptions import ValidationError
 from backend.core.department_scope_policy import student_matches_department, resolve_users_list_scope
 from backend.core.faculty_axes import (
+    AUTO_DERIVED_AXIS_KEYS,
     FACULTY_AXIS_KEYS,
     VALID_AXIS_STATUS,
     axis_labels_for_api,
+    is_editable_axis_key,
     normalize_instructor_name,
+    visible_axis_keys,
 )
 
 from .utilities import (
@@ -2574,8 +2577,42 @@ def _group_assigned_tuples_by_course(tuples: list[tuple]) -> list[dict]:
     return list(grouped.values())
 
 
+def _merged_axes_for_sections(
+    axis_map: dict,
+    section_ids: list[int],
+    *,
+    default_axes: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """دمج حالات المحاور اليدوية فقط — المحاور التلقائية تبقى pending حتى الاشتقاق."""
+    base = dict(default_axes or {k: "pending" for k in FACULTY_AXIS_KEYS})
+    for alt_sid in section_ids or []:
+        base.update(axis_map.get(int(alt_sid), {}))
+    for k in AUTO_DERIVED_AXIS_KEYS:
+        base[k] = "pending"
+    return base
+
+
+def _purge_stale_manual_auto_axes(conn, instructor_id: int, section_ids: list[int]) -> None:
+    """إزالة حالات يدوية قديمة للمحاور التي أصبحت تلقائية (8.7.4)."""
+    sids = [int(x) for x in section_ids if int(x) > 0]
+    if not sids or not AUTO_DERIVED_AXIS_KEYS:
+        return
+    keys = tuple(AUTO_DERIVED_AXIS_KEYS)
+    ph_s = ",".join(["?"] * len(sids))
+    ph_k = ",".join(["?"] * len(keys))
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        DELETE FROM faculty_section_axis_status
+        WHERE instructor_id = ? AND section_id IN ({ph_s}) AND axis_key IN ({ph_k})
+        """,
+        (int(instructor_id), *sids, *keys),
+    )
+    conn.commit()
+
+
 def _axis_status_map_for_sections(cur, instructor_db_id: int, section_ids: list) -> dict:
-    """خريطة section_id -> {axis_key: status}."""
+    """خريطة section_id -> {axis_key: status} — بدون المحاور المشتقة تلقائياً."""
     if not section_ids:
         return {}
     placeholders = ",".join(["?"] * len(section_ids))
@@ -2587,8 +2624,26 @@ def _axis_status_map_for_sections(cur, instructor_db_id: int, section_ids: list)
     rows = cur.execute(q, (instructor_db_id, *section_ids)).fetchall()
     m: dict = {int(sid): {} for sid in section_ids}
     for sid, ax, st in rows:
+        if ax in AUTO_DERIVED_AXIS_KEYS:
+            continue
         m.setdefault(int(sid), {})[ax] = st
     return m
+
+
+def _sql_bool(val) -> bool:
+    """تحويل آمن لقيم boolean/int/text من PostgreSQL."""
+    if val is None:
+        return False
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(int(val))
+    s = str(val).strip().lower()
+    if s in ("1", "true", "t", "yes"):
+        return True
+    if s in ("0", "false", "f", "no", ""):
+        return False
+    return False
 
 
 def _course_admin_payload(cur, instructor_id: int, section_id: int) -> dict:
@@ -2597,7 +2652,11 @@ def _course_admin_payload(cur, instructor_id: int, section_id: int) -> dict:
         cur.execute("SAVEPOINT sp_plan_clo")
         plan_rows = cur.execute(
             """
-            SELECT week_no, COALESCE(week_topic,''), COALESCE(lecture_status,'planned'), COALESCE(resources_text,''), COALESCE(linked_clo,'')
+            SELECT week_no,
+                   COALESCE(week_topic,'') AS week_topic,
+                   COALESCE(lecture_status,'planned') AS lecture_status,
+                   COALESCE(resources_text,'') AS resources_text,
+                   COALESCE(linked_clo,'') AS linked_clo
             FROM faculty_course_plans
             WHERE section_id = ? AND instructor_id = ?
             ORDER BY week_no
@@ -2613,7 +2672,10 @@ def _course_admin_payload(cur, instructor_id: int, section_id: int) -> dict:
         try:
             plan_rows = cur.execute(
                 """
-                SELECT week_no, COALESCE(week_topic,''), COALESCE(lecture_status,'planned'), COALESCE(resources_text,'')
+                SELECT week_no,
+                       COALESCE(week_topic,'') AS week_topic,
+                       COALESCE(lecture_status,'planned') AS lecture_status,
+                       COALESCE(resources_text,'') AS resources_text
                 FROM faculty_course_plans
                 WHERE section_id = ? AND instructor_id = ?
                 ORDER BY week_no
@@ -2624,8 +2686,13 @@ def _course_admin_payload(cur, instructor_id: int, section_id: int) -> dict:
             plan_rows = []
     ann_rows = cur.execute(
         """
-        SELECT id, COALESCE(title,''), COALESCE(body,''), COALESCE(announcement_type,'general'),
-               COALESCE(lecture_date,''), COALESCE(published_to_students,1), COALESCE(created_at,'')
+        SELECT id,
+               COALESCE(title,'') AS title,
+               COALESCE(body,'') AS body,
+               COALESCE(announcement_type,'general') AS announcement_type,
+               COALESCE(lecture_date,'') AS lecture_date,
+               COALESCE(published_to_students,1) AS published_to_students,
+               COALESCE(CAST(created_at AS TEXT),'') AS created_at
         FROM faculty_course_announcements
         WHERE section_id = ? AND instructor_id = ?
         ORDER BY id DESC
@@ -2644,10 +2711,18 @@ def _course_admin_payload(cur, instructor_id: int, section_id: int) -> dict:
     ).fetchone()
     closure_row = cur.execute(
         """
-        SELECT id, COALESCE(implementation_summary,''), COALESCE(improvement_notes,''),
-               COALESCE(reflection_text,''), COALESCE(status,'draft'), COALESCE(updated_at,''),
-               curriculum_coverage_percent, student_success_rate, student_failure_rate,
-               COALESCE(results_analysis,''), COALESCE(challenges,''), COALESCE(action_plan,''),
+        SELECT id,
+               COALESCE(implementation_summary,'') AS implementation_summary,
+               COALESCE(improvement_notes,'') AS improvement_notes,
+               COALESCE(reflection_text,'') AS reflection_text,
+               COALESCE(status,'draft') AS status,
+               COALESCE(updated_at,'') AS updated_at,
+               curriculum_coverage_percent,
+               student_success_rate,
+               student_failure_rate,
+               COALESCE(results_analysis,'') AS results_analysis,
+               COALESCE(challenges,'') AS challenges,
+               COALESCE(action_plan,'') AS action_plan,
                ilo_achievement_percent
         FROM course_closure_reports
         WHERE section_id = ? AND instructor_id = ?
@@ -2674,7 +2749,7 @@ def _course_admin_payload(cur, instructor_id: int, section_id: int) -> dict:
                 "body": r[2] or "",
                 "announcement_type": r[3] or "general",
                 "lecture_date": r[4] or "",
-                "published_to_students": bool(int(r[5] or 0)),
+                "published_to_students": _sql_bool(r[5]),
                 "created_at": r[6] or "",
             }
             for r in (ann_rows or [])
@@ -2740,6 +2815,61 @@ def _is_instructor_effective_session() -> bool:
     return False
 
 
+def _enrich_rows_delivery_summary(
+    conn, rows: list[dict], semester: str, instructor_id: int | None = None
+) -> None:
+    """إرفاق ملخص تقرير التنفيذ + محاور مشتقة تلقائياً بصفوف مقرراتي."""
+    try:
+        from backend.services.course_delivery import (
+            apply_auto_axes_to_portal_row,
+            delivery_summary_for_ui,
+        )
+    except Exception as exc:
+        logger.warning("course delivery enrich unavailable: %s", exc)
+        return
+    all_sids: list[int] = []
+    for row in rows or []:
+        for sid in row.get("section_ids") or ([row.get("section_id")] if row.get("section_id") else []):
+            try:
+                all_sids.append(int(sid))
+            except (TypeError, ValueError):
+                pass
+    if instructor_id and all_sids:
+        try:
+            _purge_stale_manual_auto_axes(conn, int(instructor_id), list(dict.fromkeys(all_sids)))
+        except Exception as exc:
+            logger.warning("purge stale manual auto axes failed: %s", exc)
+    for row in rows or []:
+        tgid = int(row.get("teaching_group_id") or 0) or None
+        row["delivery_summary"] = delivery_summary_for_ui(
+            conn,
+            teaching_group_id=tgid,
+            course_name=(row.get("course_name") or "").strip(),
+            semester=semester or (row.get("semester") or "").strip(),
+        )
+        if instructor_id:
+            apply_auto_axes_to_portal_row(
+                conn,
+                row,
+                semester=semester or (row.get("semester") or "").strip(),
+                instructor_id=int(instructor_id),
+            )
+
+
+def _count_visible_axes_done(axis_map: dict, section_ids: list[int]) -> tuple[int, int]:
+    """(منجز, إجمالي) للمحاور الظاهرة عبر شعب متعددة."""
+    keys = visible_axis_keys()
+    total = len(keys)
+    done = 0
+    merged: dict[str, str] = {}
+    for sid in section_ids:
+        merged.update(axis_map.get(int(sid), {}))
+    for k in keys:
+        if merged.get(k) in ("done", "na"):
+            done += 1
+    return done, total
+
+
 def _can_access_assignment(instructor_id: int) -> bool:
     if _is_privileged_assignment_viewer():
         return True
@@ -2793,9 +2923,8 @@ def my_assigned_sections():
                 out = []
                 for item in tg_rows:
                     sid = int(item.get("section_id") or 0)
-                    merged_axes = {**default_axes}
-                    for alt_sid in item.get("section_ids") or ([sid] if sid else []):
-                        merged_axes.update(axis_map.get(int(alt_sid), {}))
+                    sids = item.get("section_ids") or ([sid] if sid else [])
+                    merged_axes = _merged_axes_for_sections(axis_map, sids, default_axes=default_axes)
                     out.append(
                         {
                             "section_id": sid,
@@ -2816,6 +2945,7 @@ def my_assigned_sections():
                             "student_count": int(item.get("student_count") or 0),
                         }
                     )
+                _enrich_rows_delivery_summary(conn, out, sem_label, iid)
                 return jsonify(
                     {
                         "rows": out,
@@ -2851,9 +2981,8 @@ def my_assigned_sections():
         for item in _group_assigned_tuples_by_course(tuples):
             sid = int(item["section_id"])
             cn = item["course_name"]
-            merged_axes = {**default_axes}
-            for alt_sid in item.get("section_ids") or [sid]:
-                merged_axes.update(axis_map.get(int(alt_sid), {}))
+            sids = item.get("section_ids") or [sid]
+            merged_axes = _merged_axes_for_sections(axis_map, sids, default_axes=default_axes)
             ck = (cn or "").strip().lower()
             out.append(
                 {
@@ -2870,6 +2999,7 @@ def my_assigned_sections():
                     "student_count": reg_counts.get(ck, 0),
                 }
             )
+        _enrich_rows_delivery_summary(conn, out, sem_label, iid)
     return jsonify(
         {
             "rows": out,
@@ -2879,6 +3009,33 @@ def my_assigned_sections():
             "axis_catalog": axis_labels_for_api(),
         }
     )
+
+
+def _portal_section_metrics(conn, *, instructor_id: int, tuples: list) -> tuple[int, int, list[dict]]:
+    """محاور مدمجة + مهام مقترحة لملخص بوابة الأستاذ."""
+    from backend.services.course_workflow import delivery_action_items_for_row, enriched_axis_progress
+
+    axes_done = 0
+    axes_total = 0
+    action_items: list[dict] = []
+    seen_delivery: set[str] = set()
+    for t in tuples or []:
+        sid, cn = int(t[0]), (t[1] or "").strip()
+        enriched = enriched_axis_progress(conn, section_id=sid, instructor_id=int(instructor_id))
+        prog = enriched.get("progress") or {}
+        axes_done += int(prog.get("done") or 0)
+        axes_total += int(prog.get("total") or 0)
+        dkey = f"{cn}:{sid}"
+        if dkey not in seen_delivery:
+            seen_delivery.add(dkey)
+            row = {
+                "section_id": sid,
+                "course_name": cn,
+                "axes": enriched.get("axes") or {},
+                "delivery_summary": enriched.get("delivery_summary") or {},
+            }
+            action_items.extend(delivery_action_items_for_row(row))
+    return axes_done, axes_total, action_items
 
 
 @schedule_bp.route("/my_dashboard_summary", methods=["GET"])
@@ -2898,9 +3055,7 @@ def my_dashboard_summary():
         sections_count = len(section_ids)
         if not sections_count:
             return jsonify({"sections_count": 0, "students_count": 0, "action_items": [], "axes_done": 0, "axes_total": 0, "clo_avg": None})
-        axis_map = _axis_status_map_for_sections(cur, iid, section_ids)
-        axes_total = sections_count * len(FACULTY_AXIS_KEYS)
-        axes_done = sum(1 for sid_axes in axis_map.values() for v in sid_axes.values() if v in ("done", "na"))
+        axes_done, axes_total, delivery_items = _portal_section_metrics(conn, instructor_id=iid, tuples=tuples)
         students_count = 0
         try:
             course_names = list({t[1] for t in tuples if t[1]})
@@ -2921,7 +3076,7 @@ def my_dashboard_summary():
                 clo_avg = round(float(row[0]), 1)
         except Exception:
             pass
-        action_items = []
+        action_items = list(delivery_items)
         for t in tuples:
             sid, cn = t[0], t[1]
             try:
@@ -2936,10 +3091,6 @@ def my_dashboard_summary():
                     action_items.append({"type": "closure_pending", "section_id": sid, "course": cn, "message": f"تقرير إقفال {cn} لم يُرسل بعد"})
             except Exception:
                 pass
-            sid_axes = axis_map.get(int(sid), {})
-            pending_axes = [k for k in FACULTY_AXIS_KEYS if sid_axes.get(k, "pending") == "pending"]
-            if len(pending_axes) >= 4:
-                action_items.append({"type": "axes_pending", "section_id": sid, "course": cn, "message": f"محاور {cn}: {len(pending_axes)} محاور لم تُحدَّث"})
     return jsonify({
         "sections_count": sections_count,
         "students_count": students_count,
@@ -2999,11 +3150,7 @@ def instructor_portal_summary():
         tuples = _assigned_section_rows(cur, iid, inst_name)
         section_ids = [t[0] for t in tuples]
         sections_count = len(section_ids)
-        axis_map = _axis_status_map_for_sections(cur, iid, section_ids)
-        axes_total = sections_count * len(FACULTY_AXIS_KEYS)
-        axes_done = sum(
-            1 for sid_axes in axis_map.values() for v in sid_axes.values() if v in ("done", "na")
-        )
+        axes_done, axes_total, delivery_items = _portal_section_metrics(conn, instructor_id=iid, tuples=tuples)
         students_count = 0
         course_names = list({(t[1] or "").strip() for t in tuples if (t[1] or "").strip()})
         if course_names:
@@ -3028,7 +3175,7 @@ def instructor_portal_summary():
                     clo_avg = round(float(row[0]), 1)
             except Exception:
                 pass
-        action_items = []
+        action_items = list(delivery_items)
         for t in tuples:
             sid, cn = t[0], t[1]
             try:
@@ -3067,19 +3214,6 @@ def instructor_portal_summary():
                     )
             except Exception:
                 pass
-            sid_axes = axis_map.get(int(sid), {})
-            pending_axes = [k for k in FACULTY_AXIS_KEYS if sid_axes.get(k, "pending") == "pending"]
-            if len(pending_axes) >= 4:
-                action_items.append(
-                    {
-                        "type": "axes_pending",
-                        "section_id": sid,
-                        "course": cn,
-                        "tab": "sections",
-                        "focus": "axes",
-                        "message": f"محاور {cn}: {len(pending_axes)} محاور لم تُحدَّث",
-                    }
-                )
         grade_drafts_total = 0
         grade_drafts_draft = 0
         grade_drafts_by_section: dict[str, dict] = {}
@@ -3577,6 +3711,15 @@ def save_my_axis_status():
     status = (data.get("status") or "pending").strip()
     if axis_key not in FACULTY_AXIS_KEYS or status not in VALID_AXIS_STATUS:
         return jsonify({"status": "error", "message": "axis_key أو status غير صالح"}), 400
+    if not is_editable_axis_key(axis_key):
+        auto_msgs = {
+            "assessment": "محور الدرجات والاختبارات يُحدَّث تلقائياً من تقرير التنفيذ ومسودات الدرجات",
+            "course_mgmt": "محور إعداد المقرر يُحدَّث تلقائياً من قائمة المفردات والخطة الأسبوعية",
+            "teaching_content": "محور تنفيذ المحتوى يُحدَّث تلقائياً من تقارير الجزئي والنهائي",
+            "documentation_quality": "محور التوثيق يُتابع عبر تقرير تنفيذ المقرر وليس يدوياً",
+        }
+        msg = auto_msgs.get(axis_key, "هذا المحور غير قابل للتعديل اليدوي")
+        return jsonify({"status": "error", "message": msg}), 400
 
     inst_name, instructor_id = _instructor_display_name_for_session()
     if not instructor_id:
@@ -4089,7 +4232,10 @@ def _closure_status_score(status: str) -> float:
     return 0.0
 
 
-def _section_scorecard(cur, section_id: int, instructor_id: int, course_name: str, semester: str) -> dict:
+def _section_scorecard(conn, section_id: int, instructor_id: int, course_name: str, semester: str) -> dict:
+    from backend.services.course_workflow import enriched_axis_progress
+
+    cur = conn.cursor()
     plan_rows = cur.execute(
         """
         SELECT COALESCE(lecture_status,'planned')
@@ -4102,16 +4248,12 @@ def _section_scorecard(cur, section_id: int, instructor_id: int, course_name: st
     plan_done = sum(1 for r in (plan_rows or []) if (r[0] or "") in ("done", "compensated"))
     plan_progress = (float(plan_done) / float(plan_total)) if plan_total else 0.0
 
-    axis_done_row = cur.execute(
-        """
-        SELECT COUNT(*)
-        FROM faculty_section_axis_status
-        WHERE section_id = ? AND instructor_id = ? AND status = 'done'
-        """,
-        (section_id, instructor_id),
-    ).fetchone()
-    axis_done = int((axis_done_row[0] if axis_done_row else 0) or 0)
-    axis_progress = float(axis_done) / float(len(FACULTY_AXIS_KEYS)) if FACULTY_AXIS_KEYS else 0.0
+    enriched = enriched_axis_progress(conn, section_id=int(section_id), instructor_id=int(instructor_id))
+    prog = enriched.get("progress") or {}
+    axis_done = int(prog.get("done") or 0)
+    axis_total = int(prog.get("total") or 0)
+    axis_progress = float(axis_done) / float(axis_total) if axis_total else 0.0
+    delivery_pct = float(enriched.get("delivery_pct") or 0) / 100.0
 
     closure_row = cur.execute(
         """
@@ -4151,8 +4293,11 @@ def _section_scorecard(cur, section_id: int, instructor_id: int, course_name: st
     approved_logs = int((approved_logs_row[0] if approved_logs_row else 0) or 0)
     service_score = 1.0 if (approved_logs > 0 or assignments_count > 0) else 0.0
 
-    # وزن المؤشر: تنفيذ الخطة 40% + المحاور 25% + تقرير الإقفال 20% + التكليفات الرسمية 15%
-    overall_score = round((0.40 * plan_progress + 0.25 * axis_progress + 0.20 * closure_score + 0.15 * service_score) * 100.0, 1)
+    # وزن المؤشر: الخطة 35% + تقرير التنفيذ 25% + المحاور 20% + الإقفال 15% + التكليفات 5%
+    overall_score = round(
+        (0.35 * plan_progress + 0.25 * delivery_pct + 0.20 * axis_progress + 0.15 * closure_score + 0.05 * service_score) * 100.0,
+        1,
+    )
     return {
         "section_id": int(section_id),
         "instructor_id": int(instructor_id),
@@ -4162,8 +4307,9 @@ def _section_scorecard(cur, section_id: int, instructor_id: int, course_name: st
         "plan_done": int(plan_done),
         "plan_progress": round(plan_progress * 100.0, 1),
         "axis_done": int(axis_done),
-        "axis_total": int(len(FACULTY_AXIS_KEYS)),
+        "axis_total": int(axis_total),
         "axis_progress": round(axis_progress * 100.0, 1),
+        "delivery_progress": round(delivery_pct * 100.0, 1),
         "closure_status": closure_status,
         "assignments_count": int(assignments_count),
         "approved_assignment_logs": int(approved_logs),
@@ -4211,7 +4357,7 @@ def faculty_scorecards():
             iid = int(t[7]) if len(t) > 7 and t[7] not in (None, "") else int(session.get("instructor_id") or 0)
             if not iid:
                 continue
-            card = _section_scorecard(cur, int(sid), int(iid), cn or "", sem or "")
+            card = _section_scorecard(conn, int(sid), int(iid), cn or "", sem or "")
             iname_row = cur.execute(
                 "SELECT COALESCE(name,'') FROM instructors WHERE id = ? LIMIT 1",
                 (int(iid),),
@@ -4301,7 +4447,7 @@ def _final_dossier_rows(cur, instructor_id: int | None = None) -> list[dict]:
     for r in rows or []:
         sid = int(r[0])
         iid = int(r[3] or 0)
-        card = _section_scorecard(cur, sid, iid, r[1] or "", r[2] or "")
+        card = _section_scorecard(conn, sid, iid, r[1] or "", r[2] or "")
         out.append(
             {
                 "section_id": sid,

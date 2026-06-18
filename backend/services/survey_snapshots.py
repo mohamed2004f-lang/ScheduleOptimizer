@@ -257,6 +257,59 @@ def list_semester_snapshots(
     return out
 
 
+def list_semester_snapshots_batch(
+    conn,
+    semesters: list[str],
+    department_id: int | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """جلب لقطات عدة فصول في استعلام واحد."""
+    sems = [s.strip() for s in semesters if (s or "").strip()]
+    if not sems:
+        return {}
+    ensure_survey_snapshot_tables(conn)
+    sk = scope_key(department_id)
+    cur = conn.cursor()
+    placeholders = ", ".join("?" * len(sems))
+    rows = cur.execute(
+        f"""
+        SELECT semester, template_code, title_ar, response_count, min_aggregate, aggregated,
+               overall_score_percent, compliance_status_ar, weakest_item, strongest_item,
+               primary_accreditation, questions_json
+        FROM survey_semester_snapshots
+        WHERE scope_key = ? AND semester IN ({placeholders})
+        ORDER BY semester, template_code
+        """,
+        tuple([sk] + sems),
+    ).fetchall()
+    out: dict[str, list[dict[str, Any]]] = {s: [] for s in sems}
+    for row in rows:
+        if hasattr(row, "keys"):
+            d = dict(row)
+        else:
+            d = {
+                "semester": row[0],
+                "template_code": row[1],
+                "title_ar": row[2],
+                "response_count": row[3],
+                "min_aggregate": row[4],
+                "aggregated": row[5],
+                "overall_score_percent": row[6],
+                "compliance_status_ar": row[7],
+                "weakest_item": row[8],
+                "strongest_item": row[9],
+                "primary_accreditation": row[10],
+                "questions_json": row[11],
+            }
+        try:
+            d["questions"] = json.loads(d.get("questions_json") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            d["questions"] = []
+        sem_key = (d.get("semester") or "").strip()
+        if sem_key in out:
+            out[sem_key].append(d)
+    return out
+
+
 def _questions_payload(questions: list[dict] | None) -> str:
     slim = []
     for q in questions or []:
@@ -600,9 +653,10 @@ def build_trends_chart_data(
 
     surveys_map: dict[str, dict[str, Any]] = {}
     overall_avg: list[float | None] = []
+    snaps_by_sem = list_semester_snapshots_batch(conn, semesters, department_id)
 
     for sem in semesters:
-        snaps = list_semester_snapshots(conn, sem, department_id)
+        snaps = snaps_by_sem.get(sem) or []
         scored = [
             float(s["overall_score_percent"])
             for s in snaps
@@ -644,6 +698,10 @@ def closure_reminder_status(
     conn,
     semester: str,
     department_id: int | None = None,
+    *,
+    aggregated_count: int | None = None,
+    total_survey_count: int | None = None,
+    department_label: str | None = None,
 ) -> dict[str, Any]:
     """
     تذكير بإغلاق الفصل عند وجود نتائج مجمّعة دون لقطة مُقفلة.
@@ -654,20 +712,26 @@ def closure_reminder_status(
     if is_semester_closed(conn, sem, department_id):
         return {"show": False, "reason": "already_closed"}
 
-    combined = build_combined_survey_report(
-        conn, semester=sem, department_id=department_id, include_course_eval=True
-    )
-    agg = int(combined.get("aggregated_survey_count") or 0)
-    total = int(combined.get("total_survey_count") or 0)
+    if aggregated_count is None:
+        agg, total = _closure_aggregate_counts(conn, sem, department_id)
+    else:
+        agg = int(aggregated_count)
+        total = int(total_survey_count if total_survey_count is not None else aggregated_count)
+
     if agg == 0:
         return {"show": False, "reason": "no_aggregated_data"}
+
+    if department_label is None:
+        from backend.services.survey_analytics import _department_label
+
+        department_label = _department_label(conn, department_id)
 
     return {
         "show": True,
         "semester": sem,
         "aggregated_count": agg,
         "total_count": total,
-        "department_label": combined.get("department_label"),
+        "department_label": department_label,
         "title_ar": "تذكير: إغلاق الفصل وحفظ اللقطة",
         "message_ar": (
             f"الفصل «{sem}» لديه {agg} استبيان(ات) مجمّعة من أصل {total} "
@@ -676,6 +740,36 @@ def closure_reminder_status(
         ),
         "action_url": f"/academic_quality/surveys/results?semester={sem}",
     }
+
+
+def _closure_aggregate_counts(
+    conn,
+    semester: str,
+    department_id: int | None = None,
+) -> tuple[int, int]:
+    """عدّ التجميعات دون build_combined_survey_report."""
+    from backend.core.survey_platform import EXTERNAL_SURVEY_CODES
+    from backend.services.multi_surveys import aggregate_template, list_templates
+    from backend.services.survey_analytics import build_course_eval_report
+
+    sem = (semester or "").strip()
+    total = 0
+    agg = 0
+    for t in list_templates(conn):
+        if int(t.get("legacy_course_eval") or 0):
+            continue
+        tc = (t.get("code") or "").strip()
+        if not tc or tc in EXTERNAL_SURVEY_CODES:
+            continue
+        total += 1
+        a = aggregate_template(conn, tc, semester=sem, department_id=department_id)
+        if a.get("aggregated"):
+            agg += 1
+    total += 1
+    ce = build_course_eval_report(conn, semester=sem, department_id=department_id)
+    if ce.get("aggregated"):
+        agg += 1
+    return agg, total
 
 
 def get_cycle_closure(conn, cycle_label: str) -> dict[str, Any] | None:

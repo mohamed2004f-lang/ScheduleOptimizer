@@ -15,6 +15,9 @@
       <tr><th>أضعف / أقوى بند</th><td>{{ report.weakest_item or '—' }} / {{ report.strongest_item or '—' }}</td></tr>
     </tbody>
   </table>
+  {% if report.scope_note_ar %}
+  <p class="interpret">{{ report.scope_note_ar }}</p>
+  {% endif %}
   {% if report.interpretation_ar %}
   <p class="interpret">{{ report.interpretation_ar }}</p>
   {% endif %}

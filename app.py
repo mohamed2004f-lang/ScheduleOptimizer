@@ -1,4 +1,4 @@
-from flask import Flask, render_template, redirect, url_for, jsonify, session, request, abort, send_from_directory
+from flask import Flask, render_template, redirect, url_for, jsonify, session, request, abort, send_from_directory, make_response
 from flask_wtf.csrf import CSRFProtect, CSRFError
 from backend.database.database import ensure_tables, is_postgresql, close_pool
 from config import DATABASE_URL, FLASK_ENV, FLASK_DEBUG
@@ -8,6 +8,7 @@ import atexit
 from backend.services.students import students_bp
 from backend.services.courses import courses_bp
 from backend.services.grades import grades_bp
+from backend.services.course_delivery import course_delivery_bp
 from backend.services.schedule import schedule_bp
 from backend.services.exams import exams_bp
 from backend.services.admin import admin_bp
@@ -173,6 +174,7 @@ register_error_handlers(app)
 app.register_blueprint(students_bp, url_prefix="/students")
 app.register_blueprint(courses_bp, url_prefix="/courses")
 app.register_blueprint(grades_bp, url_prefix="/grades")
+app.register_blueprint(course_delivery_bp, url_prefix="/course_delivery")
 app.register_blueprint(schedule_bp, url_prefix="/schedule")
 app.register_blueprint(exams_bp, url_prefix="/exams")
 app.register_blueprint(admin_bp, url_prefix="/admin")
@@ -516,7 +518,14 @@ def health_ready():
 @role_required("instructor")
 def my_courses_page():
     """مقرراتي: الشعب المكلَّف بها في الجدول (حسب ربط الحساب بجدول instructors)."""
-    return render_template("my_courses.html", active_page="my_courses")
+    if not _instructor_portal_ui_allowed():
+        if current_supervisor_effective():
+            return redirect(url_for("supervisor_dashboard_page"))
+        return redirect(url_for("transcript_page"))
+    resp = make_response(render_template("my_courses.html", active_page="my_courses"))
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 
 @app.route("/my_schedule")
@@ -627,6 +636,14 @@ def supervision_form():
 @app.route("/supervisor_dashboard")
 @login_required
 def supervisor_dashboard_page():
+    role = _normalize_role((session.get("user_role") or "").strip())
+    try:
+        is_sup = int(session.get("is_supervisor") or 0) == 1
+    except (TypeError, ValueError):
+        is_sup = False
+    if role == "instructor" and is_sup and (session.get(SESSION_ACTIVE_MODE) or "instructor") != "supervisor":
+        session[SESSION_ACTIVE_MODE] = "supervisor"
+        session.modified = True
     if not current_supervisor_effective():
         return redirect(url_for("my_courses_page"))
     return render_template("supervisor_dashboard.html")
@@ -947,6 +964,27 @@ def exam_schedule_versions_page():
 def course_closure_reports_page():
     """لوحة رئيس القسم لاعتماد تقارير إقفال المقرر."""
     return render_template("course_closure_reports.html")
+
+
+@app.route("/course_delivery_page")
+@login_required
+@role_required("instructor", "head_of_department", "admin_main", "admin")
+def course_delivery_page():
+    """تقرير تنفيذ المقرر (baseline + جزئي/نهائي)."""
+    role = (session.get("user_role") or "").strip()
+    if role in ("instructor", "head_of_department") and not _instructor_portal_ui_allowed():
+        if current_supervisor_effective():
+            return redirect(url_for("supervisor_dashboard_page"))
+        return redirect(url_for("transcript_page"))
+    return render_template("course_delivery.html", active_page="my_courses")
+
+
+@app.route("/course_delivery_hod_page")
+@login_required
+@role_required("head_of_department")
+def course_delivery_hod_page():
+    """لوحة اعتماد رئيس القسم الموحّدة (مفردات + تقارير + مسودات)."""
+    return render_template("course_delivery_hod.html", active_page="grade_drafts")
 
 
 @app.route("/faculty_scorecards_page")

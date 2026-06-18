@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8">
@@ -23,6 +23,7 @@
         <small>تقييم سري — لن يؤثر على درجتك</small>
       </div>
       <div class="card-body">
+        {% include "_likert_scale_guide.html" %}
         <form id="evaluationForm">
           <input type="hidden" name="section_id" value="{{ section_id }}">
           {% if teaching_group_id %}<input type="hidden" name="teaching_group_id" value="{{ teaching_group_id }}">{% endif %}
@@ -34,7 +35,7 @@
             <div class="btn-group w-100 flex-wrap" role="group">
               {% for v, t in likert_options %}
               <input type="radio" class="btn-check" name="q_{{ q.id }}" value="{{ v }}" id="q{{ q.id }}_{{ v }}" required>
-              <label class="btn btn-outline-secondary btn-sm" for="q{{ q.id }}_{{ v }}">{{ t }} ({{ v }})</label>
+              <label class="btn btn-outline-secondary btn-sm" for="q{{ q.id }}_{{ v }}" title="{{ t }}">{{ v }}</label>
               {% endfor %}
             </div>
           </div>
@@ -49,6 +50,7 @@
     </div>
     {% endif %}
   </main>
+  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
   <script>
     const form = document.getElementById('evaluationForm');
     if (form) {

@@ -294,42 +294,8 @@ def check_general_sections_capacity(
     term_label: str | None,
 ) -> list[str]:
     """
-    تحقق من سعة شُعب البرنامج للمقررات المضافة حديثًا.
+    تحقق سعة المقررات — سابقاً عبر program_course_sections (مُلغى).
+    السعة التشغيلية تُدار عبر teaching_groups.capacity_max عند الحاجة.
     """
-    if not selected_pc_map:
-        return []
-    warns: list[str] = []
-    sem = (term_label or "").strip()
-    for _, pcid in selected_pc_map.items():
-        if int(pcid) in old_pc_ids:
-            continue
-        sec_rows = cur.execute(
-            """
-            SELECT COALESCE(capacity_max,0), COALESCE(semester,'')
-            FROM program_course_sections
-            WHERE program_course_id = ? AND is_active = 1
-            """,
-            (int(pcid),),
-        ).fetchall()
-        if not sec_rows:
-            continue
-        total_cap = 0
-        for sr in sec_rows:
-            cap = int(sr[0] or 0)
-            ssem = (sr[1] or "").strip()
-            if sem and ssem and ssem != sem:
-                continue
-            if cap > 0:
-                total_cap += cap
-        if total_cap <= 0:
-            continue
-        cnt = cur.execute(
-            "SELECT COUNT(DISTINCT student_id) FROM registrations WHERE program_course_id = ?",
-            (int(pcid),),
-        ).fetchone()
-        cur_count = int((cnt[0] if cnt else 0) or 0)
-        if cur_count + 1 > total_cap:
-            warns.append(
-                f"لا توجد سعة كافية في شُعب المقرر program_course_id={pcid} (المتاح {total_cap}, الحالي {cur_count})."
-            )
-    return warns
+    _ = (cur, selected_pc_map, old_pc_ids, term_label)
+    return []

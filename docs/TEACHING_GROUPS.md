@@ -41,6 +41,7 @@ python scripts/backfill_teaching_groups.py --skip-schedule --skip-registrations
 
 - **مقرراتي** تعرض مجموعات تدريس (قسم + A/B + محاضرات).
 - قائمة الدرجات تُحمّل الطلاب من مجموعة التدريس عند توفر `teaching_group_id`.
+- واجهة **مسودات الدرجات** تعرض «مجموعة تدريس» (وليس «شعبة») وتمرّر `teaching_group_id` في الروستر وإنشاء المسودة.
 
 ## استكشاف الأخطاء
 
@@ -50,3 +51,8 @@ python scripts/backfill_teaching_groups.py --skip-schedule --skip-registrations
 | مقرر يظهر مرتين للأستاذ | راجع إعداد split — كل مجموعة بطاقة منفصلة |
 | تقييم مكرر | تأكد من `teaching_group_id` في `course_evaluations` |
 | حصص بلا مجموعة | شغّل ترحيل حصص أو اربط يدوياً من الإعداد |
+
+## ملاحظة: `program_course_sections` (مُلغى)
+
+شعب الكتalog القديمة (`program_course_sections`) **أُزيلت** — استخدم **مجموعات التدريس** فقط.
+الخطة الأكاديمية (`program_courses`) تبقى للمتطلبات والكتalog؛ التشغيل الفعلي = `teaching_groups`.

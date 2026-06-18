@@ -12,36 +12,79 @@
   <main class="container mt-4" style="max-width:720px;">
     <div class="card shadow-sm">
       <div class="card-header bg-primary text-white">
-        <h5 class="mb-0">{{ template.title_ar }}</h5>
-        <small>تعبئة مطلوبة من دورك — سري — الفصل: {{ semester }}</small>
+        <h5 class="mb-1">{{ template.title_ar }}</h5>
+        {% if template_intro and template_intro.subtitle_ar %}
+        <div class="small opacity-90">{{ template_intro.subtitle_ar }}</div>
+        {% endif %}
+        <small class="d-block mt-1 opacity-75">
+          تعبئة مطلوبة من دورك — سري — الفصل: {{ semester }}
+          {% if template_intro and template_intro.duration_hint %}
+          · {{ template_intro.duration_hint }}
+          {% endif %}
+        </small>
       </div>
       <div class="card-body">
+        {% if template_intro and template_intro.scope_note_ar %}
+        <div class="alert alert-info border-start border-info border-4 small mb-4">
+          {{ template_intro.scope_note_ar }}
+        </div>
+        {% endif %}
+        {% if template_intro and template_intro.about_ar %}
+        <div class="alert alert-light border small mb-4">
+          {{ template_intro.about_ar }}
+        </div>
+        {% endif %}
+        {% include "_likert_scale_guide.html" %}
+
         <form id="surveyForm">
           <input type="hidden" name="template_code" value="{{ template.code }}">
           <input type="hidden" name="semester" value="{{ semester }}">
           <input type="hidden" name="subject_type" value="{{ subject_type }}">
           <input type="hidden" name="subject_id" value="{{ subject_id }}">
-          {% for q in questions %}
-          <div class="mb-4">
-            <label class="form-label fw-bold">{{ loop.index }}. {{ q.label_ar }}</label>
-            <div class="btn-group w-100 flex-wrap" role="group">
-              {% for v, t in likert_labels %}
-              <input type="radio" class="btn-check" name="q_{{ q.id }}" value="{{ v }}" id="q{{ q.id }}_{{ v }}" required>
-              <label class="btn btn-outline-secondary btn-sm" for="q{{ q.id }}_{{ v }}">{{ t }} ({{ v }})</label>
-              {% endfor %}
+          {% set q_index = namespace(n=0) %}
+          {% if question_sections %}
+            {% for item in question_sections %}
+              {% if item.kind == 'section' %}
+              <h6 class="fw-bold text-primary border-bottom pb-2 mt-4 mb-3">{{ item.title }}</h6>
+              {% else %}
+              {% set q = item.question %}
+              {% set q_index.n = q_index.n + 1 %}
+              <div class="mb-4">
+                <label class="form-label fw-bold">{{ q_index.n }}. {{ q.label_ar }}</label>
+                <div class="btn-group w-100 flex-wrap" role="group">
+                  {% for v, t in likert_labels %}
+                  <input type="radio" class="btn-check" name="q_{{ q.id }}" value="{{ v }}" id="q{{ q.id }}_{{ v }}" required>
+                  <label class="btn btn-outline-secondary btn-sm" for="q{{ q.id }}_{{ v }}" title="{{ t }}">{{ v }}</label>
+                  {% endfor %}
+                </div>
+                <div class="small text-muted mt-1">من ١ (ضعيف) إلى ٥ (ممتاز)</div>
+              </div>
+              {% endif %}
+            {% endfor %}
+          {% else %}
+            {% for q in questions %}
+            <div class="mb-4">
+              <label class="form-label fw-bold">{{ loop.index }}. {{ q.label_ar }}</label>
+              <div class="btn-group w-100 flex-wrap" role="group">
+                {% for v, t in likert_labels %}
+                <input type="radio" class="btn-check" name="q_{{ q.id }}" value="{{ v }}" id="q{{ q.id }}_{{ v }}" required>
+                <label class="btn btn-outline-secondary btn-sm" for="q{{ q.id }}_{{ v }}" title="{{ t }}">{{ v }}</label>
+                {% endfor %}
+              </div>
             </div>
-          </div>
-          {% endfor %}
+            {% endfor %}
+          {% endif %}
           <div class="mb-3">
-            <label class="form-label">ملاحظات (اختياري)</label>
-            <textarea class="form-control" name="comments" rows="3"></textarea>
+            <label class="form-label">ملاحظات أو اقتراحات (اختياري)</label>
+            <textarea class="form-control" name="comments" rows="3" placeholder="أي ملاحظة تساعد في التحسين دون ذكر أسماء…"></textarea>
           </div>
-          <button type="submit" class="btn btn-success btn-lg w-100">إرسال</button>
-          <a href="/academic_quality/surveys" class="btn btn-link w-100 mt-2">العودة إلى الاستبيانات</a>
+          <button type="submit" class="btn btn-success btn-lg w-100">إرسال الاستبيان</button>
+          <a href="/academic_quality/surveys" class="btn btn-link w-100 mt-2">العودة إلى مركز الاستبيانات</a>
         </form>
       </div>
     </div>
   </main>
+  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
   <script>
     document.getElementById('surveyForm').addEventListener('submit', async (e) => {
       e.preventDefault();

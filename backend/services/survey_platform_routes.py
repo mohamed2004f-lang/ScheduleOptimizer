@@ -23,6 +23,8 @@ from backend.core.survey_platform import (
     EXTERNAL_SURVEY_CODES,
     RESPONDENT_ROLE_LABELS,
     ROLE_SURVEY_FILL_GUIDE,
+    survey_question_section_title,
+    survey_template_intro,
 )
 from backend.services.survey_invites import (
     create_survey_invite,
@@ -43,15 +45,15 @@ from backend.services.multi_surveys import (
     list_templates,
     parse_answers_payload,
     submit_survey_response,
-    survey_metrics_for_quality,
+    survey_metrics_from_aggregates,
     survey_respondent_role,
     _resolve_subject,
 )
-from backend.services.evaluation_survey import likert_labels_ar
+from backend.services.evaluation_survey import likert_labels_ar, likert_scale_context
 from backend.services.quality_metrics import term_label_from_conn
 from backend.services.survey_analytics import (
     build_course_eval_report,
-    build_course_eval_sections_summary,
+    build_course_eval_results_bundle,
     export_course_eval_by_course_xlsx,
     export_course_eval_section_xlsx,
     export_course_eval_missing_sections_xlsx,
@@ -59,10 +61,10 @@ from backend.services.survey_analytics import (
     export_package_xlsx,
     export_single_survey_xlsx,
     is_exportable_template_code,
-    list_course_eval_course_instructor_groups,
     prepare_combined_pdf_context,
     prepare_single_survey_pdf_context,
 )
+from backend.services.survey_accreditation_links import SurveyLinkCache
 from backend.services.survey_accreditation import (
     accreditation_links_display,
     primary_evidence_indicator_code,
@@ -106,6 +108,7 @@ def _session_payload() -> dict:
         "user_role": session.get("user_role"),
         "student_id": session.get("student_id"),
         "instructor_id": session.get("instructor_id"),
+        "is_supervisor": session.get("is_supervisor"),
     }
 
 
@@ -193,6 +196,206 @@ def _count_supervisor_templates(conn) -> int:
     )
 
 
+def _enrich_pending_surveys(pending: list) -> list:
+    out = []
+    for p in pending or []:
+        item = dict(p)
+        code = (item.get("code") or "").strip()
+        intro = survey_template_intro(code)
+        if intro:
+            item["intro"] = intro
+        out.append(item)
+    return out
+
+
+def _count_templates_for_respondent(conn, respondent_role: str) -> int:
+    role = (respondent_role or "").strip()
+    return sum(
+        1
+        for t in list_templates(conn)
+        if (t.get("respondent_role") or "") == role
+        and not int(t.get("legacy_course_eval") or 0)
+    )
+
+
+def _student_registration_diag(conn, student_id: str) -> dict:
+    sid = (student_id or "").strip()
+    if not sid:
+        return {"registration_count": 0, "unmatched_schedule_count": 0}
+    cur = conn.cursor()
+    reg_count = int(
+        cur.execute(
+            "SELECT COUNT(*) FROM registrations WHERE student_id = ?",
+            (sid,),
+        ).fetchone()[0]
+        or 0
+    )
+    unmatched = int(
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM registrations r
+            LEFT JOIN schedule sch
+              ON lower(trim(sch.course_name)) = lower(trim(r.course_name))
+            WHERE r.student_id = ?
+              AND (
+                    sch.course_name IS NULL
+                    OR (
+                          COALESCE(sch.instructor_id, 0) = 0
+                          AND TRIM(COALESCE(sch.instructor, '')) = ''
+                       )
+                  )
+            """,
+            (sid,),
+        ).fetchone()[0]
+        or 0
+    )
+    return {
+        "registration_count": reg_count,
+        "unmatched_schedule_count": unmatched,
+    }
+
+
+def build_survey_hub_status(
+    conn,
+    *,
+    role: str,
+    session_data: dict,
+    semester: str,
+    department_id: int | None,
+    active_mode: str,
+    pending: list,
+    supervisor_effective: bool,
+    supervisor_template_count: int,
+    dept_missing: bool,
+) -> dict:
+    """سياق تشخيصي لصفحة تعبئة الاستبيانات — يوضح سبب الفراغ أو العدد المتبقي."""
+    role = _normalize_role((role or "").strip())
+    pending = pending or []
+    pending_count = len(pending)
+    course_pending = sum(1 for p in pending if p.get("pending_kind") == "course_eval")
+    platform_pending = pending_count - course_pending
+    eff = survey_respondent_role(role, active_mode)
+
+    details: dict = {
+        "pending_count": pending_count,
+        "course_eval_pending": course_pending,
+        "platform_pending": platform_pending,
+        "semester": semester,
+    }
+    messages: list[str] = []
+    level = "info"
+    show = False
+    title = "ملخص الاستبيانات"
+
+    if role in ("admin", "admin_main"):
+        return {"show": False, "level": level, "title": title, "messages": messages, "details": details}
+
+    if role == "student":
+        show = True
+        student_id = (session_data.get("student_id") or session_data.get("user") or "").strip()
+        if not student_id:
+            level = "warning"
+            messages.append(
+                "لم يُربط رقم الطالب بحسابك — لن تظهر تقييمات المقررات حتى يُصحَّح الربط في شؤون الطلبة."
+            )
+        else:
+            from backend.services.course_evaluations import (
+                _student_evaluable_sections,
+                list_pending_course_evaluations,
+            )
+
+            reg_diag = _student_registration_diag(conn, student_id)
+            details.update(reg_diag)
+            sections = _student_evaluable_sections(conn, student_id, semester)
+            evaluable = len(sections)
+            ce_pending = len(list_pending_course_evaluations(conn, student_id, semester=semester))
+            details["evaluable_courses"] = evaluable
+            details["course_eval_pending"] = ce_pending
+            details["course_eval_completed"] = max(0, evaluable - ce_pending)
+            details["platform_template_count"] = _count_templates_for_respondent(conn, "student")
+
+            if pending_count > 0:
+                level = "info"
+                messages.append(
+                    f"لديك {pending_count} عنصراً مطلوباً: "
+                    f"{ce_pending} تقييم مقرر، {platform_pending} استبيان عام."
+                )
+            elif reg_diag["registration_count"] == 0:
+                level = "warning"
+                messages.append(
+                    "لا توجد تسجيلات مقررات لحسابك — سجّل مواد الفصل الحالي أولاً ثم أعد فتح هذه الصفحة."
+                )
+            elif evaluable == 0:
+                level = "warning"
+                hint = (
+                    "لديك تسجيلات لكن لا توجد شعب قابلة للتقييم في الجدول لهذا الفصل."
+                )
+                if reg_diag["unmatched_schedule_count"] > 0:
+                    hint += (
+                        f" ({reg_diag['unmatched_schedule_count']} مقرر(ات) بلا أستاذ أو بلا صف في الجدول)."
+                    )
+                else:
+                    hint += " تحقق من ربط المقرر بالجدول ومن وجود أستاذ للشعبة."
+                messages.append(hint)
+            elif ce_pending == 0 and platform_pending == 0:
+                level = "success"
+                messages.append(
+                    f"أكملت جميع التقييمات والاستبيانات المطلوبة لهذا الفصل "
+                    f"({details['course_eval_completed']} مقرر/مجموعة تدريس)."
+                )
+                if details["platform_template_count"] == 0:
+                    messages.append("لا توجد قوالب استبيان عام مفعّلة للطالب في النظام حالياً.")
+            elif ce_pending == 0 and details["platform_template_count"] > 0:
+                level = "success"
+                messages.append("أكملت تقييم جميع المقررات القابلة للتقييم.")
+            elif platform_pending == 0 and details["platform_template_count"] == 0 and ce_pending > 0:
+                level = "warning"
+                messages.append(
+                    "تقييمات المقررات معلّقة لكن لم تُفعَّل قوالب الاستبيان العام للطالب بعد."
+                )
+        return {"show": show, "level": level, "title": title, "messages": messages, "details": details}
+
+    if supervisor_effective:
+        details["supervisor_template_count"] = supervisor_template_count
+        if dept_missing:
+            return {"show": False, "level": level, "title": title, "messages": messages, "details": details}
+        show = pending_count == 0
+        if pending_count == 0 and supervisor_template_count == 0:
+            level = "secondary"
+            messages.append("لم تُفعَّل قوالب استبيان المشرف بعد في النظام.")
+        elif pending_count == 0:
+            level = "success"
+            messages.append("أكملت جميع استبيانات المشرف الأكاديمي لهذا الفصل.")
+        return {"show": show, "level": level, "title": title, "messages": messages, "details": details}
+
+    show = pending_count == 0
+    details["platform_template_count"] = _count_templates_for_respondent(conn, eff)
+    iid = session_data.get("instructor_id")
+    if role in ("instructor", "head_of_department", "supervisor") and not iid:
+        level = "warning"
+        show = True
+        messages.append(
+            "لم يُربط رقم عضو هيئة التدريس (instructor_id) بحسابك — لن تظهر استبيانات الأستاذ/المشرف."
+        )
+    elif department_id is None and role in ("instructor", "head_of_department") and details["platform_template_count"] > 0:
+        level = "warning"
+        show = True
+        messages.append("لم يُحدد قسم لحسابك — بعض الاستبيانات مرتبطة بالقسم.")
+    elif pending_count == 0 and details["platform_template_count"] == 0:
+        level = "secondary"
+        messages.append(f"لا توجد قوالب استبيان مفعّلة لدور «{eff}» في النظام حالياً.")
+    elif pending_count == 0:
+        level = "success"
+        messages.append("أكملت جميع الاستبيانات المطلوبة منك في هذا الدور لهذا الفصل.")
+        if role in ("instructor", "head_of_department") and session_data.get("is_supervisor"):
+            messages.append(
+                "إن كنت مشرفاً أيضاً، راجع استبيانات المشرف من وضع المشرف في الشريط العلوي."
+            )
+
+    return {"show": show, "level": level, "title": title, "messages": messages, "details": details}
+
+
 def register_survey_platform_routes(bp) -> None:
     @bp.route("/surveys")
     @login_required
@@ -222,6 +425,7 @@ def register_survey_platform_routes(bp) -> None:
                         conn, student_id, semester=sem
                     )
                     pending = ce_pending + pending
+            pending = _enrich_pending_surveys(pending)
             eff = survey_respondent_role(role, active_mode)
             fill_guide = ROLE_SURVEY_FILL_GUIDE.get(role) or ROLE_SURVEY_FILL_GUIDE.get(eff, "")
             respondent_label = _active_mode_label_ar(role, active_mode, supervisor_effective)
@@ -237,6 +441,7 @@ def register_survey_platform_routes(bp) -> None:
                     semester=sem,
                     department_id=dept_id,
                 )
+                instructor_pending = _enrich_pending_surveys(instructor_pending)
                 show_instructor_cross = True
                 instructor_all_done = len(instructor_pending) == 0
 
@@ -245,6 +450,18 @@ def register_survey_platform_routes(bp) -> None:
             )
             supervisor_template_count = _count_supervisor_templates(conn) if supervisor_effective else 0
             dept_missing = supervisor_effective and dept_id is None and supervisor_template_count > 0
+            hub_status = build_survey_hub_status(
+                conn,
+                role=role,
+                session_data=sess,
+                semester=sem,
+                department_id=dept_id,
+                active_mode=active_mode,
+                pending=pending,
+                supervisor_effective=supervisor_effective,
+                supervisor_template_count=supervisor_template_count,
+                dept_missing=dept_missing,
+            )
 
         return render_template(
             "survey_hub.html",
@@ -264,6 +481,7 @@ def register_survey_platform_routes(bp) -> None:
             supervisor_template_count=supervisor_template_count,
             dept_missing=dept_missing,
             department_id=dept_id,
+            hub_status=hub_status,
         )
 
     @bp.route("/surveys/fill/<template_code>", methods=["GET"])
@@ -285,14 +503,28 @@ def register_survey_platform_routes(bp) -> None:
                 conn, template, department_id=dept_id, subject_id_arg=dept_id
             )
             questions = list_template_questions(conn, int(template["id"]))
+        code = (template.get("code") or "").strip()
+        question_sections: list[dict] = []
+        last_section = None
+        for q in questions:
+            sec = survey_question_section_title(code, int(q.get("sort_order") or 0))
+            if sec and sec != last_section:
+                question_sections.append({"kind": "section", "title": sec})
+                last_section = sec
+            question_sections.append({"kind": "question", "question": q})
+        scale_ctx = likert_scale_context(questions)
         return render_template(
             "survey_fill.html",
             template=template,
             questions=questions,
+            question_sections=question_sections,
+            template_intro=survey_template_intro(code),
+            likert_labels=likert_labels_ar(),
+            scale_guide_note="اختر الرقم الذي يعبّر عن تجربتك هذا الفصل.",
+            **scale_ctx,
             semester=sem,
             subject_type=subj_type,
             subject_id=subj_id,
-            likert_labels=likert_labels_ar(),
             department_id=dept_id,
         )
 
@@ -506,18 +738,26 @@ def register_survey_platform_routes(bp) -> None:
                 else:
                     aggregates = [aggregate_template(conn, code, semester=sem, department_id=dept_id)]
             else:
+                aggregates = []
+                aggregates_by_code: dict[str, dict] = {}
                 for t in templates:
                     if int(t.get("legacy_course_eval") or 0):
                         continue
                     tc = t["code"]
                     if tc in EXTERNAL_SURVEY_CODES:
                         continue
-                    aggregates.append(
-                        aggregate_template(conn, tc, semester=sem, department_id=dept_id)
-                    )
-            metrics = survey_metrics_for_quality(conn, sem, dept_id)
+                    agg = aggregate_template(conn, tc, semester=sem, department_id=dept_id)
+                    aggregates.append(agg)
+                    aggregates_by_code[tc] = agg
+            metrics = (
+                survey_metrics_from_aggregates(aggregates_by_code)
+                if not code and results_view != "external"
+                else {}
+            )
             tpl_by_code = {t["code"]: t for t in templates}
-            from backend.core.survey_platform import RESPONDENT_ROLE_LABELS
+            from backend.core.survey_platform import RESPONDENT_ROLE_LABELS, survey_template_intro
+
+            link_cache = SurveyLinkCache()
 
             enriched = []
             for agg in aggregates:
@@ -525,6 +765,7 @@ def register_survey_platform_routes(bp) -> None:
                 tpl = tpl_by_code.get(tc, {})
                 cnt = int(agg.get("response_count") or 0)
                 mn = int(agg.get("min_aggregate") or 1)
+                intro = survey_template_intro(tc)
                 enriched.append(
                     {
                         **agg,
@@ -532,19 +773,21 @@ def register_survey_platform_routes(bp) -> None:
                         "respondent_label": RESPONDENT_ROLE_LABELS.get(
                             (tpl.get("respondent_role") or "").strip(), "—"
                         ),
+                        "scope_note_ar": intro.get("scope_note_ar") or "",
                         "fill_url": f"/academic_quality/surveys/fill/{tc}",
                         "progress_pct": min(100, int((cnt / mn) * 100)) if mn > 0 else 0,
                         "remaining": max(0, mn - cnt),
                         "accreditation_links": accreditation_links_display(
-                            tc, conn, semester=sem, department_id=dept_id
+                            tc, conn, semester=sem, department_id=dept_id, link_cache=link_cache
                         ),
                         "evidence_indicator_code": primary_evidence_indicator_code(
-                            tc, conn, semester=sem, department_id=dept_id
+                            tc, conn, semester=sem, department_id=dept_id, link_cache=link_cache
                         ),
                     }
                 )
             aggregates = enriched
             ext_enriched = []
+            ext_link_cache = SurveyLinkCache()
             for agg in external_aggregates:
                 tc = agg.get("template_code") or ""
                 tpl = tpl_by_code.get(tc, {})
@@ -560,10 +803,10 @@ def register_survey_platform_routes(bp) -> None:
                         "progress_pct": min(100, int((cnt / mn) * 100)) if mn > 0 else 0,
                         "remaining": max(0, mn - cnt),
                         "accreditation_links": accreditation_links_display(
-                            tc, conn, semester=sem, department_id=dept_id
+                            tc, conn, semester=sem, department_id=dept_id, link_cache=ext_link_cache
                         ),
                         "evidence_indicator_code": primary_evidence_indicator_code(
-                            tc, conn, semester=sem, department_id=dept_id
+                            tc, conn, semester=sem, department_id=dept_id, link_cache=ext_link_cache
                         ),
                     }
                 )
@@ -574,17 +817,24 @@ def register_survey_platform_routes(bp) -> None:
                 (sem,),
             ).fetchone()
             course_eval_count = int((course_eval_row[0] if course_eval_row else 0) or 0)
-            course_eval_sections = build_course_eval_sections_summary(
-                conn, semester=sem, department_id=dept_id
-            )
-            course_eval_by_course = list_course_eval_course_instructor_groups(
-                conn, semester=sem, department_id=dept_id
+            course_eval_sections, course_eval_by_course = build_course_eval_results_bundle(
+                conn, semester=sem, department_id=dept_id, summary_only=True
             )
             course_eval_summary = build_course_eval_report(
                 conn, semester=sem, department_id=dept_id
             )
             semester_closure = get_semester_closure(conn, sem, dept_id)
-            closure_reminder = closure_reminder_status(conn, sem, dept_id)
+            agg_for_closure = sum(1 for a in aggregates if a.get("aggregated"))
+            total_for_closure = len(aggregates) + 1
+            if course_eval_summary.get("aggregated"):
+                agg_for_closure += 1
+            closure_reminder = closure_reminder_status(
+                conn,
+                sem,
+                dept_id,
+                aggregated_count=agg_for_closure,
+                total_survey_count=total_for_closure,
+            )
             cycle_closure = None
             if results_view == "external" and ext_cycle:
                 cycle_closure = get_cycle_closure(conn, ext_cycle)

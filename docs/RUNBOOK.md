@@ -52,6 +52,8 @@ python scripts/pg_dump_via_env.py
 Copy-Item -Recurse backend\uploads "backups\uploads_$(Get-Date -Format yyyyMMdd)"
 ```
 
+تفاصيل إعداد `pg_dump` على Windows: **`docs/PG_BACKUP.md`**
+
 ---
 
 ## 5) Update Local System from GitHub

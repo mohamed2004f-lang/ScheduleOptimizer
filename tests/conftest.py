@@ -134,18 +134,6 @@ CREATE TABLE IF NOT EXISTS program_course_prereqs (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS program_course_sections (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    program_course_id INTEGER NOT NULL,
-    section_code TEXT NOT NULL,
-    capacity_max INTEGER,
-    semester TEXT DEFAULT '',
-    note TEXT DEFAULT '',
-    is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (program_course_id, section_code)
-);
-
 CREATE TABLE IF NOT EXISTS students (
     student_id TEXT PRIMARY KEY,
     student_name TEXT NOT NULL DEFAULT '',
@@ -206,6 +194,7 @@ CREATE TABLE IF NOT EXISTS grade_drafts (
     teaching_group_id INTEGER,
     instructor_id INTEGER NOT NULL,
     grading_mode TEXT NOT NULL DEFAULT 'partial_final',
+    draft_phase TEXT NOT NULL DEFAULT 'combined',
     status TEXT NOT NULL DEFAULT 'Draft',
     created_at TEXT,
     updated_at TEXT,
@@ -1349,6 +1338,7 @@ def _setup_shared_db():
         "backend.services.college_catalog",
         "backend.core.monitoring",
         "backend.core.auth",
+        "backend.services.course_delivery",
     ]
     import importlib
     for mod_name in _modules_to_patch:

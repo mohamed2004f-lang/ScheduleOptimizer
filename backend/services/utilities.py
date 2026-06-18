@@ -11,6 +11,7 @@ from backend.database.database import (
     ensure_tables as ensure_schema,
     get_connection,
     is_postgresql,
+    sql_notifications_user_col,
 )
 
 logger = logging.getLogger(__name__)
@@ -381,10 +382,11 @@ def create_notification(user: str, title: str, body: str = "", created_at: str |
         return
     try:
         ts = created_at or datetime.utcnow().isoformat()
-        with get_connection(DB_FILE) as conn:
+        ucol = sql_notifications_user_col()
+        with get_connection() as conn:
             cur = conn.cursor()
             cur.execute(
-                "INSERT INTO notifications (user, title, body, is_read, created_at) VALUES (?,?,?,?,?)",
+                f"INSERT INTO notifications ({ucol}, title, body, is_read, created_at) VALUES (?,?,?,?,?)",
                 (user, title, body or "", 0, ts),
             )
             conn.commit()

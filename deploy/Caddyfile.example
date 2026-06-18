@@ -1,0 +1,19 @@
+# انسخ إلى Caddyfile وعدّل النطاق:
+#   cp deploy/Caddyfile.example deploy/Caddyfile
+#
+# مع Docker Compose + deploy/docker-compose.caddy.yml:
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.caddy.yml up -d --build
+#
+# --- بعد شراء النطاق (مثال) ---
+# uod-engineering.org {
+#     reverse_proxy web:5000
+# }
+#
+# --- تجربة محلية بدون نطاق (HTTP فقط — شبكة داخلية) ---
+# :80 {
+#     reverse_proxy web:5000
+# }
+
+uod-engineering.org {
+    reverse_proxy web:5000
+}

@@ -39,3 +39,24 @@
   color: #58151c;
   border: 1px solid #f1aeb5;
 }
+
+/* شريط التنقل — وضع مدمج للإدارة */
+.app-navbar.nav-staff-compact [data-nav-tier="secondary"] {
+  display: none !important;
+}
+
+#navStaffCompactMoreMenu {
+  max-height: min(70vh, 28rem);
+  overflow-y: auto;
+  min-width: 16rem;
+}
+
+#navStaffCompactMoreMenu .dropdown-header {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--bs-secondary-color, #6c757d);
+}
+
+#navDensityToggleWrap .btn.active {
+  font-weight: 700;
+}

@@ -72,31 +72,137 @@ def _sync_template_titles_from_seed(conn) -> None:
         conn.commit()
         logger.info("Synced survey template titles from seed")
 
-    _sync_question_label(
-        conn,
-        "faculty_dean",
-        "التقييم الإجمالي للقيادة على مستوى العميد/الإدارة",
-        "التقييم الإجمالي للإدارة والسياسات الأكاديمية على مستوى الكلية",
-    )
+    _sync_all_question_labels_from_seed(conn)
 
 
-def _sync_question_label(conn, template_code: str, old_label: str, new_label: str) -> None:
+def _sync_all_question_labels_from_seed(conn) -> None:
+    """تحديث نصوص بنود كل قوالب الاستبيان من البذرة (حسب sort_order) دون تغيير question_id."""
+    if not table_exists(conn, "survey_questions"):
+        return
     cur = conn.cursor()
-    tid = _template_id_by_code(cur, template_code)
+    now = datetime.datetime.utcnow().isoformat()
+    updated = 0
+    for code, items in QUESTION_SEED.items():
+        tid = _template_id_by_code(cur, code)
+        if not tid:
+            continue
+        for label, sort_order in items:
+            cur.execute(
+                """
+                UPDATE survey_questions
+                SET label_ar = ?, updated_at = ?
+                WHERE template_id = ? AND sort_order = ?
+                """,
+                (label.strip(), now, tid, int(sort_order)),
+            )
+            updated += int(cur.rowcount or 0)
+    if updated:
+        conn.commit()
+        logger.info("Synced %s platform survey question labels from seed", updated)
+
+    _migrate_faculty_dean_drop_internal_resources(conn)
+
+
+def _migrate_faculty_dean_drop_internal_resources(conn) -> None:
+    """
+    حذف بند «توزيع الموارد/موارد الكلية الداخلية» (sort 20 القديم) وإجاباته،
+    والإبقاء على بند «متابعة احتياجات الأقسام لدى الجامعة» في sort 20.
+    """
+    if not table_exists(conn, "survey_questions") or not table_exists(conn, "survey_answers"):
+        return
+    internal_markers = (
+        "توزيع موارد الكلية الداخلية",
+        "توزيع الموارد (ميزانيات",
+    )
+    seed_label_20 = next(
+        (lbl.strip() for lbl, so in (QUESTION_SEED.get("faculty_dean") or []) if int(so) == 20),
+        "",
+    )
+    if not seed_label_20:
+        return
+    cur = conn.cursor()
+    tid = _template_id_by_code(cur, "faculty_dean")
     if not tid:
         return
     now = datetime.datetime.utcnow().isoformat()
-    cur.execute(
+    rows = cur.execute(
         """
-        UPDATE survey_questions
-        SET label_ar = ?, updated_at = ?
-        WHERE template_id = ? AND label_ar = ?
+        SELECT id, label_ar, sort_order
+        FROM survey_questions
+        WHERE template_id = ?
+        ORDER BY sort_order, id
         """,
-        (new_label, now, tid, old_label),
-    )
-    if cur.rowcount:
+        (tid,),
+    ).fetchall()
+    if not rows:
+        return
+
+    follow_up_id: int | None = None
+    for row in rows:
+        qid = int(row[0] if not hasattr(row, "keys") else row["id"])
+        label = ((row[1] if not hasattr(row, "keys") else row["label_ar"]) or "").strip()
+        sort_order = int(row[2] if not hasattr(row, "keys") else row["sort_order"])
+        if "تتابع احتياجات الأقسام" in label and sort_order == 25:
+            follow_up_id = qid
+    if follow_up_id is None:
+        for row in rows:
+            qid = int(row[0] if not hasattr(row, "keys") else row["id"])
+            label = ((row[1] if not hasattr(row, "keys") else row["label_ar"]) or "").strip()
+            if "تتابع احتياجات الأقسام" in label:
+                follow_up_id = qid
+
+    changed = False
+    for row in rows:
+        qid = int(row[0] if not hasattr(row, "keys") else row["id"])
+        if follow_up_id is not None and qid == follow_up_id:
+            continue
+        label = ((row[1] if not hasattr(row, "keys") else row["label_ar"]) or "").strip()
+        sort_order = int(row[2] if not hasattr(row, "keys") else row["sort_order"])
+        drop = False
+        if any(marker in label for marker in internal_markers):
+            drop = True
+        elif sort_order == 25:
+            drop = True
+        elif sort_order == 20 and (
+            "تتابع احتياجات الأقسام" in label
+            or any(marker in label for marker in internal_markers)
+        ):
+            drop = True
+        if not drop:
+            continue
+        cur.execute("DELETE FROM survey_answers WHERE question_id = ?", (qid,))
+        cur.execute("DELETE FROM survey_questions WHERE id = ?", (qid,))
+        changed = True
+
+    if follow_up_id is not None:
+        cur.execute(
+            """
+            UPDATE survey_questions
+            SET sort_order = 20, label_ar = ?, is_active = 1, updated_at = ?
+            WHERE id = ?
+            """,
+            (seed_label_20, now, follow_up_id),
+        )
+        changed = True
+    else:
+        row20 = cur.execute(
+            "SELECT id FROM survey_questions WHERE template_id = ? AND sort_order = ? LIMIT 1",
+            (tid, 20),
+        ).fetchone()
+        if not row20:
+            cur.execute(
+                """
+                INSERT INTO survey_questions
+                    (template_id, label_ar, sort_order, question_type, is_active, created_at, updated_at)
+                VALUES (?,?,?,?,1,?,?)
+                """,
+                (tid, seed_label_20, 20, "likert_5", now, now),
+            )
+            changed = True
+
+    if changed:
         conn.commit()
-        logger.info("Updated survey question label for %s", template_code)
+        logger.info("faculty_dean: dropped internal-resources item; follow-up at sort 20")
 
 
 def ensure_survey_templates_seeded(conn) -> None:
@@ -651,6 +757,7 @@ def aggregate_template(
             per_question.append(
                 {
                     "question_id": qid,
+                    "sort_order": int(q.get("sort_order") or 0),
                     "label_ar": q.get("label_ar"),
                     "avg_rating": round(avg5, 2) if avg5 else None,
                     "score_percent": pct,
@@ -671,6 +778,30 @@ def aggregate_template(
         "questions": per_question,
         "likert_labels": likert_labels_ar(),
     }
+
+
+def survey_metrics_from_aggregates(aggregates_by_code: dict[str, dict]) -> dict:
+    """مؤشرات الجودة من تجميعات محسوبة مسبقاً (بدون إعادة aggregate_template)."""
+    codes = [
+        "student_services",
+        "student_facilities",
+        "faculty_hod",
+        "faculty_dean",
+        "faculty_educational_process",
+        "supervisor_advising",
+        "supervisor_coordination",
+        "staff_workplace",
+        "staff_student_services",
+    ]
+    out: dict[str, Any] = {}
+    for code in codes:
+        agg = aggregates_by_code.get(code) or {}
+        out[code] = {
+            "score_percent": agg.get("overall_score_percent"),
+            "response_count": agg.get("response_count"),
+            "aggregated": agg.get("aggregated"),
+        }
+    return out
 
 
 def survey_metrics_for_quality(conn, semester: str, department_id: int | None = None) -> dict:

@@ -1,0 +1,11 @@
+# استبدل uod-engineering.org بنطاقكم عند الشراء، أو subdomain الجامعة.
+# للتجربة بدون domain: استخدم Cloudflare Tunnel (انظر deploy/README.md).
+
+uod-engineering.org {
+    reverse_proxy web:5000
+}
+
+# www → الجذر (اختياري)
+www.uod-engineering.org {
+    redir https://uod-engineering.org{uri} permanent
+}

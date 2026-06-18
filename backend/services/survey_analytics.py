@@ -11,6 +11,7 @@ import pandas as pd
 from backend.core.survey_platform import (
     LINK_TYPE_LABELS_AR,
     RESPONDENT_ROLE_LABELS,
+    survey_template_intro,
 )
 from backend.database.database import fetch_table_columns, schedule_pk_column, table_exists
 from backend.services.accreditation_metrics import suggest_compliance_status
@@ -219,6 +220,7 @@ def build_survey_report(
     weakest, strongest = _weakest_strongest(questions)
     score = agg.get("overall_score_percent")
     compliance = classify_compliance_status(score if agg.get("aggregated") else None)
+    intro = survey_template_intro(template_code)
 
     return {
         **agg,
@@ -230,6 +232,7 @@ def build_survey_report(
         "respondent_label": RESPONDENT_ROLE_LABELS.get(
             (tpl.get("respondent_role") or "").strip(), "—"
         ),
+        "scope_note_ar": intro.get("scope_note_ar") or "",
         "questions": questions,
         "weakest_item": weakest,
         "strongest_item": strongest,
@@ -495,7 +498,7 @@ def _fetch_course_eval_section_groups(
         tg_join = " LEFT JOIN teaching_groups tg ON tg.id = e.teaching_group_id "
     rows = cur.execute(
         f"""
-        SELECT e.section_id,
+        SELECT COALESCE(MAX(e.section_id), 0) AS section_id,
                COALESCE(MAX(e.course_name), '') AS course_name,
                COALESCE(MAX(e.instructor_id), 0) AS instructor_id,
                COUNT(*) AS response_count,
@@ -510,7 +513,7 @@ def _fetch_course_eval_section_groups(
         LEFT JOIN departments td ON td.id = tg.department_id
         WHERE e.semester = ? {dept_sql}
         GROUP BY COALESCE(NULLIF(e.teaching_group_id, 0), e.section_id), e.course_name, e.instructor_id
-        ORDER BY course_name, instructor_name, e.section_id
+        ORDER BY COALESCE(MAX(e.course_name), ''), COALESCE(MAX(i.name), ''), COALESCE(MAX(e.section_id), 0)
         """,
         tuple([semester] + dept_params),
     ).fetchall()
@@ -939,6 +942,67 @@ def _overall_course_eval_score(
     return round((avg5 / 5.0) * 100.0, 1) if avg5 else None
 
 
+def _cache_get(cache: dict[str, Any] | None, key: Any, factory):
+    if cache is None:
+        return factory()
+    if key not in cache:
+        cache[key] = factory()
+    return cache[key]
+
+
+def _section_groups_cached(
+    conn,
+    sem: str,
+    department_id: int | None,
+    *,
+    section_groups: list[dict[str, Any]] | None = None,
+    eval_cache: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    if section_groups is not None:
+        return section_groups
+    key = ("section_groups", sem, department_id)
+    return _cache_get(
+        eval_cache,
+        key,
+        lambda: _fetch_course_eval_section_groups(conn, sem, department_id),
+    )
+
+
+def _course_eval_columns_cached(
+    conn,
+    *,
+    eval_cache: dict[str, Any] | None = None,
+) -> set[str]:
+    return _cache_get(
+        eval_cache,
+        ("course_eval_columns",),
+        lambda: {c.lower() for c in fetch_table_columns(conn, "course_evaluations")},
+    )
+
+
+def _course_eval_finalize_meta_cached(
+    conn,
+    *,
+    semester: str,
+    department_id: int | None = None,
+    eval_cache: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    key = ("finalize_meta", "student_course", semester, department_id)
+
+    def _build() -> dict[str, Any]:
+        return {
+            "accreditation_links": accreditation_links_for(
+                "student_course", conn, semester=semester, department_id=department_id
+            ),
+            "primary_accreditation": _primary_accreditation_label(
+                conn, "student_course", semester=semester, department_id=department_id
+            ),
+            "course_eval_policy_ar": format_course_eval_aggregation_policy(conn),
+        }
+
+    return _cache_get(eval_cache, key, _build)
+
+
 def _finalize_course_eval_unit_report(
     report: dict[str, Any],
     conn,
@@ -946,6 +1010,8 @@ def _finalize_course_eval_unit_report(
     semester: str,
     department_id: int | None = None,
     title_suffix: str = "",
+    eval_cache: dict[str, Any] | None = None,
+    summary_only: bool = False,
 ) -> dict[str, Any]:
     questions = report.get("questions") or []
     weakest, strongest = _weakest_strongest(questions)
@@ -955,25 +1021,43 @@ def _finalize_course_eval_unit_report(
     base_title = "تقييم المقرر والأستاذ (طالب)"
     title = f"{base_title}{title_suffix}".strip()
     enrolled = int(report.get("enrolled_count") or 0)
-    resp_n = int(report.get("response_count") or 0)
+    meta = _course_eval_finalize_meta_cached(
+        conn, semester=semester, department_id=department_id, eval_cache=eval_cache
+    )
+    if summary_only:
+        report.update(
+            {
+                "template_code": "student_course",
+                "title_ar": title,
+                "min_aggregate": report.get("min_aggregate")
+                or course_eval_min_required(enrolled, conn=conn),
+                "course_eval_policy_ar": meta["course_eval_policy_ar"],
+                "questions": [],
+                "weakest_item": "—",
+                "strongest_item": "—",
+                "compliance_status": compliance,
+                "compliance_status_ar": COMPLIANCE_STATUS_LABELS_AR.get(compliance, compliance),
+                "accreditation_links": [],
+                "primary_accreditation": "—",
+                "respondent_label": RESPONDENT_ROLE_LABELS.get("student", "الطالب"),
+                "recommendations": [],
+            }
+        )
+        return report
     report.update(
         {
             "template_code": "student_course",
             "title_ar": title,
             "min_aggregate": report.get("min_aggregate")
             or course_eval_min_required(enrolled, conn=conn),
-            "course_eval_policy_ar": format_course_eval_aggregation_policy(conn),
+            "course_eval_policy_ar": meta["course_eval_policy_ar"],
             "questions": questions,
             "weakest_item": weakest,
             "strongest_item": strongest,
             "compliance_status": compliance,
             "compliance_status_ar": COMPLIANCE_STATUS_LABELS_AR.get(compliance, compliance),
-            "accreditation_links": accreditation_links_for(
-                "student_course", conn, semester=semester, department_id=department_id
-            ),
-            "primary_accreditation": _primary_accreditation_label(
-                conn, "student_course", semester=semester, department_id=department_id
-            ),
+            "accreditation_links": meta["accreditation_links"],
+            "primary_accreditation": meta["primary_accreditation"],
             "respondent_label": RESPONDENT_ROLE_LABELS.get("student", "الطالب"),
             "recommendations": generate_recommendations(questions, title),
         }
@@ -990,17 +1074,24 @@ def build_course_eval_section_report(
     course_name: str | None = None,
     instructor_id: int | None = None,
     teaching_group_id: int | None = None,
+    group_meta: dict[str, Any] | None = None,
+    section_groups: list[dict[str, Any]] | None = None,
+    eval_cache: dict[str, Any] | None = None,
+    summary_only: bool = False,
 ) -> dict[str, Any] | None:
     """تقرير تجميعي لتقييم شعبة أو مجموعة تدريس."""
     sem = (semester or "").strip() or term_label_from_conn(conn)
     sid = int(section_id)
     tgid = int(teaching_group_id or 0)
-    groups = _fetch_course_eval_section_groups(conn, sem, department_id)
-    group = None
-    if tgid > 0:
-        group = next((g for g in groups if int(g.get("teaching_group_id") or 0) == tgid), None)
+    group = group_meta
     if not group:
-        group = next((g for g in groups if int(g["section_id"]) == sid), None)
+        groups = _section_groups_cached(
+            conn, sem, department_id, section_groups=section_groups, eval_cache=eval_cache
+        )
+        if tgid > 0:
+            group = next((g for g in groups if int(g.get("teaching_group_id") or 0) == tgid), None)
+        if not group:
+            group = next((g for g in groups if int(g["section_id"]) == sid), None)
     if not group and course_name and instructor_id:
         group = {
             "section_id": sid,
@@ -1016,20 +1107,27 @@ def build_course_eval_section_report(
     count = int(group["response_count"])
     iid = int(group["instructor_id"])
     tgid = int(group.get("teaching_group_id") or 0)
-    reg_total = _course_registration_count(conn, group["course_name"])
-    n_groups = _course_teaching_group_count(
-        conn, group["course_name"], sem, instructor_id=iid
+    cname = group["course_name"]
+    reg_total = _cache_get(
+        eval_cache,
+        ("reg_count", cname),
+        lambda: _course_registration_count(conn, cname),
+    )
+    n_groups = _cache_get(
+        eval_cache,
+        ("tg_count", cname, sem, iid),
+        lambda: _course_teaching_group_count(conn, cname, sem, instructor_id=iid),
     )
     enrolled = section_enrolled_count(
         conn,
-        group["course_name"],
+        cname,
         sem,
         section_count=n_groups,
         teaching_group_id=tgid or None,
     )
     min_req = course_eval_min_required(enrolled, conn=conn)
     aggregated = course_eval_is_aggregated(count, enrolled, conn=conn)
-    ce_cols = {c.lower() for c in fetch_table_columns(conn, "course_evaluations")}
+    ce_cols = _course_eval_columns_cached(conn, eval_cache=eval_cache)
     if tgid > 0 and "teaching_group_id" in ce_cols:
         where_sql = " AND e.teaching_group_id = ? AND e.course_name = ? AND e.instructor_id = ?"
         params = [tgid, group["course_name"], iid]
@@ -1041,9 +1139,10 @@ def build_course_eval_section_report(
     overall = None
     if aggregated:
         overall = _overall_course_eval_score(conn, semester=sem, where_sql=where_sql, params=params)
-        questions = _aggregate_course_eval_questions(
-            conn, semester=sem, where_sql=where_sql, params=params
-        )
+        if not summary_only:
+            questions = _aggregate_course_eval_questions(
+                conn, semester=sem, where_sql=where_sql, params=params
+            )
 
     report = {
         "section_id": sid,
@@ -1073,6 +1172,8 @@ def build_course_eval_section_report(
         semester=sem,
         department_id=department_id,
         title_suffix=f" — {group['course_name']} (شعبة {sid})",
+        eval_cache=eval_cache,
+        summary_only=summary_only,
     )
 
 
@@ -1083,6 +1184,8 @@ def build_course_eval_by_course_report(
     *,
     semester: str | None = None,
     department_id: int | None = None,
+    section_groups: list[dict[str, Any]] | None = None,
+    eval_cache: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """تجميع تقييمات المقرر لنفس الأستاذ عبر كل شعبِه."""
     sem = (semester or "").strip() or term_label_from_conn(conn)
@@ -1091,9 +1194,12 @@ def build_course_eval_by_course_report(
     if not cname or not iid:
         return None
 
+    all_groups = _section_groups_cached(
+        conn, sem, department_id, section_groups=section_groups, eval_cache=eval_cache
+    )
     groups = [
         g
-        for g in _fetch_course_eval_section_groups(conn, sem, department_id)
+        for g in all_groups
         if int(g.get("instructor_id") or 0) == iid
         and (g.get("course_name") or "").strip().lower() == cname.lower()
     ]
@@ -1150,6 +1256,7 @@ def build_course_eval_by_course_report(
         semester=sem,
         department_id=department_id,
         title_suffix=suffix,
+        eval_cache=eval_cache,
     )
 
 
@@ -1158,17 +1265,26 @@ def build_course_eval_sections_summary(
     *,
     semester: str | None = None,
     department_id: int | None = None,
+    section_groups: list[dict[str, Any]] | None = None,
+    eval_cache: dict[str, Any] | None = None,
+    summary_only: bool = False,
 ) -> list[dict[str, Any]]:
     """ملخص تقييم لكل شعبة."""
     sem = (semester or "").strip() or term_label_from_conn(conn)
+    groups = _section_groups_cached(
+        conn, sem, department_id, section_groups=section_groups, eval_cache=eval_cache
+    )
     reports: list[dict[str, Any]] = []
-    for g in _fetch_course_eval_section_groups(conn, sem, department_id):
+    for g in groups:
         rep = build_course_eval_section_report(
             conn,
             int(g["section_id"]),
             semester=sem,
-            course_name=g["course_name"],
-            instructor_id=int(g["instructor_id"]),
+            department_id=department_id,
+            group_meta=g,
+            section_groups=groups,
+            eval_cache=eval_cache,
+            summary_only=summary_only,
         )
         if rep:
             reports.append(rep)
@@ -1180,12 +1296,23 @@ def list_course_eval_course_instructor_groups(
     *,
     semester: str | None = None,
     department_id: int | None = None,
+    section_reports: list[dict[str, Any]] | None = None,
+    section_groups: list[dict[str, Any]] | None = None,
+    eval_cache: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """مجموعات مقرر+أستاذ (شعب متعددة مجمّعة)."""
     sem = (semester or "").strip() or term_label_from_conn(conn)
-    section_reports = build_course_eval_sections_summary(
-        conn, semester=sem, department_id=department_id
+    groups = _section_groups_cached(
+        conn, sem, department_id, section_groups=section_groups, eval_cache=eval_cache
     )
+    if section_reports is None:
+        section_reports = build_course_eval_sections_summary(
+            conn,
+            semester=sem,
+            department_id=department_id,
+            section_groups=groups,
+            eval_cache=eval_cache,
+        )
     by_key: dict[tuple[str, int], dict[str, Any]] = {}
     for r in section_reports:
         key = ((r.get("course_name") or "").strip().lower(), int(r.get("instructor_id") or 0))
@@ -1211,16 +1338,51 @@ def list_course_eval_course_instructor_groups(
 
     out: list[dict[str, Any]] = []
     for (_c, _i), meta in sorted(by_key.items(), key=lambda x: (x[1]["course_name"] or "")):
+        if int(meta.get("section_count") or 0) <= 1:
+            continue
         full = build_course_eval_by_course_report(
             conn,
             meta["course_name"],
             int(meta["instructor_id"]),
             semester=sem,
             department_id=department_id,
+            section_groups=groups,
+            eval_cache=eval_cache,
         )
         if full:
             out.append(full)
     return out
+
+
+def build_course_eval_results_bundle(
+    conn,
+    *,
+    semester: str | None = None,
+    department_id: int | None = None,
+    summary_only: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """ملخص الشعب + تجميع مقرر/أستاذ في تمرير واحد مع cache مشترك."""
+    sem = (semester or "").strip() or term_label_from_conn(conn)
+    eval_cache: dict[str, Any] = {}
+    groups = _fetch_course_eval_section_groups(conn, sem, department_id)
+    eval_cache[("section_groups", sem, department_id)] = groups
+    sections = build_course_eval_sections_summary(
+        conn,
+        semester=sem,
+        department_id=department_id,
+        section_groups=groups,
+        eval_cache=eval_cache,
+        summary_only=summary_only,
+    )
+    by_course = list_course_eval_course_instructor_groups(
+        conn,
+        semester=sem,
+        department_id=department_id,
+        section_groups=groups,
+        section_reports=sections,
+        eval_cache=eval_cache,
+    )
+    return sections, by_course
 
 
 def build_course_eval_report(
@@ -1327,10 +1489,7 @@ def build_combined_survey_report(
     course_eval_by_course: list[dict[str, Any]] = []
     if include_course_eval:
         course_eval = build_course_eval_report(conn, semester=sem, department_id=department_id)
-        course_eval_sections = build_course_eval_sections_summary(
-            conn, semester=sem, department_id=department_id
-        )
-        course_eval_by_course = list_course_eval_course_instructor_groups(
+        course_eval_sections, course_eval_by_course = build_course_eval_results_bundle(
             conn, semester=sem, department_id=department_id
         )
 
@@ -1525,7 +1684,7 @@ def _sheet_name_for_code(code: str, title_ar: str = "") -> str:
         "student_services": "خدمات_الطالب",
         "student_facilities": "مرافق_الطالب",
         "faculty_hod": "رئيس_القسم",
-        "faculty_dean": "الادارة_والسياسات",
+        "faculty_dean": "قيادة_الكلية_وسياساتها",
         "faculty_educational_process": "العملية_التعليمية",
         "supervisor_advising": "مشرف_ارشاد",
         "supervisor_coordination": "مشرف_تنسيق",
@@ -1803,8 +1962,7 @@ def export_course_eval_sections_xlsx(
     department_id: int | None = None,
 ):
     sem = (semester or "").strip() or term_label_from_conn(conn)
-    sections = build_course_eval_sections_summary(conn, semester=sem, department_id=department_id)
-    by_course = list_course_eval_course_instructor_groups(
+    sections, by_course = build_course_eval_results_bundle(
         conn, semester=sem, department_id=department_id
     )
     sem_slug = sem.replace(" ", "_")[:40]

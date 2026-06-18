@@ -49,7 +49,9 @@
     </div>
     {% elif user_role in ('instructor', 'head_of_department') and respondent_role == 'instructor' %}
     <div class="alert alert-light border small mb-3">
-      <strong>ملاحظة:</strong> إذا كنت مشرفاً أكاديمياً أيضاً، انتقل إلى <strong>وضع المشرف</strong> من الشريط العلوي لاستبيانات الإرشاد والتنسيق.
+      <strong>وضع الأستاذ:</strong>
+      ثلاثة استبيانات قصيرة عن قسمك والكلية — كل واحد ~٣–٥ دقائق.
+      إذا كنت <strong>مشرفاً أكاديمياً</strong> أيضاً، استبيانات الإرشاد منفصلة في <strong>وضع المشرف</strong>.
     </div>
     {% endif %}
 
@@ -63,6 +65,36 @@
       <p class="mb-0"><strong>المطلوب منك في هذا الدور:</strong> {{ fill_guide }}</p>
       {% endif %}
     </div>
+
+    {% if hub_status and hub_status.show %}
+    {% set hs_level = hub_status.level if hub_status.level in ('info', 'warning', 'success', 'secondary') else 'info' %}
+    <div class="alert alert-{{ hs_level }} border-start border-4 small mb-4">
+      <strong><i class="fa-solid fa-circle-info ms-1"></i> {{ hub_status.title }}</strong>
+      {% if hub_status.details and user_role == 'student' %}
+      <ul class="mb-2 mt-2 ps-3 small">
+        {% if hub_status.details.registration_count is defined %}
+        <li>تسجيلات المقررات: <strong>{{ hub_status.details.registration_count }}</strong></li>
+        {% endif %}
+        {% if hub_status.details.evaluable_courses is defined %}
+        <li>مقررات/مجموعات قابلة للتقييم ({{ semester }}): <strong>{{ hub_status.details.evaluable_courses }}</strong></li>
+        {% endif %}
+        {% if hub_status.details.course_eval_pending is defined %}
+        <li>تقييم مقرر معلّق: <strong>{{ hub_status.details.course_eval_pending }}</strong>
+          {% if hub_status.details.course_eval_completed is defined %}
+          — مكتمل: <strong>{{ hub_status.details.course_eval_completed }}</strong>
+          {% endif %}
+        </li>
+        {% endif %}
+        {% if hub_status.details.platform_pending is defined %}
+        <li>استبيانات عامة معلّقة: <strong>{{ hub_status.details.platform_pending }}</strong></li>
+        {% endif %}
+      </ul>
+      {% endif %}
+      {% for msg in hub_status.messages %}
+      <p class="mb-{% if loop.last %}0{% else %}1{% endif %} small">{{ msg }}</p>
+      {% endfor %}
+    </div>
+    {% endif %}
 
     {% if supervisor_effective %}
     <h6 class="fw-semibold mt-2 mb-2">
@@ -154,6 +186,38 @@
 
     {% else %}
     {# ——— وضع الطالب / الأستاذ / الموظف ——— #}
+    {% if respondent_role == 'instructor' and pending %}
+    <h6 class="mt-2 mb-2">استبيانات عضو هيئة التدريس — الفصل {{ semester }}</h6>
+    <p class="small text-muted mb-3">
+      أكمل الاستبيانات الثلاثة بالترتيب. إجاباتك <strong>سرية</strong> وتُجمَّع مع زملائك (٣ أعضاء على الأقل قبل عرض النتائج).
+    </p>
+    <div class="list-group mb-4">
+      {% for p in pending %}
+      <a href="{{ p.fill_url }}?semester={{ semester|urlencode }}" class="list-group-item list-group-item-action py-3">
+        <div class="d-flex justify-content-between align-items-start gap-3">
+          <div class="flex-grow-1">
+            <div class="d-flex align-items-center gap-2 mb-1">
+              {% if p.intro and p.intro.icon %}
+              <i class="fa-solid {{ p.intro.icon }} text-primary"></i>
+              {% endif %}
+              <span class="fw-semibold">{{ p.title_ar }}</span>
+            </div>
+            {% if p.intro and p.intro.subtitle_ar %}
+            <div class="small text-muted mb-1">{{ p.intro.subtitle_ar }}</div>
+            {% endif %}
+            {% if p.intro and p.intro.about_ar %}
+            <div class="small text-body-secondary">{{ p.intro.about_ar }}</div>
+            {% endif %}
+            {% if p.intro and p.intro.duration_hint %}
+            <span class="badge bg-light text-dark border mt-2">{{ p.intro.duration_hint }}</span>
+            {% endif %}
+          </div>
+          <span class="badge bg-warning text-dark flex-shrink-0">ابدأ الآن</span>
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}
     <h6 class="mt-2 mb-2">استبيانات وتقييمات مطلوبة مني</h6>
     {% if pending %}
     <div class="list-group mb-4">
@@ -165,6 +229,8 @@
             <div class="small text-muted">
               {% if p.pending_kind == 'course_eval' %}
               تقييم مقرر وشعبة — {{ p.course_name or p.code }}
+              {% elif p.intro and p.intro.subtitle_ar %}
+              {{ p.intro.subtitle_ar }}
               {% else %}
               اضغط للتعبئة — تقييم سري (1–5)
               {% endif %}
@@ -181,6 +247,8 @@
       لا توجد استبيانات تعبئة مرتبطة بحساب الإدارة.
       راجع <a href="/academic_quality/surveys/results">نتائج الاستبيانات</a>
       أو <a href="/academic_quality/survey_admin">إعداد البنود</a>.
+      {% elif user_role == 'student' %}
+      لا توجد استبيانات مطلوبة حالياً — راجع <strong>ملخص الاستبيانات</strong> أعلاه للتفاصيل.
       {% else %}
       أكملت جميع الاستبيانات المطلوبة منك <strong>في هذا الدور</strong> لهذا الفصل — شكراً لمشاركتك.
       {% if user_role in ('instructor', 'head_of_department') %}
@@ -188,6 +256,7 @@
       {% endif %}
       {% endif %}
     </div>
+    {% endif %}
     {% endif %}
     {% endif %}
   </main>

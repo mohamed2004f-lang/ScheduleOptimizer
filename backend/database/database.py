@@ -59,6 +59,11 @@ def is_postgresql() -> bool:
         return False
 
 
+def sql_notifications_user_col() -> str:
+    """اسم عمود المستخدم في جدول notifications (محجوز في PostgreSQL)."""
+    return '"user"' if is_postgresql() else "user"
+
+
 def _pg_conninfo() -> str:
     """سلسلة اتصال libpq/psycopg من عنوان SQLAlchemy."""
     u = make_url(DATABASE_URL)
@@ -659,22 +664,6 @@ TABLES_SCHEMA = {
             FOREIGN KEY (required_course_master_id) REFERENCES course_master(id)
                 ON DELETE CASCADE ON UPDATE CASCADE,
             FOREIGN KEY (required_program_course_id) REFERENCES program_courses(id)
-                ON DELETE CASCADE ON UPDATE CASCADE
-        )
-    """,
-
-    'program_course_sections': """
-        CREATE TABLE IF NOT EXISTS program_course_sections (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            program_course_id INTEGER NOT NULL,
-            section_code TEXT NOT NULL,
-            capacity_max INTEGER,
-            semester TEXT DEFAULT '',
-            note TEXT DEFAULT '',
-            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (program_course_id, section_code),
-            FOREIGN KEY (program_course_id) REFERENCES program_courses(id)
                 ON DELETE CASCADE ON UPDATE CASCADE
         )
     """,
@@ -2028,7 +2017,6 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_programs_dept ON programs(department_id)",
     "CREATE INDEX IF NOT EXISTS idx_program_courses_program ON program_courses(program_id)",
     "CREATE INDEX IF NOT EXISTS idx_program_courses_master ON program_courses(course_master_id)",
-    "CREATE INDEX IF NOT EXISTS idx_program_course_sections_pc ON program_course_sections(program_course_id)",
     "CREATE INDEX IF NOT EXISTS idx_students_department ON students(department_id)",
     "CREATE INDEX IF NOT EXISTS idx_students_program ON students(current_program_id)",
     "CREATE INDEX IF NOT EXISTS idx_users_department ON users(department_id)",
@@ -2414,27 +2402,10 @@ def _ensure_tables_postgresql() -> None:
             except Exception:
                 pass
         try:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS program_course_sections (
-                    id BIGSERIAL PRIMARY KEY,
-                    program_course_id BIGINT NOT NULL,
-                    section_code TEXT NOT NULL,
-                    capacity_max INTEGER,
-                    semester TEXT DEFAULT '',
-                    note TEXT DEFAULT '',
-                    is_active INTEGER NOT NULL DEFAULT 1,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE (program_course_id, section_code),
-                    CONSTRAINT program_course_sections_active_chk CHECK (is_active IN (0, 1)),
-                    CONSTRAINT program_course_sections_pc_fk FOREIGN KEY (program_course_id)
-                        REFERENCES program_courses(id) ON DELETE CASCADE
-                )
-                """
-            )
+            cur.execute("DROP TABLE IF EXISTS program_course_sections CASCADE")
             conn.commit()
         except Exception as e:
-            logger.warning("Could not ensure program_course_sections on PostgreSQL: %s", e)
+            logger.warning("Could not drop program_course_sections on PostgreSQL: %s", e)
             try:
                 conn.rollback()
             except Exception:
@@ -3319,6 +3290,21 @@ def _ensure_tables_postgresql() -> None:
             ensure_program_course_plan_schema(conn)
         except Exception as e:
             logger.warning("program_courses plan schema (postgresql): %s", e)
+        try:
+            cur.execute("DROP TABLE IF EXISTS program_course_sections CASCADE")
+            conn.commit()
+        except Exception as e:
+            logger.warning("drop program_course_sections (postgresql): %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        try:
+            from backend.services.course_delivery import ensure_course_delivery_schema
+
+            ensure_course_delivery_schema(conn)
+        except Exception as e:
+            logger.warning("course_delivery schema (postgresql): %s", e)
     logger.info("PostgreSQL compatibility migrations applied")
 
 
@@ -3644,6 +3630,13 @@ def ensure_tables(db_file=None):
             ensure_program_course_plan_schema(conn)
         except Exception as e:
             logger.warning("program_courses plan schema (sqlite): %s", e)
+
+        try:
+            from backend.services.course_delivery import ensure_course_delivery_schema
+
+            ensure_course_delivery_schema(conn)
+        except Exception as e:
+            logger.warning("course_delivery schema: %s", e)
 
         conn.commit()
         logger.info("Database tables and indexes ensured")

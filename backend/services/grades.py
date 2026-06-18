@@ -27,6 +27,9 @@ PASSING_GRADE = 50
 DEFAULT_COURSEWORK_WEIGHT = 10.0
 DEFAULT_MIDTERM_WEIGHT = 30.0
 DEFAULT_FINAL_EXAM_WEIGHT = 60.0
+LEGACY_COMBINED_CW_MAX = 40.0
+LEGACY_COMBINED_MD_MAX = 20.0
+LEGACY_COMBINED_FE_MAX = 40.0
 
 grades_bp = Blueprint("grades", __name__)
 SCHEDULE_PK_COL = "id"
@@ -182,6 +185,31 @@ def _resolve_assigned_section_for_course(
     return None
 
 
+def _enrich_drafts_with_group_labels(conn, items: list[dict]) -> None:
+    """يضيف group_display_label من teaching_groups عند توفر teaching_group_id."""
+    if not items:
+        return
+    from backend.services import teaching_groups as tg_svc
+
+    cache: dict[int, str] = {}
+    for item in items:
+        tgid = int(item.get("teaching_group_id") or 0)
+        if tgid <= 0:
+            item.setdefault("group_display_label", "")
+            continue
+        if tgid not in cache:
+            g = tg_svc.get_teaching_group(conn, tgid)
+            if g:
+                cache[tgid] = (
+                    g.get("display_label")
+                    or g.get("group_code_label")
+                    or f"مجموعة #{tgid}"
+                )
+            else:
+                cache[tgid] = f"مجموعة #{tgid}"
+        item["group_display_label"] = cache[tgid]
+
+
 def _instructor_can_access_draft(conn, draft_row) -> bool:
     """Own draft: session instructor_id must match draft; allowed for instructor or staff rows linked to same faculty id."""
     role = (session.get("user_role") or "").strip()
@@ -191,15 +219,23 @@ def _instructor_can_access_draft(conn, draft_row) -> bool:
         return False
     if not session.get("instructor_id"):
         return False
-    if int(draft_row["instructor_id"] or 0) != int(session.get("instructor_id") or 0):
+    d = dict(draft_row) if not isinstance(draft_row, dict) else draft_row
+    if int(d.get("instructor_id") or 0) != int(session.get("instructor_id") or 0):
         return False
-    sid = draft_row["section_id"] if hasattr(draft_row, "keys") else draft_row[3]
-    course_name = draft_row["course_name"] if hasattr(draft_row, "keys") else draft_row[2]
+    sid = d.get("section_id")
+    course_name = d.get("course_name")
+    tgid_raw = d.get("teaching_group_id")
     try:
         sid_int = int(sid) if sid not in (None, "") else None
     except (TypeError, ValueError):
         sid_int = None
-    return _resolve_assigned_section_for_course(conn, course_name, sid_int) is not None
+    try:
+        tgid_int = int(tgid_raw) if tgid_raw not in (None, "") else None
+    except (TypeError, ValueError):
+        tgid_int = None
+    return _resolve_assigned_section_for_course(
+        conn, course_name, sid_int, teaching_group_id=tgid_int
+    ) is not None
 
 
 def _can_delete_grade_draft(conn, draft_row) -> bool:
@@ -333,6 +369,69 @@ def _compute_total_from_components(coursework, midterm, final_exam, fallback_par
         fe = float(final_exam or 0)
         return c + m + fe
     return _compute_total_for_mode("partial_final", fallback_partial, fallback_final, fallback_total)
+
+
+def _compute_total_for_phase(
+    draft_phase: str,
+    coursework,
+    midterm,
+    final_exam,
+    fallback_partial=None,
+    fallback_final=None,
+    fallback_total=None,
+):
+    """مجموع الدرجة حسب مرحلة المسودة: جزئي | نهائي | combined."""
+    phase = (draft_phase or "combined").strip().lower()
+    if phase == "partial":
+        if coursework is None and midterm is None:
+            return _compute_total_for_mode("partial_final", fallback_partial, fallback_final, fallback_total)
+        return float(coursework or 0) + float(midterm or 0)
+    if phase == "final":
+        if coursework is not None or midterm is not None or final_exam is not None:
+            return float(coursework or 0) + float(midterm or 0) + float(final_exam or 0)
+        return _compute_total_for_mode("partial_final", fallback_partial, fallback_final, fallback_total)
+    return _compute_total_from_components(
+        coursework, midterm, final_exam, fallback_partial, fallback_final, fallback_total
+    )
+
+
+def _load_carried_partial_grades(cur, draft_row: dict, student_id: str):
+    """جلب أعمال+جزئي المرحّلة لمسودة النهائي من بنود المسودة أو من الجزئي المعتمد."""
+    ex = cur.execute(
+        "SELECT coursework, midterm, absent_midterm FROM grade_draft_items WHERE draft_id=? AND student_id=?",
+        (int(draft_row["id"]), student_id),
+    ).fetchone()
+    if ex:
+        if hasattr(ex, "keys"):
+            return ex["coursework"], ex["midterm"], int(ex.get("absent_midterm") or 0)
+        return ex[0], ex[1], int(ex[2] or 0)
+    tgid = int(draft_row.get("teaching_group_id") or 0)
+    semester = (draft_row.get("semester") or "").strip()
+    course_name = (draft_row.get("course_name") or "").strip()
+    instructor_id = int(draft_row.get("instructor_id") or 0)
+    if not (tgid and semester and course_name and instructor_id):
+        return None, None, 0
+    pd = cur.execute(
+        """
+        SELECT id FROM grade_drafts
+        WHERE teaching_group_id = ? AND semester = ? AND course_name = ?
+          AND instructor_id = ? AND draft_phase = 'partial' AND status = 'Approved'
+        ORDER BY id DESC LIMIT 1
+        """,
+        (tgid, semester, course_name, instructor_id),
+    ).fetchone()
+    if not pd:
+        return None, None, 0
+    partial_id = int(pd[0] if not hasattr(pd, "keys") else pd["id"])
+    pex = cur.execute(
+        "SELECT coursework, midterm, absent_midterm FROM grade_draft_items WHERE draft_id=? AND student_id=?",
+        (partial_id, student_id),
+    ).fetchone()
+    if not pex:
+        return None, None, 0
+    if hasattr(pex, "keys"):
+        return pex["coursework"], pex["midterm"], int(pex.get("absent_midterm") or 0)
+    return pex[0], pex[1], int(pex[2] or 0)
 
 
 def _validate_component_value(label: str, value, max_value: float):
@@ -535,9 +634,12 @@ def list_my_grade_drafts():
         if not semester_label:
             return jsonify({"status": "ok", "drafts": [], "semester": ""}), 200
         cur = conn.cursor()
+        gd_cols = {c.lower() for c in fetch_table_columns(conn, "grade_drafts")}
+        tgid_col = ", teaching_group_id" if "teaching_group_id" in gd_cols else ""
+        dp_col = ", draft_phase" if "draft_phase" in gd_cols else ""
         rows = cur.execute(
-            """
-            SELECT id, semester, course_name, section_id, grading_mode, status,
+            f"""
+            SELECT id, semester, course_name, section_id{tgid_col}{dp_col}, grading_mode, status,
                    created_at, updated_at, submitted_at, approved_at, approved_by, instructor_id, note
             FROM grade_drafts
             WHERE instructor_id = ? AND semester = ?
@@ -550,6 +652,7 @@ def list_my_grade_drafts():
         row_dict = dict(r)
         row_dict["can_delete"] = bool(_can_delete_grade_draft(conn, r))
         drafts.append(row_dict)
+    _enrich_drafts_with_group_labels(conn, drafts)
     return jsonify({"status": "ok", "drafts": drafts, "semester": semester_label}), 200
 
 
@@ -600,7 +703,10 @@ def draft_roster_for_course():
                 (course_name, section_id),
             ).fetchall()
     roster = [{"student_id": r[0], "student_name": r[1] or ""} for r in rows] if rows else []
-    return jsonify({"status": "ok", "roster": roster}), 200
+    payload = {"status": "ok", "roster": roster}
+    if tgid > 0:
+        payload["teaching_group_id"] = tgid
+    return jsonify(payload), 200
 
 
 @grades_bp.route("/drafts/pending", methods=["GET"])
@@ -612,9 +718,11 @@ def list_pending_grade_drafts():
         cur = conn.cursor()
         if not semester_label:
             return jsonify({"status": "ok", "pending": [], "semester": ""}), 200
+        gd_cols = {c.lower() for c in fetch_table_columns(conn, "grade_drafts")}
+        tgid_col = ", d.teaching_group_id" if "teaching_group_id" in gd_cols else ""
         rows = cur.execute(
-            """
-            SELECT d.id, d.semester, d.course_name, d.section_id, d.grading_mode, d.status,
+            f"""
+            SELECT d.id, d.semester, d.course_name, d.section_id{tgid_col}, d.grading_mode, d.status,
                    d.created_at, d.updated_at, d.submitted_at,
                    d.instructor_id, COALESCE(i.name, '') AS instructor_name
             FROM grade_drafts d
@@ -625,6 +733,7 @@ def list_pending_grade_drafts():
             (semester_label,),
         ).fetchall()
     pending = [dict(r) for r in rows] if rows else []
+    _enrich_drafts_with_group_labels(conn, pending)
     return jsonify({"status": "ok", "pending": pending, "semester": semester_label}), 200
 
 
@@ -637,9 +746,11 @@ def list_deletable_grade_drafts():
         cur = conn.cursor()
         if not semester_label:
             return jsonify({"status": "ok", "drafts": [], "semester": ""}), 200
+        gd_cols = {c.lower() for c in fetch_table_columns(conn, "grade_drafts")}
+        tgid_col = ", d.teaching_group_id" if "teaching_group_id" in gd_cols else ""
         rows = cur.execute(
-            """
-            SELECT d.id, d.semester, d.course_name, d.section_id, d.grading_mode, d.status,
+            f"""
+            SELECT d.id, d.semester, d.course_name, d.section_id{tgid_col}, d.grading_mode, d.status,
                    d.created_at, d.updated_at, d.submitted_at,
                    d.instructor_id, COALESCE(i.name, '') AS instructor_name
             FROM grade_drafts d
@@ -654,6 +765,7 @@ def list_deletable_grade_drafts():
             item = dict(r)
             item["can_delete"] = bool(_can_delete_grade_draft(conn, r))
             drafts.append(item)
+        _enrich_drafts_with_group_labels(conn, drafts)
     return jsonify({"status": "ok", "drafts": drafts, "semester": semester_label}), 200
 
 
@@ -709,6 +821,8 @@ def create_grade_draft():
         if not instructor_id:
             return jsonify({"status": "error", "message": "لا يوجد ربط بين حسابك وعضو هيئة تدريس"}), 403
 
+        gd_cols = {c.lower() for c in fetch_table_columns(conn, "grade_drafts")}
+
         # منع أكثر من مسودة مفتوحة في نفس الوقت للأستاذ (مقرر واحد فقط في كل مرة)
         row_open = cur.execute(
             """
@@ -725,22 +839,58 @@ def create_grade_draft():
 
         # قيد فريد في قاعدة البيانات على (semester, course_name, instructor_id)
         # لذلك نتحقق مسبقاً ونُرجع رسالة واضحة بدل 500.
+        draft_phase = (data.get("draft_phase") or "").strip().lower()
+        if not draft_phase:
+            draft_phase = "partial" if teaching_group_id else "combined"
+        if draft_phase not in ("partial", "final", "combined"):
+            return jsonify({"status": "error", "message": "draft_phase غير صالح"}), 400
+
+        if teaching_group_id and draft_phase in ("partial", "final"):
+            from backend.services import course_delivery as cd
+
+            cd.ensure_course_delivery_schema(conn)
+            from backend.services import teaching_groups as tg
+
+            tg_row = tg.get_teaching_group(conn, int(teaching_group_id))
+            dept_id = int(tg_row.get("department_id") or 0) if tg_row else None
+            gate = cd.grade_draft_gate_status(
+                conn,
+                teaching_group_id=int(teaching_group_id),
+                semester=semester_label,
+                course_name=course_name,
+                department_id=dept_id,
+                phase=draft_phase,
+            )
+            if not gate.get("unlocked"):
+                return jsonify({
+                    "status": "error",
+                    "message": gate.get("reason") or "بوابة مسودة الدرجات مغلقة",
+                    "gate": gate,
+                }), 423
+
+        phase_filter = ""
+        phase_params: list = []
+        if "draft_phase" in gd_cols and draft_phase in ("partial", "final"):
+            phase_filter = " AND COALESCE(draft_phase, 'combined') = ?"
+            phase_params = [draft_phase]
+
         row_same_course = cur.execute(
-            """
+            f"""
             SELECT id, status, COALESCE(section_id,0) AS section_id
             FROM grade_drafts
             WHERE instructor_id = ?
               AND semester = ?
               AND course_name = ?
+              {phase_filter}
             LIMIT 1
             """,
-            (int(instructor_id), semester_label, course_name),
+            (int(instructor_id), semester_label, course_name, *phase_params),
         ).fetchone()
         if row_same_course:
             existing_id = int(row_same_course["id"] if hasattr(row_same_course, "keys") else row_same_course[0])
             existing_status = str((row_same_course["status"] if hasattr(row_same_course, "keys") else row_same_course[1]) or "").strip()
             existing_section = int(row_same_course["section_id"] if hasattr(row_same_course, "keys") else (row_same_course[2] or 0))
-            if existing_status == "Approved":
+            if existing_status == "Approved" and draft_phase != "final":
                 return jsonify({
                     "status": "error",
                     "message": "توجد مسودة معتمدة لهذا المقرر في الفصل الحالي ولا يمكن إنشاء مسودة جديدة له",
@@ -748,48 +898,98 @@ def create_grade_draft():
                     "existing_status": existing_status,
                     "section_id": existing_section or None,
                 }), 400
+            if existing_status == "Approved" and draft_phase == "final":
+                return jsonify({
+                    "status": "error",
+                    "message": "مسودة النهائي معتمدة مسبقاً",
+                    "draft_id": existing_id,
+                }), 400
+            existing_tgid = None
+            if "teaching_group_id" in gd_cols:
+                row_tg = cur.execute(
+                    "SELECT teaching_group_id FROM grade_drafts WHERE id = ? LIMIT 1",
+                    (existing_id,),
+                ).fetchone()
+                if row_tg and row_tg[0]:
+                    existing_tgid = int(row_tg[0])
             return jsonify({
                 "status": "ok",
                 "draft_id": existing_id,
                 "grading_mode": _course_grading_mode(conn, course_name),
                 "section_id": existing_section or section_id,
+                "teaching_group_id": existing_tgid or teaching_group_id,
                 "existing": True,
                 "existing_status": existing_status,
             }), 200
 
         grading_mode = _course_grading_mode(conn, course_name)
         now = _now_iso_z()
-        gd_cols = {c.lower() for c in fetch_table_columns(conn, "grade_drafts")}
+        has_dp = "draft_phase" in gd_cols
         if teaching_group_id and "teaching_group_id" in gd_cols:
-            insert_cols = (
-                "semester, course_name, section_id, teaching_group_id, instructor_id, "
-                "grading_mode, status, created_at, updated_at"
-            )
-            insert_vals = "?,?,?,?,?,?, 'Draft', ?, ?"
-            insert_params = (
-                semester_label,
-                course_name,
-                section_id,
-                int(teaching_group_id),
-                int(instructor_id),
-                grading_mode,
-                now,
-                now,
-            )
+            if has_dp:
+                insert_cols = (
+                    "semester, course_name, section_id, teaching_group_id, instructor_id, "
+                    "grading_mode, draft_phase, status, created_at, updated_at"
+                )
+                insert_vals = "?,?,?,?,?,?,?, 'Draft', ?, ?"
+                insert_params = (
+                    semester_label,
+                    course_name,
+                    section_id,
+                    int(teaching_group_id),
+                    int(instructor_id),
+                    grading_mode,
+                    draft_phase,
+                    now,
+                    now,
+                )
+            else:
+                insert_cols = (
+                    "semester, course_name, section_id, teaching_group_id, instructor_id, "
+                    "grading_mode, status, created_at, updated_at"
+                )
+                insert_vals = "?,?,?,?,?,?, 'Draft', ?, ?"
+                insert_params = (
+                    semester_label,
+                    course_name,
+                    section_id,
+                    int(teaching_group_id),
+                    int(instructor_id),
+                    grading_mode,
+                    now,
+                    now,
+                )
         else:
-            insert_cols = (
-                "semester, course_name, section_id, instructor_id, grading_mode, status, created_at, updated_at"
-            )
-            insert_vals = "?,?,?,?,?, 'Draft', ?, ?"
-            insert_params = (
-                semester_label,
-                course_name,
-                section_id,
-                int(instructor_id),
-                grading_mode,
-                now,
-                now,
-            )
+            if has_dp:
+                insert_cols = (
+                    "semester, course_name, section_id, instructor_id, grading_mode, draft_phase, "
+                    "status, created_at, updated_at"
+                )
+                insert_vals = "?,?,?,?,?,?, 'Draft', ?, ?"
+                insert_params = (
+                    semester_label,
+                    course_name,
+                    section_id,
+                    int(instructor_id),
+                    grading_mode,
+                    draft_phase,
+                    now,
+                    now,
+                )
+            else:
+                insert_cols = (
+                    "semester, course_name, section_id, instructor_id, grading_mode, status, created_at, updated_at"
+                )
+                insert_vals = "?,?,?,?,?, 'Draft', ?, ?"
+                insert_params = (
+                    semester_label,
+                    course_name,
+                    section_id,
+                    int(instructor_id),
+                    grading_mode,
+                    now,
+                    now,
+                )
         if is_postgresql():
             row_new = cur.execute(
                 f"""
@@ -817,6 +1017,7 @@ def create_grade_draft():
         "grading_mode": grading_mode,
         "section_id": section_id,
         "teaching_group_id": teaching_group_id,
+        "draft_phase": draft_phase,
     }), 200
 
 
@@ -852,9 +1053,10 @@ def get_grade_draft(draft_id: int):
         can_delete = bool(_can_delete_grade_draft(conn, d))
         assessment_profile = _course_assessment_profile(conn, (d["course_name"] or "").strip())
 
-    draft_dict = dict(d)
-    draft_dict["can_delete"] = can_delete
-    draft_dict["assessment_profile"] = assessment_profile
+        draft_dict = dict(d)
+        draft_dict["can_delete"] = can_delete
+        draft_dict["assessment_profile"] = assessment_profile
+        _enrich_drafts_with_group_labels(conn, [draft_dict])
     return jsonify({"status": "ok", "draft": draft_dict, "items": out_items}), 200
 
 
@@ -901,6 +1103,14 @@ def save_grade_draft_items(draft_id: int):
         if (d["status"] or "") not in ("Draft", "Rejected"):
             return jsonify({"status": "error", "message": "لا يمكن تعديل مسودة ليست Draft/Rejected"}), 400
 
+        draft_phase = str(dict(d).get("draft_phase") or "combined").strip().lower()
+        has_tg = bool(dict(d).get("teaching_group_id"))
+        ap = _course_assessment_profile(conn, (d["course_name"] or "").strip())
+        weights = ap.get("weights") or {}
+        cw_cap = float(weights.get("coursework") or 10)
+        md_cap = float(weights.get("midterm") or 30)
+        fe_cap = float(weights.get("final_exam") or 60)
+
         now = _now_iso_z()
 
         saved = 0
@@ -923,14 +1133,38 @@ def save_grade_draft_items(draft_id: int):
             if absent_final_exam:
                 final_exam = 0
 
-            # validate
-            ok, cv = _validate_component_value("درجة الأعمال", coursework, 100.0)
+            if draft_phase == "partial":
+                final_exam = None
+                absent_final_exam = 0
+                partial = final = total = None
+            elif draft_phase == "final":
+                partial = final = total = None
+                carried_cw, carried_md, carried_abs_md = _load_carried_partial_grades(
+                    cur, dict(d), sid
+                )
+                coursework = carried_cw
+                midterm = carried_md
+                absent_midterm = carried_abs_md
+                if absent_midterm:
+                    midterm = 0
+
+            cw_max = cw_cap if draft_phase in ("partial", "final", "combined") else 100.0
+            md_max = md_cap if draft_phase in ("partial", "final", "combined") else 100.0
+            fe_max = fe_cap if draft_phase in ("final", "combined") else 100.0
+            if draft_phase == "combined" and not has_tg:
+                cw_max, md_max, fe_max = LEGACY_COMBINED_CW_MAX, LEGACY_COMBINED_MD_MAX, LEGACY_COMBINED_FE_MAX
+            if draft_phase == "partial":
+                fe_max = 0.0
+                if final_exam not in (None, ""):
+                    final_exam = None
+
+            ok, cv = _validate_component_value("درجة الأعمال", coursework, cw_max if cw_max > 0 else 100.0)
             if not ok:
                 return jsonify({"status": "error", "message": f"{sid}: {cv}"}), 400
-            ok, mv = _validate_component_value("درجة الجزئي", midterm, 100.0)
+            ok, mv = _validate_component_value("درجة الجزئي", midterm, md_max if md_max > 0 else 100.0)
             if not ok:
                 return jsonify({"status": "error", "message": f"{sid}: {mv}"}), 400
-            ok, fv2 = _validate_component_value("درجة النهائي", final_exam, 100.0)
+            ok, fv2 = _validate_component_value("درجة النهائي", final_exam, fe_max if fe_max > 0 else 100.0)
             if not ok:
                 return jsonify({"status": "error", "message": f"{sid}: {fv2}"}), 400
             ok, pv = validate_grade_value(partial)
@@ -943,7 +1177,9 @@ def save_grade_draft_items(draft_id: int):
             if not ok:
                 return jsonify({"status": "error", "message": f"total invalid for {sid}: {tv}"}), 400
 
-            computed = _compute_total_from_components(cv, mv, fv2, pv, fv, tv)
+            computed = _compute_total_for_phase(
+                draft_phase, cv, mv, fv2, pv, fv, tv
+            )
             ok, computed_checked = validate_grade_value(computed)
             if not ok:
                 return jsonify({"status": "error", "message": f"المجموع غير صالح للطالب {sid}"}), 400
@@ -996,7 +1232,17 @@ def submit_grade_draft(draft_id: int):
             "UPDATE grade_drafts SET status='Submitted', submitted_at=?, updated_at=? WHERE id=?",
             (now, now, int(draft_id)),
         )
+        drow = dict(d)
         conn.commit()
+        from backend.services.course_workflow import department_id_for_course, notify_grade_draft_submitted
+
+        notify_grade_draft_submitted(
+            conn,
+            course_name=str(drow.get("course_name") or ""),
+            draft_phase=str(drow.get("draft_phase") or "combined"),
+            department_id=department_id_for_course(conn, str(drow.get("course_name") or "")),
+            draft_id=int(draft_id),
+        )
     return jsonify({"status": "ok"}), 200
 
 
@@ -1018,7 +1264,36 @@ def approve_grade_draft(draft_id: int):
 
         semester = d["semester"]
         course_name = d["course_name"]
-        # نشر الدرجات
+        draft_phase = str(dict(d).get("draft_phase") or "combined").strip().lower()
+        published = 0
+
+        if draft_phase == "partial":
+            from backend.services.course_delivery import sync_partial_grades_to_final
+
+            final_id = sync_partial_grades_to_final(conn, partial_draft_id=int(draft_id))
+            cur.execute(
+                "UPDATE grade_drafts SET status='Approved', approved_at=?, approved_by=?, updated_at=? WHERE id=?",
+                (now, actor, now, int(draft_id)),
+            )
+            conn.commit()
+            from backend.services.course_workflow import notify_grade_draft_reviewed
+
+            notify_grade_draft_reviewed(
+                conn,
+                course_name=str(course_name or ""),
+                draft_phase=draft_phase,
+                approved=True,
+                instructor_id=int(d.get("instructor_id") or 0),
+            )
+            return jsonify({
+                "status": "ok",
+                "published": 0,
+                "draft_phase": "partial",
+                "final_draft_id": final_id,
+                "message": "تم اعتماد الجزئي ونسخ الدرجات إلى مسودة النهائي",
+            }), 200
+
+        # نشر الدرجات (نهائي أو combined)
         items = cur.execute(
             "SELECT student_id, computed_total FROM grade_draft_items WHERE draft_id = ?",
             (int(draft_id),),
@@ -1058,6 +1333,15 @@ def approve_grade_draft(draft_id: int):
             (now, actor, now, int(draft_id)),
         )
         conn.commit()
+        from backend.services.course_workflow import notify_grade_draft_reviewed
+
+        notify_grade_draft_reviewed(
+            conn,
+            course_name=str(course_name or ""),
+            draft_phase=draft_phase,
+            approved=True,
+            instructor_id=int(d.get("instructor_id") or 0),
+        )
 
     return jsonify({"status": "ok", "published": int(published)}), 200
 
@@ -1078,11 +1362,21 @@ def reject_grade_draft(draft_id: int):
         if (d["status"] or "") not in ("Submitted",):
             return jsonify({"status": "error", "message": "لا يمكن الإرجاع إلا لمسودة Submitted"}), 400
         new_note = note or f"Returned by {actor}"
+        drow = dict(d)
         cur.execute(
             "UPDATE grade_drafts SET status='Rejected', note=?, updated_at=? WHERE id=?",
             (new_note, now, int(draft_id)),
         )
         conn.commit()
+        from backend.services.course_workflow import notify_grade_draft_reviewed
+
+        notify_grade_draft_reviewed(
+            conn,
+            course_name=str(drow.get("course_name") or ""),
+            draft_phase=str(drow.get("draft_phase") or "combined"),
+            approved=False,
+            instructor_id=int(drow.get("instructor_id") or 0),
+        )
     return jsonify({"status": "ok", "draft_id": int(draft_id), "returned": True}), 200
 
 

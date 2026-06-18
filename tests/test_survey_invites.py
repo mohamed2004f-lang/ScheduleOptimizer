@@ -62,6 +62,8 @@ def test_invite_create_submit_aggregate(db_conn):
     ctx = invite_fill_context(db_conn, token)
     assert ctx["template_code"] == "employer_strategic"
     assert "identity_panel" in ctx
+    assert ctx.get("scale_levels")
+    assert ctx.get("scale_example_label")
 
     questions = ctx["questions"]
     answers = {str(q["id"]): 4 for q in questions}

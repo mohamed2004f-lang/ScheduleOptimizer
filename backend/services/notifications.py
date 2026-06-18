@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify, request, session
 
 from backend.core.auth import login_required
+from backend.database.database import sql_notifications_user_col
 from .utilities import get_connection
 
 notifications_bp = Blueprint("notifications", __name__)
@@ -21,7 +22,8 @@ def list_notifications():
 
     with get_connection() as conn:
         cur = conn.cursor()
-        q = "SELECT id, title, body, is_read, created_at FROM notifications WHERE user = ?"
+        ucol = sql_notifications_user_col()
+        q = f"SELECT id, title, body, is_read, created_at FROM notifications WHERE {ucol} = ?"
         params = [user]
         if unread_only:
             q += " AND is_read = 0"
@@ -58,8 +60,9 @@ def mark_read():
         cur = conn.cursor()
         placeholders = ",".join("?" for _ in ids)
         params = ids + [user]
+        ucol = sql_notifications_user_col()
         cur.execute(
-            f"UPDATE notifications SET is_read = 1 WHERE id IN ({placeholders}) AND user = ?",
+            f"UPDATE notifications SET is_read = 1 WHERE id IN ({placeholders}) AND {ucol} = ?",
             params,
         )
         conn.commit()

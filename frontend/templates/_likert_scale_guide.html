@@ -1,0 +1,67 @@
+{# مقياس ليكرت + مثال توضيحي — يُضمَّن في جميع نماذج التعبئة #}
+{% set badge_labels = likert_labels if likert_labels is defined else (likert_options if likert_options is defined else []) %}
+{% set suffix = scale_guide_suffix|default('') %}
+{% set levels = scale_levels if scale_levels is defined else [] %}
+{% set example = scale_example_label|default('') %}
+{% set guide_note = scale_guide_note|default('اختر الرقم الذي يعبّر عن تجربتك أو رأيك في هذا البند.') %}
+
+{% if badge_labels %}
+<div class="alert alert-secondary py-2 small mb-3">
+  <strong>مقياس التقييم:</strong>
+  {% for v, t in badge_labels %}
+  <span class="badge bg-light text-dark border ms-1">{{ v }} = {{ t }}</span>
+  {% endfor %}
+  <div class="mt-1 text-muted">{{ guide_note }}</div>
+</div>
+{% endif %}
+
+{% if levels and example %}
+<div class="card border-info mb-4" id="likertScaleExample{{ suffix }}">
+  <div class="card-header bg-info bg-opacity-10 py-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span class="small fw-semibold text-info-emphasis">
+      <i class="fa-solid fa-circle-question ms-1"></i> مثال توضيحي: كيف أختار الدرجة؟
+    </span>
+    <button class="btn btn-sm btn-outline-info" type="button" data-bs-toggle="collapse"
+            data-bs-target="#scaleExampleBody{{ suffix }}" aria-expanded="true"
+            aria-controls="scaleExampleBody{{ suffix }}">
+      إظهار/إخفاء
+    </button>
+  </div>
+  <div class="collapse show" id="scaleExampleBody{{ suffix }}">
+    <div class="card-body small">
+      <p class="mb-3">
+        <span class="text-muted">مثال على بند واحد:</span>
+        <strong class="d-block mt-1">«{{ example }}»</strong>
+      </p>
+      <div class="table-responsive">
+        <table class="table table-sm table-bordered mb-0 align-middle">
+          <thead class="table-light">
+            <tr>
+              <th style="width:3.5rem" class="text-center">الدرجة</th>
+              <th style="width:6rem">التسمية</th>
+              <th>ماذا تعني عملياً؟</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for level in levels %}
+            <tr{% if level.value == 3 %} class="table-warning"{% elif level.value == 5 %} class="table-success"{% elif level.value == 1 %} class="table-danger"{% endif %}>
+              <td class="text-center fw-bold fs-6">{{ level.value }}</td>
+              <td class="fw-semibold">{{ level.label }}</td>
+              <td>
+                {{ level.meaning }}
+                {% if level.hint %}
+                <div class="text-muted mt-1"><i class="fa-solid fa-lightbulb ms-1"></i>{{ level.hint }}</div>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="text-muted mb-0 mt-3">
+        طبّق نفس المنطق على بقية البنود: من <strong>١ ضعيف</strong> إلى <strong>٥ ممتاز</strong>.
+      </p>
+    </div>
+  </div>
+</div>
+{% endif %}

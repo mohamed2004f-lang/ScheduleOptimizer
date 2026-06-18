@@ -30,6 +30,10 @@ docker run -d -p 5000:5000 \
 
 ### استخدام Docker Compose (الأسهل — Postgres مدمج)
 أنشئ ملف `.env` من `.env.example` وعيّن على الأقل: `ADMIN_USERNAME`، `ADMIN_PASSWORD`، `SECRET_KEY`، **`POSTGRES_PASSWORD`** (لخدمة `db` واتصال `web`).
+
+مجلدات مُركّبة من المضيف: `backend/uploads` (شواهد الاعتماد وأرشيف الاستبيانات)، `logs/`، `backups/`.
+
+**نشر إنتاج + HTTPS:** انظر [`deploy/README.md`](deploy/README.md).
 ```bash
 # تشغيل التطبيق وقاعدة البيانات
 docker compose up -d

@@ -1,0 +1,31 @@
+# طبقة HTTPS — استخدم مع docker-compose.yml:
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.caddy.yml up -d --build
+#
+# قبل التشغيل: cp deploy/Caddyfile.example deploy/Caddyfile وعدّل النطاق
+
+services:
+  web:
+    ports: !reset []
+    expose:
+      - "5000"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: schedule-optimizer-caddy
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - schedule-network
+
+volumes:
+  caddy_data:
+  caddy_config:

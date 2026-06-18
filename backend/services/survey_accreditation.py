@@ -23,6 +23,7 @@ def accreditation_links_display(
     catalog_version: str | None = None,
     semester: str | None = None,
     department_id: int | None = None,
+    link_cache=None,
 ) -> list[dict[str, str]]:
     if conn is None:
         return []
@@ -36,6 +37,7 @@ def accreditation_links_display(
         catalog_version=catalog_version,
         semester=semester,
         department_id=department_id,
+        link_cache=link_cache,
     )
 
 
@@ -46,6 +48,7 @@ def primary_evidence_indicator_code(
     catalog_version: str | None = None,
     semester: str | None = None,
     department_id: int | None = None,
+    link_cache=None,
 ) -> str | None:
     if conn is None:
         return None
@@ -59,6 +62,7 @@ def primary_evidence_indicator_code(
         catalog_version=catalog_version,
         semester=semester,
         department_id=department_id,
+        link_cache=link_cache,
     )
 
 

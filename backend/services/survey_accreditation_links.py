@@ -10,6 +10,70 @@ from backend.core.accreditation_evidence_types import SURVEY_TEMPLATE_TO_EVIDENC
 from backend.core.survey_platform import LINK_TYPE_LABELS_AR
 
 
+class SurveyLinkCache:
+    """Cache طلب واحد — قواعد/bindings/روابط الاعتماد (تجنّب N×list_evidence_rules)."""
+
+    __slots__ = ("_rules_by_cat", "_bindings_by_key", "_resolved")
+
+    def __init__(self) -> None:
+        self._rules_by_cat: dict[str, list[dict[str, Any]]] = {}
+        self._bindings_by_key: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+        self._resolved: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+
+    def rules_for_catalog(self, conn, catalog_version: str) -> list[dict[str, Any]]:
+        cat = (catalog_version or "").strip()
+        if cat not in self._rules_by_cat:
+            from backend.services.accreditation_evidence_matrix import list_evidence_rules
+
+            self._rules_by_cat[cat] = list_evidence_rules(conn, catalog_version=cat)
+        return self._rules_by_cat[cat]
+
+    def bindings_for_term(
+        self,
+        conn,
+        *,
+        semester: str,
+        department_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        key = (semester.strip(), department_id)
+        if key not in self._bindings_by_key:
+            from backend.services.accreditation_evidence_bindings import list_bindings
+
+            self._bindings_by_key[key] = list(
+                list_bindings(
+                    conn,
+                    semester=semester.strip(),
+                    department_id=department_id,
+                    indicator_id=None,
+                )
+            )
+        return self._bindings_by_key[key]
+
+    def resolve(
+        self,
+        conn,
+        template_code: str,
+        *,
+        catalog_version: str | None = None,
+        semester: str | None = None,
+        department_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        cat = resolve_catalog_version(conn, catalog_version)
+        sem = (semester or "").strip()
+        tpl = (template_code or "").strip()
+        key = (tpl, cat, sem, department_id)
+        if key not in self._resolved:
+            self._resolved[key] = _resolve_survey_accreditation_links_impl(
+                conn,
+                tpl,
+                catalog_version=cat,
+                semester=sem or None,
+                department_id=department_id,
+                link_cache=self,
+            )
+        return self._resolved[key]
+
+
 def _link_display(link: dict[str, Any]) -> dict[str, Any]:
     lt = (link.get("link_type") or "evidence").strip().lower()
     return {
@@ -25,12 +89,20 @@ def _rules_from_db(
     *,
     template_code: str,
     catalog_version: str,
+    link_cache: SurveyLinkCache | None = None,
 ) -> list[dict[str, Any]]:
-    from backend.services.accreditation_evidence_matrix import list_evidence_rules
-
     tpl = (template_code or "").strip()
+    rules = (
+        link_cache.rules_for_catalog(conn, catalog_version)
+        if link_cache is not None
+        else None
+    )
+    if rules is None:
+        from backend.services.accreditation_evidence_matrix import list_evidence_rules
+
+        rules = list_evidence_rules(conn, catalog_version=catalog_version)
     out: list[dict[str, Any]] = []
-    for rule in list_evidence_rules(conn, catalog_version=catalog_version):
+    for rule in rules:
         cfg = rule.get("config") or {}
         if isinstance(cfg, str):
             try:
@@ -63,10 +135,9 @@ def _links_from_bindings(
     template_code: str,
     semester: str,
     department_id: int | None = None,
+    link_cache: SurveyLinkCache | None = None,
 ) -> list[dict[str, Any]]:
     """روابط فعلية من جدول bindings — الربط اليدوي فقط."""
-    from backend.services.accreditation_evidence_bindings import list_bindings
-
     tpl = (template_code or "").strip()
     if not tpl:
         return []
@@ -74,10 +145,18 @@ def _links_from_bindings(
     if not sem:
         return []
     source_ref = f"survey:{tpl}"
+    if link_cache is not None:
+        all_bindings = link_cache.bindings_for_term(
+            conn, semester=sem, department_id=department_id
+        )
+    else:
+        from backend.services.accreditation_evidence_bindings import list_bindings
+
+        all_bindings = list_bindings(
+            conn, semester=sem, department_id=department_id, indicator_id=None
+        )
     out: list[dict[str, Any]] = []
-    for b in list_bindings(
-        conn, semester=sem, department_id=department_id, indicator_id=None
-    ):
+    for b in all_bindings:
         if (b.get("binding_kind") or "").strip().lower() != "survey":
             continue
         ref = (b.get("source_ref") or "").strip()
@@ -99,25 +178,29 @@ def _links_from_bindings(
     return out
 
 
-def resolve_survey_accreditation_links(
+def _resolve_survey_accreditation_links_impl(
     conn,
     template_code: str,
     *,
-    catalog_version: str | None = None,
+    catalog_version: str,
     semester: str | None = None,
     department_id: int | None = None,
+    link_cache: SurveyLinkCache | None = None,
 ) -> list[dict[str, Any]]:
-    """روابط استبيان → مؤشرات — قواعد كتالوج نشطة + bindings فعلية فقط (بدون خرائط ثابتة)."""
+    """روابط استبيان → مؤشرات — قواعد كتالوج نشطة + bindings فعلية فقط."""
     tpl = (template_code or "").strip()
     if not tpl:
         return []
-    cat = resolve_catalog_version(conn, catalog_version)
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
 
     if semester:
         for lk in _links_from_bindings(
-            conn, template_code=tpl, semester=semester, department_id=department_id
+            conn,
+            template_code=tpl,
+            semester=semester,
+            department_id=department_id,
+            link_cache=link_cache,
         ):
             code = (lk.get("indicator_code") or "").upper()
             if code in seen:
@@ -125,7 +208,9 @@ def resolve_survey_accreditation_links(
             seen.add(code)
             merged.append(lk)
 
-    for lk in _rules_from_db(conn, template_code=tpl, catalog_version=cat):
+    for lk in _rules_from_db(
+        conn, template_code=tpl, catalog_version=catalog_version, link_cache=link_cache
+    ):
         code = (lk.get("indicator_code") or "").upper()
         if not code or code in seen:
             continue
@@ -133,6 +218,34 @@ def resolve_survey_accreditation_links(
         merged.append(lk)
 
     return [_link_display(lk) for lk in merged]
+
+
+def resolve_survey_accreditation_links(
+    conn,
+    template_code: str,
+    *,
+    catalog_version: str | None = None,
+    semester: str | None = None,
+    department_id: int | None = None,
+    link_cache: SurveyLinkCache | None = None,
+) -> list[dict[str, Any]]:
+    """روابط استبيان → مؤشرات — قواعد كتالوج نشطة + bindings فعلية فقط (بدون خرائط ثابتة)."""
+    if link_cache is not None:
+        return link_cache.resolve(
+            conn,
+            template_code,
+            catalog_version=catalog_version,
+            semester=semester,
+            department_id=department_id,
+        )
+    cat = resolve_catalog_version(conn, catalog_version)
+    return _resolve_survey_accreditation_links_impl(
+        conn,
+        (template_code or "").strip(),
+        catalog_version=cat,
+        semester=(semester or "").strip() or None,
+        department_id=department_id,
+    )
 
 
 def resolve_survey_links_all_catalogs(
@@ -162,6 +275,7 @@ def primary_survey_link(
     catalog_version: str | None = None,
     semester: str | None = None,
     department_id: int | None = None,
+    link_cache: SurveyLinkCache | None = None,
 ) -> dict[str, Any] | None:
     links = resolve_survey_accreditation_links(
         conn,
@@ -169,6 +283,7 @@ def primary_survey_link(
         catalog_version=catalog_version,
         semester=semester,
         department_id=department_id,
+        link_cache=link_cache,
     )
     if not links:
         return None
@@ -182,6 +297,7 @@ def primary_evidence_indicator_code_resolved(
     catalog_version: str | None = None,
     semester: str | None = None,
     department_id: int | None = None,
+    link_cache: SurveyLinkCache | None = None,
 ) -> str | None:
     lk = primary_survey_link(
         conn,
@@ -189,6 +305,7 @@ def primary_evidence_indicator_code_resolved(
         catalog_version=catalog_version,
         semester=semester,
         department_id=department_id,
+        link_cache=link_cache,
     )
     if not lk:
         return None

@@ -452,6 +452,10 @@ class TestInstructorMyCourses:
             assert "axes" in data["rows"][0]
             assert data["rows"][0]["axes"].get("assessment") == "pending"
             assert "axis_catalog" in data
+            catalog_keys = {x.get("key") for x in (data.get("axis_catalog") or [])}
+            assert "documentation_quality" not in catalog_keys
+            assert len(catalog_keys) == 5
+            assert "delivery_summary" in data["rows"][0]
 
     def test_my_axis_status_post(self, app):
         with app.test_client() as c:
@@ -462,7 +466,12 @@ class TestInstructorMyCourses:
             assert login.status_code == 200
             r0 = c.get("/schedule/my_assigned_sections").get_json()
             sid = r0["rows"][0]["section_id"]
-            # إثبات تنفيذ مطلوب قبل وضع المحور «منجز»
+            blocked = c.post(
+                "/schedule/my_axis_status",
+                json={"section_id": sid, "axis_key": "assessment", "status": "done"},
+            )
+            assert blocked.status_code == 400
+            # المحاور اليدوية فقط (مثل التواصل مع الطلاب)
             ann = c.post(
                 "/schedule/my_course_announcement",
                 json={
@@ -476,13 +485,46 @@ class TestInstructorMyCourses:
             assert ann.status_code == 200
             save = c.post(
                 "/schedule/my_axis_status",
-                json={"section_id": sid, "axis_key": "assessment", "status": "done"},
+                json={"section_id": sid, "axis_key": "communication_supervision", "status": "done"},
             )
             assert save.status_code == 200
             assert save.get_json().get("status") == "ok"
             r1 = c.get("/schedule/my_assigned_sections").get_json()
             row = next(x for x in r1["rows"] if x["section_id"] == sid)
-            assert row["axes"]["assessment"] == "done"
+            assert row["axes"]["communication_supervision"] == "done"
+
+    def test_stale_manual_auto_axes_ignored(self, app):
+        with app.test_client() as c:
+            login = c.post(
+                "/auth/login",
+                json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login.status_code == 200
+            with app.app_context():
+                from backend.services.utilities import get_connection
+
+                with get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT id FROM instructors WHERE name LIKE '%تجريبي%' LIMIT 1")
+                    row = cur.fetchone()
+                    iid = int(row[0]) if row else 1
+                    for axis_key in ("course_mgmt", "teaching_content", "assessment"):
+                        cur.execute(
+                            """
+                            INSERT INTO faculty_section_axis_status (section_id, instructor_id, axis_key, status)
+                            VALUES (?, ?, ?, 'done')
+                            ON CONFLICT(section_id, instructor_id, axis_key) DO UPDATE SET status='done'
+                            """,
+                            (1, iid, axis_key),
+                        )
+                    conn.commit()
+            data = c.get("/schedule/my_assigned_sections").get_json()
+            row = next((x for x in data["rows"] if x["section_id"] == 1), data["rows"][0])
+            assert row["axes"]["course_mgmt"] == "pending"
+            assert row["axes"]["teaching_content"] == "pending"
+            assert row["axes"]["assessment"] == "pending"
+            meta = row.get("axes_meta") or {}
+            assert meta.get("course_mgmt", {}).get("auto") is True
 
     def test_my_assigned_sections_forbidden_for_admin(self, auth_client):
         resp = auth_client.get("/schedule/my_assigned_sections")

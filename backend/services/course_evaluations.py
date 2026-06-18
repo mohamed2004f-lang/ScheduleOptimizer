@@ -14,6 +14,7 @@ from backend.services import teaching_groups as tg_svc
 from backend.services.evaluation_survey import (
     insert_evaluation_with_answers,
     likert_labels_ar,
+    likert_scale_context,
     list_survey_questions,
     parse_answers_payload,
 )
@@ -310,6 +311,9 @@ def _render_evaluation_form(conn, sid: str, match: dict, *, section_id: int, tea
         semester=sem,
         questions=questions,
         likert_options=likert_labels_ar(),
+        likert_labels=likert_labels_ar(),
+        scale_guide_note="اختر الرقم الذي يعبّر عن تجربتك مع المقرر والأستاذ.",
+        **likert_scale_context(questions),
     )
 
 

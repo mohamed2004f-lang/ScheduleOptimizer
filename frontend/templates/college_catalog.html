@@ -434,30 +434,6 @@
       </div>
     </div>
 
-    <!-- sections -->
-    <div class="card mb-5" id="cardSections">
-      <div class="card-header d-flex flex-wrap gap-2 align-items-center justify-content-between">
-        <strong>شُعَب تنفيذ المقرر (برنامج عام — أعداد كبيرة)</strong>
-        <div class="d-flex gap-2 flex-wrap">
-          <input type="number" class="form-control form-control-sm" id="secPcId" placeholder="program_course_id" style="width:10rem;">
-          <button type="button" class="btn btn-sm btn-outline-primary" id="btnSecRefresh">تحديث الشعب</button>
-        </div>
-      </div>
-      <div class="card-body">
-        <div class="table-responsive"><table class="table table-sm" id="tblSec"><thead><tr>
-          <th>id</th><th>رمز الشعبة</th><th>سعة</th><th>فصل</th><th></th></tr></thead><tbody></tbody></table></div>
-        <div class="row g-2 align-items-end border-top pt-2 small">
-          <div class="col-md-2"><label class="form-label small">id</label><input class="form-control form-control-sm" id="secId"></div>
-          <div class="col-md-2"><label class="form-label small">program_course_id</label><input class="form-control form-control-sm" id="secProgramCourse"></div>
-          <div class="col-md-2"><label class="form-label small">section_code</label><input class="form-control form-control-sm" id="secCode" placeholder="A / B …"></div>
-          <div class="col-md-2"><label class="form-label small">capacity_max</label><input class="form-control form-control-sm" id="secCap" type="number"></div>
-          <div class="col-md-4"><label class="form-label small">semester</label><input class="form-control form-control-sm" id="secSem"></div>
-          <div class="col-md-12"><label class="form-label small">note</label><input class="form-control form-control-sm" id="secNote"></div>
-          <div class="col-auto"><button class="btn btn-primary btn-sm" id="btnSecSave">حفظ الشعبة</button></div>
-        </div>
-      </div>
-    </div>
-
       </div><!-- /catalogTabPanePlan -->
       <div class="tab-pane fade" id="catalogTabPanePathway" role="tabpanel" aria-labelledby="catalogTabBtnPathway" tabindex="0">
 
@@ -735,7 +711,7 @@
     }
 
     function applyHeadCatalogUi() {
-      ['cardDepartments', 'cardCourseMaster', 'cardSections'].forEach(id => {
+      ['cardDepartments', 'cardCourseMaster'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = 'none';
       });
@@ -1794,38 +1770,6 @@
       updateActiveProgramBar();
     }
 
-    async function loadSections(){
-      const pid = document.getElementById('secPcId').value.trim();
-      if(!pid){ msg('حدد program_course_id', 'warning'); return;}
-      const data = await apiGet('/college/catalog/sections?program_course_id='+encodeURIComponent(pid));
-      const tbody = document.querySelector('#tblSec tbody');
-      tbody.innerHTML='';
-      (data.items||[]).forEach(s=>{
-        const enc = encodeURIComponent(JSON.stringify(s));
-        tbody.insertAdjacentHTML('beforeend', `<tr><td>${s.id}</td><td>${s.section_code}</td><td>${s.capacity_max!=null?s.capacity_max:''}</td><td>${s.semester||''}</td>
-          <td><button type="button" class="btn btn-sm btn-link p-0 btn-edit-sec" data-payload="${enc}">تحرير</button>
-          <button type="button" class="btn btn-sm btn-link text-danger p-0 btn-del-sec" data-id="${s.id}">حذف</button></td></tr>`);
-      });
-      document.querySelectorAll('.btn-edit-sec').forEach(btn=>{
-        btn.onclick=()=>{
-          const ob = JSON.parse(decodeURIComponent(btn.getAttribute('data-payload')));
-          document.getElementById('secId').value = ob.id||'';
-          document.getElementById('secProgramCourse').value = ob.program_course_id||'';
-          document.getElementById('secCode').value = ob.section_code||'';
-          document.getElementById('secCap').value = ob.capacity_max!=null ? ob.capacity_max : '';
-          document.getElementById('secSem').value = ob.semester||'';
-          document.getElementById('secNote').value = ob.note||'';
-        };
-      });
-      document.querySelectorAll('.btn-del-sec').forEach(btn=>{
-        btn.onclick = async ()=>{
-          await apiPost('/college/catalog/section/delete', {id:+btn.dataset.id});
-          loadSections();
-        };
-      });
-      msg('الشعب: '+(data.items||[]).length, 'success');
-    }
-
     document.getElementById('btnDepRefresh').onclick = loadDepartments;
     document.getElementById('btnDepSave').onclick = async ()=>{
       const payload = {
@@ -2130,23 +2074,7 @@
       }
     };
 
-    document.getElementById('btnSecRefresh').onclick = loadSections;
-    document.getElementById('btnSecSave').onclick = async ()=>{
-      const cap = document.getElementById('secCap').value.trim();
-      await apiPost('/college/catalog/section/save', {
-        id: document.getElementById('secId').value ? +document.getElementById('secId').value : null,
-        program_course_id:+document.getElementById('secProgramCourse').value,
-        section_code:document.getElementById('secCode').value.trim(),
-        capacity_max: cap === '' ? null : +cap,
-        semester: document.getElementById('secSem').value.trim(),
-        note: document.getElementById('secNote').value.trim(),
-        is_active:1
-      });
-      msg('تم حفظ الشعبة', 'success');
-      loadSections();
-    };
-
-    let PATHWAY_DEPT_ID = null;
+    document.getElementById('btnDepRefresh').onclick = loadDepartments;
 
     function renderPathwayRow(item, editable) {
       const val = item.value_number != null ? item.value_number : (item.value_text || '—');

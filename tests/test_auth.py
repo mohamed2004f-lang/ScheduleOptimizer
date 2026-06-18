@@ -96,13 +96,51 @@ class TestAuth:
         assert caps.get("nav_admin_settings") is False
         assert caps.get("nav_student_affairs_menu") is False
         assert caps.get("nav_planning_student_view") is True
+        assert caps.get("nav_student_course_evaluations") is True
+        assert caps.get("nav_surveys_hub") is True
         assert caps.get("can_manage_schedule_edit") is False
         assert caps.get("nav_transcript_nav") is True
+
+    def test_compute_capabilities_instructor_surveys_hub(self):
+        caps = compute_capabilities("instructor", 0)
+        assert caps.get("nav_surveys_hub") is True
+
+    def test_compute_capabilities_supervisor_surveys_hub(self):
+        caps = compute_capabilities("supervisor", 0)
+        assert caps.get("nav_surveys_hub") is True
+
+    def test_compute_capabilities_staff_surveys_hub(self):
+        caps = compute_capabilities("staff", 0)
+        assert caps.get("nav_surveys_hub") is True
+
+    def test_compute_capabilities_head_surveys_hub_modes(self):
+        c_head = compute_capabilities("head_of_department", 0, "head")
+        assert c_head.get("nav_surveys_hub") is True
+        c_ins = compute_capabilities("head_of_department", 0, "instructor")
+        assert c_ins.get("nav_surveys_hub") is True
+        c_sup = compute_capabilities("head_of_department", 0, "supervisor")
+        assert c_sup.get("nav_surveys_hub") is True
 
     def test_compute_capabilities_admin_college_catalog_nav(self):
         caps = compute_capabilities("admin", 0)
         assert caps.get("nav_college_catalog") is True
         assert caps.get("can_switch_department_scope") is True
+        assert caps.get("nav_staff_operations_menu") is True
+        assert caps.get("nav_instructor_portal_menu") is False
+
+    def test_staff_ops_vs_instructor_portal_nav_caps(self):
+        """الإدارة: شريط تشغيلي بدون قائمة «المزيد» للأستاذ؛ رئيس القسم بوضع أستاذ يحصل على شريط الأستاذ."""
+        admin = compute_capabilities("admin_main", 0)
+        assert admin.get("nav_staff_operations_menu") is True
+        assert admin.get("nav_instructor_portal_menu") is False
+        hod_head = compute_capabilities("head_of_department", 0, "head")
+        assert hod_head.get("nav_staff_operations_menu") is True
+        assert hod_head.get("nav_instructor_portal_menu") is False
+        assert hod_head.get("nav_surveys_hub") is True
+        hod_ins = compute_capabilities("head_of_department", 0, "instructor")
+        assert hod_ins.get("nav_staff_operations_menu") is False
+        assert hod_ins.get("nav_instructor_portal_menu") is True
+        assert hod_ins.get("nav_surveys_hub") is True
 
     def test_compute_capabilities_instructor_my_courses_nav(self):
         caps = compute_capabilities("instructor", 0)
@@ -130,8 +168,18 @@ class TestAuth:
 
     def test_compute_capabilities_instructor_dual_teaching_mode(self):
         caps = compute_capabilities("instructor", 1, "instructor")
+        assert caps.get("nav_my_assigned_courses") is True
+        assert caps.get("nav_supervisor_dashboard") is False
         assert caps.get("nav_student_affairs_attendance_only") is True
         assert caps.get("nav_transcript_nav") is False
+        assert caps.get("nav_student_affairs_menu") is True
+
+    def test_compute_capabilities_instructor_dual_supervisor_mode(self):
+        caps = compute_capabilities("instructor", 1, "supervisor")
+        assert caps.get("nav_my_assigned_courses") is False
+        assert caps.get("nav_supervisor_dashboard") is True
+        assert caps.get("nav_student_affairs_menu") is False
+        assert caps.get("nav_transcript_nav") is True
 
     def test_is_supervisor_effective_session(self):
         assert is_supervisor_effective_session("instructor", 1, "supervisor") is True

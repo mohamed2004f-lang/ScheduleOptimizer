@@ -20,7 +20,7 @@ from backend.services.multi_surveys import (
     list_template_questions,
     parse_answers_payload,
 )
-from backend.services.evaluation_survey import likert_labels_ar
+from backend.services.evaluation_survey import likert_labels_ar, likert_scale_context
 
 logger = __import__("logging").getLogger(__name__)
 
@@ -478,6 +478,8 @@ def invite_fill_context(conn, token: str) -> dict[str, Any]:
         "open_comment_label": open_label,
         "template_code": template_code,
         "cycle_label": invite.get("cycle_label"),
+        "scale_guide_note": "اختر الرقم الذي يعبّر عن رأيك في كل بند.",
+        **likert_scale_context(questions),
     }
     if template_code == "employer_strategic":
         from backend.services.survey_identity_context import build_employer_identity_panel

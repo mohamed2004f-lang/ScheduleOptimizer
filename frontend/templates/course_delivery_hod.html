@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>لوحة اعتماد رئيس القسم</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">لوحة اعتماد رئيس القسم</h1>
+        <p class="page-subtitle" id="hodSubtitle">مفردات المقررات · تقارير التنفيذ · مسودات الدرجات</p>
+      </div>
+      <a href="/grade_drafts" class="btn btn-outline-secondary btn-sm">مسودات الدرجات (تفصيلي)</a>
+    </div>
+
+    <div id="hodSummary" class="row g-2 mb-3">
+      <div class="col-md-3 col-6"><div class="card border-warning"><div class="card-body py-2 text-center"><div class="fs-4 fw-bold" id="sumBaselines">—</div><div class="small">قوائم مفردات</div></div></div></div>
+      <div class="col-md-3 col-6"><div class="card border-info"><div class="card-body py-2 text-center"><div class="fs-4 fw-bold" id="sumGates">—</div><div class="small">تقارير دون الحد</div></div></div></div>
+      <div class="col-md-3 col-6"><div class="card border-primary"><div class="card-body py-2 text-center"><div class="fs-4 fw-bold" id="sumDrafts">—</div><div class="small">مسودات درجات</div></div></div></div>
+      <div class="col-md-3 col-6"><div class="card border-danger"><div class="card-body py-2 text-center"><div class="fs-4 fw-bold" id="sumTotal">—</div><div class="small">إجمالي بانتظارك</div></div></div></div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header fw-semibold">حدود نسب الإنجاز (الفصل الحالي)</div>
+      <div class="card-body">
+        <div class="row g-2 align-items-end">
+          <div class="col-auto"><label class="form-label small mb-0">جزئي %</label><input type="number" id="partialMin" class="form-control form-control-sm" style="width:5rem" value="50"></div>
+          <div class="col-auto"><label class="form-label small mb-0">نهائي %</label><input type="number" id="finalMin" class="form-control form-control-sm" style="width:5rem" value="80"></div>
+          <div class="col-auto"><button type="button" class="btn btn-sm btn-primary" id="btnSavePolicy">حفظ</button></div>
+        </div>
+      </div>
+    </div>
+
+    <ul class="nav nav-tabs mb-2" id="hodTabs">
+      <li class="nav-item"><button class="nav-link active" data-tab="baselines" type="button">قوائم المفردات <span class="badge bg-warning text-dark ms-1" id="tabBadgeBl">0</span></button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="gates" type="button">تقارير دون الحد <span class="badge bg-info ms-1" id="tabBadgeGt">0</span></button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="drafts" type="button">مسودات الدرجات <span class="badge bg-primary ms-1" id="tabBadgeGd">0</span></button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="followup" type="button">متابعة القسم</button></li>
+    </ul>
+
+    <div id="panelBaselines" class="card mb-3">
+      <div class="card-header fw-semibold">قوائم مفردات بانتظار الاعتماد</div>
+      <div class="card-body" id="pendingBaselines">جاري التحميل…</div>
+    </div>
+
+    <div id="panelGates" class="card mb-3 d-none">
+      <div class="card-header fw-semibold">تقارير دون الحد — بانتظار الموافقة</div>
+      <div class="card-body" id="pendingGates">جاري التحميل…</div>
+    </div>
+
+    <div id="panelDrafts" class="card mb-3 d-none">
+      <div class="card-header fw-semibold">مسودات درجات بانتظار الاعتماد</div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead><tr><th>المقرر</th><th>الأستاذ</th><th>المرحلة</th><th>تاريخ الإرسال</th><th></th></tr></thead>
+            <tbody id="pendingDraftsBody"></tbody>
+          </table>
+        </div>
+        <div id="pendingDraftsEmpty" class="p-3 text-muted small d-none">لا مسودات بانتظار الاعتماد.</div>
+      </div>
+    </div>
+
+    <div id="panelFollowup" class="card mb-3 d-none">
+      <div class="card-header fw-semibold d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span>متابعة تنفيذ المقررات — القسم</span>
+        <span class="small text-muted" id="followupSummary">جاري التحميل…</span>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead><tr><th>المقرر</th><th>الأستاذ</th><th>مفردات</th><th>جزئي</th><th>نهائي</th><th>المحاور</th><th></th></tr></thead>
+            <tbody id="followupBody"></tbody>
+          </table>
+        </div>
+        <div id="followupEmpty" class="p-3 text-muted small d-none">لا مجموعات تدريس للفصل الحالي.</div>
+      </div>
+    </div>
+  </main>
+  <script>
+    function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+
+    function phaseLabel(ph) {
+      const p = String(ph || 'combined').toLowerCase();
+      if (p === 'partial') return 'جزئي';
+      if (p === 'final') return 'نهائي';
+      return 'مجمّع';
+    }
+
+    function showTab(name) {
+      ['baselines', 'gates', 'drafts', 'followup'].forEach(t => {
+        document.getElementById('panel' + t.charAt(0).toUpperCase() + t.slice(1))?.classList.toggle('d-none', t !== name);
+      });
+      document.querySelectorAll('#hodTabs .nav-link').forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('data-tab') === name);
+      });
+      if (name === 'followup') loadFollowup();
+    }
+
+    document.querySelectorAll('#hodTabs .nav-link').forEach(btn => {
+      btn.addEventListener('click', () => showTab(btn.getAttribute('data-tab')));
+    });
+
+    async function loadPolicy() {
+      const r = await fetch('/course_delivery/gate_policy', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        document.getElementById('partialMin').value = j.partial_min_pct || 50;
+        document.getElementById('finalMin').value = j.final_min_pct || 80;
+      }
+    }
+
+    document.getElementById('btnSavePolicy').onclick = async () => {
+      const r = await fetch('/course_delivery/gate_policy', {
+        method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          partial_min_pct: Number(document.getElementById('partialMin').value),
+          final_min_pct: Number(document.getElementById('finalMin').value)
+        })
+      });
+      if (r.ok) alert('تم الحفظ'); else alert('فشل');
+    };
+
+    function bindBaselineActions(blEl) {
+      blEl.querySelectorAll('.hod-add-topic').forEach(btn => {
+        btn.onclick = () => {
+          const div = document.createElement('div');
+          div.className = 'input-group input-group-sm mb-1 hod-topic-row';
+          div.innerHTML = '<input class="form-control hod-topic-title"><button type="button" class="btn btn-outline-danger hod-del-topic">×</button>';
+          div.querySelector('.hod-del-topic').onclick = () => div.remove();
+          btn.parentElement.insertBefore(div, btn);
+        };
+      });
+      blEl.querySelectorAll('.hod-del-topic').forEach(btn => { btn.onclick = () => btn.closest('.hod-topic-row')?.remove(); });
+      blEl.querySelectorAll('.hod-save-topics').forEach(btn => {
+        btn.onclick = async () => {
+          const card = btn.closest('.border');
+          const topics = Array.from(card.querySelectorAll('.hod-topic-title')).map((inp, i) => ({
+            sort_order: i, topic_title: inp.value.trim()
+          })).filter(t => t.topic_title);
+          const r = await fetch('/course_delivery/baseline/' + btn.getAttribute('data-id') + '/topics', {
+            method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ topics })
+          });
+          if (r.ok) alert('تم'); else alert('فشل');
+        };
+      });
+      blEl.querySelectorAll('.hod-approve-bl').forEach(btn => {
+        btn.onclick = async () => {
+          const note = prompt('ملاحظة (اختياري):') || '';
+          await fetch('/course_delivery/baseline/' + btn.getAttribute('data-id') + '/review', {
+            method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'approve', note })
+          });
+          loadPending();
+        };
+      });
+      blEl.querySelectorAll('.hod-reject-bl').forEach(btn => {
+        btn.onclick = async () => {
+          const note = prompt('سبب الإرجاع:') || '';
+          if (!note) return;
+          await fetch('/course_delivery/baseline/' + btn.getAttribute('data-id') + '/review', {
+            method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'reject', note })
+          });
+          loadPending();
+        };
+      });
+    }
+
+    async function approveDraft(id) {
+      if (!confirm('اعتماد هذه المسودة؟')) return;
+      const r = await fetch('/grades/drafts/' + id + '/approve', {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}'
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        alert(j.message || 'تم الاعتماد');
+        loadPending();
+      } else {
+        alert(j.message || 'فشل الاعتماد');
+      }
+    }
+
+    async function rejectDraft(id) {
+      const note = prompt('سبب الإرجاع للأستاذ:') || '';
+      if (!note) return;
+      const r = await fetch('/grades/drafts/' + id + '/reject', {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note })
+      });
+      if (r.ok) loadPending(); else alert('فشل الإرجاع');
+    }
+
+    async function loadFollowup() {
+      const body = document.getElementById('followupBody');
+      const empty = document.getElementById('followupEmpty');
+      const sumEl = document.getElementById('followupSummary');
+      const r = await fetch('/course_delivery/hod/department_summary', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        body.innerHTML = '';
+        sumEl.textContent = 'تعذر التحميل';
+        return;
+      }
+      const rows = j.rows || [];
+      const sum = j.summary || {};
+      sumEl.textContent = 'الفصل: ' + (j.semester || '') + ' — مكتمل: ' + (sum.groups_documentation_complete || 0) + ' / ' + (sum.groups_total || 0);
+      if (!rows.length) {
+        body.innerHTML = '';
+        empty.classList.remove('d-none');
+        return;
+      }
+      empty.classList.add('d-none');
+      const tick = (ok) => ok ? '<span class="text-success">✓</span>' : '<span class="text-muted">○</span>';
+      body.innerHTML = rows.map(row => {
+        const d = row.delivery || {};
+        return '<tr>' +
+          '<td>' + esc(row.course_name) + (row.group_code ? ' <small class="text-muted">(' + esc(row.group_code) + ')</small>' : '') + '</td>' +
+          '<td>' + esc(row.instructor_name) + '</td>' +
+          '<td>' + tick(d.baseline_ok) + '</td>' +
+          '<td>' + tick(d.partial_submitted) + '</td>' +
+          '<td>' + tick(d.final_submitted) + '</td>' +
+          '<td class="small">' + (row.progress_done || 0) + '/' + (row.progress_total || 0) + '</td>' +
+          '<td><a class="btn btn-sm btn-outline-primary" href="' + esc(row.survey_url || '#') + '">عرض</a></td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    async function loadPending() {
+      const r = await fetch('/course_delivery/hod/pending', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      const blEl = document.getElementById('pendingBaselines');
+      const gtEl = document.getElementById('pendingGates');
+      const gdBody = document.getElementById('pendingDraftsBody');
+      const gdEmpty = document.getElementById('pendingDraftsEmpty');
+      if (!r.ok) {
+        blEl.textContent = 'تعذر التحميل';
+        gtEl.textContent = '';
+        return;
+      }
+
+      const sum = j.summary || {};
+      document.getElementById('sumBaselines').textContent = sum.pending_baselines ?? 0;
+      document.getElementById('sumGates').textContent = sum.pending_gate_reports ?? 0;
+      document.getElementById('sumDrafts').textContent = sum.pending_grade_drafts ?? 0;
+      document.getElementById('sumTotal').textContent = sum.total_pending ?? 0;
+      document.getElementById('tabBadgeBl').textContent = sum.pending_baselines ?? 0;
+      document.getElementById('tabBadgeGt').textContent = sum.pending_gate_reports ?? 0;
+      document.getElementById('tabBadgeGd').textContent = sum.pending_grade_drafts ?? 0;
+      if (sum.semester) {
+        document.getElementById('hodSubtitle').textContent =
+          'الفصل: ' + sum.semester + ' — مفردات · تقارير · مسودات';
+      }
+
+      const bls = j.pending_baselines || [];
+      blEl.innerHTML = bls.length ? bls.map(b => {
+        const topicsHtml = (b.topics || []).map(t =>
+          '<div class="input-group input-group-sm mb-1 hod-topic-row">' +
+          '<input class="form-control hod-topic-title" value="' + esc(t.topic_title) + '">' +
+          '<button type="button" class="btn btn-outline-danger hod-del-topic">×</button></div>'
+        ).join('') +
+        '<button type="button" class="btn btn-sm btn-outline-secondary hod-add-topic" data-bid="' + b.id + '">+ مفرد</button>' +
+        '<div class="mt-2"><button class="btn btn-sm btn-success hod-approve-bl" data-id="' + b.id + '">اعتماد</button> ' +
+        '<button class="btn btn-sm btn-outline-danger hod-reject-bl" data-id="' + b.id + '">إرجاع</button> ' +
+        '<button class="btn btn-sm btn-primary hod-save-topics" data-id="' + b.id + '">حفظ التعديلات</button></div>';
+        return '<div class="border rounded p-2 mb-2"><strong>' + esc(b.course_name) + '</strong> v' + b.version +
+          '<div class="small text-muted">من: ' + esc(b.created_by) + '</div>' + topicsHtml + '</div>';
+      }).join('') : '<p class="text-muted small mb-0">لا قوائم مفردات معلّقة.</p>';
+      bindBaselineActions(blEl);
+
+      const gates = j.pending_gate_reports || [];
+      gtEl.innerHTML = gates.length ? gates.map(g =>
+        '<div class="border rounded p-2 mb-2 d-flex justify-content-between flex-wrap gap-2">' +
+        '<div><strong>' + esc(g.course_name) + '</strong> — ' + (g.phase === 'partial' ? 'جزئي' : 'نهائي') +
+        '<div class="small">النسبة: ' + g.overall_pct + '%</div>' +
+        '<div class="small text-muted">' + esc(g.below_threshold_reason) + '</div></div>' +
+        '<div><button class="btn btn-sm btn-success gt-approve" data-id="' + g.id + '">موافقة</button> ' +
+        '<button class="btn btn-sm btn-outline-danger gt-reject" data-id="' + g.id + '">رفض</button></div></div>'
+      ).join('') : '<p class="text-muted small mb-0">لا طلبات.</p>';
+      gtEl.querySelectorAll('.gt-approve').forEach(btn => {
+        btn.onclick = async () => {
+          await fetch('/course_delivery/report/' + btn.getAttribute('data-id') + '/gate_review', {
+            method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'approve' })
+          });
+          loadPending();
+        };
+      });
+      gtEl.querySelectorAll('.gt-reject').forEach(btn => {
+        btn.onclick = async () => {
+          await fetch('/course_delivery/report/' + btn.getAttribute('data-id') + '/gate_review', {
+            method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'reject', note: prompt('سبب:') || '' })
+          });
+          loadPending();
+        };
+      });
+
+      const drafts = j.pending_grade_drafts || [];
+      gdBody.innerHTML = '';
+      if (!drafts.length) {
+        gdEmpty.classList.remove('d-none');
+      } else {
+        gdEmpty.classList.add('d-none');
+        drafts.forEach(d => {
+          const tr = document.createElement('tr');
+          const sub = d.group_display_label || (d.section_id ? ('حصة #' + d.section_id) : '');
+          tr.innerHTML =
+            '<td>' + esc(d.course_name) + (sub ? (' <span class="text-muted small">(' + esc(sub) + ')</span>') : '') + '</td>' +
+            '<td>' + esc(d.instructor_name || '') + '</td>' +
+            '<td>' + phaseLabel(d.draft_phase) + '</td>' +
+            '<td>' + esc(d.submitted_at || '—') + '</td>' +
+            '<td><div class="d-flex gap-1 flex-wrap">' +
+            '<button type="button" class="btn btn-sm btn-success gd-approve" data-id="' + d.id + '">اعتماد</button>' +
+            '<button type="button" class="btn btn-sm btn-outline-danger gd-reject" data-id="' + d.id + '">إرجاع</button>' +
+            '<a class="btn btn-sm btn-outline-primary" href="/grade_drafts">معاينة</a>' +
+            '</div></td>';
+          gdBody.appendChild(tr);
+        });
+        gdBody.querySelectorAll('.gd-approve').forEach(btn => {
+          btn.onclick = () => approveDraft(Number(btn.getAttribute('data-id')));
+        });
+        gdBody.querySelectorAll('.gd-reject').forEach(btn => {
+          btn.onclick = () => rejectDraft(Number(btn.getAttribute('data-id')));
+        });
+      }
+    }
+
+    loadPolicy();
+    loadPending();
+  </script>
+</body>
+</html>

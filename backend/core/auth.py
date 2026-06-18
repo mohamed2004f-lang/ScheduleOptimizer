@@ -200,8 +200,8 @@ def _fetch_user_session_row(cur, username: str):
     try:
         return cur.execute(
             """
-            SELECT role, COALESCE(is_supervisor,0), student_id, instructor_id,
-                   COALESCE(is_college_quality_lead,0)
+            SELECT role, COALESCE(is_supervisor,0) AS is_supervisor, student_id, instructor_id,
+                   COALESCE(is_college_quality_lead,0) AS is_college_quality_lead
             FROM users WHERE lower(username) = lower(?)
             LIMIT 1
             """,
@@ -214,7 +214,8 @@ def _fetch_user_session_row(cur, username: str):
             pass
         return cur.execute(
             """
-            SELECT role, COALESCE(is_supervisor,0), student_id, instructor_id, 0
+            SELECT role, COALESCE(is_supervisor,0) AS is_supervisor, student_id, instructor_id,
+                   0 AS is_college_quality_lead
             FROM users WHERE lower(username) = lower(?)
             LIMIT 1
             """,
@@ -425,11 +426,17 @@ def compute_capabilities(
             "nav_ilo_catalog": True,
             "nav_department_lo_dashboard": staff_quality,
             "nav_supervisor_quality_report": bool(is_supervisor_effective),
+            "nav_supervisor_dashboard": isv and hod_mode in ("instructor", "supervisor"),
             "nav_student_course_evaluations": False,
-            "nav_surveys_hub": hod_mode in ("head", "instructor") or has_ins,
+            # رئيس القسم يظهر له hub الاستبيانات بحسب active_mode:
+            # - active_mode=head/instructor => respondent_role=instructor
+            # - active_mode=supervisor => respondent_role=supervisor
+            "nav_surveys_hub": hod_mode in ("head", "instructor", "supervisor"),
             "nav_surveys_results": staff_quality,
             "is_supervisor_effective": bool(is_supervisor_effective),
             "is_instructor_or_supervisor_nav": inst_sup_nav,
+            "nav_staff_operations_menu": hod_mode == "head",
+            "nav_instructor_portal_menu": hod_mode in ("instructor", "supervisor"),
             "can_switch_active_mode": can_switch,
             "active_mode_switch_profile": switch_profile,
             "is_student": False,
@@ -445,12 +452,16 @@ def compute_capabilities(
     # مسودات الدرجات من القائمة العلوية: الإدارة/رئيس القسم فقط؛ الأستاذ يدخلها من «مقرراتي»
     show_grade_drafts = role in ("admin", "admin_main", "head_of_department")
     staff_quality = role in ("admin", "admin_main", "head_of_department")
-    show_faculty_scorecards = staff_quality or role == "instructor"
-    show_ilo_catalog = staff_quality or role in ("instructor", "supervisor")
+    dual_inst_sup = role == "instructor" and isv
+    am_eff = am if am else ("instructor" if dual_inst_sup else "")
+    inst_portal = role == "instructor" and (not dual_inst_sup or am_eff != "supervisor")
+    sup_portal = (dual_inst_sup and am_eff == "supervisor") or role == "supervisor"
+    show_faculty_scorecards = staff_quality or inst_portal
+    show_ilo_catalog = staff_quality or inst_portal
 
     return {
         "v": 1,
-        "nav_my_assigned_courses": role == "instructor",
+        "nav_my_assigned_courses": inst_portal,
         "nav_users_admin": role in ("admin", "admin_main"),
         "nav_college_catalog": role in ("admin", "admin_main"),
         "nav_supervision": role in ("admin", "admin_main"),
@@ -468,29 +479,33 @@ def compute_capabilities(
         "nav_programs_portal": True,
         "nav_ilo_catalog": show_ilo_catalog,
         "nav_department_lo_dashboard": staff_quality,
-        "nav_supervisor_quality_report": bool(is_supervisor_effective),
+        "nav_supervisor_quality_report": bool(sup_portal),
+        "nav_supervisor_dashboard": bool(sup_portal),
         "nav_student_learning_outcomes": role == "student",
-        "nav_student_course_evaluations": False,
+        "nav_student_course_evaluations": role == "student",
         "nav_student_registrations": role == "student",
-        "nav_surveys_hub": role in ("student", "instructor", "staff", "head_of_department"),
+        # تظهر صفحة hub التعبئة للأدوار التي لها قوالب تعبئة:
+        # طالب / أستاذ / مشرف / موظف
+        "nav_surveys_hub": role in ("student", "instructor", "supervisor", "staff"),
         "nav_surveys_results": staff_quality,
         "nav_dashboard": role != "student",
         "nav_admin_settings": role != "student",
-        "nav_student_affairs_menu": role != "student",
+        "nav_student_affairs_menu": role != "student" and not sup_portal,
         "nav_planning_student_view": role == "student",
+        "nav_staff_operations_menu": staff_planning,
+        "nav_instructor_portal_menu": False,
         "is_supervisor_effective": bool(is_supervisor_effective),
-        "is_instructor_or_supervisor_nav": (role == "instructor") or (role == "supervisor"),
+        "is_instructor_or_supervisor_nav": inst_portal or sup_portal,
         "can_switch_active_mode": can_switch,
         "active_mode_switch_profile": switch_profile,
         "is_student": role == "student",
         "can_manage_schedule_edit": staff_planning and role != "student",
         "can_manage_courses_edit": staff_planning,
         "can_manage_transcript_admin": staff_planning,
-        "nav_student_affairs_attendance_only": (role == "instructor" and not is_supervisor_effective),
+        "nav_student_affairs_attendance_only": role == "instructor" and not sup_portal,
         "nav_transcript_nav": staff_planning
         or (role == "student")
-        or (role == "supervisor")
-        or is_supervisor_effective,
+        or sup_portal,
         "can_switch_department_scope": role in ("admin", "admin_main"),
     }
 
@@ -1288,7 +1303,7 @@ def init_auth(app):
                     if user_hint:
                         row = cur.execute(
                             """
-                            SELECT role, COALESCE(is_supervisor,0)
+                            SELECT role, COALESCE(is_supervisor,0) AS is_supervisor
                             FROM users
                             WHERE lower(username) = lower(?)
                             LIMIT 1
@@ -1298,7 +1313,7 @@ def init_auth(app):
                     if (not row) and iid_hint:
                         row = cur.execute(
                             """
-                            SELECT role, COALESCE(is_supervisor,0)
+                            SELECT role, COALESCE(is_supervisor,0) AS is_supervisor
                             FROM users
                             WHERE instructor_id = ?
                             ORDER BY COALESCE(is_active,1) DESC

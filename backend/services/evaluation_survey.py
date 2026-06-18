@@ -22,16 +22,16 @@ LEGACY_EVAL_KEYS = frozenset(
 
 # 10 بنود — مستوحاة من إطار IDEA/SERU لتقييم التدريس والمقرر
 DEFAULT_SURVEY_SEED: list[tuple[str | None, str, int]] = [
-    ("instructor_punctuality", "التزام الأستاذ بمواعيد المحاضرات والحضور الفعلي", 10),
-    ("communication_quality", "وضوح الشرح وإتقان توصيل المفاهيم الأساسية", 20),
-    ("course_clarity", "وضوح أهداف المقرر وتوافق المحتوى مع ما يُدرَّس", 30),
-    ("assessment_fairness", "عدالة التقييم وشفافية معاييره وتطبيقها", 40),
-    ("material_relevance", "ملاءمة المواد التعليمية والمراجع لمخرجات المقرر", 50),
-    ("student_engagement", "تحفيز التفاعل والمشاركة الصفية النشطة", 60),
-    ("feedback_timeliness", "تقديم تغذية راجعة بنّاءة في وقت مناسب", 70),
-    ("critical_thinking", "تعزيز التفكير النقدي وحل المشكلات", 80),
-    ("instructor_professionalism", "الاحترافية والالتزام بأخلاقيات التعليم", 90),
-    ("learning_contribution", "المساهمة الإجمالية في تحقيق مخرجات التعلم للمقرر", 100),
+    ("instructor_punctuality", "يبدأ الأستاذ المحاضرة في الوقت المحدد ويُكملها", 10),
+    ("communication_quality", "أستطيع فهم الشرح والأمثلة في هذا المقرر", 20),
+    ("course_clarity", "أعرف ما المطلوب مني لاجتياز المقرر (أهداف، تقويم، درجات)", 30),
+    ("assessment_fairness", "معايير الدرجات وطريقة التقييم واضحة ومطبّقة باتساق", 40),
+    ("material_relevance", "الكتاب والمراجع والمنصة تساعدني على فهم المقرر", 50),
+    ("student_engagement", "يشجّعني الأستاذ على السؤال والمشاركة في المحاضرة", 60),
+    ("feedback_timeliness", "أحصل على تغذية راجعة على أعمالي قبل الاختبار التالي", 70),
+    ("critical_thinking", "أنشطة المقرر تجعلني أحلّل وأربط المفاهيم بمواقف جديدة", 80),
+    ("instructor_professionalism", "يتعامل الأستاذ معي ومع الزملاء باحترام وعدالة", 90),
+    ("learning_contribution", "بشكل عام، ساهم هذا المقرر في تعلّمي هذا الفصل", 100),
 ]
 
 
@@ -64,6 +64,32 @@ def ensure_survey_questions_seeded(conn) -> None:
         logger.info("Seeded %s default evaluation survey questions", len(DEFAULT_SURVEY_SEED))
         return
     _upgrade_course_eval_questions(conn)
+    _sync_course_eval_labels_from_seed(conn)
+
+
+def _sync_course_eval_labels_from_seed(conn) -> None:
+    """مزامنة نصوص بنود تقييم المقرر من البذرة (حسب legacy_key) دون تغيير question_id."""
+    if not table_exists(conn, "evaluation_survey_questions"):
+        return
+    cur = conn.cursor()
+    now = datetime.datetime.utcnow().isoformat()
+    updated = 0
+    for legacy_key, label_ar, sort_order in DEFAULT_SURVEY_SEED:
+        lk = (legacy_key or "").strip()
+        if not lk:
+            continue
+        cur.execute(
+            """
+            UPDATE evaluation_survey_questions
+            SET label_ar = ?, sort_order = ?, updated_at = ?
+            WHERE legacy_key = ?
+            """,
+            (label_ar.strip(), int(sort_order), now, lk),
+        )
+        updated += int(cur.rowcount or 0)
+    if updated:
+        conn.commit()
+        logger.info("Synced %s course evaluation question labels from seed", updated)
 
 
 def _upgrade_course_eval_questions(conn) -> None:
@@ -411,3 +437,48 @@ def insert_evaluation_with_answers(
 
 def likert_labels_ar() -> list[tuple[int, str]]:
     return [(5, "ممتاز"), (4, "جيد جداً"), (3, "جيد"), (2, "مقبول"), (1, "ضعيف")]
+
+
+def likert_scale_guide_ar() -> list[dict[str, str | int]]:
+    """شرح عملي لكل درجة على مقياس ١–٥ (من ضعيف إلى ممتاز)."""
+    return [
+        {
+            "value": 1,
+            "label": "ضعيف",
+            "meaning": "غير مرضٍ — المشكلة متكررة أو تؤثر سلباً على عملي/تجربتي.",
+        },
+        {
+            "value": 2,
+            "label": "مقبول",
+            "meaning": "أداء دون المتوقع أحياناً — يوجد نقص يحتاج متابعة وتحسيناً ملموساً.",
+        },
+        {
+            "value": 3,
+            "label": "جيد",
+            "meaning": "مستوى متوسط ومقبول — يلبّي الحد الأدنى دون تميز ولا إخفاق متكرر.",
+            "hint": "٣ = جيد يعني: ليس ممتازاً ولا ضعيفاً؛ أداء مناسب لكنه يحتاج تحسيناً ليصبح أعلى.",
+        },
+        {
+            "value": 4,
+            "label": "جيد جداً",
+            "meaning": "تجربة قوية وواضحة، مع ملاحظات بسيطة للتحسين فقط.",
+        },
+        {
+            "value": 5,
+            "label": "ممتاز",
+            "meaning": "تجربتي ممتازة باستمرار — أتجاوز ما أتوقعه في هذا البند.",
+        },
+    ]
+
+
+def likert_scale_context(questions: list | None) -> dict:
+    """سياق مشترك لقالب المثال التوضيحي (جميع نماذج الاستبيان)."""
+    label = ""
+    if questions:
+        first = questions[0]
+        if isinstance(first, dict):
+            label = (first.get("label_ar") or "").strip()
+    return {
+        "scale_levels": likert_scale_guide_ar(),
+        "scale_example_label": label,
+    }

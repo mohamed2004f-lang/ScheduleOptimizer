@@ -40,6 +40,15 @@
     [data-bs-theme="dark"] .axis-chip[data-status="na"]{background:#1a1d21;border-color:#495057;color:#adb5bd;}
     .axes-progress{height:5px;border-radius:3px;background:#e9ecef;overflow:hidden;margin-bottom:.5rem;}
     .axes-progress .bar{height:100%;transition:width .4s ease;}
+    .delivery-card{background:#f8f9fa;border-color:#dee2e6!important;}
+    .delivery-card .delivery-step{padding:.15rem 0;}
+    .axis-checklist .axis-row{border-right:3px solid transparent;cursor:pointer;}
+    .axis-checklist .axis-row[data-status="pending"]{border-right-color:#ffc107;}
+    .axis-checklist .axis-row[data-status="done"]{border-right-color:#198754;background:rgba(25,135,84,.04);}
+    .axis-checklist .axis-row[data-status="na"]{border-right-color:#adb5bd;opacity:.85;}
+    .axis-checklist .axis-row-auto{cursor:default!important;background:rgba(13,110,253,.04);}
+    .followup-panel{background:#fafbfc;border:1px solid #e9ecef;border-radius:.5rem;padding:1rem;}
+    [data-bs-theme="dark"] .delivery-card,[data-bs-theme="dark"] .followup-panel{background:#212529;border-color:#373b3e!important;}
     .axis-saved{position:absolute;top:-4px;right:-4px;font-size:.6rem;background:#198754;color:#fff;border-radius:50%;width:14px;height:14px;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .3s;}
     .axis-saved.show{opacity:1;}
     .hub-tile{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:.75rem .5rem;border:1px solid #dee2e6;border-radius:.5rem;text-decoration:none;color:inherit;transition:transform .15s,box-shadow .15s,border-color .15s;min-height:88px;position:relative;}
@@ -115,7 +124,7 @@
         <div class="card stat-card text-center border-warning">
           <div class="card-body py-2">
             <div class="fs-4 fw-bold text-warning" id="statAxes">0/0</div>
-            <div class="small text-muted">محاور مكتملة</div>
+            <div class="small text-muted">بنود متابعة مكتملة</div>
           </div>
         </div>
       </div>
@@ -149,7 +158,7 @@
 
     <!-- التبويبات الرئيسية -->
     <ul class="nav nav-tabs mb-0" id="mainTabs" role="tablist">
-      <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#tabSections" role="tab" data-tab-tip="عرض الشُعب المكلّف بها مع أدوات إدارة كل شعبة">الشُعب</a></li>
+      <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#tabSections" role="tab" data-tab-tip="عرض مجموعات التدريس المكلّف بها مع أدوات إدارة كل مجموعة">مجموعات التدريس</a></li>
       <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tabOutcomes" role="tab" data-tab-tip="لوحة تحقق مخرجات التعلم (CLO) لكل مقرر">مخرجات التعلم</a></li>
       <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tabPlans" role="tab" data-tab-tip="عرض الخطط الأسبوعية مع نسبة التنفيذ وربط CLO">الخطط الأسبوعية</a></li>
       <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tabReports" role="tab" data-tab-tip="تقارير الإقفال والتكليفات الرسمية (لجان/إشراف)">التقارير والتكليفات</a></li>
@@ -157,9 +166,9 @@
     </ul>
     <div class="tab-content border border-top-0 rounded-bottom p-3 mb-3">
 
-      <!-- تبويب: الشُعب -->
+      <!-- تبويب: مجموعات التدريس -->
       <div class="tab-pane fade show active" id="tabSections" role="tabpanel">
-        <span data-hint="كل شعبة مكلّف بها تظهر أدناه. انقر عليها لفتحها وإدارة المفردات والخطة الأسبوعية والمحاور. البطاقات الملونة (📋📚📝💬📂🎯) تُظهر حالة المحاور — انقر عليها لتبديل الحالة." data-hint-id="mc_sections" data-hint-icon="💡" data-for-role="instructor"></span>
+        <span data-hint="التوثيق عبر «تقرير تنفيذ المقرر». إعداد المقرر وتنفيذ المحتوى والدرجات تُحدَّث تلقائياً؛ التواصل والأنشطة الإضافية فقط يمكن تغيير حالتها بالنقر." data-hint-id="mc_sections" data-hint-icon="💡" data-for-role="instructor"></span>
         <div id="loadState" class="text-muted small">جاري التحميل…</div>
         <div id="emptyState" class="d-none alert alert-secondary mb-0">
           لا توجد صفوف جدول مرتبطة باسمك في دليل هيئة التدريس، أو لم يُسند إليك مقرر بعد.
@@ -198,7 +207,7 @@
 
       <!-- تبويب: جدول القسم -->
       <div class="tab-pane fade" id="tabDeptSchedule" role="tabpanel">
-        <span data-hint="عرض جدول القسم للفصل الحالي. الصفوف المميزة بخلفية فاتحة هي شُعبك." data-hint-id="mc_dept_sched" data-hint-icon="📅" data-for-role="instructor"></span>
+        <span data-hint="عرض جدول القسم للفصل الحالي. الصفوف المميزة بخلفية فاتحة هي مجموعاتك." data-hint-id="mc_dept_sched" data-hint-icon="📅" data-for-role="instructor"></span>
         <div id="deptScheduleHint" class="alert alert-info small d-none mb-2"></div>
         <p class="small text-muted mb-2 d-none" id="deptScheduleMeta"></p>
         <div id="deptScheduleLoad" class="text-muted small">اختر هذا التبويب لتحميل جدول القسم…</div>
@@ -248,8 +257,34 @@
     }
 
     // === Cache Layer ===
-    const CACHE_KEY = 'mc_cache_v2';
+    const MC_UI_VERSION = '8.8.0';
+    const HIDDEN_AXIS_KEYS = new Set(['documentation_quality']);
+    const AUTO_AXIS_KEYS = new Set(['course_mgmt', 'teaching_content', 'assessment']);
+    const REPORT_STATUS_AR = {
+      draft: 'لم يُرسل', auto_approved: 'مقبول تلقائياً', gate_pending: 'بانتظار رئيس القسم',
+      gate_approved: 'موافق عليه', gate_rejected: 'مرفوض', submitted: 'مُرسل'
+    };
+    const AXIS_HINTS = {
+      course_mgmt: 'يُحدَّث تلقائياً: مفردات معتمدة + خطة أسبوعية',
+      teaching_content: 'يُحدَّث تلقائياً من تقرير الجزئي والنهائي',
+      assessment: 'يُحدَّث تلقائياً من تقرير التنفيذ ومسودات الدرجات',
+      communication_supervision: 'إعلانات ومتابعة الطلاب',
+      extra_service: 'نشاط خدمي — أو «لا ينطبق»'
+    };
+    const CACHE_KEY = 'mc_cache_v6';
     const CACHE_TTL = 5 * 60 * 1000;
+
+    function normalizeAxisCatalog(catalog) {
+      return (catalog || []).filter(c => c && c.key && !HIDDEN_AXIS_KEYS.has(c.key));
+    }
+
+    (function purgeOldMcCache() {
+      try {
+        Object.keys(sessionStorage).forEach(k => {
+          if (k.startsWith('mc_cache_v') && !k.startsWith(CACHE_KEY)) sessionStorage.removeItem(k);
+        });
+      } catch (e) {}
+    })();
     function cacheGet(key) {
       try {
         const raw = sessionStorage.getItem(CACHE_KEY + '_' + key);
@@ -286,7 +321,101 @@
     let G_PORTAL = {};
     let G_DRAFTS = {};
     let G_AXIS_CATALOG = [];
+    const AXIS_ICONS = {
+      course_mgmt: '📋',
+      teaching_content: '📚',
+      assessment: '📝',
+      communication_supervision: '💬',
+      extra_service: '🎯'
+    };
     const TABS_LOADED = { outcomes: false, plans: false, reports: false, deptSchedule: false };
+
+    function progressCounts(r) {
+      const axes = r.axes || {};
+      let done = (G_AXIS_CATALOG || []).filter(c => {
+        const v = axes[c.key];
+        return v === 'done' || v === 'na';
+      }).length;
+      let total = (G_AXIS_CATALOG || []).length;
+      return { done, total, pct: total ? Math.round((done / total) * 100) : 0 };
+    }
+
+    function axisStatusLabel(v) {
+      if (v === 'done') return 'منجز';
+      if (v === 'na') return 'لا ينطبق';
+      return 'قيد العمل';
+    }
+
+    function renderDeliveryCard(r) {
+      const ds = r.delivery_summary;
+      if (!ds) return '';
+      if (!ds.available) {
+        return '<div class="delivery-card border rounded p-3 mb-2">' +
+          '<strong class="d-block mb-1">📋 تقرير تنفيذ المقرر</strong>' +
+          '<span class="small text-muted">' + esc(ds.message || 'غير متاح') + '</span></div>';
+      }
+      const phaseLine = (label, ph) => {
+        const p = ph || {};
+        const pct = p.overall_pct != null ? (' — ' + p.overall_pct + '%') : '';
+        const ok = !!p.submitted;
+        const stAr = p.status ? (REPORT_STATUS_AR[p.status] || p.status) : (ok ? 'مُرسل' : 'لم يُبدأ');
+        const icon = ok ? '✓' : '○';
+        const cls = ok ? 'text-success' : 'text-muted';
+        return '<div class="delivery-step small ' + cls + '">' + icon + ' <strong>' + label + '</strong>' + pct +
+          ' <span class="text-muted">(' + esc(String(stAr)) + ')</span></div>';
+      };
+      const blOk = !!ds.baseline_ok;
+      const href = ds.survey_url || ('/course_delivery_page?teaching_group_id=' + (r.teaching_group_id || ''));
+      return '<div class="delivery-card border rounded p-3 mb-2">' +
+        '<strong class="d-block mb-2">📋 تقرير تنفيذ المقرر</strong>' +
+        '<div class="delivery-step small ' + (blOk ? 'text-success' : 'text-warning') + '">' +
+        (blOk ? '✓' : '○') + ' <strong>قائمة المفردات</strong> — ' +
+        (blOk ? 'معتمدة من رئيس القسم' : 'لم تعتمد بعد (أكملها في صفحة التقرير)') + '</div>' +
+        phaseLine('تقرير الجزئي', ds.partial) +
+        phaseLine('تقرير النهائي', ds.final) +
+        '<a class="btn btn-sm btn-primary mt-2" href="' + esc(href) + '">فتح تقرير المقرر</a>' +
+        '</div>';
+    }
+
+    function isAutoAxis(key) {
+      if (AUTO_AXIS_KEYS.has(key)) return true;
+      const cat = (G_AXIS_CATALOG || []).find(c => c.key === key);
+      return !!(cat && cat.auto_derived);
+    }
+
+    function renderAxisChecklist(axes, sid, axesMeta) {
+      axesMeta = axesMeta || {};
+      let html = '<div class="axis-checklist list-group list-group-flush border rounded">';
+      let hasAuto = false;
+      G_AXIS_CATALOG.forEach(c => {
+        const v = axes[c.key] || 'pending';
+        const meta = axesMeta[c.key] || {};
+        const auto = !!(meta.auto || c.auto_derived || isAutoAxis(c.key));
+        if (auto) hasAuto = true;
+        const hint = meta.detail_ar || c.hint_ar || AXIS_HINTS[c.key] || '';
+        const badgeCls = v === 'done' ? 'success' : (v === 'na' ? 'secondary' : 'warning text-dark');
+        const rowCls = 'list-group-item d-flex align-items-start gap-2 py-2 axis-row' + (auto ? ' axis-row-auto' : ' list-group-item-action');
+        const open = auto
+          ? '<div class="' + rowCls + '" data-status="' + v + '" data-section="' + sid + '" data-axis="' + esc(c.key) + '" data-auto="1">'
+          : '<button type="button" class="' + rowCls + '" data-status="' + v + '" data-section="' + sid + '" data-axis="' + esc(c.key) + '">';
+        html += open +
+          '<span class="axis-row-icon fs-5 lh-1">' + (AXIS_ICONS[c.key] || '📌') + '</span>' +
+          '<span class="flex-grow-1 text-start">' +
+          '<span class="d-block fw-semibold small">' + esc(c.label_ar) +
+          (auto ? ' <span class="badge bg-info text-dark auto-pill">تلقائي</span>' : '') + '</span>' +
+          (hint ? ('<span class="d-block text-muted" style="font-size:.72rem">' + esc(hint) + '</span>') : '') +
+          '</span>' +
+          '<span class="badge bg-' + badgeCls + ' axis-status-badge">' + axisStatusLabel(v) + '</span>' +
+          (auto ? '</div>' : '</button>');
+      });
+      html += '</div>' +
+        '<p class="small text-muted mt-2 mb-0">' +
+        (hasAuto
+          ? 'محاور إعداد المقرر وتنفيذ المحتوى والدرجات تُحدَّث تلقائياً. باقي المهام (التواصل والأنشطة): انقر لتغيير الحالة.'
+          : 'انقر على أي مهمة لتغيير حالتها: قيد العمل ← منجز ← لا ينطبق') +
+        '</p>';
+      return html;
+    }
 
     function mapTermNameToCalendar(tn) {
       const t = (tn || '').trim();
@@ -343,7 +472,7 @@
         { href: '/my_schedule', icon: '📅', label: 'جدولي', badge: 0 },
         { href: '/my_exams', icon: '📋', label: 'امتحاناتي', badge: 0 },
         { href: '/my_attendance', icon: '✓', label: 'حضوري', badge: 0 },
-        { href: '/academic_quality/surveys', icon: '📊', label: 'الاستبيانات', badge: 0 },
+        { href: '/academic_quality/surveys', icon: '📊', label: 'استبيانات الأستاذ (٣)', badge: 0 },
         { href: '#tabDeptSchedule', icon: '🏫', label: 'جدول القسم', badge: 0, tab: true },
       ];
       links.innerHTML = tiles.map(t => {
@@ -433,29 +562,36 @@
       }
     }
 
-    function draftForSection(r) {
-      if (!r) return null;
-      const sid = r.section_id;
-      if (sid != null && G_DRAFTS[sid]) return G_DRAFTS[sid];
-      const key = String(r.course_name || '') + '::' + String(sid || '');
-      return G_DRAFTS[key] || null;
+    function draftScopeKeyForRow(r) {
+      const cn = String((r && r.course_name) || '');
+      const tgid = Number((r && r.teaching_group_id) || 0);
+      if (tgid > 0) return cn + '::tg:' + tgid;
+      return cn + '::' + String((r && r.section_id) || '');
     }
 
-    function draftStatusBadge(d) {
-      if (!d) return '<span class="badge bg-light text-dark section-badge" title="لم تُنشأ مسودة">بلا مسودة</span>';
-      const colors = { Draft: 'warning text-dark', Submitted: 'info', Approved: 'success', Rejected: 'danger' };
-      const labels = { Draft: 'مسودة', Submitted: 'مرسلة', Approved: 'معتمدة', Rejected: 'مرفوضة' };
-      const st = d.status || '';
-      return '<span class="badge bg-' + (colors[st] || 'secondary') + ' section-badge" title="مسودة الدرجات">' + esc(labels[st] || st) + '</span>';
+    function draftForSection(r) {
+      if (!r) return null;
+      const key = draftScopeKeyForRow(r);
+      if (G_DRAFTS[key]) return G_DRAFTS[key];
+      const sid = r.section_id;
+      if (sid != null && G_DRAFTS[sid]) return G_DRAFTS[sid];
+      return null;
+    }
+
+    function teachingGroupLabel(r) {
+      if (!r) return '';
+      return r.display_label || r.group_code_label || '';
     }
 
     function gradeDraftUrl(r, draft) {
       const cn = encodeURIComponent(r.course_name || '');
       const sid = r.section_id || '';
+      const tgid = Number(r.teaching_group_id || 0);
+      const tgParam = tgid > 0 ? ('&teaching_group_id=' + encodeURIComponent(tgid)) : '';
       if (draft && draft.id) {
-        return '/grade_drafts?section_id=' + encodeURIComponent(sid) + '&action=open&draft_id=' + draft.id;
+        return '/grade_drafts?section_id=' + encodeURIComponent(sid) + tgParam + '&action=open&draft_id=' + draft.id;
       }
-      return '/grade_drafts?course_name=' + cn + '&section_id=' + encodeURIComponent(sid) + '&action=create';
+      return '/grade_drafts?course_name=' + cn + '&section_id=' + encodeURIComponent(sid) + tgParam + '&action=create';
     }
 
     async function loadGradeDraftsMap() {
@@ -464,17 +600,29 @@
         const portalMap = G_PORTAL.grade_drafts_by_section || {};
         Object.keys(portalMap).forEach(sid => {
           const d = portalMap[sid];
-          if (d) G_DRAFTS[sid] = { id: d.draft_id, status: d.status, course_name: d.course_name, section_id: sid };
+          if (d) {
+            const item = { id: d.draft_id, status: d.status, course_name: d.course_name, section_id: sid, teaching_group_id: d.teaching_group_id };
+            G_DRAFTS[sid] = item;
+            G_DRAFTS[draftScopeKeyForRow(item)] = item;
+          }
         });
         const r = await fetch('/grades/drafts/mine', { credentials: 'include' });
         if (!r.ok) return;
         const j = await r.json().catch(() => ({}));
         (j.drafts || []).forEach(d => {
+          G_DRAFTS[draftScopeKeyForRow(d)] = d;
           if (d.section_id != null) G_DRAFTS[d.section_id] = d;
-          const key = String(d.course_name || '') + '::' + String(d.section_id || '');
-          G_DRAFTS[key] = d;
+          if (d.teaching_group_id) G_DRAFTS['tg:' + d.teaching_group_id] = d;
         });
       } catch (e) {}
+    }
+
+    function draftStatusBadge(d) {
+      if (!d) return '<span class="badge bg-light text-dark section-badge" title="لم تُنشأ مسودة">بلا مسودة</span>';
+      const colors = { Draft: 'warning text-dark', Submitted: 'info', Approved: 'success', Rejected: 'danger' };
+      const labels = { Draft: 'مسودة', Submitted: 'مرسلة', Approved: 'معتمدة', Rejected: 'مرفوضة' };
+      const st = d.status || '';
+      return '<span class="badge bg-' + (colors[st] || 'secondary') + ' section-badge" title="مسودة الدرجات">' + esc(labels[st] || st) + '</span>';
     }
 
     async function loadPortalSummary() {
@@ -497,11 +645,18 @@
       try {
         const r = await fetch('/schedule/my_courses_bulk?section_ids=' + encodeURIComponent(sectionIds.join(',')), { credentials: 'include' });
         const j = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          console.warn('my_courses_bulk failed', r.status, j);
+          if (window.showToast) window.showToast((j && j.message) ? j.message : 'تعذر تحميل بيانات المقررات', 'danger');
+          return result;
+        }
         const sections = j.sections || {};
         sectionIds.forEach(sid => {
           if (sections[String(sid)] != null) result[sid] = sections[String(sid)];
         });
-      } catch(e) {}
+      } catch(e) {
+        console.warn('my_courses_bulk error', e);
+      }
       G_BULK = result;
       cacheSet(cacheKey, result);
       return result;
@@ -510,7 +665,7 @@
     function clearPortalCaches() {
       try {
         Object.keys(sessionStorage).forEach(k => {
-          if (k.startsWith(CACHE_KEY + '_bulk')) sessionStorage.removeItem(k);
+          if (k.startsWith('mc_cache_v')) sessionStorage.removeItem(k);
         });
       } catch(e) {}
     }
@@ -544,7 +699,7 @@
         }
         loadPortalSummary();
 
-        G_AXIS_CATALOG = data.axis_catalog || [];
+        G_AXIS_CATALOG = normalizeAxisCatalog(data.axis_catalog);
         G_ROWS = data.rows || [];
         if (!G_ROWS.length) { emptyState.classList.remove('d-none'); return; }
 
@@ -561,21 +716,22 @@
           const planDone = planRows.filter(p => p.lecture_status === 'done').length;
           const planPct = planRows.length ? Math.round((planDone / planRows.length) * 100) : 0;
           const axes = r.axes || {};
-          const axesDone = Object.values(axes).filter(v => v === 'done' || v === 'na').length;
-          const axesTotal = G_AXIS_CATALOG.length;
+          const prog = progressCounts(r);
           const draft = draftForSection(r);
           return (
             '<div class="accordion-item">' +
             '<h2 class="accordion-header">' +
             '<button class="accordion-button' + (idx > 0 ? ' collapsed' : '') + '" type="button" data-bs-toggle="collapse" data-bs-target="#sec_' + sid + '">' +
             '<div class="d-flex w-100 justify-content-between align-items-center flex-wrap gap-2">' +
-            '<span>' + esc(r.course_name) + ' <small class="text-muted">(' + esc(r.day) + ' ' + esc(r.time) + ' - ' + esc(r.room) + ')</small></span>' +
+            '<span>' + esc(r.course_name) +
+            (teachingGroupLabel(r) ? (' <small class="text-primary">(' + esc(teachingGroupLabel(r)) + ')</small>') : '') +
+            ' <small class="text-muted">(' + esc(r.day) + ' ' + esc(r.time) + ' - ' + esc(r.room) + ')</small></span>' +
             '<span class="d-flex gap-1 flex-wrap">' +
             (r.student_count != null ? '<span class="badge bg-success section-badge" title="مسجّلون">' + r.student_count + ' طالب</span>' : '') +
             draftStatusBadge(draft) +
             '<span class="badge bg-primary section-badge">' + esc(r.semester) + '</span>' +
             '<span class="badge bg-' + (planPct >= 80 ? 'success' : planPct >= 40 ? 'warning text-dark' : 'secondary') + ' section-badge">خطة: ' + planPct + '%</span>' +
-            '<span class="badge bg-' + (axesDone === axesTotal ? 'success' : 'warning text-dark') + ' section-badge">محاور: ' + axesDone + '/' + axesTotal + '</span>' +
+            '<span class="badge bg-' + (prog.done === prog.total && prog.total > 0 ? 'success' : 'warning text-dark') + ' section-badge">متابعة: ' + prog.done + '/' + prog.total + '</span>' +
             '</span></div></button></h2>' +
             '<div id="sec_' + sid + '" class="accordion-collapse collapse' + (idx === 0 ? ' show' : '') + '" data-section="' + sid + '">' +
             '<div class="accordion-body">' +
@@ -605,48 +761,33 @@
       const gdLabel = draft ? (draft.status === 'Draft' || draft.status === 'Rejected' ? 'متابعة المسودة' : 'عرض المسودة') : 'بدء مسودة';
       const links =
         '<a class="btn btn-sm btn-outline-primary py-0 mb-1" href="' + gdHref + '">' + gdLabel + '</a> ' +
+        (r.teaching_group_id ? ('<a class="btn btn-sm btn-outline-info py-0 mb-1" href="/course_delivery_page?teaching_group_id=' + r.teaching_group_id + '">تقرير المقرر</a> ') : '') +
         '<a class="btn btn-sm btn-outline-secondary py-0 mb-1" href="/my_exams">امتحاناتي</a> ' +
         '<button type="button" class="btn btn-sm btn-outline-info py-0 mb-1 mc-show-clos" data-section="' + sid + '" data-course="' + esc(cn) + '">مخرجات المقرر</button>';
 
       const axes = r.axes || {};
-      const AXIS_ICONS = {'course_management':'📋','teaching_content':'📚','assessment':'📝','communication':'💬','documentation':'📂','activities':'🎯'};
-      const STATUS_LABELS = {'pending':'قيد المتابعة','done':'منجز ✓','na':'لا ينطبق'};
-      const axesDoneCount = Object.values(axes).filter(v => v === 'done' || v === 'na').length;
-      const axesTotalCount = G_AXIS_CATALOG.length;
-      const axesPct = axesTotalCount ? Math.round((axesDoneCount / axesTotalCount) * 100) : 0;
-      let axisHtml = '<div class="axes-progress"><div class="bar bg-success" style="width:' + axesPct + '%"></div></div>' +
-        '<div class="small text-muted mb-2">' + axesDoneCount + '/' + axesTotalCount + ' محاور مكتملة (' + axesPct + '%)</div>' +
-        '<div class="d-flex flex-wrap gap-2">';
-      G_AXIS_CATALOG.forEach(c => {
-        const v = axes[c.key] || 'pending';
-        const icon = AXIS_ICONS[c.key] || '📌';
-        axisHtml += '<div class="position-relative">' +
-          '<div class="axis-chip" data-status="' + v + '" data-section="' + sid + '" data-axis="' + esc(c.key) + '" title="انقر للتبديل: ' + esc(c.label_ar) + '">' +
-          '<span class="axis-icon">' + icon + '</span>' +
-          '<span class="status-dot"></span>' +
-          '<span class="axis-label">' + esc(c.label_ar) + '</span>' +
-          '</div><span class="axis-saved">✓</span></div>';
-      });
-      axisHtml += '</div>';
-
-      // Syllabus
-      const syllabus = adminData.syllabus_text || '';
+      const prog = progressCounts(r);
+      const followupHtml =
+        '<div class="followup-panel mb-3" data-axis-info>' +
+        '<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">' +
+        '<strong>متابعة إنجاز المقرر</strong>' +
+        '<span class="badge bg-primary">' + prog.done + ' / ' + prog.total + ' مكتمل</span>' +
+        '</div>' +
+        '<div class="axes-progress"><div class="bar bg-success" style="width:' + prog.pct + '%"></div></div>' +
+        renderDeliveryCard(r) +
+        '<div class="mt-3"><strong class="small d-block mb-2">مهام المقرر اليومية</strong>' +
+        renderAxisChecklist(axes, sid, r.axes_meta || {}) + '</div></div>';
 
       return (
+        followupHtml +
         '<div class="row g-3">' +
         '<div class="col-md-4">' +
         '<div class="mb-2"><strong class="small">روابط سريعة</strong><br>' + links + '</div>' +
-        '<div class="mb-2"><label class="form-label small mb-1">مفردات المقرر</label>' +
-        '<textarea class="form-control form-control-sm mc-syllabus" data-section="' + sid + '" rows="2" placeholder="اكتب مفردات/خطة المقرر المختصرة">' + esc(syllabus) + '</textarea>' +
-        '<button type="button" class="btn btn-sm btn-outline-primary mt-1 mc-save-syllabus" data-section="' + sid + '">حفظ</button></div>' +
+        '<div class="mt-2"><strong class="small">إعلانات</strong>' + renderAnnouncements(sid, adminData) + '</div>' +
         '</div>' +
-        '<div class="col-md-4">' +
+        '<div class="col-md-8">' +
         '<strong class="small">الخطة الأسبوعية</strong>' +
         renderWeeklyPlan(sid, adminData) +
-        '</div>' +
-        '<div class="col-md-4" data-axis-info>' +
-        '<strong class="small">متابعة المحاور</strong>' + axisHtml +
-        '<div class="mt-2"><strong class="small">إعلانات</strong>' + renderAnnouncements(sid, adminData) + '</div>' +
         '</div></div>' +
         '<hr class="my-2">' +
         '<div class="row g-3">' +
@@ -705,42 +846,34 @@
     // === Attach Events ===
     function attachSectionEvents() {
       // Axis chips - click to cycle: pending → done → na → pending
-      document.querySelectorAll('.axis-chip').forEach(chip => {
-        chip.addEventListener('click', async () => {
-          const sid = parseInt(chip.getAttribute('data-section'), 10);
-          const axisKey = chip.getAttribute('data-axis');
-          const current = chip.getAttribute('data-status');
+      document.querySelectorAll('.axis-row').forEach(row => {
+        const axisKey = row.getAttribute('data-axis');
+        if (row.getAttribute('data-auto') === '1' || isAutoAxis(axisKey)) return;
+        row.addEventListener('click', async () => {
+          const sid = parseInt(row.getAttribute('data-section'), 10);
+          const current = row.getAttribute('data-status');
           const cycle = { pending: 'done', done: 'na', na: 'pending' };
           const next = cycle[current] || 'pending';
-          chip.setAttribute('data-status', next);
-          const savedEl = chip.parentElement.querySelector('.axis-saved');
+          row.setAttribute('data-status', next);
+          const badge = row.querySelector('.axis-status-badge');
+          if (badge) {
+            badge.textContent = axisStatusLabel(next);
+            badge.className = 'badge axis-status-badge bg-' + (next === 'done' ? 'success' : next === 'na' ? 'secondary' : 'warning text-dark');
+          }
           try {
             await fetch('/schedule/my_axis_status', { method: 'POST', credentials: 'include', headers: jsonPostHeaders(), body: JSON.stringify({ section_id: sid, axis_key: axisKey, status: next }) });
             cacheClear('bulk_' + (G_ROWS.map(r => r.section_id).join(',') || ''));
-            if (savedEl) { savedEl.classList.add('show'); setTimeout(() => savedEl.classList.remove('show'), 1500); }
-            // Update progress bar
-            const container = chip.closest('.accordion-body');
-            if (container) {
-              const chips = container.querySelectorAll('.axis-chip');
-              const done = [...chips].filter(c => c.getAttribute('data-status') === 'done' || c.getAttribute('data-status') === 'na').length;
-              const pct = Math.round((done / chips.length) * 100);
-              const bar = container.querySelector('.axes-progress .bar');
-              const label = container.querySelector('.axes-progress + .small');
-              if (bar) bar.style.width = pct + '%';
-              if (label) label.textContent = done + '/' + chips.length + ' محاور مكتملة (' + pct + '%)';
+            const gRow = G_ROWS.find(x => parseInt(x.section_id, 10) === sid);
+            if (gRow && gRow.axes) gRow.axes[axisKey] = next;
+            const panel = row.closest('.followup-panel');
+            if (panel && gRow) {
+              const prog = progressCounts(gRow);
+              const bar = panel.querySelector('.axes-progress .bar');
+              const badgeTop = panel.querySelector('.badge.bg-primary');
+              if (bar) bar.style.width = prog.pct + '%';
+              if (badgeTop) badgeTop.textContent = prog.done + ' / ' + prog.total + ' مكتمل';
             }
-          } catch(e) { chip.setAttribute('data-status', current); }
-        });
-      });
-
-      // Save syllabus
-      document.querySelectorAll('.mc-save-syllabus').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          const sid = parseInt(btn.getAttribute('data-section') || '0', 10);
-          const txt = document.querySelector('.mc-syllabus[data-section="' + sid + '"]')?.value || '';
-          const r = await fetch('/schedule/my_course_syllabus', { method: 'POST', credentials: 'include', headers: jsonPostHeaders(), body: JSON.stringify({ section_id: sid, syllabus_text: txt }) });
-          if (!r.ok) alert('تعذر حفظ المفردات');
-          else { cacheClear('bulk_' + (G_ROWS.map(r => r.section_id).join(',') || '')); btn.textContent = '✓ تم'; setTimeout(() => btn.textContent = 'حفظ', 2000); }
+          } catch(e) { row.setAttribute('data-status', current); if (badge) badge.textContent = axisStatusLabel(current); }
         });
       });
 
@@ -783,8 +916,19 @@
           const body = document.querySelector('.mc-ann-body[data-section="' + sid + '"]')?.value || '';
           if (!body.trim()) { alert('اكتب نص الإعلان'); return; }
           const r = await fetch('/schedule/my_course_announcement', { method: 'POST', credentials: 'include', headers: jsonPostHeaders(), body: JSON.stringify({ section_id: sid, title: '', body, announcement_type: 'general', lecture_date: '', published_to_students: true }) });
-          if (r.ok) { document.querySelector('.mc-ann-body[data-section="' + sid + '"]').value = ''; cacheClear('bulk_' + (G_ROWS.map(r => r.section_id).join(',') || '')); }
-          else alert('تعذر نشر الإعلان');
+          const j = await r.json().catch(() => ({}));
+          if (r.ok) {
+            document.querySelector('.mc-ann-body[data-section="' + sid + '"]').value = '';
+            cacheClear('bulk_' + (G_ROWS.map(r => r.section_id).join(',') || ''));
+            if (j.announcements) {
+              G_BULK[sid] = { ...(G_BULK[sid] || {}), announcements: j.announcements };
+            } else {
+              await fetchBulkAdmin(G_ROWS.map(x => x.section_id), true);
+            }
+            refreshSectionPlan(sid);
+            if (window.showToast) window.showToast('تم نشر الإعلان', 'success');
+          }
+          else alert((j && j.message) ? j.message : 'تعذر نشر الإعلان');
         });
       });
 
@@ -977,7 +1121,7 @@
         });
         body.innerHTML = sorted.map(row => {
           const mine = row.is_mine ? ' dept-row-mine' : '';
-          const badge = row.is_mine ? ' <span class="badge bg-primary section-badge">شعبتي</span>' : '';
+          const badge = row.is_mine ? ' <span class="badge bg-primary section-badge">مجموعتي</span>' : '';
           return '<tr class="' + mine.trim() + '"><td>' + esc(row.day) + '</td><td>' + esc(row.time) + '</td><td>' + esc(row.course_name) + badge + '</td><td>' + esc(row.room) + '</td><td>' + esc(row.instructor) + '</td></tr>';
         }).join('');
         wrap.classList.remove('d-none');
@@ -1006,19 +1150,20 @@
             const planDone = planRows.filter(p => p.lecture_status === 'done').length;
             const planPct = planRows.length ? Math.round((planDone / planRows.length) * 100) : 0;
             const axes = r.axes || {};
-            const axesDone = Object.values(axes).filter(v => v === 'done' || v === 'na').length;
-            const axesTotal = G_AXIS_CATALOG.length;
+            const prog = progressCounts(r);
             return (
               '<div class="accordion-item">' +
               '<h2 class="accordion-header">' +
               '<button class="accordion-button' + (idx > 0 ? ' collapsed' : '') + '" type="button" data-bs-toggle="collapse" data-bs-target="#sec_' + sid + '">' +
               '<div class="d-flex w-100 justify-content-between align-items-center flex-wrap gap-2">' +
-              '<span>' + esc(r.course_name) + ' <small class="text-muted">(' + esc(r.day) + ' ' + esc(r.time) + ' - ' + esc(r.room) + ')</small></span>' +
+              '<span>' + esc(r.course_name) +
+            (teachingGroupLabel(r) ? (' <small class="text-primary">(' + esc(teachingGroupLabel(r)) + ')</small>') : '') +
+            ' <small class="text-muted">(' + esc(r.day) + ' ' + esc(r.time) + ' - ' + esc(r.room) + ')</small></span>' +
               '<span class="d-flex gap-1 flex-wrap">' +
               (r.student_count != null ? '<span class="badge bg-success section-badge">' + r.student_count + ' طالب</span>' : '') +
               '<span class="badge bg-primary section-badge">' + esc(r.semester) + '</span>' +
               '<span class="badge bg-' + (planPct >= 80 ? 'success' : planPct >= 40 ? 'warning text-dark' : 'secondary') + ' section-badge">خطة: ' + planPct + '%</span>' +
-              '<span class="badge bg-' + (axesDone === axesTotal ? 'success' : 'warning text-dark') + ' section-badge">محاور: ' + axesDone + '/' + axesTotal + '</span>' +
+              '<span class="badge bg-' + (prog.done === prog.total && prog.total > 0 ? 'success' : 'warning text-dark') + ' section-badge">متابعة: ' + prog.done + '/' + prog.total + '</span>' +
               '</span></div></button></h2>' +
               '<div id="sec_' + sid + '" class="accordion-collapse collapse' + (idx === 0 ? ' show' : '') + '" data-section="' + sid + '">' +
               '<div class="accordion-body">' + renderSectionBody(r, adminData) + '</div></div></div>'

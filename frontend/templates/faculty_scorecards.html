@@ -13,7 +13,7 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">مؤشرات إنجاز الشعب</h1>
-        <p class="page-subtitle">مؤشر موحّد: تنفيذ الخطة + المحاور + تقرير الإقفال + التكليفات الرسمية</p>
+        <p class="page-subtitle">مؤشر موحّد: الخطة + تقرير التنفيذ + المحاور + الإقفال + التكليفات</p>
       </div>
     </div>
     <div id="scoreScopeBanner" class="alert alert-info small py-2 mb-3 d-none" role="status"></div>
@@ -35,6 +35,7 @@
                 <th>الأستاذ</th>
                 <th>الفصل</th>
                 <th>الخطة</th>
+                <th>تقرير التنفيذ</th>
                 <th>المحاور</th>
                 <th>الإقفال</th>
                 <th>تكليفات/اعتمادات</th>
@@ -119,7 +120,7 @@
       const body = document.getElementById('scoreBody');
       const empty = document.getElementById('scoreEmpty');
       if (!r.ok) {
-        body.innerHTML = '<tr><td colspan="8">تعذر التحميل</td></tr>';
+        body.innerHTML = '<tr><td colspan="9">تعذر التحميل</td></tr>';
         empty.classList.add('d-none');
         return;
       }
@@ -138,6 +139,7 @@
           '<td>' + (it.instructor_name || '') + '</td>' +
           '<td>' + (it.semester || '') + '</td>' +
           '<td class="small">' + (it.plan_done || 0) + '/' + (it.plan_total || 0) + ' (' + (it.plan_progress || 0) + '%)</td>' +
+          '<td class="small">' + (it.delivery_progress != null ? it.delivery_progress : 0) + '%</td>' +
           '<td class="small">' + (it.axis_done || 0) + '/' + (it.axis_total || 0) + ' (' + (it.axis_progress || 0) + '%)</td>' +
           '<td><span class="badge bg-secondary">' + (it.closure_status || 'draft') + '</span></td>' +
           '<td class="small">' + (it.assignments_count || 0) + ' / ' + (it.approved_assignment_logs || 0) + '</td>' +
