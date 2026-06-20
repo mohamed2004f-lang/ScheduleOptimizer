@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>هويتي الأكاديمية</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-900 theme-formal">
+    <div class="page-header d-flex justify-content-between flex-wrap gap-2">
+      <div><h1 class="page-title">هويتي الأكاديمية</h1><p class="page-subtitle" id="ctxLine">رؤية ورسالة الكلية والقسم والبرنامج</p></div>
+      <a href="/my_portal" class="btn btn-outline-secondary btn-sm">بوابتي</a>
+    </div>
+    <div id="loadState" class="text-muted py-3">جاري التحميل…</div>
+    <div id="mainWrap" class="d-none"></div>
+    <div class="card mt-3 border-0 bg-light"><div class="card-body py-2 d-flex flex-wrap gap-2" id="quickLinks"></div></div>
+  </main>
+  <script>
+    function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;');}
+    function card(title, mission, vision, goals, note){
+      let h='<div class="card mb-3"><div class="card-header fw-semibold">'+esc(title)+'</div><div class="card-body">';
+      if(note&&!mission&&!vision) h+='<p class="text-muted small mb-0">'+esc(note)+'</p>';
+      else {
+        if(vision) h+='<p><strong>الرؤية:</strong> '+esc(vision)+'</p>';
+        if(mission) h+='<p><strong>الرسالة:</strong> '+esc(mission)+'</p>';
+        if(goals&&goals.length){h+='<div class="accordion accordion-flush" id="acc_'+title.length+'">';
+          goals.forEach((g,i)=>{h+='<div class="accordion-item"><h2 class="accordion-header"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#g'+i+title.length+'">'+esc(g.title_ar||'هدف')+'</button></h2><div id="g'+i+title.length+'" class="accordion-collapse collapse"><div class="accordion-body small">'+esc(g.description_ar||'')+'</div></div></div>';});
+          h+='</div>';}
+      }
+      return h+'</div></div>';
+    }
+    (async function(){
+      try{
+        const r=await fetch('/students/identity_context',{credentials:'include'});
+        const j=await r.json();
+        document.getElementById('loadState').classList.add('d-none');
+        document.getElementById('ctxLine').textContent=(j.program_name||'')+(j.department_name?' · '+j.department_name:'');
+        const c=j.college||{}, p=j.program, d=j.department;
+        let html='';
+        html+=card('🏛 الكلية', c.mission_ar, c.vision_ar, (c.strategic_goals||[]).map(g=>({title_ar:g.title_ar,description_ar:g.description_ar})), '');
+        if(d) html+=card('🏫 قسمي — '+(d.name_ar||''), d.mission_ar, d.vision_ar, d.goals||[], d.has_profile?'':'لم تُنشر هوية القسم بعد.');
+        if(p) html+=card('🎓 برنامجي — '+(p.name_ar||''), p.mission_ar, p.vision_ar, p.goals||[], '');
+        document.getElementById('mainWrap').innerHTML=html;
+        document.getElementById('mainWrap').classList.remove('d-none');
+        const links=j.links||{};
+        document.getElementById('quickLinks').innerHTML=[
+          ['مخرجاتي',links.learning_outcomes],['تقييم المقررات',links.course_evaluations],['استبيانات',links.surveys],['تقدّمي',links.academic_progress]
+        ].filter(x=>x[1]).map(x=>'<a class="btn btn-sm btn-outline-primary" href="'+x[1]+'">'+x[0]+'</a>').join('');
+      }catch(e){document.getElementById('loadState').textContent='تعذر التحميل.';}
+    })();
+  </script>
+  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+</body>
+</html>

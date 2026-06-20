@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>بوابتي</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .hub-tile { display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;
+      padding:.75rem .5rem; border:1px solid var(--bs-border-color); border-radius:.75rem; text-decoration:none;
+      color:inherit; min-height:5.5rem; position:relative; transition:box-shadow .15s; }
+    .hub-tile:hover { box-shadow:0 .25rem .75rem rgba(0,0,0,.08); color:inherit; }
+    .hub-badge { position:absolute; top:.35rem; left:.35rem; font-size:.65rem; }
+    .hub-icon { font-size:1.5rem; line-height:1; margin-bottom:.25rem; }
+    .stat-pill { border-radius:.75rem; padding:.75rem; text-align:center; background:var(--bs-light); }
+    .stat-pill .val { font-size:1.35rem; font-weight:700; }
+    .skeleton { background:linear-gradient(90deg,#eee 25%,#f5f5f5 50%,#eee 75%); background-size:200% 100%; animation:sh 1.2s infinite; border-radius:.5rem; min-height:1rem; }
+    @keyframes sh { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+  </style>
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal">
+    <div class="page-header d-flex justify-content-between align-items-start flex-wrap gap-2">
+      <div>
+        <h1 class="page-title mb-1">بوابتي</h1>
+        <p class="page-subtitle mb-0" id="welcomeLine">جاري التحميل…</p>
+        <p class="small text-muted mb-0 d-none" id="termLine"></p>
+      </div>
+      <button type="button" class="btn btn-outline-secondary btn-sm" id="btnRefresh">تحديث</button>
+    </div>
+
+    <div id="loadSkeleton" class="row g-3 mb-3">
+      <div class="col-6 col-md-3"><div class="skeleton" style="height:4rem"></div></div>
+      <div class="col-6 col-md-3"><div class="skeleton" style="height:4rem"></div></div>
+      <div class="col-6 col-md-3"><div class="skeleton" style="height:4rem"></div></div>
+      <div class="col-6 col-md-3"><div class="skeleton" style="height:4rem"></div></div>
+    </div>
+
+    <div id="mainWrap" class="d-none">
+      <div class="row g-3 mb-3" id="statsBar">
+        <div class="col-6 col-md-3"><div class="stat-pill"><div class="val text-primary" id="statRegs">0</div><div class="small text-muted">مقررات مسجّلة</div></div></div>
+        <div class="col-6 col-md-3"><div class="stat-pill"><div class="val text-success" id="statUnits">0</div><div class="small text-muted">وحدات</div></div></div>
+        <div class="col-6 col-md-3"><div class="stat-pill"><div class="val text-info" id="statGpa">—</div><div class="small text-muted">المعدل التراكمي</div></div></div>
+        <div class="col-6 col-md-3"><div class="stat-pill"><div class="val" id="statPlan">—</div><div class="small text-muted">خطة التسجيل</div></div></div>
+      </div>
+
+      <div class="card mb-3 d-none" id="actionCard">
+        <div class="card-header fw-semibold d-flex justify-content-between"><span>مهام تحتاج انتباهك</span><span class="badge bg-danger" id="actionCount">0</span></div>
+        <div class="card-body py-2" id="actionList"></div>
+      </div>
+
+      <div class="card mb-3 d-none" id="announceCard">
+        <div class="card-header fw-semibold">آخر إعلانات المقررات</div>
+        <ul class="list-group list-group-flush" id="announceList"></ul>
+        <div class="card-footer py-2"><a href="/my_announcements" class="small">عرض الكل</a></div>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-header fw-semibold">اختصارات أكاديمية</div>
+        <div class="card-body"><div class="row g-2" id="hubAcademic"></div></div>
+      </div>
+      <div class="card mb-3">
+        <div class="card-header fw-semibold">ضمان الجودة والاعتماد</div>
+        <div class="card-body"><div class="row g-2" id="hubQuality"></div></div>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-header fw-semibold">جدولي الأسبوعي</div>
+        <div class="card-body"><div id="weeklyWrap" class="timetable-wrapper text-muted small">جاري التحميل…</div></div>
+      </div>
+    </div>
+  </main>
+  <script>
+    const CACHE_KEY = 'stu_portal_v1';
+    const CACHE_TTL = 5 * 60 * 1000;
+    let G_SUMMARY = {};
+
+    function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+    function cacheGet() {
+      try {
+        const raw = sessionStorage.getItem(CACHE_KEY);
+        if (!raw) return null;
+        const o = JSON.parse(raw);
+        if (Date.now() - o.ts > CACHE_TTL) return null;
+        return o.data;
+      } catch(e) { return null; }
+    }
+    function cacheSet(data) {
+      try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data })); } catch(e) {}
+    }
+
+    function planLabel(st) {
+      const m = { Draft: 'مسودة', Submitted: 'مرسلة', Approved: 'معتمدة', Rejected: 'مرفوضة', Archived: 'مؤرشفة' };
+      return m[st] || st || '—';
+    }
+
+    function renderHubs(d) {
+      const qc = d.quality_counts || {};
+      const ac = [
+        { href:'/my_transcript', icon:'📄', label:'كشف الدرجات', badge:0 },
+        { href:'/my_registrations', icon:'📋', label:'تسجيلاتي', badge: d.enrollment_plan_status === 'Rejected' ? 1 : 0 },
+        { href:'/my_schedule', icon:'📅', label:'جدولي', badge:0 },
+        { href:'/my_exams', icon:'📝', label:'امتحاناتي', badge: d.exams_upcoming || 0 },
+        { href:'/my_announcements', icon:'📢', label:'إعلانات', badge: d.announcements_total || 0 },
+        { href:'/my_requests', icon:'✉', label:'طلباتي', badge:0 },
+      ];
+      const ql = [
+        { href:'/academic_quality/student/identity', icon:'🏛', label:'هويتي الأكاديمية', badge:0 },
+        { href:'/students/evaluations/', icon:'⭐', label:'تقييم المقررات', badge: qc.evaluations_pending || 0 },
+        { href:'/academic_quality/surveys', icon:'📊', label:'استبيانات', badge: qc.surveys_pending || 0 },
+        { href:'/academic_quality/ilo/student/learning-outcomes', icon:'🎯', label:'مخرجاتي', badge:0 },
+        { href:'/academic_quality/student/progress', icon:'📈', label:'تقدّمي', badge:0 },
+      ];
+      function tiles(arr, elId) {
+        document.getElementById(elId).innerHTML = arr.map(t =>
+          '<div class="col-4 col-md-2"><a class="hub-tile" href="' + t.href + '">' +
+          (t.badge > 0 ? '<span class="badge bg-danger hub-badge">' + t.badge + '</span>' : '') +
+          '<span class="hub-icon">' + t.icon + '</span><span class="small fw-semibold">' + esc(t.label) + '</span></a></div>'
+        ).join('');
+      }
+      tiles(ac, 'hubAcademic');
+      tiles(ql, 'hubQuality');
+    }
+
+    function renderSummary(d) {
+      G_SUMMARY = d;
+      document.getElementById('loadSkeleton').classList.add('d-none');
+      document.getElementById('mainWrap').classList.remove('d-none');
+      document.getElementById('welcomeLine').textContent = (d.student_name || '') + (d.program_name ? ' · ' + d.program_name : '');
+      const tl = document.getElementById('termLine');
+      if (d.term_label) { tl.textContent = 'الفصل: ' + d.term_label; tl.classList.remove('d-none'); }
+      document.getElementById('statRegs').textContent = d.registrations_count || 0;
+      document.getElementById('statUnits').textContent = d.units_registered || 0;
+      document.getElementById('statGpa').textContent = d.gpa != null ? d.gpa : '—';
+      document.getElementById('statPlan').textContent = planLabel(d.enrollment_plan_status);
+      renderHubs(d);
+      const items = d.action_items || [];
+      const ac = document.getElementById('actionCard');
+      if (items.length) {
+        ac.classList.remove('d-none');
+        document.getElementById('actionCount').textContent = items.length;
+        document.getElementById('actionList').innerHTML = items.map(a =>
+          '<a class="d-flex align-items-center gap-2 py-2 border-bottom text-decoration-none text-body" href="' + esc(a.href || '#') + '">' +
+          '<span>⚠</span><span class="small">' + esc(a.message) + '</span></a>'
+        ).join('');
+      } else ac.classList.add('d-none');
+      const ann = d.announcements_recent || [];
+      const annCard = document.getElementById('announceCard');
+      if (ann.length) {
+        annCard.classList.remove('d-none');
+        document.getElementById('announceList').innerHTML = ann.map(a =>
+          '<li class="list-group-item py-2"><strong>' + esc(a.title) + '</strong> <span class="text-muted small">— ' + esc(a.course_name) + '</span></li>'
+        ).join('');
+      } else annCard.classList.add('d-none');
+    }
+
+    async function loadWeekly() {
+      const wrap = document.getElementById('weeklyWrap');
+      try {
+        const r = await fetch('/schedule/student_timetable', { credentials: 'include' });
+        const j = await r.json().catch(() => ({}));
+        if (!j.published) { wrap.innerHTML = '<p class="text-muted mb-0">الجدول غير معتمد بعد.</p>'; return; }
+        const rows = j.rows || [];
+        if (typeof buildPublishedTimetableHtml === 'function') {
+          wrap.innerHTML = buildPublishedTimetableHtml(rows, {});
+        } else if (!rows.length) {
+          wrap.innerHTML = '<p class="text-muted mb-0">لا حصص في الجدول المعتمد.</p>';
+        }
+      } catch(e) { wrap.textContent = 'تعذر تحميل الجدول.'; }
+    }
+
+    async function loadPortal(skipCache) {
+      if (!skipCache) {
+        const c = cacheGet();
+        if (c) { renderSummary(c); loadWeekly(); return; }
+      }
+      try {
+        const r = await fetch('/students/portal_summary', { credentials: 'include' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.message || 'fail');
+        cacheSet(j);
+        renderSummary(j);
+        loadWeekly();
+      } catch(e) {
+        document.getElementById('welcomeLine').textContent = 'تعذر تحميل البوابة.';
+        document.getElementById('loadSkeleton').classList.add('d-none');
+      }
+    }
+
+    document.getElementById('btnRefresh').addEventListener('click', () => {
+      try { sessionStorage.removeItem(CACHE_KEY); } catch(e) {}
+      loadPortal(true);
+    });
+    loadPortal(false);
+  </script>
+</body>
+</html>

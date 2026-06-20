@@ -2478,6 +2478,58 @@ def student_timetable():
     return jsonify({"rows": out, "published": True})
 
 
+@schedule_bp.route("/student_exams")
+@login_required
+@role_required("student")
+def student_exams():
+    """امتحانات الطالب (جزئية + نهائية) لمقرراته المسجّلة."""
+    from .students import normalize_sid as _norm_sid
+    sid = _norm_sid(session.get("student_id") or session.get("user"))
+    if not sid:
+        return jsonify({"rows": [], "term_label": "", "midterm_count": 0, "final_count": 0})
+    with get_connection() as conn:
+        term_name, term_year = get_current_term(conn=conn)
+        term_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip() or SEMESTER_LABEL
+        cur = conn.cursor()
+        try:
+            rows = cur.execute(
+                """
+                SELECT e.id, e.course_name, e.exam_date, e.exam_time, e.room, e.instructor, e.exam_type
+                FROM exams e
+                INNER JOIN registrations r ON LOWER(TRIM(r.course_name)) = LOWER(TRIM(e.course_name))
+                WHERE r.student_id = ? AND e.exam_type IN ('midterm', 'final')
+                ORDER BY e.exam_date, e.exam_time, e.course_name
+                """,
+                (sid,),
+            ).fetchall()
+        except Exception:
+            rows = []
+        out = []
+        midterm_count = 0
+        final_count = 0
+        for r in rows or []:
+            et = (r[6] if not hasattr(r, "keys") else r["exam_type"] or "").strip().lower()
+            if et == "midterm":
+                midterm_count += 1
+            elif et == "final":
+                final_count += 1
+            out.append({
+                "exam_id": r[0],
+                "course_name": r[1],
+                "exam_date": r[2],
+                "exam_time": r[3],
+                "room": r[4],
+                "instructor": r[5],
+                "exam_type": et,
+            })
+    return jsonify({
+        "rows": out,
+        "term_label": term_label,
+        "midterm_count": midterm_count,
+        "final_count": final_count,
+    })
+
+
 def _canonical_schedule_day_label(day: str | None) -> str:
     """توحيد تهجئة اليوم مع واجهة الجدول (مثلاً الاثنين → الإثنين)."""
     s = (day or "").strip()

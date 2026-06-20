@@ -96,6 +96,10 @@ class TestAuth:
         assert caps.get("nav_admin_settings") is False
         assert caps.get("nav_student_affairs_menu") is False
         assert caps.get("nav_planning_student_view") is True
+        assert caps.get("nav_student_portal") is True
+        assert caps.get("nav_student_hub_more") is True
+        assert caps.get("nav_student_academic_identity") is True
+        assert caps.get("nav_student_academic_progress") is True
         assert caps.get("nav_student_course_evaluations") is True
         assert caps.get("nav_surveys_hub") is True
         assert caps.get("can_manage_schedule_edit") is False

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>جدولي</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal schedule-wide">
+    <div class="page-header d-flex justify-content-between"><div><h1 class="page-title">جدولي</h1><p class="page-subtitle" id="termLine">الفصل الحالي</p></div><a href="/my_portal" class="btn btn-outline-secondary btn-sm">بوابتي</a></div>
+    <div id="loadState" class="text-muted py-3">جاري التحميل…</div>
+    <div id="unpublishedNote" class="alert alert-warning small d-none"></div>
+    <div class="card d-none" id="timetableCard"><div class="card-header fw-semibold">الجدول الأسبوعي المعتمد</div><div class="card-body"><div id="timetableWrap" class="timetable-wrapper"></div></div></div>
+  </main>
+  <script>
+    (async function(){
+      const ls=document.getElementById('loadState');
+      try{
+        const r=await fetch('/schedule/student_timetable',{credentials:'include'});
+        const j=await r.json().catch(()=>({}));
+        ls.classList.add('d-none');
+        if(!j.published){document.getElementById('unpublishedNote').textContent='الجدول غير معتمد بعد.';document.getElementById('unpublishedNote').classList.remove('d-none');return;}
+        const rows=j.rows||[];
+        document.getElementById('timetableCard').classList.remove('d-none');
+        document.getElementById('timetableWrap').innerHTML=typeof buildPublishedTimetableHtml==='function'?buildPublishedTimetableHtml(rows,{}):'<p class="text-muted">لا حصص.</p>';
+      }catch(e){ls.textContent='تعذر التحميل.';}
+    })();
+  </script>
+</body>
+</html>

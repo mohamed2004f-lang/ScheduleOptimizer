@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>طلبات الإضافة والإسقاط</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-900 theme-formal">
+    <div class="page-header d-flex justify-content-between flex-wrap gap-2">
+      <div><h1 class="page-title">طلباتي</h1><p class="page-subtitle">إضافة أو إسقاط مقرر — للفصل الحالي</p></div>
+      <a href="/my_portal" class="btn btn-outline-secondary btn-sm">بوابتي</a>
+    </div>
+    <div class="card mb-3"><div class="card-body">
+      <div class="row g-2 align-items-end">
+        <div class="col-md-4"><label class="form-label small">المقرر</label><input id="reqCourse" class="form-control form-control-sm" placeholder="اسم المقرر"></div>
+        <div class="col-md-3"><label class="form-label small">الإجراء</label><select id="reqAction" class="form-select form-select-sm"><option value="add">إضافة</option><option value="drop">إسقاط</option></select></div>
+        <div class="col-md-4"><label class="form-label small">السبب (اختياري)</label><input id="reqReason" class="form-control form-control-sm"></div>
+        <div class="col-md-1"><button type="button" class="btn btn-primary btn-sm w-100" id="btnSubmit">إرسال</button></div>
+      </div>
+      <div id="reqFeedback" class="small text-danger mt-2"></div>
+    </div></div>
+    <div id="loadState" class="text-muted py-2">جاري التحميل…</div>
+    <div class="table-responsive d-none" id="tblWrap"><table class="table table-sm"><thead><tr><th>المقرر</th><th>الإجراء</th><th>الحالة</th><th>التاريخ</th></tr></thead><tbody id="reqBody"></tbody></table></div>
+  </main>
+  <script>
+    let studentId='';
+    function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;');}
+    function hdr(){const c=document.querySelector('meta[name=csrf-token]')?.content||'';const h={'Content-Type':'application/json','Accept':'application/json'};if(c)h['X-CSRFToken']=c;return h;}
+    async function loadList(){
+      if(!studentId)return;
+      const r=await fetch('/registration_requests/list?student_id='+encodeURIComponent(studentId),{credentials:'include'});
+      const j=await r.json().catch(()=>({}));
+      const rows=j.items||j.requests||[];
+      document.getElementById('loadState').classList.add('d-none');
+      document.getElementById('tblWrap').classList.remove('d-none');
+      document.getElementById('reqBody').innerHTML=rows.map(x=>'<tr><td>'+esc(x.course_name)+'</td><td>'+esc(x.action)+'</td><td>'+esc(x.status)+'</td><td>'+esc(x.created_at||'')+'</td></tr>').join('')||'<tr><td colspan="4" class="text-muted">لا طلبات</td></tr>';
+    }
+    (async function(){
+      const a=await fetch('/auth/check',{credentials:'include'});const aj=await a.json();studentId=aj.student_id||aj.user||'';
+      await loadList();
+    })();
+    document.getElementById('btnSubmit').addEventListener('click',async()=>{
+      const fb=document.getElementById('reqFeedback');fb.textContent='';
+      const body={student_id:studentId,course_name:document.getElementById('reqCourse').value.trim(),action:document.getElementById('reqAction').value,request_reason:document.getElementById('reqReason').value.trim()};
+      if(!body.course_name){fb.textContent='أدخل اسم المقرر';return;}
+      const r=await fetch('/registration_requests/create',{method:'POST',credentials:'include',headers:hdr(),body:JSON.stringify(body)});
+      const j=await r.json().catch(()=>({}));
+      if(r.ok){document.getElementById('reqCourse').value='';await loadList();}else fb.textContent=j.message||'فشل الإرسال';
+    });
+  </script>
+</body>
+</html>

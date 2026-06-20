@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>هوية القسم</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-900 theme-formal">
+    <div class="page-header d-flex justify-content-between flex-wrap gap-2">
+      <div>
+        <h1 class="page-title" id="deptTitle">هوية القسم</h1>
+        <p class="page-subtitle" id="deptSub"></p>
+      </div>
+      <div class="d-flex gap-2">
+        <a href="/academic_quality/college" class="btn btn-outline-primary btn-sm">هوية الكلية</a>
+        {% if can_edit %}
+        <button type="button" class="btn btn-primary btn-sm" id="btnEdit">تعديل</button>
+        {% endif %}
+      </div>
+    </div>
+    <div id="loadState" class="text-muted py-3">جاري التحميل…</div>
+    <div id="mainWrap" class="d-none">
+      <div class="card mb-3"><div class="card-header fw-semibold">مقدمة القسم</div><div class="card-body" id="boxIntro"></div></div>
+      <div class="row g-3 mb-3">
+        <div class="col-md-6"><div class="card h-100"><div class="card-header fw-semibold">رسالة القسم</div><div class="card-body" id="boxMission"></div></div></div>
+        <div class="col-md-6"><div class="card h-100"><div class="card-header fw-semibold">رؤية القسم</div><div class="card-body" id="boxVision"></div></div></div>
+      </div>
+      <div class="card mb-3"><div class="card-header fw-semibold">أهداف القسم</div><div class="card-body p-0" id="boxGoals"></div></div>
+    </div>
+  </main>
+
+  <div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">تعديل هوية القسم</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+          <div class="mb-3"><label class="form-label">مقدمة</label><textarea class="form-control" id="editIntro" rows="2"></textarea></div>
+          <div class="mb-3"><label class="form-label">رسالة</label><textarea class="form-control" id="editMission" rows="3"></textarea></div>
+          <div class="mb-3"><label class="form-label">رؤية</label><textarea class="form-control" id="editVision" rows="3"></textarea></div>
+          <div class="mb-2 d-flex justify-content-between"><label class="form-label mb-0">أهداف القسم</label><button type="button" class="btn btn-sm btn-outline-primary" id="btnAddGoal">+ هدف</button></div>
+          <div id="goalsEditor"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+          <button type="button" class="btn btn-primary" id="btnSave">حفظ</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const DEPT_ID = {{ department_id|tojson }};
+    const CAN_EDIT = {{ can_edit|tojson }};
+    let payload = null;
+
+    function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+    function hdr(){ const c=document.querySelector('meta[name=csrf-token]')?.content||''; const h={'Content-Type':'application/json','Accept':'application/json'}; if(c) h['X-CSRFToken']=c; return h; }
+
+    function render(){
+      const d=payload.department||{};
+      document.getElementById('deptTitle').textContent='هوية القسم — '+(d.name_ar||'');
+      document.getElementById('deptSub').textContent=d.code||'';
+      document.getElementById('boxIntro').textContent=d.intro_ar||'—';
+      document.getElementById('boxMission').textContent=d.mission_ar||'—';
+      document.getElementById('boxVision').textContent=d.vision_ar||'—';
+      const goals=payload.goals||[];
+      document.getElementById('boxGoals').innerHTML=goals.length?'<ul class="list-group list-group-flush">'+goals.map(g=>'<li class="list-group-item"><strong>'+esc(g.title_ar)+'</strong><div class="small text-muted">'+esc(g.description||'')+'</div></li>').join('')+'</ul>':'<p class="p-3 text-muted mb-0">لا أهداف بعد.</p>';
+    }
+
+    function renderGoalsEditor(goals){
+      const box=document.getElementById('goalsEditor');
+      box.innerHTML=(goals||[]).map((g,i)=>`<div class="border rounded p-2 mb-2 goal-row"><input class="form-control form-control-sm mb-1 goal-title" placeholder="عنوان الهدف" value="${esc(g.title_ar||'')}"><textarea class="form-control form-control-sm goal-desc" rows="2" placeholder="الوصف">${esc(g.description||'')}</textarea><button type="button" class="btn btn-sm btn-outline-danger mt-1 btn-rm">حذف</button></div>`).join('')||'<p class="text-muted small">لا أهداف — أضف هدفاً.</p>';
+      box.querySelectorAll('.btn-rm').forEach(b=>b.addEventListener('click',e=>e.target.closest('.goal-row').remove()));
+    }
+
+    async function load(){
+      const r=await fetch('/academic_quality/api/departments/'+DEPT_ID+'/profile',{credentials:'include'});
+      const j=await r.json().catch(()=>({}));
+      document.getElementById('loadState').classList.add('d-none');
+      if(!r.ok){ document.getElementById('loadState').classList.remove('d-none'); document.getElementById('loadState').textContent=j.message||'تعذر التحميل.'; return; }
+      payload=j; render(); document.getElementById('mainWrap').classList.remove('d-none');
+    }
+
+    document.getElementById('btnEdit')?.addEventListener('click',()=>{
+      const d=payload.department||{};
+      document.getElementById('editIntro').value=d.intro_ar||'';
+      document.getElementById('editMission').value=d.mission_ar||'';
+      document.getElementById('editVision').value=d.vision_ar||'';
+      renderGoalsEditor(payload.goals||[]);
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('editModal')).show();
+    });
+    document.getElementById('btnAddGoal')?.addEventListener('click',()=>{
+      const box=document.getElementById('goalsEditor');
+      const div=document.createElement('div');
+      div.className='border rounded p-2 mb-2 goal-row';
+      div.innerHTML='<input class="form-control form-control-sm mb-1 goal-title" placeholder="عنوان الهدف"><textarea class="form-control form-control-sm goal-desc" rows="2" placeholder="الوصف"></textarea><button type="button" class="btn btn-sm btn-outline-danger mt-1 btn-rm">حذف</button>';
+      div.querySelector('.btn-rm').addEventListener('click',()=>div.remove());
+      box.appendChild(div);
+    });
+    document.getElementById('btnSave')?.addEventListener('click',async()=>{
+      const goals=[...document.querySelectorAll('#goalsEditor .goal-row')].map((row,i)=>({
+        code:'DG'+(i+1), title_ar:row.querySelector('.goal-title')?.value||'', description:row.querySelector('.goal-desc')?.value||'', sort_order:i
+      })).filter(g=>g.title_ar.trim());
+      const body={ intro_ar:document.getElementById('editIntro').value, mission_ar:document.getElementById('editMission').value, vision_ar:document.getElementById('editVision').value, goals };
+      const r=await fetch('/academic_quality/api/departments/'+DEPT_ID+'/profile',{method:'PUT',credentials:'include',headers:hdr(),body:JSON.stringify(body)});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok){ alert(j.message||'فشل الحفظ'); return; }
+      bootstrap.Modal.getInstance(document.getElementById('editModal'))?.hide();
+      await load();
+    });
+    load();
+  </script>
+  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+</body>
+</html>

@@ -172,20 +172,41 @@
             <li><a class="dropdown-item" id="navInsStudentLo" href="/academic_quality/ilo/student/learning-outcomes" style="display:none;">مخرجاتي التعليمية</a></li>
           </ul>
         </li>
-        <li class="nav-item" id="navStudentEvaluationsWrap" style="display:none;">
-          <a class="nav-link" id="navStudentEvaluations" href="/academic_quality/surveys">
-            <i class="fa-solid fa-star ms-1"></i> الاستبيانات وتقييم المقررات
-          </a>
-        </li>
-        <li class="nav-item" id="navStudentLearningOutcomesWrap" style="display:none;">
-          <a class="nav-link" id="navStudentLearningOutcomes" href="/academic_quality/ilo/student/learning-outcomes">
-            <i class="fa-solid fa-bullseye ms-1"></i> مخرجاتي التعليمية
+        <li class="nav-item" id="navStudentPortalWrap" style="display:none;">
+          <a class="nav-link" id="navStudentPortal" href="/my_portal">
+            <i class="fa-solid fa-house-user ms-1"></i> بوابتي
           </a>
         </li>
         <li class="nav-item" id="navStudentRegistrationsWrap" style="display:none;">
           <a class="nav-link" id="navStudentRegistrations" href="/my_registrations">
             <i class="fa-solid fa-clipboard-list ms-1"></i> تسجيلاتي
           </a>
+        </li>
+        <li class="nav-item dropdown" id="navStudentMoreWrap" style="display:none;">
+          <a class="nav-link dropdown-toggle" href="#" id="studentMoreMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="fa-solid fa-ellipsis ms-1"></i> المزيد
+          </a>
+          <ul class="dropdown-menu" aria-labelledby="studentMoreMenu">
+            <li><a class="dropdown-item" id="navStudentSchedule" href="/my_schedule">جدولي</a></li>
+            <li><a class="dropdown-item" id="navStudentExams" href="/my_exams">امتحاناتي</a></li>
+            <li><a class="dropdown-item" id="navStudentTranscript" href="/my_transcript">كشف الدرجات</a></li>
+            <li><a class="dropdown-item" id="navStudentAnnouncements" href="/my_announcements">إعلانات المقررات</a></li>
+            <li><a class="dropdown-item" id="navStudentRequests" href="/my_requests">طلبات الإضافة/الإسقاط</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" id="navStudentIdentity" href="/academic_quality/student/identity">هويتي الأكاديمية</a></li>
+            <li><a class="dropdown-item" id="navStudentEvaluations" href="/students/evaluations/">تقييم المقررات</a></li>
+            <li><a class="dropdown-item" id="navStudentSurveys" href="/academic_quality/surveys">استبيانات الجودة</a></li>
+            <li><a class="dropdown-item" id="navStudentLearningOutcomes" href="/academic_quality/ilo/student/learning-outcomes">مخرجاتي التعليمية</a></li>
+            <li><a class="dropdown-item" id="navStudentProgress" href="/academic_quality/student/progress">تقدّمي الأكاديمي</a></li>
+            <li><a class="dropdown-item" id="navStudentGlossary" href="/academic_quality/glossary">دليل المصطلحات</a></li>
+          </ul>
+        </li>
+        <!-- legacy ids kept hidden for compat -->
+        <li class="nav-item d-none" id="navStudentEvaluationsWrap">
+          <a class="nav-link" id="navStudentEvaluationsLegacy" href="/academic_quality/surveys"></a>
+        </li>
+        <li class="nav-item d-none" id="navStudentLearningOutcomesWrap">
+          <a class="nav-link" id="navStudentLearningOutcomesLegacy" href="/academic_quality/ilo/student/learning-outcomes"></a>
         </li>
 
         <!-- شؤون الطلبة -->
@@ -512,10 +533,24 @@
       if (wrapSupPortal) wrapSupPortal.style.display = showSupervisorPortal ? '' : 'none';
       const wrapStudentAffairs = document.getElementById('navStudentAffairsWrap');
       if (wrapStudentAffairs) wrapStudentAffairs.style.display = showStudentAffairsMenu ? '' : 'none';
+      let showStudentPortal = false, showStudentHubMore = false;
+      if (caps && caps.v >= 1) {
+        showStudentPortal = !!caps.nav_student_portal || isStudentUi;
+        showStudentHubMore = !!caps.nav_student_hub_more || isStudentUi;
+        showStudentRegs = !!caps.nav_student_registrations || isStudentUi;
+      } else {
+        showStudentPortal = isStudentUi;
+        showStudentHubMore = isStudentUi;
+        showStudentRegs = isStudentUi;
+      }
+      const wrapStudentPortal = document.getElementById('navStudentPortalWrap');
+      if (wrapStudentPortal) wrapStudentPortal.style.display = showStudentPortal ? '' : 'none';
+      const wrapStudentMore = document.getElementById('navStudentMoreWrap');
+      if (wrapStudentMore) wrapStudentMore.style.display = showStudentHubMore ? '' : 'none';
       const wrapEvals = document.getElementById('navStudentEvaluationsWrap');
-      if (wrapEvals) wrapEvals.style.display = showStudentEvals ? '' : 'none';
+      if (wrapEvals) wrapEvals.style.display = 'none';
       const wrapStudentLo = document.getElementById('navStudentLearningOutcomesWrap');
-      if (wrapStudentLo) wrapStudentLo.style.display = showStudentLo ? '' : 'none';
+      if (wrapStudentLo) wrapStudentLo.style.display = 'none';
       const wrapStudentRegs = document.getElementById('navStudentRegistrationsWrap');
       if (wrapStudentRegs) wrapStudentRegs.style.display = showStudentRegs ? '' : 'none';
 
@@ -1034,6 +1069,7 @@
         skipAutoShow.add('navCatalogWrap');
         skipAutoShow.add('navFacultySupervisionWrap');
         skipAutoShow.add('navAdminSettingsWrap');
+        skipAutoShow.add('navStudentMoreWrap');
       }
       document.querySelectorAll('.nav-item.dropdown').forEach(dd => {
         if (skipAutoShow.has(dd.id)) return;
@@ -1221,7 +1257,18 @@
         ['/academic_quality/surveys/results','navSurveysResults'],
         ['/academic_quality/surveys/trends','navSurveysTrends'],
         ['/academic_quality/surveys/invites','navSurveysInvites'],
-        ['/academic_quality/surveys','navStudentEvaluations'],
+        ['/my_portal','navStudentPortal'],
+        ['/my_schedule','navStudentSchedule'],
+        ['/my_exams','navStudentExams'],
+        ['/my_transcript','navStudentTranscript'],
+        ['/my_announcements','navStudentAnnouncements'],
+        ['/my_requests','navStudentRequests'],
+        ['/academic_quality/student/identity','navStudentIdentity'],
+        ['/students/evaluations','navStudentEvaluations'],
+        ['/academic_quality/surveys','navStudentSurveys'],
+        ['/academic_quality/ilo/student/learning-outcomes','navStudentLearningOutcomes'],
+        ['/academic_quality/student/progress','navStudentProgress'],
+        ['/academic_quality/glossary','navStudentGlossary'],
         ['/my_registrations','navStudentRegistrations'],
         ['/academic_quality/college','navCollegeProfile'],
         ['/academic_quality/programs','navProgramsPortal'],
@@ -1276,7 +1323,8 @@
         });
       }
 
-      // تنبيه تغيير الجدول بعد الاعتماد (لكل الأدوار)
+      // تنبيه تغيير الجدول — غير حرج؛ يُحمَّل بعد اكتمال الشريط
+      setTimeout(async () => {
       try {
         const metaResp = await fetch('/schedule/meta', { credentials: 'include' });
         const meta = await metaResp.json().catch(()=>null);
@@ -1291,6 +1339,7 @@
       } catch(e) {
         // تجاهل أي خطأ في عرض التنبيه
       }
+      }, 0);
       window.showLoading = function() {
         var el = document.getElementById('loadingOverlay');
         if (el) { el.classList.add('active'); el.setAttribute('aria-hidden', 'false'); }

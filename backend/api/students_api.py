@@ -92,6 +92,81 @@ def _can_view_student(conn, student_id: str) -> bool:
 
 
 # -----------------------------
+# Student portal (v1 wrappers)
+# -----------------------------
+@students_api_bp.route("/me", methods=["GET"])
+@login_required
+@role_required("student")
+@handle_errors
+def api_v1_student_me():
+    from backend.services.student_portal import session_student_id, _student_row, _current_term_label, _registrations_summary
+
+    sid = session_student_id()
+    if not sid:
+        raise APIError("غير مصرح", 403)
+    with get_connection() as conn:
+        stu = _student_row(conn, sid)
+        if not stu:
+            raise NotFoundError("لم يُعثر على الطالب")
+        _, _, term_label = _current_term_label(conn)
+        regs = _registrations_summary(conn, sid, term_label)
+    return jsonify({
+        "success": True,
+        "data": {
+            **stu,
+            "term_label": term_label,
+            "registrations_count": regs["count"],
+            "units_registered": regs["units"],
+        },
+    }), 200
+
+
+@students_api_bp.route("/me/portal_summary", methods=["GET"])
+@login_required
+@role_required("student")
+@handle_errors
+def api_v1_portal_summary():
+    from backend.services.student_portal import session_student_id, build_portal_summary
+
+    sid = session_student_id()
+    if not sid:
+        raise APIError("غير مصرح", 403)
+    with get_connection() as conn:
+        data = build_portal_summary(conn, sid)
+    return jsonify({"success": True, "data": data}), 200
+
+
+@students_api_bp.route("/me/identity_context", methods=["GET"])
+@login_required
+@role_required("student")
+@handle_errors
+def api_v1_identity_context():
+    from backend.services.student_portal import session_student_id, build_identity_context
+
+    sid = session_student_id()
+    if not sid:
+        raise APIError("غير مصرح", 403)
+    with get_connection() as conn:
+        data = build_identity_context(conn, sid)
+    return jsonify({"success": True, "data": data}), 200
+
+
+@students_api_bp.route("/me/academic_progress", methods=["GET"])
+@login_required
+@role_required("student")
+@handle_errors
+def api_v1_academic_progress():
+    from backend.services.student_portal import session_student_id, build_academic_progress
+
+    sid = session_student_id()
+    if not sid:
+        raise APIError("غير مصرح", 403)
+    with get_connection() as conn:
+        data = build_academic_progress(conn, sid)
+    return jsonify({"success": True, "data": data}), 200
+
+
+# -----------------------------
 # Routes (GET/Statistics only)
 # -----------------------------
 @students_api_bp.route("", methods=["GET"])

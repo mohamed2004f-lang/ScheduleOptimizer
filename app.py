@@ -6,6 +6,7 @@ import atexit
 
 # Blueprints
 from backend.services.students import students_bp
+from backend.services.student_portal import student_portal_bp
 from backend.services.courses import courses_bp
 from backend.services.grades import grades_bp
 from backend.services.course_delivery import course_delivery_bp
@@ -53,6 +54,42 @@ from pathlib import Path
 
 # استخدم مجلد القوالب/الستايتك كما في مشروعك
 app = Flask(__name__, template_folder="frontend/templates", static_folder="frontend/static")
+
+
+def _request_is_https() -> bool:
+    if request.is_secure:
+        return True
+    forwarded = (request.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
+    return forwarded == "https"
+
+
+@app.before_request
+def _canonical_host_in_production():
+    """توحيد النطاق (www → apex) حتى لا تتفرّق cookies بين نطاقين."""
+    if FLASK_ENV != "production":
+        return None
+    host = (request.host or "").split(":")[0].lower()
+    if host == "www.uod-engineering.org":
+        path = request.full_path if request.full_path else request.path
+        if path.endswith("?"):
+            path = path[:-1]
+        return redirect(f"https://uod-engineering.org{path}", code=301)
+    return None
+
+
+@app.before_request
+def _require_https_in_production():
+    """الكوكيز Secure لا تُحفظ على http:// — إجبار https للنطاق العام (صفحات GET فقط)."""
+    if FLASK_ENV != "production":
+        return None
+    if request.method not in ("GET", "HEAD"):
+        return None
+    host = (request.host or "").split(":")[0].lower()
+    if host in ("127.0.0.1", "localhost"):
+        return None
+    if _request_is_https():
+        return None
+    return redirect(request.url.replace("http://", "https://", 1), code=301)
 
 
 @app.route("/static/vendor/webfonts/<path:filename>")
@@ -172,6 +209,7 @@ register_error_handlers(app)
 
 # تسجيل الـ Blueprints
 app.register_blueprint(students_bp, url_prefix="/students")
+app.register_blueprint(student_portal_bp, url_prefix="/students")
 app.register_blueprint(courses_bp, url_prefix="/courses")
 app.register_blueprint(grades_bp, url_prefix="/grades")
 app.register_blueprint(course_delivery_bp, url_prefix="/course_delivery")
@@ -241,6 +279,10 @@ def _is_instructor_or_supervisor_role() -> bool:
     if role == "instructor":
         return True
     return False
+
+
+def _student_portal_ui_allowed() -> bool:
+    return (session.get("user_role") or "").strip() == "student"
 
 
 def _instructor_portal_ui_allowed() -> bool:
@@ -441,7 +483,31 @@ def handle_csrf_error(e):
 @app.route("/login")
 def login_page():
     """صفحة تسجيل الدخول"""
-    return render_template("login.html")
+    from backend.core.auth import SESSION_KEY, LOGIN_PROBE_COOKIE, _purge_legacy_auth_cookies
+    from flask import make_response
+
+    if session.get(SESSION_KEY):
+        return redirect("/")
+    errors = {
+        "MISSING_CREDENTIALS": "اسم المستخدم وكلمة المرور مطلوبان",
+        "INVALID_CREDENTIALS": "اسم المستخدم أو كلمة المرور غير صحيحة",
+        "ACCOUNT_DISABLED": "تم تعطيل هذا الحساب",
+        "ACCOUNT_LOCKED": "الحساب موقوف مؤقتاً. تواصل مع الإدارة.",
+        "PASSWORD_EXPIRED": "انتهت صلاحية كلمة المرور. يرجى تعيين كلمة جديدة.",
+        "SESSION_NOT_SAVED": (
+            "تم التحقق من البيانات لكن الجلسة لم تُحفظ في المتصفّح. "
+            "امسح cookies للموقع وجرّب من نافذة خاصة عبر https://"
+        ),
+    }
+    err = request.args.get("error")
+    login_error = errors.get(err) if err else None
+    if not login_error and request.cookies.get(LOGIN_PROBE_COOKIE) and not session.get(SESSION_KEY):
+        login_error = errors["SESSION_NOT_SAVED"]
+    resp = make_response(render_template("login.html", login_error=login_error))
+    _purge_legacy_auth_cookies(resp)
+    if request.cookies.get(LOGIN_PROBE_COOKIE):
+        resp.delete_cookie(LOGIN_PROBE_COOKIE, path="/")
+    return resp
 
 @app.route("/logout")
 def logout_page():
@@ -454,8 +520,7 @@ def index():
     # صفحة البوابة تحتوي "مدخلات الجدولة (JSON)" لذلك تُحجب عن الطالب
     role = session.get("user_role") or ""
     if role == "student":
-        sid = session.get("student_id") or session.get("user")
-        return redirect(url_for("student_view", student_id=sid))
+        return redirect(url_for("my_portal_page"))
     if role == "head_of_department":
         am = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
         if am == "instructor" and session.get("instructor_id"):
@@ -531,6 +596,8 @@ def my_courses_page():
 @app.route("/my_schedule")
 @login_required
 def my_schedule_page():
+    if _student_portal_ui_allowed():
+        return render_template("student_my_schedule.html", active_page="student_schedule")
     if not _instructor_portal_ui_allowed():
         return redirect(url_for("transcript_page"))
     return render_template("my_schedule.html", active_page="my_schedule")
@@ -539,9 +606,61 @@ def my_schedule_page():
 @app.route("/my_exams")
 @login_required
 def my_exams_page():
+    if _student_portal_ui_allowed():
+        return render_template("student_my_exams.html", active_page="student_exams")
     if not _instructor_portal_ui_allowed():
         return redirect(url_for("transcript_page"))
     return render_template("my_exams.html", active_page="my_exams")
+
+
+@app.route("/my_announcements")
+@login_required
+@role_required("student")
+def my_announcements_page():
+    return render_template("student_my_announcements.html", active_page="student_announcements")
+
+
+@app.route("/my_requests")
+@login_required
+@role_required("student")
+def my_requests_page():
+    return render_template("student_my_requests.html", active_page="student_requests")
+
+
+@app.route("/my_transcript")
+@login_required
+@role_required("student")
+def my_transcript_page():
+    from backend.services.students import normalize_sid
+    from backend.services.grades import _load_transcript_data
+
+    sid = normalize_sid(session.get("student_id") or session.get("user"))
+    initial_transcript = None
+    if sid:
+        try:
+            initial_transcript = _load_transcript_data(sid)
+        except Exception:
+            initial_transcript = None
+    return render_template(
+        "student_my_transcript.html",
+        active_page="student_transcript",
+        student_id=sid,
+        initial_transcript=initial_transcript,
+    )
+
+
+@app.route("/academic_quality/student/identity")
+@login_required
+@role_required("student")
+def student_academic_identity_page():
+    return render_template("student_academic_identity.html", active_page="student_identity")
+
+
+@app.route("/academic_quality/student/progress")
+@login_required
+@role_required("student")
+def student_academic_progress_page():
+    return render_template("student_academic_progress.html", active_page="student_progress")
 
 
 @app.route("/my_attendance")
@@ -559,7 +678,22 @@ def my_attendance_page():
 @app.route("/dashboard")
 @role_required("admin", "admin_main", "head_of_department")
 def dashboard_page():
-    return render_template("dashboard.html", active_page="dashboard")
+    from backend.core.auth import LOGIN_PROBE_COOKIE
+    from flask import make_response
+
+    logged_in = request.args.get("logged_in") == "1"
+    user_role = session.get("user_role") or ""
+    resp = make_response(
+        render_template(
+            "dashboard.html",
+            active_page="dashboard",
+            logged_in=logged_in,
+            user_role=user_role,
+        )
+    )
+    if logged_in and session.get("authenticated"):
+        resp.delete_cookie(LOGIN_PROBE_COOKIE, path="/")
+    return resp
 
 
 @app.route("/analytics")
@@ -568,11 +702,25 @@ def analytics_dashboard_page():
     # لوحة تحكم تحليلية متقدمة تعتمد على بيانات /performance/report و /admin/summary
     return render_template("analytics_dashboard.html", active_page="analytics")
 
+@app.route("/my_portal")
+@login_required
+@role_required("student")
+def my_portal_page():
+    """بوابة الطالب الموحّدة."""
+    resp = make_response(render_template("student_portal.html", active_page="student_portal"))
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
+
+
 @app.route("/student_view")
 @app.route("/student_view/<student_id>")
 @login_required
 def student_view(student_id=None):
-    return render_template("student_view.html", student_id=student_id)
+    role = (session.get("user_role") or "").strip()
+    if role == "student":
+        return redirect(url_for("my_portal_page"))
+    return render_template("student_view.html", student_id=student_id, active_page="student_view")
 
 
 @app.route("/my_registrations")
@@ -772,6 +920,8 @@ def department_policy_approvals_page():
 @login_required
 def transcript_page():
     role = (session.get("user_role") or "").strip()
+    if role == "student":
+        return redirect(url_for("my_transcript_page"))
     active_m = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower()
     if (role == "instructor" and not current_supervisor_effective()) or (
         role == "head_of_department" and active_m == "instructor"

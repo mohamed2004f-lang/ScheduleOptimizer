@@ -66,6 +66,9 @@ STUDENT_USERNAME = os.environ.get("STUDENT_USERNAME")
 STUDENT_PASSWORD = os.environ.get("STUDENT_PASSWORD")
 
 SESSION_KEY = 'authenticated'
+LOGIN_PROBE_COOKIE = '_so_login_probe'
+SESSION_COOKIE_NAME = 'so_session'
+LEGACY_AUTH_COOKIE_NAMES = ('session', 'remember_token')
 SESSION_USER = 'user'
 SESSION_LOGIN_TIME = 'login_time'
 # وضع العمل داخل الجلسة:
@@ -484,6 +487,10 @@ def compute_capabilities(
         "nav_student_learning_outcomes": role == "student",
         "nav_student_course_evaluations": role == "student",
         "nav_student_registrations": role == "student",
+        "nav_student_portal": role == "student",
+        "nav_student_hub_more": role == "student",
+        "nav_student_academic_identity": role == "student",
+        "nav_student_academic_progress": role == "student",
         # تظهر صفحة hub التعبئة للأدوار التي لها قوالب تعبئة:
         # طالب / أستاذ / مشرف / موظف
         "nav_surveys_hub": role in ("student", "instructor", "supervisor", "staff"),
@@ -561,6 +568,8 @@ login_manager = LoginManager() if LoginManager is not None else None
 if login_manager is not None:
     login_manager.login_view = "login_page"  # endpoint في app.py لمسار /login
     login_manager.login_message = "يجب تسجيل الدخول للوصول إلى هذه الصفحة."
+    # خلف Cloudflare Tunnel قد يتغيّر IP بين الطلبات — لا تُبطل الجلسة بسبب ذلك
+    login_manager.session_protection = None
 
 
 class User(UserMixin):
@@ -641,6 +650,33 @@ def verify_password(password: str, hashed: str) -> bool:
     return old_hash == hashed
 
 
+def _purge_legacy_auth_cookies(resp):
+    """حذف cookies قديمة (اسم session + domain-scoped) تسبب تعارضاً خلف Cloudflare."""
+    if not any(request.cookies.get(n) for n in LEGACY_AUTH_COOKIE_NAMES):
+        return resp
+    host = (request.host or "").split(":")[0].lower()
+    domains = {None}
+    if host.endswith("uod-engineering.org"):
+        domains.update({".uod-engineering.org", "uod-engineering.org"})
+    if host.startswith("www."):
+        bare = host[4:]
+        domains.update({f".{bare}", bare})
+    for name in LEGACY_AUTH_COOKIE_NAMES:
+        for domain in domains:
+            if domain:
+                resp.delete_cookie(name, path="/", domain=domain)
+            else:
+                resp.delete_cookie(name, path="/")
+    return resp
+
+
+def _redirect_to_login():
+    """توجيه لصفحة الدخول؛ إذا جاء بعد محاولة login ناجحة لكن بدون جلسة، أظهر السبب."""
+    if request.args.get("logged_in") == "1" or request.cookies.get(LOGIN_PROBE_COOKIE):
+        return redirect("/login?error=SESSION_NOT_SAVED")
+    return redirect("/login")
+
+
 def login_required(f):
     """ديكوراتور للمصادقة - يتطلب تسجيل الدخول.
 
@@ -671,7 +707,7 @@ def login_required(f):
                     'code': 'UNAUTHORIZED'
                 }), 401
             # طلب متصفح عادي → تحويل إلى صفحة تسجيل الدخول
-            return redirect("/login")
+            return _redirect_to_login()
         return f(*args, **kwargs)
     return decorated_function
 
@@ -738,7 +774,7 @@ def role_required(*roles):
                         'message': 'يجب تسجيل الدخول للوصول إلى هذه الصفحة',
                         'code': 'UNAUTHORIZED'
                     }), 401
-                return redirect("/login")
+                return _redirect_to_login()
             user_role = None
             if current_user is not None:
                 try:
@@ -893,9 +929,21 @@ def init_auth(app):
     
     # إعدادات الجلسة
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=SESSION_LIFETIME_MINUTES)
+    app.config['SESSION_COOKIE_NAME'] = os.environ.get('SESSION_COOKIE_NAME', SESSION_COOKIE_NAME)
     app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') == 'production'
     app.config['SESSION_COOKIE_HTTPONLY'] = True
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    if os.environ.get('FLASK_ENV') == 'production':
+        app.config['PREFERRED_URL_SCHEME'] = 'https'
+    _cookie_domain = (os.environ.get('SESSION_COOKIE_DOMAIN') or '').strip()
+    if _cookie_domain:
+        if not _cookie_domain.startswith('.'):
+            _cookie_domain = '.' + _cookie_domain
+        app.config['SESSION_COOKIE_DOMAIN'] = _cookie_domain
+        app.config['REMEMBER_COOKIE_DOMAIN'] = _cookie_domain
+        app.config['REMEMBER_COOKIE_SECURE'] = app.config['SESSION_COOKIE_SECURE']
+        app.config['REMEMBER_COOKIE_HTTPONLY'] = True
+        app.config['REMEMBER_COOKIE_SAMESITE'] = 'Lax'
     
     # Blueprint للمصادقة
     from flask import Blueprint
@@ -925,19 +973,30 @@ def init_auth(app):
         enabled=_login_rl_enabled,
     )
     def login():
-        """تسجيل الدخول"""
-        data = request.get_json(force=True) or {}
-        username = data.get('username', '').strip()
-        password = data.get('password', '')
-        remember = bool(data.get('remember', False))
-        
+        """تسجيل الدخول (JSON API أو form POST مع redirect)."""
+        ct = (request.content_type or "").lower()
+        accept = (request.headers.get("Accept") or "").lower()
+        wants_json = (
+            request.is_json
+            or "application/json" in ct
+            or ("application/json" in accept and "text/html" not in accept)
+        )
+        data = request.get_json(silent=True) if wants_json else None
+        if not data:
+            data = request.form
+        username = (data.get("username") or "").strip()
+        password = data.get("password") or ""
+        remember = bool(data.get("remember", False))
+
+        def _err(message, code, status=400):
+            if wants_json:
+                return jsonify({"status": "error", "message": message, "code": code}), status
+            from flask import redirect as _redirect, url_for as _url_for
+            return _redirect(_url_for("login_page", error=code))
+
         # التحقق من البيانات المطلوبة
         if not username or not password:
-            return jsonify({
-                'status': 'error',
-                'message': 'اسم المستخدم وكلمة المرور مطلوبان',
-                'code': 'MISSING_CREDENTIALS'
-            }), 400
+            return _err("اسم المستخدم وكلمة المرور مطلوبان", "MISSING_CREDENTIALS", 400)
         
         # التحقق من بيانات الدخول وتحديد الدور
         role = None
@@ -953,15 +1012,7 @@ def init_auth(app):
             try:
                 with get_connection() as conn:
                     cur = conn.cursor()
-                    # احصل على عدد المستخدمين لمعرفة ما إذا كان الجدول فارغاً
-                    try:
-                        row_cnt = cur.execute("SELECT COUNT(*) FROM users").fetchone()
-                        users_count = row_cnt[0] if row_cnt else 0
-                    except Exception:
-                        users_count = 0
-
                     # دعم تسجيل الدخول بـ username أو student_id أو instructor_id
-                    # مطابقة اسم المستخدم بدون حساسية لحالة الأحرف (متوافقة مع _sync_user_session_from_db)
                     row = _fetch_user_login_row(cur, username)
                     if not row:
                         # fallback: student_id or instructor_id
@@ -995,11 +1046,7 @@ def init_auth(app):
                         db_is_supervisor = row[6]
                         db_college_quality_lead = row[7] if len(row) > 7 else 0
                         if int(db_is_active or 1) == 0:
-                            return jsonify({
-                                'status': 'error',
-                                'message': 'تم تعطيل هذا الحساب',
-                                'code': 'ACCOUNT_DISABLED'
-                            }), 403
+                            return _err("تم تعطيل هذا الحساب", "ACCOUNT_DISABLED", 403)
                         ok = verify_password(password, pw_hash)
                         if ok:
                             username_db = str(row[0] or "").strip()
@@ -1030,8 +1077,15 @@ def init_auth(app):
                 if users_count is None:
                     users_count = 0
 
-        # 2) إذا لم يكن هناك أي مستخدم في جدول users (bootstrap فقط)،
-        #    اسمح بحساب admin من ملف الإعدادات كحالة خاصة أولية.
+        # 2) bootstrap فقط إذا لم يُعثر على مستخدم — COUNT(*) مرة واحدة عند الحاجة
+        if role is None and get_connection is not None:
+            try:
+                with get_connection() as conn:
+                    row_cnt = conn.cursor().execute("SELECT COUNT(*) FROM users").fetchone()
+                    users_count = row_cnt[0] if row_cnt else 0
+            except Exception:
+                users_count = 0
+
         if role is None and users_count == 0:
             if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
                 role = "admin"
@@ -1053,15 +1107,13 @@ def init_auth(app):
 
         if role is None:
             logger.warning(f"Failed login attempt for user: {username}")
-            return jsonify({
-                'status': 'error',
-                'message': 'اسم المستخدم أو كلمة المرور غير صحيحة',
-                'code': 'INVALID_CREDENTIALS'
-            }), 401
+            return _err("اسم المستخدم أو كلمة المرور غير صحيحة", "INVALID_CREDENTIALS", 401)
 
         role = _normalize_role((role or "").strip())
         canonical_user = (username_db or username).strip()
-        session.permanent = True
+        session.clear()
+        # جلسة المتصفّح بدون Expires — تتجنّب رفض الكوكي عند انحراف ساعة Docker (~1h)
+        session.permanent = False
         session[SESSION_KEY] = True
         session[SESSION_USER] = canonical_user
         session['user_role'] = role
@@ -1082,17 +1134,15 @@ def init_auth(app):
         elif role == "head_of_department":
             session[SESSION_ACTIVE_MODE] = "head"
         session[SESSION_LOGIN_TIME] = str(os.times())
+        session['_auth_fresh'] = True
         if student_id:
             session['student_id'] = student_id
         # ربط حساب المشرف/المدرّس/رئيس القسم بسجل عضو هيئة تدريس (إن وُجد) لوضعي الأستاذ والمشرف
         if role in ("supervisor", "instructor", "head_of_department"):
             try:
-                # إذا جلبنا instructor_id من جدول users نستخدمه مباشرة
                 if 'instructor_id' in locals() and instructor_id:
                     session['instructor_id'] = int(instructor_id)
-                else:
-                    # fallback: محاولة إيجاد مدرس بنفس اسم المستخدم المعياري
-                    if get_connection is not None:
+                elif get_connection is not None:
                         with get_connection() as conn:
                             cur = conn.cursor()
                             row = cur.execute(
@@ -1108,15 +1158,45 @@ def init_auth(app):
         # تسجيل الدخول عبر Flask-Login (إن توفر) مع الحفاظ على الجلسة القديمة
         try:
             if login_user is not None and login_manager is not None:
-                login_user(User(username=canonical_user, role=role, student_id=student_id, instructor_id=session.get('instructor_id')), remember=remember)
+                # remember=True يضبط session.permanent و Expires — يفشل إذا ساعة Docker متأخرة
+                login_user(
+                    User(username=canonical_user, role=role, student_id=student_id, instructor_id=session.get('instructor_id')),
+                    remember=False,
+                )
         except Exception:
             logger.exception("failed to login_user (Flask-Login)")
-        return jsonify({
-            'status': 'ok',
-            'message': 'تم تسجيل الدخول بنجاح',
-            'user': canonical_user,
-            'role': role
-        }), 200
+        session.permanent = False
+        if wants_json:
+            return jsonify({
+                'status': 'ok',
+                'message': 'تم تسجيل الدخول بنجاح',
+                'user': canonical_user,
+                'role': role
+            }), 200
+        from flask import make_response, redirect as _redirect
+        if role in ("admin", "admin_main", "head_of_department"):
+            target = "/dashboard?logged_in=1"
+        elif role == "student" and student_id:
+            target = "/my_portal?logged_in=1"
+        elif role in ("supervisor",) or (role == "instructor" and int(is_supervisor_flag or 0) == 1):
+            target = "/supervisor_dashboard?logged_in=1"
+        elif role == "instructor":
+            target = "/my_courses?logged_in=1"
+        else:
+            target = "/?logged_in=1"
+        resp = make_response(_redirect(target))
+        secure = os.environ.get("FLASK_ENV") == "production"
+        _purge_legacy_auth_cookies(resp)
+        resp.set_cookie(
+            LOGIN_PROBE_COOKIE,
+            "1",
+            max_age=20,
+            secure=secure,
+            httponly=True,
+            samesite="Lax",
+            path="/",
+        )
+        return resp
 
     @auth_bp.route('/invite/<token>', methods=['GET'])
     def invite_page(token):
@@ -1227,7 +1307,8 @@ def init_auth(app):
             except Exception:
                 pass
         if is_authenticated:
-            _sync_user_session_from_db(user or session.get(SESSION_USER))
+            if not session.pop('_auth_fresh', False):
+                _sync_user_session_from_db(user or session.get(SESSION_USER))
             role = session.get("user_role")
             is_supervisor_val = session.get("is_supervisor", 0)
             student_id_val = session.get("student_id", student_id_val)

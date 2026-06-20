@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 from flask import Blueprint, jsonify, render_template, request, session
 
 from backend.core.auth import (
+    SESSION_ACTIVE_MODE,
     get_admin_department_scope_id,
     login_required,
     role_required,
@@ -19,6 +20,7 @@ from backend.core.auth import (
 )
 from backend.core.college_identity_schema import ensure_college_identity_schema
 from backend.core.plo_schema import ensure_plo_enhancement_schema
+from backend.database.database import fetch_table_columns, table_exists
 from backend.core.department_scope_policy import head_home_department_id, resolve_users_list_scope
 from backend.core.plo_glo import (
     DOMAIN_COLORS,
@@ -1034,6 +1036,167 @@ def api_program_profile(program_id: int):
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     return resp
+
+
+def _department_in_scope(conn, department_id: int) -> bool:
+    role = _session_role()
+    if role in ("admin", "admin_main"):
+        dep = get_admin_department_scope_id()
+        if dep is None:
+            return True
+        return int(dep) == int(department_id)
+    if role == "head_of_department":
+        active_mode = (session.get("active_mode") or session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
+        if active_mode not in ("", "head", "hod", "department_head"):
+            return False
+        hid = head_home_department_id(conn, session.get("username") or "")
+        return hid is not None and int(hid) == int(department_id)
+    if role == "student":
+        from backend.core.department_scope_policy import resolve_student_department_id
+        sid = (session.get("student_id") or "").strip()
+        sd = resolve_student_department_id(conn, sid)
+        return sd is not None and int(sd) == int(department_id)
+    return role in ("instructor", "staff", "supervisor")
+
+
+def department_profile_payload(conn, department_id: int) -> dict[str, Any] | None:
+    ensure_college_identity_schema(conn)
+    cur = conn.cursor()
+    cols = {c.lower() for c in fetch_table_columns(conn, "departments")}
+    if not cols:
+        return None
+    extra = ""
+    if "intro_ar" in cols:
+        extra = ", COALESCE(intro_ar,'') AS intro_ar, COALESCE(mission_ar,'') AS mission_ar, COALESCE(vision_ar,'') AS vision_ar"
+    row = cur.execute(
+        f"SELECT id, code, COALESCE(name_ar,'') AS name_ar{extra} FROM departments WHERE id = ? LIMIT 1",
+        (int(department_id),),
+    ).fetchone()
+    if not row:
+        return None
+    dept = _row_dict(row)
+    goals: list[dict] = []
+    if table_exists(conn, "department_goals"):
+        gr = cur.execute(
+            """
+            SELECT id, code, title_ar, COALESCE(description,'') AS description, sort_order, is_active
+            FROM department_goals WHERE department_id = ? AND COALESCE(is_active,1)=1
+            ORDER BY sort_order, code
+            """,
+            (int(department_id),),
+        ).fetchall()
+        goals = [_row_dict(g) for g in gr or []]
+    return {"department": dept, "goals": goals}
+
+
+@college_portal_bp.route("/department/profile")
+@login_required
+def department_profile_redirect():
+    """توجيه رئيس القسم إلى صفحة قسمه."""
+    role = _session_role()
+    with get_connection() as conn:
+        dep_id = None
+        if role == "head_of_department":
+            dep_id = head_home_department_id(conn, session.get("username") or "")
+        elif role in ("admin", "admin_main"):
+            dep_id = get_admin_department_scope_id()
+        if dep_id is None:
+            return jsonify({"status": "error", "message": "لم يُحدد قسم"}), 404
+    from flask import redirect, url_for
+    return redirect(url_for("college_portal.department_profile_page", department_id=int(dep_id)))
+
+
+@college_portal_bp.route("/departments/<int:department_id>/profile")
+@login_required
+def department_profile_page(department_id: int):
+    role = _session_role()
+    with get_connection() as conn:
+        if not _department_in_scope(conn, department_id) and role not in ("admin", "admin_main", "head_of_department", "instructor", "staff", "supervisor"):
+            from flask import abort
+            abort(403)
+        can_edit = False
+        if role == "head_of_department":
+            active_mode = (session.get("active_mode") or session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
+            if active_mode in ("", "head", "hod", "department_head"):
+                can_edit = _department_in_scope(conn, department_id)
+        elif role == "admin_main":
+            can_edit = True
+    return render_template(
+        "department_profile.html",
+        active_page="department_profile",
+        department_id=department_id,
+        can_edit=can_edit,
+    )
+
+
+@college_portal_bp.route("/api/departments/<int:department_id>/profile", methods=["GET", "PUT"])
+@login_required
+def api_department_profile(department_id: int):
+    def _can_edit_dept(conn) -> bool:
+        role = _session_role()
+        if role == "admin_main":
+            return True
+        if role == "head_of_department":
+            active_mode = (session.get("active_mode") or session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
+            if active_mode not in ("", "head", "hod", "department_head"):
+                return False
+            return _department_in_scope(conn, department_id)
+        return False
+
+    if request.method == "PUT":
+        with get_connection() as conn:
+            if not _can_edit_dept(conn):
+                return jsonify({"status": "error", "message": "غير مصرح بالتعديل"}), 403
+            ensure_college_identity_schema(conn)
+            data = request.get_json(force=True) or {}
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE departments SET intro_ar = ?, mission_ar = ?, vision_ar = ?
+                WHERE id = ?
+                """,
+                (
+                    (data.get("intro_ar") or "").strip(),
+                    (data.get("mission_ar") or "").strip(),
+                    (data.get("vision_ar") or "").strip(),
+                    int(department_id),
+                ),
+            )
+            goals = data.get("goals")
+            if goals is not None and isinstance(goals, list) and table_exists(conn, "department_goals"):
+                cur.execute("DELETE FROM department_goals WHERE department_id = ?", (int(department_id),))
+                for i, g in enumerate(goals):
+                    if not isinstance(g, dict):
+                        continue
+                    code = (g.get("code") or f"DG{i+1}").strip()
+                    title = (g.get("title_ar") or "").strip()
+                    if not title:
+                        continue
+                    cur.execute(
+                        """
+                        INSERT INTO department_goals (department_id, code, title_ar, description, sort_order, is_active)
+                        VALUES (?, ?, ?, ?, ?, 1)
+                        """,
+                        (
+                            int(department_id),
+                            code,
+                            title,
+                            (g.get("description") or "").strip(),
+                            int(g.get("sort_order") or i),
+                        ),
+                    )
+            conn.commit()
+        return jsonify({"status": "ok"})
+
+    with get_connection() as conn:
+        ensure_college_identity_schema(conn)
+        if not _department_in_scope(conn, department_id) and _session_role() not in ("admin", "admin_main", "head_of_department", "instructor", "staff", "supervisor"):
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        payload = department_profile_payload(conn, department_id)
+        if not payload:
+            return jsonify({"status": "error", "message": "القسم غير موجود"}), 404
+        can_edit = _can_edit_dept(conn)
+    return jsonify({"status": "ok", "can_edit": can_edit, **payload})
 
 
 @college_portal_bp.route("/export/college-strategic")

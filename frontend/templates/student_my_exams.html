@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>امتحاناتي</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal">
+    <div class="page-header d-flex justify-content-between"><div><h1 class="page-title">امتحاناتي</h1><p class="page-subtitle" id="termLine"></p></div><a href="/my_portal" class="btn btn-outline-secondary btn-sm">بوابتي</a></div>
+    <ul class="nav nav-pills mb-3" id="examTabs">
+      <li class="nav-item"><button type="button" class="nav-link active" data-f="all">الكل</button></li>
+      <li class="nav-item"><button type="button" class="nav-link" data-f="midterm">جزئية</button></li>
+      <li class="nav-item"><button type="button" class="nav-link" data-f="final">نهائية</button></li>
+    </ul>
+    <div id="loadState" class="text-muted py-3">جاري التحميل…</div>
+    <div class="table-responsive d-none" id="tblWrap"><table class="table table-sm table-striped"><thead><tr><th>المقرر</th><th>النوع</th><th>التاريخ</th><th>الوقت</th><th>القاعة</th></tr></thead><tbody id="exBody"></tbody></table></div>
+  </main>
+  <script>
+    let G=[], F='all';
+    function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;');}
+    function render(){document.getElementById('exBody').innerHTML=(F==='all'?G:G.filter(r=>r.exam_type===F)).map(r=>'<tr><td>'+esc(r.course_name)+'</td><td>'+esc(r.exam_type)+'</td><td>'+esc(r.exam_date||'—')+'</td><td>'+esc(r.exam_time||'—')+'</td><td>'+esc(r.room||'—')+'</td></tr>').join('')||'<tr><td colspan="5" class="text-muted">لا امتحانات</td></tr>';}
+    document.getElementById('examTabs').addEventListener('click',e=>{const b=e.target.closest('[data-f]');if(!b)return;F=b.getAttribute('data-f');document.querySelectorAll('#examTabs .nav-link').forEach(x=>x.classList.remove('active'));b.classList.add('active');render();});
+    (async function(){try{const r=await fetch('/schedule/student_exams',{credentials:'include'});const j=await r.json();G=j.rows||[];document.getElementById('termLine').textContent=j.term_label?'الفصل: '+j.term_label:'';document.getElementById('loadState').classList.add('d-none');document.getElementById('tblWrap').classList.remove('d-none');render();}catch(e){document.getElementById('loadState').textContent='تعذر التحميل.';}})();
+  </script>
+</body>
+</html>

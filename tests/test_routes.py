@@ -266,6 +266,11 @@ class TestStudentViewRoute:
         resp = auth_client.get("/student_view")
         assert resp.status_code in (200, 500)
 
+    def test_student_view_student_redirects(self, student_auth_client):
+        resp = student_auth_client.get("/student_view", follow_redirects=False)
+        assert resp.status_code in (302, 301)
+        assert "my_portal" in resp.headers.get("Location", "")
+
 
 class TestGradesTranscriptRoute:
     """مسار كشف الدرجات لطالب موجود في بيانات الاختبار."""

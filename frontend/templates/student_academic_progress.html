@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>تقدّمي الأكاديمي</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal">
+    <div class="page-header d-flex justify-content-between"><div><h1 class="page-title">تقدّمي الأكاديمي</h1><p class="page-subtitle">مخرجات تعلم + مسار التخرج</p></div><a href="/my_portal" class="btn btn-outline-secondary btn-sm">بوابتي</a></div>
+    <div id="loadState" class="text-muted py-3">جاري التحميل…</div>
+    <div id="mainWrap" class="d-none">
+      <div class="row g-3 mb-3"><div class="col-md-4"><div class="card"><div class="card-body text-center"><div class="fs-4 fw-bold text-info" id="gpaVal">—</div><div class="small text-muted">المعدل</div></div></div></div>
+      <div class="col-md-4"><div class="card"><div class="card-body text-center"><div class="fs-4 fw-bold text-success" id="unitsVal">—</div><div class="small text-muted">وحدات مكتسبة</div></div></div></div>
+      <div class="col-md-4"><div class="card"><div class="card-body text-center"><div class="fs-4 fw-bold" id="pathVal">—</div><div class="small text-muted">مسار التخرج</div></div></div></div></div>
+      <div id="gloWrap"></div><div id="coursesWrap"></div><div id="pathWrap" class="card d-none"><div class="card-header fw-semibold">مسار التخرج</div><div class="card-body small" id="pathBody"></div></div>
+    </div>
+  </main>
+  <script>
+    function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;');}
+    function badge(p){if(p==null)return '—';const n=Number(p);const c=n>=70?'success':n>=50?'warning text-dark':'danger';return '<span class="badge bg-'+c+'">'+n+'%</span>';}
+    (async function(){
+      try{
+        const r=await fetch('/students/academic_progress',{credentials:'include'});
+        const j=await r.json();
+        document.getElementById('loadState').classList.add('d-none');
+        document.getElementById('mainWrap').classList.remove('d-none');
+        document.getElementById('gpaVal').textContent=j.gpa!=null?j.gpa:'—';
+        document.getElementById('unitsVal').textContent=j.completed_units!=null?j.completed_units:'—';
+        const pw=j.pathway;
+        document.getElementById('pathVal').textContent=pw&&pw.completion_percent!=null?pw.completion_percent+'%':'—';
+        const glo=j.glo_summary||[];
+        document.getElementById('gloWrap').innerHTML=glo.length?'<div class="card mb-3"><div class="card-header fw-semibold">المخرجات الكلية</div><div class="card-body p-0"><table class="table table-sm mb-0"><thead><tr><th>المخرج</th><th>إتقان</th></tr></thead><tbody>'+glo.map(g=>'<tr><td>'+esc(g.glo_code)+'</td><td>'+badge(g.average_mastery_percent)+'</td></tr>').join('')+'</tbody></table></div></div>':'';
+        const courses=j.courses||[];
+        document.getElementById('coursesWrap').innerHTML=courses.map(c=>'<div class="card mb-2"><div class="card-header py-2 fw-semibold">'+esc(c.course_name)+'</div><div class="card-body p-0 small"><table class="table table-sm mb-0"><tbody>'+(c.clos||[]).map(cl=>'<tr><td>'+esc(cl.code)+'</td><td>'+badge(cl.mastery_percent)+'</td></tr>').join('')+'</tbody></table></div></div>').join('')||'<p class="text-muted">لا CLO بعد.</p>';
+        if(pw&&pw.courses){
+          document.getElementById('pathWrap').classList.remove('d-none');
+          const courses=pw.courses;
+          const done=courses.filter(c=>c.status==='completed'||c.passed).length;
+          document.getElementById('pathBody').innerHTML='<p class="mb-2">إنجاز المسار: <strong>'+(pw.completion_percent??'—')+'%</strong> ('+done+' / '+courses.length+' مقرر)</p><ul class="mb-0">'+courses.map(c=>'<li>'+esc(c.course_name||c.name||'')+' — '+(c.status||'—')+'</li>').join('')+'</ul>';
+        }
+      }catch(e){document.getElementById('loadState').textContent='تعذر التحميل.';}
+    })();
+  </script>
+</body>
+</html>

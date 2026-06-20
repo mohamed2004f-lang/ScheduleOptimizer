@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>إعلانات المقررات</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-900 theme-formal">
+    <div class="page-header d-flex justify-content-between"><div><h1 class="page-title">إعلانات المقررات</h1></div><a href="/my_portal" class="btn btn-outline-secondary btn-sm">بوابتي</a></div>
+    <div id="loadState" class="text-muted py-3">جاري التحميل…</div>
+    <div id="listWrap" class="list-group d-none"></div>
+  </main>
+  <script>
+    function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;');}
+    (async function(){
+      try{
+        const r=await fetch('/schedule/student_my_announcements',{credentials:'include'});
+        const j=await r.json();
+        const items=j.items||[];
+        document.getElementById('loadState').classList.add('d-none');
+        const w=document.getElementById('listWrap');
+        if(!items.length){w.innerHTML='<div class="alert alert-info">لا إعلانات حالياً.</div>';w.classList.remove('d-none');return;}
+        w.innerHTML=items.map(a=>'<div class="list-group-item"><div class="fw-semibold">'+esc(a.title)+'</div><div class="small text-muted">'+esc(a.course_name)+' · '+esc(a.created_at||'')+'</div><div class="small mt-1">'+esc(a.body||'')+'</div></div>').join('');
+        w.classList.remove('d-none');
+      }catch(e){document.getElementById('loadState').textContent='تعذر التحميل.';}
+    })();
+  </script>
+</body>
+</html>

@@ -21,6 +21,13 @@
       <button class="btn btn-outline-info btn-sm" onclick="PageGuide.open()">❓ دليل الاستخدام</button>
     </div>
 
+    {% if logged_in %}
+    <div class="alert alert-success alert-dismissible fade show mb-4" role="alert">
+      تم تسجيل الدخول بنجاح.
+      <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="إغلاق"></button>
+    </div>
+    {% endif %}
+
     <section class="kpi-grid">
       <div class="kpi-card">
         <div class="kpi-title">الطلبة النشطون</div>
@@ -158,6 +165,7 @@
   </main>
 
 <script>
+const DASHBOARD_USER_ROLE = {{ (user_role or '')|tojson }};
 async function fetchJSON(url){ const r=await fetch(url); const j=await r.json().catch(()=>null); return {ok:r.ok,json:j,status:r.status}; }
 function esc(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
 
@@ -277,13 +285,8 @@ function setKpiValue(id, value) {
 }
 
 async function loadDashboard(){
-  const [summaryRes, conflictsRes, pendingRes, riskRes] = await Promise.all([
-    fetchJSON('/admin/summary'),
-    fetchJSON('/results_data'),
-    fetchJSON('/enrollment/plans'),
-    fetchJSON('/students/failed_courses_report?min_failed=1'),
-  ]);
-
+  // مرحلة 1: ملخص سريع — يظهر أول KPIs دون انتظار كل التقارير
+  const summaryRes = await fetchJSON('/admin/summary');
   let recent = [];
   let summaryData = {};
   if (summaryRes.ok && summaryRes.json && summaryRes.json.data) {
@@ -296,6 +299,13 @@ async function loadDashboard(){
     setKpiValue('studentCount', '0');
     setKpiValue('conflictCount', '0');
   }
+
+  // مرحلة 2: باقي البيانات بالتوازي (لا تُبطّئ رسالة «تم تسجيل الدخول»)
+  const [conflictsRes, pendingRes, riskRes] = await Promise.all([
+    fetchJSON('/results_data'),
+    fetchJSON('/enrollment/plans'),
+    fetchJSON('/students/failed_courses_report?min_failed=1'),
+  ]);
 
   let conflicts = [];
   if (conflictsRes.ok && conflictsRes.json && conflictsRes.json.conflict_report) {
@@ -398,8 +408,7 @@ document.getElementById('btnRefreshPending')?.addEventListener('click', async ()
 async function initCourseEvalRateSettings(){
   const section = document.getElementById('courseEvalRateSection');
   if(!section) return;
-  const auth = await fetchJSON('/auth/check');
-  const role = auth.ok ? (auth.json?.role || '') : '';
+  const role = (typeof DASHBOARD_USER_ROLE !== 'undefined' ? DASHBOARD_USER_ROLE : '') || window.SO_AUTH?.role || '';
   if(role !== 'admin' && role !== 'admin_main') return;
   section.style.display = '';
   const input = document.getElementById('courseEvalRateInput');

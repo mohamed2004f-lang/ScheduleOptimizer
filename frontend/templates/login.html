@@ -3,7 +3,6 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>تسجيل الدخول - Schedule Optimizer</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -19,7 +18,13 @@
     <h1 class="auth-title">تسجيل الدخول</h1>
     <p class="auth-subtitle">نظام إدارة الجدول الدراسي — جامعة درنة</p>
 
-    <form id="loginForm">
+    {% if login_error %}
+    <div class="alert alert-danger mb-3">{{ login_error }}</div>
+    {% endif %}
+
+    <div id="loginStatus"></div>
+
+    <form id="loginForm" method="post" action="/auth/login">
       <div class="mb-3">
         <label for="username" class="form-label">اسم المستخدم أو الرقم</label>
         <input type="text" class="form-control" id="username" name="username" required autocomplete="username" placeholder="مثال: ahmed أو 20201234">
@@ -35,11 +40,9 @@
       </div>
 
       <div class="mb-3 form-check">
-        <input class="form-check-input" type="checkbox" value="1" id="rememberMe">
+        <input class="form-check-input" type="checkbox" name="remember" value="1" id="rememberMe">
         <label class="form-check-label" for="rememberMe">تذكرني</label>
       </div>
-
-      <div id="alertMessage"></div>
 
       <button type="submit" class="btn btn-primary w-100" id="loginBtn">
         <span id="loginBtnText">تسجيل الدخول</span>
@@ -55,6 +58,13 @@
   </div>
 
   <script>
+    (function () {
+      const h = window.location.hostname;
+      if (window.location.protocol === 'http:' && h !== 'localhost' && h !== '127.0.0.1') {
+        window.location.replace('https://' + window.location.host + window.location.pathname + window.location.search);
+      }
+    })();
+
     document.getElementById('togglePassword')?.addEventListener('click', function() {
       const inp = document.getElementById('password');
       if (!inp) return;
@@ -63,64 +73,16 @@
       this.textContent = show ? '🙈' : '👁';
     });
 
-    function loginErrorMessage(data, status) {
-      const code = (data && data.code) ? String(data.code) : '';
-      if (code === 'ACCOUNT_LOCKED') return 'الحساب موقوف مؤقتاً. تواصل مع الإدارة.';
-      if (code === 'PASSWORD_EXPIRED') return 'انتهت صلاحية كلمة المرور. يرجى تعيين كلمة جديدة.';
-      if (status === 429) return 'محاولات كثيرة. انتظر قليلاً ثم أعد المحاولة.';
-      return (data && data.message) ? data.message : 'فشل تسجيل الدخول. تحقق من البيانات.';
-    }
-
-    document.getElementById('loginForm').addEventListener('submit', async function(e) {
-      e.preventDefault();
-      const username = document.getElementById('username').value.trim();
-      const password = document.getElementById('password').value;
-      const alertDiv = document.getElementById('alertMessage');
+    document.getElementById('loginForm')?.addEventListener('submit', function() {
       const loginBtn = document.getElementById('loginBtn');
       const loginBtnText = document.getElementById('loginBtnText');
       const loginBtnSpinner = document.getElementById('loginBtnSpinner');
-      alertDiv.innerHTML = '';
-      loginBtn.disabled = true;
-      loginBtnText.textContent = 'جاري تسجيل الدخول...';
-      loginBtnSpinner.style.display = 'inline-block';
-      try {
-        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
-        const remember = !!document.getElementById('rememberMe')?.checked;
-        const response = await fetch('/auth/login', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(csrfToken ? {'X-CSRFToken': csrfToken} : {}),
-          },
-          body: JSON.stringify({ username, password, remember }),
-          credentials: 'include'
-        });
-        const data = await response.json().catch(() => ({}));
-        if (response.ok && data.status === 'ok') {
-          alertDiv.innerHTML = '<div class="alert alert-success">تم تسجيل الدخول بنجاح! جاري التوجيه...</div>';
-          setTimeout(() => { window.location.href = '/dashboard'; }, 800);
-        } else {
-          alertDiv.innerHTML = `<div class="alert alert-danger">${loginErrorMessage(data, response.status)}</div>`;
-          loginBtn.disabled = false;
-          loginBtnText.textContent = 'تسجيل الدخول';
-          loginBtnSpinner.style.display = 'none';
-        }
-      } catch (error) {
-        console.error('Login error:', error);
-        alertDiv.innerHTML = '<div class="alert alert-danger">حدث خطأ في الاتصال. يرجى المحاولة مرة أخرى.</div>';
-        loginBtn.disabled = false;
-        loginBtnText.textContent = 'تسجيل الدخول';
-        loginBtnSpinner.style.display = 'none';
-      }
-    });
-
-    window.addEventListener('load', async function() {
-      try {
-        const response = await fetch('/auth/check', { credentials: 'include' });
-        const data = await response.json();
-        if (data.authenticated) window.location.href = '/dashboard';
-      } catch (error) {
-        console.error('Auth check error:', error);
+      const alertBox = document.getElementById('loginStatus');
+      if (loginBtn) loginBtn.disabled = true;
+      if (loginBtnText) loginBtnText.textContent = 'جاري تسجيل الدخول...';
+      if (loginBtnSpinner) loginBtnSpinner.style.display = 'inline-block';
+      if (alertBox) {
+        alertBox.innerHTML = '<div class="alert alert-info mb-3">جاري التحقق وتسجيل الدخول...</div>';
       }
     });
   </script>

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>كشف درجاتي</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .row-uncompleted { background: #fff4e6; }
+    .sem-card { margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal">
+    <div class="page-header d-flex justify-content-between flex-wrap gap-2">
+      <div>
+        <h1 class="page-title">كشف درجاتي</h1>
+        <p class="page-subtitle">السجل الأكاديمي — عرض وتصدير</p>
+      </div>
+      <div class="d-flex gap-2">
+        <a href="/my_portal" class="btn btn-outline-secondary btn-sm">بوابتي</a>
+        <div class="dropdown">
+          <button class="btn btn-primary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">تصدير</button>
+          <ul class="dropdown-menu dropdown-menu-end">
+            <li><button type="button" class="dropdown-item" id="btnExportExcel">Excel</button></li>
+            <li><button type="button" class="dropdown-item" id="btnExportPdf">PDF</button></li>
+            <li><button type="button" class="dropdown-item" id="btnPrint">طباعة</button></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body d-flex flex-wrap gap-4 align-items-baseline">
+        <div><h6 class="text-muted small mb-1">المعدل التراكمي</h6><div id="cumulativeGPA" class="display-6 text-primary fw-bold">—</div></div>
+        <div><h6 class="text-muted small mb-1">الوحدات المنجزة</h6><div id="completedUnits" class="display-6 fw-bold">—</div></div>
+        <div id="electivesWrap" class="d-none"><h6 class="text-muted small mb-1">الاختيارية</h6><div id="electivesStatus" class="fw-bold">—</div></div>
+      </div>
+    </div>
+
+    <div id="loadState" class="text-muted py-3">جاري التحميل…</div>
+    <div id="semestersList"></div>
+    <div id="academicStatusNote" class="small text-muted mt-2"></div>
+  </main>
+  <script>
+    const STUDENT_ID = {{ (student_id or '')|tojson }};
+    const INITIAL = {{ (initial_transcript or None)|tojson }};
+
+    function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+
+    function renderTranscript(data){
+      document.getElementById('loadState').classList.add('d-none');
+      const gpa = data.cumulative_gpa ?? data.cumulative_average;
+      document.getElementById('cumulativeGPA').textContent = gpa != null ? Number(gpa).toFixed(2) : '—';
+      document.getElementById('completedUnits').textContent = data.completed_units != null ? data.completed_units : '—';
+      if (data.electives_status) {
+        document.getElementById('electivesWrap').classList.remove('d-none');
+        document.getElementById('electivesStatus').textContent = data.electives_status;
+      }
+      const transcript = data.transcript || {};
+      const semesterGPAs = data.semester_gpas || {};
+      const semesterCompletedUnits = data.semester_completed_units || {};
+      const unitsBreakdown = Array.isArray(data.completed_units_breakdown) ? data.completed_units_breakdown : [];
+      const bestByCourse = {};
+      unitsBreakdown.forEach(b => { if (b && b.course_name) bestByCourse[b.course_name] = b; });
+      let semesterNames = (Array.isArray(data.ordered_semesters) && data.ordered_semesters.length)
+        ? data.ordered_semesters.filter(s => transcript[s])
+        : Object.keys(transcript);
+      const wrap = document.getElementById('semestersList');
+      wrap.innerHTML = '';
+      if (!semesterNames.length) {
+        wrap.innerHTML = '<p class="text-muted">لا توجد درجات مسجّلة بعد.</p>';
+        return;
+      }
+      semesterNames.forEach(sem => {
+        const courses = transcript[sem] || [];
+        let semUnits = 0, semPoints = 0;
+        let rows = courses.map((c, i) => {
+          const units = Number(c.units) || 0;
+          const grade = (c.grade == null) ? null : Number(c.grade);
+          semUnits += units;
+          if (grade != null) semPoints += grade * units;
+          const bb = bestByCourse[c.course_name];
+          const uncompleted = bb && bb.passed === false;
+          return `<tr class="${uncompleted ? 'row-uncompleted' : ''}"><td>${i+1}</td><td>${esc(c.course_name)}</td><td><code>${esc(c.course_code||'—')}</code></td><td class="text-center">${units}</td><td class="text-center fw-semibold">${grade != null ? grade : '—'}</td></tr>`;
+        }).join('');
+        const gpaSem = semesterGPAs[sem] ?? (semUnits ? Math.round((semPoints/semUnits)*100)/100 : '—');
+        const card = document.createElement('div');
+        card.className = 'card sem-card';
+        card.innerHTML = `<div class="card-header d-flex justify-content-between flex-wrap gap-2"><span class="fw-semibold">${esc(sem)}</span><span class="small">معدل: <span class="badge bg-info text-dark">${gpaSem}</span> | وحدات: ${semUnits} | منجزة: ${semesterCompletedUnits[sem] ?? '—'}</span></div><div class="card-body p-0"><table class="table table-sm mb-0"><thead><tr><th>#</th><th>المقرر</th><th>الرمز</th><th class="text-center">و</th><th class="text-center">الدرجة</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+        wrap.appendChild(card);
+      });
+    }
+
+    async function loadTranscript(){
+      if (INITIAL) { renderTranscript(INITIAL); return; }
+      if (!STUDENT_ID) {
+        document.getElementById('loadState').textContent = 'تعذر تحديد الطالب.';
+        return;
+      }
+      const r = await fetch('/grades/transcript/' + encodeURIComponent(STUDENT_ID), { credentials: 'include' });
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j) {
+        document.getElementById('loadState').textContent = (j && j.message) || 'تعذر تحميل الكشف.';
+        return;
+      }
+      renderTranscript(j);
+      try {
+        const st = await fetch('/performance/status/' + encodeURIComponent(STUDENT_ID), { credentials: 'include' });
+        const sj = await st.json().catch(() => null);
+        if (st.ok && sj && sj.status_label) {
+          document.getElementById('academicStatusNote').textContent = 'ملاحظات أكاديمية: ' + sj.status_label;
+        }
+      } catch(e) {}
+    }
+
+    document.getElementById('btnExportExcel')?.addEventListener('click', () => {
+      if (STUDENT_ID) window.open('/grades/export/' + encodeURIComponent(STUDENT_ID) + '?format=excel', '_blank');
+    });
+    document.getElementById('btnExportPdf')?.addEventListener('click', () => {
+      if (STUDENT_ID) window.open('/grades/export/' + encodeURIComponent(STUDENT_ID) + '?format=pdf', '_blank');
+    });
+    document.getElementById('btnPrint')?.addEventListener('click', () => window.print());
+    loadTranscript();
+  </script>
+  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+</body>
+</html>

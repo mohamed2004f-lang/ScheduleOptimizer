@@ -1,6 +1,6 @@
 # Dockerfile لـ Schedule Optimizer
 # الإنتاج: Python 3.11. يُختبر في CI أيضاً 3.10 و 3.12 و 3.13 (انظر .github/workflows/ci.yml).
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 # تعيين معلومات الصيانة
 LABEL maintainer="Schedule Optimizer Team"

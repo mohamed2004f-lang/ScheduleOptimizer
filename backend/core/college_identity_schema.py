@@ -20,6 +20,48 @@ COLLEGE_IDENTITY_EXTRA_COLUMNS: tuple[tuple[str, str], ...] = (
     ("strategic_plan_summary_ar", "TEXT DEFAULT ''"),
 )
 
+DEPARTMENT_PROFILE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("intro_ar", "TEXT DEFAULT ''"),
+    ("mission_ar", "TEXT DEFAULT ''"),
+    ("vision_ar", "TEXT DEFAULT ''"),
+)
+
+DEPARTMENT_GOALS_SQLITE = (
+    "department_goals",
+    """
+    CREATE TABLE IF NOT EXISTS department_goals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        department_id INTEGER NOT NULL,
+        code TEXT NOT NULL,
+        title_ar TEXT NOT NULL,
+        title_en TEXT DEFAULT '',
+        description TEXT DEFAULT '',
+        parent_ig_code TEXT DEFAULT '',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        UNIQUE (department_id, code)
+    )
+    """,
+)
+
+DEPARTMENT_GOALS_PG = (
+    "department_goals",
+    """
+    CREATE TABLE IF NOT EXISTS department_goals (
+        id BIGSERIAL PRIMARY KEY,
+        department_id BIGINT NOT NULL,
+        code TEXT NOT NULL,
+        title_ar TEXT NOT NULL,
+        title_en TEXT DEFAULT '',
+        description TEXT DEFAULT '',
+        parent_ig_code TEXT DEFAULT '',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        UNIQUE (department_id, code)
+    )
+    """,
+)
+
 PROGRAM_IG_ALIGNMENT_SQLITE = (
     "program_ig_alignment",
     """
@@ -279,6 +321,27 @@ def ensure_college_identity_schema(conn) -> None:
                 cur.execute(idx)
             except Exception:
                 pass
+    dept_goals_tbl = DEPARTMENT_GOALS_PG if pg else DEPARTMENT_GOALS_SQLITE
+    try:
+        cur.execute(dept_goals_tbl[1])
+    except Exception as e:
+        logger.debug("department_goals: %s", e)
+    if pg:
+        for col, typ in DEPARTMENT_PROFILE_COLUMNS:
+            try:
+                cur.execute(f"ALTER TABLE departments ADD COLUMN IF NOT EXISTS {col} {typ}")
+            except Exception as e:
+                logger.debug("pg departments.%s: %s", col, e)
+                _pg_recover_transaction(conn)
+    else:
+        for col, typ in DEPARTMENT_PROFILE_COLUMNS:
+            _sqlite_add_column(conn, cur, "departments", col, typ)
+        try:
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_department_goals_dept ON department_goals(department_id, is_active)"
+            )
+        except Exception:
+            pass
     try:
         from backend.core.college_identity_seed import seed_college_identity_defaults
 
