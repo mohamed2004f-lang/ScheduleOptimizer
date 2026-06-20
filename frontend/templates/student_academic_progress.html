@@ -5,44 +5,124 @@
   <title>تقدّمي الأكاديمي</title>
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .path-progress { height: 10px; }
+    .course-done { color: var(--bs-success); }
+    .course-pending { color: var(--bs-secondary); }
+  </style>
 </head>
 <body>
   {% include "base_nav.html" %}
   <main class="container-main container-1100 theme-formal">
-    <div class="page-header d-flex justify-content-between"><div><h1 class="page-title">تقدّمي الأكاديمي</h1><p class="page-subtitle">مخرجات تعلم + مسار التخرج</p></div><a href="/my_portal" class="btn btn-outline-secondary btn-sm">بوابتي</a></div>
+    <div class="page-header d-flex justify-content-between flex-wrap gap-2">
+      <div>
+        <h1 class="page-title">تقدّمي الأكاديمي</h1>
+        <p class="page-subtitle" id="subLine">مخرجات تعلم + مسار التخرج</p>
+      </div>
+      <a href="/my_portal" class="btn btn-outline-secondary btn-sm">بوابتي</a>
+    </div>
     <div id="loadState" class="text-muted py-3">جاري التحميل…</div>
     <div id="mainWrap" class="d-none">
-      <div class="row g-3 mb-3"><div class="col-md-4"><div class="card"><div class="card-body text-center"><div class="fs-4 fw-bold text-info" id="gpaVal">—</div><div class="small text-muted">المعدل</div></div></div></div>
-      <div class="col-md-4"><div class="card"><div class="card-body text-center"><div class="fs-4 fw-bold text-success" id="unitsVal">—</div><div class="small text-muted">وحدات مكتسبة</div></div></div></div>
-      <div class="col-md-4"><div class="card"><div class="card-body text-center"><div class="fs-4 fw-bold" id="pathVal">—</div><div class="small text-muted">مسار التخرج</div></div></div></div></div>
-      <div id="gloWrap"></div><div id="coursesWrap"></div><div id="pathWrap" class="card d-none"><div class="card-header fw-semibold">مسار التخرج</div><div class="card-body small" id="pathBody"></div></div>
+      <div class="row g-3 mb-3">
+        <div class="col-md-4"><div class="card h-100"><div class="card-body text-center"><div class="fs-4 fw-bold text-info" id="gpaVal">—</div><div class="small text-muted">المعدل التراكمي</div></div></div></div>
+        <div class="col-md-4"><div class="card h-100"><div class="card-body text-center"><div class="fs-4 fw-bold text-success" id="unitsVal">—</div><div class="small text-muted">وحدات مكتسبة (كشف)</div></div></div></div>
+        <div class="col-md-4"><div class="card h-100"><div class="card-body text-center"><div class="fs-4 fw-bold text-primary" id="pathVal">—</div><div class="small text-muted">إنجاز خطة التخرج</div></div></div></div>
+      </div>
+      <div id="pathError" class="alert alert-warning d-none"></div>
+      <div id="pathWrap" class="card mb-3 d-none">
+        <div class="card-header fw-semibold d-flex justify-content-between flex-wrap gap-2">
+          <span>مسار التخرج</span>
+          <span class="small text-muted" id="pathMeta"></span>
+        </div>
+        <div class="card-body">
+          <div class="mb-3">
+            <div class="d-flex justify-content-between small mb-1"><span id="pathUnitsLabel">—</span><span id="pathPctLabel">—</span></div>
+            <div class="progress path-progress"><div class="progress-bar bg-primary" id="pathBar" style="width:0%"></div></div>
+          </div>
+          <div class="row g-2 mb-3" id="scopeCards"></div>
+          <details class="mb-0">
+            <summary class="fw-semibold small">تفاصيل المقررات (<span id="courseCountLabel">0</span>)</summary>
+            <div class="table-responsive mt-2"><table class="table table-sm table-hover mb-0"><thead><tr><th>الرمز</th><th>المقرر</th><th>النطاق</th><th>و</th><th>الحالة</th></tr></thead><tbody id="pathCoursesBody"></tbody></table></div>
+          </details>
+        </div>
+      </div>
+      <div id="gloWrap"></div>
+      <div id="coursesWrap"></div>
     </div>
   </main>
   <script>
-    function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;');}
-    function badge(p){if(p==null)return '—';const n=Number(p);const c=n>=70?'success':n>=50?'warning text-dark':'danger';return '<span class="badge bg-'+c+'">'+n+'%</span>';}
+    function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+    function badge(p){ if(p==null) return '—'; const n=Number(p); const c=n>=70?'success':n>=50?'warning text-dark':'danger'; return '<span class="badge bg-'+c+'">'+n+'%</span>'; }
+
+    function renderPathway(pw) {
+      if (!pw || pw.status !== 'ok') return;
+      document.getElementById('pathWrap').classList.remove('d-none');
+      const sm = pw.summary_ar || {};
+      const pct = pw.completion_percent;
+      document.getElementById('pathVal').textContent = pct != null ? pct + '%' : '—';
+      document.getElementById('pathMeta').textContent = 'الشعبة: ' + (sm.track_label || '—');
+      document.getElementById('pathUnitsLabel').textContent =
+        (sm.units_completed ?? 0) + ' / ' + (sm.units_required ?? 0) + ' وحدة في الخطة'
+        + (sm.graduation_target ? ' · هدف التخرج ' + sm.graduation_target + ' وحدة' : '');
+      const doneC = pw.courses_completed_count ?? 0;
+      const reqC = pw.courses_required_count ?? 0;
+      document.getElementById('pathPctLabel').textContent = doneC + ' / ' + reqC + ' مقرر';
+      document.getElementById('courseCountLabel').textContent = reqC;
+      const bar = document.getElementById('pathBar');
+      bar.style.width = (pct != null ? Math.min(100, pct) : 0) + '%';
+      bar.setAttribute('aria-valuenow', pct != null ? pct : 0);
+
+      const byScope = pw.by_scope || {};
+      const scopeOrder = ['college_general','pre_track','dept_common','track','elective'];
+      document.getElementById('scopeCards').innerHTML = scopeOrder.filter(k => byScope[k] && byScope[k].courses_required).map(k => {
+        const b = byScope[k];
+        const p = b.courses_required ? Math.round(100 * b.courses_completed / b.courses_required) : 0;
+        return '<div class="col-md-6 col-lg-4"><div class="border rounded p-2 h-100"><div class="small fw-semibold">'+esc(b.label||k)+'</div><div class="small text-muted">'+b.courses_completed+'/'+b.courses_required+' مقرر · '+b.completed_units+'/'+b.required_units+' و</div><div class="progress path-progress mt-1"><div class="progress-bar bg-success" style="width:'+p+'%"></div></div></div></div>';
+      }).join('');
+
+      const courses = pw.courses || [];
+      document.getElementById('pathCoursesBody').innerHTML = courses.map(c => {
+        const done = !!c.completed;
+        return '<tr class="'+(done?'table-success':'')+'"><td><code>'+esc(c.course_code||'—')+'</code></td><td>'+esc(c.title_ar||c.matched_course_name||'—')+'</td><td class="small">'+esc(c.requirement_scope_label||'')+'</td><td>'+(c.units??'—')+'</td><td class="'+(done?'course-done':'course-pending')+'">'+(done?'✓ منجز':'متبقي')+'</td></tr>';
+      }).join('');
+    }
+
     (async function(){
-      try{
-        const r=await fetch('/students/academic_progress',{credentials:'include'});
-        const j=await r.json();
+      try {
+        const r = await fetch('/students/academic_progress', { credentials: 'include' });
+        const j = await r.json();
         document.getElementById('loadState').classList.add('d-none');
-        document.getElementById('mainWrap').classList.remove('d-none');
-        document.getElementById('gpaVal').textContent=j.gpa!=null?j.gpa:'—';
-        document.getElementById('unitsVal').textContent=j.completed_units!=null?j.completed_units:'—';
-        const pw=j.pathway;
-        document.getElementById('pathVal').textContent=pw&&pw.completion_percent!=null?pw.completion_percent+'%':'—';
-        const glo=j.glo_summary||[];
-        document.getElementById('gloWrap').innerHTML=glo.length?'<div class="card mb-3"><div class="card-header fw-semibold">المخرجات الكلية</div><div class="card-body p-0"><table class="table table-sm mb-0"><thead><tr><th>المخرج</th><th>إتقان</th></tr></thead><tbody>'+glo.map(g=>'<tr><td>'+esc(g.glo_code)+'</td><td>'+badge(g.average_mastery_percent)+'</td></tr>').join('')+'</tbody></table></div></div>':'';
-        const courses=j.courses||[];
-        document.getElementById('coursesWrap').innerHTML=courses.map(c=>'<div class="card mb-2"><div class="card-header py-2 fw-semibold">'+esc(c.course_name)+'</div><div class="card-body p-0 small"><table class="table table-sm mb-0"><tbody>'+(c.clos||[]).map(cl=>'<tr><td>'+esc(cl.code)+'</td><td>'+badge(cl.mastery_percent)+'</td></tr>').join('')+'</tbody></table></div></div>').join('')||'<p class="text-muted">لا CLO بعد.</p>';
-        if(pw&&pw.courses){
-          document.getElementById('pathWrap').classList.remove('d-none');
-          const courses=pw.courses;
-          const done=courses.filter(c=>c.status==='completed'||c.passed).length;
-          document.getElementById('pathBody').innerHTML='<p class="mb-2">إنجاز المسار: <strong>'+(pw.completion_percent??'—')+'%</strong> ('+done+' / '+courses.length+' مقرر)</p><ul class="mb-0">'+courses.map(c=>'<li>'+esc(c.course_name||c.name||'')+' — '+(c.status||'—')+'</li>').join('')+'</ul>';
+        if (j.status && j.status !== 'ok' && !j.gpa) {
+          document.getElementById('loadState').classList.remove('d-none');
+          document.getElementById('loadState').textContent = j.message || 'تعذر التحميل.';
+          return;
         }
-      }catch(e){document.getElementById('loadState').textContent='تعذر التحميل.';}
+        document.getElementById('mainWrap').classList.remove('d-none');
+        document.getElementById('gpaVal').textContent = j.gpa != null ? Number(j.gpa).toFixed(2) : '—';
+        document.getElementById('unitsVal').textContent = j.completed_units != null ? j.completed_units : '—';
+        if (j.pathway_error) {
+          const el = document.getElementById('pathError');
+          el.classList.remove('d-none');
+          el.textContent = j.pathway_error;
+        } else if (j.pathway) {
+          renderPathway(j.pathway);
+        }
+        const glo = j.glo_summary || [];
+        document.getElementById('gloWrap').innerHTML = glo.length
+          ? '<div class="card mb-3"><div class="card-header fw-semibold">المخرجات الكلية (GLO)</div><div class="card-body p-0"><table class="table table-sm mb-0"><thead><tr><th>المخرج</th><th>إتقان</th></tr></thead><tbody>'
+            + glo.map(g => '<tr><td>'+esc(g.glo_code)+'</td><td>'+badge(g.average_mastery_percent)+'</td></tr>').join('')
+            + '</tbody></table></div></div>' : '';
+        const loCourses = j.courses || [];
+        document.getElementById('coursesWrap').innerHTML = loCourses.length
+          ? loCourses.map(c => '<div class="card mb-2"><div class="card-header py-2 fw-semibold">'+esc(c.course_name)+'</div><div class="card-body p-0 small"><table class="table table-sm mb-0"><tbody>'
+            + (c.clos||[]).map(cl => '<tr><td>'+esc(cl.code)+'</td><td>'+badge(cl.mastery_percent)+'</td></tr>').join('')
+            + '</tbody></table></div></div>').join('')
+          : '';
+      } catch(e) {
+        document.getElementById('loadState').textContent = 'تعذر التحميل.';
+      }
     })();
   </script>
+  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
 </body>
 </html>

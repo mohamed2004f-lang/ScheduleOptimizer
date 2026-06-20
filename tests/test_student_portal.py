@@ -78,6 +78,10 @@ class TestStudentPortalAPI:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data.get("status") == "ok"
+        if data.get("pathway"):
+            pw = data["pathway"]
+            assert "completion_percent" in pw
+            assert "courses_completed_count" in pw
 
     def test_v1_portal_summary(self, student_auth_client):
         resp = student_auth_client.get(

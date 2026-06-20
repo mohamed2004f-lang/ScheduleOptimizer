@@ -346,9 +346,11 @@ def inject_ui_context():
         "department_name_ar": "كل الأقسام",
         "department_scope_label_ar": "نطاق العرض: كل الأقسام",
         "actor_display_ar": "",
+        "nav_shell_student": False,
     }
     try:
         role_n = _normalize_role((session.get("user_role") or "").strip())
+        ctx["nav_shell_student"] = role_n == "student"
         active_mode = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower()
         uname = (session.get("user") or session.get("username") or "").strip()
         from backend.services.utilities import get_connection

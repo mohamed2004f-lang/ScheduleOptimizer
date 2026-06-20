@@ -208,6 +208,31 @@ def _load_plan_courses(cur, program_ids: list[int]) -> list[dict[str, Any]]:
     return items
 
 
+def _lookup_course_code(cur, course_name: str) -> str:
+    name = (course_name or "").strip()
+    if not name:
+        return ""
+    row = cur.execute(
+        "SELECT COALESCE(course_code, '') FROM courses WHERE course_name = ? LIMIT 1",
+        (name,),
+    ).fetchone()
+    if row:
+        code = str(_row_val(row, 0, "course_code") or "").strip()
+        if code:
+            return code
+    row = cur.execute(
+        """
+        SELECT COALESCE(code, '') FROM course_master
+        WHERE TRIM(COALESCE(title_ar, '')) = ? OR TRIM(COALESCE(code, '')) = ?
+        LIMIT 1
+        """,
+        (name, name),
+    ).fetchone()
+    if row:
+        return str(_row_val(row, 0, "code") or "").strip()
+    return ""
+
+
 def _load_passed_pool(cur, student_id: str) -> list[dict[str, Any]]:
     from backend.services.grades import _load_transcript_data
 
@@ -218,14 +243,7 @@ def _load_passed_pool(cur, student_id: str) -> list[dict[str, Any]]:
             continue
         name = (item.get("course_name") or "").strip()
         units = int(item.get("units_used") or 0)
-        code = ""
-        if name:
-            row = cur.execute(
-                "SELECT COALESCE(course_code, '') FROM courses WHERE course_name = ? LIMIT 1",
-                (name,),
-            ).fetchone()
-            if row:
-                code = str(_row_val(row, 0, "course_code") or "").strip()
+        code = _lookup_course_code(cur, name)
         pool.append(
             {
                 "course_name": name,
@@ -251,7 +269,7 @@ def _match_plan_course(pc: dict[str, Any], pool: list[dict[str, Any]]) -> dict[s
             entry["used"] = True
             return entry
         ename = (entry.get("course_name") or "").strip().lower()
-        if title and ename and title == ename:
+        if title and ename and (title == ename or title in ename or ename in title):
             entry["used"] = True
             return entry
     return None

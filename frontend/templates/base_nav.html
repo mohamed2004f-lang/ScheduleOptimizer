@@ -115,8 +115,27 @@
 </div>
 {% endif %}
 
+{% if nav_shell_student|default(false) %}
+<style id="navShellStudentCritical">
+  /* من السيرفر: منع وميض قائمة الإدارة قبل تحميل JS */
+  .nav-shell-student #navDashboardWrap,
+  .nav-shell-student #navStudentAffairsWrap,
+  .nav-shell-student #navAcademicRecordsMenuWrap,
+  .nav-shell-student #navPlanningMenuWrap,
+  .nav-shell-student #navCatalogWrap,
+  .nav-shell-student #navFacultySupervisionWrap,
+  .nav-shell-student #navAdminSettingsWrap,
+  .nav-shell-student #navQualityAccreditationWrap,
+  .nav-shell-student #navStaffCompactMoreWrap,
+  .nav-shell-student #navDensityToggleWrap { display: none !important; }
+  .nav-shell-student #navStudentPortalWrap,
+  .nav-shell-student #navStudentRegistrationsWrap,
+  .nav-shell-student #navStudentMoreWrap { display: list-item !important; }
+</style>
+{% endif %}
+
 <!-- primary navigation (Bootstrap) -->
-<nav class="app-navbar navbar navbar-expand-lg navbar-light">
+<nav class="app-navbar navbar navbar-expand-lg navbar-light{% if nav_shell_student|default(false) %} nav-shell-student{% endif %}">
   <div class="container-fluid">
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav" aria-controls="mainNav" aria-expanded="false" aria-label="تبديل التنقل">
       <span class="navbar-toggler-icon"></span>
@@ -125,7 +144,7 @@
     <div class="collapse navbar-collapse" id="mainNav">
       <ul class="navbar-nav me-auto mb-2 mb-lg-0">
         <!-- عام -->
-        <li class="nav-item">
+        <li class="nav-item" id="navDashboardWrap">
           <a class="nav-link" id="navDashboard" href="/dashboard">
             <i class="fa-solid fa-gauge-high ms-1"></i> لوحة القيادة
           </a>
@@ -415,8 +434,30 @@
     }
   }
 
-  // التحقق من حالة تسجيل الدخول عند تحميل الصفحة
-  window.addEventListener('load', async function() {
+  // التحقق من حالة تسجيل الدخول وتطبيق الشريط — DOMContentLoaded (وليس load) لتجنب وميض القائمة
+  async function runNavAuthCheck() {
+    function enforceStudentNavShell() {
+      const hideIds = [
+        'navDashboardWrap', 'navStudentAffairsWrap', 'navAcademicRecordsMenuWrap',
+        'navPlanningMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
+        'navAdminSettingsWrap', 'navQualityAccreditationWrap', 'navStaffCompactMoreWrap',
+        'navDensityToggleWrap',
+      ];
+      hideIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.style.display = 'none'; el.classList.add('d-none'); }
+      });
+      ['navStudentPortalWrap', 'navStudentRegistrationsWrap', 'navStudentMoreWrap'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.style.display = ''; el.classList.remove('d-none'); }
+      });
+      const navBar = document.querySelector('.app-navbar');
+      if (navBar) {
+        navBar.classList.add('nav-shell-student');
+        navBar.classList.remove('nav-staff-compact');
+      }
+    }
+
     try {
       const response = await fetch('/auth/check', {
         credentials: 'include',
@@ -990,55 +1031,13 @@
       }
 
       if (isStudentUi) {
-        // واجهة الطالب: كشف درجات + تقويم + جداول (عرض فقط) + تقييم المقررات
-        const hideWholeMenus = [
-          'navDashboard',
-          'navStudentAffairsWrap',
-          'navCatalogWrap',
-          'navFacultySupervisionWrap',
-          'navAdminSettingsWrap',
-        ];
-        hideWholeMenus.forEach(id => {
-          const el = document.getElementById(id);
-          if (el) el.style.display = 'none';
-        });
-        const hideAcademicRecords = [
-          'navPerformance',
-          'navElectivesReport',
-          'navRegistrationChangesReport',
-          'navFailedCoursesReport',
-          'navNotRegisteredCoursesReport',
-          'navUncompletedCoursesReport',
-          'navGradeCourseAudit',
-          'navCourseRegistrationReport',
-          'navGradeDrafts',
-          'navAnalytics',
-        ];
-        hideAcademicRecords.forEach(id => {
-          const el = document.getElementById(id);
-          if (el) el.style.display = 'none';
-        });
-        const hidePlanning = [
-          'navResults',
-          'navScheduleVersions',
-          'navExamScheduleVersions',
-          'navExamsConflicts',
-        ];
-        hidePlanning.forEach(id => {
-          const el = document.getElementById(id);
-          if (el) el.style.display = 'none';
-        });
-        // إبقاء: navTranscript, navAcademicCalendar, navScheduleForm, navExamsMidterms, navExamsFinals
-        const elTranscript = document.getElementById('navTranscript');
-        if (elTranscript) elTranscript.style.display = '';
-        ['navAcademicCalendar', 'navScheduleForm', 'navExamsMidterms', 'navExamsFinals'].forEach(id => {
-          const el = document.getElementById(id);
-          if (el) el.style.display = '';
-        });
+        // واجهة الطالب: بوابتي + تسجيلاتي + المزيد فقط (بدون قوائم الإدارة)
+        enforceStudentNavShell();
       }
 
       // ضمان الجودة والاعتماد (بعد فلاتر الأدوار — لا يُخفى بـ d-none فقط)
       let showQualityMenu = showQualityDash || showSurveyAdmin || showIloCatalog || showDeptLoDash || showCollegeProfile || showProgramsPortal || showSurveysHub || showSurveysResults;
+      if (isStudentUi) showQualityMenu = false;
       // trends + invites تستخدم نفس صلاحية نتائج الاستبيانات
       if (!showQualityMenu) {
         const amQ = (data.active_mode || '').trim().toLowerCase();
@@ -1070,6 +1069,9 @@
         skipAutoShow.add('navFacultySupervisionWrap');
         skipAutoShow.add('navAdminSettingsWrap');
         skipAutoShow.add('navStudentMoreWrap');
+        skipAutoShow.add('navAcademicRecordsMenuWrap');
+        skipAutoShow.add('navPlanningMenuWrap');
+        skipAutoShow.add('navQualityAccreditationWrap');
       }
       document.querySelectorAll('.nav-item.dropdown').forEach(dd => {
         if (skipAutoShow.has(dd.id)) return;
@@ -1078,11 +1080,13 @@
         const hasVisible = Array.from(items).some(it => it.style.display !== 'none');
         if (!hasVisible) {
           dd.style.display = 'none';
-        } else {
+        } else if (!isStudentUi || !skipAutoShow.has(dd.id)) {
           dd.style.removeProperty('display');
           dd.classList.remove('d-none');
         }
       });
+
+      if (isStudentUi) enforceStudentNavShell();
 
       // منع إعادة إظهار قوائم الأستاذ بعد الحلقة أعلاه (خلل سابق)
       if (!useInstructorMore) {
@@ -1204,6 +1208,7 @@
           });
         }
       }
+      if (isStudentUi) enforceStudentNavShell();
 
       // تفعيل الرابط الحالي (Active state) حسب المسار
       const path = (window.location.pathname || '/').toLowerCase();
@@ -1385,5 +1390,10 @@
         window.location.href = '/login';
       }
     }
-  });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', runNavAuthCheck);
+  } else {
+    runNavAuthCheck();
+  }
 </script>

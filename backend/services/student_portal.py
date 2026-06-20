@@ -488,18 +488,54 @@ def build_identity_context(conn, sid: str) -> dict[str, Any]:
     }
 
 
+def _enrich_pathway_for_student(pathway: dict[str, Any] | None) -> dict[str, Any] | None:
+    """ملخص مسار التخرج بصيغة مناسبة لواجهة الطالب."""
+    if not pathway or pathway.get("status") != "ok":
+        return pathway
+    totals = pathway.get("totals") or {}
+    courses = pathway.get("courses") or []
+    plan_required = int(totals.get("plan_required_units") or 0)
+    plan_completed = int(totals.get("plan_completed_units") or 0)
+    grad_target = int(totals.get("graduation_target") or 0)
+    courses_required = len(courses)
+    courses_completed = sum(1 for c in courses if c.get("completed"))
+    pct_units = round(100.0 * plan_completed / plan_required, 1) if plan_required else None
+    pct_courses = round(100.0 * courses_completed / courses_required, 1) if courses_required else None
+    pathway = dict(pathway)
+    pathway["completion_percent"] = pct_units
+    pathway["courses_completion_percent"] = pct_courses
+    pathway["courses_completed_count"] = courses_completed
+    pathway["courses_required_count"] = courses_required
+    pathway["summary_ar"] = {
+        "units_completed": plan_completed,
+        "units_required": plan_required,
+        "units_remaining": max(0, plan_required - plan_completed),
+        "graduation_target": grad_target,
+        "graduation_remaining": int(totals.get("graduation_remaining") or max(0, grad_target - plan_completed)),
+        "track_label": (pathway.get("track_code") or "").strip() or "بدون شعبة",
+    }
+    return pathway
+
+
 def build_academic_progress(conn, sid: str) -> dict[str, Any]:
     from backend.services.learning_outcomes import student_learning_outcomes_payload
     from backend.core.pathway_progress import compute_pathway_progress
 
     lo = student_learning_outcomes_payload(conn, sid)
     cur = conn.cursor()
-    pathway = compute_pathway_progress(cur, sid)
+    pathway_raw = compute_pathway_progress(cur, sid)
+    pathway = None
+    pathway_error = None
+    if pathway_raw.get("status") == "error":
+        pathway_error = pathway_raw.get("message") or "تعذر حساب مسار التخرج"
+    else:
+        pathway = _enrich_pathway_for_student(pathway_raw)
     tr = _load_transcript_data(sid) or {}
     return {
         "glo_summary": lo.get("glo_summary") or [],
         "courses": lo.get("courses") or [],
-        "pathway": pathway if pathway.get("status") != "error" else None,
+        "pathway": pathway,
+        "pathway_error": pathway_error,
         "gpa": tr.get("cumulative_gpa"),
         "completed_units": tr.get("completed_units"),
     }
