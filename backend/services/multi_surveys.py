@@ -486,6 +486,14 @@ def survey_respondent_role(user_role: str, active_mode: str | None = None) -> st
         if am == "supervisor":
             return "supervisor"
         return "instructor"
+    if r == "college_dean":
+        if am == "supervisor":
+            return "supervisor"
+        return "instructor"
+    if r == "academic_vice_dean":
+        if am == "supervisor":
+            return "supervisor"
+        return "instructor"
     if r == "instructor" and am == "supervisor":
         return "supervisor"
     return r

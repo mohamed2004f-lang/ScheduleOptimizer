@@ -239,7 +239,7 @@ def list_courses():
     return resp
 
 @courses_bp.route("/add", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def add_course():
     data = request.get_json(force=True)
     # حماية: مقررات الخطة (150/155) يجب إدارتها عبر college_catalog/program_courses
@@ -364,7 +364,7 @@ def add_course():
     return jsonify({"status": "ok", "message": "تم إضافة المقرر"}), 200
 
 @courses_bp.route("/update", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def update_course():
     data = request.get_json(force=True)
     old_name = (data.get("old_course_name") or "").strip()
@@ -526,7 +526,7 @@ def update_course():
     return jsonify({"status": "ok", "message": "تم تعديل بيانات المقرر"}), 200
 
 @courses_bp.route("/delete", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def delete_course():
     data = request.get_json(force=True)
     cname = data.get("course_name")
@@ -590,7 +590,7 @@ def delete_course():
 
 # المتطلبات (Prereqs) - يدعم زوج واحد أو دفعة items[]
 @courses_bp.route("/prereqs/add", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def add_prereq():
     """
     Accepts:
@@ -718,7 +718,7 @@ def add_prereq():
     }), 200
 
 @courses_bp.route("/prereqs/delete", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def delete_prereq():
     data = request.get_json(force=True)
     course = data.get("course_name")

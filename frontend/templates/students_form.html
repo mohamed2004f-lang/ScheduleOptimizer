@@ -468,7 +468,7 @@
       const role = String(j.role || '').trim().toLowerCase();
       const caps = j.capabilities || {};
       const isSupervisorOnly = role === 'supervisor' || !!caps.is_supervisor_effective;
-      STUDENTS_VIEW_ONLY = isSupervisorOnly;
+      STUDENTS_VIEW_ONLY = isSupervisorOnly || !!caps.students_data_view_only || caps.can_manage_students === false;
       if (!STUDENTS_VIEW_ONLY) return;
       const createCard = document.getElementById('studentCreateCard');
       if (createCard) createCard.style.display = 'none';

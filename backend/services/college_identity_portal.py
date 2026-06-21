@@ -79,7 +79,8 @@ def _session_role() -> str:
 
 
 def _can_edit_college() -> bool:
-    return _session_role() == "admin_main"
+    r = _session_role()
+    return r in ("admin_main", "college_dean", "academic_vice_dean", "system_admin")
 
 
 def _can_edit_program_goals() -> bool:

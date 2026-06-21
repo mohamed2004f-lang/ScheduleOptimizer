@@ -11,6 +11,7 @@ from backend.core.auth import (
     hash_password,
     verify_password,
     compute_capabilities,
+    instructor_blocked_student_portal_path,
     is_supervisor_effective_session,
     _normalize_role,
 )
@@ -117,6 +118,18 @@ class TestAuth:
         caps = compute_capabilities("staff", 0)
         assert caps.get("nav_surveys_hub") is True
 
+    def test_teaching_roles_no_admin_settings_nav(self):
+        for role in ("instructor", "supervisor", "staff"):
+            caps = compute_capabilities(role, 0)
+            assert caps.get("nav_admin_settings") is False, role
+            assert caps.get("nav_users_admin") is False, role
+        hod_ins = compute_capabilities("head_of_department", 0, "instructor")
+        assert hod_ins.get("nav_admin_settings") is False
+        hod_sup = compute_capabilities("head_of_department", 0, "supervisor")
+        assert hod_sup.get("nav_admin_settings") is False
+        hod_head = compute_capabilities("head_of_department", 0, "head")
+        assert hod_head.get("nav_admin_settings") is True
+
     def test_compute_capabilities_head_surveys_hub_modes(self):
         c_head = compute_capabilities("head_of_department", 0, "head")
         assert c_head.get("nav_surveys_hub") is True
@@ -149,6 +162,10 @@ class TestAuth:
     def test_compute_capabilities_instructor_my_courses_nav(self):
         caps = compute_capabilities("instructor", 0)
         assert caps.get("nav_my_assigned_courses") is True
+        assert caps.get("nav_instructor_portal_menu") is True
+        assert caps.get("nav_instructor_quality_hub") is True
+        assert caps.get("nav_student_affairs_menu") is False
+        assert caps.get("nav_student_hub_more") is False
         assert caps.get("nav_grade_drafts") is False
         assert caps.get("nav_student_affairs_attendance_only") is True
         assert caps.get("nav_transcript_nav") is False
@@ -176,7 +193,14 @@ class TestAuth:
         assert caps.get("nav_supervisor_dashboard") is False
         assert caps.get("nav_student_affairs_attendance_only") is True
         assert caps.get("nav_transcript_nav") is False
-        assert caps.get("nav_student_affairs_menu") is True
+        assert caps.get("nav_student_affairs_menu") is False
+
+    def test_compute_capabilities_hod_instructor_mode_student_nav_hidden(self):
+        caps = compute_capabilities("head_of_department", 0, "instructor")
+        assert caps.get("nav_instructor_portal_menu") is True
+        assert caps.get("nav_student_hub_more") is False
+        assert caps.get("nav_student_portal") is False
+        assert caps.get("nav_student_affairs_menu") is False
 
     def test_compute_capabilities_instructor_dual_supervisor_mode(self):
         caps = compute_capabilities("instructor", 1, "supervisor")
@@ -193,3 +217,19 @@ class TestAuth:
         assert is_supervisor_effective_session("head_of_department", 0, "supervisor") is True
         assert is_supervisor_effective_session("head_of_department", 0, "head") is False
         assert is_supervisor_effective_session("head_of_department", 0, "instructor") is False
+
+    def test_is_instructor_portal_effective_session(self, app):
+        from backend.core.auth import is_instructor_portal_effective_session
+
+        with app.test_request_context():
+            assert is_instructor_portal_effective_session("college_dean", "instructor", require_instructor_id=False) is True
+            assert is_instructor_portal_effective_session("college_dean", "dean", require_instructor_id=False) is False
+            assert is_instructor_portal_effective_session("academic_vice_dean", "instructor", require_instructor_id=False) is True
+            assert is_instructor_portal_effective_session("head_of_department", "instructor", require_instructor_id=False) is True
+
+    def test_instructor_blocked_student_portal_paths(self):
+        assert instructor_blocked_student_portal_path("/my_portal") is True
+        assert instructor_blocked_student_portal_path("/my_transcript") is True
+        assert instructor_blocked_student_portal_path("/academic_quality/student/progress") is True
+        assert instructor_blocked_student_portal_path("/my_courses") is False
+        assert instructor_blocked_student_portal_path("/my_schedule") is False

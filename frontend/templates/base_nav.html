@@ -1,4 +1,87 @@
 <!-- frontend/templates/base_nav.html -->
+{% set nss = nav_shell_student|default(ui_context.nav_shell_student|default(false)) if ui_context is defined else nav_shell_student|default(false) %}
+{% set nis = nav_shell_instructor|default(ui_context.nav_shell_instructor|default(false)) if ui_context is defined else nav_shell_instructor|default(false) %}
+{% set nsss = nav_shell_supervisor|default(ui_context.nav_shell_supervisor|default(false)) if ui_context is defined else nav_shell_supervisor|default(false) %}
+{% set nstaff = nav_shell_staff|default(ui_context.nav_shell_staff|default(false)) if ui_context is defined else nav_shell_staff|default(false) %}
+{% if nss %}
+<style id="navShellStudentCritical">
+  html.nav-shell-student-pending .app-navbar .navbar-nav > .nav-item:not(#navStudentPortalWrap):not(#navStudentRegistrationsWrap):not(#navStudentMoreWrap),
+  .nav-shell-student #navDashboardWrap,
+  .nav-shell-student #navStudentAffairsWrap,
+  .nav-shell-student #navAcademicRecordsMenuWrap,
+  .nav-shell-student #navPlanningMenuWrap,
+  .nav-shell-student #navCatalogWrap,
+  .nav-shell-student #navFacultySupervisionWrap,
+  .nav-shell-student #navAdminSettingsWrap,
+  .nav-shell-student #navQualityAccreditationWrap,
+  .nav-shell-student #navStaffCompactMoreWrap,
+  .nav-shell-student #navDensityToggleWrap,
+  .nav-shell-student #navMyCoursesWrap,
+  .nav-shell-student #navInstructorMoreWrap,
+  .nav-shell-student #navInstructorGradeDraftsWrap {
+    display: none !important;
+    pointer-events: none !important;
+  }
+  .nav-shell-student #navStudentPortalWrap,
+  .nav-shell-student #navStudentRegistrationsWrap,
+  .nav-shell-student #navStudentMoreWrap { display: list-item !important; }
+</style>
+<script>document.documentElement.classList.add('nav-shell-student-pending');</script>
+{% elif nis %}
+<style id="navShellInstructorCritical">
+  html.nav-shell-instructor-pending .app-navbar .navbar-nav > .nav-item:not(#navMyCoursesWrap):not(#navInstructorMoreWrap):not(#navInstructorGradeDraftsWrap),
+  .nav-shell-instructor #navDashboardWrap,
+  .nav-shell-instructor #navStudentAffairsWrap,
+  .nav-shell-instructor #navAcademicRecordsMenuWrap,
+  .nav-shell-instructor #navPlanningMenuWrap,
+  .nav-shell-instructor #navCatalogWrap,
+  .nav-shell-instructor #navFacultySupervisionWrap,
+  .nav-shell-instructor #navAdminSettingsWrap,
+  .nav-shell-instructor #navQualityAccreditationWrap,
+  .nav-shell-instructor #navStaffCompactMoreWrap,
+  .nav-shell-instructor #navDensityToggleWrap,
+  .nav-shell-instructor #navSupervisorPortalWrap,
+  .nav-shell-instructor #navHodCourseDeliveryWrap,
+  .nav-shell-instructor #navStudentPortalWrap,
+  .nav-shell-instructor #navStudentRegistrationsWrap,
+  .nav-shell-instructor #navStudentMoreWrap {
+    display: none !important;
+    pointer-events: none !important;
+  }
+  .nav-shell-instructor #navMyCoursesWrap,
+  .nav-shell-instructor #navInstructorMoreWrap,
+  .nav-shell-instructor #navInstructorGradeDraftsWrap { display: list-item !important; }
+</style>
+<script>document.documentElement.classList.add('nav-shell-instructor-pending');</script>
+{% elif nsss %}
+<style id="navShellSupervisorCritical">
+  html.nav-shell-supervisor-pending .app-navbar .navbar-nav > .nav-item:not(#navSupervisorPortalWrap):not(#navSupervisorSurveysWrap):not(#navSupervisorMoreWrap),
+  .nav-shell-supervisor #navDashboardWrap,
+  .nav-shell-supervisor #navStudentAffairsWrap,
+  .nav-shell-supervisor #navAcademicRecordsMenuWrap,
+  .nav-shell-supervisor #navPlanningMenuWrap,
+  .nav-shell-supervisor #navCatalogWrap,
+  .nav-shell-supervisor #navFacultySupervisionWrap,
+  .nav-shell-supervisor #navAdminSettingsWrap,
+  .nav-shell-supervisor #navQualityAccreditationWrap,
+  .nav-shell-supervisor #navStaffCompactMoreWrap,
+  .nav-shell-supervisor #navDensityToggleWrap,
+  .nav-shell-supervisor #navMyCoursesWrap,
+  .nav-shell-supervisor #navInstructorMoreWrap,
+  .nav-shell-supervisor #navInstructorGradeDraftsWrap,
+  .nav-shell-supervisor #navHodCourseDeliveryWrap,
+  .nav-shell-supervisor #navStudentPortalWrap,
+  .nav-shell-supervisor #navStudentRegistrationsWrap,
+  .nav-shell-supervisor #navStudentMoreWrap {
+    display: none !important;
+    pointer-events: none !important;
+  }
+  .nav-shell-supervisor #navSupervisorPortalWrap,
+  .nav-shell-supervisor #navSupervisorSurveysWrap,
+  .nav-shell-supervisor #navSupervisorMoreWrap { display: list-item !important; }
+</style>
+<script>document.documentElement.classList.add('nav-shell-supervisor-pending');</script>
+{% endif %}
 <link rel="stylesheet" href="/static/styles.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -10,6 +93,7 @@
 <link rel="stylesheet" href="/static/css/term-help.css">
 <link rel="stylesheet" href="/static/vendor/fontawesome/all.min.css">
 <meta name="csrf-token" content="{{ csrf_token() }}">
+<meta name="show-dev-hints" content="{{ '1' if show_dev_hints else '0' }}">
 <script src="/static/js/common.js?v=20260520"></script>
 <script src="/static/js/guide-catalog.js"></script>
 <script src="/static/js/page-guide.js"></script>
@@ -61,7 +145,7 @@
         <button type="button" class="btn-theme-toggle" id="themeToggleBtn" aria-label="تبديل الوضع الليلي" title="الوضع الليلي">
           <i class="fa-solid fa-moon" aria-hidden="true"></i>
         </button>
-        <button class="btn btn-logout" type="button" id="logoutBtn" onclick="handleLogout()">خروج</button>
+        <a class="btn btn-logout" id="logoutBtn" href="/logout">خروج</a>
       </div>
     </div>
   </div>
@@ -96,46 +180,41 @@
 </div>
 
 <!-- سياق قسم المسؤول: تصفية بيانات (لا يغيّر الدور الوظيفي) -->
-<div id="adminDeptScopeBanner" class="container-fluid py-2 mb-0 d-none border-bottom border-secondary border-opacity-25 bg-body-tertiary" role="region" aria-label="نطاق عمل القسم" style="border-radius:0!important;">
-  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
-    <div class="small fw-semibold text-body-secondary">
+<div id="adminDeptScopeBanner" class="container-fluid py-2 mb-0 d-none border-bottom border-secondary border-opacity-25 bg-body-tertiary" role="region" aria-label="نطاق عرض البيانات" style="border-radius:0!important;">
+  <div class="d-flex flex-wrap align-items-center gap-2">
+    <div class="small fw-semibold text-body-secondary d-flex align-items-center gap-1 flex-wrap">
       <i class="fa-solid fa-building-columns ms-1" aria-hidden="true"></i>
-      <span>نطاق عرض البيانات</span>
+      <span id="adminDeptScopeLabelText">{{ ui_context.department_scope_label_ar if ui_context else 'نطاق العرض: كل الأقسام' }}</span>
     </div>
     <div class="d-flex align-items-center gap-2 flex-wrap">
       <label for="adminDeptScopeSelect" class="small mb-0 visually-hidden">اختر القسم للتصفية</label>
-      <select id="adminDeptScopeSelect" class="form-select form-select-sm" style="min-width:15rem;" title="تصفية الكتالوج والطلاب والمقررات حسب القسم"></select>
+      <select id="adminDeptScopeSelect" class="form-select form-select-sm" style="min-width:15rem;" title="تصفية الكتالوج والطلاب والمقررات حسب القسم" aria-describedby="adminDeptScopeHint adminDeptScopeEmptyWarn"></select>
+      <button type="button" class="btn btn-sm btn-link text-secondary p-0 d-none" id="adminDeptScopeHelpBtn"
+        title="تفاصيل تقنية لمسؤول النظام"
+        data-bs-toggle="popover" data-bs-trigger="focus" data-bs-placement="bottom" data-bs-html="true"
+        aria-label="تفاصيل تقنية لنطاق القسم">
+        <i class="fa-regular fa-circle-question" aria-hidden="true"></i>
+      </button>
     </div>
-    <p class="small text-muted mb-0 mt-1 w-100">يُعرض الطلاب إن وُجد تطابق في <strong>قسم الطالب</strong> أو في <strong>برنامجه الحالي/الالتحاق</strong> ضمن هذا القسم. إن بقي القائمة فارغة شغّل ترحيل phase0 أو راجع أعمدة department_id و current_program_id في قاعدة البيانات.</p>
+    <p id="adminDeptScopeHint" class="small text-muted mb-0">تصفية العرض حسب القسم — يشمل الطلاب المسجّلين في القسم أو في برامجه الأكاديمية.</p>
   </div>
+  <div id="adminDeptScopeEmptyWarn" class="alert alert-warning py-1 px-2 mb-0 mt-2 small d-none" role="status">
+    <i class="fa-solid fa-triangle-exclamation ms-1" aria-hidden="true"></i>
+    لا توجد سجلات طلاب أو مقررات لهذا القسم. إذا كان ذلك غير متوقّع، تواصل مع مسؤول النظام.
+  </div>
+  <p id="adminDeptScopeDevHint" class="small text-muted mb-0 mt-1 d-none">
+    للمطوّر: يُعرض الطلاب عند تطابق <strong>قسم الطالب</strong> أو <strong>برنامجه الحالي/الالتحاق</strong>.
+    إن بقي النطاق فارغاً راجع ترحيل phase0 أو أعمدة <code>department_id</code> و <code>current_program_id</code>.
+  </p>
 </div>
-{% if ui_context %}
+{% if ui_context and not show_admin_dept_scope_ui %}
 <div class="container-fluid py-1 border-bottom border-secondary border-opacity-10 bg-light-subtle">
   <p class="small text-muted mb-0">{{ ui_context.department_scope_label_ar }}</p>
 </div>
 {% endif %}
 
-{% if nav_shell_student|default(false) %}
-<style id="navShellStudentCritical">
-  /* من السيرفر: منع وميض قائمة الإدارة قبل تحميل JS */
-  .nav-shell-student #navDashboardWrap,
-  .nav-shell-student #navStudentAffairsWrap,
-  .nav-shell-student #navAcademicRecordsMenuWrap,
-  .nav-shell-student #navPlanningMenuWrap,
-  .nav-shell-student #navCatalogWrap,
-  .nav-shell-student #navFacultySupervisionWrap,
-  .nav-shell-student #navAdminSettingsWrap,
-  .nav-shell-student #navQualityAccreditationWrap,
-  .nav-shell-student #navStaffCompactMoreWrap,
-  .nav-shell-student #navDensityToggleWrap { display: none !important; }
-  .nav-shell-student #navStudentPortalWrap,
-  .nav-shell-student #navStudentRegistrationsWrap,
-  .nav-shell-student #navStudentMoreWrap { display: list-item !important; }
-</style>
-{% endif %}
-
 <!-- primary navigation (Bootstrap) -->
-<nav class="app-navbar navbar navbar-expand-lg navbar-light{% if nav_shell_student|default(false) %} nav-shell-student{% endif %}">
+<nav class="app-navbar navbar navbar-expand-lg navbar-light{% if nss %} nav-shell-student{% elif nis %} nav-shell-instructor{% endif %}">
   <div class="container-fluid">
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav" aria-controls="mainNav" aria-expanded="false" aria-label="تبديل التنقل">
       <span class="navbar-toggler-icon"></span>
@@ -144,12 +223,12 @@
     <div class="collapse navbar-collapse" id="mainNav">
       <ul class="navbar-nav me-auto mb-2 mb-lg-0">
         <!-- عام -->
-        <li class="nav-item" id="navDashboardWrap">
+        <li class="nav-item" id="navDashboardWrap" style="display:{% if nss or nis %}none{% elif nstaff %}list-item{% else %}none{% endif %};">
           <a class="nav-link" id="navDashboard" href="/dashboard">
             <i class="fa-solid fa-gauge-high ms-1"></i> لوحة القيادة
           </a>
         </li>
-        <li class="nav-item" id="navMyCoursesWrap" style="display:none;">
+        <li class="nav-item" id="navMyCoursesWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
           <a class="nav-link" id="navMyCourses" href="/my_courses">
             <i class="fa-solid fa-chalkboard-user ms-1"></i> مقرراتي
           </a>
@@ -158,6 +237,25 @@
           <a class="nav-link" id="navSupervisorPortal" href="/supervisor_dashboard" title="لوحة الإشراف الأكاديمي">
             <i class="fa-solid fa-user-tie ms-1"></i> الإشراف
           </a>
+        </li>
+        <li class="nav-item" id="navSupervisorSurveysWrap" style="display:none;">
+          <a class="nav-link" id="navSupervisorSurveys" href="/academic_quality/supervisor/quality-hub" title="استبيانات المشرف">
+            <i class="fa-solid fa-pen-to-square ms-1"></i> استبياناتي
+            <span class="badge rounded-pill bg-warning text-dark ms-1 d-none" id="navSupervisorSurveysBadge">0</span>
+          </a>
+        </li>
+        <li class="nav-item dropdown" id="navSupervisorMoreWrap" style="display:none;">
+          <a class="nav-link dropdown-toggle" href="#" id="supervisorMoreMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="fa-solid fa-ellipsis ms-1"></i> المزيد
+          </a>
+          <ul class="dropdown-menu" aria-labelledby="supervisorMoreMenu">
+            <li><a class="dropdown-item" id="navSupQualityReport" href="/supervisor_quality_report_page">تقرير الإرشاد (كمي)</a></li>
+            <li><a class="dropdown-item" id="navSupTranscript" href="/transcript_page">كشف درجات طالب</a></li>
+            <li><a class="dropdown-item" id="navSupPerformance" href="/performance_report">تقرير الأداء</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" id="navSupSummaryPdf" href="/supervisors/summary.pdf" target="_blank">PDF ملخص الفصل</a></li>
+            <li><a class="dropdown-item" id="navSupSurveysFull" href="/academic_quality/surveys">صفحة التعبئة الكاملة</a></li>
+          </ul>
         </li>
         <li class="nav-item" id="navInstructorGradeDraftsWrap" style="display:none;">
           <a class="nav-link" id="navInstructorGradeDrafts" href="/grade_drafts">
@@ -170,7 +268,7 @@
             <span class="badge rounded-pill bg-danger ms-1 d-none" id="navHodCourseDeliveryBadge">0</span>
           </a>
         </li>
-        <li class="nav-item dropdown" id="navInstructorMoreWrap" style="display:none;">
+        <li class="nav-item dropdown" id="navInstructorMoreWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
           <a class="nav-link dropdown-toggle" href="#" id="instructorMoreMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-ellipsis ms-1"></i> المزيد
           </a>
@@ -186,22 +284,22 @@
             <li><a class="dropdown-item" id="navInsFinals" href="/exams/finals">امتحانات نهائية</a></li>
             <li><a class="dropdown-item" id="navInsAttendance" href="/attendance_export">الحضور والغياب</a></li>
             <li><hr class="dropdown-divider"></li>
-            <li><a class="dropdown-item" id="navInsSurveys" href="/academic_quality/surveys">الاستبيانات</a></li>
+            <li><a class="dropdown-item" id="navInsQualityHub" href="/academic_quality/instructor/quality-hub">ضمان الجودة</a></li>
             <li><a class="dropdown-item" id="navInsIloCatalog" href="/ilo_catalog_page">كتالوج المخرجات</a></li>
             <li><a class="dropdown-item" id="navInsStudentLo" href="/academic_quality/ilo/student/learning-outcomes" style="display:none;">مخرجاتي التعليمية</a></li>
           </ul>
         </li>
-        <li class="nav-item" id="navStudentPortalWrap" style="display:none;">
+        <li class="nav-item" id="navStudentPortalWrap" style="display:{% if nss %}list-item{% else %}none{% endif %};">
           <a class="nav-link" id="navStudentPortal" href="/my_portal">
             <i class="fa-solid fa-house-user ms-1"></i> بوابتي
           </a>
         </li>
-        <li class="nav-item" id="navStudentRegistrationsWrap" style="display:none;">
+        <li class="nav-item" id="navStudentRegistrationsWrap" style="display:{% if nss %}list-item{% else %}none{% endif %};">
           <a class="nav-link" id="navStudentRegistrations" href="/my_registrations">
             <i class="fa-solid fa-clipboard-list ms-1"></i> تسجيلاتي
           </a>
         </li>
-        <li class="nav-item dropdown" id="navStudentMoreWrap" style="display:none;">
+        <li class="nav-item dropdown" id="navStudentMoreWrap" style="display:{% if nss %}list-item{% else %}none{% endif %};">
           <a class="nav-link dropdown-toggle" href="#" id="studentMoreMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-ellipsis ms-1"></i> المزيد
           </a>
@@ -229,7 +327,7 @@
         </li>
 
         <!-- شؤون الطلبة -->
-        <li class="nav-item dropdown" id="navStudentAffairsWrap" data-nav-tier="primary">
+        <li class="nav-item dropdown" id="navStudentAffairsWrap" data-nav-tier="primary" style="display:{% if nss or nis %}none{% elif nstaff %}list-item{% else %}none{% endif %};">
           <a class="nav-link dropdown-toggle" href="#" id="studentAffairsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-user-graduate ms-1"></i> شؤون الطلبة
           </a>
@@ -245,7 +343,7 @@
         </li>
 
         <!-- السجل الأكاديمي والتقارير -->
-        <li class="nav-item dropdown" id="navAcademicRecordsMenuWrap" data-nav-tier="secondary">
+        <li class="nav-item dropdown" id="navAcademicRecordsMenuWrap" data-nav-tier="secondary" style="display:none;">
           <a class="nav-link dropdown-toggle" href="#" id="academicRecordsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-regular fa-file-lines ms-1"></i> السجل الأكاديمي
           </a>
@@ -267,7 +365,7 @@
         </li>
 
         <!-- التخطيط والجدولة -->
-        <li class="nav-item dropdown" id="navPlanningMenuWrap" data-nav-tier="primary">
+        <li class="nav-item dropdown" id="navPlanningMenuWrap" data-nav-tier="primary" style="display:{% if nss or nis %}none{% elif nstaff %}list-item{% else %}none{% endif %};">
           <a class="nav-link dropdown-toggle" href="#" id="planningMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-calendar-check ms-1"></i> التخطيط والجدولة
           </a>
@@ -293,7 +391,7 @@
         </li>
 
         <!-- المقررات الدراسية ومتطلباتها -->
-        <li class="nav-item dropdown" id="navCatalogWrap" data-nav-tier="secondary">
+        <li class="nav-item dropdown" id="navCatalogWrap" data-nav-tier="secondary" style="display:none;">
           <a class="nav-link dropdown-toggle" href="#" id="catalogMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-book ms-1"></i> المقررات الدراسية ومتطلباتها
           </a>
@@ -307,7 +405,7 @@
         </li>
 
         <!-- الأساتذة والإشراف -->
-        <li class="nav-item dropdown" id="navFacultySupervisionWrap" data-nav-tier="secondary">
+        <li class="nav-item dropdown" id="navFacultySupervisionWrap" data-nav-tier="secondary" style="display:none;">
           <a class="nav-link dropdown-toggle" href="#" id="facultySupervisionMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-user-tie ms-1"></i> الأساتذة والإشراف
           </a>
@@ -345,7 +443,7 @@
             <li><a class="dropdown-item" id="navDepartmentLoDashboard" href="/academic_quality/ilo/department/dashboard" style="display:none;">لوحة مخرجات القسم</a></li>
           </ul>
         </li>
-        <li class="nav-item dropdown" id="navAdminSettingsWrap" data-nav-tier="secondary">
+        <li class="nav-item dropdown" id="navAdminSettingsWrap" data-nav-tier="secondary" style="display:none;">
           <a class="nav-link dropdown-toggle" href="#" id="adminSettingsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-gear ms-1"></i> الإدارة والإعدادات
           </a>
@@ -412,36 +510,45 @@
 </script>
 
 <script>
-  // دالة تسجيل الخروج
-  async function handleLogout() {
-    try {
-      const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
-      const response = await fetch('/auth/logout', {
-        method: 'POST',
-        credentials: 'include',
-        headers: csrfToken ? { 'X-CSRFToken': csrfToken } : {}
-      });
-      
-      if (response.ok) {
-        window.location.href = '/login';
-      } else {
-        alert('حدث خطأ أثناء تسجيل الخروج');
-      }
-    } catch (error) {
-      console.error('Logout error:', error);
-      // حتى لو فشل الطلب، توجيه المستخدم لصفحة تسجيل الدخول
-      window.location.href = '/login';
-    }
+  // دالة تسجيل الخروج — تنقل كامل إلى GET /logout (يمسح الجلسة + cookies)
+  function handleLogout() {
+    const btn = document.getElementById('logoutBtn');
+    if (btn) btn.disabled = true;
+    window.location.assign('/logout');
   }
+  window.handleLogout = handleLogout;
+  (function bindLogoutButton() {
+    function attach() {
+      const logoutBtn = document.getElementById('logoutBtn');
+      if (!logoutBtn || logoutBtn.dataset.logoutBound === '1') return;
+      logoutBtn.dataset.logoutBound = '1';
+      logoutBtn.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        handleLogout();
+      });
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', attach);
+    } else {
+      attach();
+    }
+  })();
 
   // التحقق من حالة تسجيل الدخول وتطبيق الشريط — DOMContentLoaded (وليس load) لتجنب وميض القائمة
   async function runNavAuthCheck() {
+    function hideStudentNavShell() {
+      ['navStudentPortalWrap', 'navStudentRegistrationsWrap', 'navStudentMoreWrap'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.style.display = 'none'; el.classList.add('d-none'); }
+      });
+    }
+
     function enforceStudentNavShell() {
       const hideIds = [
         'navDashboardWrap', 'navStudentAffairsWrap', 'navAcademicRecordsMenuWrap',
         'navPlanningMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
         'navAdminSettingsWrap', 'navQualityAccreditationWrap', 'navStaffCompactMoreWrap',
-        'navDensityToggleWrap',
+        'navDensityToggleWrap', 'navMyCoursesWrap', 'navInstructorMoreWrap', 'navInstructorGradeDraftsWrap',
       ];
       hideIds.forEach(id => {
         const el = document.getElementById(id);
@@ -454,7 +561,55 @@
       const navBar = document.querySelector('.app-navbar');
       if (navBar) {
         navBar.classList.add('nav-shell-student');
-        navBar.classList.remove('nav-staff-compact');
+        navBar.classList.remove('nav-shell-instructor', 'nav-staff-compact');
+      }
+    }
+
+    function enforceInstructorNavShell() {
+      hideStudentNavShell();
+      const hideIds = [
+        'navDashboardWrap', 'navStudentAffairsWrap', 'navAcademicRecordsMenuWrap',
+        'navPlanningMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
+        'navAdminSettingsWrap', 'navQualityAccreditationWrap', 'navStaffCompactMoreWrap',
+        'navDensityToggleWrap', 'navSupervisorPortalWrap', 'navSupervisorSurveysWrap', 'navSupervisorMoreWrap',
+        'navHodCourseDeliveryWrap',
+      ];
+      hideIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.style.display = 'none'; el.classList.add('d-none'); }
+      });
+      ['navMyCoursesWrap', 'navInstructorMoreWrap', 'navInstructorGradeDraftsWrap'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.style.display = ''; el.classList.remove('d-none'); }
+      });
+      const navBar = document.querySelector('.app-navbar');
+      if (navBar) {
+        navBar.classList.add('nav-shell-instructor');
+        navBar.classList.remove('nav-shell-student', 'nav-shell-supervisor', 'nav-staff-compact');
+      }
+    }
+
+    function enforceSupervisorNavShell() {
+      hideStudentNavShell();
+      const hideIds = [
+        'navDashboardWrap', 'navStudentAffairsWrap', 'navAcademicRecordsMenuWrap',
+        'navPlanningMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
+        'navAdminSettingsWrap', 'navQualityAccreditationWrap', 'navStaffCompactMoreWrap',
+        'navDensityToggleWrap', 'navMyCoursesWrap', 'navInstructorMoreWrap', 'navInstructorGradeDraftsWrap',
+        'navHodCourseDeliveryWrap',
+      ];
+      hideIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.style.display = 'none'; el.classList.add('d-none'); }
+      });
+      ['navSupervisorPortalWrap', 'navSupervisorSurveysWrap', 'navSupervisorMoreWrap'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.style.display = ''; el.classList.remove('d-none'); }
+      });
+      const navBar = document.querySelector('.app-navbar');
+      if (navBar) {
+        navBar.classList.add('nav-shell-supervisor');
+        navBar.classList.remove('nav-shell-student', 'nav-shell-instructor', 'nav-staff-compact');
       }
     }
 
@@ -475,6 +630,31 @@
       }
       const role = String(data.role || '').trim();
       const caps = data.capabilities;
+      const isDeanNav = role === 'college_dean';
+      const isViceDeanNav = role === 'academic_vice_dean';
+      const isCollegeLeadNav = isDeanNav || isViceDeanNav;
+      const ACAD_STAFF_ROLES = ['admin', 'admin_main', 'system_admin', 'college_dean', 'academic_vice_dean', 'head_of_department'];
+      function isLeadershipOpsMode() {
+        if (isDeanNav) return activeModeNav === 'dean' || activeModeNav === '';
+        if (isViceDeanNav) return activeModeNav === 'vice_dean' || activeModeNav === 'dean' || activeModeNav === '';
+        return false;
+      }
+      function isInstructorPortalMode() {
+        return activeModeNav === 'instructor' && (
+          role === 'instructor' || role === 'head_of_department' || isCollegeLeadNav
+        );
+      }
+      function isSupervisorPortalModeNav() {
+        return activeModeNav === 'supervisor' && (
+          role === 'supervisor' || role === 'instructor' || role === 'head_of_department' || isCollegeLeadNav
+        );
+      }
+      function defaultActiveModeForRole() {
+        if (role === 'head_of_department') return 'head';
+        if (isDeanNav) return 'dean';
+        if (isViceDeanNav) return 'vice_dean';
+        return 'instructor';
+      }
       window.SO_AUTH = data;
       window.SO_CAPS = caps || null;
 
@@ -501,7 +681,7 @@
       const dualInstructorSupervisor = role === 'instructor' && Number(data.is_supervisor || 0) === 1;
       const activeModeNav = (data.active_mode != null && data.active_mode !== '')
         ? String(data.active_mode).toLowerCase()
-        : (role === 'head_of_department' ? 'head' : 'instructor');
+        : defaultActiveModeForRole();
       const inInstructorPortal = !dualInstructorSupervisor || activeModeNav !== 'supervisor';
       const inSupervisorPortal = role === 'supervisor' || (dualInstructorSupervisor && activeModeNav === 'supervisor');
       let isSupervisor = inSupervisorPortal;
@@ -535,14 +715,14 @@
         isSupervisor = inSupervisorPortal || !!(caps && caps.is_supervisor_effective);
         canDeptScope = !!caps.can_switch_department_scope;
       } else {
-        navUsers = (role === 'admin' || role === 'admin_main');
+        navUsers = (role === 'admin' || role === 'admin_main' || role === 'system_admin' || role === 'college_dean');
         navCollegeCatalog = navUsers;
         navSup = navUsers;
         navRules = navUsers;
-        showCourseReg = ['admin', 'admin_main', 'head_of_department'].includes(role || '');
+        showCourseReg = ACAD_STAFF_ROLES.includes(role || '');
         showScheduleVersions = showCourseReg;
         showExamArch = showCourseReg;
-        showGradeDrafts = ['admin', 'admin_main', 'head_of_department'].includes(role || '');
+        showGradeDrafts = ACAD_STAFF_ROLES.includes(role || '');
         showClosureReports = showCourseReg;
         showFacultyScorecards = showCourseReg || role === 'instructor';
         showFacultyDossier = showCourseReg;
@@ -556,9 +736,9 @@
         showStudentEvals = role === 'student';
         showStudentLo = role === 'student';
         showStudentRegs = role === 'student';
-        showSurveysHub = ['student', 'instructor', 'supervisor', 'staff', 'head_of_department'].includes(role || '');
-        showSurveysResults = ['admin', 'admin_main', 'head_of_department'].includes(role || '');
-        canDeptScope = (role === 'admin' || role === 'admin_main');
+        showSurveysHub = ['student', 'instructor', 'supervisor', 'staff', 'head_of_department', 'college_dean', 'academic_vice_dean'].includes(role || '');
+        showSurveysResults = ACAD_STAFF_ROLES.includes(role || '');
+        canDeptScope = (role === 'admin' || role === 'admin_main' || role === 'system_admin' || isLeadershipOpsMode());
       }
       const showMyCourses = (caps && caps.v >= 1)
         ? !!caps.nav_my_assigned_courses
@@ -566,12 +746,38 @@
       const showSupervisorPortal = (caps && caps.v >= 1)
         ? !!caps.nav_supervisor_dashboard
         : inSupervisorPortal;
+      const showSupervisorPortalMenu = (caps && caps.v >= 1)
+        ? !!caps.nav_supervisor_portal_menu
+        : inSupervisorPortal;
+      const instructorSlimNav = !!showMyCourses && inInstructorPortal && (
+        role === 'instructor' ||
+        (role === 'head_of_department' && activeModeNav === 'instructor') ||
+        (isCollegeLeadNav && activeModeNav === 'instructor')
+      );
+      const showInstructorPortalMenu = (caps && caps.v >= 1)
+        ? !!caps.nav_instructor_portal_menu
+        : instructorSlimNav;
+      const useInstructorMore = showInstructorPortalMenu && instructorSlimNav;
+      const inTeachingPortalNav = (caps && caps.v >= 1)
+        ? (!!caps.is_instructor_or_supervisor_nav
+          || (role === 'staff' && !caps.nav_staff_operations_menu))
+        : (useInstructorMore
+          || isInstructorPortalMode()
+          || isSupervisorPortalModeNav()
+          || role === 'supervisor'
+          || (role === 'instructor' && !isCollegeLeadNav && role !== 'head_of_department')
+          || (role === 'staff'));
       let showStudentAffairsMenu = role !== 'student';
       if (caps && caps.v >= 1) showStudentAffairsMenu = !!caps.nav_student_affairs_menu;
+      if (useInstructorMore) showStudentAffairsMenu = false;
       const wrapMy = document.getElementById('navMyCoursesWrap');
       if (wrapMy) wrapMy.style.display = showMyCourses ? '' : 'none';
       const wrapSupPortal = document.getElementById('navSupervisorPortalWrap');
       if (wrapSupPortal) wrapSupPortal.style.display = showSupervisorPortal ? '' : 'none';
+      const wrapSupSurveys = document.getElementById('navSupervisorSurveysWrap');
+      const wrapSupMore = document.getElementById('navSupervisorMoreWrap');
+      if (wrapSupSurveys) wrapSupSurveys.style.display = showSupervisorPortalMenu ? '' : 'none';
+      if (wrapSupMore) wrapSupMore.style.display = showSupervisorPortalMenu ? '' : 'none';
       const wrapStudentAffairs = document.getElementById('navStudentAffairsWrap');
       if (wrapStudentAffairs) wrapStudentAffairs.style.display = showStudentAffairsMenu ? '' : 'none';
       let showStudentPortal = false, showStudentHubMore = false;
@@ -584,10 +790,18 @@
         showStudentHubMore = isStudentUi;
         showStudentRegs = isStudentUi;
       }
+      if (useInstructorMore || showInstructorPortalMenu) {
+        showStudentPortal = false;
+        showStudentHubMore = false;
+        showStudentRegs = false;
+      }
       const wrapStudentPortal = document.getElementById('navStudentPortalWrap');
       if (wrapStudentPortal) wrapStudentPortal.style.display = showStudentPortal ? '' : 'none';
       const wrapStudentMore = document.getElementById('navStudentMoreWrap');
-      if (wrapStudentMore) wrapStudentMore.style.display = showStudentHubMore ? '' : 'none';
+      if (wrapStudentMore) {
+        wrapStudentMore.style.display = showStudentHubMore ? '' : 'none';
+        if (!showStudentHubMore) wrapStudentMore.classList.add('d-none');
+      }
       const wrapEvals = document.getElementById('navStudentEvaluationsWrap');
       if (wrapEvals) wrapEvals.style.display = 'none';
       const wrapStudentLo = document.getElementById('navStudentLearningOutcomesWrap');
@@ -603,7 +817,38 @@
         const elHeadPolicy = document.getElementById('navDepartmentPolicyHead');
         if (elHeadPolicy) elHeadPolicy.style.display = (role === 'head_of_department') ? '' : 'none';
         const elMainPolicy = document.getElementById('navDepartmentPolicyApprovals');
-        if (elMainPolicy) elMainPolicy.style.display = (role === 'admin_main') ? '' : 'none';
+        if (elMainPolicy) elMainPolicy.style.display = (role === 'admin_main' || role === 'college_dean' || role === 'system_admin') ? '' : 'none';
+      }
+      {
+        const adminSettingsSubItems = navUsers || navRules || navCollegeCatalog || navSup;
+        const showAdminSettingsMenu = !inTeachingPortalNav && (
+          (caps && caps.v >= 1)
+            ? (!!caps.nav_admin_settings && adminSettingsSubItems)
+            : (adminSettingsSubItems && (
+                role === 'admin' || role === 'admin_main' || role === 'system_admin'
+                || (role === 'college_dean' && isLeadershipOpsMode())
+                || (role === 'head_of_department' && (
+                  activeModeNav === 'head' || activeModeNav === 'hod'
+                  || activeModeNav === 'department_head' || activeModeNav === ''
+                ))
+              ))
+        );
+        const wrapAdminSettings = document.getElementById('navAdminSettingsWrap');
+        if (wrapAdminSettings) {
+          if (!showAdminSettingsMenu) {
+            wrapAdminSettings.style.display = 'none';
+          } else if (!useInstructorMore && !isStudentUi && !inTeachingPortalNav) {
+            wrapAdminSettings.style.removeProperty('display');
+            wrapAdminSettings.classList.remove('d-none');
+          }
+        }
+        const elProjectStatus = document.getElementById('navProjectStatus');
+        if (elProjectStatus) {
+          const showProjectStatus = showAdminSettingsMenu && (
+            role === 'admin_main' || role === 'admin' || role === 'system_admin' || role === 'college_dean'
+          );
+          elProjectStatus.style.display = showProjectStatus ? '' : 'none';
+        }
       }
       if (!navSup) {
         const elSup = document.getElementById('navSupervision');
@@ -725,6 +970,12 @@
           'navQualityAccreditationWrap',
           'navAdminSettingsWrap',
         ];
+        if (useInstructorMore) {
+          hideIds.push(
+            'navStudentAffairsWrap', 'navPlanningMenuWrap', 'navAcademicRecordsMenuWrap',
+            'navStudentPortalWrap', 'navStudentRegistrationsWrap', 'navStudentMoreWrap',
+          );
+        }
         if (!showSupervisorPortal) {
           hideIds.push('navFacultySupervisionWrap');
         }
@@ -744,19 +995,15 @@
         }
       }
 
-      const instructorSlimNav = !!showMyCourses && inInstructorPortal && (
-        role === 'instructor' ||
-        (role === 'head_of_department' && activeModeNav === 'instructor')
-      );
       const isStaffOpsNav = (caps && caps.v >= 1)
         ? !!caps.nav_staff_operations_menu
-        : (['admin', 'admin_main'].includes(role || '')
-          || (role === 'head_of_department' && (activeModeNav === 'head' || activeModeNav === 'hod' || activeModeNav === 'department_head' || activeModeNav === '')));
-      const showInstructorPortalMenu = (caps && caps.v >= 1)
-        ? !!caps.nav_instructor_portal_menu
-        : instructorSlimNav;
+        : (['admin', 'admin_main', 'system_admin'].includes(role || '')
+          || (role === 'head_of_department' && (activeModeNav === 'head' || activeModeNav === 'hod' || activeModeNav === 'department_head' || activeModeNav === ''))
+          || isLeadershipOpsMode());
       const supervisorSlimNav = !!showSupervisorPortal && inSupervisorPortal && (
         dualInstructorSupervisor || role === 'supervisor'
+        || (role === 'head_of_department' && activeModeNav === 'supervisor')
+        || (isCollegeLeadNav && activeModeNav === 'supervisor')
       );
       let showTranscriptNav = true;
       let saAttendanceOnly = false;
@@ -764,13 +1011,12 @@
         showTranscriptNav = !!caps.nav_transcript_nav;
         saAttendanceOnly = !!caps.nav_student_affairs_attendance_only;
       } else {
-        showTranscriptNav = ['admin', 'admin_main', 'head_of_department'].includes(role || '')
+        showTranscriptNav = ACAD_STAFF_ROLES.includes(role || '')
           || role === 'student' || inSupervisorPortal;
         saAttendanceOnly = (role === 'instructor' && inInstructorPortal && dualInstructorSupervisor);
       }
       const wrapInsGd = document.getElementById('navInstructorGradeDraftsWrap');
       const wrapInsMore = document.getElementById('navInstructorMoreWrap');
-      const useInstructorMore = showInstructorPortalMenu && instructorSlimNav;
       if (wrapInsGd) wrapInsGd.style.display = useInstructorMore ? '' : 'none';
       if (wrapInsMore) wrapInsMore.style.display = useInstructorMore ? '' : 'none';
       const elInsSup = document.getElementById('navInsSupervisor');
@@ -782,13 +1028,16 @@
         });
         const elInsIlo = document.getElementById('navInsIloCatalog');
         if (elInsIlo) elInsIlo.style.display = (showIloCatalog || role === 'instructor') ? '' : 'none';
+        enforceInstructorNavShell();
+      } else if (!isStudentUi) {
+        hideStudentNavShell();
       }
       if (supervisorSlimNav) {
         [
           'navMyCoursesWrap', 'navInstructorGradeDraftsWrap', 'navInstructorMoreWrap',
           'navPlanningMenuWrap', 'navStudentAffairsWrap', 'navCatalogWrap',
-          'navFacultySupervisionWrap', 'navAdminSettingsWrap', 'navDashboard',
-          'navHodCourseDeliveryWrap',
+          'navFacultySupervisionWrap', 'navAdminSettingsWrap', 'navDashboardWrap',
+          'navHodCourseDeliveryWrap', 'navQualityAccreditationWrap',
         ].forEach(id => {
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
@@ -797,6 +1046,27 @@
         if (wrapQuality) {
           wrapQuality.classList.add('d-none');
           wrapQuality.style.display = 'none';
+        }
+        if (showSupervisorPortalMenu) {
+          ['navSupervisorPortalWrap', 'navSupervisorSurveysWrap', 'navSupervisorMoreWrap'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) { el.style.removeProperty('display'); el.classList.remove('d-none'); }
+          });
+          enforceSupervisorNavShell();
+          fetch('/supervisors/quality_context', { credentials: 'include', cache: 'no-store' })
+            .then(r => r.json().catch(() => ({})))
+            .then(j => {
+              const pc = Number((j.surveys && j.surveys.pending_count) || 0);
+              const badge = document.getElementById('navSupervisorSurveysBadge');
+              if (!badge) return;
+              if (pc > 0) {
+                badge.textContent = String(pc);
+                badge.classList.remove('d-none');
+              } else {
+                badge.classList.add('d-none');
+              }
+            })
+            .catch(() => {});
         }
         const wrapAR = document.getElementById('navAcademicRecordsMenuWrap');
         if (wrapAR) wrapAR.style.removeProperty('display');
@@ -824,7 +1094,7 @@
         });
         [
           'navInsMySchedule', 'navInsMyExams', 'navInsMyAttendance',
-          'navInsSupervisor', 'navInsSurveys', 'navInsIloCatalog', 'navInsStudentLo',
+          'navInsSupervisor', 'navInsQualityHub', 'navInsIloCatalog', 'navInsStudentLo',
         ].forEach(id => {
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
@@ -836,6 +1106,13 @@
         if (!showSupQuality) {
           const elSupQFac = document.getElementById('navSupervisorQualityReport');
           if (elSupQFac) elSupQFac.style.display = 'none';
+        }
+        const showDashboardNav = (caps && caps.v >= 1)
+          ? !!caps.nav_dashboard
+          : (role !== 'student' && !inSupervisorPortal && !useInstructorMore);
+        const wrapDashboard = document.getElementById('navDashboardWrap');
+        if (wrapDashboard && !supervisorSlimNav) {
+          wrapDashboard.style.display = showDashboardNav ? '' : 'none';
         }
       }
 
@@ -863,21 +1140,40 @@
       const canSwitchMode =
         !!(caps && caps.can_switch_active_mode)
         || dualInstructorSupervisor
-        || role === 'head_of_department';
+        || role === 'head_of_department'
+        || isCollegeLeadNav;
       const switchProfile = (caps && caps.v >= 1)
         ? (caps.active_mode_switch_profile || '')
-        : (role === 'head_of_department' ? 'triple' : (dualInstructorSupervisor ? 'dual' : ''));
+        : (role === 'head_of_department' ? 'triple'
+          : (isDeanNav ? 'dean_triple'
+            : (isViceDeanNav ? 'vice_dean_triple' : (dualInstructorSupervisor ? 'dual' : ''))));
       if (modeBanner) {
         if (canSwitchMode) {
           modeBanner.classList.remove('d-none');
           const am = (data.active_mode != null && data.active_mode !== '')
             ? data.active_mode.toString().toLowerCase()
-            : (role === 'head_of_department' ? 'head' : 'instructor');
+            : defaultActiveModeForRole();
           const labelEl = document.getElementById('activeModeBannerLabel');
           if (labelEl) {
+            const useDeanTriple = switchProfile === 'dean_triple' || switchProfile === 'dean_dual' || isDeanNav;
+            const useViceDeanTriple = switchProfile === 'vice_dean_triple' || switchProfile === 'vice_dean_dual' || isViceDeanNav;
             if (switchProfile === 'triple' || role === 'head_of_department') {
               if (am === 'head' || am === 'hod' || am === 'department_head' || am === '')
                 labelEl.textContent = 'الوضع الحالي: رئيس القسم (صلاحيات القسم والإدارة التشغيلية)';
+              else if (am === 'supervisor')
+                labelEl.textContent = 'الوضع الحالي: مشرف أكاديمي';
+              else
+                labelEl.textContent = 'الوضع الحالي: أستاذ (مقرراتي وتدريس)';
+            } else if (useViceDeanTriple) {
+              if (am === 'vice_dean' || am === 'dean' || am === '')
+                labelEl.textContent = 'الوضع الحالي: وكيل الكلية للشؤون العلمية (صلاحيات القيادة الأكاديمية)';
+              else if (am === 'supervisor')
+                labelEl.textContent = 'الوضع الحالي: مشرف أكاديمي';
+              else
+                labelEl.textContent = 'الوضع الحالي: أستاذ (مقرراتي وتدريس)';
+            } else if (useDeanTriple) {
+              if (am === 'dean' || am === '')
+                labelEl.textContent = 'الوضع الحالي: عميد الكلية (صلاحيات القيادة على مستوى الكلية)';
               else if (am === 'supervisor')
                 labelEl.textContent = 'الوضع الحالي: مشرف أكاديمي';
               else
@@ -890,7 +1186,9 @@
           }
           const dualG = document.getElementById('activeModeDualGroup');
           const tripleG = document.getElementById('activeModeTripleGroup');
-          const useTriple = switchProfile === 'triple' || role === 'head_of_department';
+          const useTriple = switchProfile === 'triple' || switchProfile === 'dean_triple' || switchProfile === 'dean_dual'
+            || switchProfile === 'vice_dean_triple' || switchProfile === 'vice_dean_dual'
+            || role === 'head_of_department' || isCollegeLeadNav;
           if (dualG) dualG.style.display = useTriple ? 'none' : '';
           if (tripleG) tripleG.style.display = useTriple ? '' : 'none';
           /** بعد تبديل الوضع: صفحة افتراضية مناسبة للدور الجديد (تجنّب بقاء صفحة رئيس القسم معلّقة مثل /dashboard) */
@@ -898,6 +1196,18 @@
             var m = String(newMode || '').toLowerCase().trim();
             if (userRole === 'head_of_department' || profile === 'triple') {
               if (m === 'head' || m === 'hod' || m === 'department_head') return '/dashboard';
+              if (m === 'supervisor') return '/supervisor_dashboard';
+              if (m === 'instructor') return '/my_courses';
+              return '/';
+            }
+            if (userRole === 'college_dean' || profile === 'dean_triple' || profile === 'dean_dual') {
+              if (m === 'dean' || m === '') return '/dashboard';
+              if (m === 'supervisor') return '/supervisor_dashboard';
+              if (m === 'instructor') return '/my_courses';
+              return '/';
+            }
+            if (userRole === 'academic_vice_dean' || profile === 'vice_dean_triple' || profile === 'vice_dean_dual') {
+              if (m === 'vice_dean' || m === 'dean' || m === '') return '/dashboard';
               if (m === 'supervisor') return '/supervisor_dashboard';
               if (m === 'instructor') return '/my_courses';
               return '/';
@@ -941,9 +1251,22 @@
             const bHodIns = document.getElementById('btnHodInstructor');
             const bHodSup = document.getElementById('btnHodSupervisor');
             const headActive = am === 'head' || am === 'hod' || am === 'department_head' || am === '';
+            const deanActive = am === 'dean' || am === '';
+            const viceDeanActive = am === 'vice_dean' || am === 'dean' || am === '';
             if (bHead) {
-              bHead.classList.toggle('active', headActive);
-              bHead.onclick = function() { switchMode('head'); };
+              if (role === 'college_dean') {
+                bHead.textContent = 'عميد الكلية';
+                bHead.classList.toggle('active', deanActive);
+                bHead.onclick = function() { switchMode('dean'); };
+              } else if (role === 'academic_vice_dean') {
+                bHead.textContent = 'وكيل الشؤون العلمية';
+                bHead.classList.toggle('active', viceDeanActive);
+                bHead.onclick = function() { switchMode('vice_dean'); };
+              } else {
+                bHead.textContent = 'رئيس القسم';
+                bHead.classList.toggle('active', headActive);
+                bHead.onclick = function() { switchMode('head'); };
+              }
             }
             if (bHodIns) {
               bHodIns.classList.toggle('active', am === 'instructor');
@@ -972,7 +1295,65 @@
 
       const deptBanner = document.getElementById('adminDeptScopeBanner');
       const deptSel = document.getElementById('adminDeptScopeSelect');
-      if (deptBanner && deptSel && canDeptScope && !isStudentUi) {
+      const showDevHints = document.querySelector('meta[name="show-dev-hints"]')?.getAttribute('content') === '1';
+      const deptDevHint = document.getElementById('adminDeptScopeDevHint');
+      const deptHelpBtn = document.getElementById('adminDeptScopeHelpBtn');
+      const deptEmptyWarn = document.getElementById('adminDeptScopeEmptyWarn');
+      const deptScopeLabel = document.getElementById('adminDeptScopeLabelText');
+
+      function updateAdminDeptScopeLabel(scopeObj, selectEl) {
+        if (!deptScopeLabel) return;
+        if (scopeObj && scopeObj.id != null) {
+          const code = (scopeObj.code || '').trim();
+          const name = (scopeObj.name_ar || '').trim() || 'قسم';
+          deptScopeLabel.textContent = 'نطاق العرض: ' + (code ? (code + ' — ') : '') + name;
+        } else if (selectEl && selectEl.selectedIndex >= 0 && !selectEl.value) {
+          deptScopeLabel.textContent = 'نطاق العرض: كل الأقسام';
+        } else {
+          deptScopeLabel.textContent = 'نطاق العرض: كل الأقسام';
+        }
+      }
+
+      async function refreshAdminDeptScopeEmptyWarn() {
+        if (!deptEmptyWarn || !deptSel || !deptSel.value) {
+          if (deptEmptyWarn) deptEmptyWarn.classList.add('d-none');
+          return;
+        }
+        try {
+          const stResp = await fetch('/auth/admin_department_scope/status', {
+            credentials: 'include',
+            cache: 'no-store',
+            headers: { 'Accept': 'application/json' }
+          });
+          const stJson = await stResp.json().catch(function () { return null; });
+          if (stResp.ok && stJson && stJson.scoped && stJson.is_empty) {
+            deptEmptyWarn.classList.remove('d-none');
+          } else {
+            deptEmptyWarn.classList.add('d-none');
+          }
+        } catch (_e) {
+          deptEmptyWarn.classList.add('d-none');
+        }
+      }
+
+      if (showDevHints) {
+        if (deptDevHint) deptDevHint.classList.remove('d-none');
+        if (deptHelpBtn) {
+          deptHelpBtn.classList.remove('d-none');
+          const popHtml = (
+            'يُعرض الطلاب عند تطابق <strong>قسم الطالب</strong> أو '
+            + '<strong>برنامجه الحالي/الالتحاق</strong> ضمن القسم.<br>'
+            + 'إن بقي النطاق فارغاً: شغّل <code>scripts/phase0_apply.py</code> '
+            + 'أو راجع <code>department_id</code> و <code>current_program_id</code>.'
+          );
+          deptHelpBtn.setAttribute('data-bs-content', popHtml);
+          if (window.bootstrap && typeof window.bootstrap.Popover !== 'undefined') {
+            try { bootstrap.Popover.getOrCreateInstance(deptHelpBtn); } catch (_e) { /* ignore */ }
+          }
+        }
+      }
+
+      if (deptBanner && deptSel && canDeptScope && !isStudentUi && !isInstructorPortalMode() && !isSupervisorPortalModeNav()) {
         deptBanner.classList.remove('d-none');
         try {
           const dResp = await fetch('/college/catalog/departments', {
@@ -995,6 +1376,8 @@
           });
           const curScope = data.admin_department_scope;
           deptSel.value = (curScope && curScope.id != null) ? String(curScope.id) : '';
+          updateAdminDeptScopeLabel(curScope, deptSel);
+          await refreshAdminDeptScopeEmptyWarn();
           let lastDeptSelect = deptSel.value;
           deptSel.addEventListener('change', async function () {
             const v = deptSel.value;
@@ -1038,12 +1421,16 @@
       // ضمان الجودة والاعتماد (بعد فلاتر الأدوار — لا يُخفى بـ d-none فقط)
       let showQualityMenu = showQualityDash || showSurveyAdmin || showIloCatalog || showDeptLoDash || showCollegeProfile || showProgramsPortal || showSurveysHub || showSurveysResults;
       if (isStudentUi) showQualityMenu = false;
+      if (useInstructorMore) showQualityMenu = false;
+      if (showSupervisorPortalMenu && inSupervisorPortal) showQualityMenu = false;
       // trends + invites تستخدم نفس صلاحية نتائج الاستبيانات
       if (!showQualityMenu) {
         const amQ = (data.active_mode || '').trim().toLowerCase();
         const hodHeadMode = role === 'head_of_department'
           && (amQ === '' || amQ === 'head' || amQ === 'hod' || amQ === 'department_head');
-        showQualityMenu = (role === 'admin' || role === 'admin_main') || hodHeadMode;
+        const deanLeadMode = isDeanNav && (amQ === '' || amQ === 'dean');
+        const viceDeanLeadMode = isViceDeanNav && (amQ === '' || amQ === 'vice_dean' || amQ === 'dean');
+        showQualityMenu = (role === 'admin' || role === 'admin_main' || role === 'system_admin' || isLeadershipOpsMode()) || hodHeadMode || deanLeadMode || viceDeanLeadMode;
       }
       const wrapQuality = document.getElementById('navQualityAccreditationWrap');
       if (wrapQuality) {
@@ -1062,6 +1449,9 @@
         'navInstructorMoreWrap',
         'navAdminSettingsWrap',
         'navStaffCompactMoreWrap',
+        'navStudentPortalWrap',
+        'navStudentRegistrationsWrap',
+        'navStudentMoreWrap',
       ]);
       if (isStudentUi) {
         skipAutoShow.add('navStudentAffairsWrap');
@@ -1073,6 +1463,18 @@
         skipAutoShow.add('navPlanningMenuWrap');
         skipAutoShow.add('navQualityAccreditationWrap');
       }
+      if (useInstructorMore) {
+        skipAutoShow.add('navStudentAffairsWrap');
+        skipAutoShow.add('navAcademicRecordsMenuWrap');
+        skipAutoShow.add('navPlanningMenuWrap');
+        skipAutoShow.add('navCatalogWrap');
+        skipAutoShow.add('navFacultySupervisionWrap');
+        skipAutoShow.add('navAdminSettingsWrap');
+        skipAutoShow.add('navQualityAccreditationWrap');
+        skipAutoShow.add('navStudentMoreWrap');
+        skipAutoShow.add('navStudentPortalWrap');
+        skipAutoShow.add('navStudentRegistrationsWrap');
+      }
       document.querySelectorAll('.nav-item.dropdown').forEach(dd => {
         if (skipAutoShow.has(dd.id)) return;
         const items = dd.querySelectorAll('.dropdown-item');
@@ -1080,13 +1482,15 @@
         const hasVisible = Array.from(items).some(it => it.style.display !== 'none');
         if (!hasVisible) {
           dd.style.display = 'none';
-        } else if (!isStudentUi || !skipAutoShow.has(dd.id)) {
+        } else if (!skipAutoShow.has(dd.id) && !isStudentUi && !useInstructorMore) {
           dd.style.removeProperty('display');
           dd.classList.remove('d-none');
         }
       });
 
       if (isStudentUi) enforceStudentNavShell();
+      else if (useInstructorMore) enforceInstructorNavShell();
+      else if (showSupervisorPortalMenu && inSupervisorPortal) enforceSupervisorNavShell();
 
       // منع إعادة إظهار قوائم الأستاذ بعد الحلقة أعلاه (خلل سابق)
       if (!useInstructorMore) {
@@ -1110,6 +1514,21 @@
         { wrapId: 'navQualityAccreditationWrap', header: 'ضمان الجودة والاعتماد' },
         { wrapId: 'navAdminSettingsWrap', header: 'الإدارة والإعدادات' },
       ];
+      function staffWrapHasVisibleItems(wrapId) {
+        const wrap = document.getElementById(wrapId);
+        if (!wrap) return false;
+        return Array.from(wrap.querySelectorAll('.dropdown-item')).some(it => it.style.display !== 'none');
+      }
+      function revealStaffSecondaryWrap(wrapId) {
+        if (!staffWrapHasVisibleItems(wrapId)) return;
+        const wrap = document.getElementById(wrapId);
+        if (!wrap || useInstructorMore || isStudentUi) return;
+        wrap.style.removeProperty('display');
+        wrap.classList.remove('d-none');
+      }
+      if (isStaffOpsNav && !useInstructorMore && !isStudentUi) {
+        STAFF_NAV_SECONDARY.forEach(({ wrapId }) => revealStaffSecondaryWrap(wrapId));
+      }
       function navItemVisible(el) {
         if (!el) return false;
         if (el.classList.contains('d-none')) return false;
@@ -1164,6 +1583,7 @@
         if (!navBar || !moreWrap) return;
         const compact = mode === 'compact';
         if (compact) {
+          STAFF_NAV_SECONDARY.forEach(({ wrapId }) => revealStaffSecondaryWrap(wrapId));
           const hasItems = buildStaffCompactMoreMenu();
           if (hasItems) {
             navBar.classList.add('nav-staff-compact');
@@ -1173,6 +1593,8 @@
             navBar.classList.remove('nav-staff-compact');
             moreWrap.classList.add('d-none');
             moreWrap.style.display = 'none';
+            STAFF_NAV_SECONDARY.forEach(({ wrapId }) => revealStaffSecondaryWrap(wrapId));
+            updateNavDensityToggleUi('expanded');
           }
         } else {
           navBar.classList.remove('nav-staff-compact');
@@ -1209,12 +1631,19 @@
         }
       }
       if (isStudentUi) enforceStudentNavShell();
+      else if (useInstructorMore) enforceInstructorNavShell();
+      else if (showSupervisorPortalMenu && inSupervisorPortal) enforceSupervisorNavShell();
+      else hideStudentNavShell();
 
       // تفعيل الرابط الحالي (Active state) حسب المسار
       const path = (window.location.pathname || '/').toLowerCase();
       const map = [
         ['/my_courses','navMyCourses'],
         ['/supervisor_dashboard','navSupervisorPortal'],
+        ['/academic_quality/supervisor/quality-hub','navSupervisorSurveys'],
+        ['/academic_quality/surveys','navSupervisorSurveys'],
+        ['/supervisor_quality_report_page','navSupQualityReport'],
+        ['/supervisors/summary.pdf','navSupSummaryPdf'],
         ['/my_schedule','navInsMySchedule'],
         ['/my_exams','navInsMyExams'],
         ['/my_attendance','navInsMyAttendance'],
@@ -1259,6 +1688,8 @@
         ['/academic_quality/accreditation/map?scope=prog','navAccreditationMapProg'],
         ['/academic_quality/survey_admin','navEvaluationSurveyAdmin'],
         ['/academic_quality/surveys','navSurveysHub'],
+        ['/academic_quality/instructor/quality-hub','navInsQualityHub'],
+        ['/academic_quality/surveys/fill','navInsQualityHub'],
         ['/academic_quality/surveys/results','navSurveysResults'],
         ['/academic_quality/surveys/trends','navSurveysTrends'],
         ['/academic_quality/surveys/invites','navSurveysInvites'],
@@ -1355,6 +1786,7 @@
       };
       if (typeof window.cleanupUiBlockers === 'function') window.cleanupUiBlockers();
       if (typeof window.initNavDropdowns === 'function') window.initNavDropdowns();
+      document.documentElement.classList.remove('nav-shell-student-pending', 'nav-shell-instructor-pending');
 
       // Fallback: قوائم منسدلة يدوياً فقط إذا Bootstrap غير متاح
       try {

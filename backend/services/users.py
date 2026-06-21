@@ -70,23 +70,25 @@ def _admin_storage_meta(*, verbose_storage_hint: bool = False) -> dict:
 def _user_dict_from_row(row) -> Optional[dict]:
     if not row:
         return None
-    dept_out = None
-    if len(row) > 6:
-        dr = row["department_id"] if hasattr(row, "keys") and "department_id" in row.keys() else row[6]
-        if dr not in (None, ""):
-            try:
-                dept_out = int(dr)
-            except (TypeError, ValueError):
-                dept_out = None
-    return {
-        "username": row[0],
-        "role": row[1],
-        "student_id": row[2],
-        "instructor_id": row[3],
-        "is_supervisor": int(row[4] or 0),
-        "is_active": int(row[5] or 1),
-        "department_id": dept_out,
-    }
+    return users_repo._user_row_to_dict(row)
+
+
+def _actor_is_privileged_users_admin() -> bool:
+    from backend.core.user_admin_policy import can_manage_users_session
+
+    r = _normalize_role(_current_role())
+    if r == "head_of_department":
+        return False
+    return can_manage_users_session(session)
+
+
+def _hide_system_accounts() -> bool:
+    from backend.core.user_admin_policy import is_system_admin_session
+
+    return not is_system_admin_session(session)
+
+
+_ELEVATED_ASSIGN_ROLES = frozenset({"system_admin", "admin_main", "college_dean"})
 
 
 def _now_iso() -> str:
@@ -158,7 +160,7 @@ def _unique_username(conn, base: str) -> str:
 
 
 @users_bp.route("/suggest_linked", methods=["GET"])
-@role_required("admin_main", "head_of_department")
+@role_required("admin_main", "system_admin", "college_dean", "head_of_department")
 def suggest_linked():
     entity_type = (request.args.get("type") or "").strip().lower()
     entity_id = (request.args.get("id") or "").strip()
@@ -204,7 +206,7 @@ def suggest_linked():
 
 
 @users_bp.route("/invite", methods=["POST"])
-@role_required("admin_main")
+@role_required("admin_main", "system_admin", "college_dean")
 def invite_user():
     """
     إنشاء/تحديث مستخدم مرتبط وإرسال رابط تعيين كلمة المرور بالبريد.
@@ -373,7 +375,7 @@ def invite_user():
 
 
 @users_bp.route("/invite/resend", methods=["POST"])
-@role_required("admin_main")
+@role_required("admin_main", "system_admin", "college_dean")
 def resend_invite():
     """
     إعادة إرسال دعوة تعيين كلمة المرور لمستخدم موجود.
@@ -454,7 +456,7 @@ def resend_invite():
 
 
 @users_bp.route("/invite/status", methods=["GET"])
-@role_required("admin_main", "head_of_department")
+@role_required("admin_main", "system_admin", "college_dean", "head_of_department")
 def invite_status():
     """
     عرض حالة الدعوات لمستخدم:
@@ -516,7 +518,7 @@ def invite_status():
 
 
 @users_bp.route("/invite/revoke", methods=["POST"])
-@role_required("admin_main")
+@role_required("admin_main", "system_admin", "college_dean")
 def invite_revoke():
     """
     إلغاء جميع الدعوات غير المستخدمة لمستخدم (وضع used_at=now).
@@ -549,7 +551,7 @@ def invite_revoke():
 
 
 @users_bp.route("/invite/cleanup", methods=["POST"])
-@role_required("admin_main")
+@role_required("admin_main", "system_admin", "college_dean")
 def invite_cleanup():
     """
     تنظيف الدعوات القديمة لتقليل تراكم البيانات.
@@ -651,6 +653,10 @@ def _normalize_user_links_for_role(
             return sid, iid, sup, "instructor_id مطلوب لدور عضو هيئة التدريس/رئيس القسم"
         return None, iid, sup, None
 
+    if role_n in ("college_dean", "academic_vice_dean"):
+        # ربط اختياري بعضو هيئة التدريس — مطلوب لتفعيل وضع الأستاذ/المشرف من الشريط
+        return None, iid, sup, None
+
     if role_n == "admin_main":
         return None, None, 0, None
 
@@ -678,26 +684,37 @@ def _log_user_audit(conn, *, action: str, actor: str, username: str, before: Opt
 
 
 @users_bp.route("/list")
-@role_required("admin_main", "head_of_department")
+@role_required("system_admin", "college_dean", "admin_main", "head_of_department")
 def list_users():
     """
     إرجاع قائمة المستخدمين (بدون كلمات المرور الصريحة).
     """
+    from backend.core.user_admin_policy import assignable_roles_for_actor, filter_users_for_actor
+
     actor = _current_actor()
+    exclude_sys = _hide_system_accounts()
     with get_connection() as conn:
         mode, dep_id = resolve_users_list_scope(conn, actor)
         if mode == "none":
-            items = users_repo.fetch_all_users_ordered(conn)
+            items = users_repo.fetch_all_users_ordered(
+                conn, exclude_system_accounts=exclude_sys
+            )
         elif mode == "empty":
             items = []
         else:
             items = users_repo.fetch_all_users_ordered(
-                conn, scope_mode="department", scope_department_id=dep_id
+                conn,
+                scope_mode="department",
+                scope_department_id=dep_id,
+                exclude_system_accounts=exclude_sys,
             )
+    items = filter_users_for_actor(session, items)
     role_norm = _normalize_role(_current_role())
     _diag_env = (os.environ.get("SHOW_USER_LIST_STORAGE_DIAGNOSTICS") or "").strip().lower()
-    verbose_meta = _diag_env in ("1", "true", "yes") and role_norm == "admin_main"
+    verbose_meta = _diag_env in ("1", "true", "yes") and role_norm in ("admin_main", "system_admin")
     meta = _admin_storage_meta(verbose_storage_hint=verbose_meta)
+    meta["assignable_roles"] = assignable_roles_for_actor(session)
+    meta["can_view_system_accounts"] = not exclude_sys
     logger.info(
         "users/list count=%s backend=%s storage=%s verbose_meta=%s",
         len(items),
@@ -713,20 +730,27 @@ def list_users():
 
 
 @users_bp.route("/validation_report", methods=["GET"])
-@role_required("admin_main", "head_of_department")
+@role_required("system_admin", "college_dean", "admin_main", "head_of_department")
 def users_validation_report():
     """تقرير فحص سلامة ربط المستخدمين حسب الدور (للتحقق اليدوي)."""
+    from backend.core.user_admin_policy import filter_users_for_actor
+
     actor = _current_actor()
+    exclude_sys = _hide_system_accounts()
     with get_connection() as conn:
         mode, dep_id = resolve_users_list_scope(conn, actor)
         if mode == "none":
-            rows = users_repo.fetch_all_users_ordered(conn)
+            rows = users_repo.fetch_all_users_ordered(conn, exclude_system_accounts=exclude_sys)
         elif mode == "empty":
             rows = []
         else:
             rows = users_repo.fetch_all_users_ordered(
-                conn, scope_mode="department", scope_department_id=dep_id
+                conn,
+                scope_mode="department",
+                scope_department_id=dep_id,
+                exclude_system_accounts=exclude_sys,
             )
+    rows = filter_users_for_actor(session, rows)
 
     issues = []
     for u in rows:
@@ -784,7 +808,7 @@ def users_validation_report():
 
 
 @users_bp.route("/add", methods=["POST"])
-@role_required("admin_main", "head_of_department")
+@role_required("system_admin", "college_dean", "admin_main", "head_of_department")
 def add_user():
     """
     إضافة/تحديث مستخدم.
@@ -795,6 +819,12 @@ def add_user():
       - student_id (اختياري؛ مهم لدور student)
       - instructor_id (اختياري؛ مهم لدور supervisor)
     """
+    from backend.core.user_admin_policy import (
+        assert_actor_may_modify_user,
+        is_system_admin_session,
+        role_assignments_forbidden_for_actor,
+    )
+
     data = request.get_json(force=True) or {}
     username = _clean_username(data.get("username") or "")
     password = data.get("password")
@@ -803,6 +833,8 @@ def add_user():
     instructor_id_raw = data.get("instructor_id")
     is_supervisor = int(bool(data.get("is_supervisor", False)))
     is_active = int(bool(data.get("is_active", True)))
+    role_profile_code = (data.get("role_profile_code") or "").strip() or None
+    display_title_ar = (data.get("display_title_ar") or "").strip() or None
     instructor_id = None
     if instructor_id_raw not in (None, ""):
         try:
@@ -815,7 +847,14 @@ def add_user():
             jsonify({"status": "error", "message": "username مطلوب"}),
             400,
         )
-    if role not in ("admin_main", "head_of_department", "instructor", "student", "staff"):
+    assign_err = role_assignments_forbidden_for_actor(session, role)
+    if assign_err:
+        return jsonify({"status": "error", "message": assign_err}), 403
+    if role in _ELEVATED_ASSIGN_ROLES and not is_system_admin_session(session):
+        return jsonify({"status": "error", "message": "لا يمكن تعيين هذا الدور إلا بواسطة مسؤول النظام"}), 403
+    if role not in (
+        "admin_main", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "student", "staff"
+    ):
         return (
             jsonify({"status": "error", "message": "role غير صحيح"}),
             400,
@@ -827,10 +866,11 @@ def add_user():
         return jsonify({"status": "error", "message": links_err}), 400
 
     actor_role = _normalize_role(_current_role())
-    if actor_role != "admin_main":
-        # رئيس القسم: لا يعيّن admin_main ولا يغيّر تفعيل الحساب ولا يغيّر كلمات المرور ولا ينشئ مستخدمين جدد
-        if role == "admin_main":
-            return jsonify({"status": "error", "message": "غير مسموح تعيين دور admin_main"}), 403
+    privileged = _actor_is_privileged_users_admin()
+    if not privileged:
+        # رئيس القسم: لا يعيّن أدوار إدارية ولا يغيّر تفعيل الحساب ولا كلمات المرور ولا ينشئ مستخدمين جدد
+        if role in _ELEVATED_ASSIGN_ROLES or role == "admin_main":
+            return jsonify({"status": "error", "message": "غير مسموح تعيين هذا الدور"}), 403
         if not is_active:
             return jsonify({"status": "error", "message": "غير مسموح تعطيل/تفعيل الحساب لرئيس القسم"}), 403
         if password:
@@ -858,11 +898,14 @@ def add_user():
                         return jsonify({"status": "error", "message": f"رقم عضو هيئة التدريس غير موجود: {instructor_id}"}), 400
             existing = users_repo.fetch_user_row_by_username_ci(conn, username)
             before_user = _user_dict_from_row(existing) if existing else None
+            ok_mod, mod_err = assert_actor_may_modify_user(session, before_user, new_role=role)
+            if not ok_mod:
+                return jsonify({"status": "error", "message": mod_err or "غير مسموح"}), 403
             if existing:
                 old_role = _normalize_role(existing[1] if existing else "")
-                if old_role == "admin_main" and actor_role != "admin_main":
-                    return jsonify({"status": "error", "message": "لا يمكن تعديل مستخدم admin_main إلا بواسطة admin_main"}), 403
-                if actor_role != "admin_main":
+                if old_role in _ELEVATED_ASSIGN_ROLES and not is_system_admin_session(session):
+                    return jsonify({"status": "error", "message": "لا يمكن تعديل هذا المستخدم إلا بواسطة مسؤول النظام"}), 403
+                if not privileged:
                     # رئيس القسم يسمح فقط بتعديل الأساتذة: is_supervisor و instructor_id و role= instructor/ head_of_department
                     if old_role not in ("instructor", "head_of_department"):
                         return jsonify({"status": "error", "message": "رئيس القسم يمكنه تعديل الأساتذة فقط"}), 403
@@ -889,29 +932,58 @@ def add_user():
                 student_id=student_id,
                 instructor_id=instructor_id,
             )
+            role_profile_id = None
+            if role_profile_code:
+                from backend.core.permissions import get_profile_by_code
+
+                prof = get_profile_by_code(role_profile_code)
+                if prof and prof.get("code") != "system_admin":
+                    try:
+                        row_p = cur.execute(
+                            "SELECT id FROM role_profiles WHERE code = ?",
+                            (prof["code"],),
+                        ).fetchone()
+                        if row_p:
+                            role_profile_id = int(row_p[0] if not hasattr(row_p, "keys") else row_p["id"])
+                            if not display_title_ar:
+                                display_title_ar = prof.get("name_ar")
+                    except Exception:
+                        pass
             try:
                 if existing:
                     # تحديث مستخدم موجود
-                    if actor_role == "admin_main":
+                    if privileged:
                         if password:
                             pw_hash = hash_password(password)
                             cur.execute(
                                 """
                                 UPDATE users
-                                SET password_hash = ?, role = ?, student_id = ?, instructor_id = ?, is_supervisor = ?, is_active = ?, department_id = ?
+                                SET password_hash = ?, role = ?, student_id = ?, instructor_id = ?,
+                                    is_supervisor = ?, is_active = ?, department_id = ?,
+                                    role_profile_id = COALESCE(?, role_profile_id),
+                                    display_title_ar = COALESCE(?, display_title_ar)
                                 WHERE username = ?
                                 """,
-                                (pw_hash, role, student_id, instructor_id, is_supervisor, is_active, dept_store, username),
+                                (
+                                    pw_hash, role, student_id, instructor_id, is_supervisor, is_active,
+                                    dept_store, role_profile_id, display_title_ar, username,
+                                ),
                             )
                             affected_rows = cur.rowcount if cur.rowcount is not None else affected_rows
                         else:
                             cur.execute(
                                 """
                                 UPDATE users
-                                SET role = ?, student_id = ?, instructor_id = ?, is_supervisor = ?, is_active = ?, department_id = ?
+                                SET role = ?, student_id = ?, instructor_id = ?, is_supervisor = ?,
+                                    is_active = ?, department_id = ?,
+                                    role_profile_id = COALESCE(?, role_profile_id),
+                                    display_title_ar = COALESCE(?, display_title_ar)
                                 WHERE username = ?
                                 """,
-                                (role, student_id, instructor_id, is_supervisor, is_active, dept_store, username),
+                                (
+                                    role, student_id, instructor_id, is_supervisor, is_active, dept_store,
+                                    role_profile_id, display_title_ar, username,
+                                ),
                             )
                             affected_rows = cur.rowcount if cur.rowcount is not None else affected_rows
                     else:
@@ -926,7 +998,7 @@ def add_user():
                         )
                         affected_rows = cur.rowcount if cur.rowcount is not None else affected_rows
                 else:
-                    if actor_role != "admin_main":
+                    if not privileged:
                         return jsonify({"status": "error", "message": "رئيس القسم لا يمكنه إنشاء مستخدم جديد"}), 403
                     if not password:
                         return (
@@ -942,10 +1014,16 @@ def add_user():
                     pw_hash = hash_password(password)
                     cur.execute(
                         """
-                        INSERT INTO users (username, password_hash, role, student_id, instructor_id, is_supervisor, is_active, department_id)
-                        VALUES (?,?,?,?,?,?,?,?)
+                        INSERT INTO users (
+                            username, password_hash, role, student_id, instructor_id,
+                            is_supervisor, is_active, department_id, role_profile_id, display_title_ar
+                        )
+                        VALUES (?,?,?,?,?,?,?,?,?,?)
                         """,
-                        (username, pw_hash, role, student_id, instructor_id, is_supervisor, is_active, dept_store),
+                        (
+                            username, pw_hash, role, student_id, instructor_id, is_supervisor,
+                            is_active, dept_store, role_profile_id, display_title_ar,
+                        ),
                     )
                     affected_rows = cur.rowcount if cur.rowcount is not None else affected_rows
             except Exception as write_err:
@@ -1022,13 +1100,15 @@ def add_user():
 
 
 @users_bp.route("/delete", methods=["POST"])
-@role_required("admin_main")
+@role_required("system_admin", "college_dean", "admin_main")
 def delete_user():
     """
     حذف مستخدم.
     body:
       - username
     """
+    from backend.core.user_admin_policy import assert_actor_may_modify_user
+
     data = request.get_json(force=True) or {}
     username = (data.get("username") or "").strip()
     if not username:
@@ -1041,13 +1121,13 @@ def delete_user():
         if not target_username_allowed_for_actor(conn, actor, username):
             return jsonify({"status": "error", "message": "غير مسموح بحذف هذا المستخدم خارج نطاق القسم الحالي."}), 403
         cur = conn.cursor()
-        before = cur.execute(
-            "SELECT username, role, student_id, instructor_id, "
-            "COALESCE(is_supervisor,0) AS is_supervisor, COALESCE(is_active,1) AS is_active "
-            "FROM users WHERE username = ?",
-            (username,),
-        ).fetchone()
+        before = users_repo.fetch_user_row_by_username_ci(conn, username)
         before_user = _user_dict_from_row(before) if before else None
+        ok_mod, mod_err = assert_actor_may_modify_user(session, before_user)
+        if not ok_mod:
+            return jsonify({"status": "error", "message": mod_err or "غير مسموح"}), 403
+        if not before_user:
+            return jsonify({"status": "error", "message": "المستخدم غير موجود"}), 404
         cur.execute("DELETE FROM users WHERE username = ?", (username,))
         deleted = cur.rowcount if cur.rowcount is not None else 0
         if deleted:
@@ -1066,8 +1146,10 @@ def delete_user():
 
 
 @users_bp.route("/toggle_active", methods=["POST"])
-@role_required("admin_main")
+@role_required("system_admin", "college_dean", "admin_main")
 def toggle_active():
+    from backend.core.user_admin_policy import assert_actor_may_modify_user, is_system_admin_session
+
     data = request.get_json(force=True) or {}
     username = (data.get("username") or "").strip()
     active = int(bool(data.get("active", True)))
@@ -1079,28 +1161,26 @@ def toggle_active():
     with get_connection() as conn:
         if not target_username_allowed_for_actor(conn, actor, username):
             return jsonify({"status": "error", "message": "غير مسموح بتعديل هذا المستخدم خارج نطاق القسم الحالي."}), 403
-        cur = conn.cursor()
-        row = cur.execute(
-            "SELECT username, role, student_id, instructor_id, COALESCE(is_supervisor,0), COALESCE(is_active,1) "
-            "FROM users WHERE username = ?",
-            (username,),
-        ).fetchone()
+        row = users_repo.fetch_user_row_by_username_ci(conn, username)
         if not row:
             return jsonify({"status": "error", "message": "المستخدم غير موجود"}), 404
         before_user = _user_dict_from_row(row)
-        target_role = _normalize_role(row[1])
-        if target_role == "admin_main" and actor_role != "admin_main":
-            return jsonify({"status": "error", "message": "لا يمكن تعطيل admin_main إلا بواسطة admin_main"}), 403
+        ok_mod, mod_err = assert_actor_may_modify_user(session, before_user)
+        if not ok_mod:
+            return jsonify({"status": "error", "message": mod_err or "غير مسموح"}), 403
+        target_role = _normalize_role(before_user.get("role") or "")
+        if target_role in _ELEVATED_ASSIGN_ROLES and not is_system_admin_session(session):
+            return jsonify({"status": "error", "message": "لا يمكن تعطيل هذا الحساب إلا بواسطة مسؤول النظام"}), 403
         if target_role == "admin_main" and active == 0:
-            cnt = cur.execute("SELECT COUNT(*) FROM users WHERE role = 'admin_main' AND COALESCE(is_active,1)=1").fetchone()[0]
+            cur = conn.cursor()
+            cnt = cur.execute(
+                "SELECT COUNT(*) FROM users WHERE role = 'admin_main' AND COALESCE(is_active,1)=1"
+            ).fetchone()[0]
             if cnt <= 1:
                 return jsonify({"status": "error", "message": "لا يمكن تعطيل آخر مستخدم admin_main"}), 400
+        cur = conn.cursor()
         cur.execute("UPDATE users SET is_active = ? WHERE username = ?", (active, username))
-        after = cur.execute(
-            "SELECT username, role, student_id, instructor_id, COALESCE(is_supervisor,0), COALESCE(is_active,1) "
-            "FROM users WHERE username = ?",
-            (username,),
-        ).fetchone()
+        after = users_repo.fetch_user_row_after_write_ci(conn, username)
         _log_user_audit(
             conn,
             action="users.toggle_active",
@@ -1114,7 +1194,7 @@ def toggle_active():
 
 
 @users_bp.route("/set_supervisor", methods=["POST"])
-@role_required("admin_main", "head_of_department")
+@role_required("admin_main", "system_admin", "college_dean", "head_of_department")
 def set_supervisor():
     data = request.get_json(force=True) or {}
     username = (data.get("username") or "").strip()
@@ -1156,7 +1236,7 @@ def set_supervisor():
 
 
 @users_bp.route("/audit_log", methods=["GET"])
-@role_required("admin_main", "head_of_department")
+@role_required("admin_main", "system_admin", "college_dean", "head_of_department")
 def users_audit_log():
     """آخر سجلات تدقيق عمليات المستخدمين مع فلاتر بسيطة."""
     actor = (request.args.get("actor") or "").strip()

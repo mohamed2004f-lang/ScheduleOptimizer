@@ -883,7 +883,7 @@ def api_baseline_get():
 
 
 @course_delivery_bp.route("/baseline", methods=["POST"])
-@role_required("instructor", "head_of_department", "admin_main", "admin")
+@role_required("instructor", "head_of_department", "admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
 def api_baseline_create():
     data = request.get_json(force=True) or {}
     course_name = (data.get("course_name") or "").strip()
@@ -950,7 +950,7 @@ def api_baseline_create():
 
 
 @course_delivery_bp.route("/baseline/<int:baseline_id>/topics", methods=["PUT"])
-@role_required("instructor", "head_of_department", "admin_main", "admin")
+@role_required("instructor", "head_of_department", "admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
 def api_baseline_save_topics(baseline_id: int):
     data = request.get_json(force=True) or {}
     topics = data.get("topics") or []
@@ -1010,7 +1010,7 @@ def api_baseline_submit(baseline_id: int):
 
 
 @course_delivery_bp.route("/baseline/<int:baseline_id>/review", methods=["POST"])
-@role_required("head_of_department", "admin_main", "admin")
+@role_required("head_of_department", "admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
 def api_baseline_review(baseline_id: int):
     data = request.get_json(force=True) or {}
     action = (data.get("action") or "").strip().lower()
@@ -1232,7 +1232,7 @@ def api_report_submit(report_id: int):
 
 
 @course_delivery_bp.route("/report/<int:report_id>/gate_review", methods=["POST"])
-@role_required("head_of_department", "admin_main", "admin")
+@role_required("head_of_department", "admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
 def api_report_gate_review(report_id: int):
     data = request.get_json(force=True) or {}
     action = (data.get("action") or "").strip().lower()
@@ -1454,7 +1454,7 @@ def api_hod_department_summary():
 
 
 @course_delivery_bp.route("/gate_policy", methods=["GET", "PUT"])
-@role_required("head_of_department", "admin_main", "admin")
+@role_required("head_of_department", "admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
 def api_gate_policy():
     dept_id = get_admin_department_scope_id()
     with get_connection() as conn:

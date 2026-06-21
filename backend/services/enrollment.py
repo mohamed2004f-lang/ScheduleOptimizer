@@ -189,8 +189,8 @@ def _create_registration_form_version(conn, student_id: str, semester: str, sour
 
 
 def _is_instructor_or_supervisor_view_only() -> bool:
-    role = (session.get("user_role") or "").strip()
-    return role in ("instructor", "supervisor")
+    from backend.core.auth import students_registry_view_only
+    return students_registry_view_only()
 
 
 def _actor_username() -> str:
@@ -1132,7 +1132,7 @@ def submit_plan(plan_id: int):
 
 
 @enrollment_bp.route("/plans/<int:plan_id>/approve", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def approve_plan(plan_id: int):
     """
     اعتماد الخطة وتحويلها إلى Approved
@@ -1289,7 +1289,7 @@ def approve_plan(plan_id: int):
 
 
 @enrollment_bp.route("/plans/archive_after_migration", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def archive_plans_after_migration():
     """
     أرشفة خطة التسجيل لفصل معيّن بعد ترحيل المقررات إلى كشف الدرجات.
@@ -1487,7 +1487,7 @@ def print_registration_form(student_id):
 
 
 @enrollment_bp.route("/registration_form_versions", methods=["GET"])
-@role_required("admin", "admin_main", "head_of_department", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def registration_form_versions():
     sid = (request.args.get("student_id") or "").strip()
     semester = (request.args.get("semester") or "").strip()
@@ -1529,7 +1529,7 @@ def registration_form_versions():
 
 
 @enrollment_bp.route("/plans/<int:plan_id>/reject", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def reject_plan(plan_id: int):
     if _is_instructor_or_supervisor_view_only():
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403

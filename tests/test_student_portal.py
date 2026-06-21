@@ -99,3 +99,12 @@ class TestStudentPortalAPI:
             headers={"Accept": "application/json"},
         )
         assert resp.status_code == 403
+
+    def test_student_blocked_from_staff_form_page(self, student_auth_client):
+        resp = student_auth_client.get("/students_form", follow_redirects=False)
+        assert resp.status_code in (302, 301)
+        assert "my_portal" in resp.headers.get("Location", "")
+
+    def test_student_blocked_from_dashboard(self, student_auth_client):
+        resp = student_auth_client.get("/dashboard", follow_redirects=False)
+        assert resp.status_code in (302, 403)

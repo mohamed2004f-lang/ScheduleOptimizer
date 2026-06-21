@@ -53,8 +53,8 @@ from backend.services.utilities import excel_response_from_frames, get_connectio
 
 college_catalog_bp = Blueprint("college_catalog", __name__, url_prefix="/college/catalog")
 
-_ADMIN_FULL = ("admin", "admin_main")
-_PLAN_EDITOR = ("admin", "admin_main", "head_of_department")
+_ADMIN_FULL = ("admin", "admin_main", "system_admin", "college_dean")
+_PLAN_EDITOR = ("admin", "admin_main", "system_admin", "college_dean", "head_of_department")
 
 
 def _body() -> dict:

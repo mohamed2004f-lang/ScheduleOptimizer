@@ -29,6 +29,14 @@
         <span class="badge bg-secondary ms-1">حساب: رئيس قسم · تعبئة كعضو هيئة تدريس</span>
         {% elif user_role == 'head_of_department' and respondent_role == 'supervisor' %}
         <span class="badge bg-secondary ms-1">حساب: رئيس قسم · وضع المشرف الأكاديمي</span>
+        {% elif user_role == 'college_dean' and respondent_role == 'instructor' %}
+        <span class="badge bg-secondary ms-1">حساب: عميد كلية · تعبئة كعضو هيئة تدريس</span>
+        {% elif user_role == 'college_dean' and respondent_role == 'supervisor' %}
+        <span class="badge bg-secondary ms-1">حساب: عميد كلية · وضع المشرف الأكاديمي</span>
+        {% elif user_role == 'academic_vice_dean' and respondent_role == 'instructor' %}
+        <span class="badge bg-secondary ms-1">حساب: وكيل الشؤون العلمية · تعبئة كعضو هيئة تدريس</span>
+        {% elif user_role == 'academic_vice_dean' and respondent_role == 'supervisor' %}
+        <span class="badge bg-secondary ms-1">حساب: وكيل الشؤون العلمية · وضع المشرف الأكاديمي</span>
         {% endif %}
       </div>
       {% if show_results_link %}
@@ -47,7 +55,7 @@
       استبيانات المشرف <em>منفصلة</em> عن استبيانات عضو هيئة التدريس (رئيس القسم، الإدارة والسياسات العامة، العملية التعليمية).
       التعبئة تُحفظ مرة واحدة لكل فصل حسب <code>instructor_id</code> — تبديل الوضع لا يُعيد طلب نفس الاستبيان.
     </div>
-    {% elif user_role in ('instructor', 'head_of_department') and respondent_role == 'instructor' %}
+    {% elif user_role in ('instructor', 'head_of_department', 'college_dean', 'academic_vice_dean') and respondent_role == 'instructor' %}
     <div class="alert alert-light border small mb-3">
       <strong>وضع الأستاذ:</strong>
       ثلاثة استبيانات قصيرة عن قسمك والكلية — كل واحد ~٣–٥ دقائق.

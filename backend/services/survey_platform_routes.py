@@ -134,7 +134,13 @@ def _user_department_id(conn) -> int | None:
         except (TypeError, ValueError):
             pass
     iid = session.get("instructor_id")
-    if iid and role in ("instructor", "head_of_department", "supervisor"):
+    if iid and role in (
+        "instructor",
+        "head_of_department",
+        "supervisor",
+        "college_dean",
+        "academic_vice_dean",
+    ):
         try:
             iid_i = int(iid)
         except (TypeError, ValueError):
@@ -153,6 +159,10 @@ def _session_active_mode(role: str) -> str:
     am = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower()
     if role == "head_of_department":
         return am if am in ("head", "instructor", "supervisor") else "head"
+    if role == "college_dean":
+        return am if am in ("dean", "instructor", "supervisor") else "dean"
+    if role == "academic_vice_dean":
+        return am if am in ("vice_dean", "instructor", "supervisor") else "vice_dean"
     if role == "instructor":
         return am if am in ("instructor", "supervisor") else "instructor"
     return am
@@ -165,6 +175,14 @@ def _active_mode_label_ar(role: str, active_mode: str, supervisor_effective: boo
         return "رئيس القسم (استبيانات الأستاذ)"
     if role == "head_of_department" and active_mode == "instructor":
         return "رئيس القسم — وضع الأستاذ"
+    if role == "college_dean" and active_mode in ("", "dean"):
+        return "عميد الكلية (استبيانات الأستاذ)"
+    if role == "college_dean" and active_mode == "instructor":
+        return "عميد الكلية — وضع الأستاذ"
+    if role == "academic_vice_dean" and active_mode in ("", "vice_dean"):
+        return "وكيل الشؤون العلمية (استبيانات الأستاذ)"
+    if role == "academic_vice_dean" and active_mode == "instructor":
+        return "وكيل الشؤون العلمية — وضع الأستاذ"
     return RESPONDENT_ROLE_LABELS.get(
         survey_respondent_role(role, active_mode), role
     )
@@ -372,13 +390,25 @@ def build_survey_hub_status(
     show = pending_count == 0
     details["platform_template_count"] = _count_templates_for_respondent(conn, eff)
     iid = session_data.get("instructor_id")
-    if role in ("instructor", "head_of_department", "supervisor") and not iid:
+    teaching_roles = (
+        "instructor",
+        "head_of_department",
+        "supervisor",
+        "college_dean",
+        "academic_vice_dean",
+    )
+    if role in teaching_roles and not iid:
         level = "warning"
         show = True
         messages.append(
             "لم يُربط رقم عضو هيئة التدريس (instructor_id) بحسابك — لن تظهر استبيانات الأستاذ/المشرف."
         )
-    elif department_id is None and role in ("instructor", "head_of_department") and details["platform_template_count"] > 0:
+    elif department_id is None and role in (
+        "instructor",
+        "head_of_department",
+        "college_dean",
+        "academic_vice_dean",
+    ) and details["platform_template_count"] > 0:
         level = "warning"
         show = True
         messages.append("لم يُحدد قسم لحسابك — بعض الاستبيانات مرتبطة بالقسم.")
@@ -388,7 +418,12 @@ def build_survey_hub_status(
     elif pending_count == 0:
         level = "success"
         messages.append("أكملت جميع الاستبيانات المطلوبة منك في هذا الدور لهذا الفصل.")
-        if role in ("instructor", "head_of_department") and session_data.get("is_supervisor"):
+        if role in (
+            "instructor",
+            "head_of_department",
+            "college_dean",
+            "academic_vice_dean",
+        ) and session_data.get("is_supervisor"):
             messages.append(
                 "إن كنت مشرفاً أيضاً، راجع استبيانات المشرف من وضع المشرف في الشريط العلوي."
             )
@@ -651,7 +686,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/invites")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def survey_invites_admin_page():
         template_code = (request.args.get("template") or "").strip()
         with get_connection() as conn:
@@ -676,7 +711,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/api/invites", methods=["GET"])
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def survey_invites_list_api():
         template_code = (request.args.get("template") or "").strip() or None
         with get_connection() as conn:
@@ -685,7 +720,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/api/invites", methods=["POST"])
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def survey_invites_create_api():
         data = request.get_json(force=True) or {}
         try:
@@ -710,7 +745,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/results")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_results_page():
         code = (request.args.get("template") or "").strip()
         results_view = (request.args.get("view") or "internal").strip().lower()
@@ -874,7 +909,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/trends")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_trends_page():
         with get_connection() as conn:
             sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
@@ -928,7 +963,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/api/trends/chart", methods=["GET"])
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_trends_chart_api():
         with get_connection() as conn:
             dept_id = _user_department_id(conn)
@@ -937,7 +972,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/api/closure_reminder", methods=["GET"])
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_closure_reminder_api():
         with get_connection() as conn:
             sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
@@ -947,7 +982,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/api/closure", methods=["GET"])
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_closure_status_api():
         with get_connection() as conn:
             sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
@@ -966,7 +1001,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/api/close_semester", methods=["POST"])
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_close_semester_api():
         data = request.get_json(force=True) or {}
         with get_connection() as conn:
@@ -993,7 +1028,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/api/cycle_closure", methods=["GET"])
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_cycle_closure_status_api():
         cycle = (request.args.get("cycle") or "").strip()
         if not cycle:
@@ -1013,7 +1048,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/api/close_cycle", methods=["POST"])
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_close_cycle_api():
         data = request.get_json(force=True) or {}
         cycle = (data.get("cycle_label") or data.get("cycle") or "").strip()
@@ -1040,7 +1075,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/api/snapshots/compare", methods=["GET"])
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_compare_snapshots_api():
         sem_a = (request.args.get("semester_a") or "").strip()
         sem_b = (request.args.get("semester_b") or "").strip()
@@ -1055,7 +1090,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/archives/<path:filename>")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_download_archive(filename: str):
         safe = os.path.basename((filename or "").strip())
         if not safe or safe != filename:
@@ -1072,7 +1107,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/api/register_evidence", methods=["POST"])
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_register_evidence_api():
         """رفع تقرير استبيان كشاهد في خريطة امتثال الاعتماد."""
         data = request.get_json(force=True) or {}
@@ -1128,7 +1163,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/api/surveys/aggregate")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def api_surveys_aggregate():
         code = (request.args.get("template_code") or request.args.get("code") or "").strip()
         if not code:
@@ -1141,7 +1176,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/api/surveys/metrics")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def api_surveys_metrics():
         with get_connection() as conn:
             sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
@@ -1151,7 +1186,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export.xlsx")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_export_xlsx():
         """ملخص سريع (صف واحد لكل استبيان) — للتوافق مع الإصدارات السابقة."""
         with get_connection() as conn:
@@ -1178,7 +1213,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/package")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_export_package_html():
         """معاينة HTML لتقرير الاستبيانات الموحّد."""
         with get_connection() as conn:
@@ -1199,7 +1234,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/package.pdf")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_export_package_pdf():
         """تقرير PDF موحّد للاستبيانات."""
         with get_connection() as conn:
@@ -1222,7 +1257,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/external/package.xlsx")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_export_external_package_xlsx():
         cycle = (request.args.get("cycle") or "").strip()
         if not cycle:
@@ -1232,7 +1267,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/external/package.pdf")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_export_external_package_pdf():
         cycle = (request.args.get("cycle") or "").strip()
         if not cycle:
@@ -1245,7 +1280,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/external/bundle.zip")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_export_external_bundle_zip():
         cycle = (request.args.get("cycle") or "").strip()
         if not cycle:
@@ -1271,7 +1306,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/external/<template_code>.xlsx")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_export_external_single_xlsx(template_code: str):
         code = (template_code or "").strip()
         if code not in EXTERNAL_SURVEY_CODES:
@@ -1292,7 +1327,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/external/<template_code>.pdf")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_export_external_single_pdf(template_code: str):
         code = (template_code or "").strip()
         if code not in EXTERNAL_SURVEY_CODES:
@@ -1309,7 +1344,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/bundle.zip")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_export_bundle_zip():
         """حزمة ZIP: package + تقارير فردية (Excel وPDF إن توفر wkhtmltopdf)."""
         with get_connection() as conn:
@@ -1342,7 +1377,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/package.xlsx")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_export_package_xlsx():
         """تقرير Excel موحّد متعدد الأوراق (ملخص + معايير + تحليل + بنود كل استبيان)."""
         with get_connection() as conn:
@@ -1362,7 +1397,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/course_eval_sections.xlsx")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_export_course_eval_sections_xlsx():
         """تصدير تقييم المقررات — ملخص كل شعبة + تجميع مقرر/أستاذ."""
         with get_connection() as conn:
@@ -1374,7 +1409,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/course_eval_missing_sections.xlsx")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_export_course_eval_missing_sections_xlsx():
         """تصدير تدقيق شعب الجدول التي لم يُرسَل لها أي تقييم مقرر."""
         with get_connection() as conn:
@@ -1386,7 +1421,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/course_eval/section/<int:section_id>.xlsx")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_export_course_eval_section_xlsx(section_id: int):
         """تصدير تقييم شعبة واحدة."""
         with get_connection() as conn:
@@ -1398,7 +1433,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/course_eval/by-course.xlsx")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_export_course_eval_by_course_xlsx():
         """تجميع تقييمات المقرر لنفس الأستاذ عبر شعب متعددة."""
         course_name = (request.args.get("course_name") or "").strip()
@@ -1424,7 +1459,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/<template_code>")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_export_single_html(template_code: str):
         """معاينة HTML لتقرير استبيان واحد."""
         code = (template_code or "").strip()
@@ -1442,7 +1477,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/<template_code>.pdf")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_export_single_pdf(template_code: str):
         """تقرير PDF لاستبيان واحد."""
         code = (template_code or "").strip()
@@ -1461,7 +1496,7 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/<template_code>.xlsx")
     @login_required
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_export_single_xlsx(template_code: str):
         """تقرير Excel مفصّل لاستبيان واحد."""
         code = (template_code or "").strip()

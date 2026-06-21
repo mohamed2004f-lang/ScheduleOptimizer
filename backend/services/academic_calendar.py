@@ -130,7 +130,7 @@ def get_items():
 
 @academic_calendar_bp.route("/items", methods=["POST"])
 @login_required
-@role_required("admin_main")
+@role_required("admin_main", "system_admin", "college_dean")
 def upsert_items():
     """
     Save dates for items. Admin only.

@@ -218,6 +218,9 @@ def rate_limit(
 
         @wraps(f)
         def decorated_function(*args, **kwargs):
+            from flask import current_app
+            if current_app.config.get("TESTING"):
+                return f(*args, **kwargs)
             # استخدام IP كمفتاح
             key = request.remote_addr or 'unknown'
 

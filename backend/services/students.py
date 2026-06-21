@@ -10,6 +10,7 @@ from backend.core.auth import (
     SESSION_ACTIVE_MODE,
     _normalize_role,
     get_admin_department_scope_id,
+    students_registry_view_only,
 )
 from collections import defaultdict
 import pandas as pd
@@ -103,8 +104,7 @@ def _ensure_registration_signature_tables(cur):
 
 
 def _is_instructor_or_supervisor_view_only() -> bool:
-    role = _normalize_role((session.get("user_role") or "").strip())
-    return role in ("instructor", "supervisor") or current_supervisor_effective()
+    return students_registry_view_only()
 
 
 def _session_instructor_id(conn):
@@ -404,7 +404,7 @@ def _course_registration_count_rows(conn):
 
 
 @students_bp.route("/course_registration_counts")
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def course_registration_counts_api():
     """تقرير مجمّع: عدد الطلبة لكل مقرر من التسجيلات الفعلية."""
     with get_connection() as conn:
@@ -455,7 +455,7 @@ def course_registration_counts_api():
 
 
 @students_bp.route("/course_registration_counts/excel")
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def course_registration_counts_excel():
     with get_connection() as conn:
         items = _course_registration_count_rows(conn)
@@ -471,7 +471,7 @@ def course_registration_counts_excel():
 
 
 @students_bp.route("/course_registration_counts/pdf")
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def course_registration_counts_pdf():
     with get_connection() as conn:
         items = _course_registration_count_rows(conn)
@@ -1095,7 +1095,7 @@ def _classified_uncompleted_items(conn, student_id=None, student_ids=None, cours
 
 
 @students_bp.route("/uncompleted_courses_report")
-@role_required("admin", "admin_main", "head_of_department", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def uncompleted_courses_report_api():
     """تقرير: المقررات غير المنجزة لطالب واحد مع تصنيف السبب (غير مسجل/راسب)."""
     sid = normalize_sid(request.args.get("student_id"))
@@ -1120,7 +1120,7 @@ def uncompleted_courses_report_api():
 
 
 @students_bp.route("/uncompleted_courses_report/excel")
-@role_required("admin", "admin_main", "head_of_department", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def uncompleted_courses_report_excel():
     sid = normalize_sid(request.args.get("student_id"))
     r = uncompleted_courses_report_api()
@@ -1139,7 +1139,7 @@ def uncompleted_courses_report_excel():
 
 
 @students_bp.route("/uncompleted_courses_report/pdf")
-@role_required("admin", "admin_main", "head_of_department", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def uncompleted_courses_report_pdf():
     sid = normalize_sid(request.args.get("student_id"))
     r = uncompleted_courses_report_api()
@@ -1194,7 +1194,7 @@ def uncompleted_courses_report_pdf():
 
 
 @students_bp.route("/not_registered_courses_report")
-@role_required("admin", "admin_main", "head_of_department", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def not_registered_courses_report_api():
     """
     تقرير عام: المقررات غير المسجل بها (من الخطة/قائمة المقررات) حسب أفضلية التصنيف.
@@ -1247,7 +1247,7 @@ def not_registered_courses_report_api():
 
 
 @students_bp.route("/not_registered_courses_report/excel")
-@role_required("admin", "admin_main", "head_of_department", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def not_registered_courses_report_excel():
     course_name = (request.args.get("course_name") or "").strip() or None
     min_count = request.args.get("min_count")
@@ -1283,7 +1283,7 @@ def not_registered_courses_report_excel():
 
 
 @students_bp.route("/not_registered_courses_report/pdf")
-@role_required("admin", "admin_main", "head_of_department", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def not_registered_courses_report_pdf():
     course_name = (request.args.get("course_name") or "").strip() or None
     min_count = request.args.get("min_count")
@@ -1365,7 +1365,7 @@ def not_registered_courses_report_pdf():
 
 
 @students_bp.route("/failed_courses_report")
-@role_required("admin", "admin_main", "head_of_department", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def failed_courses_report_api():
     """
     تقرير عام: المقررات التي رسب فيها الطلبة.
@@ -1429,7 +1429,7 @@ def failed_courses_report_api():
 
 
 @students_bp.route("/failed_courses_report/excel")
-@role_required("admin", "admin_main", "head_of_department", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def failed_courses_report_excel():
     course_name = (request.args.get("course_name") or "").strip() or None
     min_failed = request.args.get("min_failed")
@@ -1479,7 +1479,7 @@ def failed_courses_report_excel():
 
 
 @students_bp.route("/failed_courses_report/pdf")
-@role_required("admin", "admin_main", "head_of_department", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def failed_courses_report_pdf():
     course_name = (request.args.get("course_name") or "").strip() or None
     min_failed = request.args.get("min_failed")
@@ -1661,8 +1661,24 @@ def _get_allowed_student_ids_for_role(conn, user_role: str) -> set:
     - instructor: طلاب مقررات الفصل الحالي عبر schedule + registrations
     """
     role = _normalize_role((user_role or "").strip())
-    if role in ("admin_main", "admin"):
+    if role in ("admin_main", "admin", "system_admin"):
         return None
+
+    if role == "college_dean":
+        mode = (session.get(SESSION_ACTIVE_MODE) or "dean").strip().lower()
+        if mode in ("instructor", "supervisor"):
+            role = "supervisor" if mode == "supervisor" else "instructor"
+        else:
+            return None
+
+    if role == "academic_vice_dean":
+        mode = (session.get(SESSION_ACTIVE_MODE) or "vice_dean").strip().lower()
+        if mode in ("dean", "hod", "head", "department_head"):
+            mode = "vice_dean"
+        if mode in ("instructor", "supervisor"):
+            role = "supervisor" if mode == "supervisor" else "instructor"
+        else:
+            return None
 
     # رئيس القسم:
     # - في وضع head: مقيّدة بقسم الحساب (department_id) لحماية العزل بين الأقسام.
@@ -1786,7 +1802,7 @@ def list_students():
             students = [s for s in students if normalize_sid(s.get("student_id")) in allowed_student_ids]
         role_n = _normalize_role((user_role or "").strip())
         scope_dep = get_admin_department_scope_id()
-        if scope_dep is not None and role_n in ("admin", "admin_main"):
+        if scope_dep is not None and role_n in ("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean"):
             program_ids_for_scope = set()
             with get_connection() as conn:
                 cur = conn.cursor()
@@ -1971,7 +1987,7 @@ def add_student():
 
 
 @students_bp.route("/update_status", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def update_student_status():
     """تحديث حالة قيد الطالب (مسجَّل، سحب الملف، موقوف قيده، خريج) عبر Service Layer"""
     try:
@@ -2005,7 +2021,7 @@ def update_student_status():
 
 
 @students_bp.route("/pathway_stage/update", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def update_student_pathway_stage():
     """تحديث مرحلة مسار الطالب (داخل القسم / ما قبل الشعبة / متخصص …)."""
     from backend.core.academic_pathway import (
@@ -2095,7 +2111,7 @@ def update_student_pathway_stage():
 
 
 @students_bp.route("/pathway_progress", methods=["GET"])
-@role_required("admin", "admin_main", "head_of_department", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def student_pathway_progress():
     """حاسبة منجز/متبقي حسب نطاق المتطلب (المرحلة ج)."""
     from backend.core.pathway_progress import compute_pathway_progress
@@ -2115,7 +2131,7 @@ def student_pathway_progress():
 
 
 @students_bp.route("/pathway_progress/export", methods=["GET"])
-@role_required("admin", "admin_main", "head_of_department", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def student_pathway_progress_export():
     from backend.core.pathway_export import frames_for_pathway_progress_export
     from backend.core.pathway_progress import compute_pathway_progress
@@ -2138,7 +2154,7 @@ def student_pathway_progress_export():
 
 
 @students_bp.route("/pathway_progress/bulk_export", methods=["GET"])
-@role_required("admin", "admin_main", "head_of_department", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def student_pathway_progress_bulk_export():
     """ملخص مسار لعدة طلاب (حسب فلاتر القائمة، حد 150)."""
     import pandas as pd
@@ -2198,7 +2214,7 @@ def pathway_stages_meta():
 
 
 @students_bp.route("/specialization/update", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def update_student_specialization():
     """
     Sprint C:
@@ -2287,7 +2303,7 @@ def update_student_specialization():
 
 
 @students_bp.route("/specialization/summary", methods=["GET"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def specialization_summary():
     """
     Sprint C: لوحة تجميعية سريعة للتخصص/المسارات داخل القسم.
@@ -3380,7 +3396,7 @@ def export_registrations_excel():
 
 @students_bp.route("/registration_signature", methods=["GET"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def get_registration_signature():
     sid = normalize_sid(request.args.get("student_id"))
     if not sid:
@@ -3437,7 +3453,7 @@ def get_registration_signature():
 
 @students_bp.route("/registration_signature/upload", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def upload_registration_signature_file():
     sid = normalize_sid(request.form.get("student_id"))
     if not sid:
@@ -3538,7 +3554,7 @@ def upload_registration_signature_file():
 
 @students_bp.route("/registration_signature/file/<int:file_id>", methods=["GET"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def download_registration_signature_file(file_id: int):
     try:
         with get_connection() as conn:
@@ -3566,7 +3582,7 @@ def download_registration_signature_file(file_id: int):
 
 @students_bp.route("/registration_signatures/list", methods=["GET"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def registration_signatures_list():
     """
     إرجاع توثيقات التوقيع للفصل الحالي (أو فصل محدد):
@@ -3645,7 +3661,7 @@ def registration_signatures_list():
 
 @students_bp.route("/export/registration_signatures", methods=["GET"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def export_registration_signatures():
     """
     تصدير قائمة الطلبة الموقعين (أو الجميع) للفصل الحالي إلى Excel.

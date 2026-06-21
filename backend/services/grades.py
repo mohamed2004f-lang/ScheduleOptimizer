@@ -710,7 +710,7 @@ def draft_roster_for_course():
 
 
 @grades_bp.route("/drafts/pending", methods=["GET"])
-@role_required("admin_main", "head_of_department")
+@role_required("admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def list_pending_grade_drafts():
     """مسودات بانتظار الاعتماد للفصل الحالي."""
     with get_connection() as conn:
@@ -738,7 +738,7 @@ def list_pending_grade_drafts():
 
 
 @grades_bp.route("/drafts/deletable", methods=["GET"])
-@role_required("admin", "admin_main")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean")
 def list_deletable_grade_drafts():
     """مسودات قابلة للحذف للأدمن في الفصل الحالي (Draft/Rejected)."""
     with get_connection() as conn:
@@ -1022,7 +1022,7 @@ def create_grade_draft():
 
 
 @grades_bp.route("/drafts/<int:draft_id>", methods=["GET"])
-@role_required("instructor", "head_of_department", "admin_main", "admin")
+@role_required("instructor", "head_of_department", "admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
 def get_grade_draft(draft_id: int):
     with get_connection() as conn:
         cur = conn.cursor()
@@ -1247,7 +1247,7 @@ def submit_grade_draft(draft_id: int):
 
 
 @grades_bp.route("/drafts/<int:draft_id>/approve", methods=["POST"])
-@role_required("admin_main", "head_of_department")
+@role_required("admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def approve_grade_draft(draft_id: int):
     """
     اعتماد المسودة ونشرها في جدول grades.
@@ -1347,7 +1347,7 @@ def approve_grade_draft(draft_id: int):
 
 
 @grades_bp.route("/drafts/<int:draft_id>/reject", methods=["POST"])
-@role_required("admin_main", "head_of_department")
+@role_required("admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def reject_grade_draft(draft_id: int):
     """إرجاع المسودة للأستاذ لتصحيحها (تغيير الحالة إلى Rejected مع ملاحظة)."""
     data = request.get_json(force=True) or {}
@@ -1462,7 +1462,7 @@ def request_grade_draft_correction(draft_id: int):
 
 
 @grades_bp.route("/drafts/correction_requests", methods=["GET"])
-@role_required("admin_main", "head_of_department")
+@role_required("admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def list_grade_correction_requests():
     """طلبات التصحيح الرسمية بعد الاعتماد (للمعتمدين)."""
     status = (request.args.get("status") or "pending").strip().lower()
@@ -1491,7 +1491,7 @@ def list_grade_correction_requests():
 
 
 @grades_bp.route("/drafts/correction_requests/<int:req_id>/review", methods=["POST"])
-@role_required("admin_main", "head_of_department")
+@role_required("admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def review_grade_correction_request(req_id: int):
     """
     مراجعة طلب التصحيح:
@@ -1675,7 +1675,7 @@ def create_grade_special_case():
 
 
 @grades_bp.route("/special_cases/<int:case_id>/review", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def review_grade_special_case(case_id: int):
     data = request.get_json(force=True) or {}
     status = (data.get("status") or "").strip().lower()
@@ -1714,7 +1714,7 @@ def validate_grade_value(g):
 
 
 @grades_bp.route("/save", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def save_grades():
     data = request.get_json(force=True)
     sid = data.get("student_id")
@@ -1886,7 +1886,7 @@ def download_semester_template():
 
 
 @grades_bp.route("/import/semester", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def import_semester_excel():
     """
     استيراد نتيجة فصل كاملة من ملف Excel.
@@ -2145,7 +2145,7 @@ def import_semester_excel():
 
 
 @grades_bp.route("/migrate_registrations_to_transcript", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def migrate_registrations_to_transcript():
     data = request.get_json(force=True)
     student_id = data.get("student_id")
@@ -2789,7 +2789,7 @@ def _parse_export_style_single_student(df):
 
 
 @grades_bp.route("/import/single", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def import_single_student():
     # expects form with file (excel) and optional student_id/semester/year/changed_by
     file = request.files.get("file")
@@ -2817,7 +2817,7 @@ def import_single_student():
 
 
 @grades_bp.route("/import/transcript", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def import_transcript():
     """
     Alias لمسار استيراد كشف درجات طالب واحد باستخدام نفس منطق /import/single
@@ -2957,7 +2957,7 @@ def _import_export_style_single_student(parsed, student_id_override, student_nam
 
 
 @grades_bp.route("/update", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def update_grade():
     data = request.get_json(force=True)
     sid = data.get("student_id")
@@ -3084,7 +3084,7 @@ def update_grade():
 
 
 @grades_bp.route("/course_mapping_issues", methods=["GET"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def course_mapping_issues():
     """
     يعرض سجلات grades غير المطابقة مع دليل المقررات.
@@ -3180,7 +3180,7 @@ def course_mapping_issues():
 
 
 @grades_bp.route("/course_mapping_fix", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def course_mapping_fix():
     """
     تصحيح ربط مقرر في grades عبر اختيار مقرر معتمد من دليل المقررات.
@@ -3265,7 +3265,7 @@ def course_mapping_fix():
 
 
 @grades_bp.route("/rename_semester", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def rename_semester():
     """
     تعديل اسم فصل (مثلاً من \"خريف 24-25\" إلى \"خريف 25-26\").
@@ -3772,7 +3772,7 @@ def export_transcript(student_id):
 
 
 @grades_bp.route("/delete/semester", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def delete_semester():
     """Delete all grades for a student in a semester. Records audit rows for each deleted course."""
     data = request.get_json(force=True)
@@ -3820,7 +3820,7 @@ def delete_semester():
 
 
 @grades_bp.route("/delete/course", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def delete_course():
     """Delete a single course result for a student in a semester. Records an audit row."""
     data = request.get_json(force=True)

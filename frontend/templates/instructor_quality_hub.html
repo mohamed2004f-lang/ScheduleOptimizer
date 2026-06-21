@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ضمان الجودة — هويتي كعضو هيئة تدريس</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/vendor/fontawesome/css/all.min.css">
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .iq-identity-card .accordion-button { font-size: .95rem; }
+    .iq-survey-item { border-right: 3px solid var(--bs-warning); }
+    .iq-survey-item.done { border-right-color: var(--bs-success); }
+  </style>
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-900 theme-formal">
+    <div class="page-header d-flex justify-content-between flex-wrap gap-2 align-items-start">
+      <div>
+        <h1 class="page-title">ضمان الجودة</h1>
+        <p class="page-subtitle mb-1">هويتي كعضو هيئة تدريس — رؤية الكلية والقسم واستبيانات الجودة</p>
+        <p class="text-muted small mb-0" id="ctxLine"></p>
+      </div>
+      <div class="d-flex flex-wrap gap-2 align-items-center">
+        <span class="badge bg-primary d-none" id="pendingBadge"></span>
+        <a href="/my_courses" class="btn btn-outline-secondary btn-sm">مقرراتي</a>
+      </div>
+    </div>
+
+    <div id="loadState" class="text-muted py-3">جاري التحميل…</div>
+
+    <div id="mainWrap" class="d-none">
+      <div id="identityWrap"></div>
+
+      <div class="card mt-4 border-primary border-opacity-25">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2 bg-primary bg-opacity-10">
+          <span class="fw-semibold"><i class="fa-solid fa-pen-to-square ms-1"></i> استبياناتي — الفصل <span id="semLabel"></span></span>
+          <span class="badge bg-warning text-dark d-none" id="surveysPendingBadge"></span>
+        </div>
+        <div class="card-body">
+          <div id="hubStatusBox" class="alert d-none small mb-3"></div>
+          <div id="surveysList"></div>
+          <p class="small text-muted mb-0 mt-2">
+            <a href="/academic_quality/surveys" id="surveysFullLink">صفحة التعبئة الكاملة</a>
+            — إجاباتك سرية وتُجمَّع مع زملائك.
+          </p>
+        </div>
+      </div>
+
+      <div class="card mt-3 border-0 bg-light">
+        <div class="card-body py-2 d-flex flex-wrap gap-2" id="quickLinks"></div>
+      </div>
+    </div>
+  </main>
+  <script>
+    function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;');}
+    function identityCard(title, mission, vision, goals, note){
+      let h='<div class="card mb-3 iq-identity-card"><div class="card-header fw-semibold">'+esc(title)+'</div><div class="card-body">';
+      if(note&&!mission&&!vision&&(!goals||!goals.length)) h+='<p class="text-muted small mb-0">'+esc(note)+'</p>';
+      else {
+        if(vision) h+='<p><strong>الرؤية:</strong> '+esc(vision)+'</p>';
+        if(mission) h+='<p><strong>الرسالة:</strong> '+esc(mission)+'</p>';
+        if(goals&&goals.length){
+          const uid='acc_'+Math.random().toString(36).slice(2,8);
+          h+='<div class="accordion accordion-flush" id="'+uid+'">';
+          goals.forEach((g,i)=>{
+            const t=g.title_ar||g.title||'هدف';
+            const d=g.description_ar||g.description||'';
+            h+='<div class="accordion-item"><h2 class="accordion-header"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#'+uid+'_'+i+'">'+esc(t)+'</button></h2><div id="'+uid+'_'+i+'" class="accordion-collapse collapse" data-bs-parent="#'+uid+'"><div class="accordion-body small">'+esc(d)+'</div></div></div>';
+          });
+          h+='</div>';
+        }
+      }
+      return h+'</div></div>';
+    }
+    function flattenCollegeGoals(goals){
+      const out=[];
+      (goals||[]).forEach(g=>{
+        out.push({title_ar:g.title_ar,description_ar:g.description_ar});
+        (g.children||[]).forEach(ch=>out.push({title_ar:ch.title_ar,description_ar:ch.description_ar}));
+      });
+      return out;
+    }
+    function renderSurveys(j){
+      const box=document.getElementById('surveysList');
+      const pending=j.surveys?.pending||[];
+      const sem=j.term_label||'';
+      document.getElementById('semLabel').textContent=sem;
+      const hs=j.surveys?.hub_status;
+      const hsBox=document.getElementById('hubStatusBox');
+      if(hs&&hs.show&&hs.messages&&hs.messages.length){
+        hsBox.className='alert alert-'+(hs.level||'info')+' border-start border-4 small mb-3';
+        hsBox.innerHTML='<strong>'+esc(hs.title||'ملخص')+'</strong><ul class="mb-0 mt-1 ps-3">'+hs.messages.map(m=>'<li>'+esc(m)+'</li>').join('')+'</ul>';
+        hsBox.classList.remove('d-none');
+      }
+      if(!pending.length){
+        if(j.surveys?.all_done) box.innerHTML='<div class="alert alert-success mb-0 py-2 small">✓ أكملت جميع استبياناتك المطلوبة لهذا الفصل.</div>';
+        else box.innerHTML='<div class="alert alert-secondary mb-0 py-2 small">لا توجد استبيانات معلّقة حالياً.</div>';
+        return;
+      }
+      box.innerHTML='<div class="list-group">'+pending.map(p=>{
+        const url=(p.fill_url||'/academic_quality/surveys/fill/'+encodeURIComponent(p.code||''))+'?semester='+encodeURIComponent(sem);
+        let meta=p.intro?.subtitle_ar||'تقييم سري (1–5)';
+        if(p.intro?.duration_hint) meta+=' · '+p.intro.duration_hint;
+        return '<a href="'+url+'" class="list-group-item list-group-item-action iq-survey-item py-3"><div class="d-flex justify-content-between gap-2"><div><div class="fw-semibold">'+esc(p.title_ar)+'</div><div class="small text-muted">'+esc(meta)+'</div></div><span class="badge bg-warning text-dark">ابدأ</span></div></a>';
+      }).join('')+'</div>';
+    }
+    (async function(){
+      try{
+        const r=await fetch('/instructors/quality_context',{credentials:'include'});
+        if(r.status===403){document.getElementById('loadState').textContent='غير مصرح — هذه الصفحة لعضو هيئة التدريس في وضع التدريس.';return;}
+        const j=await r.json();
+        if(j.status!=='ok'){document.getElementById('loadState').textContent=j.message||'تعذر التحميل.';return;}
+        document.getElementById('loadState').classList.add('d-none');
+        document.getElementById('ctxLine').textContent=(j.instructor_name||'')+(j.department_name?' · '+j.department_name:'');
+        const c=j.college||{}, d=j.department;
+        let html='';
+        html+=identityCard('🏛 الكلية', c.mission_ar, c.vision_ar, flattenCollegeGoals(c.strategic_goals), '');
+        if(d) html+=identityCard('🏫 قسمي — '+(d.name_ar||''), d.mission_ar, d.vision_ar, d.goals||[], d.has_profile?'':'لم تُنشر هوية القسم بعد.');
+        document.getElementById('identityWrap').innerHTML=html;
+        renderSurveys(j);
+        const pc=j.surveys?.pending_count||0;
+        if(pc>0){
+          const b=document.getElementById('pendingBadge');
+          b.textContent=pc+' استبيان معلّق';
+          b.classList.remove('d-none');
+          const sb=document.getElementById('surveysPendingBadge');
+          sb.textContent=pc+' متبقٍ';
+          sb.classList.remove('d-none');
+        }
+        const links=j.links||{};
+        document.getElementById('quickLinks').innerHTML=[
+          ['كتالوج المخرجات',links.ilo_catalog],['دليل المصطلحات',links.glossary],['مقرراتي',links.my_courses]
+        ].filter(x=>x[1]).map(x=>'<a class="btn btn-sm btn-outline-primary" href="'+x[1]+'">'+x[0]+'</a>').join('');
+        document.getElementById('mainWrap').classList.remove('d-none');
+      }catch(e){document.getElementById('loadState').textContent='تعذر التحميل.';}
+    })();
+  </script>
+  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+</body>
+</html>

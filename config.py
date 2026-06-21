@@ -105,6 +105,13 @@ WTF_CSRF_TIME_LIMIT = 3600  # ساعة واحدة
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
 LOG_FILE = os.environ.get('LOG_FILE', 'logs/app.log')
 
+# تلميحات تقنية للمطوّر في الواجهة (نطاق القسم، phase0، …)
+_show_dev_raw = (os.environ.get("SHOW_DEV_HINTS") or "").strip().lower()
+if _show_dev_raw:
+    SHOW_DEV_HINTS = _show_dev_raw in ("1", "true", "yes")
+else:
+    SHOW_DEV_HINTS = FLASK_DEBUG
+
 # ============================================
 # التخزين المؤقت والمهام الخلفية والتحسين
 # ============================================

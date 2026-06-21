@@ -78,6 +78,9 @@ SESSION_ACTIVE_MODE = "active_mode"
 # سياق عمل المسؤول الرئيسي: تصفية بيانات حسب قسم (لا يغيّر الدور)
 SESSION_ADMIN_DEPARTMENT_SCOPE_ID = "admin_department_scope_id"
 
+_ADMIN_SCOPE_ROLES = frozenset({"admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean"})
+_COLLEGE_LEADERSHIP_MODES = frozenset({"college_dean", "academic_vice_dean"})
+
 
 def get_admin_department_scope_id() -> int | None:
     """معرّف القسم النشط في جلسة admin/admin_main لتصفية القوائم، أو None لكل الكلية."""
@@ -87,7 +90,7 @@ def get_admin_department_scope_id() -> int | None:
         if not has_request_context():
             return None
         role = _normalize_role((flask_session.get("user_role") or "").strip())
-        if role not in ("admin", "admin_main"):
+        if role not in _ADMIN_SCOPE_ROLES:
             return None
         raw = flask_session.get(SESSION_ADMIN_DEPARTMENT_SCOPE_ID)
         if raw in (None, ""):
@@ -108,7 +111,7 @@ def resolve_admin_department_scope_api_dict() -> dict | None:
     if raw in (None, ""):
         return None
     role = _normalize_role((session.get("user_role") or "").strip())
-    if role not in ("admin", "admin_main"):
+    if role not in _ADMIN_SCOPE_ROLES:
         return None
     try:
         iid = int(raw)
@@ -190,9 +193,15 @@ def _normalize_role(role: str) -> str:
         return "admin_main"
     if k == "head_of_department" or k_norm == "head_of_department" or k in _HEAD_ROLE_ALIASES or k_norm in _HEAD_ROLE_ALIASES:
         return "head_of_department"
-    if k in ("instructor", "student", "supervisor", "admin_main", "staff"):
+    if k in (
+        "instructor", "student", "supervisor", "admin_main", "staff",
+        "system_admin", "college_dean", "academic_vice_dean",
+    ):
         return k
-    if k_norm in ("instructor", "student", "supervisor", "admin_main", "staff"):
+    if k_norm in (
+        "instructor", "student", "supervisor", "admin_main", "staff",
+        "system_admin", "college_dean", "academic_vice_dean",
+    ):
         return k_norm
     return r
 
@@ -229,6 +238,23 @@ def _fetch_user_session_row(cur, username: str):
 def _fetch_user_login_row(cur, username: str):
     """قراءة صف تسجيل الدخول مع دعم ترقية العمود الجديد."""
     params = (username,)
+    extended = (
+        "SELECT username, password_hash, role, student_id, instructor_id, "
+        "COALESCE(is_active,1) AS is_active, "
+        "COALESCE(is_supervisor,0) AS is_supervisor, "
+        "COALESCE(is_college_quality_lead,0) AS is_college_quality_lead, "
+        "COALESCE(is_system_account,0) AS is_system_account, "
+        "role_profile_id, display_title_ar, "
+        "COALESCE(is_dept_quality_coordinator,0) AS is_dept_quality_coordinator "
+        "FROM users WHERE lower(username) = lower(?)"
+    )
+    try:
+        return cur.execute(extended, params).fetchone()
+    except Exception:
+        try:
+            cur.connection.rollback()
+        except Exception:
+            pass
     try:
         return cur.execute(
             """
@@ -322,6 +348,10 @@ def is_supervisor_effective_session(
     m = (active_mode or "").strip().lower()
     if r == "head_of_department":
         return m == "supervisor"
+    if r == "college_dean":
+        return m == "supervisor"
+    if r == "academic_vice_dean":
+        return m == "supervisor"
     if r != "instructor":
         return False
     try:
@@ -343,6 +373,103 @@ def current_supervisor_effective() -> bool:
     )
 
 
+def is_instructor_portal_effective_session(
+    user_role: str | None = None,
+    active_mode: str | None = None,
+    *,
+    require_instructor_id: bool = True,
+) -> bool:
+    """وضع الأستاذ الفعّال: instructor، أو قيادة كلية/قسم عند active_mode=instructor."""
+    role = _normalize_role((user_role or session.get("user_role") or "").strip())
+    am = (
+        (active_mode if active_mode is not None else session.get(SESSION_ACTIVE_MODE) or "")
+        .strip()
+        .lower()
+    )
+    try:
+        db_sup = int(session.get("is_supervisor") or 0) == 1
+    except (TypeError, ValueError):
+        db_sup = False
+    if require_instructor_id and not _session_has_instructor_id():
+        return False
+    if role == "instructor":
+        return not db_sup or am != "supervisor"
+    if role == "head_of_department":
+        return am == "instructor"
+    if role == "college_dean":
+        return am == "instructor"
+    if role == "academic_vice_dean":
+        return am == "instructor"
+    return False
+
+
+def supervisor_portal_ui_allowed(
+    user_role: str | None = None,
+    active_mode: str | None = None,
+) -> bool:
+    """بوابة المشرف — دور supervisor أو active_mode=supervisor."""
+    return is_supervisor_effective_session(
+        user_role or session.get("user_role"),
+        session.get("is_supervisor"),
+        active_mode if active_mode is not None else session.get(SESSION_ACTIVE_MODE),
+    )
+
+
+def supervisor_quality_admin_blocked() -> bool:
+    """مشرف في وضع الإشراف — يُمنع من صفحات إدارة ضمان الجودة."""
+    return supervisor_portal_ui_allowed()
+
+
+def is_college_leadership_ops_mode(
+    user_role: str | None = None,
+    active_mode: str | None = None,
+) -> bool:
+    """وضع القيادة على الكلية (عميد/وكيل) — وليس وضع الأستاذ/المشرف."""
+    role = _normalize_role((user_role or session.get("user_role") or "").strip())
+    am = (
+        (active_mode if active_mode is not None else session.get(SESSION_ACTIVE_MODE) or "")
+        .strip()
+        .lower()
+    )
+    if role == "college_dean":
+        return am in ("", "dean")
+    if role == "academic_vice_dean":
+        if am in ("dean", "hod", "head", "department_head"):
+            am = "vice_dean"
+        return am in ("", "vice_dean", "dean")
+    return False
+
+
+def admin_department_scope_ui_allowed(
+    user_role: str | None = None,
+    active_mode: str | None = None,
+) -> bool:
+    """شريط تصفية القسم — للإدارة وقيادة الكلية في وضع القيادة فقط."""
+    role = _normalize_role((user_role or session.get("user_role") or "").strip())
+    if role in ("admin", "admin_main", "system_admin"):
+        return True
+    return is_college_leadership_ops_mode(role, active_mode)
+
+
+def students_registry_view_only() -> bool:
+    """
+    عرض قوائم الطلبة والتسجيلات والجداول دون تعديل.
+    يشمل: أستاذ/مشرف، عميد في وضع القيادة، رئيس قسم في وضع مشرف.
+    """
+    role = _normalize_role((session.get("user_role") or "").strip())
+    if role in ("instructor", "supervisor"):
+        return True
+    if role == "college_dean":
+        am = (session.get(SESSION_ACTIVE_MODE) or "dean").strip().lower()
+        return am in ("", "dean")
+    if role == "academic_vice_dean":
+        am = (session.get(SESSION_ACTIVE_MODE) or "vice_dean").strip().lower()
+        return am in ("", "vice_dean", "dean")
+    if current_supervisor_effective() and role not in ("admin", "admin_main", "system_admin"):
+        return True
+    return False
+
+
 def compute_capabilities(
     user_role: str | None,
     is_supervisor_val: int | None,
@@ -354,6 +481,9 @@ def compute_capabilities(
     تُحاكي منطق ``base_nav.html`` السابق مع إمكانية التوسعة دون تغيير كل قالب.
     """
     role = _normalize_role((user_role or "").strip())
+    if role == "system_admin":
+        from backend.core.permissions import compute_system_admin_capabilities
+        return compute_system_admin_capabilities()
     try:
         isv = int(is_supervisor_val or 0) == 1
     except (TypeError, ValueError):
@@ -371,10 +501,14 @@ def compute_capabilities(
 
     is_supervisor_effective = is_supervisor_effective_session(role, is_supervisor_val, active_mode)
 
-    can_switch = (role == "instructor" and isv) or (role == "head_of_department")
+    can_switch = (role == "instructor" and isv) or (role == "head_of_department") or (role in _COLLEGE_LEADERSHIP_MODES)
     switch_profile = None
     if role == "head_of_department":
         switch_profile = "triple"
+    elif role == "college_dean":
+        switch_profile = "dean_triple" if isv else "dean_dual"
+    elif role == "academic_vice_dean":
+        switch_profile = "vice_dean_triple" if isv else "vice_dean_dual"
     elif role == "instructor" and isv:
         switch_profile = "dual"
 
@@ -398,7 +532,7 @@ def compute_capabilities(
             inst_sup_nav = True
             student_affairs_att_only = True
             nav_transcript = False
-        else:
+        elif hod_mode == "supervisor":
             staff_planning = False
             show_grade_drafts = False
             staff_quality = False
@@ -408,7 +542,7 @@ def compute_capabilities(
             student_affairs_att_only = False
             nav_transcript = True
 
-        return {
+        hod_caps = {
             "v": 1,
             "nav_my_assigned_courses": nav_my,
             "nav_users_admin": False,
@@ -440,6 +574,7 @@ def compute_capabilities(
             "is_instructor_or_supervisor_nav": inst_sup_nav,
             "nav_staff_operations_menu": hod_mode == "head",
             "nav_instructor_portal_menu": hod_mode in ("instructor", "supervisor"),
+            "nav_instructor_quality_hub": hod_mode == "instructor",
             "can_switch_active_mode": can_switch,
             "active_mode_switch_profile": switch_profile,
             "is_student": False,
@@ -448,13 +583,26 @@ def compute_capabilities(
             "can_manage_transcript_admin": staff_planning,
             "nav_student_affairs_attendance_only": student_affairs_att_only,
             "nav_transcript_nav": nav_transcript,
+            "nav_student_affairs_menu": hod_mode == "head",
+            "nav_student_portal": False,
+            "nav_student_hub_more": False,
+            "nav_student_registrations": False,
+            "nav_student_academic_identity": False,
+            "nav_student_academic_progress": False,
+            "nav_dashboard": hod_mode == "head",
+            "nav_admin_settings": hod_mode == "head",
+            "nav_planning_student_view": False,
             "can_switch_department_scope": False,
         }
+        if hod_mode == "supervisor":
+            from backend.core.permissions import apply_supervisor_portal_caps
+            apply_supervisor_portal_caps(hod_caps)
+        return hod_caps
 
-    staff_planning = role in ("admin", "admin_main", "head_of_department")
+    staff_planning = role in ("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     # مسودات الدرجات من القائمة العلوية: الإدارة/رئيس القسم فقط؛ الأستاذ يدخلها من «مقرراتي»
-    show_grade_drafts = role in ("admin", "admin_main", "head_of_department")
-    staff_quality = role in ("admin", "admin_main", "head_of_department")
+    show_grade_drafts = role in ("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    staff_quality = role in ("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     dual_inst_sup = role == "instructor" and isv
     am_eff = am if am else ("instructor" if dual_inst_sup else "")
     inst_portal = role == "instructor" and (not dual_inst_sup or am_eff != "supervisor")
@@ -462,13 +610,13 @@ def compute_capabilities(
     show_faculty_scorecards = staff_quality or inst_portal
     show_ilo_catalog = staff_quality or inst_portal
 
-    return {
+    base_caps = {
         "v": 1,
         "nav_my_assigned_courses": inst_portal,
-        "nav_users_admin": role in ("admin", "admin_main"),
-        "nav_college_catalog": role in ("admin", "admin_main"),
-        "nav_supervision": role in ("admin", "admin_main"),
-        "nav_academic_rules": role in ("admin", "admin_main"),
+        "nav_users_admin": role in ("admin", "admin_main", "system_admin", "college_dean"),
+        "nav_college_catalog": role in ("admin", "admin_main", "system_admin", "college_dean"),
+        "nav_supervision": role in ("admin", "admin_main", "system_admin", "college_dean"),
+        "nav_academic_rules": role in ("admin", "admin_main", "system_admin", "college_dean"),
         "nav_course_registration_report": staff_planning,
         "nav_schedule_versions": staff_planning,
         "nav_exam_schedule_versions": staff_planning,
@@ -496,11 +644,12 @@ def compute_capabilities(
         "nav_surveys_hub": role in ("student", "instructor", "supervisor", "staff"),
         "nav_surveys_results": staff_quality,
         "nav_dashboard": role != "student",
-        "nav_admin_settings": role != "student",
-        "nav_student_affairs_menu": role != "student" and not sup_portal,
+        "nav_admin_settings": role in ("admin", "admin_main", "system_admin"),
+        "nav_student_affairs_menu": role != "student" and not sup_portal and not inst_portal,
         "nav_planning_student_view": role == "student",
         "nav_staff_operations_menu": staff_planning,
-        "nav_instructor_portal_menu": False,
+        "nav_instructor_portal_menu": inst_portal,
+        "nav_instructor_quality_hub": inst_portal,
         "is_supervisor_effective": bool(is_supervisor_effective),
         "is_instructor_or_supervisor_nav": inst_portal or sup_portal,
         "can_switch_active_mode": can_switch,
@@ -513,8 +662,12 @@ def compute_capabilities(
         "nav_transcript_nav": staff_planning
         or (role == "student")
         or sup_portal,
-        "can_switch_department_scope": role in ("admin", "admin_main"),
+        "can_switch_department_scope": role in ("admin", "admin_main", "college_dean", "academic_vice_dean", "system_admin"),
     }
+    if sup_portal:
+        from backend.core.permissions import apply_supervisor_portal_caps
+        apply_supervisor_portal_caps(base_caps)
+    return base_caps
 
 
 def _effective_roles(user_role: str) -> set:
@@ -525,11 +678,29 @@ def _effective_roles(user_role: str) -> set:
     """
     r = _normalize_role(user_role)
     roles = {r} if r else set()
+    if r == "system_admin":
+        roles.update({"system_admin", "admin_main", "admin"})
     try:
         is_sup = int(session.get("is_supervisor") or 0)
     except Exception:
         is_sup = 0
     active = session.get(SESSION_ACTIVE_MODE)
+    if r == "college_dean":
+        roles.add("college_dean")
+        am = (active or "dean").strip().lower() if active is not None else "dean"
+        if am == "instructor":
+            roles.add("instructor")
+        elif am == "supervisor":
+            roles.update({"supervisor", "instructor"})
+    if r == "academic_vice_dean":
+        roles.add("academic_vice_dean")
+        am = (active or "vice_dean").strip().lower() if active is not None else "vice_dean"
+        if am in ("dean", "hod", "head", "department_head"):
+            am = "vice_dean"
+        if am == "instructor":
+            roles.add("instructor")
+        elif am == "supervisor":
+            roles.update({"supervisor", "instructor"})
     if r == "instructor" and is_sup == 1:
         if is_supervisor_effective_session(r, is_sup, active):
             roles.add("supervisor")
@@ -548,10 +719,8 @@ def _effective_roles(user_role: str) -> set:
     return roles
 
 
-def _head_of_department_blocked_path(path: str) -> bool:
-    """مسارات الإدارة والإعدادات المحصورة على admin_main فقط."""
-    p = (path or "").strip().lower()
-    blocked_prefixes = (
+def _admin_settings_blocked_prefixes() -> tuple[str, ...]:
+    return (
         "/users",
         "/users_admin",
         "/admin/project_status",
@@ -560,8 +729,190 @@ def _head_of_department_blocked_path(path: str) -> bool:
         "/admin/settings",
         "/academic_rules",
         "/academic_rules_page",
+        "/college_catalog",
+        "/college/catalog",
+        "/department_policy_approvals",
+        "/department_policy_approvals_page",
+        "/course_equivalences",
+        "/course_equivalences_page",
+        "/system_docs",
     )
-    return any(p.startswith(prefix) for prefix in blocked_prefixes)
+
+
+def _dual_role_admin_blocked_path(path: str, user_role: str, active_mode: str | None) -> bool:
+    """مسارات الإدارة محصورة على الوضع القيادي (رئيس قسم/عميد) وليس وضع الأستاذ/المشرف."""
+    r = _normalize_role((user_role or "").strip())
+    am = (active_mode or "").strip().lower()
+    if r == "head_of_department":
+        if am in ("instructor", "supervisor"):
+            p = (path or "").strip().lower()
+            return any(p.startswith(prefix) for prefix in _admin_settings_blocked_prefixes())
+        return False
+    if r == "college_dean":
+        if am in ("instructor", "supervisor"):
+            p = (path or "").strip().lower()
+            return any(p.startswith(prefix) for prefix in _admin_settings_blocked_prefixes())
+        return False
+    if r == "academic_vice_dean":
+        p = (path or "").strip().lower()
+        return any(p.startswith(prefix) for prefix in _admin_settings_blocked_prefixes())
+    return False
+
+
+def _head_of_department_blocked_path(path: str) -> bool:
+    """Legacy wrapper — يستخدم active_mode من الجلسة."""
+    try:
+        am = session.get(SESSION_ACTIVE_MODE)
+        role = session.get("user_role")
+    except Exception:
+        return False
+    return _dual_role_admin_blocked_path(path, role or "", am)
+
+
+_STUDENT_SURVEY_BLOCKED = (
+    "/academic_quality/surveys/results",
+    "/academic_quality/surveys/trends",
+    "/academic_quality/surveys/invites",
+    "/academic_quality/survey_admin",
+)
+
+_STUDENT_ALLOWED_PREFIXES = (
+    "/my_portal",
+    "/my_registrations",
+    "/my_schedule",
+    "/my_exams",
+    "/my_transcript",
+    "/my_announcements",
+    "/my_requests",
+    "/academic_quality/student/",
+    "/students/evaluations",
+    "/students/me",
+    "/students/portal_summary",
+    "/students/academic_progress",
+    "/students/identity_context",
+    "/students/get_registrations",
+    "/students/eligible_courses",
+    "/academic_quality/ilo/student/",
+    "/academic_quality/ilo/api/student/",
+    "/academic_quality/glossary",
+    "/auth/",
+    "/notifications",
+    "/schedule/student_",
+    "/schedule/meta",
+    "/grades/transcript/",
+    "/grades/export/",
+    "/performance/status/",
+    "/admin/settings/current_term",
+    "/list_courses",
+    "/enrollment/plans",
+    "/registration_requests/",
+    "/api/v1/students/me",
+    "/transcript_page",
+    "/static/",
+    "/health",
+    "/favicon",
+)
+
+
+def student_portal_path_allowed(path: str) -> bool:
+    """مسارات مسموحة للطالب (صفحات + APIs). الباقي يُحجب."""
+    p = (path or "/").split("?")[0].rstrip("/") or "/"
+    if p in ("/", "/login", "/logout"):
+        return True
+    if any(p.startswith(b) for b in _STUDENT_SURVEY_BLOCKED):
+        return False
+    if p.startswith("/academic_quality/surveys"):
+        return True
+    for prefix in _STUDENT_ALLOWED_PREFIXES:
+        if p.startswith(prefix):
+            return True
+    return False
+
+
+def register_student_route_guard(app) -> None:
+    """يمنع الطالب من فتح صفحات الإدارة حتى لو ظهرت في الشريط لحظياً."""
+
+    @app.before_request
+    def _block_student_staff_routes():
+        from flask import jsonify, redirect, request, session, url_for
+
+        if request.method == "OPTIONS":
+            return None
+        if not session.get(SESSION_KEY):
+            return None
+        role = _normalize_role((session.get("user_role") or "").strip())
+        if role != "student":
+            return None
+        path = request.path or "/"
+        if student_portal_path_allowed(path):
+            return None
+        accept = (request.headers.get("Accept") or "").lower()
+        is_api = (
+            request.is_json
+            or "application/json" in accept
+            or path.startswith("/api/")
+            or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        )
+        if is_api:
+            return jsonify({
+                "status": "error",
+                "message": "غير مصرح — هذه الصفحة للموظفين فقط",
+                "code": "FORBIDDEN",
+            }), 403
+        return redirect(url_for("my_portal_page"))
+
+
+_INSTRUCTOR_STUDENT_PORTAL_PREFIXES = (
+    "/my_portal",
+    "/my_registrations",
+    "/my_transcript",
+    "/my_announcements",
+    "/my_requests",
+    "/academic_quality/student/",
+)
+
+
+def instructor_blocked_student_portal_path(path: str) -> bool:
+    p = (path or "/").split("?")[0].rstrip("/") or "/"
+    return any(p.startswith(prefix) for prefix in _INSTRUCTOR_STUDENT_PORTAL_PREFIXES)
+
+
+def register_instructor_route_guard(app) -> None:
+    """يمنع الأستاذ من صفحات بوابة الطالب (my_portal، كشف الطالب…)."""
+
+    @app.before_request
+    def _block_instructor_student_portal_routes():
+        from flask import jsonify, redirect, request, session, url_for
+
+        if request.method == "OPTIONS":
+            return None
+        if not session.get(SESSION_KEY):
+            return None
+        role = _normalize_role((session.get("user_role") or "").strip())
+        if role not in ("instructor", "head_of_department"):
+            return None
+        # رئيس القسم في وضع رئيس القسم — لا يُمنع
+        if role == "head_of_department":
+            active = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
+            if active in ("", "head", "hod", "department_head"):
+                return None
+        path = request.path or "/"
+        if not instructor_blocked_student_portal_path(path):
+            return None
+        accept = (request.headers.get("Accept") or "").lower()
+        is_api = (
+            request.is_json
+            or "application/json" in accept
+            or path.startswith("/api/")
+            or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        )
+        if is_api:
+            return jsonify({
+                "status": "error",
+                "message": "هذه الصفحة للطلاب فقط",
+                "code": "FORBIDDEN",
+            }), 403
+        return redirect(url_for("my_courses_page"))
 
 # إعداد Flask-Login (username هو المعرّف لأن جدول users يستخدمه كمفتاح أساسي)
 login_manager = LoginManager() if LoginManager is not None else None
@@ -653,7 +1004,7 @@ def verify_password(password: str, hashed: str) -> bool:
 def _purge_legacy_auth_cookies(resp):
     """حذف cookies قديمة (اسم session + domain-scoped) تسبب تعارضاً خلف Cloudflare."""
     if not any(request.cookies.get(n) for n in LEGACY_AUTH_COOKIE_NAMES):
-        return resp
+        pass  # still attempt delete below when clearing logout
     host = (request.host or "").split(":")[0].lower()
     domains = {None}
     if host.endswith("uod-engineering.org"):
@@ -668,6 +1019,57 @@ def _purge_legacy_auth_cookies(resp):
             else:
                 resp.delete_cookie(name, path="/")
     return resp
+
+
+def _clear_session_cookies(resp):
+    """حذف cookie الجلسة الحالية (so_session) بكل النطاقات المحتملة."""
+    from flask import current_app
+
+    name = current_app.config.get("SESSION_COOKIE_NAME", SESSION_COOKIE_NAME)
+    domain_cfg = (current_app.config.get("SESSION_COOKIE_DOMAIN") or "").strip() or None
+    host = (request.host or "").split(":")[0].lower()
+    domains = {None, domain_cfg}
+    if host.endswith("uod-engineering.org"):
+        domains.update({".uod-engineering.org", "uod-engineering.org"})
+    if host.startswith("www."):
+        bare = host[4:]
+        domains.update({f".{bare}", bare})
+
+    cookie_names = {name, "session", "remember_token"}
+    for cookie_name in cookie_names:
+        for domain in domains:
+            try:
+                if domain:
+                    resp.delete_cookie(cookie_name, path="/", domain=domain)
+                else:
+                    resp.delete_cookie(cookie_name, path="/")
+            except Exception:
+                pass
+    _purge_legacy_auth_cookies(resp)
+    try:
+        resp.delete_cookie(LOGIN_PROBE_COOKIE, path="/")
+    except Exception:
+        pass
+    return resp
+
+
+def _session_is_logged_in() -> bool:
+    """مصدر الحقيقة للمصادقة — SESSION_KEY فقط (لا نُعيد الدخول عبر Flask-Login بعد الخروج)."""
+    return bool(session.get(SESSION_KEY))
+
+
+def perform_logout() -> None:
+    """مسح جلسة المصادقة (مشترك بين POST /auth/logout و GET /logout)."""
+    try:
+        if logout_user is not None:
+            logout_user()
+    except Exception:
+        logger.exception("failed to logout_user (Flask-Login)")
+    try:
+        session.clear()
+        session.modified = True
+    except Exception:
+        logger.exception("failed to clear session on logout")
 
 
 def _redirect_to_login():
@@ -685,12 +1087,7 @@ def login_required(f):
     """
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        is_logged_in = bool(session.get(SESSION_KEY, False))
-        if not is_logged_in and current_user is not None:
-            try:
-                is_logged_in = bool(current_user.is_authenticated)
-            except Exception:
-                is_logged_in = False
+        is_logged_in = _session_is_logged_in()
         if not is_logged_in:
             # تحديد ما إذا كان الطلب API/JSON أو من Ajax/fetch
             accept = (request.headers.get("Accept") or "").lower()
@@ -716,12 +1113,7 @@ def admin_required(f):
     """ديكوراتور للمصادقة - يتطلب صلاحيات إدارية"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        is_logged_in = bool(session.get(SESSION_KEY, False))
-        if not is_logged_in and current_user is not None:
-            try:
-                is_logged_in = bool(current_user.is_authenticated)
-            except Exception:
-                is_logged_in = False
+        is_logged_in = _session_is_logged_in()
         if not is_logged_in:
             return jsonify({
                 'status': 'error',
@@ -754,12 +1146,7 @@ def role_required(*roles):
     def decorator(f):
         @wraps(f)
         def wrapped(*args, **kwargs):
-            is_logged_in = bool(session.get(SESSION_KEY, False))
-            if not is_logged_in and current_user is not None:
-                try:
-                    is_logged_in = bool(current_user.is_authenticated)
-                except Exception:
-                    is_logged_in = False
+            is_logged_in = _session_is_logged_in()
             if not is_logged_in:
                 accept = (request.headers.get("Accept") or "").lower()
                 is_api_request = (
@@ -786,7 +1173,11 @@ def role_required(*roles):
                 user_role = session.get('user_role')
             normalized_allowed = {_normalize_role(r) for r in roles}
             effective = _effective_roles(user_role)
-            if _normalize_role(user_role or "") == "head_of_department" and _head_of_department_blocked_path(request.path):
+            if _dual_role_admin_blocked_path(
+                request.path,
+                user_role or "",
+                session.get(SESSION_ACTIVE_MODE),
+            ):
                 accept = (request.headers.get("Accept") or "").lower()
                 is_api_request = (
                     request.is_json
@@ -837,11 +1228,22 @@ def is_college_quality_lead_session() -> bool:
         return False
 
 
+def is_system_admin_session() -> bool:
+    from backend.core.user_admin_policy import is_system_admin_session as _isa
+    return _isa(session)
+
+
+def is_college_dean_session() -> bool:
+    from backend.core.user_admin_policy import is_college_dean_session as _icd
+    return _icd(session)
+
+
 def can_edit_accreditation_catalog(user_role: str | None = None) -> bool:
     """
     تعديل مصفوفة الأدلة الثابتة (أنواع + قواعد) — مستوى المؤسسة.
-    admin دائماً؛ admin_main فقط إن عُيّن كرئيس جودة بالكلية.
     """
+    if is_system_admin_session():
+        return True
     try:
         if int(session.get("is_platform_admin") or 0) == 1:
             return True
@@ -854,10 +1256,14 @@ def can_edit_accreditation_catalog(user_role: str | None = None) -> bool:
 
 
 def can_bind_accreditation_evidence(user_role: str | None = None) -> bool:
-    """ربط المصادر الفعلية — رئيس قسم، منسق جودة، أو مسؤول/رئيس جودة الكلية."""
+    """ربط المصادر الفعلية — رئيس قسم، منسق جودة، عميد، أو مسؤول."""
     if can_edit_accreditation_catalog(user_role):
         return True
+    if is_college_dean_session():
+        return True
     role = _normalize_role((user_role or session.get("user_role") or "").strip())
+    if role == "academic_vice_dean":
+        return True
     if role in ("admin", "admin_main"):
         return True
     if role == "head_of_department":
@@ -1002,6 +1408,11 @@ def init_auth(app):
         role = None
         student_id = None
         is_supervisor_flag = 0
+        is_system_account_flag = 0
+        role_profile_id_val = None
+        display_title_ar_val = None
+        is_dept_quality_coordinator_flag = 0
+        db_role = None
         # اسم المستخدم المعياري من عمود users.username (ضروري لمزامنة الجلسة مع قاعدة البيانات
         # ولـ POST /auth/active_mode؛ لا يُستخدم المُدخل الخام إذا وُجد الصف عبر student_id/instructor_id)
         username_db = None
@@ -1072,6 +1483,20 @@ def init_auth(app):
                                 college_quality_lead_flag = int(db_college_quality_lead or 0)
                             except Exception:
                                 college_quality_lead_flag = 0
+                            if len(row) > 8:
+                                try:
+                                    is_system_account_flag = int(row[8] or 0)
+                                except (TypeError, ValueError):
+                                    is_system_account_flag = 0
+                            if len(row) > 9:
+                                role_profile_id_val = row[9]
+                            if len(row) > 10:
+                                display_title_ar_val = row[10]
+                            if len(row) > 11:
+                                try:
+                                    is_dept_quality_coordinator_flag = int(row[11] or 0)
+                                except (TypeError, ValueError):
+                                    is_dept_quality_coordinator_flag = 0
             except Exception:
                 logger.exception("login: failed to query users table")
                 if users_count is None:
@@ -1088,15 +1513,16 @@ def init_auth(app):
 
         if role is None and users_count == 0:
             if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
-                role = "admin"
-                # seed admin into users table to support Flask-Login persistence
+                role = "system_admin"
+                is_system_account_flag = 1
                 try:
                     if get_connection is not None:
                         with get_connection() as conn2:
                             cur2 = conn2.cursor()
                             cur2.execute(
                                 """
-                                INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')
+                                INSERT INTO users (username, password_hash, role, is_system_account)
+                                VALUES (?, ?, 'system_admin', 1)
                                 ON CONFLICT (username) DO NOTHING
                                 """,
                                 (ADMIN_USERNAME, hash_password(ADMIN_PASSWORD)),
@@ -1109,23 +1535,32 @@ def init_auth(app):
             logger.warning(f"Failed login attempt for user: {username}")
             return _err("اسم المستخدم أو كلمة المرور غير صحيحة", "INVALID_CREDENTIALS", 401)
 
-        role = _normalize_role((role or "").strip())
+        from backend.core.user_admin_policy import resolve_user_role_from_db
+        role = resolve_user_role_from_db(db_role or role, is_system_account_flag)
         canonical_user = (username_db or username).strip()
         session.clear()
-        # جلسة المتصفّح بدون Expires — تتجنّب رفض الكوكي عند انحراف ساعة Docker (~1h)
         session.permanent = False
         session[SESSION_KEY] = True
         session[SESSION_USER] = canonical_user
         session['user_role'] = role
         session['is_supervisor'] = 1 if int(is_supervisor_flag or 0) == 1 else 0
+        session['is_system_account'] = 1 if int(is_system_account_flag or 0) == 1 else 0
+        session['is_dept_quality_coordinator'] = 1 if int(is_dept_quality_coordinator_flag or 0) == 1 else 0
+        if role_profile_id_val not in (None, ""):
+            try:
+                session['role_profile_id'] = int(role_profile_id_val)
+            except (TypeError, ValueError):
+                pass
+        if display_title_ar_val:
+            session['display_title_ar'] = str(display_title_ar_val)
         try:
             session['is_college_quality_lead'] = 1 if int(college_quality_lead_flag or 0) == 1 else 0
         except NameError:
             session['is_college_quality_lead'] = 0
         try:
-            session['is_platform_admin'] = 1 if str(db_role or '').strip().lower() == 'admin' else 0
+            session['is_platform_admin'] = 1 if role == 'system_admin' else 0
         except NameError:
-            session['is_platform_admin'] = 1 if role == 'admin' else 0
+            session['is_platform_admin'] = 1 if role == 'system_admin' else 0
         session.pop(SESSION_ACTIVE_MODE, None)
         if role == "supervisor":
             session[SESSION_ACTIVE_MODE] = "supervisor"
@@ -1133,12 +1568,16 @@ def init_auth(app):
             session[SESSION_ACTIVE_MODE] = "instructor"
         elif role == "head_of_department":
             session[SESSION_ACTIVE_MODE] = "head"
+        elif role == "college_dean":
+            session[SESSION_ACTIVE_MODE] = "dean"
+        elif role == "academic_vice_dean":
+            session[SESSION_ACTIVE_MODE] = "vice_dean"
         session[SESSION_LOGIN_TIME] = str(os.times())
         session['_auth_fresh'] = True
         if student_id:
             session['student_id'] = student_id
         # ربط حساب المشرف/المدرّس/رئيس القسم بسجل عضو هيئة تدريس (إن وُجد) لوضعي الأستاذ والمشرف
-        if role in ("supervisor", "instructor", "head_of_department"):
+        if role in ("supervisor", "instructor", "head_of_department", "college_dean", "academic_vice_dean"):
             try:
                 if 'instructor_id' in locals() and instructor_id:
                     session['instructor_id'] = int(instructor_id)
@@ -1174,7 +1613,7 @@ def init_auth(app):
                 'role': role
             }), 200
         from flask import make_response, redirect as _redirect
-        if role in ("admin", "admin_main", "head_of_department"):
+        if role in ("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department"):
             target = "/dashboard?logged_in=1"
         elif role == "student" and student_id:
             target = "/my_portal?logged_in=1"
@@ -1258,54 +1697,28 @@ def init_auth(app):
     @auth_bp.route('/logout', methods=['POST'])
     def logout():
         """تسجيل الخروج"""
+        from flask import make_response
+
         username = session.get(SESSION_USER, 'unknown')
-        try:
-            if logout_user is not None:
-                logout_user()
-        except Exception:
-            logger.exception("failed to logout_user (Flask-Login)")
-        # لا تستخدم session.clear() هنا لأن Flask-Login يحتاج وضع علامة لمسح cookie "تذكرني"
-        # (logout_user يضع session['_remember']='clear' عند الحاجة).
-        for k in (
-            SESSION_KEY,
-            SESSION_USER,
-            SESSION_LOGIN_TIME,
-            "user_role",
-            "is_supervisor",
-            "student_id",
-            "instructor_id",
-            SESSION_ACTIVE_MODE,
-            SESSION_ADMIN_DEPARTMENT_SCOPE_ID,
-        ):
-            try:
-                session.pop(k, None)
-            except Exception:
-                pass
+        perform_logout()
         logger.info(f"User {username} logged out")
-        return jsonify({
+        resp = make_response(jsonify({
             'status': 'ok',
             'message': 'تم تسجيل الخروج بنجاح'
-        }), 200
+        }), 200)
+        _clear_session_cookies(resp)
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        return resp
     
     @auth_bp.route('/check', methods=['GET'])
     def check_auth():
         """التحقق من حالة تسجيل الدخول"""
-        is_authenticated = session.get(SESSION_KEY, False)
+        is_authenticated = _session_is_logged_in()
         user = session.get(SESSION_USER, None) if is_authenticated else None
         role = session.get('user_role', None) if is_authenticated else None
         student_id_val = session.get('student_id', None) if is_authenticated else None
         instructor_id_val = session.get('instructor_id', None) if is_authenticated else None
         is_supervisor_val = session.get('is_supervisor', 0) if is_authenticated else 0
-        if current_user is not None:
-            try:
-                if current_user.is_authenticated:
-                    is_authenticated = True
-                    user = getattr(current_user, "username", user)
-                    # لا نأخذ role من current_user — يُحمّل عند تسجيل الدخول وقد لا يطابق السجل بعد تعديل الدور في DB
-                    student_id_val = getattr(current_user, "student_id", student_id_val)
-                    instructor_id_val = getattr(current_user, "instructor_id", instructor_id_val)
-            except Exception:
-                pass
         if is_authenticated:
             if not session.pop('_auth_fresh', False):
                 _sync_user_session_from_db(user or session.get(SESSION_USER))
@@ -1337,10 +1750,48 @@ def init_auth(app):
                 elif r0 == "head_of_department":
                     session[SESSION_ACTIVE_MODE] = "head"
                     active_mode_val = "head"
+                elif r0 == "college_dean":
+                    session[SESSION_ACTIVE_MODE] = "dean"
+                    active_mode_val = "dean"
+                elif r0 == "academic_vice_dean":
+                    session[SESSION_ACTIVE_MODE] = "vice_dean"
+                    active_mode_val = "vice_dean"
         caps = None
         admin_dept_scope = None
         if is_authenticated:
-            caps = compute_capabilities(role, int(is_supervisor_val or 0), active_mode_val)
+            from backend.core.permissions import resolve_capabilities_for_user
+            from backend.services.utilities import get_connection as _gc
+
+            rp_id = session.get("role_profile_id")
+            rp_code = session.get("role_profile_code")
+            try:
+                rp_id = int(rp_id) if rp_id not in (None, "") else None
+            except (TypeError, ValueError):
+                rp_id = None
+            conn_ctx = _gc() if _gc else None
+            if conn_ctx:
+                with conn_ctx as conn:
+                    caps = resolve_capabilities_for_user(
+                        role=role,
+                        is_supervisor_val=int(is_supervisor_val or 0),
+                        active_mode=active_mode_val,
+                        username=user,
+                        role_profile_id=rp_id,
+                        role_profile_code=rp_code,
+                        is_system_account=int(session.get("is_system_account") or 0),
+                        conn=conn,
+                    )
+            else:
+                caps = resolve_capabilities_for_user(
+                    role=role,
+                    is_supervisor_val=int(is_supervisor_val or 0),
+                    active_mode=active_mode_val,
+                    username=user,
+                    role_profile_id=rp_id,
+                    role_profile_code=rp_code,
+                    is_system_account=int(session.get("is_system_account") or 0),
+                    conn=None,
+                )
             admin_dept_scope = resolve_admin_department_scope_api_dict()
 
         resp = jsonify({
@@ -1374,7 +1825,7 @@ def init_auth(app):
             isv = 0
         # صمام أمان: إذا بقي الدور غير صالح بعد المزامنة، حاول الإنقاذ من users
         # بالاعتماد على instructor_id (مفيد لحسابات ربطت عبر معرف التدريس).
-        if role not in ("head_of_department", "instructor") and get_connection is not None:
+        if role not in ("head_of_department", "instructor", "college_dean") and get_connection is not None:
             try:
                 row = None
                 user_hint = (session.get(SESSION_USER) or "").strip()
@@ -1416,6 +1867,116 @@ def init_auth(app):
                         isv = isv_db
             except Exception:
                 logger.exception("active_mode fallback sync failed")
+        if role == "college_dean":
+            allowed = ("dean", "instructor", "supervisor") if isv else ("dean", "instructor")
+            if mode not in allowed:
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "وضع غير صالح",
+                            "code": "INVALID_MODE",
+                        }
+                    ),
+                    400,
+                )
+            if mode in ("instructor", "supervisor") and not _session_has_instructor_id():
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "يجب ربط الحساب برقم عضو هيئة التدريس لتفعيل وضع الأستاذ/المشرف",
+                            "code": "NO_INSTRUCTOR_ID",
+                        }
+                    ),
+                    400,
+                )
+            prev = session.get(SESSION_ACTIVE_MODE)
+            session[SESSION_ACTIVE_MODE] = mode
+            session.modified = True
+            user = session.get(SESSION_USER, "?")
+            logger.info("active_mode_switch user=%s from=%s to=%s (college_dean)", user, prev, mode)
+            try:
+                from backend.core.permissions import compute_college_dean_capabilities
+                caps = compute_college_dean_capabilities(mode, isv, has_instructor_id=_session_has_instructor_id())
+            except Exception:
+                logger.exception("compute_capabilities failed (dean active_mode)")
+                session[SESSION_ACTIVE_MODE] = prev
+                session.modified = True
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "خطأ داخلي عند حساب الصلاحيات بعد التبديل",
+                            "code": "CAPS_ERROR",
+                        }
+                    ),
+                    500,
+                )
+            out = jsonify(
+                {
+                    "status": "ok",
+                    "active_mode": mode,
+                    "capabilities": caps,
+                }
+            )
+            out.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            return out, 200
+        if role == "academic_vice_dean":
+            allowed = ("vice_dean", "instructor", "supervisor") if isv else ("vice_dean", "instructor")
+            if mode not in allowed:
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "وضع غير صالح",
+                            "code": "INVALID_MODE",
+                        }
+                    ),
+                    400,
+                )
+            if mode in ("instructor", "supervisor") and not _session_has_instructor_id():
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "يجب ربط الحساب برقم عضو هيئة تدريس لتفعيل وضع الأستاذ/المشرف",
+                            "code": "NO_INSTRUCTOR_ID",
+                        }
+                    ),
+                    400,
+                )
+            prev = session.get(SESSION_ACTIVE_MODE)
+            session[SESSION_ACTIVE_MODE] = mode
+            session.modified = True
+            user = session.get(SESSION_USER, "?")
+            logger.info("active_mode_switch user=%s from=%s to=%s (academic_vice_dean)", user, prev, mode)
+            try:
+                from backend.core.permissions import compute_academic_vice_dean_capabilities
+                caps = compute_academic_vice_dean_capabilities(mode, isv, has_instructor_id=_session_has_instructor_id())
+            except Exception:
+                logger.exception("compute_capabilities failed (vice_dean active_mode)")
+                session[SESSION_ACTIVE_MODE] = prev
+                session.modified = True
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "خطأ داخلي عند حساب الصلاحيات بعد التبديل",
+                            "code": "CAPS_ERROR",
+                        }
+                    ),
+                    500,
+                )
+            out = jsonify(
+                {
+                    "status": "ok",
+                    "active_mode": mode,
+                    "capabilities": caps,
+                }
+            )
+            out.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            return out, 200
         if role == "head_of_department":
             if mode not in ("head", "instructor", "supervisor"):
                 return (
@@ -1527,7 +2088,7 @@ def init_auth(app):
         raw_id = data.get("department_id")
         _sync_user_session_from_db(session.get(SESSION_USER))
         role = _normalize_role((session.get("user_role") or "").strip())
-        if role not in ("admin", "admin_main"):
+        if role not in _ADMIN_SCOPE_ROLES:
             return (
                 jsonify(
                     {
@@ -1654,6 +2215,68 @@ def init_auth(app):
         out.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         return out, 200
 
+    @auth_bp.route("/admin_department_scope/status", methods=["GET"])
+    @login_required
+    def admin_department_scope_status():
+        """ملخص محتوى نطاق القسم الحالي (لتنبيه الواجهة عند فراغ القائمة)."""
+        _sync_user_session_from_db(session.get(SESSION_USER))
+        role = _normalize_role((session.get("user_role") or "").strip())
+        if role not in _ADMIN_SCOPE_ROLES:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "غير مسموح",
+                        "code": "FORBIDDEN",
+                    }
+                ),
+                403,
+            )
+        dept_id = get_admin_department_scope_id()
+        if dept_id is None:
+            out = jsonify(
+                {
+                    "status": "ok",
+                    "scoped": False,
+                    "student_count": None,
+                    "course_count": None,
+                    "is_empty": False,
+                }
+            )
+            out.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            return out, 200
+        if get_connection is None:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "قاعدة البيانات غير متاحة",
+                        "code": "DB",
+                    }
+                ),
+                500,
+            )
+        try:
+            from backend.core.department_scope_policy import department_scope_data_summary
+
+            with get_connection() as conn:
+                summary = department_scope_data_summary(conn, int(dept_id))
+        except Exception:
+            logger.exception("admin_department_scope_status failed")
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "تعذّر قراءة ملخص النطاق",
+                        "code": "DB",
+                    }
+                ),
+                500,
+            )
+        out = jsonify({"status": "ok", "scoped": True, **summary})
+        out.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        return out, 200
+
     @auth_bp.route('/change_password', methods=['POST'])
     @login_required
     def change_password():
@@ -1671,6 +2294,7 @@ def init_auth(app):
         csrf = app.extensions.get("csrf")
         if csrf is not None:
             csrf.exempt(login)
+            csrf.exempt(logout)
             csrf.exempt(set_active_mode)
             csrf.exempt(set_admin_department_scope)
     except Exception:

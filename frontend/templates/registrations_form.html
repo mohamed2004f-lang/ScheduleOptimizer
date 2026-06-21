@@ -318,6 +318,7 @@ let REG_GROUP_OPTIONS = {}; // course_name -> [options]
 let COURSES = [];  // cached courses metadata
 let PROGRAMS = []; // cached programs list
 let editing = null; // current student object
+let REG_VIEW_ONLY = false;
 let regEditBaseline = [];
 let lastRegPrereqValidation = null;
 let regPrereqTimer = null;
@@ -858,6 +859,7 @@ function renderStudents(list){
     left.appendChild(badges);
 
     const right = el('div','ms-3 student-actions');
+    if (!REG_VIEW_ONLY) {
     const btnEdit = el('button','btn btn-sm btn-outline-secondary','تعديل');
     btnEdit.addEventListener('click', ()=> openEditModal(s));
     right.appendChild(btnEdit);
@@ -874,6 +876,7 @@ function renderStudents(list){
         right.appendChild(btnWithdraw);
       }
     }
+    }
 
     if (CURRENT_ROLE !== 'student') {
       const btnPrintActual = el('button','btn btn-sm btn-outline-primary btn-print','طباعة التسجيل الفعلي');
@@ -884,6 +887,7 @@ function renderStudents(list){
       btnDownloadActual.addEventListener('click', ()=> downloadActualRegistrationForm(s));
       right.appendChild(btnDownloadActual);
 
+      if (!REG_VIEW_ONLY) {
       const btnMigrate = el('button','btn btn-sm btn-warning','ترحيل إلى كشف الدرجات');
       btnMigrate.addEventListener('click', ()=> migrateStudentRegistrations(s));
       right.appendChild(btnMigrate);
@@ -891,6 +895,7 @@ function renderStudents(list){
       const btnDelete = el('button','btn btn-sm btn-danger','حذف');
       btnDelete.addEventListener('click', ()=> deleteAllRegistrations(s));
       right.appendChild(btnDelete);
+      }
     } else {
       const btnReqAdd = el('button','btn btn-sm btn-outline-primary','طلب إضافة مقرر');
       btnReqAdd.addEventListener('click', ()=> requestAddCourseForStudent(s));
@@ -1647,6 +1652,20 @@ if (fileImport){
   });
 }
 
+function applyRegViewOnlyUi(){
+  if (!REG_VIEW_ONLY) return;
+  const subtitle = document.querySelector('.page-subtitle');
+  if (subtitle && !WITHDRAWN_MODE) {
+    subtitle.textContent = 'عرض التسجيلات فقط (بدون تعديل أو استيراد) — يمكنك التصفية حسب القسم من الشريط العلوي.';
+  }
+  const termCard = document.querySelector('#registrationsAdmin .card.mb-3');
+  if (termCard && termCard.querySelector('#btnSaveRegistrationTerm')) termCard.style.display = 'none';
+  const importLabel = document.querySelector('label.btn.btn-outline-primary');
+  if (importLabel && importLabel.querySelector('#fileImport')) importLabel.style.display = 'none';
+  const hintLine = document.querySelector('#registrationsAdmin .filter-section .ms-auto.small.text-muted');
+  if (hintLine) hintLine.textContent = 'عرض وتصدير فقط — التعديل غير متاح لهذا الدور.';
+}
+
 /* startup */
 (async function init(){
   try{
@@ -1654,6 +1673,8 @@ if (fileImport){
     if (auth.ok && auth.json){
       CURRENT_ROLE = auth.json.role || null;
       CURRENT_USER_ID = auth.json.user || null;
+      const caps = auth.json.capabilities || {};
+      REG_VIEW_ONLY = !!caps.students_data_view_only || caps.can_manage_students === false;
     }
   } catch(e){
     CURRENT_ROLE = null;
@@ -1675,6 +1696,8 @@ if (fileImport){
       }
     }
   }
+
+  applyRegViewOnlyUi();
 
   await loadData();
   if (CURRENT_ROLE !== 'student' && window.initListSearch) {

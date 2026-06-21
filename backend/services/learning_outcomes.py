@@ -258,7 +258,7 @@ def _courses_table_exists(conn) -> bool:
 
 @learning_outcomes_bp.route("/catalog")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def ilo_catalog_page():
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
@@ -283,7 +283,7 @@ def api_outcome_domains():
 
 @learning_outcomes_bp.route("/api/programs")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def list_programs():
     with get_connection() as conn:
         allowed = _scope_program_ids(conn)
@@ -318,7 +318,7 @@ def list_programs():
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/outcomes", methods=["GET", "POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def program_outcomes(program_id: int):
     with get_connection() as conn:
         if not _program_in_scope(conn, program_id):
@@ -387,7 +387,7 @@ def program_outcomes(program_id: int):
 
 @learning_outcomes_bp.route("/api/outcomes/<int:outcome_id>", methods=["PUT", "DELETE"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def update_outcome(outcome_id: int):
     with get_connection() as conn:
         cur = conn.cursor()
@@ -497,7 +497,7 @@ def update_outcome(outcome_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/summary")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def program_ilo_summary(program_id: int):
     with get_connection() as conn:
         if not _program_in_scope(conn, program_id):
@@ -592,7 +592,7 @@ def program_ilo_summary(program_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/courses")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def program_courses_for_ilo(program_id: int):
     """
     مقررات قابلة للربط بمخرجات البرنامج المحدد:
@@ -728,7 +728,7 @@ def program_courses_for_ilo(program_id: int):
 
 @learning_outcomes_bp.route("/api/program_courses/<int:program_course_id>/outcomes", methods=["GET", "PUT"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def course_outcome_links(program_course_id: int):
     with get_connection() as conn:
         cur = conn.cursor()
@@ -838,7 +838,7 @@ def course_outcome_links(program_course_id: int):
     methods=["GET", "PUT"],
 )
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def course_master_outcome_links(program_id: int, course_master_id: int):
     """ربط مخرجات البرنامج مباشرة على course_master دون المرور بـ program_courses."""
     with get_connection() as conn:
@@ -999,7 +999,7 @@ def _matrix_columns_for_program(cur, program_id: int, dept_id: int | None) -> tu
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/coverage_matrix")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def coverage_matrix(program_id: int):
     with get_connection() as conn:
         if not _program_in_scope(conn, program_id):
@@ -1062,7 +1062,7 @@ def coverage_matrix(program_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/coverage_matrix/toggle", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def coverage_matrix_toggle(program_id: int):
     with get_connection() as conn:
         if not _can_edit_ilo(conn, program_id):
@@ -1156,7 +1156,7 @@ def coverage_matrix_toggle(program_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/add_to_plan", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def add_operational_course_to_plan(program_id: int):
     """إضافة مقرر تشغيلي إلى خطة البرنامج + ربط مخرجات (اختياري)."""
     with get_connection() as conn:
@@ -1514,7 +1514,7 @@ def student_learning_outcomes_page():
 
 @learning_outcomes_bp.route("/department/dashboard")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def department_lo_dashboard_page():
     return render_template(
         "department_lo_dashboard.html",
@@ -1524,7 +1524,7 @@ def department_lo_dashboard_page():
 
 @learning_outcomes_bp.route("/api/department/outcomes-dashboard", methods=["GET"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def api_department_outcomes_dashboard():
     with get_connection() as conn:
         dep_id = head_home_department_id(conn, _current_user_name())
@@ -1580,7 +1580,7 @@ def sync_closure_ilo_from_assessments(conn, section_id: int, instructor_id: int,
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/goals", methods=["GET", "POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def program_goals(program_id: int):
     with get_connection() as conn:
         if not _program_in_scope(conn, program_id):
@@ -1642,7 +1642,7 @@ def program_goals(program_id: int):
 
 @learning_outcomes_bp.route("/api/goals/<int:goal_id>", methods=["PUT", "DELETE"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def update_goal(goal_id: int):
     with get_connection() as conn:
         cur = conn.cursor()
@@ -1716,7 +1716,7 @@ def update_goal(goal_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/goal_outcome_matrix")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def goal_outcome_matrix(program_id: int):
     with get_connection() as conn:
         if not _program_in_scope(conn, program_id):
@@ -1773,7 +1773,7 @@ def goal_outcome_matrix(program_id: int):
     "/api/programs/<int:program_id>/goal_outcome_links", methods=["PUT"]
 )
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def save_goal_outcome_links(program_id: int):
     data = request.get_json(force=True) or {}
     goal_id = data.get("goal_id")
@@ -1821,7 +1821,7 @@ def save_goal_outcome_links(program_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/fix_outcome_symbols", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def fix_outcome_symbols(program_id: int):
     """إصلاح خلط PLO/SO — ميكانيك: إيقاف PLO زائدة + إعادة تطبيق قالب SO."""
     with get_connection() as conn:
@@ -1850,7 +1850,7 @@ def fix_outcome_symbols(program_id: int):
 
 @learning_outcomes_bp.route("/api/outcome_symbols/audit", methods=["GET"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def outcome_symbols_audit_all():
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
@@ -1862,7 +1862,7 @@ def outcome_symbols_audit_all():
     "/api/programs/<int:program_id>/import_mech_profile", methods=["POST"]
 )
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def import_mech_profile(program_id: int):
     data = request.get_json(force=True) or {}
     merge = bool(data.get("merge", True))
@@ -1892,7 +1892,7 @@ def import_mech_profile(program_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/export_profile.xlsx")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def export_program_profile_xlsx(program_id: int):
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
@@ -1980,7 +1980,7 @@ def _can_edit_college_glo() -> bool:
 
 @learning_outcomes_bp.route("/api/glo", methods=["GET", "POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def college_glo_api():
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
@@ -2043,7 +2043,7 @@ def college_glo_api():
 
 @learning_outcomes_bp.route("/api/glo/<int:glo_id>", methods=["PUT", "DELETE"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def update_college_glo(glo_id: int):
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
@@ -2155,7 +2155,7 @@ def update_college_glo(glo_id: int):
 
 @learning_outcomes_bp.route("/api/benchmark_templates")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def benchmark_templates_api():
     program_id = request.args.get("program_id")
     if not program_id:
@@ -2171,7 +2171,7 @@ def benchmark_templates_api():
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/import_benchmark", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def import_benchmark(program_id: int):
     data = request.get_json(force=True) or {}
     template_code = (data.get("template_code") or "").strip()
@@ -2197,7 +2197,7 @@ def import_benchmark(program_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/outcomes/template.xlsx")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def plo_excel_template(program_id: int):
     with get_connection() as conn:
         if not _program_in_scope(conn, program_id):
@@ -2212,7 +2212,7 @@ def plo_excel_template(program_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/outcomes/export.xlsx")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def plo_excel_export(program_id: int):
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
@@ -2241,7 +2241,7 @@ def plo_excel_export(program_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/outcomes/import.xlsx", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def plo_excel_import(program_id: int):
     f = request.files.get("file")
     if not f or not f.filename:
@@ -2264,7 +2264,7 @@ def plo_excel_import(program_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/analytics")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def program_analytics(program_id: int):
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
@@ -2277,7 +2277,7 @@ def program_analytics(program_id: int):
 
 @learning_outcomes_bp.route("/api/programs/<int:program_id>/export_matrix.csv")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def export_matrix_csv(program_id: int):
     with get_connection() as conn:
         if not _program_in_scope(conn, program_id):
@@ -2332,7 +2332,7 @@ def export_matrix_csv(program_id: int):
 
 @learning_outcomes_bp.route("/api/program_courses/<int:program_course_id>/clos", methods=["GET", "POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def course_clos(program_course_id: int):
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
@@ -2417,7 +2417,7 @@ def course_clos(program_course_id: int):
 
 @learning_outcomes_bp.route("/api/clos/<int:clo_id>", methods=["PUT", "DELETE"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def update_clo(clo_id: int):
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)

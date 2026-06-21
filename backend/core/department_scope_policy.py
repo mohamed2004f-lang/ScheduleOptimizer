@@ -19,7 +19,7 @@ def resolve_users_list_scope(conn, actor_username: str | None) -> tuple[UsersLis
         return ("none", None)
 
     role = _normalize_role((session.get("user_role") or "").strip())
-    if role in ("admin_main", "admin"):
+    if role in ("admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean"):
         sid = get_admin_department_scope_id()
         if sid is None:
             return ("none", None)
@@ -409,7 +409,7 @@ def finalize_instructor_department_id_for_write(
             return None, (False, "لا يوجد قسم مرتبط بحساب رئيس القسم.")
         return int(hid), (True, None)
 
-    if role in ("admin_main", "admin"):
+    if role in ("admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean"):
         if mode == "department" and scope_dep is not None:
             return int(scope_dep), (True, None)
         raw = body_department_id
@@ -433,6 +433,54 @@ def finalize_instructor_department_id_for_write(
         return int(raw), (True, None)
     except (TypeError, ValueError):
         return None, (False, "department_id غير صالح.")
+
+
+def count_students_for_department(conn, dept_id: int) -> int:
+    """عدد الطلاب المطابقين لسياسة نطاق القسم (قسم مباشر أو عبر البرنامج)."""
+    frag, params = sql_student_row_belongs_to_department(int(dept_id))
+    cur = conn.cursor()
+    row = cur.execute(f"SELECT COUNT(*) FROM students WHERE {frag}", params).fetchone()
+    if not row:
+        return 0
+    try:
+        return int(row[0] if not hasattr(row, "keys") else row["COUNT(*)"])
+    except (TypeError, ValueError, KeyError):
+        return int(row[0])
+
+
+def count_courses_for_department(conn, dept_id: int) -> int:
+    """عدد المقررات المرتبطة بالقسم (owning_department_id)."""
+    try:
+        from backend.services.utilities import fetch_table_columns
+
+        cols = fetch_table_columns(conn, "courses")
+    except Exception:
+        cols = []
+    if "owning_department_id" not in cols:
+        return 0
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT COUNT(*) FROM courses WHERE owning_department_id = ?",
+        (int(dept_id),),
+    ).fetchone()
+    if not row:
+        return 0
+    try:
+        return int(row[0] if not hasattr(row, "keys") else row["COUNT(*)"])
+    except (TypeError, ValueError, KeyError):
+        return int(row[0])
+
+
+def department_scope_data_summary(conn, dept_id: int) -> dict:
+    """ملخص سريع لمحتوى نطاق قسم (لتنبيه الواجهة عند الفراغ)."""
+    sc = count_students_for_department(conn, int(dept_id))
+    cc = count_courses_for_department(conn, int(dept_id))
+    return {
+        "department_id": int(dept_id),
+        "student_count": sc,
+        "course_count": cc,
+        "is_empty": sc == 0 and cc == 0,
+    }
 
 
 def proposed_department_allowed_for_scope(

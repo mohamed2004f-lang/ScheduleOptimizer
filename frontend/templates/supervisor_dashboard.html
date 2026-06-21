@@ -5,27 +5,36 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>لوحة المشرف الأكاديمي</title>
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/vendor/fontawesome/css/all.min.css">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   {% include "base_nav.html" %}
   <main class="container-main">
     <div class="page-header mb-3">
-      <div>
-        <h1 class="page-title">لوحة المشرف الأكاديمي</h1>
-        <p class="page-subtitle">عرض الطلبة المسندين إليك مع روابط سريعة لجدولهم وسجلهم وخطط التسجيل</p>
+      <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+        <div>
+          <h1 class="page-title">لوحة المشرف الأكاديمي</h1>
+          <p class="page-subtitle mb-0">الطلبة المسندون إليك — الفصل: <strong id="semLabel">—</strong></p>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+          <a href="/academic_quality/supervisor/quality-hub" class="btn btn-sm btn-primary" id="btnSurveys">
+            <i class="fa-solid fa-pen-to-square"></i> استبياناتي
+            <span class="badge bg-light text-dark ms-1 d-none" id="navPendingBadge">0</span>
+          </a>
+          <a href="/supervisors/summary.pdf" class="btn btn-sm btn-outline-secondary" target="_blank">PDF ملخص</a>
+        </div>
       </div>
     </div>
 
+    <div id="roleWarning" class="alert alert-danger d-none">هذه الصفحة مخصصة للمشرفين الأكاديميين فقط.</div>
+
+    <div id="tasksWrap" class="row g-3 mb-3 d-none"></div>
+
     <div class="card mb-3">
-      <div class="card-body d-flex justify-content-between align-items-center flex-wrap gap-2">
-        <div class="small text-muted">
-          يمكنك من هنا الوصول لجدول كل طالب، كشف درجاته، وخطط التسجيل الخاصة به.
-        </div>
-        <a href="/supervisor_quality_report_page" class="btn btn-sm btn-outline-warning">تقرير الإرشاد (جودة)</a>
-        <div id="roleWarning" class="text-danger small d-none">
-          هذه الصفحة مخصصة للمشرفين الأكاديميين فقط.
-        </div>
+      <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-2 small text-muted">
+        <span id="summaryLine">—</span>
+        <a href="/supervisor_quality_report_page" class="btn btn-sm btn-outline-warning">تقرير الإرشاد (كمي)</a>
       </div>
     </div>
 
@@ -44,6 +53,7 @@
               <tr>
                 <th style="width:15%;">الرقم الدراسي</th>
                 <th>اسم الطالب</th>
+                <th style="width:12%;">الحالة</th>
                 <th style="width:30%;">إجراءات</th>
               </tr>
             </thead>
@@ -56,117 +66,103 @@
 
   <script src="/static/js/common.js"></script>
   <script>
-    let SUP_STUDENTS = [];
-
-    async function fetchAuthFresh() {
-      const u = '/auth/check?ts=' + encodeURIComponent(String(Date.now()));
-      const r = await fetch(u, {
-        credentials: 'include',
-        cache: 'no-store',
-        headers: { 'Accept': 'application/json' },
-      });
-      if (!r.ok) throw new Error('auth check failed: ' + r.status);
-      return await r.json();
-    }
+    let SUP_CTX = null;
 
     function showMsg(text, type = 'info') {
       const box = document.getElementById('msgBox');
-      box.innerHTML = text
-        ? `<div class="alert alert-${type} py-1 px-2 mb-0">${text}</div>`
-        : '';
+      box.innerHTML = text ? `<div class="alert alert-${type} py-1 px-2 mb-0">${text}</div>` : '';
     }
 
-    function renderStudents() {
+    function renderTasks(tasks) {
+      const wrap = document.getElementById('tasksWrap');
+      if (!tasks || !tasks.length) { wrap.classList.add('d-none'); return; }
+      wrap.innerHTML = tasks.map(t => {
+        const btn = t.href ? `<a href="${t.href}" class="btn btn-sm btn-outline-dark mt-2">فتح</a>` : '';
+        return `<div class="col-md-6 col-lg-4"><div class="alert alert-${t.level || 'info'} mb-0 h-100"><strong>${t.title}</strong><p class="small mb-0 mt-1">${t.message}</p>${btn}</div></div>`;
+      }).join('');
+      wrap.classList.remove('d-none');
+    }
+
+    function renderStudents(students) {
       const tbody = document.querySelector('#studentsTable tbody');
       const searchVal = (document.getElementById('searchStudent').value || '').toLowerCase();
       tbody.innerHTML = '';
-      const filtered = SUP_STUDENTS.filter(st => {
+      const filtered = (students || []).filter(st => {
         const text = ((st.student_id || '') + ' ' + (st.student_name || '')).toLowerCase();
         return !searchVal || text.includes(searchVal);
       });
       if (!filtered.length) {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td colspan="3" class="text-muted text-center">لا توجد طلبة مسندين إليك حالياً.</td>`;
-        tbody.appendChild(tr);
+        tbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center">لا توجد طلبة مسندين إليك حالياً.</td></tr>';
         return;
       }
       filtered.forEach(st => {
         const sid = st.student_id || '';
         const name = st.student_name || '';
+        const statusBadge = st.at_risk
+          ? `<span class="badge bg-danger" title="مقررات راسبة: ${st.failed_courses_count || 0}">معرّض</span>`
+          : '<span class="badge bg-success">منتظم</span>';
         const tr = document.createElement('tr');
         tr.innerHTML = `
           <td class="mono">${sid}</td>
           <td>${name}</td>
+          <td>${statusBadge}</td>
           <td>
             <div class="btn-group btn-group-sm" role="group">
-              <a href="/student_view/${encodeURIComponent(sid)}" class="btn btn-outline-primary" target="_blank">جدول الطالب</a>
-              <a href="/transcript_page" class="btn btn-outline-secondary btn-open-transcript" data-sid="${sid}" target="_blank">كشف الدرجات</a>
-              <a href="/enrollment_plans" class="btn btn-outline-success btn-open-plans" data-sid="${sid}" target="_blank">خطط التسجيل</a>
+              <a href="/student_view/${encodeURIComponent(sid)}" class="btn btn-outline-primary" target="_blank">جدول</a>
+              <a href="/transcript_page" class="btn btn-outline-secondary btn-open-transcript" data-sid="${sid}" target="_blank">كشف</a>
+              <a href="/enrollment_plans" class="btn btn-outline-success btn-open-plans" data-sid="${sid}" target="_blank">خطط</a>
+              <a href="/performance_report?student_id=${encodeURIComponent(sid)}" class="btn btn-outline-info" target="_blank">أداء</a>
             </div>
-          </td>
-        `;
+          </td>`;
         tbody.appendChild(tr);
       });
     }
 
-    async function loadSupervisedStudents() {
-      try {
-        const data = await apiGet('/instructors/supervised_students');
-        SUP_STUDENTS = data.students || [];
-        renderStudents();
-        showMsg(`تم تحميل ${SUP_STUDENTS.length} طالب/ـة تحت إشرافك.`, 'info');
-      } catch (e) {
-        console.error(e);
-        showMsg('فشل تحميل قائمة الطلبة المسندين إليك', 'danger');
+    async function loadDashboard() {
+      const data = await apiGet('/supervisors/dashboard_context');
+      SUP_CTX = data;
+      document.getElementById('semLabel').textContent = data.term_label || '—';
+      document.getElementById('summaryLine').textContent =
+        `${data.student_count || 0} طالب/ـة · ${data.at_risk_count || 0} معرّض(ون) للخطر · استبيانات معلّقة: ${data.surveys_pending_count || 0}`;
+      renderTasks(data.tasks || []);
+      renderStudents(data.students || []);
+      const pc = data.surveys_pending_count || 0;
+      const badge = document.getElementById('navPendingBadge');
+      if (pc > 0) {
+        badge.textContent = String(pc);
+        badge.classList.remove('d-none');
       }
+      showMsg(`تم تحميل ${data.student_count || 0} طالب/ـة تحت إشرافك.`, 'info');
     }
 
     document.addEventListener('DOMContentLoaded', async () => {
       try {
-        const auth = await fetchAuthFresh();
-        const role = auth.role || null;
+        const auth = await fetch('/auth/check', { credentials: 'include', cache: 'no-store' }).then(r => r.json());
         const caps = auth.capabilities || {};
-        const isSupervisor = !!caps.is_supervisor_effective
-          || (role === 'supervisor')
-          || (role === 'instructor' && Number(auth.is_supervisor || 0) === 1);
+        const isSupervisor = !!caps.is_supervisor_effective || auth.role === 'supervisor';
         if (!isSupervisor) {
-          const warn = document.getElementById('roleWarning');
-          if (warn) warn.classList.remove('d-none');
-          showMsg('هذه الصفحة مخصصة للمشرفين الأكاديميين فقط.', 'danger');
+          document.getElementById('roleWarning').classList.remove('d-none');
           return;
         }
+        await loadDashboard();
+        document.getElementById('searchStudent').addEventListener('input', debounce(() => {
+          renderStudents((SUP_CTX && SUP_CTX.students) || []);
+        }, 250));
+        document.getElementById('studentsTable').addEventListener('click', (ev) => {
+          const transcriptBtn = ev.target.closest('.btn-open-transcript');
+          const plansBtn = ev.target.closest('.btn-open-plans');
+          if (transcriptBtn) {
+            try { localStorage.setItem('transcript_selected_student', transcriptBtn.dataset.sid); } catch (e) {}
+          }
+          if (plansBtn) {
+            try { localStorage.setItem('enrollment_plans_student', plansBtn.dataset.sid); } catch (e) {}
+          }
+        });
       } catch (e) {
         console.error(e);
-        showMsg('تعذر التحقق من صلاحيات المستخدم', 'danger');
-        return;
+        showMsg('فشل تحميل لوحة المشرف', 'danger');
       }
-
-      await loadSupervisedStudents();
-
-      document.getElementById('searchStudent').addEventListener('input', debounce(() => {
-        renderStudents();
-      }, 250));
-
-      // تحسين: يمكن في المستقبل تمرير student_id للصفحات الأخرى عبر query params أو تخزين محلي
-      document.getElementById('studentsTable').addEventListener('click', (ev) => {
-        const transcriptBtn = ev.target.closest('.btn-open-transcript');
-        const plansBtn = ev.target.closest('.btn-open-plans');
-        if (transcriptBtn) {
-          const sid = transcriptBtn.dataset.sid;
-          // فتح transcript_page مع تحديد الطالب تلقائياً من خلال localStorage
-          try {
-            localStorage.setItem('transcript_selected_student', sid);
-          } catch(e) {}
-        }
-        if (plansBtn) {
-          const sid = plansBtn.dataset.sid;
-          try {
-            localStorage.setItem('plans_selected_student', sid);
-          } catch(e) {}
-        }
-      });
     });
   </script>
 </body>
 </html>
-

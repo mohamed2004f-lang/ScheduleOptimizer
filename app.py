@@ -1,8 +1,11 @@
 from flask import Flask, render_template, redirect, url_for, jsonify, session, request, abort, send_from_directory, make_response
 from flask_wtf.csrf import CSRFProtect, CSRFError
 from backend.database.database import ensure_tables, is_postgresql, close_pool
-from config import DATABASE_URL, FLASK_ENV, FLASK_DEBUG
+from config import DATABASE_URL, FLASK_ENV, FLASK_DEBUG, SHOW_DEV_HINTS
 import atexit
+
+# أدوار القيادة على مستوى الكلية (صفحات الإدارة — ما عدا الإعدادات التقنية)
+_COLLEGE_LEADERSHIP = ("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean")
 
 # Blueprints
 from backend.services.students import students_bp
@@ -17,14 +20,18 @@ from backend.services.enrollment import enrollment_bp
 from backend.services.registration_requests import registration_requests_bp
 from backend.services.notifications import notifications_bp
 from backend.services.users import users_bp
+from backend.services.role_profiles import role_profiles_bp
 from backend.services.academic_calendar import academic_calendar_bp
 from backend.services.academic_rules import academic_rules_bp
 from backend.services.instructors import instructors_bp
+from backend.services.instructor_portal import instructor_portal_bp
+from backend.services.supervisor_portal import supervisor_portal_bp
 from backend.services.course_equivalences import course_equivalence_bp
 from backend.services.department_policies import department_policies_bp
 from backend.services.college_catalog import college_catalog_bp
 from backend.services.performance import performance_bp
 from backend.api.students_api import students_api_bp
+from backend.api.instructors_api import instructors_api_bp
 from backend.services.index_portal import index_portal_bp
 from backend.services.academic_quality import academic_quality_bp
 from backend.services.course_evaluations import course_evaluations_bp
@@ -38,6 +45,9 @@ from backend.core.auth import (
     login_required,
     role_required,
     current_supervisor_effective,
+    supervisor_portal_ui_allowed,
+    supervisor_quality_admin_blocked,
+    admin_department_scope_ui_allowed,
     SESSION_ACTIVE_MODE,
     _normalize_role,
     get_admin_department_scope_id,
@@ -90,6 +100,31 @@ def _require_https_in_production():
     if _request_is_https():
         return None
     return redirect(request.url.replace("http://", "https://", 1), code=301)
+
+
+_SUPERVISOR_ALLOWED_QUALITY_PREFIXES = (
+    "/academic_quality/surveys",
+    "/academic_quality/supervisor/quality-hub",
+    "/academic_quality/glossary",
+    "/academic_quality/supervisor_report",
+)
+
+
+@app.before_request
+def _supervisor_quality_admin_guard():
+    """مشرف في وضع الإشراف — يُسمح فقط بتعبئة الاستبيانات من ضمان الجودة."""
+    if not supervisor_quality_admin_blocked():
+        return None
+    path = (request.path or "").split("?")[0].rstrip("/") or "/"
+    if not path.startswith("/academic_quality"):
+        return None
+    for allowed in _SUPERVISOR_ALLOWED_QUALITY_PREFIXES:
+        if path == allowed or path.startswith(allowed + "/"):
+            return None
+    wants_json = request.is_json or "application/json" in (request.headers.get("Accept") or "")
+    if wants_json or "/api/" in path:
+        return jsonify({"status": "error", "message": "غير مصرح — تعبئة الاستبيانات فقط"}), 403
+    return redirect(url_for("supervisor_quality_hub_page"))
 
 
 @app.route("/static/vendor/webfonts/<path:filename>")
@@ -207,6 +242,12 @@ init_security_headers(app)
 # تسجيل معالجات الأخطاء
 register_error_handlers(app)
 
+# حماية الطالب: لا يصل لصفحات الإدارة حتى عبر الرابط المباشر
+from backend.core.auth import register_instructor_route_guard, register_student_route_guard
+
+register_student_route_guard(app)
+register_instructor_route_guard(app)
+
 # تسجيل الـ Blueprints
 app.register_blueprint(students_bp, url_prefix="/students")
 app.register_blueprint(student_portal_bp, url_prefix="/students")
@@ -220,9 +261,12 @@ app.register_blueprint(enrollment_bp, url_prefix="/enrollment")
 app.register_blueprint(registration_requests_bp, url_prefix="/")
 app.register_blueprint(notifications_bp, url_prefix="/notifications")
 app.register_blueprint(users_bp, url_prefix="/users")
+app.register_blueprint(role_profiles_bp, url_prefix="/role_profiles")
 app.register_blueprint(academic_calendar_bp, url_prefix="/academic_calendar")
 app.register_blueprint(academic_rules_bp, url_prefix="/academic_rules")
 app.register_blueprint(instructors_bp, url_prefix="/instructors")
+app.register_blueprint(instructor_portal_bp, url_prefix="/instructors")
+app.register_blueprint(supervisor_portal_bp, url_prefix="/supervisors")
 app.register_blueprint(course_equivalence_bp)
 app.register_blueprint(department_policies_bp)
 from backend.services.pathway_regulations import register_pathway_regulation_routes
@@ -231,6 +275,7 @@ register_pathway_regulation_routes(college_catalog_bp)
 app.register_blueprint(college_catalog_bp)
 app.register_blueprint(performance_bp, url_prefix="/performance")
 app.register_blueprint(students_api_bp)
+app.register_blueprint(instructors_api_bp)
 app.register_blueprint(index_portal_bp, url_prefix="/index")
 app.register_blueprint(academic_quality_bp, url_prefix="/academic_quality")
 app.register_blueprint(college_portal_bp, url_prefix="/academic_quality")
@@ -265,6 +310,7 @@ _startup_verify_critical_symbols()
 # Exempt API blueprints from CSRF (as requested)
 try:
     csrf.exempt(students_api_bp)
+    csrf.exempt(instructors_api_bp)
 except Exception:
     pass
 
@@ -285,8 +331,13 @@ def _student_portal_ui_allowed() -> bool:
     return (session.get("user_role") or "").strip() == "student"
 
 
+def _supervisor_portal_ui_allowed() -> bool:
+    """بوابة المشرف — دور supervisor أو active_mode=supervisor."""
+    return supervisor_portal_ui_allowed()
+
+
 def _instructor_portal_ui_allowed() -> bool:
-    """بوابة الأستاذ (مقرراتي، مسودات، جدولي…) — أستاذ أو رئيس قسم في وضع الأستاذ."""
+    """بوابة الأستاذ (مقرراتي، مسودات، جدولي…) — أستاذ أو رئيس قسم/عميد في وضع الأستاذ."""
     role = (session.get("user_role") or "").strip()
     try:
         db_sup = int(session.get("is_supervisor") or 0) == 1
@@ -294,13 +345,36 @@ def _instructor_portal_ui_allowed() -> bool:
         db_sup = False
     if role == "head_of_department":
         active_m = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
+    elif role == "college_dean":
+        active_m = (session.get(SESSION_ACTIVE_MODE) or "dean").strip().lower()
+    elif role == "academic_vice_dean":
+        active_m = (session.get(SESSION_ACTIVE_MODE) or "vice_dean").strip().lower()
     else:
         active_m = (session.get(SESSION_ACTIVE_MODE) or "instructor").strip().lower()
     has_instructor = bool(session.get("instructor_id"))
     return has_instructor and (
         (role == "instructor" and (not db_sup or active_m == "instructor"))
         or (role == "head_of_department" and active_m == "instructor")
+        or (role == "college_dean" and active_m == "instructor")
+        or (role == "academic_vice_dean" and active_m == "instructor")
     )
+
+
+def _staff_ops_nav_default() -> bool:
+    """شريط الإدارة الكامل — admin أو رئيس قسم/عميد في الوضع القيادي."""
+    role = _normalize_role((session.get("user_role") or "").strip())
+    if role in _COLLEGE_LEADERSHIP:
+        if role == "college_dean":
+            active_m = (session.get(SESSION_ACTIVE_MODE) or "dean").strip().lower()
+            return active_m in ("", "dean")
+        if role == "academic_vice_dean":
+            active_m = (session.get(SESSION_ACTIVE_MODE) or "vice_dean").strip().lower()
+            return active_m in ("", "vice_dean", "dean")
+        return True
+    if role == "head_of_department":
+        active_m = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
+        return active_m in ("", "head", "hod", "department_head")
+    return False
 
 
 def _resolve_actor_department_id(conn) -> int | None:
@@ -347,10 +421,19 @@ def inject_ui_context():
         "department_scope_label_ar": "نطاق العرض: كل الأقسام",
         "actor_display_ar": "",
         "nav_shell_student": False,
+        "nav_shell_instructor": False,
+        "nav_shell_supervisor": False,
+        "nav_shell_staff": False,
+        "show_admin_dept_scope_ui": False,
+        "show_dev_hints": SHOW_DEV_HINTS,
     }
     try:
         role_n = _normalize_role((session.get("user_role") or "").strip())
         ctx["nav_shell_student"] = role_n == "student"
+        ctx["nav_shell_instructor"] = _instructor_portal_ui_allowed()
+        ctx["nav_shell_supervisor"] = _supervisor_portal_ui_allowed() and not _instructor_portal_ui_allowed()
+        ctx["nav_shell_staff"] = _staff_ops_nav_default()
+        ctx["show_admin_dept_scope_ui"] = admin_department_scope_ui_allowed(role_n, active_mode)
         active_mode = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower()
         uname = (session.get("user") or session.get("username") or "").strip()
         from backend.services.utilities import get_connection
@@ -365,7 +448,7 @@ def inject_ui_context():
                 sid_for_dept = (session.get("student_id") or uname or "").strip()
                 dep_id = resolve_student_department_id(conn, sid_for_dept)
                 student_identity_label = dep_id is not None
-            elif role_n in ("admin", "admin_main"):
+            elif role_n in _COLLEGE_LEADERSHIP:
                 dep_id = get_admin_department_scope_id()
             elif role_n == "head_of_department":
                 if active_mode in ("", "head", "hod", "department_head"):
@@ -400,6 +483,36 @@ def inject_ui_context():
                 who = f"{sname} {sid}".strip() if sname else sid
                 if who:
                     display_actor = f"طالب {who}"
+            elif role_n == "college_dean" and active_mode in ("", "dean"):
+                irow = cur.execute(
+                    """
+                    SELECT COALESCE(i.name,''), COALESCE(u.display_title_ar,'')
+                    FROM users u
+                    LEFT JOIN instructors i ON i.id = u.instructor_id
+                    WHERE lower(u.username)=lower(?)
+                    LIMIT 1
+                    """,
+                    (uname,),
+                ).fetchone()
+                nm = ((irow[0] if irow else "") or "").strip() or uname
+                title = ((irow[1] if irow and len(irow) > 1 else "") or "").strip()
+                if nm:
+                    display_actor = f"{title or 'عميد الكلية'} - {nm}"
+            elif role_n == "academic_vice_dean" and active_mode in ("", "vice_dean", "dean"):
+                irow = cur.execute(
+                    """
+                    SELECT COALESCE(i.name,''), COALESCE(u.display_title_ar,'')
+                    FROM users u
+                    LEFT JOIN instructors i ON i.id = u.instructor_id
+                    WHERE lower(u.username)=lower(?)
+                    LIMIT 1
+                    """,
+                    (uname,),
+                ).fetchone()
+                nm = ((irow[0] if irow else "") or "").strip() or uname
+                title = ((irow[1] if irow and len(irow) > 1 else "") or "").strip()
+                if nm:
+                    display_actor = f"{title or 'وكيل الكلية للشؤون العلمية'} - {nm}"
             elif role_n == "head_of_department" and active_mode in ("", "head", "hod", "department_head"):
                 # اسم رئيس القسم: من اسم الأستاذ المرتبط إن وُجد، وإلا username.
                 irow = cur.execute(
@@ -421,6 +534,12 @@ def inject_ui_context():
                 if role_n == "head_of_department":
                     if eff_mode not in ("instructor", "supervisor"):
                         eff_mode = "head"
+                if role_n == "college_dean":
+                    if eff_mode not in ("instructor", "supervisor"):
+                        eff_mode = "dean"
+                elif role_n == "academic_vice_dean":
+                    if eff_mode not in ("instructor", "supervisor"):
+                        eff_mode = "vice_dean"
                 iid_raw = session.get("instructor_id")
                 try:
                     iid = int(iid_raw or 0)
@@ -451,8 +570,12 @@ def inject_ui_context():
                     elif role_n == "instructor" or eff_mode == "instructor":
                         display_actor = f"أستاذ/ة {iname}"
                 if not display_actor and uname:
-                    if role_n in ("admin", "admin_main"):
+                    if role_n in _COLLEGE_LEADERSHIP:
                         display_actor = f"إدارة النظام - {uname}"
+                    elif role_n == "college_dean":
+                        display_actor = f"عميد الكلية - {uname}"
+                    elif role_n == "academic_vice_dean":
+                        display_actor = f"وكيل الكلية للشؤون العلمية - {uname}"
                     elif role_n == "head_of_department":
                         display_actor = f"رئيس قسم - {uname}"
                     elif role_n == "supervisor":
@@ -464,7 +587,16 @@ def inject_ui_context():
             ctx["actor_display_ar"] = display_actor
     except Exception:
         pass
-    return {"ui_context": ctx}
+    return {
+        "ui_context": ctx,
+        "nav_shell_student": bool(ctx.get("nav_shell_student")),
+        "nav_shell_instructor": bool(ctx.get("nav_shell_instructor")),
+        "nav_shell_supervisor": bool(ctx.get("nav_shell_supervisor")),
+        "nav_shell_supervisor": bool(ctx.get("nav_shell_supervisor")),
+        "nav_shell_staff": bool(ctx.get("nav_shell_staff")),
+        "show_admin_dept_scope_ui": bool(ctx.get("show_admin_dept_scope_ui")),
+        "show_dev_hints": bool(ctx.get("show_dev_hints")),
+    }
 
 
 @app.errorhandler(CSRFError)
@@ -485,10 +617,18 @@ def handle_csrf_error(e):
 @app.route("/login")
 def login_page():
     """صفحة تسجيل الدخول"""
-    from backend.core.auth import SESSION_KEY, LOGIN_PROBE_COOKIE, _purge_legacy_auth_cookies
+    from backend.core.auth import (
+        LOGIN_PROBE_COOKIE,
+        SESSION_KEY,
+        _clear_session_cookies,
+        _purge_legacy_auth_cookies,
+        perform_logout,
+    )
     from flask import make_response
 
-    if session.get(SESSION_KEY):
+    if request.args.get("logged_out") == "1":
+        perform_logout()
+    elif session.get(SESSION_KEY):
         return redirect("/")
     errors = {
         "MISSING_CREDENTIALS": "اسم المستخدم وكلمة المرور مطلوبان",
@@ -506,15 +646,25 @@ def login_page():
     if not login_error and request.cookies.get(LOGIN_PROBE_COOKIE) and not session.get(SESSION_KEY):
         login_error = errors["SESSION_NOT_SAVED"]
     resp = make_response(render_template("login.html", login_error=login_error))
-    _purge_legacy_auth_cookies(resp)
+    if request.args.get("logged_out") == "1":
+        _clear_session_cookies(resp)
+    else:
+        _purge_legacy_auth_cookies(resp)
     if request.cookies.get(LOGIN_PROBE_COOKIE):
         resp.delete_cookie(LOGIN_PROBE_COOKIE, path="/")
     return resp
 
-@app.route("/logout")
+@app.route("/logout", methods=["GET"])
 def logout_page():
-    """صفحة تسجيل الخروج - توجيه إلى صفحة تسجيل الدخول"""
-    return redirect("/login")
+    """تسجيل الخروج — تنقل كامل (أكثر موثوقية من fetch)."""
+    from backend.core.auth import _clear_session_cookies, perform_logout
+    from flask import make_response
+
+    perform_logout()
+    resp = make_response(redirect("/login?logged_out=1"))
+    _clear_session_cookies(resp)
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return resp
 
 @app.route("/")
 @login_required
@@ -529,7 +679,7 @@ def index():
             return redirect(url_for("my_courses_page"))
     if current_supervisor_effective():
         return redirect(url_for("supervisor_dashboard_page"))
-    if role in ("admin", "admin_main", "head_of_department"):
+    if role in ("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department"):
         return redirect(url_for("dashboard_page"))
     if role == "instructor":
         # الأستاذ غير المشرف: نقطة الدخول «مقرراتي» (وليس كشف درجات الطلبة)
@@ -665,6 +815,29 @@ def student_academic_progress_page():
     return render_template("student_academic_progress.html", active_page="student_progress")
 
 
+@app.route("/academic_quality/instructor/quality-hub")
+@login_required
+def instructor_quality_hub_page():
+    if not _instructor_portal_ui_allowed():
+        role = (session.get("user_role") or "").strip()
+        if _supervisor_portal_ui_allowed():
+            return redirect(url_for("supervisor_quality_hub_page"))
+        if role == "student":
+            return redirect(url_for("my_portal_page"))
+        return redirect(url_for("my_courses_page"))
+    return render_template("instructor_quality_hub.html", active_page="instructor_quality")
+
+
+@app.route("/academic_quality/supervisor/quality-hub")
+@login_required
+def supervisor_quality_hub_page():
+    if not _supervisor_portal_ui_allowed():
+        if _instructor_portal_ui_allowed():
+            return redirect(url_for("instructor_quality_hub_page"))
+        return redirect(url_for("supervisor_dashboard_page"))
+    return render_template("supervisor_quality_hub.html", active_page="supervisor_quality")
+
+
 @app.route("/my_attendance")
 @login_required
 def my_attendance_page():
@@ -678,7 +851,7 @@ def my_attendance_page():
 
 
 @app.route("/dashboard")
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def dashboard_page():
     from backend.core.auth import LOGIN_PROBE_COOKIE
     from flask import make_response
@@ -699,7 +872,7 @@ def dashboard_page():
 
 
 @app.route("/analytics")
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def analytics_dashboard_page():
     # لوحة تحكم تحليلية متقدمة تعتمد على بيانات /performance/report و /admin/summary
     return render_template("analytics_dashboard.html", active_page="analytics")
@@ -734,14 +907,14 @@ def my_registrations_page():
 
 @app.route("/prereqs_form")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def prereqs_form():
     return render_template("prereqs_form.html")
 
 
 @app.route("/prereqs_flowchart")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def prereqs_flowchart_page():
     return render_template("prereqs_flowchart.html")
 
@@ -760,7 +933,7 @@ def graduates_page():
 
 @app.route("/courses_form")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "supervisor", "instructor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor", "instructor")
 def courses_form():
     return render_template("courses_form.html")
 
@@ -799,13 +972,13 @@ def supervisor_dashboard_page():
     return render_template("supervisor_dashboard.html")
 
 @app.route("/schedule_form")
-@role_required("admin", "supervisor", "admin_main", "head_of_department", "instructor", "student")
+@role_required("admin", "supervisor", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor")
 def schedule_form():
     return render_template("schedule_form.html")
 
 
 @app.route("/schedule_teaching_groups")
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def schedule_teaching_groups_page():
     return render_template("teaching_groups_setup.html")
 
@@ -844,7 +1017,7 @@ def registrations_form():
 
 @app.route("/withdrawn_file_list")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def withdrawn_file_list_page():
     return render_template("registrations_form.html", withdrawn_mode=True)
 
@@ -861,7 +1034,7 @@ def notifications_center_page():
 
 @app.route("/users_admin")
 @login_required
-@role_required("admin", "admin_main")
+@role_required("admin", "admin_main", "system_admin", "college_dean")
 def users_admin_page():
     return render_template("users_admin.html")
 
@@ -873,7 +1046,7 @@ def results_page():
 
 @app.route("/attendance_export")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "supervisor", "instructor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor", "instructor")
 def attendance_export_page():
     return render_template("attendance_export.html")
 
@@ -885,21 +1058,21 @@ def academic_calendar_page():
 
 @app.route("/academic_rules_page")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "head_of_department")
 def academic_rules_page():
     return render_template("academic_rules.html")
 
 
 @app.route("/college_catalog_page")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def college_catalog_page():
     return render_template("college_catalog.html")
 
 
 @app.route("/course_equivalences_page")
 @login_required
-@role_required("admin", "admin_main")
+@role_required("admin", "admin_main", "system_admin", "college_dean")
 def course_equivalences_page():
     return render_template("course_equivalences.html")
 
@@ -913,7 +1086,7 @@ def department_policy_head_page():
 
 @app.route("/department_policy_approvals_page")
 @login_required
-@role_required("admin_main")
+@role_required("admin_main", "system_admin", "college_dean")
 def department_policy_approvals_page():
     return render_template("department_policy_approvals.html")
 
@@ -927,6 +1100,9 @@ def transcript_page():
     active_m = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower()
     if (role == "instructor" and not current_supervisor_effective()) or (
         role == "head_of_department" and active_m == "instructor"
+    ) or (
+        role == "college_dean" and active_m == "instructor"
+        or role == "academic_vice_dean" and active_m == "instructor"
     ):
         return redirect(url_for("my_courses_page"))
 
@@ -1009,7 +1185,7 @@ def grade_drafts_page():
         (role == "instructor" and (not db_sup or active_m == "instructor"))
         or (role == "head_of_department" and active_m == "instructor")
     )
-    can_approver_ui = role in ("admin", "admin_main") or (
+    can_approver_ui = role in _COLLEGE_LEADERSHIP or (
         role == "head_of_department"
         and active_m in ("", "head", "hod", "department_head")
     )
@@ -1081,14 +1257,14 @@ def not_registered_courses_report_page():
 
 @app.route("/grade_course_mapping_audit_page")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def grade_course_mapping_audit_page():
     return render_template("grade_course_mapping_audit.html")
 
 
 @app.route("/course_registration_report_page")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def course_registration_report_page():
     """أعداد الطلبة لكل مقرر من التسجيلات الفعلية — للإدارة ورئيس القسم."""
     return render_template("course_registration_report.html")
@@ -1096,7 +1272,7 @@ def course_registration_report_page():
 
 @app.route("/schedule_versions_page")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def schedule_versions_page():
     """أرشيف نسخ الجدول الدراسي."""
     return render_template("schedule_versions.html")
@@ -1104,7 +1280,7 @@ def schedule_versions_page():
 
 @app.route("/exam_schedule_versions_page")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def exam_schedule_versions_page():
     """أرشيف نسخ جداول الامتحانات (جزئي / نهائي)."""
     return render_template("exam_versions.html")
@@ -1112,7 +1288,7 @@ def exam_schedule_versions_page():
 
 @app.route("/course_closure_reports_page")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def course_closure_reports_page():
     """لوحة رئيس القسم لاعتماد تقارير إقفال المقرر."""
     return render_template("course_closure_reports.html")
@@ -1120,7 +1296,7 @@ def course_closure_reports_page():
 
 @app.route("/course_delivery_page")
 @login_required
-@role_required("instructor", "head_of_department", "admin_main", "admin")
+@role_required("instructor", "head_of_department", "admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
 def course_delivery_page():
     """تقرير تنفيذ المقرر (baseline + جزئي/نهائي)."""
     role = (session.get("user_role") or "").strip()
@@ -1141,7 +1317,7 @@ def course_delivery_hod_page():
 
 @app.route("/faculty_scorecards_page")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor")
 def faculty_scorecards_page():
     """لوحة مؤشرات إنجاز الشعب (Scorecard)."""
     return render_template("faculty_scorecards.html")
@@ -1149,7 +1325,7 @@ def faculty_scorecards_page():
 
 @app.route("/faculty_final_dossier_page")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def faculty_final_dossier_page():
     """واجهة الملف النهائي الموحّد للشعب."""
     return render_template("faculty_final_dossier.html")
@@ -1157,7 +1333,7 @@ def faculty_final_dossier_page():
 
 @app.route("/academic_quality_dashboard_page")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def academic_quality_dashboard_page():
     """لوحة ضمان الجودة والاعتماد الأكاديمي."""
     return redirect(url_for("academic_quality.quality_dashboard"))
@@ -1165,7 +1341,7 @@ def academic_quality_dashboard_page():
 
 @app.route("/ilo_catalog_page")
 @login_required
-@role_required("admin", "admin_main", "head_of_department", "instructor", "supervisor")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def ilo_catalog_page_redirect():
     return redirect(url_for("learning_outcomes.ilo_catalog_page"))
 
@@ -1196,7 +1372,7 @@ def _is_system_docs_enabled() -> bool:
 
 
 @app.route("/system_docs")
-@role_required("admin_main", "admin")
+@role_required("admin_main", "admin", "system_admin", "college_dean")
 def system_docs_page():
     if not _is_system_docs_enabled():
         abort(404)
@@ -1285,7 +1461,7 @@ def compat_results_data():
 
         # --- الجدول المعروض (optimized أو صفوف schedule) ---
         sched_scope = _effective_schedule_department_scope_id(conn)
-        scoped_ui = sched_scope is not None and role_n in ("admin", "admin_main", "head_of_department")
+        scoped_ui = sched_scope is not None and role_n in (*_COLLEGE_LEADERSHIP, "head_of_department")
         cols_courses = fetch_table_columns(conn, "courses") if table_exists(conn, "courses") else []
         has_owning_course = "owning_department_id" in cols_courses
         cols_sched = fetch_table_columns(conn, "schedule") if table_exists(conn, "schedule") else []
@@ -1402,7 +1578,7 @@ def compat_delete_registrations():
     return redirect(url_for("students.delete_registrations"), code=307)
 
 @app.route("/save_grades", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def compat_save_grades():
     return redirect(url_for("grades.save_grades"), code=307)
 
@@ -1412,7 +1588,7 @@ def compat_transcript(student_id):
     return redirect(url_for("grades.get_transcript", student_id=student_id))
 
 @app.route("/update_grade", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def compat_update_grade():
     return redirect(url_for("grades.update_grade"), code=307)
 

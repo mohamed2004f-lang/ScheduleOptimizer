@@ -419,8 +419,8 @@ def _department_identity(conn, dept_id: int | None) -> dict | None:
     }
 
 
-def build_identity_context(conn, sid: str) -> dict[str, Any]:
-    stu = _student_row(conn, sid) or {}
+def _build_college_identity(conn) -> dict[str, Any]:
+    """هوية الكلية (رؤية، رسالة، أهداف) — مشتركة بين الطالب والأستاذ."""
     ensure_college_identity_schema(conn)
     cur = conn.cursor()
     identity = _active_identity(cur)
@@ -445,7 +445,7 @@ def build_identity_context(conn, sid: str) -> dict[str, Any]:
                 "title_ar": sanitize_survey_display_text(v.get("title_ar") or ""),
                 "description_ar": sanitize_survey_display_text(v.get("description") or ""),
             })
-    college = {
+    return {
         "intro_ar": sanitize_survey_display_text(identity.get("intro_ar") or ""),
         "mission_ar": (identity.get("mission_ar") or "").strip(),
         "vision_ar": (identity.get("vision_ar") or "").strip(),
@@ -455,6 +455,11 @@ def build_identity_context(conn, sid: str) -> dict[str, Any]:
         "core_values": core_values,
         "strategic_goals": college_goals,
     }
+
+
+def build_identity_context(conn, sid: str) -> dict[str, Any]:
+    stu = _student_row(conn, sid) or {}
+    college = _build_college_identity(conn)
     program = None
     pid = stu.get("program_id")
     if pid:

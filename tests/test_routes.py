@@ -145,6 +145,20 @@ class TestAuthFlow:
             assert resp.status_code == 200
             data = resp.get_json()
             assert data["status"] == "ok"
+            chk = c.get("/auth/check")
+            assert chk.get_json()["authenticated"] is False
+
+    def test_logout_get_clears_session(self, app):
+        """GET /logout يمسح الجلسة (احتياطي للزر)."""
+        with app.test_client() as c:
+            c.post(
+                "/auth/login",
+                json={"username": "admin-test", "password": "TestP@ssw0rd!"},
+            )
+            resp = c.get("/logout", follow_redirects=False)
+            assert resp.status_code in (302, 301)
+            chk = c.get("/auth/check")
+            assert chk.get_json()["authenticated"] is False
 
     def test_auth_check_after_logout(self, app):
         """GET /auth/check بعد تسجيل الخروج يجب أن يرجع authenticated=False."""

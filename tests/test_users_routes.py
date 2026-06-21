@@ -191,3 +191,23 @@ class TestUsersAuditAndReport:
         assert "users.created" in actions or "users.updated" in actions
         assert "users.toggle_active" in actions
         assert "users.deleted" in actions
+
+
+def test_college_dean_preserves_instructor_id_on_normalize():
+    from backend.services.users import _normalize_user_links_for_role
+
+    sid, iid, sup, err = _normalize_user_links_for_role("college_dean", None, 100, 1)
+    assert err is None
+    assert sid is None
+    assert iid == 100
+    assert sup == 1
+
+
+def test_admin_main_clears_instructor_id_on_normalize():
+    from backend.services.users import _normalize_user_links_for_role
+
+    sid, iid, sup, err = _normalize_user_links_for_role("admin_main", None, 100, 1)
+    assert err is None
+    assert sid is None
+    assert iid is None
+    assert sup == 0

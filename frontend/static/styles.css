@@ -163,6 +163,8 @@ html[data-theme="dark"] .bg-body-tertiary{
   padding: 8px 12px;
   font-weight:800;
   border-radius: 10px;
+  text-decoration: none;
+  display: inline-block;
 }
 .btn-logout:hover{ filter: brightness(.95); color: #fff; }
 

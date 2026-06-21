@@ -51,10 +51,11 @@
             <input type="email" id="inst-email" class="form-control">
           </div>
           <div class="col-md-3 d-none" id="inst-dept-wrap">
-            <label for="inst-dept" class="form-label">القسم الرئيسي (إداري)</label>
+            <label for="inst-dept" class="form-label">القسم الرئيسي (إداري) <span id="inst-dept-required" class="text-danger d-none">*</span></label>
             <select id="inst-dept" class="form-select">
-              <option value="">— بدون تحديد —</option>
+              <option value="">— اختر القسم —</option>
             </select>
+            <div id="inst-dept-hint" class="form-text small text-muted"></div>
           </div>
           <div class="col-md-2 d-flex align-items-end">
             <div class="form-check">
@@ -186,6 +187,11 @@
       return "داخل الكلية (خارج القسم)";
     }
 
+    function instructorCanManageDepartments(authJson) {
+      const role = (authJson && authJson.role) || "";
+      return ["admin", "admin_main", "system_admin", "college_dean"].includes(role);
+    }
+
     function syncExternalScopeField() {
       const typeEl = document.getElementById("inst-type");
       const wrap = document.getElementById("inst-external-scope-wrap");
@@ -193,6 +199,27 @@
       const isExternal = (typeEl.value || "internal") === "external";
       if (isExternal) wrap.classList.remove("d-none");
       else wrap.classList.add("d-none");
+      syncDeptRequiredMarker();
+    }
+
+    function syncDeptRequiredMarker() {
+      const typeEl = document.getElementById("inst-type");
+      const req = document.getElementById("inst-dept-required");
+      const hint = document.getElementById("inst-dept-hint");
+      const deptWrap = document.getElementById("inst-dept-wrap");
+      if (!typeEl || !req) return;
+      const isInternal = (typeEl.value || "internal") === "internal";
+      const deptVisible = deptWrap && !deptWrap.classList.contains("d-none");
+      req.classList.toggle("d-none", !(isInternal && deptVisible));
+      if (hint) {
+        if (isInternal && deptVisible) {
+          hint.textContent = "إلزامي للأستاذ من داخل القسم.";
+        } else if (deptVisible) {
+          hint.textContent = "اختياري للمتعاون الخارجي.";
+        } else {
+          hint.textContent = "";
+        }
+      }
     }
 
     function showManageModalElement() {
@@ -257,10 +284,10 @@
       const wrap = document.getElementById("inst-dept-wrap");
       const sel = document.getElementById("inst-dept");
       if (!wrap || !sel) return;
-      const role = (authJson && authJson.role) || "";
-      const show = (role === "admin_main" || role === "admin");
+      const show = instructorCanManageDepartments(authJson);
       if (!show) {
         wrap.classList.add("d-none");
+        syncDeptRequiredMarker();
         return;
       }
       wrap.classList.remove("d-none");
@@ -269,12 +296,16 @@
           headers: { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" },
         });
         if (!resp.ok) {
-          wrap.classList.add("d-none");
+          wrap.classList.remove("d-none");
+          sel.innerHTML = '<option value="">— تعذر تحميل الأقسام —</option>';
+          const hint = document.getElementById("inst-dept-hint");
+          if (hint) hint.textContent = "تعذر جلب قائمة الأقسام؛ أعد تحميل الصفحة أو راجع الصلاحيات.";
+          syncDeptRequiredMarker();
           return;
         }
         const data = await resp.json();
         const items = (data && data.items) || [];
-        sel.innerHTML = '<option value="">— بدون تحديد —</option>';
+        sel.innerHTML = '<option value="">— اختر القسم —</option>';
         items.forEach((d) => {
           const id = d.id;
           const label = (d.name_ar || d.code || "").trim() || String(id);
@@ -289,9 +320,12 @@
           const hasScopeOption = Array.from(sel.options).some((o) => o.value === sid);
           if (hasScopeOption && !sel.value) sel.value = sid;
         }
+        syncDeptRequiredMarker();
       } catch (e) {
         console.error(e);
-        wrap.classList.add("d-none");
+        wrap.classList.remove("d-none");
+        sel.innerHTML = '<option value="">— خطأ في التحميل —</option>';
+        syncDeptRequiredMarker();
       }
     }
 
@@ -340,8 +374,7 @@
     async function syncExtraDeptAssignCard(authJson) {
       const card = document.getElementById("extra-dept-assign-card");
       if (!card) return;
-      const role = authJson && authJson.role;
-      const show = role === "admin_main" || role === "admin";
+      const show = instructorCanManageDepartments(authJson);
       if (!show) {
         card.classList.add("d-none");
         return;
@@ -604,6 +637,13 @@
 
       const deptWrap = document.getElementById("inst-dept-wrap");
       const deptSel = document.getElementById("inst-dept");
+      const deptVisible = deptWrap && !deptWrap.classList.contains("d-none") && deptSel;
+      if (type === "internal" && deptVisible && !(deptSel.value || "").trim()) {
+        uiToast("القسم الرئيسي إلزامي للأستاذ من داخل القسم — اختر القسم من القائمة.", "warning");
+        deptSel.focus();
+        return;
+      }
+
       const payload = { id, name, type, email, is_active };
       if (type === "external") {
         payload.external_scope = external_scope;
@@ -777,7 +817,10 @@
         });
       }
       const typeEl = document.getElementById("inst-type");
-      if (typeEl) typeEl.addEventListener("change", syncExternalScopeField);
+      if (typeEl) typeEl.addEventListener("change", () => {
+        syncExternalScopeField();
+        syncDeptRequiredMarker();
+      });
       syncExternalScopeField();
       try {
         const r = await fetch("/auth/check");

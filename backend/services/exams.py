@@ -320,7 +320,7 @@ def _create_exam_schedule_version(
 
 @exams_bp.route("/versions")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def exam_schedule_versions_list():
     semester = (request.args.get("semester") or "").strip()
     exam_type = (request.args.get("exam_type") or "").strip()
@@ -376,7 +376,7 @@ def exam_schedule_versions_list():
 
 @exams_bp.route("/versions/<int:version_id>")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def exam_schedule_version_detail(version_id: int):
     download = str(request.args.get("download") or "").lower() in ("1", "true", "yes")
     format_json = str(request.args.get("format") or "").lower() == "json"
@@ -423,7 +423,7 @@ def exam_schedule_version_detail(version_id: int):
 
 @exams_bp.route("/versions/<int:version_id>/restore_draft", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def exam_schedule_version_restore_draft(version_id: int):
     exam_type = ""
     semester = ""
@@ -554,7 +554,7 @@ def exam_schedule_publish_status(exam_type):
 
 @exams_bp.route("/<exam_type>/publish", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def exam_schedule_publish(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"status": "error", "message": "invalid exam type"}), 400
@@ -1033,7 +1033,7 @@ def check_exam_conflicts(exam_type):
         }), 500
 
 @exams_bp.route('/<exam_type>/add_row', methods=['POST'])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def add_exam_row(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"status":"error","message":"invalid exam type"}), 400
@@ -1075,7 +1075,7 @@ def add_exam_row(exam_type):
     return jsonify({"status":"ok"})
 
 @exams_bp.route('/<exam_type>/delete_row', methods=['POST'])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def delete_exam_row(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"status":"error"}), 400
@@ -1107,7 +1107,7 @@ def delete_exam_row(exam_type):
     return jsonify({"status":"ok"})
 
 @exams_bp.route('/<exam_type>/distribute', methods=['POST'])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def distribute_exams(exam_type):
     """
     Body: { dates: ["YYYY-MM-DD", ...], method: "round_robin" }
@@ -1531,7 +1531,7 @@ def exam_results_data(exam_type):
 
 
 @exams_bp.route('/<exam_type>/update_row', methods=['POST'])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def update_exam_row(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"status":"error","message":"invalid exam type"}), 400
@@ -1573,7 +1573,7 @@ def update_exam_row(exam_type):
 
 
 @exams_bp.route('/<exam_type>/bulk_update', methods=['POST'])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def bulk_update_exam_rows(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"status":"error","message":"invalid exam type"}), 400

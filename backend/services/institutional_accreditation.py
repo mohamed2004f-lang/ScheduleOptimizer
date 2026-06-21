@@ -290,7 +290,7 @@ def register_institutional_accreditation_routes(bp) -> None:
     """تسجيل مسارات الاعتماد المؤسسي على blueprint الجودة."""
 
     @bp.route("/accreditation/map", methods=["GET"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_map_page():
         from backend.services.accreditation_evidence import build_checklist_status
         from backend.services.accreditation_manual import (
@@ -393,7 +393,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         )
 
     @bp.route("/api/accreditation/compliance_map", methods=["GET"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_compliance_map_api():
         semester = (request.args.get("semester") or "").strip() or None
         scope_param = (request.args.get("scope") or "").strip() or None
@@ -416,7 +416,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify(data), 200
 
     @bp.route("/api/accreditation/catalog_versions", methods=["GET"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_catalog_versions():
         with get_connection() as conn:
             versions = list_active_catalog_versions(conn)
@@ -431,7 +431,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         ), 200
 
     @bp.route("/api/accreditation/meta", methods=["GET"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_meta():
         from backend.services.accreditation_metrics import (
             ACCREDITATION_COORDINATOR_ROLES,
@@ -456,7 +456,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         ), 200
 
     @bp.route("/api/accreditation/compute_auto", methods=["POST"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_compute_auto():
         from backend.services.accreditation_metrics import apply_auto_assessments
 
@@ -482,7 +482,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify(result), 200
 
     @bp.route("/api/accreditation/compute_auto/preview", methods=["GET"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_compute_auto_preview():
         from backend.services.accreditation_metrics import (
             AUTO_INDICATOR_CODES,
@@ -506,14 +506,14 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify({"status": "ok", **item}), 200
 
     @bp.route("/api/accreditation/ensure_catalog", methods=["POST"])
-    @role_required("admin", "admin_main")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean")
     def accreditation_ensure_catalog():
         with get_connection() as conn:
             stats = ensure_accreditation_catalog(conn)
         return jsonify({"status": "ok", **stats}), 200
 
     @bp.route("/api/accreditation/assessment/save", methods=["POST"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_assessment_save():
         data = request.get_json(force=True) or {}
         indicator_id = data.get("indicator_id")
@@ -568,7 +568,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify({"status": "ok"}), 200
 
     @bp.route("/api/accreditation/evidence/types", methods=["GET"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_evidence_types_api():
         from backend.services.accreditation_evidence_matrix import list_evidence_types
 
@@ -577,7 +577,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify({"status": "ok", "items": items}), 200
 
     @bp.route("/api/accreditation/evidence/matrix", methods=["GET"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_evidence_matrix_api():
         from backend.services.accreditation_evidence_matrix import build_evidence_matrix
 
@@ -594,7 +594,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify(data), 200
 
     @bp.route("/api/accreditation/evidence/rules", methods=["GET"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_evidence_rules_list():
         from backend.services.accreditation_evidence_matrix import list_evidence_rules
 
@@ -609,7 +609,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify({"status": "ok", "items": items}), 200
 
     @bp.route("/api/accreditation/evidence/permissions", methods=["GET"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_evidence_permissions_api():
         from backend.core.auth import can_bind_accreditation_evidence
 
@@ -754,7 +754,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify({"status": "ok"}), 200
 
     @bp.route("/api/accreditation/evidence/checklist", methods=["GET"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_evidence_checklist():
         from backend.services.accreditation_evidence import build_checklist_status
 
@@ -765,7 +765,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify({"status": "ok", "semester": sem, "items": items}), 200
 
     @bp.route("/api/accreditation/evidence/list", methods=["GET"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_evidence_list():
         from backend.services.accreditation_evidence import list_evidence
 
@@ -784,7 +784,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify({"status": "ok", "semester": sem, "items": items}), 200
 
     @bp.route("/api/accreditation/evidence/upload", methods=["POST"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_evidence_upload():
         from backend.services.accreditation_evidence import save_file_evidence
 
@@ -817,7 +817,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify({"status": "ok", **result}), 200
 
     @bp.route("/api/accreditation/evidence/link", methods=["POST"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_evidence_link():
         from backend.services.accreditation_evidence import save_link_evidence
 
@@ -846,7 +846,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify({"status": "ok", **result}), 200
 
     @bp.route("/api/accreditation/evidence/file/<int:evidence_id>", methods=["GET"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_evidence_download(evidence_id: int):
         from backend.services.accreditation_evidence import get_evidence_file
 
@@ -865,7 +865,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         )
 
     @bp.route("/api/accreditation/evidence/<int:evidence_id>", methods=["DELETE"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_evidence_delete(evidence_id: int):
         from backend.services.accreditation_evidence import soft_delete_evidence
 
@@ -876,7 +876,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify({"status": "ok"}), 200
 
     @bp.route("/api/accreditation/manual_inputs", methods=["GET"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_manual_inputs_get():
         from backend.services.accreditation_manual import get_manual_inputs
 
@@ -887,7 +887,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify({"status": "ok", **data}), 200
 
     @bp.route("/api/accreditation/manual_inputs/save", methods=["POST"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_manual_inputs_save():
         from backend.services.accreditation_manual import save_manual_inputs
 
@@ -908,7 +908,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify({"status": "ok", **result}), 200
 
     @bp.route("/api/accreditation/improvement_plans", methods=["GET"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_improvement_plans_list():
         from backend.services.accreditation_manual import list_improvement_plans
 
@@ -919,7 +919,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify({"status": "ok", "semester": sem, "items": items}), 200
 
     @bp.route("/api/accreditation/improvement_plans/save", methods=["POST"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_improvement_plans_save():
         from backend.services.accreditation_manual import save_improvement_plan
 
@@ -942,7 +942,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify({"status": "ok", **result}), 200
 
     @bp.route("/api/accreditation/improvement_plans/<int:plan_id>", methods=["DELETE"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_improvement_plans_delete(plan_id: int):
         from backend.services.accreditation_manual import delete_improvement_plan
 
@@ -953,7 +953,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return jsonify({"status": "ok"}), 200
 
     @bp.route("/api/accreditation/export/xlsx", methods=["GET"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_export_xlsx():
         from backend.core.accreditation_workbook import frames_for_accreditation_workbook
         from backend.services.accreditation_evidence import build_checklist_status
@@ -977,7 +977,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return excel_response_from_frames(frames, filename_prefix=prefix)
 
     @bp.route("/api/accreditation/export/pdf", methods=["GET"])
-    @role_required("admin", "admin_main", "head_of_department")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_export_pdf():
         from backend.core.accreditation_workbook import html_for_accreditation_workbook
         from backend.services.accreditation_evidence import build_checklist_status
@@ -1000,7 +1000,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return pdf_response_from_html(html, filename_prefix=f"accreditation_{sem.replace(' ', '_')}")
 
     @bp.route("/api/accreditation/import_catalog/template", methods=["GET"])
-    @role_required("admin", "admin_main")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean")
     def accreditation_import_template():
         import pandas as pd
 
@@ -1011,7 +1011,7 @@ def register_institutional_accreditation_routes(bp) -> None:
         return excel_response_from_df(df, filename_prefix="accreditation_catalog_template")
 
     @bp.route("/api/accreditation/import_catalog", methods=["POST"])
-    @role_required("admin", "admin_main")
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean")
     def accreditation_import_catalog():
         from backend.services.accreditation_catalog_import import import_catalog_from_excel
 

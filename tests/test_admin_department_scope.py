@@ -59,6 +59,78 @@ class TestAdminDepartmentScope:
         )
         assert resp.status_code == 403
 
+    def test_scope_status_unscoped(self, app):
+        with app.test_client() as c:
+            c.post(
+                "/auth/login",
+                json={"username": "admin-test", "password": "TestP@ssw0rd!"},
+            )
+            r = c.get("/auth/admin_department_scope/status")
+            assert r.status_code == 200
+            data = r.get_json()
+            assert data.get("status") == "ok"
+            assert data.get("scoped") is False
+            assert data.get("is_empty") is False
+
+    def test_scope_status_reports_empty_department(self, app, db_conn):
+        uid = uuid.uuid4().hex[:8]
+        code = f"EM{uid}".upper()[:12]
+        cur = db_conn.cursor()
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (code, "قسم فارغ", "Empty"),
+        )
+        db_conn.commit()
+        did = cur.execute("SELECT id FROM departments WHERE code = ?", (code,)).fetchone()[0]
+        with app.test_client() as c:
+            c.post(
+                "/auth/login",
+                json={"username": "admin-test", "password": "TestP@ssw0rd!"},
+            )
+            c.post(
+                "/auth/admin_department_scope",
+                json={"department_id": did},
+                headers={"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
+            )
+            r = c.get("/auth/admin_department_scope/status")
+            assert r.status_code == 200
+            data = r.get_json()
+            assert data.get("scoped") is True
+            assert data.get("student_count") == 0
+            assert data.get("is_empty") is True
+
+    def test_scope_status_counts_students_in_department(self, app, db_conn):
+        uid = uuid.uuid4().hex[:8]
+        code = f"SC{uid}".upper()[:12]
+        cur = db_conn.cursor()
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (code, "قسم عد", "Count"),
+        )
+        db_conn.commit()
+        did = cur.execute("SELECT id FROM departments WHERE code = ?", (code,)).fetchone()[0]
+        sid = f"ST{uid}"
+        cur.execute(
+            "INSERT INTO students (student_id, student_name, enrollment_status, department_id) VALUES (?, ?, 'active', ?)",
+            (sid, "طالب عد", did),
+        )
+        db_conn.commit()
+        with app.test_client() as c:
+            c.post(
+                "/auth/login",
+                json={"username": "admin-test", "password": "TestP@ssw0rd!"},
+            )
+            c.post(
+                "/auth/admin_department_scope",
+                json={"department_id": did},
+                headers={"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
+            )
+            r = c.get("/auth/admin_department_scope/status")
+            assert r.status_code == 200
+            data = r.get_json()
+            assert data.get("student_count") >= 1
+            assert data.get("is_empty") is False
+
     def test_users_list_respects_department_scope(self, app, db_conn):
         uid = uuid.uuid4().hex[:8]
         code1 = f"DA{uid}".upper()[:12]

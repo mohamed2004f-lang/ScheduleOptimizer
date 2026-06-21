@@ -47,9 +47,9 @@
                 
                 <div class="d-flex align-items-center gap-2">
                     <span class="d-none d-md-inline text-white-50 me-2" id="currentUser"></span>
-                    <button class="btn btn-logout" type="button" id="logoutBtn" onclick="handleLogout()">
+                    <a class="btn btn-logout" id="logoutBtn" href="/logout">
                         <i class="bi bi-box-arrow-right"></i> خروج
-                    </button>
+                    </a>
                 </div>
             </div>
         </div>
@@ -155,26 +155,12 @@
     
     <script>
         // دالة تسجيل الخروج
-        async function handleLogout() {
-            try {
-                showLoading();
-                const response = await fetch('/auth/logout', {
-                    method: 'POST',
-                    credentials: 'include'
-                });
-                
-                if (response.ok) {
-                    window.location.href = '/login';
-                } else {
-                    showToast('حدث خطأ أثناء تسجيل الخروج', 'error');
-                }
-            } catch (error) {
-                console.error('Logout error:', error);
-                window.location.href = '/login';
-            } finally {
-                hideLoading();
-            }
+        function handleLogout() {
+            const btn = document.getElementById('logoutBtn');
+            if (btn) btn.disabled = true;
+            window.location.assign('/logout');
         }
+        window.handleLogout = handleLogout;
         
         // إظهار/إخفاء التحميل
         function showLoading() {

@@ -7,6 +7,7 @@ from backend.services.multi_surveys import (
     list_templates,
     submit_survey_response,
     survey_metrics_for_quality,
+    survey_respondent_role,
 )
 from backend.services.quality_metrics import compute_quality_metrics, term_label_from_conn
 
@@ -180,3 +181,14 @@ def test_survey_question_labels_sync_from_seed(db_conn):
     assert tpl
     labels = [q["label_ar"] for q in list_template_questions(db_conn, int(tpl["id"]))]
     assert "بشكل عام، أنا راضٍ عن خدمات الشؤون والتسجيل" in labels
+
+
+def test_survey_respondent_role_leadership_teaching():
+    assert survey_respondent_role("head_of_department", "head") == "instructor"
+    assert survey_respondent_role("head_of_department", "supervisor") == "supervisor"
+    assert survey_respondent_role("college_dean", "dean") == "instructor"
+    assert survey_respondent_role("college_dean", "instructor") == "instructor"
+    assert survey_respondent_role("college_dean", "supervisor") == "supervisor"
+    assert survey_respondent_role("academic_vice_dean", "vice_dean") == "instructor"
+    assert survey_respondent_role("academic_vice_dean", "instructor") == "instructor"
+    assert survey_respondent_role("academic_vice_dean", "supervisor") == "supervisor"

@@ -79,7 +79,7 @@ def quality_glossary_api():
 
 @academic_quality_bp.route("/dashboard")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def quality_dashboard():
     from backend.core.survey_platform import SURVEY_METRIC_LABELS
 
@@ -159,7 +159,7 @@ def quality_dashboard():
 
 @academic_quality_bp.route("/api/metrics")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def quality_metrics_api():
     semester = (request.args.get("semester") or "").strip() or None
     with get_connection() as conn:
@@ -170,7 +170,7 @@ def quality_metrics_api():
 
 @academic_quality_bp.route("/api/snapshot", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def save_snapshot():
     data = request.get_json(force=True) or {}
     semester = (data.get("semester") or "").strip() or None
@@ -185,7 +185,7 @@ def save_snapshot():
 
 @academic_quality_bp.route("/api/institutional_inputs", methods=["GET", "POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def institutional_inputs():
     with get_connection() as conn:
         dept_id = _resolve_department_scope(conn)
@@ -328,7 +328,7 @@ def supervisor_quality_report():
 
 @academic_quality_bp.route("/export/program")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def export_program_report():
     """تصدير HTML للطباعة — تقرير الاعتماد البرامجي."""
     with get_connection() as conn:
@@ -351,7 +351,7 @@ def export_program_report():
 
 @academic_quality_bp.route("/export/program.pdf")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def export_program_report_pdf():
     with get_connection() as conn:
         dept_id = _resolve_department_scope(conn)
@@ -375,7 +375,7 @@ def export_program_report_pdf():
 
 @academic_quality_bp.route("/export/institutional")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def export_institutional_report():
     with get_connection() as conn:
         dept_id = _resolve_department_scope(conn)
@@ -389,7 +389,7 @@ def export_institutional_report():
 
 @academic_quality_bp.route("/export/institutional.pdf")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def export_institutional_report_pdf():
     with get_connection() as conn:
         dept_id = _resolve_department_scope(conn)
@@ -420,7 +420,7 @@ def _survey_admin_template_code() -> str:
 
 @academic_quality_bp.route("/survey_admin")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def survey_admin_page():
     template_code = _survey_admin_template_code()
     with get_connection() as conn:
@@ -447,7 +447,7 @@ def survey_admin_page():
 
 @academic_quality_bp.route("/api/survey_templates")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def survey_templates_api():
     with get_connection() as conn:
         templates = list_templates(conn, active_only=False)
@@ -456,7 +456,7 @@ def survey_templates_api():
 
 @academic_quality_bp.route("/api/survey_questions", methods=["GET", "POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def survey_questions_api():
     template_code = _survey_admin_template_code()
     body: dict = {}
@@ -488,7 +488,7 @@ def survey_questions_api():
 
 @academic_quality_bp.route("/api/survey_questions/<int:question_id>", methods=["PUT", "DELETE"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def survey_question_item_api(question_id: int):
     template_code = _survey_admin_template_code()
     with get_connection() as conn:
@@ -523,7 +523,7 @@ def survey_question_item_api(question_id: int):
 
 @academic_quality_bp.route("/api/survey_questions/reorder", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def survey_questions_reorder_api():
     data = request.get_json(force=True) or {}
     template_code = (data.get("template_code") or data.get("template") or _survey_admin_template_code()).strip()

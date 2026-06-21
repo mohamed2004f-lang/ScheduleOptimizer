@@ -19,6 +19,21 @@
 
     <div id="usersDeptScopeBanner" class="alert alert-info py-2 small d-none" role="status"></div>
 
+    <ul class="nav nav-tabs mb-3" id="usersAdminTabs" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="tab-users-btn" data-bs-toggle="tab" data-bs-target="#tabUsers" type="button" role="tab">المستخدمون</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-profiles-btn" data-bs-toggle="tab" data-bs-target="#tabProfiles" type="button" role="tab">قوالب الأدوار</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-handover-btn" data-bs-toggle="tab" data-bs-target="#tabHandover" type="button" role="tab">نقل الصلاحيات</button>
+      </li>
+    </ul>
+
+    <div class="tab-content" id="usersAdminTabContent">
+    <div class="tab-pane fade show active" id="tabUsers" role="tabpanel">
+
     <div id="adminWarning" class="alert alert-warning p-2 d-none">
       هذه الصفحة مخصصة للمسؤول (admin) فقط. إذا لم تكن تملك صلاحيات كافية، ستظهر لك أخطاء عند حفظ البيانات.
     </div>
@@ -29,10 +44,14 @@
         <div id="headDeptOnlyHint" class="alert alert-secondary p-2 small d-none">
           بصلاحية <strong>رئيس القسم</strong>: يمكنك فقط <strong>تعديل</strong> حسابات <strong>عضو هيئة التدريس / رئيس القسم</strong> (إشراف، رقم مدرّس، الدور بين هذين الدورين). لا يمكن إنشاء مستخدم جديد من هنا، ولا الحذف، ولا تغيير كلمة المرور أو حالة التفعيل.
         </div>
+        <div id="collegeLeadRoleHint" class="alert alert-warning p-2 small d-none">
+          <div class="fw-semibold mb-1">عميد / وكيل الكلية: ربط رقم عضو هيئة التدريس</div>
+          <p class="mb-0">أدخل <strong>رقم عضو هيئة التدريس</strong> (مثل 100 لد. سالم) من القائمة ثم <strong>حفظ المستخدم</strong>. بدون هذا الرقم لا يعمل التبديل إلى <strong>وضع الأستاذ</strong> أو <strong>المشرف</strong> من الشريط العلوي. فعّل <strong>مشرف أكاديمي</strong> إن كان يمارس الإشراف.</p>
+        </div>
         <div class="alert alert-info p-2 small">
           <strong>الطريقة الأساسية:</strong> أدخل اسم المستخدم وكلمة المرور والدور والربط (رقم طالب أو رقم مدرّس حسب الدور) ثم <strong>حفظ المستخدم</strong>.
-          <span class="d-block mt-1">لـ <strong>رئيس القسم</strong>: أدخل <strong>رقم عضو هيئة التدريس</strong> لنفس الشخص، وفعّل <strong>مشرف أكاديمي</strong> إن لزم — التفاصيل تظهر أسفل النموذج عند اختيار الدور.</span>
-          قسم «ربط من القائمة» أدناه <strong>اختياري</strong> ويُكمّل عند رغبتك بإرسال رابط بالبريد (للمسؤول الرئيسي فقط).
+          <span class="d-block mt-1">لـ <strong>رئيس القسم / عميد / وكيل الكلية</strong>: أدخل <strong>رقم عضو هيئة التدريس</strong> لنفس الشخص، وفعّل <strong>مشرف أكاديمي</strong> إن لزم — التفاصيل تظهر أسفل النموذج عند اختيار الدور.</span>
+          قسم «ربط من القائمة» أدناه <strong>اختياري</strong> ويُكمّل عند رغبتك بإرسال رابط بالبريد (للمسؤول الرئيسي وعميد الكلية).
         </div>
         <div class="row g-2 align-items-end">
           <div class="col-md-4">
@@ -47,6 +66,8 @@
             <label class="form-label">الدور</label>
             <select id="roleSelect" class="form-select form-select-sm">
               <option value="admin_main">مسؤول رئيسي (admin_main)</option>
+              <option value="college_dean">عميد الكلية (college_dean)</option>
+              <option value="academic_vice_dean">وكيل الكلية للشؤون العلمية (academic_vice_dean)</option>
               <option value="head_of_department">رئيس قسم (head_of_department)</option>
               <option value="instructor">عضو هيئة تدريس (instructor)</option>
               <option value="student">طالب (student)</option>
@@ -55,6 +76,12 @@
           </div>
         </div>
         <div class="row g-2 align-items-end mt-2">
+          <div class="col-md-4">
+            <label class="form-label">قالب دور (اختياري)</label>
+            <select id="roleProfileSelect" class="form-select form-select-sm">
+              <option value="">— بدون قالب —</option>
+            </select>
+          </div>
           <div class="col-md-4">
             <label class="form-label">الرقم الدراسي (لطالب فقط)</label>
             <input id="studentIdInput" list="studentIdOptions" class="form-control form-control-sm">
@@ -144,6 +171,7 @@
           قائمة المستخدمين
           <span id="usersTotalBadge" class="badge bg-secondary">—</span>
         </h5>
+        <p class="text-muted small mb-2">اضغط على أي مستخدم لتحميل بياناته في نموذج <strong>«إضافة / تعديل مستخدم»</strong> أعلاه (اسم المستخدم، كلمة المرور، رقم المدرّس…).</p>
         <p id="usersStorageHint" class="text-muted small mb-2" title=""></p>
         <div id="pgStorageNote" class="alert alert-warning py-2 px-3 small d-none" role="status"></div>
         <div class="row g-2 mb-2">
@@ -168,11 +196,152 @@
         <div id="usersList" class="list-group small"></div>
       </div>
     </div>
+    </div><!-- tabUsers -->
+
+    <div class="tab-pane fade" id="tabProfiles" role="tabpanel">
+      <div class="card mb-3">
+        <div class="card-body">
+          <h5 class="card-title">قوالب الأدوار الوظيفية</h5>
+          <p class="text-muted small">قوالب جاهزة لتوزيع الصلاحيات — لا يظهر «مسؤول النظام» إلا لمسؤول النظام.</p>
+          <div id="roleProfilesList" class="small"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-pane fade" id="tabHandover" role="tabpanel">
+      <div class="card mb-3">
+        <div class="card-body">
+          <h5 class="card-title">نقل قالب الدور والصلاحيات</h5>
+          <p class="text-muted small mb-2">اختر حسابين من القائمة المسجّلة في النظام — ينسخ قالب الدور والاستثناءات من المصدر إلى الهدف (مثلاً عند تسليم مهمة).</p>
+          <div class="row g-2 align-items-end">
+            <div class="col-md-4">
+              <label class="form-label" for="handoverFrom">من المستخدم (المصدر)</label>
+              <select id="handoverFrom" class="form-select form-select-sm">
+                <option value="">— اختر المستخدم المصدر —</option>
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label" for="handoverTo">إلى المستخدم (الهدف)</label>
+              <select id="handoverTo" class="form-select form-select-sm">
+                <option value="">— اختر المستخدم الهدف —</option>
+              </select>
+            </div>
+            <div class="col-md-4">
+              <button type="button" id="btnHandover" class="btn btn-warning btn-sm mt-3">تنفيذ النقل</button>
+            </div>
+          </div>
+          <div id="handoverPreview" class="alert alert-light border small mt-3 mb-0 d-none" role="status"></div>
+          <div id="handoverMsg" class="mt-2"></div>
+        </div>
+      </div>
+    </div>
+
+    </div><!-- tab-content -->
   </main>
 
   <script>
     let VALID_STUDENT_IDS = new Set();
     let VALID_INSTRUCTOR_IDS = new Set();
+    let CACHED_USERS = [];
+
+    function escHtml(s){
+      return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function userHandoverOptionLabel(u){
+      const un = u.username != null ? String(u.username) : '—';
+      const role = u.role || '—';
+      const title = (u.display_title_ar || '').trim();
+      const inactive = (u.is_active === 0 || u.is_active === false) ? ' · معطّل' : '';
+      const titlePart = title ? ` · ${title}` : '';
+      return `${un} — ${role}${titlePart}${inactive}`;
+    }
+
+    function findCachedUser(username){
+      const q = (username || '').trim().toLowerCase();
+      if(!q) return null;
+      return CACHED_USERS.find(u => String(u.username || '').toLowerCase() === q) || null;
+    }
+
+    function populateHandoverSelects(users){
+      const fromSel = document.getElementById('handoverFrom');
+      const toSel = document.getElementById('handoverTo');
+      if(!fromSel || !toSel) return;
+      const prevFrom = fromSel.value;
+      const prevTo = toSel.value;
+      const fill = (sel, placeholder)=>{
+        sel.innerHTML = '';
+        const empty = document.createElement('option');
+        empty.value = '';
+        empty.textContent = placeholder;
+        sel.appendChild(empty);
+        (users || []).forEach(u=>{
+          if(!u || u.username == null) return;
+          const opt = document.createElement('option');
+          opt.value = String(u.username);
+          opt.textContent = userHandoverOptionLabel(u);
+          sel.appendChild(opt);
+        });
+      };
+      fill(fromSel, '— اختر المستخدم المصدر —');
+      fill(toSel, '— اختر المستخدم الهدف —');
+      if(prevFrom && [...fromSel.options].some(o => o.value === prevFrom)) fromSel.value = prevFrom;
+      if(prevTo && [...toSel.options].some(o => o.value === prevTo)) toSel.value = prevTo;
+      syncHandoverPreview();
+    }
+
+    function describeUserForHandover(u){
+      if(!u) return '—';
+      const parts = [`<strong>${escHtml(u.username)}</strong>`, `دور: <code>${escHtml(u.role || '—')}</code>`];
+      if(u.display_title_ar) parts.push(`مسمى: ${escHtml(u.display_title_ar)}`);
+      if(u.role_profile_id) parts.push(`قالب #${escHtml(u.role_profile_id)}`);
+      else parts.push('بدون قالب دور');
+      if(u.is_active === 0 || u.is_active === false) parts.push('<span class="text-secondary">(معطّل)</span>');
+      return parts.join(' · ');
+    }
+
+    function syncHandoverPreview(){
+      const box = document.getElementById('handoverPreview');
+      if(!box) return;
+      const fromU = (document.getElementById('handoverFrom')?.value || '').trim();
+      const toU = (document.getElementById('handoverTo')?.value || '').trim();
+      if(!fromU && !toU){
+        box.classList.add('d-none');
+        box.innerHTML = '';
+        return;
+      }
+      const src = findCachedUser(fromU);
+      const tgt = findCachedUser(toU);
+      let html = '<div class="fw-semibold mb-1">معاينة النقل</div><ul class="mb-0 ps-3">';
+      html += `<li><span class="text-muted">من:</span> ${describeUserForHandover(src)}</li>`;
+      html += `<li><span class="text-muted">إلى:</span> ${describeUserForHandover(tgt)}</li>`;
+      html += '</ul>';
+      if(fromU && toU && fromU.toLowerCase() === toU.toLowerCase()){
+        html += '<div class="text-danger mt-2 mb-0">لا يمكن النقل إلى نفس الحساب.</div>';
+      } else if(fromU && toU){
+        html += '<div class="text-warning mt-2 mb-0">سيُستبدَل دور الهدف وقالبه واستثناءات صلاحياته بما لدى المصدر.</div>';
+      }
+      box.innerHTML = html;
+      box.classList.remove('d-none');
+    }
+
+    function openHandoverTab(fromUsername, toUsername){
+      populateHandoverSelects(CACHED_USERS);
+      const fromSel = document.getElementById('handoverFrom');
+      const toSel = document.getElementById('handoverTo');
+      if(fromUsername && fromSel) fromSel.value = String(fromUsername);
+      if(toUsername && toSel) toSel.value = String(toUsername);
+      syncHandoverPreview();
+      const tabBtn = document.getElementById('tab-handover-btn');
+      if(tabBtn){
+        if(typeof bootstrap !== 'undefined' && bootstrap.Tab){
+          bootstrap.Tab.getOrCreateInstance(tabBtn).show();
+        } else {
+          tabBtn.click();
+        }
+      }
+      document.getElementById('handoverMsg').innerHTML = '';
+    }
 
     async function fetchJSON(url, opts){
       /* منع عرض قائمة مستخدمين قديمة بعد الحفظ: لا تخزين مؤقت لطلبات JSON */
@@ -227,7 +396,7 @@
       const right = document.createElement('div');
       right.className = 'd-flex gap-1 align-items-center';
 
-      if(CURRENT_ROLE === 'admin_main' || CURRENT_ROLE === 'admin'){
+      if(CURRENT_ROLE === 'admin_main' || CURRENT_ROLE === 'admin' || CURRENT_ROLE === 'college_dean'){
         const statusBtn = document.createElement('button');
         statusBtn.className = 'btn btn-sm btn-outline-primary';
         statusBtn.textContent = 'حالة الدعوات';
@@ -259,7 +428,7 @@
         right.appendChild(revokeBtn);
       }
 
-      const canManageSupervisor = (CURRENT_ROLE === 'admin_main' || CURRENT_ROLE === 'admin' || CURRENT_ROLE === 'head_of_department');
+      const canManageSupervisor = (CURRENT_ROLE === 'admin_main' || CURRENT_ROLE === 'admin' || CURRENT_ROLE === 'college_dean' || CURRENT_ROLE === 'head_of_department');
       const isInstructorTarget = (u.role === 'instructor' || u.role === 'head_of_department');
       if(canManageSupervisor && isInstructorTarget){
         const supBtn = document.createElement('button');
@@ -271,6 +440,20 @@
           await toggleSupervisor(u.username, !u.is_supervisor);
         });
         right.appendChild(supBtn);
+      }
+
+      const canHandover = ['admin','admin_main','system_admin','college_dean'].includes(CURRENT_ROLE || '');
+      if(canHandover){
+        const hoBtn = document.createElement('button');
+        hoBtn.type = 'button';
+        hoBtn.className = 'btn btn-sm btn-outline-warning btn-handover-from-user';
+        hoBtn.textContent = 'نقل صلاحياته';
+        hoBtn.title = 'فتح نقل الصلاحيات مع اختيار هذا المستخدم كمصدر';
+        hoBtn.addEventListener('click', (ev)=>{
+          ev.stopPropagation();
+          openHandoverTab(u.username, null);
+        });
+        right.appendChild(hoBtn);
       }
 
       const delBtn = document.createElement('button');
@@ -294,6 +477,13 @@
         document.getElementById('isActive').checked = !(u.is_active === 0 || u.is_active === false);
         syncSupervisorAvailability();
         syncRoleHeadHints();
+        const card = document.getElementById('directUserCard');
+        if(card){
+          card.classList.add('border', 'border-primary');
+          card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          setTimeout(()=> card.classList.remove('border', 'border-primary'), 2000);
+        }
+        setUserMsg('info', 'تم تحميل بيانات «' + (u.username || '') + '» في النموذج أعلاه — عدّل ثم اضغط حفظ المستخدم.');
       });
       return item;
     }
@@ -319,6 +509,8 @@
         if(badge) badge.textContent = '!';
         if(hint){ hint.textContent = ''; hint.classList.remove('font-monospace'); hint.title = ''; }
         if(pgNote){ pgNote.textContent = ''; pgNote.classList.add('d-none'); }
+        CACHED_USERS = [];
+        populateHandoverSelects([]);
         return null;
       }
       const arr = Array.isArray(res.json?.users) ? res.json.users : [];
@@ -366,9 +558,13 @@
       }
       if(!arr.length){
         container.innerHTML = '<div class="text-muted p-2">لا توجد حسابات مستخدمين بعد.</div>';
+        CACHED_USERS = [];
+        populateHandoverSelects([]);
         applyPermissions();
         return [];
       }
+      CACHED_USERS = arr.slice();
+      populateHandoverSelects(CACHED_USERS);
       arr.forEach(u=>{
         try {
           container.appendChild(buildUserListItem(u));
@@ -386,6 +582,8 @@
       const un = String(saved.username);
       const found = listArr.some((x)=> String(x.username) === un);
       if(found) return;
+      CACHED_USERS = [...listArr, saved];
+      populateHandoverSelects(CACHED_USERS);
       const container = document.getElementById('usersList');
       if(!container) return;
       const emptyMsg = container.querySelector('.text-muted.p-2');
@@ -444,6 +642,8 @@
       if(instructorId) body.instructor_id = instructorId;
       body.is_supervisor = isSupervisor;
       body.is_active = isActive;
+      const rpCode = (document.getElementById('roleProfileSelect')?.value || '').trim();
+      if(rpCode) body.role_profile_code = rpCode;
       const res = await fetchJSON('/users/add', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
@@ -585,7 +785,8 @@
       const role = document.getElementById('roleSelect').value;
       const sup = document.getElementById('isSupervisor');
       if(!sup) return;
-      const allowed = (role === 'instructor' || role === 'head_of_department' || role === 'admin_main');
+      const allowed = (role === 'instructor' || role === 'head_of_department' || role === 'admin_main'
+        || role === 'college_dean' || role === 'academic_vice_dean');
       sup.disabled = !allowed;
       if(!allowed) sup.checked = false;
       const label = document.getElementById('isSupervisorLabel') || document.querySelector('label[for=\"isSupervisor\"]');
@@ -603,6 +804,8 @@
       const role = document.getElementById('roleSelect')?.value || '';
       const hint = document.getElementById('headDeptRoleHint');
       if(hint) hint.classList.toggle('d-none', role !== 'head_of_department');
+      const leadHint = document.getElementById('collegeLeadRoleHint');
+      if(leadHint) leadHint.classList.toggle('d-none', role !== 'college_dean' && role !== 'academic_vice_dean');
     }
 
     let CURRENT_ROLE = null;
@@ -647,11 +850,12 @@
 
     function applyPermissions(){
       const role = CURRENT_ROLE || '';
-      const isAdminMain = (role === 'admin_main' || role === 'admin');
+      const isPrivileged = ['admin','admin_main','system_admin','college_dean'].includes(role);
+      const isAdminMain = (role === 'admin_main' || role === 'admin' || role === 'system_admin');
       const isHead = (role === 'head_of_department');
 
       document.getElementById('headDeptOnlyHint')?.classList.toggle('d-none', !isHead);
-      document.getElementById('inviteSection')?.classList.toggle('d-none', !isAdminMain);
+      document.getElementById('inviteSection')?.classList.toggle('d-none', !isPrivileged);
 
       const roleSelect = document.getElementById('roleSelect');
       if(roleSelect){
@@ -659,6 +863,10 @@
           const v = opt.value;
           if(isHead){
             opt.disabled = (v !== 'instructor' && v !== 'head_of_department');
+          } else if(role === 'college_dean'){
+            opt.disabled = (v === 'admin_main' || v === 'college_dean' || v === 'system_admin');
+          } else if(!isAdminMain){
+            opt.disabled = false;
           } else {
             opt.disabled = false;
           }
@@ -678,8 +886,88 @@
 
       // اخفاء زر الحذف لرئيس القسم
       document.querySelectorAll('.btn-delete-user').forEach(btn=>{
-        btn.style.display = (isAdminMain ? '' : 'none');
+        btn.style.display = (isPrivileged ? '' : 'none');
       });
+      document.querySelectorAll('.btn-handover-from-user').forEach(btn=>{
+        btn.style.display = (isPrivileged ? '' : 'none');
+      });
+      document.getElementById('tab-handover-btn')?.closest('.nav-item')?.classList.toggle('d-none', !isPrivileged);
+      document.getElementById('btnInviteCleanup')?.classList.toggle('d-none', !isAdminMain);
+      document.getElementById('btnUsersValidationReport')?.classList.toggle('d-none', !isPrivileged);
+      document.getElementById('btnUsersAuditLog')?.classList.toggle('d-none', !isPrivileged);
+    }
+
+    async function loadRoleProfiles(){
+      const box = document.getElementById('roleProfilesList');
+      const sel = document.getElementById('roleProfileSelect');
+      if(!box) return;
+      box.textContent = 'جاري التحميل...';
+      const res = await fetchJSON('/role_profiles/list');
+      if(!res.ok){
+        box.textContent = 'تعذر تحميل القوالب.';
+        return;
+      }
+      const profiles = Array.isArray(res.json?.profiles) ? res.json.profiles : [];
+      const assignable = Array.isArray(res.json?.assignable) ? res.json.assignable : profiles;
+      if(sel){
+        const keep = sel.querySelector('option[value=""]');
+        sel.innerHTML = '';
+        if(keep) sel.appendChild(keep);
+        assignable.forEach(p=>{
+          const opt = document.createElement('option');
+          opt.value = p.code || '';
+          opt.textContent = (p.name_ar || p.code) + ' (' + (p.base_role || '') + ')';
+          sel.appendChild(opt);
+        });
+      }
+      if(!profiles.length){
+        box.textContent = 'لا توجد قوالب.';
+        return;
+      }
+      box.innerHTML = '<ul class="list-group">' + profiles.map(p =>
+        `<li class="list-group-item d-flex justify-content-between"><span><strong>${p.name_ar||p.code}</strong> <code>${p.code}</code></span><span class="text-muted">${p.base_role||''} · ${p.scope_mode||'none'}</span></li>`
+      ).join('') + '</ul>';
+    }
+
+    async function runHandover(){
+      const fromU = (document.getElementById('handoverFrom')?.value || '').trim();
+      const toU = (document.getElementById('handoverTo')?.value || '').trim();
+      const msg = document.getElementById('handoverMsg');
+      if(!fromU || !toU){
+        if(msg) msg.innerHTML = '<div class="alert alert-warning p-2 mb-0">اختر المستخدم المصدر والهدف من القائمة.</div>';
+        return;
+      }
+      if(fromU.toLowerCase() === toU.toLowerCase()){
+        if(msg) msg.innerHTML = '<div class="alert alert-warning p-2 mb-0">لا يمكن النقل إلى نفس الحساب.</div>';
+        return;
+      }
+      syncHandoverPreview();
+      const src = findCachedUser(fromU);
+      const tgt = findCachedUser(toU);
+      const confirmLines = [
+        `نقل القالب والصلاحيات من «${fromU}» إلى «${toU}»؟`,
+        src ? `المصدر: ${userHandoverOptionLabel(src)}` : '',
+        tgt ? `الهدف (حالياً): ${userHandoverOptionLabel(tgt)}` : '',
+        'سيُستبدَل دور الهدف وقالبه واستثناءات صلاحياته.',
+      ].filter(Boolean).join('\n');
+      if(!confirm(confirmLines)) return;
+      if(msg) msg.innerHTML = '<div class="alert alert-info p-2 mb-0">جاري النقل...</div>';
+      const res = await fetchJSON('/role_profiles/handover', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({from_username: fromU, to_username: toU})
+      });
+      if(msg){
+        msg.innerHTML = res.ok
+          ? `<div class="alert alert-success p-2 mb-0">${escHtml(res.json?.message||'تم')}</div>`
+          : `<div class="alert alert-danger p-2 mb-0">${escHtml(res.json?.message||'فشل')}</div>`;
+      }
+      if(res.ok){
+        document.getElementById('handoverFrom').value = '';
+        document.getElementById('handoverTo').value = '';
+        syncHandoverPreview();
+        await loadUsers();
+      }
     }
 
     function syncUsersScopeBanner(authJson){
@@ -707,7 +995,7 @@
           CURRENT_ROLE = auth.json?.role || null;
           syncUsersScopeBanner(auth.json);
         }
-        if(auth.ok && !['admin','admin_main','head_of_department'].includes(auth.json?.role)){
+        if(auth.ok && !['admin','admin_main','system_admin','college_dean','head_of_department'].includes(auth.json?.role)){
           document.getElementById('adminWarning').classList.remove('d-none');
         }
       } catch(e){}
@@ -716,6 +1004,9 @@
         usersFilter.addEventListener('input', applyUsersFilter);
       }
       document.getElementById('btnSaveUser').addEventListener('click', saveUser);
+      document.getElementById('btnHandover')?.addEventListener('click', runHandover);
+      document.getElementById('handoverFrom')?.addEventListener('change', syncHandoverPreview);
+      document.getElementById('handoverTo')?.addEventListener('change', syncHandoverPreview);
       document.getElementById('btnSendInvite').addEventListener('click', sendInvite);
       document.getElementById('btnInviteCleanup').addEventListener('click', cleanupInvites);
       document.getElementById('btnUsersValidationReport').addEventListener('click', loadUsersValidationReport);
@@ -750,6 +1041,7 @@
       syncSupervisorAvailability();
       syncRoleHeadHints();
       applyPermissions();
+      await loadRoleProfiles();
       await loadUsersValidationReport();
       await loadUsersAuditLog();
     });

@@ -780,7 +780,7 @@ def list_schedule_rows_alias():
 
 @schedule_bp.route("/teaching_groups")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def teaching_groups_list():
     semester = (request.args.get("semester") or "").strip() or None
     course_name = (request.args.get("course_name") or "").strip() or None
@@ -797,7 +797,7 @@ def teaching_groups_list():
 
 @schedule_bp.route("/teaching_groups", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def teaching_groups_create():
     data = request.get_json(silent=True) or {}
     with get_connection() as conn:
@@ -832,7 +832,7 @@ def teaching_groups_create():
 
 @schedule_bp.route("/teaching_groups/<int:group_id>", methods=["PATCH"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def teaching_groups_patch(group_id: int):
     data = request.get_json(silent=True) or {}
     with get_connection() as conn:
@@ -866,7 +866,7 @@ def teaching_groups_patch(group_id: int):
 
 @schedule_bp.route("/teaching_groups/setup")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def teaching_groups_setup_list():
     semester = (request.args.get("semester") or "").strip() or None
     with get_connection() as conn:
@@ -894,7 +894,7 @@ def teaching_groups_setup_list():
 
 @schedule_bp.route("/teaching_groups/setup", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def teaching_groups_setup_save():
     data = request.get_json(silent=True) or {}
     with get_connection() as conn:
@@ -934,7 +934,7 @@ def teaching_groups_setup_save():
 
 @schedule_bp.route("/teaching_groups/backfill", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def teaching_groups_backfill():
     data = request.get_json(silent=True) or {}
     semester = (data.get("semester") or request.args.get("semester") or "").strip() or None
@@ -949,7 +949,7 @@ def teaching_groups_backfill():
 
 @schedule_bp.route("/teaching_groups/audit")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def teaching_groups_audit():
     semester = (request.args.get("semester") or "").strip() or None
     with get_connection() as conn:
@@ -1012,7 +1012,7 @@ def teaching_groups_registration_options():
 
 @schedule_bp.route("/teaching_groups/evaluations/backfill", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def teaching_groups_evaluations_backfill():
     data = request.get_json(silent=True) or {}
     semester = (data.get("semester") or request.args.get("semester") or "").strip() or None
@@ -1024,7 +1024,7 @@ def teaching_groups_evaluations_backfill():
 
 @schedule_bp.route("/teaching_groups/registrations/backfill", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def teaching_groups_registrations_backfill():
     data = request.get_json(silent=True) or {}
     semester = (data.get("semester") or request.args.get("semester") or "").strip() or None
@@ -1039,7 +1039,7 @@ def teaching_groups_registrations_backfill():
 
 @schedule_bp.route("/teaching_groups/registrations/audit")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def teaching_groups_registrations_audit():
     semester = (request.args.get("semester") or "").strip() or None
     with get_connection() as conn:
@@ -1053,7 +1053,7 @@ def teaching_groups_registrations_audit():
 
 @schedule_bp.route("/teaching_groups/enrollment_counts")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def teaching_groups_enrollment_counts():
     semester = (request.args.get("semester") or "").strip() or None
     with get_connection() as conn:
@@ -1242,7 +1242,7 @@ def instructor_conflicts():
         return jsonify({"status": "ok", "conflicts": []}), 200
 
 @schedule_bp.route("/check_conflicts", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def check_conflicts():
     """
     التحقق من التعارضات قبل إضافة مقرر جديد
@@ -1426,7 +1426,7 @@ def _parse_instructor_id_payload(raw):
 
 
 @schedule_bp.route("/add_row", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def add_schedule_row():
     data = request.get_json(force=True)
     required = ["course_name", "day", "time"]
@@ -1476,13 +1476,13 @@ def add_schedule_row():
 
 # Alias to match frontend calls that use /add_schedule_row
 @schedule_bp.route("/add_schedule_row", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def add_schedule_row_alias():
     return add_schedule_row()
 
 
 @schedule_bp.route("/delete_schedule_row", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def delete_schedule_row():
     """حذف صف من الجدول الدراسي (للأدمن فقط)."""
     data = request.get_json(force=True) or {}
@@ -1505,7 +1505,7 @@ def delete_schedule_row():
 
 
 @schedule_bp.route("/update_schedule_row", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def update_schedule_row():
     """تحديث صف في الجدول الدراسي (للأدمن فقط)."""
     data = request.get_json(force=True) or {}
@@ -1537,7 +1537,7 @@ def update_schedule_row():
 # أدوات إدارية للأوقات/تفريغ الجدول
 # -----------------------------
 @schedule_bp.route("/distinct_times")
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def distinct_schedule_times():
     """قائمة الأوقات المخزّنة فعلياً في schedule.time (لأغراض التوحيد/التنظيف)."""
     with get_connection() as conn:
@@ -1556,7 +1556,7 @@ def distinct_schedule_times():
 
 
 @schedule_bp.route("/normalize_times", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def normalize_schedule_times():
     """
     توحيد/تحويل قيم الوقت المخزّنة في schedule.time.
@@ -1610,7 +1610,7 @@ def normalize_schedule_times():
 
 
 @schedule_bp.route("/clear_all", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def clear_schedule_all():
     """مسح كل صفوف الجدول الدراسي (schedule) مع تفريغ الجداول المشتقة."""
     deleted = 0
@@ -1650,7 +1650,7 @@ def get_time_slots():
 
 
 @schedule_bp.route("/time_slots", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def save_time_slots():
     """
     حفظ تقسيمات الوقت للفصل الحالي في app_settings.
@@ -1704,7 +1704,7 @@ def save_time_slots():
 
 
 @schedule_bp.route("/export/pdf")
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def export_schedule_pdf():
     include_empty = str(request.args.get("include_empty") or "").lower() in ("1", "true", "yes")
     official = str(request.args.get("official") or "").lower() in ("1", "true", "yes")
@@ -1924,7 +1924,7 @@ def export_schedule_pdf():
 
 
 @schedule_bp.route("/export/excel")
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def export_schedule_excel():
     include_empty = str(request.args.get("include_empty") or "").lower() in ("1", "true", "yes")
     with get_connection() as conn:
@@ -2014,7 +2014,7 @@ def _sync_optimized_schedule_from_current(conn) -> int:
 
 @schedule_bp.route("/run_optimize", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def run_optimize():
     """إنتاج الجدول، اقتراحات نقل المقررات، وحساب تعارضات التسجيل."""
     data = request.get_json(silent=True) or {}
@@ -2075,7 +2075,7 @@ def run_optimize():
 
 @schedule_bp.route("/optimize_job/<job_id>", methods=["GET"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def optimize_job_status(job_id: str):
     from backend.jobs.optimize_jobs import get_optimize_job
 
@@ -2087,7 +2087,7 @@ def optimize_job_status(job_id: str):
 
 @schedule_bp.route("/proposed_moves", methods=["GET"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def list_proposed_moves_route():
     try:
         from backend.services.schedule_optimizer import list_proposed_moves
@@ -2102,7 +2102,7 @@ def list_proposed_moves_route():
 
 @schedule_bp.route("/proposed_move/<int:section_id>", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def proposed_move_action(section_id: int):
     """تطبيق اقتراح نقل لمقطع جدول (أرخص اقتراح أو move_id في الجسم)."""
     data = request.get_json(silent=True) or {}
@@ -2147,7 +2147,7 @@ def publish_status():
 
 @schedule_bp.route("/publish", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def publish_schedule():
     """اعتماد/نشر الجدول من الأدمن الرئيسي. بعدها يراه الطالب والمشرف وتُستمد منه المقررات المتاحة في خطط التسجيل."""
     try:
@@ -2200,7 +2200,7 @@ def schedule_meta():
 
 @schedule_bp.route("/versions")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def schedule_versions():
     semester = (request.args.get("semester") or "").strip()
     event_type = (request.args.get("event_type") or "").strip()
@@ -2252,7 +2252,7 @@ def schedule_versions():
 
 @schedule_bp.route("/versions/<int:version_id>")
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def schedule_version_detail(version_id: int):
     download = str(request.args.get("download") or "").lower() in ("1", "true", "yes")
     format_json = str(request.args.get("format") or "").lower() == "json"
@@ -2302,7 +2302,7 @@ def schedule_version_detail(version_id: int):
 
 @schedule_bp.route("/versions/<int:version_id>/restore_draft", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def schedule_version_restore_draft(version_id: int):
     """
     استعادة نسخة جدول إلى جدول schedule الحالي كمسودة (بدون نشر).
@@ -2857,14 +2857,10 @@ def _is_privileged_assignment_viewer() -> bool:
 
 
 def _is_instructor_effective_session() -> bool:
-    """وضع التدريس الفعّال: instructor أو رئيس قسم عندما active_mode=instructor."""
-    role = (session.get("user_role") or "").strip()
-    if role == "instructor":
-        return True
-    if role == "head_of_department":
-        mode = (session.get("active_mode") or "head").strip().lower()
-        return mode == "instructor"
-    return False
+    """وضع التدريس الفعّال: instructor أو قيادة كلية/قسم في active_mode=instructor."""
+    from backend.core.auth import is_instructor_portal_effective_session
+
+    return is_instructor_portal_effective_session()
 
 
 def _enrich_rows_delivery_summary(
@@ -3545,7 +3541,7 @@ def list_faculty_assignments():
 
 
 @schedule_bp.route("/faculty_assignments", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def create_faculty_assignment():
     data = request.get_json(force=True) or {}
     instructor_id = data.get("instructor_id")
@@ -4203,7 +4199,7 @@ def save_my_course_closure():
 
 
 @schedule_bp.route("/course_closure_reports", methods=["GET"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def list_course_closure_reports():
     status = (request.args.get("status") or "").strip().lower()
     with get_connection() as conn:
@@ -4235,7 +4231,7 @@ def list_course_closure_reports():
 
 
 @schedule_bp.route("/course_closure_reports/<int:report_id>/review", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def review_course_closure_report(report_id: int):
     data = request.get_json(force=True) or {}
     status = (data.get("status") or "").strip().lower()
@@ -4431,7 +4427,7 @@ def get_faculty_cycle_lock():
 
 
 @schedule_bp.route("/faculty_cycle_lock", methods=["POST"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def set_faculty_cycle_lock():
     data = request.get_json(force=True) or {}
     locked = bool(data.get("locked", False))
@@ -4458,7 +4454,7 @@ def set_faculty_cycle_lock():
 
 
 @schedule_bp.route("/governance_audit_logs", methods=["GET"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def governance_audit_logs():
     action = (request.args.get("action") or "").strip().upper()
     with get_connection() as conn:
@@ -4519,7 +4515,7 @@ def _final_dossier_rows(cur, instructor_id: int | None = None) -> list[dict]:
 
 
 @schedule_bp.route("/faculty_final_dossier", methods=["GET"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def faculty_final_dossier():
     instructor_id = request.args.get("instructor_id", type=int)
     with get_connection() as conn:
@@ -4529,7 +4525,7 @@ def faculty_final_dossier():
 
 
 @schedule_bp.route("/faculty_final_dossier/export", methods=["GET"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def export_faculty_final_dossier():
     fmt = (request.args.get("format") or "excel").strip().lower()
     instructor_id = request.args.get("instructor_id", type=int)

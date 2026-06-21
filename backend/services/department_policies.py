@@ -234,7 +234,7 @@ def head_submit_policy(policy_id: int):
 
 
 @department_policies_bp.route("/department_policies/admin/pending", methods=["GET"])
-@role_required("admin_main")
+@role_required("admin_main", "system_admin", "college_dean")
 def admin_list_pending():
     with get_connection() as conn:
         _ensure_table(conn)
@@ -253,7 +253,7 @@ def admin_list_pending():
 
 
 @department_policies_bp.route("/department_policies/admin/approve/<int:policy_id>", methods=["POST"])
-@role_required("admin_main")
+@role_required("admin_main", "system_admin", "college_dean")
 def admin_approve(policy_id: int):
     body = request.get_json(force=True) or {}
     activate_now = bool(body.get("activate_now"))
@@ -323,7 +323,7 @@ def admin_approve(policy_id: int):
 
 
 @department_policies_bp.route("/department_policies/admin/reject/<int:policy_id>", methods=["POST"])
-@role_required("admin_main")
+@role_required("admin_main", "system_admin", "college_dean")
 def admin_reject(policy_id: int):
     body = request.get_json(force=True) or {}
     reason = (body.get("reason") or "").strip()
@@ -364,7 +364,7 @@ def admin_reject(policy_id: int):
 
 
 @department_policies_bp.route("/department_policies/active/<int:department_id>", methods=["GET"])
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def get_active_policy(department_id: int):
     with get_connection() as conn:
         _ensure_table(conn)

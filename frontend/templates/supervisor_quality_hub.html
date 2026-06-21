@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>استبيانات المشرف — ضمان الجودة</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/vendor/fontawesome/css/all.min.css">
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .sq-survey-item { border-right: 3px solid var(--bs-warning); }
+  </style>
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-900 theme-formal">
+    <div class="page-header d-flex justify-content-between flex-wrap gap-2 align-items-start">
+      <div>
+        <h1 class="page-title">استبيانات المشرف</h1>
+        <p class="page-subtitle mb-1">تعبئة استبيانات الإرشاد والتنسيق — منفصلة عن استبيانات الأستاذ</p>
+        <p class="text-muted small mb-0" id="ctxLine"></p>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <span class="badge bg-warning text-dark d-none" id="pendingBadge"></span>
+        <a href="/supervisor_dashboard" class="btn btn-outline-secondary btn-sm">لوحة الإشراف</a>
+      </div>
+    </div>
+
+    <div id="loadState" class="text-muted py-3">جاري التحميل…</div>
+
+    <div id="mainWrap" class="d-none">
+      <div class="alert alert-light border small mb-3">
+        <strong>ليست هذه الصفحة:</strong> نتائج مجمّعة، إعداد بنود، أو لوحة جودة إدارية —
+        للتعبئة فقط. <strong>تقرير الإرشاد الكمي</strong> من
+        <a href="/supervisor_quality_report_page">تقرير الإرشاد</a>.
+      </div>
+
+      <div class="card border-primary border-opacity-25">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2 bg-primary bg-opacity-10">
+          <span class="fw-semibold"><i class="fa-solid fa-pen-to-square ms-1"></i> استبياناتي — الفصل <span id="semLabel"></span></span>
+          <span class="badge bg-warning text-dark d-none" id="surveysPendingBadge"></span>
+        </div>
+        <div class="card-body">
+          <div id="hubStatusBox" class="alert d-none small mb-3"></div>
+          <div id="reportStatusBox" class="alert d-none small mb-3"></div>
+          <div id="surveysList"></div>
+          <p class="small text-muted mb-0 mt-2">
+            <a href="/academic_quality/surveys" id="surveysFullLink">صفحة التعبئة الكاملة</a>
+          </p>
+        </div>
+      </div>
+
+      <div class="card mt-3 border-0 bg-light">
+        <div class="card-body py-2 d-flex flex-wrap gap-2">
+          <a href="/supervisor_quality_report_page" class="btn btn-sm btn-outline-warning">تقرير الإرشاد (كمي)</a>
+          <a href="/supervisors/summary.pdf" class="btn btn-sm btn-outline-secondary" target="_blank">PDF ملخص الفصل</a>
+        </div>
+      </div>
+    </div>
+  </main>
+  <script>
+    function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;');}
+    function renderSurveys(j){
+      const box=document.getElementById('surveysList');
+      const pending=j.surveys?.pending||[];
+      document.getElementById('semLabel').textContent=j.term_label||'';
+      const hs=j.surveys?.hub_status;
+      const hsBox=document.getElementById('hubStatusBox');
+      if(hs&&hs.show&&hs.messages&&hs.messages.length){
+        hsBox.className='alert alert-'+(hs.level||'info')+' border-start border-4 small mb-3';
+        hsBox.innerHTML='<strong>'+esc(hs.title||'ملخص')+'</strong><ul class="mb-0 mt-1 ps-3">'+hs.messages.map(m=>'<li>'+esc(m)+'</li>').join('')+'</ul>';
+        hsBox.classList.remove('d-none');
+      }
+      const rep=j.supervisor_report||{};
+      const repBox=document.getElementById('reportStatusBox');
+      if(rep.submitted){
+        repBox.className='alert alert-success small mb-3';
+        repBox.textContent='✓ أرسلت تقرير الإرشاد الكمي'+(rep.submitted_at?(' — '+rep.submitted_at):'')+'.';
+        repBox.classList.remove('d-none');
+      } else {
+        repBox.className='alert alert-info small mb-3';
+        repBox.innerHTML='لم يُرسَل <a href="/supervisor_quality_report_page">تقرير الإرشاد الكمي</a> بعد.';
+        repBox.classList.remove('d-none');
+      }
+      if(!pending.length){
+        if(j.surveys?.all_done) box.innerHTML='<div class="alert alert-success mb-0 py-2 small">✓ أكملت جميع استبيانات المشرف لهذا الفصل.</div>';
+        else box.innerHTML='<div class="alert alert-secondary mb-0 py-2 small">لا توجد استبيانات معلّقة حالياً.</div>';
+        return;
+      }
+      box.innerHTML='<div class="list-group">'+pending.map(p=>{
+        const url=(p.fill_url||'/academic_quality/surveys/fill/'+encodeURIComponent(p.code||''))+'?semester='+encodeURIComponent(j.term_label||'');
+        return '<a href="'+url+'" class="list-group-item list-group-item-action sq-survey-item py-3"><div class="d-flex justify-content-between gap-2"><div><div class="fw-semibold">'+esc(p.title_ar)+'</div><div class="small text-muted">'+esc(p.intro?.subtitle_ar||'تقييم سري')+'</div></div><span class="badge bg-warning text-dark">ابدأ</span></div></a>';
+      }).join('')+'</div>';
+    }
+    (async function(){
+      try{
+        const r=await fetch('/supervisors/quality_context',{credentials:'include'});
+        if(r.status===403){document.getElementById('loadState').textContent='غير مصرح — وضع المشرف مطلوب.';return;}
+        const j=await r.json();
+        if(j.status!=='ok'){document.getElementById('loadState').textContent=j.message||'تعذر التحميل.';return;}
+        document.getElementById('loadState').classList.add('d-none');
+        document.getElementById('ctxLine').textContent=(j.instructor_name||'')+(j.department_name?' · '+j.department_name:'');
+        renderSurveys(j);
+        const pc=j.surveys?.pending_count||0;
+        if(pc>0){
+          document.getElementById('pendingBadge').textContent=pc+' استبيان';
+          document.getElementById('pendingBadge').classList.remove('d-none');
+          document.getElementById('surveysPendingBadge').textContent=pc+' متبقٍ';
+          document.getElementById('surveysPendingBadge').classList.remove('d-none');
+        }
+        document.getElementById('mainWrap').classList.remove('d-none');
+      }catch(e){document.getElementById('loadState').textContent='تعذر التحميل.';}
+    })();
+  </script>
+  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+</body>
+</html>

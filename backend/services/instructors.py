@@ -23,7 +23,7 @@ from .utilities import get_connection
 
 instructors_bp = Blueprint("instructors", __name__)
 
-_MANAGE_ROLES = ("admin_main", "head_of_department")
+_MANAGE_ROLES = ("admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 _EXTERNAL_SCOPE_ALLOWED = {"within_college", "outside_college", "outside_university"}
 
 
@@ -255,7 +255,7 @@ def save_instructor():
             return jsonify({"status": "error", "message": fd_err[1]}), 400
 
         # admin_main/admin: اسمح بتعديل القسم الرئيسي صراحةً حتى مع وجود نطاق عرض مفعّل في الجلسة.
-        if actor_role in ("admin_main", "admin") and "department_id" in data:
+        if actor_role in ("admin_main", "admin", "system_admin") and "department_id" in data:
             if body_dept in (None, ""):
                 final_dept = None
             else:
@@ -264,7 +264,7 @@ def save_instructor():
                 except (TypeError, ValueError):
                     return jsonify({"status": "error", "message": "department_id غير صالح."}), 400
 
-        if actor_role not in ("admin_main", "admin"):
+        if actor_role not in ("admin_main", "admin", "system_admin"):
             ok_prop, msg_prop = proposed_department_allowed_for_scope(conn, actor, final_dept)
             if not ok_prop:
                 return jsonify({"status": "error", "message": msg_prop}), 400

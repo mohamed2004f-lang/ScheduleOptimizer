@@ -247,7 +247,11 @@ CREATE TABLE IF NOT EXISTS users (
     department_id INTEGER,
     is_supervisor INTEGER NOT NULL DEFAULT 0,
     is_active INTEGER NOT NULL DEFAULT 1,
-    is_college_quality_lead INTEGER NOT NULL DEFAULT 0
+    is_college_quality_lead INTEGER NOT NULL DEFAULT 0,
+    is_system_account INTEGER NOT NULL DEFAULT 0,
+    role_profile_id INTEGER,
+    display_title_ar TEXT,
+    is_dept_quality_coordinator INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS student_exceptions (
@@ -1054,8 +1058,8 @@ def _seed_admin(conn):
         from backend.core.auth import hash_password
         pw_hash = hash_password("TestP@ssw0rd!")
     conn.execute(
-        "INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-        ("admin-test", pw_hash, "admin"),
+        "INSERT OR IGNORE INTO users (username, password_hash, role, is_system_account) VALUES (?, ?, ?, ?)",
+        ("admin-test", pw_hash, "system_admin", 1),
     )
     conn.commit()
 
@@ -1142,9 +1146,9 @@ def _seed_postgres_repositories(conn):
         pw_hash = hash_password("TestP@ssw0rd!")
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?) "
+        "INSERT INTO users (username, password_hash, role, is_system_account) VALUES (?, ?, ?, ?) "
         "ON CONFLICT (username) DO NOTHING",
-        ("admin-test", pw_hash, "admin"),
+        ("admin-test", pw_hash, "system_admin", 1),
     )
     for sid, name, jy in (("S001", "طالب أول", "1445"), ("S002", "طالب ثاني", "1445")):
         cur.execute(
@@ -1330,6 +1334,9 @@ def _setup_shared_db():
         "backend.services.academic_calendar",
         "backend.services.academic_rules",
         "backend.services.instructors",
+        "backend.services.instructor_portal",
+        "backend.services.student_portal",
+        "backend.api.instructors_api",
         "backend.services.academic_quality",
         "backend.services.college_identity_portal",
         "backend.services.learning_outcomes",
@@ -1410,6 +1417,18 @@ def student_auth_client(app):
             json={"username": "student-s001", "password": "TestP@ssw0rd!"},
         )
         assert resp.status_code == 200, f"Student login failed: {resp.get_data(as_text=True)}"
+        yield c
+
+
+@pytest.fixture
+def instructor_auth_client(app):
+    """عميل مسجّل كأستاذ (inst-test) — منفصل عن جلسة الأدمن/الطالب."""
+    with app.test_client() as c:
+        resp = c.post(
+            "/auth/login",
+            json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+        )
+        assert resp.status_code == 200, f"Instructor login failed: {resp.get_data(as_text=True)}"
         yield c
 
 

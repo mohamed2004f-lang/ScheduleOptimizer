@@ -2076,6 +2076,10 @@ def _ensure_tables_postgresql() -> None:
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_supervisor INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_college_quality_lead INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_system_account INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS role_profile_id BIGINT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS display_title_ar TEXT",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_dept_quality_coordinator INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE courses ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'required'",
         "ALTER TABLE courses ADD COLUMN IF NOT EXISTS grading_mode TEXT NOT NULL DEFAULT 'partial_final'",
         "ALTER TABLE courses ADD COLUMN IF NOT EXISTS assessment_type TEXT NOT NULL DEFAULT 'theoretical'",
@@ -3305,6 +3309,18 @@ def _ensure_tables_postgresql() -> None:
             ensure_course_delivery_schema(conn)
         except Exception as e:
             logger.warning("course_delivery schema (postgresql): %s", e)
+        try:
+            from backend.boot.role_profiles_seed import migrate_legacy_admin_to_system, seed_role_profiles
+
+            seed_role_profiles(conn)
+            try:
+                from config import ADMIN_USERNAME
+
+                migrate_legacy_admin_to_system(conn, ADMIN_USERNAME)
+            except Exception:
+                migrate_legacy_admin_to_system(conn, None)
+        except Exception as e:
+            logger.warning("role profiles seed (postgresql): %s", e)
     logger.info("PostgreSQL compatibility migrations applied")
 
 
@@ -3393,6 +3409,10 @@ def ensure_tables(db_file=None):
             "ALTER TABLE users ADD COLUMN is_supervisor INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
             "ALTER TABLE users ADD COLUMN is_college_quality_lead INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN is_system_account INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN role_profile_id INTEGER",
+            "ALTER TABLE users ADD COLUMN display_title_ar TEXT",
+            "ALTER TABLE users ADD COLUMN is_dept_quality_coordinator INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN department_id INTEGER",
             "ALTER TABLE grade_drafts ADD COLUMN section_id INTEGER",
             "ALTER TABLE grade_draft_items ADD COLUMN coursework REAL",
@@ -3637,6 +3657,19 @@ def ensure_tables(db_file=None):
             ensure_course_delivery_schema(conn)
         except Exception as e:
             logger.warning("course_delivery schema: %s", e)
+
+        try:
+            from backend.boot.role_profiles_seed import migrate_legacy_admin_to_system, seed_role_profiles
+
+            seed_role_profiles(conn)
+            try:
+                from config import ADMIN_USERNAME
+
+                migrate_legacy_admin_to_system(conn, ADMIN_USERNAME)
+            except Exception:
+                migrate_legacy_admin_to_system(conn, None)
+        except Exception as e:
+            logger.warning("role profiles seed (sqlite): %s", e)
 
         conn.commit()
         logger.info("Database tables and indexes ensured")

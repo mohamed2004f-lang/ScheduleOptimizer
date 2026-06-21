@@ -77,7 +77,7 @@ def set_current_term():
 
 @admin_bp.route("/settings/course_eval_response_rate", methods=["GET"])
 @login_required
-@role_required("admin", "admin_main", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "head_of_department")
 def get_course_eval_response_rate_setting():
     """قراءة نسبة الاستجابة المطلوبة لإظهار نتائج تقييم المقرر."""
     from backend.services.survey_analytics import (
@@ -101,7 +101,7 @@ def get_course_eval_response_rate_setting():
 
 
 @admin_bp.route("/settings/course_eval_response_rate", methods=["POST"])
-@role_required("admin", "admin_main")
+@role_required("admin", "admin_main", "system_admin", "college_dean")
 def set_course_eval_response_rate_setting():
     """حفظ نسبة الاستجابة المطلوبة لإظهار نتائج تقييم المقرر."""
     from backend.services.survey_analytics import set_course_eval_response_rate_percent
@@ -491,7 +491,7 @@ def _summarize_database_url_safe(url: str) -> dict:
 
 
 @admin_bp.route("/system_diagnostics", methods=["GET"])
-@role_required("admin", "admin_main")
+@role_required("admin", "admin_main", "system_admin", "college_dean")
 def system_diagnostics():
     """JSON للمسؤول: بيئة، قاعدة البيانات، النسخ، آخر أخطاء حرجة، عدد المستخدمين."""
     from config import DATABASE_URL, FLASK_ENV
@@ -528,7 +528,7 @@ def system_diagnostics():
 
 
 @admin_bp.route("/project_status")
-@role_required("admin_main")
+@role_required("admin_main", "system_admin", "college_dean")
 def admin_project_status_page():
     """صفحة بسيطة: تاريخ آخر تعديل لقاعدة البيانات + ملاحظة إصدار يدوية."""
     if not _is_project_status_enabled():
@@ -537,7 +537,7 @@ def admin_project_status_page():
 
 
 @admin_bp.route("/project_status/data", methods=["GET"])
-@role_required("admin_main")
+@role_required("admin_main", "system_admin", "college_dean")
 def project_status_data():
     """JSON: آخر تعديل لملف DB + تسمية/ملاحظة محفوظة (لا يُعاد مسار الملف)."""
     if not _is_project_status_enabled():
@@ -565,7 +565,7 @@ def project_status_data():
 
 
 @admin_bp.route("/project_status/note", methods=["POST"])
-@role_required("admin_main")
+@role_required("admin_main", "system_admin", "college_dean")
 def project_status_save_note():
     """حفظ تسمية إصدار وملاحظة (نص عربي UTF-8 من المتصفح)."""
     if not _is_project_status_enabled():
@@ -585,7 +585,7 @@ def project_status_save_note():
 
 
 @admin_bp.route("/backup_now", methods=["POST"])
-@role_required("admin_main")
+@role_required("admin_main", "system_admin", "college_dean")
 def backup_now():
     """إنشاء نسخة احتياطية فورية من DB عبر الواجهة."""
     if not _is_project_status_enabled():
