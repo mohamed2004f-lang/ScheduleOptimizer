@@ -82,7 +82,7 @@
 </style>
 <script>document.documentElement.classList.add('nav-shell-supervisor-pending');</script>
 {% endif %}
-<link rel="stylesheet" href="/static/styles.css">
+<link rel="stylesheet" href="/static/styles.css?v=20260604">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
@@ -132,12 +132,15 @@
         <div class="app-brand-title">
           <p class="t1">{{ (ui_context.university_name_ar if ui_context else 'جامعة درنة') }}</p>
           <p class="t2">{{ (ui_context.college_name_ar if ui_context else 'كلية الهندسة') }}</p>
-          <p class="t3">{{ (ui_context.department_name_ar if ui_context else 'كل الأقسام') }}</p>
         </div>
       </a>
 
-      <!-- compact logout control on the right -->
+      <!-- إجراءات الشريط العلوي -->
       <div class="app-actions d-flex align-items-center gap-2">
+        <div class="btn-group btn-group-sm d-none nav-density-toggle" id="navDensityToggleWrap" role="group" aria-label="كثافة الشريط الرئيسي">
+          <button type="button" class="btn btn-outline-light" id="navDensityCompactBtn" title="عرض الروابط الأكثر استخداماً فقط">مدمج</button>
+          <button type="button" class="btn btn-outline-light" id="navDensityExpandedBtn" title="عرض كل القوائم في الشريط">موسع</button>
+        </div>
         <a class="btn-topbar-notify position-relative" id="navNotificationsTop" href="/notifications_center" title="الإشعارات" aria-label="الإشعارات">
           <i class="fa-regular fa-bell" aria-hidden="true"></i>
           <span class="badge rounded-pill bg-danger position-absolute top-0 start-100 translate-middle d-none" id="navNotificationsBadge" style="font-size:0.65rem;">0</span>
@@ -145,7 +148,10 @@
         <button type="button" class="btn-theme-toggle" id="themeToggleBtn" aria-label="تبديل الوضع الليلي" title="الوضع الليلي">
           <i class="fa-solid fa-moon" aria-hidden="true"></i>
         </button>
-        <a class="btn btn-logout" id="logoutBtn" href="/logout">خروج</a>
+        <a class="btn-topbar-logout" id="logoutBtn" href="/logout" aria-label="تسجيل الخروج" title="تسجيل الخروج">
+          <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i>
+          <span class="btn-topbar-logout-label">خروج</span>
+        </a>
       </div>
     </div>
   </div>
@@ -188,7 +194,7 @@
     </div>
     <div class="d-flex align-items-center gap-2 flex-wrap">
       <label for="adminDeptScopeSelect" class="small mb-0 visually-hidden">اختر القسم للتصفية</label>
-      <select id="adminDeptScopeSelect" class="form-select form-select-sm" style="min-width:15rem;" title="تصفية الكتالوج والطلاب والمقررات حسب القسم" aria-describedby="adminDeptScopeHint adminDeptScopeEmptyWarn"></select>
+      <select id="adminDeptScopeSelect" class="form-select form-select-sm admin-dept-scope-select" title="تصفية الكتالوج والطلاب والمقررات حسب القسم" aria-describedby="adminDeptScopeHint adminDeptScopeEmptyWarn"></select>
       <button type="button" class="btn btn-sm btn-link text-secondary p-0 d-none" id="adminDeptScopeHelpBtn"
         title="تفاصيل تقنية لمسؤول النظام"
         data-bs-toggle="popover" data-bs-trigger="focus" data-bs-placement="bottom" data-bs-html="true"
@@ -434,6 +440,7 @@
             <li><a class="dropdown-item" id="navAccreditationMapProg" href="/academic_quality/accreditation/map?scope=prog" style="display:none;">امتثال — اعتماد برامجي</a></li>
             <li><a class="dropdown-item" id="navQualityGlossary" href="/academic_quality/glossary">دليل المصطلحات</a></li>
             <li><a class="dropdown-item" id="navSurveysResults" href="/academic_quality/surveys/results" style="display:none;">نتائج الاستبيانات (مجمّعة)</a></li>
+            <li><a class="dropdown-item" id="navSurveysCompletion" href="/academic_quality/surveys/completion" style="display:none;">تغطية التعبئة</a></li>
             <li><a class="dropdown-item" id="navSurveysTrends" href="/academic_quality/surveys/trends" style="display:none;">اتجاهات الاستبيانات</a></li>
             <li><a class="dropdown-item" id="navSurveysInvites" href="/academic_quality/surveys/invites" style="display:none;">دعوات الاستبيانات الخارجية</a></li>
             <li><a class="dropdown-item" id="navEvaluationSurveyAdmin" href="/academic_quality/survey_admin" style="display:none;">إعداد بنود الاستبيانات</a></li>
@@ -458,14 +465,6 @@
           </ul>
         </li>
       </ul>
-
-      <!-- تبديل كثافة الشريط (إدارة / رئيس قسم) -->
-      <div class="d-flex align-items-center gap-2">
-        <div class="btn-group btn-group-sm d-none" id="navDensityToggleWrap" role="group" aria-label="كثافة الشريط الرئيسي">
-          <button type="button" class="btn btn-outline-secondary" id="navDensityCompactBtn" title="عرض الروابط الأكثر استخداماً فقط">مدمج</button>
-          <button type="button" class="btn btn-outline-secondary" id="navDensityExpandedBtn" title="عرض كل القوائم في الشريط">موسع</button>
-        </div>
-      </div>
     </div>
   </div>
 </nav>
@@ -922,6 +921,8 @@
       if (elSurveyAdmin) elSurveyAdmin.style.display = showSurveyAdmin ? '' : 'none';
       const elSurveysResults = document.getElementById('navSurveysResults');
       if (elSurveysResults) elSurveysResults.style.display = showSurveysResults ? '' : 'none';
+      const elSurveysCompletion = document.getElementById('navSurveysCompletion');
+      if (elSurveysCompletion) elSurveysCompletion.style.display = showSurveysResults ? '' : 'none';
       const elSurveysTrends = document.getElementById('navSurveysTrends');
       if (elSurveysTrends) elSurveysTrends.style.display = showSurveysResults ? '' : 'none';
       const elSurveysInvites = document.getElementById('navSurveysInvites');
@@ -1691,6 +1692,7 @@
         ['/academic_quality/instructor/quality-hub','navInsQualityHub'],
         ['/academic_quality/surveys/fill','navInsQualityHub'],
         ['/academic_quality/surveys/results','navSurveysResults'],
+        ['/academic_quality/surveys/completion','navSurveysCompletion'],
         ['/academic_quality/surveys/trends','navSurveysTrends'],
         ['/academic_quality/surveys/invites','navSurveysInvites'],
         ['/my_portal','navStudentPortal'],

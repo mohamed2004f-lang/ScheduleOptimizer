@@ -771,6 +771,7 @@ def _head_of_department_blocked_path(path: str) -> bool:
 
 _STUDENT_SURVEY_BLOCKED = (
     "/academic_quality/surveys/results",
+    "/academic_quality/surveys/completion",
     "/academic_quality/surveys/trends",
     "/academic_quality/surveys/invites",
     "/academic_quality/survey_admin",

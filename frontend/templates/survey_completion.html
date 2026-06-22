@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>تغطية تعبئة الاستبيانات</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css?v=20260604">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-fluid mt-4 px-3" style="max-width:1200px;">
+    <nav aria-label="breadcrumb" class="mb-2">
+      <ol class="breadcrumb small mb-0">
+        <li class="breadcrumb-item">ضمان الجودة والاعتماد</li>
+        <li class="breadcrumb-item"><a href="/academic_quality/surveys/results">نتائج الاستبيانات</a></li>
+        <li class="breadcrumb-item active" aria-current="page">تغطية التعبئة</li>
+      </ol>
+    </nav>
+
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+      <div>
+        <h4 class="mb-1"><i class="fa-solid fa-clipboard-check text-primary"></i> تغطية تعبئة الاستبيانات</h4>
+        <p class="text-muted small mb-0">
+          أعداد مجمّعة للمكتملين — <strong>أسماء وأرقام المتأخرين فقط</strong> لإرسال تذكير (وليس للنشر العام).
+        </p>
+      </div>
+      <div class="d-flex gap-2 flex-wrap">
+        <a href="/academic_quality/surveys/results?semester={{ semester|urlencode }}" class="btn btn-outline-secondary btn-sm">النتائج المجمّعة</a>
+        {% if report %}
+        <a href="/academic_quality/surveys/export/completion/pending.xlsx?semester={{ semester|urlencode }}{% if department_id %}&department_id={{ department_id }}{% endif %}" class="btn btn-outline-success btn-sm">
+          <i class="fa-solid fa-file-excel"></i> Excel — المتأخرون
+        </a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card shadow-sm mb-4">
+      <div class="card-body">
+        <form class="row g-2 align-items-end" method="get" action="/academic_quality/surveys/completion">
+          <div class="col-sm-4 col-md-3">
+            <label class="form-label small mb-1" for="semesterInput">الفصل</label>
+            <input type="text" class="form-control form-control-sm" id="semesterInput" name="semester" value="{{ semester }}" required>
+          </div>
+          {% if can_pick_department %}
+          <div class="col-sm-5 col-md-4">
+            <label class="form-label small mb-1" for="deptSelect">نطاق القسم</label>
+            <select class="form-select form-select-sm" id="deptSelect" name="department_id">
+              <option value="" {% if not department_id %}selected{% endif %}>كل الكلية</option>
+              {% for d in departments %}
+              <option value="{{ d.id }}" {% if department_id == d.id %}selected{% endif %}>{{ d.label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          {% else %}
+          <div class="col-sm-5 col-md-4">
+            <label class="form-label small mb-1">نطاق القسم</label>
+            <div class="form-control form-control-sm bg-light">{{ report.department_label if report else 'قسمك' }}</div>
+          </div>
+          {% endif %}
+          <div class="col-auto">
+            <button type="submit" class="btn btn-primary btn-sm">تحديث</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    {% if load_error %}
+    <div class="alert alert-danger">
+      {{ load_error }}
+    </div>
+    {% elif dept_missing %}
+    <div class="alert alert-warning">
+      لم يُحدد قسم لحساب رئيس القسم. راجع ربط <code>department_id</code> في حسابك قبل عرض التغطية.
+    </div>
+    {% elif report %}
+    <div class="alert alert-info border-start border-info border-4 small">
+      <strong>الفصل:</strong> {{ report.semester }} —
+      <strong>النطاق:</strong> {{ report.department_label }} —
+      يُعرض {{ report.summary_completed }} مكتملاً من {{ report.summary_total }} ضمن النطاق (بدون أسماء المكتملين).
+    </div>
+
+    <section class="kpi-grid mb-4" aria-label="ملخص التغطية">
+      {% for block in report.roles %}
+      <div class="kpi-card">
+        <div class="kpi-title">{{ block.role_label }}</div>
+        <div class="kpi-value">{{ block.completed }} <span class="fs-6 text-muted">/ {{ block.total }}</span></div>
+        <p class="kpi-desc mb-1">{{ block.completion_percent }}% مكتمل</p>
+        <p class="small text-muted mb-0">
+          متأخر: <strong class="text-danger">{{ block.pending }}</strong>
+          {% if block.partial %}<span class="mx-1">·</span> جزئي: {{ block.partial }}{% endif %}
+          {% if block.not_started %}<span class="mx-1">·</span> لم يبدأ: {{ block.not_started }}{% endif %}
+        </p>
+      </div>
+      {% endfor %}
+    </section>
+
+    <ul class="nav nav-tabs mb-3" id="completionTabs" role="tablist">
+      {% for block in report.roles %}
+      <li class="nav-item" role="presentation">
+        <button class="nav-link {% if loop.first %}active{% endif %}" id="tab-{{ block.role }}-btn"
+                data-bs-toggle="tab" data-bs-target="#tab-{{ block.role }}" type="button" role="tab">
+          {{ block.role_label }}
+          {% if block.pending %}
+          <span class="badge bg-danger ms-1">{{ block.pending }}</span>
+          {% endif %}
+        </button>
+      </li>
+      {% endfor %}
+    </ul>
+
+    <div class="tab-content" id="completionTabContent">
+      {% for block in report.roles %}
+      <div class="tab-pane fade {% if loop.first %}show active{% endif %}" id="tab-{{ block.role }}" role="tabpanel">
+        <div class="card shadow-sm">
+          <div class="card-header bg-light d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <span>
+              <strong>لم يُنجزوا بعد</strong> — {{ block.role_label }}
+              <span class="text-muted small">({{ block.pending }} من {{ block.total }})</span>
+            </span>
+            {% if block.pending == 0 %}
+            <span class="badge bg-success">تغطية كاملة في هذا النطاق</span>
+            {% endif %}
+          </div>
+          {% if block.pending_people %}
+          <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0 align-middle">
+              <thead class="table-light">
+                <tr>
+                  <th>الاسم</th>
+                  <th>المعرّف / الرقم</th>
+                  <th>الحالة</th>
+                  <th>المتبقي</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for p in block.pending_people %}
+                <tr>
+                  <td><strong>{{ p.name }}</strong></td>
+                  <td><code>{{ p.display_id }}</code></td>
+                  <td>
+                    {% if p.status == 'not_started' %}
+                    <span class="badge bg-secondary">لم يبدأ</span>
+                    {% else %}
+                    <span class="badge bg-warning text-dark">جزئي</span>
+                    {% endif %}
+                  </td>
+                  <td class="small text-muted">{{ p.missing_summary }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <div class="card-body text-center text-muted py-4">
+            <i class="fa-solid fa-circle-check text-success fa-2x mb-2"></i>
+            <p class="mb-0">لا يوجد متأخرون في هذه الفئة ضمن النطاق المحدد.</p>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </main>
+</body>
+</html>

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from urllib.parse import quote
 
@@ -98,8 +99,16 @@ from backend.services.survey_snapshots import (
     list_semester_snapshots,
     survey_archive_dir,
 )
+from backend.services.survey_completion import (
+    build_survey_completion_report,
+    export_pending_completion_xlsx,
+    list_departments_for_completion,
+    resolve_completion_department_id,
+)
 from backend.services.utilities import get_connection, excel_response_from_df, pdf_response_from_html
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def _session_payload() -> dict:
@@ -153,6 +162,24 @@ def _user_department_id(conn) -> int | None:
             if inst and inst[0] is not None:
                 return int(inst[0])
     return None
+
+
+def _completion_scope(conn) -> tuple[int | None, bool]:
+    role = _normalize_role((session.get("user_role") or "").strip())
+    raw_dept = (request.args.get("department_id") or "").strip()
+    requested: int | None = None
+    if raw_dept:
+        try:
+            requested = int(raw_dept)
+        except (TypeError, ValueError):
+            requested = None
+    return resolve_completion_department_id(
+        conn,
+        role=role,
+        username=(session.get("user") or "").strip(),
+        requested_department_id=requested,
+        session_scope_id=get_admin_department_scope_id(),
+    )
 
 
 def _session_active_mode(role: str) -> str:
@@ -1511,6 +1538,111 @@ def register_survey_platform_routes(bp) -> None:
                 semester=sem,
                 department_id=dept_id,
             )
+
+    @bp.route("/surveys/completion")
+    @login_required
+    @role_required(
+        "admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department"
+    )
+    def surveys_completion_page():
+        sem = (request.args.get("semester") or "").strip()
+        load_error = None
+        report = None
+        dept_id = None
+        can_pick_dept = False
+        departments: list = []
+        dept_missing = False
+        try:
+            with get_connection() as conn:
+                if not sem:
+                    sem = term_label_from_conn(conn)
+                dept_id, can_pick_dept = _completion_scope(conn)
+                role = _normalize_role((session.get("user_role") or "").strip())
+                dept_missing = role == "head_of_department" and dept_id is None
+                if not dept_missing:
+                    report = build_survey_completion_report(
+                        conn, semester=sem, department_id=dept_id
+                    )
+                departments = list_departments_for_completion(conn) if can_pick_dept else []
+            return render_template(
+                "survey_completion.html",
+                semester=sem,
+                report=report,
+                department_id=dept_id,
+                can_pick_department=can_pick_dept,
+                departments=departments,
+                dept_missing=dept_missing,
+                load_error=None,
+            )
+        except Exception:
+            logger.exception("surveys_completion_page failed semester=%r", sem)
+            if not sem:
+                try:
+                    with get_connection() as conn:
+                        sem = term_label_from_conn(conn)
+                except Exception:
+                    sem = ""
+            try:
+                return render_template(
+                    "survey_completion.html",
+                    semester=sem,
+                    report=None,
+                    department_id=None,
+                    can_pick_department=False,
+                    departments=[],
+                    dept_missing=False,
+                    load_error="تعذّر تحميل تقرير التغطية. تأكد من نشر آخر تحديث للنظام ثم أعد المحاولة.",
+                ), 500
+            except Exception:
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": "حدث خطأ غير متوقع",
+                        "code": "UNKNOWN_ERROR",
+                    }
+                ), 500
+
+    @bp.route("/surveys/api/completion")
+    @login_required
+    @role_required(
+        "admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department"
+    )
+    def surveys_completion_api():
+        with get_connection() as conn:
+            sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
+            dept_id, _can_pick = _completion_scope(conn)
+            role = _normalize_role((session.get("user_role") or "").strip())
+            if role == "head_of_department" and dept_id is None:
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": "لم يُحدد قسم لحساب رئيس القسم.",
+                    }
+                ), 400
+            report = build_survey_completion_report(conn, semester=sem, department_id=dept_id)
+        return jsonify({"status": "ok", "data": report})
+
+    @bp.route("/surveys/export/completion/pending.xlsx")
+    @login_required
+    @role_required(
+        "admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department"
+    )
+    def surveys_completion_pending_xlsx():
+        with get_connection() as conn:
+            sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
+            dept_id, _can_pick = _completion_scope(conn)
+            role = _normalize_role((session.get("user_role") or "").strip())
+            if role == "head_of_department" and dept_id is None:
+                return jsonify({"status": "error", "message": "قسم غير محدد"}), 400
+            report = build_survey_completion_report(conn, semester=sem, department_id=dept_id)
+        data = export_pending_completion_xlsx(report)
+        fname = f"survey_completion_pending_{sem}.xlsx".replace("/", "-")
+        return send_file(
+            io.BytesIO(data),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=fname,
+        )
 
 
 def _respondent_key_from_session(respondent_role: str) -> tuple[str, str]:

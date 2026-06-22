@@ -60,3 +60,7 @@
 #navDensityToggleWrap .btn.active {
   font-weight: 700;
 }
+
+.app-topbar #navDensityToggleWrap:not(.d-none) {
+  display: inline-flex !important;
+}

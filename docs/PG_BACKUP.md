@@ -44,14 +44,41 @@ PG_DUMP_PATH=C:\Program Files\PostgreSQL\16\bin\pg_dump.exe
 Copy-Item -Recurse backend\uploads "backups\uploads_$(Get-Date -Format yyyyMMdd)"
 ```
 
-## جدولة تلقائية (اختياري)
+## جدولة تلقائية (موصى به)
 
 ```powershell
 scripts\setup_backup_tasks.bat
 ```
 
-- يومي: 23:30 — `scripts\backup_db_daily.bat`
-- أسبوعي (الأحد): 23:45 — `scripts\backup_db_weekly.bat`
+- يومي: 23:30 — قاعدة + مرفقات → **القرص D:**
+- أسبوعي (الأحد): 23:45 — نفس النسخة الكاملة
+
+## نسخ على القرص D: (بديل OneDrive/USB)
+
+المجلد الافتراضي:
+
+```
+D:\ScheduleOptimizer_Backups\
+  pg_dump\              ← نسخ قاعدة PostgreSQL
+  uploads\latest\       ← آخر مرفقات
+  uploads\uploads_YYYYMMDD\  ← لقطة يومية
+  logs\backup.log
+```
+
+نسخ فوري يدوي:
+
+```powershell
+scripts\backup_full_now.bat
+```
+
+تغيير المسار (في `.env`):
+
+```env
+BACKUP_MIRROR_ROOT=D:\ScheduleOptimizer_Backups
+BACKUP_RETENTION_DAYS=30
+```
+
+**لا ترفع هذا المجلد إلى GitHub** — يحتوي بيانات طلبة واستبيانات.
 
 ## استعادة من `.dump`
 

@@ -31,6 +31,32 @@
 
     <div id="tasksWrap" class="row g-3 mb-3 d-none"></div>
 
+    <div class="card mb-3 d-none" id="pendingReviewCard">
+      <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+          <h2 class="h6 mb-0">طلبات تحتاج مراجعة أو اعتماد</h2>
+          <div class="d-flex gap-2">
+            <a href="/enrollment_plans" class="btn btn-sm btn-outline-success">خطط التسجيل</a>
+            <a href="/registration_requests_page" class="btn btn-sm btn-outline-primary">طلبات الإضافة والإسقاط</a>
+          </div>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm table-striped align-middle mb-0" id="pendingReviewTable">
+            <thead>
+              <tr>
+                <th>النوع</th>
+                <th>الطالب</th>
+                <th>التفاصيل</th>
+                <th>الحالة</th>
+                <th>إجراء</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <div class="card mb-3">
       <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-2 small text-muted">
         <span id="summaryLine">—</span>
@@ -51,10 +77,12 @@
           <table class="table table-sm table-striped align-middle" id="studentsTable">
             <thead>
               <tr>
-                <th style="width:15%;">الرقم الدراسي</th>
+                <th style="width:12%;">الرقم الدراسي</th>
                 <th>اسم الطالب</th>
-                <th style="width:12%;">الحالة</th>
-                <th style="width:30%;">إجراءات</th>
+                <th style="width:10%;">تسجيلات الفصل</th>
+                <th style="width:12%;">خطة التسجيل</th>
+                <th style="width:10%;">الحالة</th>
+                <th style="width:28%;">إجراءات</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -83,6 +111,60 @@
       wrap.classList.remove('d-none');
     }
 
+    const PLAN_STATUS_AR = {
+      Pending: 'بانتظار الاعتماد',
+      Draft: 'مسودة',
+      Approved: 'معتمدة',
+      Rejected: 'مرفوضة',
+    };
+
+    function planStatusBadge(status) {
+      if (!status) return '<span class="text-muted">—</span>';
+      const label = PLAN_STATUS_AR[status] || status;
+      const cls = status === 'Pending' ? 'bg-warning text-dark'
+        : status === 'Approved' ? 'bg-success'
+        : status === 'Rejected' ? 'bg-danger'
+        : 'bg-secondary';
+      return `<span class="badge ${cls}">${label}</span>`;
+    }
+
+    function renderPendingReview(items) {
+      const card = document.getElementById('pendingReviewCard');
+      const tbody = document.querySelector('#pendingReviewTable tbody');
+      if (!items || !items.length) {
+        card.classList.add('d-none');
+        tbody.innerHTML = '';
+        return;
+      }
+      card.classList.remove('d-none');
+      tbody.innerHTML = items.map(it => {
+        const sid = it.student_id || '';
+        const name = it.student_name || sid;
+        let details = '';
+        if (it.kind === 'enrollment_plan') {
+          details = `${it.courses_count || 0} مقرر في الخطة`;
+        } else {
+          details = `${it.action_label || ''}: ${it.course_name || ''}`;
+        }
+        const status = it.kind === 'enrollment_plan'
+          ? planStatusBadge(it.status)
+          : '<span class="badge bg-warning text-dark">معلّق</span>';
+        const href = it.href || '#';
+        return `<tr>
+          <td>${it.label || '—'}</td>
+          <td><span class="mono">${sid}</span><br><span class="small">${name}</span></td>
+          <td class="small">${details}</td>
+          <td>${status}</td>
+          <td><a href="${href}" class="btn btn-sm btn-outline-primary" data-sid="${sid}">مراجعة</a></td>
+        </tr>`;
+      }).join('');
+      tbody.querySelectorAll('a[data-sid]').forEach(a => {
+        a.addEventListener('click', () => {
+          try { localStorage.setItem('enrollment_plans_student', a.dataset.sid); } catch (e) {}
+        });
+      });
+    }
+
     function renderStudents(students) {
       const tbody = document.querySelector('#studentsTable tbody');
       const searchVal = (document.getElementById('searchStudent').value || '').toLowerCase();
@@ -92,12 +174,19 @@
         return !searchVal || text.includes(searchVal);
       });
       if (!filtered.length) {
-        tbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center">لا توجد طلبة مسندين إليك حالياً.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="text-muted text-center">لا توجد طلبة مسندين إليك حالياً.</td></tr>';
         return;
       }
       filtered.forEach(st => {
         const sid = st.student_id || '';
         const name = st.student_name || '';
+        const regCount = st.registrations_count || 0;
+        const regCourses = (st.registration_courses || []).join('، ');
+        const regCell = regCount
+          ? `<span class="badge bg-primary" title="${regCourses}">${regCount}</span>`
+          : '<span class="text-muted">0</span>';
+        const planCell = `${planStatusBadge(st.plan_status)}` +
+          (st.plan_courses_count ? `<div class="small text-muted">${st.plan_courses_count} مقرر</div>` : '');
         const statusBadge = st.at_risk
           ? `<span class="badge bg-danger" title="مقررات راسبة: ${st.failed_courses_count || 0}">معرّض</span>`
           : '<span class="badge bg-success">منتظم</span>';
@@ -105,6 +194,8 @@
         tr.innerHTML = `
           <td class="mono">${sid}</td>
           <td>${name}</td>
+          <td>${regCell}</td>
+          <td>${planCell}</td>
           <td>${statusBadge}</td>
           <td>
             <div class="btn-group btn-group-sm" role="group">
@@ -123,8 +214,9 @@
       SUP_CTX = data;
       document.getElementById('semLabel').textContent = data.term_label || '—';
       document.getElementById('summaryLine').textContent =
-        `${data.student_count || 0} طالب/ـة · ${data.at_risk_count || 0} معرّض(ون) للخطر · استبيانات معلّقة: ${data.surveys_pending_count || 0}`;
+        `${data.student_count || 0} طالب/ـة · ${data.at_risk_count || 0} معرّض(ون) للخطر · مراجعة: ${data.pending_review_count || 0} · استبيانات: ${data.surveys_pending_count || 0}`;
       renderTasks(data.tasks || []);
+      renderPendingReview(data.pending_review || []);
       renderStudents(data.students || []);
       const pc = data.surveys_pending_count || 0;
       const badge = document.getElementById('navPendingBadge');

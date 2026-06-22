@@ -23,9 +23,10 @@ from backend.services.survey_platform_routes import (
     _supervisor_report_status,
     build_survey_hub_status,
 )
+from backend.database.database import table_exists
 from backend.services.quality_metrics import term_label_from_conn
 from backend.services import utilities as db_util
-from backend.services.utilities import pdf_response_from_html
+from backend.services.utilities import pdf_response_from_html, schedule_semester_matches_current_term
 
 supervisor_portal_bp = Blueprint("supervisor_portal", __name__)
 
@@ -70,32 +71,253 @@ def _serialize_pending(pending: list) -> list[dict]:
     return out
 
 
+def _safe_rollback(conn) -> None:
+    try:
+        conn.rollback()
+    except Exception:
+        pass
+
+
+def _row_val(row, key: str, idx: int = 0):
+    if hasattr(row, "keys"):
+        return row[key]
+    return row[idx]
+
+
 def _failed_course_counts(conn, student_ids: list[str]) -> dict[str, int]:
-    """عدد مقررات راسب فيها كل طالب (تقريبي من registrations.final_grade)."""
-    if not student_ids:
+    """عدد مقررات راسب فيها كل طالب (من جدول grades)."""
+    if not student_ids or not table_exists(conn, "grades"):
         return {}
     cur = conn.cursor()
     placeholders = ",".join("?" for _ in student_ids)
     try:
         rows = cur.execute(
             f"""
-            SELECT student_id, COUNT(*) AS cnt
-            FROM registrations
+            SELECT student_id, COUNT(DISTINCT course_name) AS cnt
+            FROM grades
             WHERE student_id IN ({placeholders})
-              AND lower(trim(COALESCE(final_grade, ''))) IN ('f', 'راسب', 'fail', 'failed')
+              AND (
+                (grade IS NOT NULL AND grade < 50)
+                OR lower(trim(COALESCE(CAST(grade AS TEXT), ''))) IN ('f', 'راسب', 'fail', 'failed')
+              )
             GROUP BY student_id
             """,
             tuple(student_ids),
         ).fetchall()
     except Exception:
+        _safe_rollback(conn)
         return {}
     out: dict[str, int] = {}
     for r in rows:
-        sid = (r[0] if not hasattr(r, "keys") else r["student_id"]) or ""
-        cnt = int((r[1] if not hasattr(r, "keys") else r["cnt"]) or 0)
+        sid = str(_row_val(r, "student_id", 0) or "").strip()
+        cnt = int(_row_val(r, "cnt", 1) or 0)
         if sid:
-            out[str(sid).strip()] = cnt
+            out[sid] = cnt
     return out
+
+
+def _load_semester_academic_by_student(
+    conn, student_ids: list[str], semester: str,
+) -> dict[str, dict[str, Any]]:
+    """تسجيلات الفصل وحالة خطة التسجيل لكل طالب."""
+    sem = (semester or "").strip()
+    base = {
+        sid: {
+            "registrations_count": 0,
+            "registration_courses": [],
+            "plan_id": None,
+            "plan_status": None,
+            "plan_courses_count": 0,
+            "plan_courses": [],
+        }
+        for sid in student_ids
+    }
+    if not student_ids:
+        return base
+
+    cur = conn.cursor()
+    placeholders = ",".join("?" for _ in student_ids)
+    plan_courses_by_student: dict[str, set[str]] = {sid: set() for sid in student_ids}
+
+    if table_exists(conn, "enrollment_plans"):
+        try:
+            plan_rows = cur.execute(
+                f"""
+                SELECT ep.id, ep.student_id, ep.status
+                FROM enrollment_plans ep
+                INNER JOIN (
+                    SELECT student_id, MAX(id) AS max_id
+                    FROM enrollment_plans
+                    WHERE student_id IN ({placeholders}) AND semester = ?
+                    GROUP BY student_id
+                ) latest ON latest.max_id = ep.id
+                """,
+                (*student_ids, sem),
+            ).fetchall()
+        except Exception:
+            _safe_rollback(conn)
+            plan_rows = []
+        plan_ids: list[int] = []
+        plan_id_by_student: dict[str, int] = {}
+        for r in plan_rows or []:
+            sid = str(_row_val(r, "student_id", 1) or "").strip()
+            pid = _row_val(r, "id", 0)
+            if not sid or pid in (None, ""):
+                continue
+            pid_i = int(pid)
+            plan_ids.append(pid_i)
+            plan_id_by_student[sid] = pid_i
+            base[sid]["plan_id"] = pid_i
+            base[sid]["plan_status"] = _row_val(r, "status", 2)
+
+        if plan_ids and table_exists(conn, "enrollment_plan_items"):
+            ph2 = ",".join("?" for _ in plan_ids)
+            try:
+                item_rows = cur.execute(
+                    f"""
+                    SELECT plan_id, course_name
+                    FROM enrollment_plan_items
+                    WHERE plan_id IN ({ph2})
+                    ORDER BY plan_id, course_name
+                    """,
+                    tuple(plan_ids),
+                ).fetchall()
+            except Exception:
+                _safe_rollback(conn)
+                item_rows = []
+            courses_by_plan: dict[int, list[str]] = {}
+            for r in item_rows or []:
+                pid = int(_row_val(r, "plan_id", 0) or 0)
+                cn = str(_row_val(r, "course_name", 1) or "").strip()
+                if pid and cn:
+                    courses_by_plan.setdefault(pid, []).append(cn)
+            for sid, pid in plan_id_by_student.items():
+                lst = courses_by_plan.get(pid, [])
+                plan_courses_by_student[sid] = set(lst)
+                base[sid]["plan_courses"] = lst[:12]
+                base[sid]["plan_courses_count"] = len(lst)
+
+    if table_exists(conn, "registrations"):
+        try:
+            reg_rows = cur.execute(
+                f"""
+                SELECT r.student_id, r.course_name, COALESCE(tg.semester, '') AS group_semester
+                FROM registrations r
+                LEFT JOIN teaching_groups tg ON tg.id = r.teaching_group_id
+                WHERE r.student_id IN ({placeholders})
+                ORDER BY r.student_id, r.course_name
+                """,
+                tuple(student_ids),
+            ).fetchall()
+        except Exception:
+            _safe_rollback(conn)
+            reg_rows = []
+        for r in reg_rows or []:
+            sid = str(_row_val(r, "student_id", 0) or "").strip()
+            cn = str(_row_val(r, "course_name", 1) or "").strip()
+            gsem = str(_row_val(r, "group_semester", 2) or "").strip()
+            if not sid or not cn:
+                continue
+            in_term = bool(sem) and schedule_semester_matches_current_term(gsem, sem)
+            if not in_term and sem and cn in plan_courses_by_student.get(sid, set()):
+                in_term = True
+            if not in_term:
+                continue
+            entry = base.setdefault(sid, {
+                "registrations_count": 0,
+                "registration_courses": [],
+                "plan_id": None,
+                "plan_status": None,
+                "plan_courses_count": 0,
+                "plan_courses": [],
+            })
+            entry["registrations_count"] += 1
+            if len(entry["registration_courses"]) < 12:
+                entry["registration_courses"].append(cn)
+
+    return base
+
+
+def _load_pending_review_items(
+    conn, student_ids: list[str], semester: str, name_by_id: dict[str, str],
+) -> list[dict[str, Any]]:
+    """خطط بانتظار الاعتماد وطلبات إضافة/إسقاط معلّقة لطلبة المشرف."""
+    sem = (semester or "").strip()
+    if not student_ids:
+        return []
+    items: list[dict[str, Any]] = []
+    cur = conn.cursor()
+    placeholders = ",".join("?" for _ in student_ids)
+
+    if table_exists(conn, "enrollment_plans"):
+        try:
+            plan_rows = cur.execute(
+                f"""
+                SELECT ep.id, ep.student_id, ep.status,
+                       (SELECT COUNT(*) FROM enrollment_plan_items epi WHERE epi.plan_id = ep.id) AS course_count,
+                       COALESCE(ep.updated_at, ep.created_at, '') AS updated_at
+                FROM enrollment_plans ep
+                WHERE ep.student_id IN ({placeholders})
+                  AND ep.semester = ?
+                  AND ep.status = 'Pending'
+                ORDER BY ep.updated_at DESC, ep.id DESC
+                """,
+                (*student_ids, sem),
+            ).fetchall()
+        except Exception:
+            _safe_rollback(conn)
+            plan_rows = []
+        for r in plan_rows or []:
+            sid = str(_row_val(r, "student_id", 1) or "").strip()
+            pid = _row_val(r, "id", 0)
+            items.append({
+                "kind": "enrollment_plan",
+                "id": int(pid) if pid not in (None, "") else None,
+                "student_id": sid,
+                "student_name": name_by_id.get(sid, ""),
+                "status": _row_val(r, "status", 2),
+                "courses_count": int(_row_val(r, "course_count", 3) or 0),
+                "updated_at": _row_val(r, "updated_at", 4) or "",
+                "href": "/enrollment_plans",
+                "label": "خطة تسجيل بانتظار الاعتماد",
+            })
+
+    if table_exists(conn, "registration_requests"):
+        try:
+            req_rows = cur.execute(
+                f"""
+                SELECT id, student_id, term, course_name, action, status, created_at
+                FROM registration_requests
+                WHERE student_id IN ({placeholders})
+                  AND status = 'pending'
+                  AND (? = '' OR term = ?)
+                ORDER BY created_at DESC, id DESC
+                """,
+                (*student_ids, sem, sem),
+            ).fetchall()
+        except Exception:
+            _safe_rollback(conn)
+            req_rows = []
+        action_ar = {"add": "إضافة", "drop": "إسقاط"}
+        for r in req_rows or []:
+            sid = str(_row_val(r, "student_id", 1) or "").strip()
+            action = str(_row_val(r, "action", 4) or "").strip()
+            items.append({
+                "kind": "registration_request",
+                "id": _row_val(r, "id", 0),
+                "student_id": sid,
+                "student_name": name_by_id.get(sid, ""),
+                "term": _row_val(r, "term", 2) or "",
+                "course_name": _row_val(r, "course_name", 3) or "",
+                "action": action,
+                "action_label": action_ar.get(action, action),
+                "status": _row_val(r, "status", 5) or "",
+                "created_at": _row_val(r, "created_at", 6) or "",
+                "href": "/registration_requests_page",
+                "label": f"طلب {action_ar.get(action, action)} مقرر",
+            })
+
+    return items
 
 
 def _load_supervised_students(conn, instructor_id: int) -> list[dict]:
@@ -241,36 +463,51 @@ def build_supervisor_dashboard_context(
         conn, role=role, session_data=session_data, active_mode=active_mode, semester=sem,
     )
     students = _load_supervised_students(conn, iid_int) if iid_int else []
-    failed_map = _failed_course_counts(conn, [s["student_id"] for s in students if s.get("student_id")])
+    student_ids = [str(s.get("student_id") or "").strip() for s in students if s.get("student_id")]
+    name_by_id = {str(s.get("student_id") or "").strip(): s.get("student_name") or "" for s in students}
+    failed_map = _failed_course_counts(conn, student_ids)
+    academic_map = _load_semester_academic_by_student(conn, student_ids, sem)
+    pending_review = _load_pending_review_items(conn, student_ids, sem, name_by_id)
     at_risk_threshold = 1
     for st in students:
         sid = (st.get("student_id") or "").strip()
         fc = int(failed_map.get(sid) or 0)
         st["failed_courses_count"] = fc
         st["at_risk"] = fc >= at_risk_threshold
+        acad = academic_map.get(sid) or {}
+        st["registrations_count"] = int(acad.get("registrations_count") or 0)
+        st["registration_courses"] = acad.get("registration_courses") or []
+        st["plan_id"] = acad.get("plan_id")
+        st["plan_status"] = acad.get("plan_status")
+        st["plan_courses_count"] = int(acad.get("plan_courses_count") or 0)
+        st["plan_courses"] = acad.get("plan_courses") or []
 
     pending_count = int((quality.get("surveys") or {}).get("pending_count") or 0)
     report = quality.get("supervisor_report") or {}
     report_row = {}
     if iid_int:
-        cur = conn.cursor()
-        row = cur.execute(
-            """
-            SELECT at_risk_students_count, intervention_actions, success_rate, submitted_at
-            FROM supervisor_quality_reports
-            WHERE supervisor_instructor_id = ? AND semester = ?
-            LIMIT 1
-            """,
-            (iid_int, sem),
-        ).fetchone()
-        if row:
-            report_row = {
-                "at_risk_students_count": row[0],
-                "intervention_actions": row[1] or "",
-                "success_rate": row[2],
-                "submitted_at": row[3],
-            }
+        try:
+            cur = conn.cursor()
+            row = cur.execute(
+                """
+                SELECT at_risk_students_count, intervention_actions, success_rate, submitted_at
+                FROM supervisor_quality_reports
+                WHERE supervisor_instructor_id = ? AND semester = ?
+                LIMIT 1
+                """,
+                (iid_int, sem),
+            ).fetchone()
+            if row:
+                report_row = {
+                    "at_risk_students_count": row[0],
+                    "intervention_actions": row[1] or "",
+                    "success_rate": row[2],
+                    "submitted_at": row[3],
+                }
+        except Exception:
+            _safe_rollback(conn)
     report_done = bool(report.get("submitted"))
+    pending_review_count = len(pending_review)
     tasks = []
     if not iid_int:
         tasks.append({
@@ -278,6 +515,13 @@ def build_supervisor_dashboard_context(
             "title": "ربط حساب الأستاذ",
             "message": "لم يُربط instructor_id — تواصل مع الإدارة.",
             "href": None,
+        })
+    if pending_review_count > 0:
+        tasks.append({
+            "level": "warning",
+            "title": "طلبات تحتاج مراجعة",
+            "message": f"لديك {pending_review_count} طلب/خطة بانتظار المراجعة أو الاعتماد لهذا الفصل.",
+            "href": "/registration_requests_page",
         })
     if pending_count > 0:
         tasks.append({
@@ -309,6 +553,8 @@ def build_supervisor_dashboard_context(
         "student_count": len(students),
         "at_risk_count": len(at_risk_students),
         "students": students,
+        "pending_review": pending_review,
+        "pending_review_count": pending_review_count,
         "tasks": tasks,
         "surveys_pending_count": pending_count,
         "report_submitted": report_done,
