@@ -429,12 +429,12 @@ def inject_ui_context():
     }
     try:
         role_n = _normalize_role((session.get("user_role") or "").strip())
+        active_mode = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower()
         ctx["nav_shell_student"] = role_n == "student"
         ctx["nav_shell_instructor"] = _instructor_portal_ui_allowed()
         ctx["nav_shell_supervisor"] = _supervisor_portal_ui_allowed() and not _instructor_portal_ui_allowed()
         ctx["nav_shell_staff"] = _staff_ops_nav_default()
         ctx["show_admin_dept_scope_ui"] = admin_department_scope_ui_allowed(role_n, active_mode)
-        active_mode = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower()
         uname = (session.get("user") or session.get("username") or "").strip()
         from backend.services.utilities import get_connection
 

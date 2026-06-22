@@ -79,6 +79,10 @@
       <strong>النطاق:</strong> {{ report.department_label }} —
       يُعرض {{ report.summary_completed }} مكتملاً من {{ report.summary_total }} ضمن النطاق (بدون أسماء المكتملين).
     </div>
+    <div class="alert alert-light border small mb-3">
+      <strong>تنبيه:</strong> للطالب نوعان من التعبئة: <strong>استبيانات المنصة</strong> (المرافق، الخدمات) و<strong>تقييم كل مقرر</strong>.
+      الشارة الحمراء على التبويب = عدد المتأخرين. الحالة <span class="badge bg-warning text-dark">جزئي</span> تعني أنه بدأ ولم يُكمل الكل — وليس فقدان بيانات.
+    </div>
 
     <section class="kpi-grid mb-4" aria-label="ملخص التغطية">
       {% for block in report.roles %}
@@ -144,8 +148,24 @@
                     {% else %}
                     <span class="badge bg-warning text-dark">جزئي</span>
                     {% endif %}
+                    {% if p.status_hint %}
+                    <div class="small text-muted mt-1">{{ p.status_hint }}</div>
+                    {% endif %}
                   </td>
-                  <td class="small text-muted">{{ p.missing_summary }}</td>
+                  <td class="small">
+                    {% if p.done_summary %}
+                    <div class="text-success mb-1">{{ p.done_summary }}</div>
+                    {% endif %}
+                    {% if p.missing_summary_course %}
+                    <div class="text-muted"><strong>مقررات:</strong> {{ p.missing_summary_course }}</div>
+                    {% endif %}
+                    {% if p.missing_summary_platform %}
+                    <div class="text-muted"><strong>منصة:</strong> {{ p.missing_summary_platform }}</div>
+                    {% endif %}
+                    {% if not p.missing_summary_course and not p.missing_summary_platform %}
+                    <span class="text-muted">{{ p.missing_summary }}</span>
+                    {% endif %}
+                  </td>
                 </tr>
                 {% endfor %}
               </tbody>

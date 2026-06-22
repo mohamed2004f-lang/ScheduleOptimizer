@@ -21,23 +21,15 @@ Write-Host ""
 Write-Host "=== ScheduleOptimizer: Deploy ===" -ForegroundColor Cyan
 Write-Host ""
 
-Write-Step "1/4" "Checking Docker..."
-$dockerOk = $false
-try {
-    $null = docker version 2>&1
-    if ($LASTEXITCODE -eq 0) { $dockerOk = $true }
-} catch { }
-
-if (-not $dockerOk) {
-    Write-Host ""
-    Write-Host "Docker is NOT running." -ForegroundColor Red
-    Write-Host "Open Docker Desktop from Start menu and wait until Running." -ForegroundColor Red
-    Write-Host ""
-    exit 1
-}
+Write-Step "1/5" "Ensuring Docker engine..."
+& (Join-Path $Root "scripts\docker_ensure.ps1")
+if ($LASTEXITCODE -ne 0) { exit 1 }
 Write-Host "     Docker: OK" -ForegroundColor Green
 
-Write-Step "2/4" "Checking Cloudflare Tunnel..."
+Write-Step "2/5" "Freeing port 5000 (stop local app.py if running)..."
+& (Join-Path $Root "scripts\stop_port_5000.ps1") | Out-Null
+
+Write-Step "3/5" "Checking Cloudflare Tunnel..."
 $cf = Get-Service -Name Cloudflared -ErrorAction SilentlyContinue
 if ($null -eq $cf) {
     Write-Host "     Warning: Cloudflared service not found" -ForegroundColor Yellow
@@ -53,7 +45,7 @@ if ($null -eq $cf) {
     Write-Host "     Cloudflared: OK" -ForegroundColor Green
 }
 
-Write-Step "3/4" "Building and restarting containers (wait 1-3 min)..."
+Write-Step "4/5" "Building and restarting containers (wait 1-3 min)..."
 if ($SkipBuild) {
     docker compose up -d
 } else {
@@ -66,7 +58,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "     Containers: OK" -ForegroundColor Green
 
-Write-Step "4/4" "Health check..."
+Write-Step "5/5" "Health check..."
 Start-Sleep -Seconds 8
 
 $localOk = $false

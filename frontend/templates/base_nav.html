@@ -459,6 +459,7 @@
             <li><a class="dropdown-item" id="navDepartmentPolicyHead" href="/department_policy_head_page" style="display:none;">اقتراح سياسة نظام التخرج (رئيس القسم)</a></li>
             <li><a class="dropdown-item" id="navDepartmentPolicyApprovals" href="/department_policy_approvals_page" style="display:none;">اعتماد سياسات الأقسام (admin_main)</a></li>
             <li><a class="dropdown-item" id="navProjectStatus" href="/admin/project_status">إصدار المشروع وآخر تحديث</a></li>
+            <li><a class="dropdown-item" id="navAdminBackup" href="/admin/backup_page" style="display:none;">النسخ الاحتياطي الكامل</a></li>
             <li><a class="dropdown-item" id="navAcademicRules" href="/academic_rules_page">لائحة الإنذارات والفصل</a></li>
             <li><a class="dropdown-item" id="navCollegeCatalog" href="/college_catalog_page">كتالوج الأقسام والخطط</a></li>
             <!-- توثيق النظام معطّل افتراضياً عبر ENABLE_SYSTEM_DOCS_PAGE -->
@@ -847,6 +848,11 @@
             role === 'admin_main' || role === 'admin' || role === 'system_admin' || role === 'college_dean'
           );
           elProjectStatus.style.display = showProjectStatus ? '' : 'none';
+        }
+        const elAdminBackup = document.getElementById('navAdminBackup');
+        if (elAdminBackup) {
+          const showAdminBackup = showAdminSettingsMenu && (role === 'admin_main' || role === 'system_admin');
+          elAdminBackup.style.display = showAdminBackup ? '' : 'none';
         }
       }
       if (!navSup) {
@@ -1719,6 +1725,7 @@
         ['/department_policy_head_page','navDepartmentPolicyHead'],
         ['/department_policy_approvals_page','navDepartmentPolicyApprovals'],
         ['/admin/project_status','navProjectStatus'],
+        ['/admin/backup_page','navAdminBackup'],
         ['/academic_rules_page','navAcademicRules'],
         ['/college_catalog_page','navCollegeCatalog'],
         ['/college_catalog_page','navCollegeCatalogCourses'],

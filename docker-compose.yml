@@ -32,10 +32,14 @@ services:
       - SECRET_KEY=${SECRET_KEY:?يجب تعيين SECRET_KEY في ملف .env}
       # نفس كلمة مرور POSTGRES_PASSWORD في الخدمة db — يُفضّل أحرف بسيطة بدون @ : / في كلمة المرور
       - DATABASE_URL=postgresql+psycopg://schedule:${POSTGRES_PASSWORD}@db:5432/schedule_optimizer
+      # داخل الحاوية — يُربط بمجلد المضيف عبر BACKUP_MIRROR_HOST أدناه
+      - BACKUP_MIRROR_ROOT=/app/backups/mirror
+      - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-30}
     volumes:
       - ./backend/uploads:/app/backend/uploads
       - ./logs:/app/logs
       - ./backups:/app/backups
+      - ${BACKUP_MIRROR_HOST:-D:/ScheduleOptimizer_Backups}:/app/backups/mirror
     restart: unless-stopped
     depends_on:
       db:

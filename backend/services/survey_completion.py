@@ -14,7 +14,8 @@ from backend.services.multi_surveys import (
     list_pending_for_respondent_role,
     list_templates,
 )
-from backend.services.quality_metrics import term_label_from_conn
+from backend.services.quality_metrics import term_label_from_conn, normalize_term_label
+from backend.services.utilities import schedule_semester_matches_current_term
 
 logger = logging.getLogger(__name__)
 
@@ -371,6 +372,41 @@ def _student_missing_items(
     return missing
 
 
+def _split_student_missing(missing: list[str]) -> tuple[list[str], list[str]]:
+    course = [m for m in missing if (m or "").strip().startswith("تقييم مقرر")]
+    platform = [m for m in missing if m not in course]
+    return platform, course
+
+
+def _student_done_platform_titles(conn, student_id: str, semester: str) -> list[str]:
+    """استبيانات المنصة (مرافق/خدمات/…) المُرسَلة لهذا الفصل."""
+    sid = (student_id or "").strip()
+    sem = (semester or "").strip()
+    if not sid or not table_exists(conn, "survey_responses"):
+        return []
+    cur = conn.cursor()
+    rows = cur.execute(
+        """
+        SELECT template_code, semester
+        FROM survey_responses
+        WHERE respondent_role = 'student' AND respondent_id = ? AND status = 'submitted'
+        """,
+        (sid,),
+    ).fetchall()
+    titles: list[str] = []
+    code_labels = {
+        "student_facilities": "استبيان المرافق",
+        "student_services": "استبيان الخدمات",
+    }
+    for row in rows:
+        code = str(_row_val(row, 0, "template_code") or "").strip()
+        row_sem = str(_row_val(row, 1, "semester") or "").strip()
+        if sem and row_sem and not schedule_semester_matches_current_term(row_sem, sem):
+            continue
+        titles.append(code_labels.get(code, code or "استبيان"))
+    return titles
+
+
 def _person_missing_items(
     conn,
     *,
@@ -443,31 +479,37 @@ def _has_any_survey_submission(
 ) -> bool:
     if not table_exists(conn, "survey_responses"):
         return False
+    sem = (semester or "").strip()
     cur = conn.cursor()
-    row = cur.execute(
+    rows = cur.execute(
         """
-        SELECT 1 FROM survey_responses
-        WHERE respondent_role = ? AND respondent_id = ? AND semester = ?
-          AND status = 'submitted'
-        LIMIT 1
+        SELECT semester FROM survey_responses
+        WHERE respondent_role = ? AND respondent_id = ? AND status = 'submitted'
         """,
-        (respondent_role, str(respondent_id), semester),
-    ).fetchone()
-    return row is not None
+        (respondent_role, str(respondent_id)),
+    ).fetchall()
+    for row in rows:
+        row_sem = str(_row_val(row, 0, "semester") or "").strip()
+        if not sem or not row_sem or schedule_semester_matches_current_term(row_sem, sem):
+            return True
+    return False
 
 
 def _student_has_any_submission(conn, student_id: str, semester: str) -> bool:
     sid = (student_id or "").strip()
+    sem = (semester or "").strip()
     if not sid:
         return False
     if table_exists(conn, "course_evaluations"):
         cur = conn.cursor()
-        row = cur.execute(
-            "SELECT 1 FROM course_evaluations WHERE student_id = ? AND semester = ? LIMIT 1",
-            (sid, semester),
-        ).fetchone()
-        if row is not None:
-            return True
+        rows = cur.execute(
+            "SELECT semester FROM course_evaluations WHERE student_id = ?",
+            (sid,),
+        ).fetchall()
+        for row in rows:
+            row_sem = str(_row_val(row, 0, "semester") or "").strip()
+            if not sem or not row_sem or schedule_semester_matches_current_term(row_sem, sem):
+                return True
     return _has_any_survey_submission(
         conn, respondent_role="student", respondent_id=sid, semester=semester
     )
@@ -488,6 +530,36 @@ def _classify_pending_status(
     if _has_any_survey_submission(conn, respondent_role=resp_role, respondent_id=rid, semester=semester):
         return "partial"
     return "not_started"
+
+
+def _student_pending_extras(
+    conn,
+    student_id: str,
+    semester: str,
+    missing: list[str],
+    status: str,
+) -> dict[str, Any]:
+    platform_missing, course_missing = _split_student_missing(missing)
+    done = _student_done_platform_titles(conn, student_id, semester)
+    done_summary = ""
+    if done:
+        done_summary = "أُنجز: " + "، ".join(done)
+    missing_summary_platform = "؛ ".join(platform_missing[:3]) if platform_missing else ""
+    missing_summary_course = "؛ ".join(course_missing[:3]) if course_missing else ""
+    if course_missing and len(course_missing) > 3:
+        missing_summary_course += "…"
+    return {
+        "done_summary": done_summary,
+        "missing_platform": platform_missing,
+        "missing_course_eval": course_missing,
+        "missing_summary_platform": missing_summary_platform,
+        "missing_summary_course": missing_summary_course,
+        "status_hint": (
+            "أكمل استبيانات المنصة وتقييم المقررات المطلوبة"
+            if status == "not_started"
+            else ("متبقي تقييم مقررات" if course_missing and not platform_missing else "متبقي استبيانات")
+        ),
+    }
 
 
 def _role_universe(conn, role_key: str, department_id: int | None) -> list[dict[str, Any]]:
@@ -548,6 +620,11 @@ def build_role_completion(
                 "missing_items": missing,
                 "missing_summary": "؛ ".join(missing[:4])
                 + ("…" if len(missing) > 4 else ""),
+                **(
+                    _student_pending_extras(conn, person["respondent_id"], semester, missing, status)
+                    if role_key == "student"
+                    else {}
+                ),
             }
         )
 
@@ -574,7 +651,7 @@ def build_survey_completion_report(
     department_id: int | None = None,
 ) -> dict[str, Any]:
     ensure_survey_templates_seeded(conn)
-    sem = (semester or "").strip() or term_label_from_conn(conn)
+    sem = normalize_term_label(semester, conn)
     roles = [build_role_completion(conn, role_key=rk, semester=sem, department_id=department_id) for rk in ROLE_KEYS]
     summary_completed = sum(int(b.get("completed") or 0) for b in roles)
     summary_total = sum(int(b.get("total") or 0) for b in roles)

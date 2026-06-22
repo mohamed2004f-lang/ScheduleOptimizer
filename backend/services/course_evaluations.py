@@ -251,30 +251,43 @@ def _already_evaluated(
 ) -> bool:
     if not table_exists(conn, "course_evaluations"):
         return False
+    sem = " ".join((semester or "").split()).strip()
     ce_cols = {c.lower() for c in fetch_table_columns(conn, "course_evaluations")}
     tgid = int(teaching_group_id or 0)
-    if tgid > 0 and "teaching_group_id" in ce_cols:
-        row = cur.execute(
-            """
-            SELECT 1 FROM course_evaluations
-            WHERE student_id = ? AND teaching_group_id = ? AND semester = ?
-            LIMIT 1
-            """,
-            (student_id, tgid, semester),
-        ).fetchone()
-        if row is not None:
+
+    def _sem_match(row_sem: str) -> bool:
+        rs = " ".join((row_sem or "").split()).strip()
+        if not sem or not rs:
+            return False
+        if rs == sem:
             return True
+        return schedule_semester_matches_current_term(rs, sem)
+
+    if tgid > 0 and "teaching_group_id" in ce_cols:
+        rows = cur.execute(
+            """
+            SELECT semester FROM course_evaluations
+            WHERE student_id = ? AND teaching_group_id = ?
+            """,
+            (student_id, tgid),
+        ).fetchall()
+        for row in rows:
+            row_sem = row[0] if not hasattr(row, "keys") else row.get("semester")
+            if _sem_match(str(row_sem or "")):
+                return True
     sid = int(section_id or 0)
     if sid > 0:
-        row = cur.execute(
+        rows = cur.execute(
             """
-            SELECT 1 FROM course_evaluations
-            WHERE student_id = ? AND section_id = ? AND semester = ?
-            LIMIT 1
+            SELECT semester FROM course_evaluations
+            WHERE student_id = ? AND section_id = ?
             """,
-            (student_id, sid, semester),
-        ).fetchone()
-        return row is not None
+            (student_id, sid),
+        ).fetchall()
+        for row in rows:
+            row_sem = row[0] if not hasattr(row, "keys") else row.get("semester")
+            if _sem_match(str(row_sem or "")):
+                return True
     return False
 
 

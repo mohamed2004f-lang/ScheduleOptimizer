@@ -8,7 +8,7 @@ from backend.services.multi_surveys import (
     list_template_questions,
     submit_survey_response,
 )
-from backend.services.quality_metrics import term_label_from_conn
+from backend.services.quality_metrics import term_label_from_conn, normalize_term_label
 from backend.services.survey_completion import (
     build_survey_completion_report,
     export_pending_completion_xlsx,
@@ -125,3 +125,15 @@ def test_surveys_completion_routes(app):
         payload = json.loads(api.data)
         assert payload["status"] == "ok"
         assert "roles" in payload["data"]
+
+
+def test_double_space_semester_does_not_mark_all_students_pending(db_conn):
+    """مسافتان في الفصل كانت تُظهر الجميع متأخرين — يجب توحيد الكتابة."""
+    sem = term_label_from_conn(db_conn)
+    double = sem.replace(" ", "  ", 1) if " " in sem else f"{sem}  "
+    report_ok = build_survey_completion_report(db_conn, semester=sem)
+    report_bad = build_survey_completion_report(db_conn, semester=double)
+    st_ok = next(b for b in report_ok["roles"] if b["role"] == "student")
+    st_bad = next(b for b in report_bad["roles"] if b["role"] == "student")
+    assert st_bad["pending"] == st_ok["pending"]
+    assert normalize_term_label(double, db_conn) == sem

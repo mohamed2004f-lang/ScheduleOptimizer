@@ -606,3 +606,51 @@ def backup_now():
     except Exception:
         current_app.logger.exception("Backup now failed")
         return jsonify({"status": "error", "message": "فشل إنشاء النسخة الاحتياطية. حاول لاحقًا."}), 500
+
+
+@admin_bp.route("/backup_page")
+@role_required("admin_main", "system_admin")
+def admin_backup_page():
+    """صفحة النسخ الاحتياطي الكامل للأدمن الرئيسي."""
+    return render_template("admin_backup.html")
+
+
+@admin_bp.route("/backup/status", methods=["GET"])
+@role_required("admin_main", "system_admin")
+def admin_backup_status():
+    from backend.services.backup_jobs import backup_status
+
+    return jsonify({"status": "ok", **backup_status()})
+
+
+@admin_bp.route("/backup/full", methods=["POST"])
+@role_required("admin_main", "system_admin")
+def admin_backup_full():
+    """نسخة كاملة: قاعدة + مرفقات → القرص المُعرَّف في BACKUP_MIRROR_ROOT."""
+    from backend.services.backup_jobs import run_full_backup
+
+    try:
+        now_ts = datetime.now(timezone.utc).timestamp()
+        last_ts = float(session.get("last_backup_full_ts") or 0)
+        if now_ts - last_ts < BACKUP_MIN_INTERVAL_SECONDS:
+            wait_s = int(BACKUP_MIN_INTERVAL_SECONDS - (now_ts - last_ts)) + 1
+            return jsonify({
+                "status": "error",
+                "message": f"تم تنفيذ نسخة احتياطية مؤخرًا. انتظر {wait_s} ثانية.",
+            }), 429
+        result = run_full_backup()
+        session["last_backup_full_ts"] = now_ts
+        session["last_backup_now_ts"] = now_ts
+        log_activity(
+            action="admin_backup_full",
+            details=f"mirror={result.get('mirror_root','')} dump={result.get('dump_name','')}",
+        )
+        return jsonify({
+            "status": "ok",
+            "message": "تم إنشاء نسخة احتياطية كاملة بنجاح",
+            "backup": result,
+        })
+    except Exception as exc:
+        current_app.logger.exception("Full backup failed")
+        msg = str(exc).strip() or "فشل إنشاء النسخة الاحتياطية الكاملة"
+        return jsonify({"status": "error", "message": msg}), 500

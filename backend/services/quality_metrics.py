@@ -20,9 +20,26 @@ def term_label_from_conn(conn) -> str:
     try:
         tname, tyear = get_current_term(conn=conn)
         label = f"{(tname or '').strip()} {(tyear or '').strip()}".strip()
-        return label or SEMESTER_LABEL
+        collapsed = " ".join(label.split()).strip()
+        return collapsed or SEMESTER_LABEL
     except Exception:
         return SEMESTER_LABEL
+
+
+def normalize_term_label(semester: str | None, conn=None) -> str:
+    """
+    توحيد كتابة الفصل (مسافات مكررة) ومطابقته بالفصل الحالي من الإعدادات.
+    يمنع ظهور الجميع «متأخرين» عند إدخال «ربيع  25-26» بدل «ربيع 25-26».
+    """
+    collapsed = " ".join((semester or "").split()).strip()
+    if conn is None:
+        return collapsed
+    canonical_c = term_label_from_conn(conn)
+    if not collapsed:
+        return canonical_c
+    if collapsed == canonical_c:
+        return canonical_c
+    return collapsed
 
 
 def _row_val(row, idx: int = 0, key: str | None = None):

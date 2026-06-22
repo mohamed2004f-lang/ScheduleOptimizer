@@ -84,8 +84,8 @@ def _ensure_exam_schedule_version_tables(cur):
 
 
 def _role_may_edit_exam_schedule():
-    role = (session.get("user_role") or "").strip()
-    if role in ("admin", "admin_main"):
+    role = _normalize_role((session.get("user_role") or "").strip())
+    if role in ("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean"):
         return True
     if role == "head_of_department":
         mode = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()

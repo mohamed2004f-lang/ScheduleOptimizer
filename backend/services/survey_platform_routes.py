@@ -51,7 +51,7 @@ from backend.services.multi_surveys import (
     _resolve_subject,
 )
 from backend.services.evaluation_survey import likert_labels_ar, likert_scale_context
-from backend.services.quality_metrics import term_label_from_conn
+from backend.services.quality_metrics import term_label_from_conn, normalize_term_label
 from backend.services.survey_analytics import (
     build_course_eval_report,
     build_course_eval_results_bundle,
@@ -1556,6 +1556,8 @@ def register_survey_platform_routes(bp) -> None:
             with get_connection() as conn:
                 if not sem:
                     sem = term_label_from_conn(conn)
+                else:
+                    sem = normalize_term_label(sem, conn)
                 dept_id, can_pick_dept = _completion_scope(conn)
                 role = _normalize_role((session.get("user_role") or "").strip())
                 dept_missing = role == "head_of_department" and dept_id is None
@@ -1609,7 +1611,8 @@ def register_survey_platform_routes(bp) -> None:
     )
     def surveys_completion_api():
         with get_connection() as conn:
-            sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
+            raw = (request.args.get("semester") or "").strip()
+            sem = normalize_term_label(raw, conn) if raw else term_label_from_conn(conn)
             dept_id, _can_pick = _completion_scope(conn)
             role = _normalize_role((session.get("user_role") or "").strip())
             if role == "head_of_department" and dept_id is None:
@@ -1629,7 +1632,8 @@ def register_survey_platform_routes(bp) -> None:
     )
     def surveys_completion_pending_xlsx():
         with get_connection() as conn:
-            sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
+            raw = (request.args.get("semester") or "").strip()
+            sem = normalize_term_label(raw, conn) if raw else term_label_from_conn(conn)
             dept_id, _can_pick = _completion_scope(conn)
             role = _normalize_role((session.get("user_role") or "").strip())
             if role == "head_of_department" and dept_id is None:

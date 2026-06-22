@@ -724,6 +724,8 @@ def _admin_settings_blocked_prefixes() -> tuple[str, ...]:
         "/users",
         "/users_admin",
         "/admin/project_status",
+        "/admin/backup_page",
+        "/admin/backup/",
         "/admin/backup_now",
         "/admin/system_diagnostics",
         "/admin/settings",

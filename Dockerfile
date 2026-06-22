@@ -19,6 +19,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wkhtmltopdf \
     xvfb \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 # نسخ ملف المتطلبات وتثبيت التبعيات
