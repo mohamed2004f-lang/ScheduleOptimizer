@@ -42,6 +42,11 @@ def _find_pg_dump() -> str | None:
     found = shutil.which("pg_dump")
     if found:
         return found
+    if sys.platform != "win32":
+        for ver in (17, 16, 15):
+            candidate = Path(f"/usr/lib/postgresql/{ver}/bin/pg_dump")
+            if candidate.is_file():
+                return str(candidate.resolve())
     if sys.platform == "win32":
         for base in (
             os.environ.get("ProgramFiles", r"C:\Program Files"),

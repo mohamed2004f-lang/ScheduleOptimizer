@@ -43,6 +43,12 @@ from .attendance_export_core import (
     effective_attendance_department_scope as _effective_attendance_department_scope,
     fallback_distinct_attendance_courses,
 )
+from .attendance_registration import (
+    absence_summary_for_export,
+    build_registration_roster,
+    get_attendance_term_weeks,
+    save_registration_marks,
+)
 from backend.database.database import is_postgresql, fetch_table_columns, table_exists
 
 students_bp = Blueprint("students", __name__)
@@ -3767,6 +3773,7 @@ def export_attendance_excel():
         course_students = r["course_students"]
         attendance_map = r["attendance_map"]
         missing_courses = r["missing_courses"]
+        term_weeks = get_attendance_term_weeks()
 
         summaries = []
         frames = []
@@ -3781,6 +3788,7 @@ def export_attendance_excel():
                 "المقرر": course_name,
                 "عدد الطلبة": len(students_list),
                 "عدد الأسابيع": weeks,
+                "مقام نسبة الغياب": term_weeks,
                 "ملاحظات": notes
             })
 
@@ -3794,12 +3802,28 @@ def export_attendance_excel():
                 week_statuses = attendance_map.get((course_name, sid), {})
                 for idx, col in enumerate(week_columns, start=1):
                     row[col] = week_statuses.get(idx, "")
+                abs_stats = absence_summary_for_export(
+                    attendance_map,
+                    course_name=course_name,
+                    student_id=sid,
+                    term_weeks=term_weeks,
+                )
+                row["أسابيع الغياب"] = abs_stats["absence_label"]
+                row["نسبة الغياب %"] = abs_stats["absence_percent"]
                 rows.append(row)
 
             if rows:
                 df = pd.DataFrame(rows)
             else:
-                df = pd.DataFrame(columns=["الرقم الدراسي", "اسم الطالب", *week_columns])
+                df = pd.DataFrame(
+                    columns=[
+                        "الرقم الدراسي",
+                        "اسم الطالب",
+                        *week_columns,
+                        "أسابيع الغياب",
+                        "نسبة الغياب %",
+                    ]
+                )
             frames.append((course_name, df))
 
         seen_missing = set()
@@ -3953,6 +3977,62 @@ def export_attendance_pdf():
     except Exception:
         current_app.logger.exception("export_attendance_pdf failed")
         return jsonify({"status": "error", "message": "فشل تجهيز PDF"}), 500
+
+
+@students_bp.route("/attendance/register/config")
+@login_required
+def attendance_register_config():
+    """إعدادات تسجيل الحضور (عدد أسابيع الفصل للمقام الثابت)."""
+    weeks = get_attendance_term_weeks()
+    return jsonify({"status": "ok", "term_weeks": weeks})
+
+
+@students_bp.route("/attendance/register/roster")
+@login_required
+def attendance_register_roster():
+    """قائمة طلاب المقرر لأسبوع محدد مع نسبة الغياب."""
+    course = (request.args.get("course") or request.args.get("course_name") or "").strip()
+    week_raw = request.args.get("week")
+    week_number = None
+    if week_raw not in (None, ""):
+        try:
+            week_number = int(week_raw)
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "رقم أسبوع غير صالح"}), 400
+    result = build_registration_roster(
+        get_connection,
+        get_current_term,
+        normalize_sid,
+        course_name=course,
+        week_number=week_number,
+    )
+    if not result.get("ok"):
+        return result["response"]
+    return jsonify({"status": "ok", **result["data"]})
+
+
+@students_bp.route("/attendance/register/save", methods=["POST"])
+@login_required
+def attendance_register_save():
+    """حفظ حضور أسبوع واحد لمقرر."""
+    data = request.get_json(force=True) or {}
+    course = (data.get("course_name") or data.get("course") or "").strip()
+    try:
+        week_number = int(data.get("week_number") or data.get("week"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "رقم أسبوع غير صالح"}), 400
+    marks = data.get("marks") or data.get("students") or []
+    result = save_registration_marks(
+        get_connection,
+        get_current_term,
+        normalize_sid,
+        course_name=course,
+        week_number=week_number,
+        marks=marks,
+    )
+    if not result.get("ok"):
+        return result["response"]
+    return jsonify({"status": "ok", "saved": result.get("saved", 0), **result["data"]})
 
 
 @students_bp.route("/attendance_allowed_courses")

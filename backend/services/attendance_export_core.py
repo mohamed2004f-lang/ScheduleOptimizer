@@ -449,11 +449,16 @@ def collect_attendance_export_state(
     selected_courses = _normalize_courses(raw_courses)
 
     MAX_WEEKS = 30
-    DEFAULT_WEEKS = 14
     try:
-        weeks = int(str(request.args.get("weeks", DEFAULT_WEEKS)).strip())
+        from backend.services.attendance_registration import get_attendance_term_weeks
+
+        default_weeks = get_attendance_term_weeks()
+    except Exception:
+        default_weeks = 16
+    try:
+        weeks = int(str(request.args.get("weeks", default_weeks)).strip())
     except (TypeError, ValueError):
-        weeks = DEFAULT_WEEKS
+        weeks = default_weeks
     if weeks < 1:
         weeks = 1
     if weeks > MAX_WEEKS:

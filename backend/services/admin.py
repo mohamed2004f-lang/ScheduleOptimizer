@@ -75,6 +75,54 @@ def set_current_term():
     return jsonify({"status": "ok", "message": "تم حفظ الفصل الحالي", "term_name": name, "term_year": year})
 
 
+@admin_bp.route("/settings/attendance_term_weeks", methods=["GET"])
+@login_required
+@role_required("admin", "admin_main", "system_admin", "college_dean", "head_of_department")
+def get_attendance_term_weeks_setting():
+    """عدد أسابيع الفصل لحساب نسبة الغياب (مقام ثابت — افتراضي 16)."""
+    from backend.services.attendance_registration import (
+        DEFAULT_TERM_WEEKS,
+        MAX_TERM_WEEKS,
+        get_attendance_term_weeks,
+    )
+
+    with get_connection() as conn:
+        weeks = get_attendance_term_weeks(conn)
+    return jsonify(
+        {
+            "status": "ok",
+            "term_weeks": weeks,
+            "default_weeks": DEFAULT_TERM_WEEKS,
+            "max_weeks": MAX_TERM_WEEKS,
+        }
+    )
+
+
+@admin_bp.route("/settings/attendance_term_weeks", methods=["POST"])
+@role_required("admin", "admin_main", "system_admin", "college_dean")
+def set_attendance_term_weeks_setting():
+    """حفظ عدد أسابيع الفصل لحساب نسبة الغياب."""
+    from backend.services.attendance_registration import set_attendance_term_weeks
+
+    data = request.get_json(force=True) or {}
+    try:
+        weeks = int(data.get("term_weeks"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "term_weeks مطلوب (رقم صحيح)"}), 400
+    with get_connection() as conn:
+        saved = set_attendance_term_weeks(conn, weeks)
+        try:
+            conn.commit()
+        except Exception:
+            pass
+    log_activity(
+        session.get("user") or session.get("username") or "—",
+        "attendance_term_weeks",
+        f"term_weeks={saved}",
+    )
+    return jsonify({"status": "ok", "message": "تم حفظ عدد أسابيع الفصل", "term_weeks": saved})
+
+
 @admin_bp.route("/settings/course_eval_response_rate", methods=["GET"])
 @login_required
 @role_required("admin", "admin_main", "system_admin", "college_dean", "head_of_department")

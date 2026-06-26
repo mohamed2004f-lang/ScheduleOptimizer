@@ -35,6 +35,7 @@ services:
       # داخل الحاوية — يُربط بمجلد المضيف عبر BACKUP_MIRROR_HOST أدناه
       - BACKUP_MIRROR_ROOT=/app/backups/mirror
       - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-30}
+      - PG_DUMP_PATH=/usr/lib/postgresql/17/bin/pg_dump
     volumes:
       - ./backend/uploads:/app/backend/uploads
       - ./logs:/app/logs

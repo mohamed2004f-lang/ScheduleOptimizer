@@ -843,10 +843,13 @@ def supervisor_quality_hub_page():
 def my_attendance_page():
     if not _instructor_portal_ui_allowed():
         return redirect(url_for("transcript_page"))
+    from backend.services.attendance_registration import get_attendance_term_weeks
+
     return render_template(
         "attendance_export.html",
         active_page="my_attendance",
         portal_mode="instructor",
+        default_term_weeks=get_attendance_term_weeks(),
     )
 
 
@@ -1048,7 +1051,12 @@ def results_page():
 @login_required
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor", "instructor")
 def attendance_export_page():
-    return render_template("attendance_export.html")
+    from backend.services.attendance_registration import get_attendance_term_weeks
+
+    return render_template(
+        "attendance_export.html",
+        default_term_weeks=get_attendance_term_weeks(),
+    )
 
 @app.route("/academic_calendar_page")
 @login_required

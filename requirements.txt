@@ -24,6 +24,8 @@ docxtpl>=0.16.7
 # ============================================
 # خرائط المتطلبات (Flowchart) وتصدير PowerPoint
 # ============================================
+# lxml صراحةً — python-pptx يعتمد عليه؛ يُثبَّت أيضاً في Dockerfile قبل requirements
+lxml==5.3.1
 matplotlib==3.10.1
 Pillow==10.4.0
 python-pptx==1.0.2

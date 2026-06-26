@@ -1,6 +1,7 @@
 # Deploy to production (Docker) -> uod-engineering.org
 param(
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$WebOnly
 )
 
 $ErrorActionPreference = "Continue"
@@ -17,6 +18,34 @@ function Write-Step($n, $msg) {
     } catch { }
 }
 
+function Invoke-DockerCompose {
+    param([switch]$Build, [switch]$WebOnly)
+    $env:DOCKER_BUILDKIT = "1"
+    $env:COMPOSE_PROGRESS = "plain"
+    if ($Build) {
+        Write-Host "     --- docker compose build (plain progress) ---" -ForegroundColor DarkGray
+        if ($WebOnly) {
+            docker compose build --progress=plain web
+        } else {
+            docker compose build --progress=plain
+        }
+        if ($LASTEXITCODE -ne 0) { return $LASTEXITCODE }
+        Write-Host "     --- docker compose up -d ---" -ForegroundColor DarkGray
+        if ($WebOnly) {
+            docker compose up -d web
+        } else {
+            docker compose up -d
+        }
+    } else {
+        if ($WebOnly) {
+            docker compose up -d web
+        } else {
+            docker compose up -d
+        }
+    }
+    return $LASTEXITCODE
+}
+
 Write-Host ""
 Write-Host "=== ScheduleOptimizer: Deploy ===" -ForegroundColor Cyan
 Write-Host ""
@@ -26,7 +55,7 @@ Write-Step "1/5" "Ensuring Docker engine..."
 if ($LASTEXITCODE -ne 0) { exit 1 }
 Write-Host "     Docker: OK" -ForegroundColor Green
 
-Write-Step "2/5" "Freeing port 5000 (stop local app.py if running)..."
+Write-Step "2/5" "Freeing port 5000 (local app.py only, not Docker)..."
 & (Join-Path $Root "scripts\stop_port_5000.ps1") | Out-Null
 
 Write-Step "3/5" "Checking Cloudflare Tunnel..."
@@ -45,15 +74,33 @@ if ($null -eq $cf) {
     Write-Host "     Cloudflared: OK" -ForegroundColor Green
 }
 
-Write-Step "4/5" "Building and restarting containers (wait 1-3 min)..."
-if ($SkipBuild) {
-    docker compose up -d
-} else {
-    docker compose up -d --build
+$target = if ($WebOnly) { "web container only" } else { "all containers" }
+Write-Step "4/5" "Building and restarting $target (wait 1-3 min)..."
+
+$composeOk = $false
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+    if ($attempt -gt 1) {
+        Write-Host "     docker compose failed - retry $attempt/3 after Docker re-check..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 8
+        & (Join-Path $Root "scripts\docker_ensure.ps1") -MaxWaitSeconds 120 -WaitOnly | Out-Null
+        if ($LASTEXITCODE -ne 0) { break }
+    }
+    $code = Invoke-DockerCompose -Build:(-not $SkipBuild) -WebOnly:$WebOnly
+    if ($code -eq 0) {
+        $composeOk = $true
+        break
+    }
 }
-if ($LASTEXITCODE -ne 0) {
+
+if (-not $composeOk) {
     Write-Host ""
     Write-Host "docker compose FAILED." -ForegroundColor Red
+    Write-Host "Docker engine may have stopped. Open Docker Desktop, wait for Engine running, then retry:" -ForegroundColor Yellow
+    if ($WebOnly) {
+        Write-Host "  docker compose up -d --build web" -ForegroundColor Yellow
+    } else {
+        Write-Host "  docker compose up -d --build" -ForegroundColor Yellow
+    }
     exit 1
 }
 Write-Host "     Containers: OK" -ForegroundColor Green
@@ -82,7 +129,7 @@ try {
 if ($publicOk) {
     Write-Host "     Internet: OK  https://uod-engineering.org" -ForegroundColor Green
 } else {
-    Write-Host "     Internet: not reachable (Tunnel or network?)" -ForegroundColor Yellow
+    Write-Host "     Internet: not reachable - check Tunnel or network" -ForegroundColor Yellow
 }
 
 Write-Host ""
