@@ -121,6 +121,141 @@ def _is_instructor_or_supervisor_view_only() -> bool:
     return students_registry_view_only()
 
 
+def _can_transfer_student_department() -> bool:
+    """المسؤول الرئيسي / عميد / وكيل في وضع القيادة فقط."""
+    role = _normalize_role((session.get("user_role") or "").strip())
+    if role not in ("admin_main", "system_admin", "college_dean", "academic_vice_dean"):
+        return False
+    if role == "college_dean":
+        am = (session.get(SESSION_ACTIVE_MODE) or "dean").strip().lower()
+        return am in ("", "dean")
+    if role == "academic_vice_dean":
+        am = (session.get(SESSION_ACTIVE_MODE) or "vice_dean").strip().lower()
+        return am in ("", "vice_dean", "dean")
+    return True
+
+
+def _invalidate_students_list_cache() -> None:
+    try:
+        from backend.core.cache_setup import cache, list_cache_key
+
+        if cache:
+            cache.delete(list_cache_key("students"))
+    except Exception:
+        pass
+
+
+def _apply_student_department_transfer(
+    conn,
+    *,
+    student_id: str,
+    department_id: int,
+    actor: str,
+) -> dict:
+    """تحديد أو نقل قسم الطالب مع مزامنة برنامج القسم الرئيسي."""
+    from backend.core.exceptions import NotFoundError, ValidationError
+
+    cur = conn.cursor()
+    cols = fetch_table_columns(conn, "students")
+    if "department_id" not in cols:
+        raise ValidationError("عمود department_id غير متوفر")
+
+    select_cols = ["department_id"]
+    if "current_program_id" in cols:
+        select_cols.append("current_program_id")
+    if "admission_program_id" in cols:
+        select_cols.append("admission_program_id")
+    if "pathway_stage" in cols:
+        select_cols.append("COALESCE(pathway_stage, '') AS pathway_stage")
+    if "track_code" in cols:
+        select_cols.append("COALESCE(track_code, '') AS track_code")
+
+    old = cur.execute(
+        f"SELECT {', '.join(select_cols)} FROM students WHERE student_id = ? LIMIT 1",
+        (student_id,),
+    ).fetchone()
+    if not old:
+        raise NotFoundError("الطالب غير موجود")
+
+    def _cell(row, idx: int, key: str):
+        if hasattr(row, "keys"):
+            try:
+                return row[key]
+            except (KeyError, IndexError):
+                return row[idx] if idx < len(row) else None
+        return row[idx] if idx < len(row) else None
+
+    old_dept = _cell(old, 0, "department_id")
+    idx = 1
+    old_curr = None
+    if "current_program_id" in cols:
+        old_curr = _cell(old, idx, "current_program_id")
+        idx += 1
+    old_adm = None
+    if "admission_program_id" in cols:
+        old_adm = _cell(old, idx, "admission_program_id")
+        idx += 1
+    old_stage = ""
+    if "pathway_stage" in cols:
+        old_stage = str(_cell(old, idx, "pathway_stage") or "").strip()
+        idx += 1
+    old_track = ""
+    if "track_code" in cols:
+        old_track = str(_cell(old, idx, "track_code") or "").strip()
+
+    dept_row = cur.execute(
+        "SELECT id FROM departments WHERE id = ? AND COALESCE(is_active, 1) = 1 LIMIT 1",
+        (int(department_id),),
+    ).fetchone()
+    if not dept_row:
+        raise ValidationError("القسم المطلوب غير موجود أو غير نشط")
+
+    prog_id = major_program_id_for_department(conn, int(department_id))
+    sets = ["department_id = ?"]
+    params: list = [int(department_id)]
+    if prog_id is not None:
+        if "admission_program_id" in cols:
+            sets.append("admission_program_id = ?")
+            params.append(int(prog_id))
+        if "current_program_id" in cols and (old_stage != "specialized" or not old_track):
+            sets.append("current_program_id = ?")
+            params.append(int(prog_id))
+    if "updated_at" in cols:
+        sets.append("updated_at = CURRENT_TIMESTAMP")
+    params.append(student_id)
+    cur.execute(
+        f"UPDATE students SET {', '.join(sets)} WHERE student_id = ?",
+        tuple(params),
+    )
+
+    dept_name_row = cur.execute(
+        "SELECT COALESCE(name_ar, code, '') FROM departments WHERE id = ? LIMIT 1",
+        (int(department_id),),
+    ).fetchone()
+    dept_label = (dept_name_row[0] if dept_name_row else "") or f"#{department_id}"
+
+    try:
+        log_activity(
+            action="student_department_transfer",
+            actor=actor,
+            details=(
+                f"student_id={student_id}; "
+                f"old_department_id={old_dept}; new_department_id={int(department_id)}; "
+                f"old_program_id={old_curr}; new_program_id={prog_id}; "
+                f"old_admission_program_id={old_adm}"
+            ),
+        )
+    except Exception:
+        pass
+
+    return {
+        "student_id": student_id,
+        "department_id": int(department_id),
+        "department_name": dept_label,
+        "program_id": int(prog_id) if prog_id is not None else None,
+    }
+
+
 def _session_instructor_id(conn):
     """Resolve instructor_id from session, with DB fallback by username."""
     sid = session.get("instructor_id")
@@ -1895,6 +2030,18 @@ def list_students():
                 return False
 
             students = [s for s in students if _admin_scope_student_row(s)]
+        dept_labels: dict[int, str] = {}
+        with get_connection() as conn:
+            cur = conn.cursor()
+            for r in cur.execute(
+                "SELECT id, COALESCE(name_ar, code, '') AS dept_label FROM departments"
+            ).fetchall() or []:
+                try:
+                    did = int(r["id"] if hasattr(r, "keys") else r[0])
+                    label = str(r["dept_label"] if hasattr(r, "keys") else r[1] or "")
+                    dept_labels[did] = label
+                except (TypeError, ValueError, KeyError, IndexError):
+                    continue
         # تحويل إلى كائنات Student للتوافق مع الكود القديم مع إضافة حالة القيد كحقول إضافية
         students_objects = []
         for s in students:
@@ -1910,6 +2057,15 @@ def list_students():
             setattr(obj, "join_year", s.get("join_year", ""))
             setattr(obj, "pathway_stage", s.get("pathway_stage", "dept_admitted"))
             setattr(obj, "track_code", s.get("track_code", ""))
+            raw_dep = s.get("department_id")
+            dep_id = None
+            if raw_dep not in (None, ""):
+                try:
+                    dep_id = int(raw_dep)
+                except (TypeError, ValueError):
+                    dep_id = None
+            setattr(obj, "department_id", dep_id)
+            setattr(obj, "department_name", dept_labels.get(dep_id, "") if dep_id is not None else "")
             students_objects.append(obj)
         resp = jsonify([s.__dict__ for s in students_objects])
         try:
@@ -2074,6 +2230,75 @@ def update_student_status():
     except Exception as e:
         from backend.core.exceptions import DatabaseError
         raise DatabaseError(f"فشل تحديث حالة قيد الطالب: {str(e)}")
+
+
+@students_bp.route("/department/options", methods=["GET"])
+@login_required
+def student_department_options():
+    """قائمة الأقسام النشطة لنقل/تحديد قسم الطالب."""
+    if not _can_transfer_student_department():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+    with get_connection() as conn:
+        cur = conn.cursor()
+        rows = cur.execute(
+            """
+            SELECT id, COALESCE(code, '') AS code, COALESCE(name_ar, name_en, code, '') AS label
+            FROM departments
+            WHERE COALESCE(is_active, 1) = 1
+            ORDER BY COALESCE(name_ar, code, '')
+            """
+        ).fetchall()
+    items = []
+    for r in rows or []:
+        items.append(
+            {
+                "id": int(r[0] if not hasattr(r, "keys") else r["id"]),
+                "code": (r[1] if not hasattr(r, "keys") else r["code"]) or "",
+                "label": (r[2] if not hasattr(r, "keys") else r["label"]) or "",
+            }
+        )
+    return jsonify({"status": "ok", "items": items}), 200
+
+
+@students_bp.route("/department/transfer", methods=["POST"])
+@login_required
+def transfer_student_department():
+    """تحديد أو نقل قسم الطالب — للمسؤول الرئيسي والعميد والوكيل فقط."""
+    if not _can_transfer_student_department():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+    data = request.get_json(force=True) or {}
+    sid = normalize_sid(data.get("student_id"))
+    dept_raw = data.get("department_id")
+    if not sid:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
+    try:
+        dept_id = int(dept_raw)
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "department_id مطلوب"}), 400
+
+    actor = (session.get("user") or session.get("username") or "").strip()
+    try:
+        with get_connection() as conn:
+            allowed = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+            if allowed is not None and sid not in allowed:
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+            result = _apply_student_department_transfer(
+                conn,
+                student_id=sid,
+                department_id=dept_id,
+                actor=actor,
+            )
+            conn.commit()
+        _invalidate_students_list_cache()
+        return jsonify({"status": "ok", **result}), 200
+    except Exception as exc:
+        from backend.core.exceptions import AppException, ValidationError, NotFoundError
+
+        if isinstance(exc, (ValidationError, NotFoundError, AppException)):
+            raise
+        from backend.core.exceptions import DatabaseError
+
+        raise DatabaseError(f"فشل نقل قسم الطالب: {str(exc)}")
 
 
 @students_bp.route("/pathway_stage/update", methods=["POST"])

@@ -669,6 +669,7 @@ def compute_capabilities(
         or (role == "student")
         or sup_portal,
         "can_switch_department_scope": role in ("admin", "admin_main", "college_dean", "academic_vice_dean", "system_admin"),
+        "can_transfer_student_department": role in ("admin", "admin_main", "college_dean", "academic_vice_dean", "system_admin"),
     }
     if sup_portal:
         from backend.core.permissions import apply_supervisor_portal_caps

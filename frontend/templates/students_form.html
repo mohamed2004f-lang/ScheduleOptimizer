@@ -304,10 +304,45 @@
       </div>
     </div>
 
+    <!-- تحديد / نقل قسم الطالب -->
+    <div class="modal fade" id="deptStudentModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h6 class="modal-title">تحديد / نقل قسم الطالب</h6>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-2">
+              <label class="form-label">الطالب</label>
+              <input id="sd_student_id" class="form-control mb-1" disabled>
+              <input id="sd_student_name" class="form-control" disabled>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">القسم الحالي</label>
+              <input id="sd_current_dept" class="form-control" disabled>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">القسم الجديد</label>
+              <select id="sd_department_id" class="form-select"></select>
+              <div class="form-text small">يُحدَّث قسم الطالب وبرنامج القسم الرئيسي (PROG_MAJOR) عند الحفظ.</div>
+            </div>
+            <div id="sd_msg" class="mt-2"></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">إلغاء</button>
+            <button class="btn btn-primary btn-sm" id="sdSaveBtn">حفظ القسم</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </main>
 
   <script>
   let STUDENTS_VIEW_ONLY = false;
+  let CAN_TRANSFER_DEPARTMENT = false;
+  let DEPARTMENT_OPTIONS = [];
   let PATHWAY_STAGE_META = {};
   let STUDENTS_ALL = [];
   let STUDENTS_PAGE = 1;
@@ -420,6 +455,18 @@
         tgBadge.textContent = tc;
         span.appendChild(tgBadge);
       }
+      const depName = (s.department_name || '').trim();
+      if (depName) {
+        const depBadge = document.createElement('span');
+        depBadge.className = 'badge rounded-pill ms-1 bg-dark-subtle text-dark border';
+        depBadge.textContent = depName;
+        span.appendChild(depBadge);
+      } else if (CAN_TRANSFER_DEPARTMENT) {
+        const depBadge = document.createElement('span');
+        depBadge.className = 'badge rounded-pill ms-1 bg-danger-subtle text-danger border';
+        depBadge.textContent = 'بلا قسم';
+        span.appendChild(depBadge);
+      }
       const btnGroup = document.createElement('div');
       const progressBtn = document.createElement('button');
       progressBtn.className = 'btn btn-sm btn-outline-success me-1';
@@ -453,6 +500,14 @@
         btnGroup.appendChild(delBtn);
         btnGroup.appendChild(statusBtn);
       }
+      if (CAN_TRANSFER_DEPARTMENT) {
+        const deptBtn = document.createElement('button');
+        deptBtn.className = 'btn btn-sm btn-outline-dark me-1';
+        deptBtn.type = 'button';
+        deptBtn.textContent = 'القسم';
+        deptBtn.addEventListener('click', () => openDepartmentStudent(s));
+        btnGroup.appendChild(deptBtn);
+      }
       li.appendChild(span);
       li.appendChild(btnGroup);
       ul.appendChild(li);
@@ -468,6 +523,7 @@
       const role = String(j.role || '').trim().toLowerCase();
       const caps = j.capabilities || {};
       const isSupervisorOnly = role === 'supervisor' || !!caps.is_supervisor_effective;
+      CAN_TRANSFER_DEPARTMENT = !!caps.can_transfer_student_department;
       STUDENTS_VIEW_ONLY = isSupervisorOnly || !!caps.students_data_view_only || caps.can_manage_students === false;
       if (!STUDENTS_VIEW_ONLY) return;
       const createCard = document.getElementById('studentCreateCard');
@@ -475,7 +531,11 @@
       const importForm = document.getElementById('students-import-form');
       if (importForm) importForm.style.display = 'none';
       const subtitle = document.querySelector('.page-subtitle');
-      if (subtitle) subtitle.textContent = 'عرض قائمة الطلبة فقط (بدون تعديل أو استيراد).';
+      if (subtitle) {
+        subtitle.textContent = CAN_TRANSFER_DEPARTMENT
+          ? 'عرض قائمة الطلبة مع إمكانية تحديد/نقل قسم الطالب.'
+          : 'عرض قائمة الطلبة فقط (بدون تعديل أو استيراد).';
+      }
     } catch (_e) {
       // ignore
     }
@@ -525,7 +585,6 @@
     }
   }
 
-  /* فتح نافذة تعديل طالب */
   function openEditStudent(student){
     try{
       const sidInput = document.getElementById('es_student_id');
@@ -549,6 +608,36 @@
     } catch(e){
       console.error('openEditStudent error', e);
       alert('تعذّر فتح نافذة تعديل الطالب.');
+    }
+  }
+
+  async function loadDepartmentOptions() {
+    if (DEPARTMENT_OPTIONS.length) return DEPARTMENT_OPTIONS;
+    const r = await fetch('/students/department/options', { credentials: 'include' });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.status !== 'ok') throw new Error((j && j.message) || 'تعذّر تحميل الأقسام');
+    DEPARTMENT_OPTIONS = j.items || [];
+    return DEPARTMENT_OPTIONS;
+  }
+
+  async function openDepartmentStudent(student) {
+    try {
+      const items = await loadDepartmentOptions();
+      const sel = document.getElementById('sd_department_id');
+      const msgEl = document.getElementById('sd_msg');
+      if (msgEl) msgEl.innerHTML = '';
+      document.getElementById('sd_student_id').value = student.student_id || '';
+      document.getElementById('sd_student_name').value = student.student_name || '';
+      const curLabel = (student.department_name || '').trim() || '— غير محدد —';
+      document.getElementById('sd_current_dept').value = curLabel;
+      if (sel) {
+        sel.innerHTML = items.map(d => `<option value="${d.id}">${d.label || d.code || d.id}</option>`).join('');
+        if (student.department_id) sel.value = String(student.department_id);
+      }
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('deptStudentModal')).show();
+    } catch (e) {
+      console.error('openDepartmentStudent', e);
+      alert('تعذّر فتح نافذة القسم.');
     }
   }
 
@@ -934,6 +1023,41 @@
         } catch(err){
           console.error('update_status error', err);
           if(msgEl) msgEl.innerHTML = '<div class="alert alert-danger p-1">خطأ في الاتصال بالخادم.</div>';
+        }
+      });
+    }
+
+    const sdSaveBtn = document.getElementById('sdSaveBtn');
+    if (sdSaveBtn) {
+      sdSaveBtn.addEventListener('click', async () => {
+        const sid = (document.getElementById('sd_student_id') || {}).value || '';
+        const depSel = document.getElementById('sd_department_id');
+        const msgEl = document.getElementById('sd_msg');
+        const depId = depSel ? depSel.value : '';
+        if (!sid || !depId) {
+          if (msgEl) msgEl.innerHTML = '<div class="alert alert-warning p-1">اختر القسم الجديد</div>';
+          return;
+        }
+        try {
+          const resp = await fetch('/students/department/transfer', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ student_id: sid, department_id: parseInt(depId, 10) }),
+          });
+          const j = await resp.json().catch(() => null);
+          if (resp.ok) {
+            if (msgEl) msgEl.innerHTML = '<div class="alert alert-success p-1">تم تحديث قسم الطالب</div>';
+            setTimeout(async () => {
+              bootstrap.Modal.getInstance(document.getElementById('deptStudentModal'))?.hide();
+              await loadStudents();
+            }, 700);
+          } else if (msgEl) {
+            msgEl.innerHTML = `<div class="alert alert-danger p-1">${(j && j.message) || 'فشل حفظ القسم'}</div>`;
+          }
+        } catch (err) {
+          console.error('department transfer', err);
+          if (msgEl) msgEl.innerHTML = '<div class="alert alert-danger p-1">خطأ في الاتصال بالخادم.</div>';
         }
       });
     }

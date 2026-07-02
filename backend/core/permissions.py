@@ -19,6 +19,7 @@ PERMISSION_CATALOG: list[dict[str, Any]] = [
     {"key": "can_assign_system_admin", "group_key": "users", "group_label_ar": "المستخدمون", "label_ar": "تعيين مسؤول نظام"},
     {"key": "nav_student_affairs_menu", "group_key": "students", "group_label_ar": "شؤون الطلبة", "label_ar": "قائمة شؤون الطلبة"},
     {"key": "can_manage_students", "group_key": "students", "group_label_ar": "شؤون الطلبة", "label_ar": "تعديل بيانات الطلبة"},
+    {"key": "can_transfer_student_department", "group_key": "students", "group_label_ar": "شؤون الطلبة", "label_ar": "نقل/تحديد قسم الطالب"},
     {"key": "nav_planning_menu", "group_key": "scheduling", "group_label_ar": "الجدولة", "label_ar": "التخطيط والجدولة"},
     {"key": "can_manage_schedule_edit", "group_key": "scheduling", "group_label_ar": "الجدولة", "label_ar": "تعديل الجدول"},
     {"key": "nav_transcript_nav", "group_key": "records", "group_label_ar": "السجل الأكademي", "label_ar": "كشف الدرجات"},
@@ -64,6 +65,7 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
             "nav_surveys_results", "nav_evaluation_survey_admin",
             "can_edit_college_identity", "can_edit_accreditation_catalog",
             "can_switch_department_scope",
+            "can_transfer_student_department",
             "nav_staff_operations_menu", "nav_college_catalog",
         ],
     },
@@ -83,6 +85,7 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
             "nav_surveys_results", "nav_evaluation_survey_admin",
             "can_edit_accreditation_catalog",
             "can_switch_department_scope",
+            "can_transfer_student_department",
             "nav_staff_operations_menu",
         ],
     },
@@ -466,6 +469,7 @@ def compute_college_dean_capabilities(
     out["can_manage_transcript_admin"] = False
     out["can_manage_courses_edit"] = False
     out["students_data_view_only"] = True
+    out["can_transfer_student_department"] = True
     out["nav_student_affairs_menu"] = True
     out["nav_course_registration_report"] = True
     out["nav_schedule_versions"] = True
@@ -531,6 +535,7 @@ def compute_academic_vice_dean_capabilities(
     out["can_manage_transcript_admin"] = False
     out["can_manage_courses_edit"] = False
     out["students_data_view_only"] = True
+    out["can_transfer_student_department"] = True
     out["nav_student_affairs_menu"] = True
     out["nav_course_registration_report"] = True
     out["nav_schedule_versions"] = True
