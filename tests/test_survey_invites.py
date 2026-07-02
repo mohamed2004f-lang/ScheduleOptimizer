@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from backend.core.survey_platform import EXTERNAL_SURVEY_CODES
 from backend.services.multi_surveys import (
     aggregate_template,
@@ -15,6 +17,7 @@ from backend.services.survey_invites import (
     ensure_survey_invite_schema,
     invite_fill_context,
     list_external_cycles,
+    list_public_departments,
     submit_invite_survey,
     validate_invite,
 )
@@ -117,6 +120,11 @@ def test_invite_create_submit_aggregate(db_conn):
 def test_alumni_invite_submit(db_conn):
     ensure_survey_invite_schema(db_conn)
     ensure_survey_templates_seeded(db_conn)
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES ('MECH', 'الهندسة الميكانيكية', 'ME', 1)"
+    )
+    dept_id = int(cur.lastrowid)
     invite = create_survey_invite(
         db_conn,
         template_code="alumni",
@@ -132,8 +140,7 @@ def test_alumni_invite_submit(db_conn):
         token=invite["token"],
         profile={
             "graduation_year": 2020,
-            "department_id": "other",
-            "department_label": "قسم قديم",
+            "department_id": dept_id,
             "employment_status": "in_specialty",
             "current_role_text": "مهندس",
             "engineering_qualification": "yes",
@@ -152,3 +159,48 @@ def test_alumni_invite_submit(db_conn):
     profile = json.loads(row[0])
     assert profile["graduation_year"] == 2020
     assert profile["employment_status"] == "in_specialty"
+    assert profile["department_id"] == dept_id
+    assert profile["department_label"] == "الهندسة الميكانيكية"
+
+
+def test_alumni_public_departments_exclude_general_and_other(db_conn):
+    ensure_survey_invite_schema(db_conn)
+    ensure_survey_templates_seeded(db_conn)
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT OR IGNORE INTO departments (code, name_ar, name_en, is_active) "
+        "VALUES ('GENERAL', 'القسم العام', 'General', 1)"
+    )
+    cur.execute(
+        "INSERT OR IGNORE INTO departments (code, name_ar, name_en, is_active) "
+        "VALUES ('CIVIL', 'الهندسة المدنية', 'CE', 1)"
+    )
+    civil_id = int(
+        cur.execute("SELECT id FROM departments WHERE code = 'CIVIL'").fetchone()[0]
+    )
+    items = list_public_departments(db_conn)
+    codes = {d["code"] for d in items}
+    ids = {d["id"] for d in items}
+    assert "GENERAL" not in codes
+    assert civil_id in ids
+
+    invite = create_survey_invite(
+        db_conn,
+        template_code="alumni",
+        cycle_label="test-other",
+        invite_kind="campaign",
+        created_by="test",
+    )
+    with pytest.raises(ValueError, match="القسم"):
+        submit_invite_survey(
+            db_conn,
+            token=invite["token"],
+            profile={
+                "graduation_year": 2020,
+                "department_id": "other",
+                "employment_status": "not_working",
+                "recommend_enrollment": "no",
+                "program_development_choice": "merge_dept",
+            },
+            answers_payload={"answers": {}},
+        )

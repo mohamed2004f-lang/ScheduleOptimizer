@@ -87,10 +87,6 @@
               <input type="hidden" name="track_label" id="track_label" value="">
               <div class="form-text">{{ alumni_track_field_hint }}</div>
             </div>
-            <div class="col-md-6" id="deptOtherWrap" style="display:none;">
-              <label class="form-label">اسم التخصص (أخرى / غير متذكر)</label>
-              <input type="text" class="form-control" name="department_label" id="department_label" maxlength="120" placeholder="اكتب اسم قسمك أو تخصصك كما تتذكره">
-            </div>
             <div class="col-12">
               <div id="alumniProgramSummary" class="alert alert-success py-2 small mb-0 d-none" role="status">
                 <strong>البرنامج الذي ستقيّمه في هذا الاستبيان:</strong>
@@ -320,19 +316,16 @@
       const textEl = document.getElementById('alumniProgramSummaryText');
       const deptSel = document.getElementById('department_id');
       const trackSel = document.getElementById('track_code');
-      const deptOther = document.getElementById('department_label');
       if (!box || !textEl || !deptSel) return;
 
       const deptVal = deptSel.value || '';
       let deptLabel = '';
-      if (deptVal === 'other') {
-        deptLabel = (deptOther?.value || '').trim() || 'تخصص غير محدد';
-      } else if (deptVal) {
+      if (deptVal) {
         deptLabel = (deptSel.selectedOptions[0]?.textContent || '').trim();
       }
 
       let trackLabel = '';
-      if (trackSel && trackSel.value && trackSel.value !== 'unknown') {
+      if (trackSel && trackSel.value) {
         const t = (trackSel.selectedOptions[0]?.textContent || '').trim();
         if (t && !t.startsWith('—')) trackLabel = t;
       }
@@ -383,7 +376,6 @@
       (j.items || []).forEach(d => {
         html += `<option value="${d.id}">${d.name_ar}</option>`;
       });
-      html += '<option value="other">قسم آخر / غير متذكر</option>';
       sel.innerHTML = html;
     }
 
@@ -401,8 +393,8 @@
     async function loadTracks(deptId) {
       const sel = document.getElementById('track_code');
       if (!sel) return;
-      if (!deptId || deptId === 'other') {
-        sel.innerHTML = '<option value="">— لا ينطبق —</option><option value="unknown">غير متذكر</option>';
+      if (!deptId) {
+        sel.innerHTML = '<option value="">— لا ينطبق —</option>';
         sel.disabled = false;
         return;
       }
@@ -414,16 +406,12 @@
       (j.items || []).forEach(t => {
         html += `<option value="${t.track_code}" data-label="${t.track_label}">${t.track_label}</option>`;
       });
-      html += '<option value="unknown" data-label="غير متذكر">غير متذكر</option>';
       sel.innerHTML = html;
       sel.disabled = false;
     }
 
     document.getElementById('department_id')?.addEventListener('change', (e) => {
-      const v = e.target.value;
-      const wrap = document.getElementById('deptOtherWrap');
-      if (wrap) wrap.style.display = v === 'other' ? 'block' : 'none';
-      loadTracks(v).then(updateAlumniProgramSummary);
+      loadTracks(e.target.value).then(updateAlumniProgramSummary);
       updateAlumniProgramSummary();
     });
 
@@ -433,8 +421,6 @@
       if (lbl) lbl.value = opt ? (opt.dataset.label || opt.textContent || '') : '';
       updateAlumniProgramSummary();
     });
-
-    document.getElementById('department_label')?.addEventListener('input', updateAlumniProgramSummary);
 
     document.getElementById('employment_status')?.addEventListener('change', updateAlumniConditionalFields);
     document.getElementById('job_rejection')?.addEventListener('change', updateAlumniConditionalFields);

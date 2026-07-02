@@ -282,6 +282,26 @@ def _phone_hash(phone: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:32]
 
 
+def _resolve_public_department(conn, department_id: int) -> str:
+    """اسم قسم مسموح به في استبيان الخريج (يستبعد القسم العام)."""
+    if not table_exists(conn, "departments"):
+        raise ValueError("القسم غير صالح")
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT COALESCE(name_ar, name_en, code) AS name_ar
+        FROM departments
+        WHERE id = ? AND COALESCE(is_active, 1) = 1
+          AND UPPER(COALESCE(code, '')) != 'GENERAL'
+        """,
+        (int(department_id),),
+    ).fetchone()
+    if not row:
+        raise ValueError("القسم غير صالح")
+    d = _row_dict(row)
+    return (d.get("name_ar") or "").strip() or "قسم"
+
+
 def _validate_alumni_profile(profile: dict) -> dict:
     year = profile.get("graduation_year")
     try:
@@ -292,15 +312,21 @@ def _validate_alumni_profile(profile: dict) -> dict:
     if grad_year < 1980 or grad_year > current_year + 1:
         raise ValueError("سنة التخرج غير صالحة")
     dept_id = profile.get("department_id")
-    dept_label = (profile.get("department_label") or "").strip()
     if dept_id in (None, "", "other"):
-        if not dept_label:
-            raise ValueError("القسم مطلوب")
-    else:
-        try:
-            dept_id = int(dept_id)
-        except (TypeError, ValueError):
-            raise ValueError("القسم غير صالح")
+        raise ValueError("القسم مطلوب")
+    try:
+        dept_id = int(dept_id)
+    except (TypeError, ValueError):
+        raise ValueError("القسم غير صالح")
+    if dept_id <= 0:
+        raise ValueError("القسم غير صالح")
+
+    track_code = (profile.get("track_code") or "").strip()
+    if track_code == "unknown":
+        track_code = ""
+    track_label = (profile.get("track_label") or "").strip()
+    if not track_code:
+        track_label = ""
 
     employment_status = (profile.get("employment_status") or "").strip()
     valid_employment = {k for k, _ in ALUMNI_EMPLOYMENT_STATUSES}
@@ -340,10 +366,10 @@ def _validate_alumni_profile(profile: dict) -> dict:
     return {
         "full_name": (profile.get("full_name") or "").strip(),
         "graduation_year": grad_year,
-        "department_id": dept_id if isinstance(dept_id, int) else None,
-        "department_label": dept_label,
-        "track_code": (profile.get("track_code") or "").strip(),
-        "track_label": (profile.get("track_label") or "").strip(),
+        "department_id": dept_id,
+        "department_label": "",
+        "track_code": track_code,
+        "track_label": track_label,
         "employment_status": employment_status,
         "employment_status_label": employment_labels.get(employment_status, employment_status),
         "current_role_text": (profile.get("current_role_text") or "").strip(),
@@ -434,6 +460,10 @@ def submit_invite_survey(
     invite = validate_invite(conn, token)
     template_code = (invite.get("template_code") or "").strip()
     cleaned_profile = validate_respondent_profile(template_code, profile)
+    if template_code == "alumni":
+        dept_id = cleaned_profile.get("department_id")
+        if isinstance(dept_id, int):
+            cleaned_profile["department_label"] = _resolve_public_department(conn, dept_id)
     _check_duplicate_submission(conn, invite, cleaned_profile)
 
     template = get_template_by_code(conn, template_code)
@@ -614,6 +644,7 @@ def list_public_departments(conn) -> list[dict]:
         SELECT id, code, COALESCE(name_ar, name_en, code) AS name_ar
         FROM departments
         WHERE COALESCE(is_active, 1) = 1
+          AND UPPER(COALESCE(code, '')) != 'GENERAL'
         ORDER BY name_ar, code
         """
     ).fetchall()
