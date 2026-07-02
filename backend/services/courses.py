@@ -6,15 +6,17 @@ from flask import Blueprint, request, jsonify, Response, current_app, session, s
 from backend.core.auth import (
     login_required,
     role_required,
-    get_admin_department_scope_id,
     _normalize_role,
+    students_registry_view_only,
 )
+from backend.core.department_scope_policy import resolve_effective_department_scope_id
 from collections import defaultdict
 from .utilities import get_connection, df_from_query, excel_response_from_df, pdf_response_from_html
 from backend.database.database import fetch_table_columns, is_postgresql
 from backend.repositories import courses_repo
 import io
 import base64
+import pandas as pd
 from datetime import datetime
 
 courses_bp = Blueprint("courses", __name__)
@@ -22,49 +24,14 @@ courses_bp = Blueprint("courses", __name__)
 
 def _is_instructor_or_supervisor_view_only() -> bool:
     role = (session.get("user_role") or "").strip()
-    return role in ("supervisor", "instructor")
-
-
-def _resolve_actor_department_id(conn) -> int | None:
-    cur = conn.cursor()
-    uname = (session.get("user") or session.get("username") or "").strip()
-    if uname:
-        try:
-            row = cur.execute(
-                "SELECT department_id FROM users WHERE lower(username)=lower(?) LIMIT 1",
-                (uname,),
-            ).fetchone()
-            if row and row[0] not in (None, ""):
-                return int(row[0])
-        except Exception:
-            pass
-    try:
-        iid = int(session.get("instructor_id") or 0)
-    except (TypeError, ValueError):
-        iid = 0
-    if iid:
-        try:
-            row = cur.execute(
-                "SELECT department_id FROM instructors WHERE id = ? LIMIT 1",
-                (iid,),
-            ).fetchone()
-            if row and row[0] not in (None, ""):
-                return int(row[0])
-        except Exception:
-            pass
-    return None
+    if role in ("supervisor", "instructor"):
+        return True
+    return students_registry_view_only()
 
 
 def _effective_department_scope_id(conn) -> int | None:
-    role_n = _normalize_role((session.get("user_role") or "").strip())
-    scope_dep = get_admin_department_scope_id()
-    if role_n == "head_of_department":
-        mode = (session.get("active_mode") or "head").strip().lower()
-        if mode in ("", "head", "hod", "department_head"):
-            return _resolve_actor_department_id(conn)
-    if role_n in ("admin", "admin_main"):
-        return scope_dep
-    return None
+    uname = (session.get("user") or session.get("username") or "").strip()
+    return resolve_effective_department_scope_id(conn, uname)
 
 
 def _normalize_assessment_type(raw: str) -> str:
@@ -109,7 +76,6 @@ def list_courses():
     role_n = _normalize_role((session.get("user_role") or "").strip())
     with get_connection() as conn:
         scope_dep = _effective_department_scope_id(conn)
-        admin_scoped = scope_dep is not None and role_n in ("admin", "admin_main", "head_of_department")
         cur = conn.cursor()
         try:
             try:
@@ -138,7 +104,7 @@ def list_courses():
                 sel += ", final_exam_weight"
             sel += " FROM courses WHERE COALESCE(course_name,'') <> ''"
             q_params: tuple = ()
-            if admin_scoped and has_owning_dept:
+            if scope_dep is not None and has_owning_dept:
                 sel += " AND owning_department_id = ?"
                 q_params = (scope_dep,)
             sel += " ORDER BY course_name"
@@ -1297,6 +1263,149 @@ def prereqs_flowchart_pptx():
         as_attachment=True,
         download_name="prereqs_flowchart.pptx",
     )
+
+# -----------------------
+# Import / Export endpoints
+# -----------------------
+
+def _bind_imported_courses_department(
+    conn,
+    course_names: list[str],
+    dept_id: int,
+) -> int:
+    """تعيين قسم المالك للمقررات المستوردة دون الكتابة فوق تعيين سابق."""
+    if not course_names:
+        return 0
+    cols = fetch_table_columns(conn, "courses")
+    if "owning_department_id" not in cols:
+        return 0
+    placeholders = ",".join("?" for _ in course_names)
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        UPDATE courses
+        SET owning_department_id = COALESCE(owning_department_id, ?)
+        WHERE course_name IN ({placeholders})
+        """,
+        (int(dept_id), *course_names),
+    )
+    return int(cur.rowcount or 0)
+
+
+@courses_bp.route("/import/excel", methods=["POST"])
+@login_required
+def courses_import_excel():
+    if _is_instructor_or_supervisor_view_only():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"status": "error", "message": "file required"}), 400
+    try:
+        df = pd.read_excel(f)
+        df.columns = [str(c).lower().strip() for c in df.columns]
+        if "course_name" not in df.columns:
+            return jsonify({"status": "error", "message": "Columns required: course_name"}), 400
+        rows = df.to_dict(orient="records")
+        imported_names: list[str] = []
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cols = fetch_table_columns(conn, "courses")
+            has_cat = "category" in cols
+            has_owning = "owning_department_id" in cols
+            dept_id = _effective_department_scope_id(conn)
+            for r in rows:
+                cname = (r.get("course_name") or "").strip()
+                if not cname:
+                    continue
+                code = (r.get("course_code") or "").strip()
+                try:
+                    units = int(r.get("units", 0) or 0)
+                except (TypeError, ValueError):
+                    units = 0
+                category = (r.get("category") or "required").strip() or "required"
+                if category not in ("required", "elective_major", "elective_free"):
+                    category = "required"
+                imported_names.append(cname)
+                if has_cat and has_owning and dept_id is not None:
+                    cur.execute(
+                        """
+                        INSERT INTO courses (course_name, course_code, units, category, owning_department_id)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(course_name) DO UPDATE SET
+                          course_code = excluded.course_code,
+                          units = excluded.units,
+                          category = excluded.category,
+                          owning_department_id = COALESCE(courses.owning_department_id, excluded.owning_department_id)
+                        """,
+                        (cname, code, units, category, int(dept_id)),
+                    )
+                elif has_cat and has_owning:
+                    cur.execute(
+                        """
+                        INSERT INTO courses (course_name, course_code, units, category, owning_department_id)
+                        VALUES (?, ?, ?, ?, NULL)
+                        ON CONFLICT(course_name) DO UPDATE SET
+                          course_code = excluded.course_code,
+                          units = excluded.units,
+                          category = excluded.category
+                        """,
+                        (cname, code, units, category),
+                    )
+                elif has_cat:
+                    cur.execute(
+                        """
+                        INSERT INTO courses (course_name, course_code, units, category)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(course_name) DO UPDATE SET
+                          course_code = excluded.course_code,
+                          units = excluded.units,
+                          category = excluded.category
+                        """,
+                        (cname, code, units, category),
+                    )
+                elif has_owning and dept_id is not None:
+                    cur.execute(
+                        """
+                        INSERT INTO courses (course_name, course_code, units, owning_department_id)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(course_name) DO UPDATE SET
+                          course_code = excluded.course_code,
+                          units = excluded.units,
+                          owning_department_id = COALESCE(courses.owning_department_id, excluded.owning_department_id)
+                        """,
+                        (cname, code, units, int(dept_id)),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO courses (course_name, course_code, units)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(course_name) DO UPDATE SET
+                          course_code = excluded.course_code,
+                          units = excluded.units
+                        """,
+                        (cname, code, units),
+                    )
+            department_bound = 0
+            if dept_id is not None and imported_names and has_owning:
+                department_bound = _bind_imported_courses_department(
+                    conn, imported_names, int(dept_id)
+                )
+            conn.commit()
+            try:
+                from backend.core.cache_setup import invalidate_list_prefix
+                invalidate_list_prefix("courses")
+            except Exception:
+                pass
+        payload: dict = {"status": "ok", "imported": len(imported_names)}
+        if dept_id is not None:
+            payload["department_id"] = int(dept_id)
+            payload["department_bound"] = department_bound
+        return jsonify(payload), 200
+    except Exception as e:
+        current_app.logger.exception("courses_import_excel failed")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 
 # -----------------------
 # Export endpoints

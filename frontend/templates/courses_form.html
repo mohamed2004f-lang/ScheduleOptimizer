@@ -216,7 +216,10 @@ async function importCourses(){
     const res = await fetch('/courses/import/excel', { method:'POST', body: data });
     const j = await res.json().catch(()=>({}));
     if(res.ok){
-      window.showToast?.(`تم استيراد ${j.imported ?? 'عدد'} مقرر`, 'success');
+      const boundMsg = (j.department_bound != null && j.department_bound > 0)
+        ? ` وربط ${j.department_bound} بقسمك`
+        : '';
+      window.showToast?.(`تم استيراد ${j.imported ?? 'عدد'} مقرر${boundMsg}`, 'success');
       await loadCourses();
       form.reset();
     } else {

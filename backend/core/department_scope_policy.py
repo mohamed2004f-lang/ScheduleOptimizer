@@ -8,6 +8,47 @@ from backend.core.auth import _normalize_role, get_admin_department_scope_id
 
 UsersListScopeMode = Literal["none", "department", "empty"]
 
+_SCOPE_SESSION_ROLES = frozenset(
+    {
+        "admin",
+        "admin_main",
+        "system_admin",
+        "college_dean",
+        "academic_vice_dean",
+        "staff",
+    }
+)
+
+
+def session_role_profile_scope_mode() -> str:
+    """نطاق ملف الدور في الجلسة: college | department | none."""
+    try:
+        from flask import session
+    except Exception:
+        return "none"
+    code = (session.get("role_profile_code") or "").strip()
+    if code:
+        try:
+            from backend.core.permissions import get_profile_by_code
+
+            prof = get_profile_by_code(code)
+            return str((prof or {}).get("scope_mode") or "none").strip().lower()
+        except Exception:
+            return "none"
+    rp_id = session.get("role_profile_id")
+    if rp_id not in (None, ""):
+        try:
+            from backend.database.database import get_connection
+            from backend.core.permissions import get_profile_by_id
+
+            with get_connection() as conn:
+                prof = get_profile_by_id(conn, int(rp_id))
+            if prof:
+                return str(prof.get("scope_mode") or "none").strip().lower()
+        except Exception:
+            pass
+    return "none"
+
 
 def resolve_users_list_scope(conn, actor_username: str | None) -> tuple[UsersListScopeMode, int | None]:
     try:
@@ -19,7 +60,12 @@ def resolve_users_list_scope(conn, actor_username: str | None) -> tuple[UsersLis
         return ("none", None)
 
     role = _normalize_role((session.get("user_role") or "").strip())
-    if role in ("admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean"):
+    if role in _SCOPE_SESSION_ROLES:
+        if role == "staff" and session_role_profile_scope_mode() == "department":
+            hid = head_home_department_id(conn, actor_username)
+            if hid is None:
+                return ("empty", None)
+            return ("department", int(hid))
         sid = get_admin_department_scope_id()
         if sid is None:
             return ("none", None)
@@ -32,6 +78,81 @@ def resolve_users_list_scope(conn, actor_username: str | None) -> tuple[UsersLis
         return ("department", int(hid))
 
     return ("none", None)
+
+
+def resolve_effective_department_scope_id(
+    conn,
+    actor_username: str | None = None,
+) -> int | None:
+    """معرّف القسم الفعّال للفلترة والربط عند الاستيراد."""
+    mode, dept_id = resolve_users_list_scope(conn, actor_username)
+    if mode == "department" and dept_id is not None:
+        return int(dept_id)
+    return None
+
+
+def student_ids_for_department(conn, dept_id: int) -> set[str]:
+    """أرقام الطلاب المطابقين لسياسة نطاق القسم."""
+    cur = conn.cursor()
+    p_rows = cur.execute(
+        "SELECT id FROM programs WHERE department_id = ?",
+        (int(dept_id),),
+    ).fetchall()
+    program_ids: set[int] = set()
+    for pr in p_rows or []:
+        try:
+            v = pr[0] if not hasattr(pr, "keys") else pr["id"]
+            if v not in (None, ""):
+                program_ids.add(int(v))
+        except (TypeError, ValueError, KeyError, IndexError):
+            continue
+    if program_ids:
+        ph = ",".join("?" for _ in program_ids)
+        rows = cur.execute(
+            f"""
+            SELECT student_id
+            FROM students
+            WHERE department_id = ?
+               OR current_program_id IN ({ph})
+               OR admission_program_id IN ({ph})
+            """,
+            (int(dept_id), *tuple(program_ids), *tuple(program_ids)),
+        ).fetchall()
+    else:
+        rows = cur.execute(
+            "SELECT student_id FROM students WHERE department_id = ?",
+            (int(dept_id),),
+        ).fetchall()
+    out: set[str] = set()
+    for r in rows or []:
+        if not r:
+            continue
+        sid = r[0] if not hasattr(r, "keys") else r["student_id"]
+        if sid:
+            out.add(str(sid).strip())
+    return out
+
+
+def major_program_id_for_department(conn, dept_id: int) -> int | None:
+    """برنامج PROG_MAJOR لقسم محدد."""
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT p.id FROM programs p
+        WHERE p.department_id = ? AND UPPER(TRIM(COALESCE(p.code, ''))) = 'PROG_MAJOR'
+        LIMIT 1
+        """,
+        (int(dept_id),),
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        raw = row["id"] if hasattr(row, "keys") else row[0]
+        if raw in (None, ""):
+            return None
+        return int(raw)
+    except (TypeError, ValueError, KeyError, IndexError):
+        return None
 
 
 def head_home_department_id(conn, username: str | None) -> int | None:

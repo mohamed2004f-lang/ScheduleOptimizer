@@ -94,6 +94,7 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
         "permissions": [
             "nav_dashboard", "nav_student_affairs_menu", "can_manage_students",
             "nav_transcript_nav", "can_manage_transcript_admin", "nav_planning_menu",
+            "can_switch_department_scope",
         ],
     },
     {

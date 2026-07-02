@@ -78,7 +78,9 @@ SESSION_ACTIVE_MODE = "active_mode"
 # سياق عمل المسؤول الرئيسي: تصفية بيانات حسب قسم (لا يغيّر الدور)
 SESSION_ADMIN_DEPARTMENT_SCOPE_ID = "admin_department_scope_id"
 
-_ADMIN_SCOPE_ROLES = frozenset({"admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean"})
+_ADMIN_SCOPE_ROLES = frozenset(
+    {"admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "staff"}
+)
 _COLLEGE_LEADERSHIP_MODES = frozenset({"college_dean", "academic_vice_dean"})
 
 
@@ -444,10 +446,14 @@ def admin_department_scope_ui_allowed(
     user_role: str | None = None,
     active_mode: str | None = None,
 ) -> bool:
-    """شريط تصفية القسم — للإدارة وقيادة الكلية في وضع القيادة فقط."""
+    """شريط تصفية القسم — للإدارة وقيادة الكلية والمسجل في وضع القيادة."""
     role = _normalize_role((user_role or session.get("user_role") or "").strip())
     if role in ("admin", "admin_main", "system_admin"):
         return True
+    if role == "staff":
+        from backend.core.department_scope_policy import session_role_profile_scope_mode
+
+        return session_role_profile_scope_mode() != "department"
     return is_college_leadership_ops_mode(role, active_mode)
 
 
@@ -2102,6 +2108,20 @@ def init_auth(app):
                 ),
                 403,
             )
+        if role == "staff":
+            from backend.core.department_scope_policy import session_role_profile_scope_mode
+
+            if session_role_profile_scope_mode() == "department":
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "حسابك مقيّد بقسم واحد ولا يمكن تغيير نطاق العرض.",
+                            "code": "FORBIDDEN",
+                        }
+                    ),
+                    403,
+                )
         try:
             isv = int(session.get("is_supervisor") or 0)
         except (TypeError, ValueError):

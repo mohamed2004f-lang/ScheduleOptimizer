@@ -957,7 +957,10 @@
       const res = await fetch('/students/import/excel', { method:'POST', body: data });
       const j = await res.json();
       if(res.ok){
-        window.showToast?.(`تم استيراد ${j.imported} سجل`, 'success');
+        const boundMsg = (j.department_bound != null && j.department_bound > 0)
+          ? ` وربط ${j.department_bound} بقسمك`
+          : '';
+        window.showToast?.(`تم استيراد ${j.imported} سجل${boundMsg}`, 'success');
         await loadStudents();
         form.reset();
       } else {

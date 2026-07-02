@@ -28,7 +28,13 @@ from .utilities import (
 )
 from .prereg_helpers import evaluate_courses_prereqs
 from backend.core.feature_flags import registration_program_course_mode
-from backend.core.department_scope_policy import resolve_scope_sql_for_aliased_student
+from backend.core.department_scope_policy import (
+    resolve_scope_sql_for_aliased_student,
+    resolve_effective_department_scope_id,
+    resolve_users_list_scope,
+    student_ids_for_department,
+    major_program_id_for_department,
+)
 from backend.services.registration_policy import (
     check_general_sections_capacity,
     check_program_prereqs,
@@ -1658,6 +1664,54 @@ def _resolve_actor_department_id(conn) -> int | None:
     return None
 
 
+def _resolve_student_import_department_binding(conn) -> tuple[int | None, int | None]:
+    """قسم/برنامج الربط التلقائي عند استيراد Excel حسب نطاق المنفّذ."""
+    uname = (session.get("user") or session.get("username") or "").strip()
+    dept_id = resolve_effective_department_scope_id(conn, uname)
+    if dept_id is None:
+        return None, None
+    prog_id = major_program_id_for_department(conn, int(dept_id))
+    return int(dept_id), prog_id
+
+
+def _bind_imported_students_department(
+    conn,
+    student_ids: list[str],
+    dept_id: int,
+    prog_id: int | None,
+) -> int:
+    """تعيين القسم/البرنامج للطلاب المستوردين دون الكتابة فوق تعيين سابق."""
+    if not student_ids:
+        return 0
+    cols = fetch_table_columns(conn, "students")
+    has_pathway = "pathway_stage" in cols
+    has_updated = "updated_at" in cols
+    placeholders = ",".join("?" for _ in student_ids)
+    sets = ["department_id = COALESCE(department_id, ?)"]
+    params: list = [int(dept_id)]
+    if prog_id is not None:
+        sets.append("current_program_id = COALESCE(current_program_id, ?)")
+        params.append(int(prog_id))
+    if has_pathway:
+        sets.append(
+            """pathway_stage = CASE
+                WHEN TRIM(COALESCE(track_code, '')) <> '' THEN pathway_stage
+                WHEN pathway_stage IS NULL OR TRIM(COALESCE(pathway_stage, '')) = ''
+                  THEN 'dept_admitted'
+                ELSE pathway_stage
+              END"""
+        )
+    if has_updated:
+        sets.append("updated_at = CURRENT_TIMESTAMP")
+    params.extend(student_ids)
+    cur = conn.cursor()
+    cur.execute(
+        f"UPDATE students SET {', '.join(sets)} WHERE student_id IN ({placeholders})",
+        tuple(params),
+    )
+    return int(cur.rowcount or 0)
+
+
 def _get_allowed_student_ids_for_role(conn, user_role: str) -> set:
     """
     تُرجع set بأرقام الطلاب المسموح عرضهم/تصديرهم حسب role الحالي.
@@ -1675,6 +1729,13 @@ def _get_allowed_student_ids_for_role(conn, user_role: str) -> set:
         if mode in ("instructor", "supervisor"):
             role = "supervisor" if mode == "supervisor" else "instructor"
         else:
+            scope_mode, scope_dep = resolve_users_list_scope(
+                conn, (session.get("user") or session.get("username") or "").strip()
+            )
+            if scope_mode == "empty":
+                return set()
+            if scope_mode == "department" and scope_dep is not None:
+                return {normalize_sid(s) for s in student_ids_for_department(conn, int(scope_dep))}
             return None
 
     if role == "academic_vice_dean":
@@ -1684,7 +1745,24 @@ def _get_allowed_student_ids_for_role(conn, user_role: str) -> set:
         if mode in ("instructor", "supervisor"):
             role = "supervisor" if mode == "supervisor" else "instructor"
         else:
+            scope_mode, scope_dep = resolve_users_list_scope(
+                conn, (session.get("user") or session.get("username") or "").strip()
+            )
+            if scope_mode == "empty":
+                return set()
+            if scope_mode == "department" and scope_dep is not None:
+                return {normalize_sid(s) for s in student_ids_for_department(conn, int(scope_dep))}
             return None
+
+    if role == "staff":
+        scope_mode, scope_dep = resolve_users_list_scope(
+            conn, (session.get("user") or session.get("username") or "").strip()
+        )
+        if scope_mode == "empty":
+            return set()
+        if scope_mode == "department" and scope_dep is not None:
+            return {normalize_sid(s) for s in student_ids_for_department(conn, int(scope_dep))}
+        return None
 
     # رئيس القسم:
     # - في وضع head: مقيّدة بقسم الحساب (department_id) لحماية العزل بين الأقسام.
@@ -1697,37 +1775,7 @@ def _get_allowed_student_ids_for_role(conn, user_role: str) -> set:
             if not dept_id:
                 # Fail-closed: لا نسمح بعرض عابر للأقسام عندما لا يوجد ربط قسم صالح.
                 return set()
-            cur_h = conn.cursor()
-            p_rows = cur_h.execute(
-                "SELECT id FROM programs WHERE department_id = ?",
-                (int(dept_id),),
-            ).fetchall()
-            program_ids = set()
-            for pr in p_rows or []:
-                try:
-                    v = pr[0] if not hasattr(pr, "keys") else pr["id"]
-                    if v not in (None, ""):
-                        program_ids.add(int(v))
-                except Exception:
-                    continue
-            if program_ids:
-                ph = ",".join("?" for _ in program_ids)
-                rows = cur_h.execute(
-                    f"""
-                    SELECT student_id
-                    FROM students
-                    WHERE department_id = ?
-                       OR current_program_id IN ({ph})
-                       OR admission_program_id IN ({ph})
-                    """,
-                    (int(dept_id), *tuple(program_ids), *tuple(program_ids)),
-                ).fetchall()
-            else:
-                rows = cur_h.execute(
-                    "SELECT student_id FROM students WHERE department_id = ?",
-                    (int(dept_id),),
-                ).fetchall()
-            return {normalize_sid(r[0]) for r in rows if r and r[0]}
+            return {normalize_sid(s) for s in student_ids_for_department(conn, int(dept_id))}
         role = "supervisor" if mode == "supervisor" else "instructor"
 
     cur = conn.cursor()
@@ -4648,6 +4696,7 @@ def students_import_excel():
         if not {"student_id","student_name"}.issubset(df.columns):
             return jsonify({"status":"error","message":"Columns required: student_id, student_name"}), 400
         rows = df.to_dict(orient="records")
+        imported_ids: list[str] = []
         with get_connection() as conn:
             cur = conn.cursor()
             for r in rows:
@@ -4655,6 +4704,7 @@ def students_import_excel():
                 name = (r.get("student_name") or "").strip()
                 if not sid:
                     continue
+                imported_ids.append(sid)
                 if is_postgresql():
                     cur.execute(
                         """
@@ -4675,8 +4725,18 @@ def students_import_excel():
                         """,
                         (sid, name),
                     )
+            dept_id, prog_id = _resolve_student_import_department_binding(conn)
+            department_bound = 0
+            if dept_id is not None and imported_ids:
+                department_bound = _bind_imported_students_department(
+                    conn, imported_ids, dept_id, prog_id
+                )
             conn.commit()
-        return jsonify({"status":"ok","imported":len(rows)}), 200
+        payload: dict = {"status": "ok", "imported": len(imported_ids)}
+        if dept_id is not None:
+            payload["department_id"] = dept_id
+            payload["department_bound"] = department_bound
+        return jsonify(payload), 200
     except Exception as e:
         current_app.logger.exception("students_import_excel failed")
         return jsonify({"status":"error","message":str(e)}), 500
