@@ -26,7 +26,8 @@ def test_external_templates_seeded(db_conn):
         tpl = get_template_by_code(db_conn, code)
         assert tpl is not None
         qs = list_template_questions(db_conn, int(tpl["id"]))
-        assert len(qs) == 6
+        expected = 10 if code == "alumni" else 6
+        assert len(qs) == expected
 
 
 def test_sanitize_removes_abbreviations():
@@ -133,7 +134,12 @@ def test_alumni_invite_submit(db_conn):
             "graduation_year": 2020,
             "department_id": "other",
             "department_label": "قسم قديم",
+            "employment_status": "in_specialty",
             "current_role_text": "مهندس",
+            "engineering_qualification": "yes",
+            "job_rejection": "no",
+            "recommend_enrollment": "yes",
+            "program_development_choice": "curriculum",
         },
         answers_payload={"answers": answers},
     )
@@ -145,3 +151,4 @@ def test_alumni_invite_submit(db_conn):
     ).fetchone()
     profile = json.loads(row[0])
     assert profile["graduation_year"] == 2020
+    assert profile["employment_status"] == "in_specialty"

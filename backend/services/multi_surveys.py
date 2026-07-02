@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from backend.core.survey_platform import (
+    ALUMNI_V2_MARKER_PREFIX,
     QUESTION_SEED,
     SURVEY_QUESTIONS_TARGET_COUNT,
     SURVEY_TEMPLATE_SEED,
@@ -101,6 +102,53 @@ def _sync_all_question_labels_from_seed(conn) -> None:
         logger.info("Synced %s platform survey question labels from seed", updated)
 
     _migrate_faculty_dean_drop_internal_resources(conn)
+    _migrate_alumni_survey_v2(conn)
+
+
+def _migrate_alumni_survey_v2(conn) -> None:
+    """ترقية استبيان الخريج إلى نسخة مراجعة البرنامج (١٠ بنود Likert) مع الإبقاء على الردود القديمة."""
+    if not table_exists(conn, "survey_questions"):
+        return
+    cur = conn.cursor()
+    tid = _template_id_by_code(cur, "alumni")
+    if not tid:
+        return
+    row = cur.execute(
+        """
+        SELECT label_ar FROM survey_questions
+        WHERE template_id = ? AND is_active = 1 AND sort_order = 10
+        LIMIT 1
+        """,
+        (tid,),
+    ).fetchone()
+    active_row = cur.execute(
+        "SELECT COUNT(*) FROM survey_questions WHERE template_id = ? AND is_active = 1",
+        (tid,),
+    ).fetchone()
+    active_count = int((active_row[0] if active_row else 0) or 0)
+    if row and active_count >= 10:
+        label = ((row[0] if not hasattr(row, "keys") else row["label_ar"]) or "").strip()
+        if label.startswith(ALUMNI_V2_MARKER_PREFIX):
+            return
+    items = QUESTION_SEED.get("alumni") or []
+    if len(items) < 10:
+        return
+    now = datetime.datetime.utcnow().isoformat()
+    cur.execute(
+        "UPDATE survey_questions SET is_active = 0, updated_at = ? WHERE template_id = ?",
+        (now, tid),
+    )
+    for label, sort_order in items:
+        cur.execute(
+            """
+            INSERT INTO survey_questions
+                (template_id, label_ar, sort_order, question_type, is_active, created_at, updated_at)
+            VALUES (?,?,?,?,1,?,?)
+            """,
+            (tid, label.strip(), int(sort_order), "likert_5", now, now),
+        )
+    conn.commit()
+    logger.info("alumni: migrated to program-review survey v2 (%s active items)", len(items))
 
 
 def _migrate_faculty_dean_drop_internal_resources(conn) -> None:

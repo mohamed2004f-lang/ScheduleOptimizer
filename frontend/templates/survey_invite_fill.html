@@ -26,7 +26,7 @@
       <div class="card shadow-sm mb-3">
         <div class="card-header fw-semibold">
           <span class="badge bg-secondary rounded-pill step-badge me-1">1</span>
-          {% if template_code == 'employer_strategic' %}بيانات جهة العمل{% else %}بياناتك كخريج{% endif %}
+          {% if template_code == 'employer_strategic' %}بيانات جهة العمل{% else %}أولاً — معلومات الخريج والواقع المهني{% endif %}
         </div>
         <div class="card-body">
           {% if template_code == 'employer_strategic' %}
@@ -63,12 +63,16 @@
           {% else %}
           <p class="text-muted small">{{ alumni_intro_ar }}</p>
           <div class="row g-2">
+            <div class="col-12">
+              <label class="form-label">الاسم الثلاثي <span class="text-muted small">(اختياري)</span></label>
+              <input type="text" class="form-control" name="full_name" maxlength="120" placeholder="للتواصل عند الحاجة فقط — لا يُنشر علناً">
+            </div>
             <div class="col-md-6">
               <label class="form-label">سنة التخرج <span class="text-danger">*</span></label>
               <select class="form-select" name="graduation_year" id="graduation_year" required></select>
             </div>
             <div class="col-md-6">
-              <label class="form-label">القسم <span class="text-danger">*</span></label>
+              <label class="form-label">القسم العلمي (تخصصك) <span class="text-danger">*</span></label>
               <select class="form-select" name="department_id" id="department_id" required>
                 <option value="">— جاري التحميل —</option>
               </select>
@@ -85,11 +89,41 @@
               <input type="text" class="form-control" name="department_label" id="department_label" maxlength="120">
             </div>
             <div class="col-12">
-              <label class="form-label">العمل أو المنصب الحالي</label>
-              <input type="text" class="form-control" name="current_role_text" maxlength="200">
+              <label class="form-label">الحالة المهنية الحالية <span class="text-danger">*</span></label>
+              <select class="form-select" name="employment_status" id="employment_status" required>
+                <option value="">— اختر —</option>
+                {% for val, label in alumni_employment_statuses %}
+                <option value="{{ val }}">{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-12" id="currentRoleWrap" style="display:none;">
+              <label class="form-label">مسمى وظيفتك الحالي</label>
+              <input type="text" class="form-control" name="current_role_text" id="current_role_text" maxlength="200">
+            </div>
+            <div class="col-12" id="engineeringQualWrap" style="display:none;">
+              <label class="form-label">هل تتطلب وظيفتك الحالية مؤهلاً هندسياً في تخصصك أو مجال قريب؟ <span class="text-danger">*</span></label>
+              <select class="form-select" name="engineering_qualification" id="engineering_qualification">
+                <option value="">— اختر —</option>
+                {% for val, label in alumni_engineering_qual_options %}
+                <option value="{{ val }}">{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-12" id="jobRejectionWrap" style="display:none;">
+              <label class="form-label">هل واجهت رفضاً عند التقديم على وظائف بعد التخرج؟ <span class="text-danger">*</span></label>
+              <select class="form-select" name="job_rejection" id="job_rejection">
+                <option value="">— اختر —</option>
+                <option value="yes">نعم</option>
+                <option value="no">لا</option>
+              </select>
+            </div>
+            <div class="col-12" id="jobRejectionReasonWrap" style="display:none;">
+              <label class="form-label">إن نعم، ما السبب الأبرز؟ <span class="text-muted small">(اختياري)</span></label>
+              <input type="text" class="form-control" name="job_rejection_reason" id="job_rejection_reason" maxlength="300">
             </div>
             <div class="col-md-6">
-              <label class="form-label">رقم الهاتف (اختياري — لمنع التكرار في الحملة)</label>
+              <label class="form-label">رقم الهاتف <span class="text-muted small">(اختياري — لمنع التكرار)</span></label>
               <input type="tel" class="form-control" name="phone" maxlength="20" placeholder="آخر 4 أرقام أو الرقم كاملاً">
             </div>
           </div>
@@ -176,6 +210,64 @@
         </div>
         <div class="card-body">
           {% include "_likert_scale_guide.html" %}
+          {% if template_code == 'alumni' and alumni_form_items %}
+          {% set q_index = namespace(n=0) %}
+          {% for item in alumni_form_items %}
+            {% if item.kind == 'section' %}
+          <h6 class="text-primary fw-bold mt-3 mb-2">{{ item.title_ar }}</h6>
+            {% else %}
+          {% set q_index.n = q_index.n + 1 %}
+          <div class="mb-4">
+            <label class="form-label fw-bold">{{ q_index.n }}. {{ item.label_ar }}</label>
+            <div class="d-flex flex-wrap gap-1" role="group">
+              {% for v, t in likert_labels %}
+              <input type="radio" class="btn-check" name="q_{{ item.id }}" value="{{ v }}" id="q{{ item.id }}_{{ v }}" required>
+              <label class="btn btn-outline-secondary btn-sm" for="q{{ item.id }}_{{ v }}" title="{{ t }}">{{ v }}</label>
+              {% endfor %}
+            </div>
+          </div>
+            {% endif %}
+          {% endfor %}
+          <hr class="my-4">
+          <h6 class="text-primary fw-bold mb-3">خامساً — التوصيات ومستقبل البرنامج</h6>
+          <div class="mb-3">
+            <label class="form-label">هل تنصح الطلاب الجدد بالالتحاق بهذا البرنامج في ظل الظروف الحالية؟ <span class="text-danger">*</span></label>
+            <select class="form-select" name="recommend_enrollment" id="recommend_enrollment" required>
+              <option value="">— اختر —</option>
+              <option value="yes">نعم</option>
+              <option value="no">لا</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">لماذا؟ <span class="text-muted small">(اختياري)</span></label>
+            <input type="text" class="form-control" name="recommend_reason_text" maxlength="400">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">في حال قررت الكلية تطوير أو تجميد البرنامج، ما مقترحك؟ <span class="text-danger">*</span></label>
+            <select class="form-select" name="program_development_choice" required>
+              <option value="">— اختر —</option>
+              {% for val, label in alumni_program_development_options %}
+              <option value="{{ val }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mb-3" id="openAdaptationWrap" style="display:none;">
+            <label class="form-label">ما أبرز صعوبة واجهتها عند بدء العمل؟ <span class="text-muted small">(اختياري)</span></label>
+            <input type="text" class="form-control" name="open_adaptation_difficulty" maxlength="400">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">ما المهارة التقنية أو البرمجية التي تمنيت التركيز عليها أكثر؟ <span class="text-muted small">(اختياري)</span></label>
+            <input type="text" class="form-control" name="open_missing_skill" maxlength="300">
+          </div>
+          <div class="mb-3" id="openTechnologyWrap" style="display:none;">
+            <label class="form-label">ما التقنيات أو الأدوات التي يتطلبها عملك ولم يغطّها البرنامج بشكل كافٍ؟ <span class="text-muted small">(اختياري)</span></label>
+            <input type="text" class="form-control" name="open_missing_technology" maxlength="400">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">{{ open_comment_label }}</label>
+            <textarea class="form-control" name="comments" rows="3"></textarea>
+          </div>
+          {% else %}
           {% for q in questions %}
           <div class="mb-4">
             <label class="form-label fw-bold">{{ loop.index }}. {{ q.label_ar }}</label>
@@ -191,6 +283,7 @@
             <label class="form-label">{{ open_comment_label }}</label>
             <textarea class="form-control" name="comments" rows="3"></textarea>
           </div>
+          {% endif %}
           <button type="submit" class="btn btn-success btn-lg w-100">إرسال الاستبيان</button>
         </div>
       </div>
@@ -206,6 +299,33 @@
   <script>
     const TOKEN = {{ invite.token|tojson }};
     const TEMPLATE = {{ template_code|tojson }};
+    const EMPLOYED_STATUSES = new Set(['in_specialty', 'other_engineering', 'non_engineering', 'self_employed']);
+    const WORKING_STATUSES = new Set([...EMPLOYED_STATUSES, 'job_seeking']);
+
+    function updateAlumniConditionalFields() {
+      const status = document.getElementById('employment_status')?.value || '';
+      const isEmployed = EMPLOYED_STATUSES.has(status);
+      const isWorking = WORKING_STATUSES.has(status);
+      const rejection = document.getElementById('job_rejection')?.value || '';
+
+      const toggle = (id, show, requiredIds = []) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.style.display = show ? 'block' : 'none';
+        el.querySelectorAll('select, input').forEach((input) => {
+          if (!requiredIds.includes(input.id)) return;
+          input.required = show;
+          if (!show) input.value = '';
+        });
+      };
+
+      toggle('currentRoleWrap', isEmployed);
+      toggle('engineeringQualWrap', isEmployed, ['engineering_qualification']);
+      toggle('jobRejectionWrap', isWorking, ['job_rejection']);
+      toggle('jobRejectionReasonWrap', isWorking && rejection === 'yes');
+      toggle('openAdaptationWrap', isWorking);
+      toggle('openTechnologyWrap', isEmployed);
+    }
 
     async function loadDepartments() {
       const sel = document.getElementById('department_id');
@@ -265,6 +385,9 @@
       if (lbl) lbl.value = opt ? (opt.dataset.label || opt.textContent || '') : '';
     });
 
+    document.getElementById('employment_status')?.addEventListener('change', updateAlumniConditionalFields);
+    document.getElementById('job_rejection')?.addEventListener('change', updateAlumniConditionalFields);
+
     document.getElementById('inviteSurveyForm')?.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -297,6 +420,7 @@
     if (TEMPLATE === 'alumni') {
       fillGradYears();
       loadDepartments();
+      updateAlumniConditionalFields();
     }
   </script>
 </body>

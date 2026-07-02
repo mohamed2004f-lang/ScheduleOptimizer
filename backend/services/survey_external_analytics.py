@@ -77,6 +77,10 @@ def _profile_breakdown_alumni(rows: list[dict]) -> dict[str, list[dict]]:
     by_year: Counter[int] = Counter()
     by_dept: Counter[str] = Counter()
     by_track: Counter[str] = Counter()
+    by_employment: Counter[str] = Counter()
+    by_recommend: Counter[str] = Counter()
+    by_program_choice: Counter[str] = Counter()
+    recommend_labels = {"yes": "نعم", "no": "لا"}
     for r in rows:
         p = r.get("profile") or {}
         y = p.get("graduation_year")
@@ -90,6 +94,15 @@ def _profile_breakdown_alumni(rows: list[dict]) -> dict[str, list[dict]]:
         track = (p.get("track_label") or p.get("track_code") or "").strip()
         if track:
             by_track[track] += 1
+        emp = (p.get("employment_status_label") or p.get("employment_status") or "").strip()
+        if emp:
+            by_employment[emp] += 1
+        rec = recommend_labels.get((p.get("recommend_enrollment") or "").strip().lower(), "")
+        if rec:
+            by_recommend[rec] += 1
+        prog = (p.get("program_development_label") or p.get("program_development_choice") or "").strip()
+        if prog:
+            by_program_choice[prog] += 1
     return {
         "by_graduation_year": [
             {"سنة_التخرج": y, "عدد_الردود": c} for y, c in sorted(by_year.items())
@@ -99,6 +112,15 @@ def _profile_breakdown_alumni(rows: list[dict]) -> dict[str, list[dict]]:
         ],
         "by_track": [
             {"الشعبة_أو_المسار": k, "عدد_الردود": v} for k, v in by_track.most_common()
+        ],
+        "by_employment_status": [
+            {"الحالة_المهنية": k, "عدد_الردود": v} for k, v in by_employment.most_common()
+        ],
+        "by_recommend_enrollment": [
+            {"ينصح_بالالتحاق": k, "عدد_الردود": v} for k, v in by_recommend.most_common()
+        ],
+        "by_program_development_choice": [
+            {"مقترح_تطوير_البرنامج": k, "عدد_الردود": v} for k, v in by_program_choice.most_common()
         ],
     }
 

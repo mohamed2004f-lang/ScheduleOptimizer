@@ -9,7 +9,13 @@ import secrets
 from typing import Any
 
 from backend.core.survey_platform import (
+    ALUMNI_EMPLOYED_STATUSES,
+    ALUMNI_EMPLOYMENT_STATUSES,
+    ALUMNI_ENGINEERING_QUAL_OPTIONS,
+    ALUMNI_INTRO_AR,
     ALUMNI_OPEN_COMMENT_LABEL,
+    ALUMNI_PROGRAM_DEVELOPMENT_OPTIONS,
+    ALUMNI_QUESTION_SECTIONS,
     EMPLOYER_OPEN_COMMENT_LABEL,
     EMPLOYER_ORG_TYPES,
     EXTERNAL_SURVEY_CODES,
@@ -287,13 +293,63 @@ def _validate_alumni_profile(profile: dict) -> dict:
             dept_id = int(dept_id)
         except (TypeError, ValueError):
             raise ValueError("القسم غير صالح")
+
+    employment_status = (profile.get("employment_status") or "").strip()
+    valid_employment = {k for k, _ in ALUMNI_EMPLOYMENT_STATUSES}
+    if employment_status not in valid_employment:
+        raise ValueError("الحالة المهنية الحالية مطلوبة")
+
+    engineering_qualification = ""
+    if employment_status in ALUMNI_EMPLOYED_STATUSES:
+        engineering_qualification = (profile.get("engineering_qualification") or "").strip()
+        valid_qual = {k for k, _ in ALUMNI_ENGINEERING_QUAL_OPTIONS}
+        if engineering_qualification not in valid_qual:
+            raise ValueError("يرجى الإجابة: هل تتطلب وظيفتك مؤهلاً هندسياً في تخصصك أو مجال قريب؟")
+
+    job_rejection = ""
+    job_rejection_reason = ""
+    if employment_status in ALUMNI_EMPLOYED_STATUSES or employment_status == "job_seeking":
+        job_rejection = (profile.get("job_rejection") or "").strip().lower()
+        if job_rejection not in ("yes", "no"):
+            raise ValueError("يرجى الإجابة: هل واجهت رفضاً عند التقديم على وظائف بعد التخرج؟")
+        if job_rejection == "yes":
+            job_rejection_reason = (profile.get("job_rejection_reason") or "").strip()
+
+    recommend_enrollment = (profile.get("recommend_enrollment") or "").strip().lower()
+    if recommend_enrollment not in ("yes", "no"):
+        raise ValueError("يرجى الإجابة: هل تنصح الطلاب الجدد بالالتحاق بهذا البرنامج؟")
+
+    program_development_choice = (profile.get("program_development_choice") or "").strip()
+    valid_program = {k for k, _ in ALUMNI_PROGRAM_DEVELOPMENT_OPTIONS}
+    if program_development_choice not in valid_program:
+        raise ValueError("يرجى اختيار مقترحكم لتطوير البرنامج أو تجميده")
+
+    employment_labels = dict(ALUMNI_EMPLOYMENT_STATUSES)
+    qual_labels = dict(ALUMNI_ENGINEERING_QUAL_OPTIONS)
+    program_labels = dict(ALUMNI_PROGRAM_DEVELOPMENT_OPTIONS)
     return {
+        "full_name": (profile.get("full_name") or "").strip(),
         "graduation_year": grad_year,
         "department_id": dept_id if isinstance(dept_id, int) else None,
         "department_label": dept_label,
         "track_code": (profile.get("track_code") or "").strip(),
         "track_label": (profile.get("track_label") or "").strip(),
+        "employment_status": employment_status,
+        "employment_status_label": employment_labels.get(employment_status, employment_status),
         "current_role_text": (profile.get("current_role_text") or "").strip(),
+        "engineering_qualification": engineering_qualification,
+        "engineering_qualification_label": qual_labels.get(engineering_qualification, engineering_qualification),
+        "job_rejection": job_rejection,
+        "job_rejection_reason": job_rejection_reason,
+        "recommend_enrollment": recommend_enrollment,
+        "recommend_reason_text": (profile.get("recommend_reason_text") or "").strip(),
+        "program_development_choice": program_development_choice,
+        "program_development_label": program_labels.get(
+            program_development_choice, program_development_choice
+        ),
+        "open_missing_skill": (profile.get("open_missing_skill") or "").strip(),
+        "open_adaptation_difficulty": (profile.get("open_adaptation_difficulty") or "").strip(),
+        "open_missing_technology": (profile.get("open_missing_technology") or "").strip(),
         "phone_hash": _phone_hash(profile.get("phone") or ""),
     }
 
@@ -459,6 +515,20 @@ def submit_invite_survey(
     return rid
 
 
+def _alumni_form_items(questions: list[dict]) -> list[dict[str, Any]]:
+    """دمج عناوين المحاور مع بنود الاستبيان لعرضها في واجهة التعبئة."""
+    sections = list(ALUMNI_QUESTION_SECTIONS)
+    next_section = 0
+    items: list[dict[str, Any]] = []
+    for q in questions:
+        sort_order = int(q.get("sort_order") or 0)
+        while next_section < len(sections) and sort_order >= int(sections[next_section][0]):
+            items.append({"kind": "section", "title_ar": sections[next_section][1]})
+            next_section += 1
+        items.append({"kind": "question", **q})
+    return items
+
+
 def invite_fill_context(conn, token: str) -> dict[str, Any]:
     invite = validate_invite(conn, token)
     template_code = (invite.get("template_code") or "").strip()
@@ -486,10 +556,11 @@ def invite_fill_context(conn, token: str) -> dict[str, Any]:
 
         ctx["identity_panel"] = build_employer_identity_panel(conn)
     elif template_code == "alumni":
-        ctx["alumni_intro_ar"] = (
-            "يرجى إدخال بياناتكم كخريج ثم الإجابة على أسئلة الاستبيان. "
-            "جميع الردود مجمّعة ولا تُنشر أسماء الأفراد."
-        )
+        ctx["alumni_intro_ar"] = ALUMNI_INTRO_AR
+        ctx["alumni_employment_statuses"] = list(ALUMNI_EMPLOYMENT_STATUSES)
+        ctx["alumni_engineering_qual_options"] = list(ALUMNI_ENGINEERING_QUAL_OPTIONS)
+        ctx["alumni_program_development_options"] = list(ALUMNI_PROGRAM_DEVELOPMENT_OPTIONS)
+        ctx["alumni_form_items"] = _alumni_form_items(questions)
     return ctx
 
 
