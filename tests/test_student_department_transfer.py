@@ -57,6 +57,16 @@ class TestStudentDepartmentTransfer:
             assert body.get("department_id") == int(dept_b)
             assert body.get("program_id") == int(prog_b)
 
+            lst = c.get(f"/students/list?active_only=1&_={uid}")
+            assert lst.status_code == 200
+            listed = next(
+                (x for x in (lst.get_json() or []) if str(x.get("student_id")) == sid),
+                None,
+            )
+            assert listed is not None
+            assert listed.get("department_id") == int(dept_b)
+            assert (listed.get("department_name") or "").strip() != ""
+
         row = cur.execute(
             "SELECT department_id, admission_program_id FROM students WHERE student_id = ?",
             (sid,),
@@ -102,6 +112,16 @@ class TestStudentDepartmentTransfer:
                 json={"student_id": sid, "department_id": int(dept_id)},
             )
             assert tr.status_code == 200, tr.get_data(as_text=True)
+
+            lst = c.get(f"/students/list?_={uid}")
+            assert lst.status_code == 200
+            row = next(
+                (x for x in (lst.get_json() or []) if str(x.get("student_id")) == sid),
+                None,
+            )
+            assert row is not None
+            assert row.get("department_id") == int(dept_id)
+            assert (row.get("department_name") or "").strip() != ""
 
         row = cur.execute(
             "SELECT department_id FROM students WHERE student_id = ?",

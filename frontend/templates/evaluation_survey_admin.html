@@ -21,6 +21,9 @@
       <div>
         <h1 class="page-title h4 mb-1"><i class="fa-solid fa-list-check text-primary"></i> إدارة بنود الاستبيانات</h1>
         <p class="text-muted small mb-0">اختر الاستبيان من القائمة ثم أضف/عدّل/رتّب البنود. البنود النشطة فقط تظهر للمُقيِّم.</p>
+        {% if form_outline %}
+        <p class="text-muted small mb-0 mt-1">استبيان الخريج يعرض أدناه <strong>هيكل النموذج الكامل</strong> كما يصل للمشارك؛ البنود ذات الشارة «ثابت» لا تُعدَّل من هذه الصفحة.</p>
+        {% endif %}
       </div>
       <div class="d-flex gap-2">
         <a href="/academic_quality/surveys" class="btn btn-outline-primary btn-sm">صفحة الاستبيانات</a>
@@ -68,6 +71,47 @@
         <button type="button" class="btn btn-sm btn-success" id="btnSaveOrder" disabled>حفظ الترتيب</button>
       </div>
       <ul class="list-group list-group-flush" id="questionList">
+        {% if form_outline %}
+        {% for item in form_outline %}
+          {% if item.kind == 'section' %}
+        <li class="list-group-item bg-light fw-bold {% if item.fixed_block %}border-start border-3 border-secondary{% endif %}">
+          {{ item.title_ar }}
+          {% if item.fixed_block %}<span class="badge bg-secondary ms-2">قسم ثابت</span>{% endif %}
+        </li>
+          {% elif item.kind == 'fixed' %}
+        <li class="list-group-item list-group-item-secondary">
+          <div class="d-flex align-items-start gap-2">
+            <span class="badge bg-secondary">ثابت</span>
+            <div class="flex-grow-1">
+              <div>{{ item.label_ar }}</div>
+              {% if item.field_type == 'select' and item.options %}
+              <small class="text-muted">الخيارات: {{ item.options | join(' · ') }}</small>
+              {% elif item.optional %}
+              <small class="text-muted">اختياري</small>
+              {% endif %}
+            </div>
+          </div>
+        </li>
+          {% else %}
+        <li class="list-group-item {% if not item.is_active %}list-group-item-warning{% endif %}" data-id="{{ item.id }}" draggable="true">
+          <div class="d-flex align-items-start gap-2">
+            <span class="text-muted drag-handle" title="سحب"><i class="fa-solid fa-grip-vertical"></i></span>
+            <div class="flex-grow-1">
+              <input type="text" class="form-control form-control-sm label-input" value="{{ item.label_ar }}" data-id="{{ item.id }}">
+              <small class="text-muted">بند Likert #{{ item.id }}{% if item.legacy_key %} — مفتاح: {{ item.legacy_key }}{% endif %}</small>
+            </div>
+            <div class="btn-group btn-group-sm flex-wrap">
+              <button type="button" class="btn btn-outline-primary btn-save-label" data-id="{{ item.id }}">حفظ</button>
+              <button type="button" class="btn btn-outline-secondary btn-toggle" data-id="{{ item.id }}" data-active="{{ item.is_active }}">
+                {% if item.is_active %}إيقاف{% else %}تفعيل{% endif %}
+              </button>
+              <button type="button" class="btn btn-outline-danger btn-delete" data-id="{{ item.id }}">حذف</button>
+            </div>
+          </div>
+        </li>
+          {% endif %}
+        {% endfor %}
+        {% else %}
         {% for q in questions %}
         <li class="list-group-item {% if not q.is_active %}list-group-item-secondary{% endif %}" data-id="{{ q.id }}" draggable="true">
           <div class="d-flex align-items-start gap-2">
@@ -88,6 +132,7 @@
         {% else %}
         <li class="list-group-item text-muted text-center" id="emptyMsg">لا توجد بنود — أضف بنداً أو انتظر البذر الافتراضي.</li>
         {% endfor %}
+        {% endif %}
       </ul>
     </div>
   </main>

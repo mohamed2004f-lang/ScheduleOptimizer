@@ -426,6 +426,11 @@ def survey_admin_page():
         resp_label = RESPONDENT_ROLE_LABELS.get(
             (selected.get("respondent_role") or "").strip(), "—"
         )
+        form_outline = None
+        if template_code == "alumni":
+            from backend.core.survey_platform import build_alumni_admin_outline
+
+            form_outline = build_alumni_admin_outline(questions)
     return render_template(
         "evaluation_survey_admin.html",
         questions=questions,
@@ -433,6 +438,7 @@ def survey_admin_page():
         selected_template=selected,
         template_code=template_code,
         respondent_label=resp_label,
+        form_outline=form_outline,
     )
 
 

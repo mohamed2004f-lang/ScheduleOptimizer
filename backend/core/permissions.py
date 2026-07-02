@@ -20,6 +20,7 @@ PERMISSION_CATALOG: list[dict[str, Any]] = [
     {"key": "nav_student_affairs_menu", "group_key": "students", "group_label_ar": "شؤون الطلبة", "label_ar": "قائمة شؤون الطلبة"},
     {"key": "can_manage_students", "group_key": "students", "group_label_ar": "شؤون الطلبة", "label_ar": "تعديل بيانات الطلبة"},
     {"key": "can_transfer_student_department", "group_key": "students", "group_label_ar": "شؤون الطلبة", "label_ar": "نقل/تحديد قسم الطالب"},
+    {"key": "can_rename_student_id", "group_key": "students", "group_label_ar": "شؤون الطلبة", "label_ar": "تصحيح الرقم الدراسي"},
     {"key": "nav_planning_menu", "group_key": "scheduling", "group_label_ar": "الجدولة", "label_ar": "التخطيط والجدولة"},
     {"key": "can_manage_schedule_edit", "group_key": "scheduling", "group_label_ar": "الجدولة", "label_ar": "تعديل الجدول"},
     {"key": "nav_transcript_nav", "group_key": "records", "group_label_ar": "السجل الأكademي", "label_ar": "كشف الدرجات"},
@@ -470,6 +471,7 @@ def compute_college_dean_capabilities(
     out["can_manage_courses_edit"] = False
     out["students_data_view_only"] = True
     out["can_transfer_student_department"] = True
+    out["can_rename_student_id"] = True
     out["nav_student_affairs_menu"] = True
     out["nav_course_registration_report"] = True
     out["nav_schedule_versions"] = True
@@ -536,6 +538,7 @@ def compute_academic_vice_dean_capabilities(
     out["can_manage_courses_edit"] = False
     out["students_data_view_only"] = True
     out["can_transfer_student_department"] = True
+    out["can_rename_student_id"] = True
     out["nav_student_affairs_menu"] = True
     out["nav_course_registration_report"] = True
     out["nav_schedule_versions"] = True

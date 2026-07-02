@@ -62,6 +62,7 @@
           </div>
           {% else %}
           <p class="text-muted small">{{ alumni_intro_ar }}</p>
+          <div class="alert alert-info py-2 small mb-3">{{ alumni_program_terminology_ar | safe }}</div>
           <div class="row g-2">
             <div class="col-12">
               <label class="form-label">الاسم الثلاثي <span class="text-muted small">(اختياري)</span></label>
@@ -72,21 +73,29 @@
               <select class="form-select" name="graduation_year" id="graduation_year" required></select>
             </div>
             <div class="col-md-6">
-              <label class="form-label">القسم العلمي (تخصصك) <span class="text-danger">*</span></label>
+              <label class="form-label">{{ alumni_department_field_label }} <span class="text-danger">*</span></label>
               <select class="form-select" name="department_id" id="department_id" required>
                 <option value="">— جاري التحميل —</option>
               </select>
+              <div class="form-text">{{ alumni_department_field_hint }}</div>
             </div>
             <div class="col-md-6">
-              <label class="form-label">الشعبة / المسار</label>
+              <label class="form-label">{{ alumni_track_field_label }}</label>
               <select class="form-select" name="track_code" id="track_code" disabled>
                 <option value="">— اختر القسم أولاً —</option>
               </select>
               <input type="hidden" name="track_label" id="track_label" value="">
+              <div class="form-text">{{ alumni_track_field_hint }}</div>
             </div>
             <div class="col-md-6" id="deptOtherWrap" style="display:none;">
-              <label class="form-label">اسم القسم (أخرى / غير متذكر)</label>
-              <input type="text" class="form-control" name="department_label" id="department_label" maxlength="120">
+              <label class="form-label">اسم التخصص (أخرى / غير متذكر)</label>
+              <input type="text" class="form-control" name="department_label" id="department_label" maxlength="120" placeholder="اكتب اسم قسمك أو تخصصك كما تتذكره">
+            </div>
+            <div class="col-12">
+              <div id="alumniProgramSummary" class="alert alert-success py-2 small mb-0 d-none" role="status">
+                <strong>البرنامج الذي ستقيّمه في هذا الاستبيان:</strong>
+                <span id="alumniProgramSummaryText" class="fw-semibold"></span>
+              </div>
             </div>
             <div class="col-12">
               <label class="form-label">الحالة المهنية الحالية <span class="text-danger">*</span></label>
@@ -210,6 +219,9 @@
         </div>
         <div class="card-body">
           {% include "_likert_scale_guide.html" %}
+          {% if template_code == 'alumni' %}
+          <p class="text-muted small mb-3">{{ alumni_program_scope_hint_ar }}</p>
+          {% endif %}
           {% if template_code == 'alumni' and alumni_form_items %}
           {% set q_index = namespace(n=0) %}
           {% for item in alumni_form_items %}
@@ -230,8 +242,9 @@
           {% endfor %}
           <hr class="my-4">
           <h6 class="text-primary fw-bold mb-3">خامساً — التوصيات ومستقبل البرنامج</h6>
+          <p class="text-muted small mb-3">{{ alumni_tail_program_hint_ar }}</p>
           <div class="mb-3">
-            <label class="form-label">هل تنصح الطلاب الجدد بالالتحاق بهذا البرنامج في ظل الظروف الحالية؟ <span class="text-danger">*</span></label>
+            <label class="form-label">هل تنصح الطلاب الجدد بالالتحاق بهذا التخصص في ظل الظروف الحالية؟ <span class="text-danger">*</span></label>
             <select class="form-select" name="recommend_enrollment" id="recommend_enrollment" required>
               <option value="">— اختر —</option>
               <option value="yes">نعم</option>
@@ -243,7 +256,7 @@
             <input type="text" class="form-control" name="recommend_reason_text" maxlength="400">
           </div>
           <div class="mb-3">
-            <label class="form-label">في حال قررت الكلية تطوير أو تجميد البرنامج، ما مقترحك؟ <span class="text-danger">*</span></label>
+            <label class="form-label">{{ alumni_program_freeze_question_ar }} <span class="text-danger">*</span></label>
             <select class="form-select" name="program_development_choice" required>
               <option value="">— اختر —</option>
               {% for val, label in alumni_program_development_options %}
@@ -301,6 +314,40 @@
     const TEMPLATE = {{ template_code|tojson }};
     const EMPLOYED_STATUSES = new Set(['in_specialty', 'other_engineering', 'non_engineering', 'self_employed']);
     const WORKING_STATUSES = new Set([...EMPLOYED_STATUSES, 'job_seeking']);
+
+    function updateAlumniProgramSummary() {
+      const box = document.getElementById('alumniProgramSummary');
+      const textEl = document.getElementById('alumniProgramSummaryText');
+      const deptSel = document.getElementById('department_id');
+      const trackSel = document.getElementById('track_code');
+      const deptOther = document.getElementById('department_label');
+      if (!box || !textEl || !deptSel) return;
+
+      const deptVal = deptSel.value || '';
+      let deptLabel = '';
+      if (deptVal === 'other') {
+        deptLabel = (deptOther?.value || '').trim() || 'تخصص غير محدد';
+      } else if (deptVal) {
+        deptLabel = (deptSel.selectedOptions[0]?.textContent || '').trim();
+      }
+
+      let trackLabel = '';
+      if (trackSel && trackSel.value && trackSel.value !== 'unknown') {
+        const t = (trackSel.selectedOptions[0]?.textContent || '').trim();
+        if (t && !t.startsWith('—')) trackLabel = t;
+      }
+
+      if (!deptLabel) {
+        box.classList.add('d-none');
+        textEl.textContent = '';
+        return;
+      }
+
+      const parts = [deptLabel];
+      if (trackLabel) parts.push('شعبة: ' + trackLabel);
+      textEl.textContent = parts.join(' — ');
+      box.classList.remove('d-none');
+    }
 
     function updateAlumniConditionalFields() {
       const status = document.getElementById('employment_status')?.value || '';
@@ -376,14 +423,18 @@
       const v = e.target.value;
       const wrap = document.getElementById('deptOtherWrap');
       if (wrap) wrap.style.display = v === 'other' ? 'block' : 'none';
-      loadTracks(v);
+      loadTracks(v).then(updateAlumniProgramSummary);
+      updateAlumniProgramSummary();
     });
 
     document.getElementById('track_code')?.addEventListener('change', (e) => {
       const opt = e.target.selectedOptions[0];
       const lbl = document.getElementById('track_label');
       if (lbl) lbl.value = opt ? (opt.dataset.label || opt.textContent || '') : '';
+      updateAlumniProgramSummary();
     });
+
+    document.getElementById('department_label')?.addEventListener('input', updateAlumniProgramSummary);
 
     document.getElementById('employment_status')?.addEventListener('change', updateAlumniConditionalFields);
     document.getElementById('job_rejection')?.addEventListener('change', updateAlumniConditionalFields);

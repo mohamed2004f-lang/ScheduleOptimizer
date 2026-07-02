@@ -15,7 +15,15 @@ from backend.core.survey_platform import (
     ALUMNI_INTRO_AR,
     ALUMNI_OPEN_COMMENT_LABEL,
     ALUMNI_PROGRAM_DEVELOPMENT_OPTIONS,
+    ALUMNI_PROGRAM_FREEZE_QUESTION_AR,
+    ALUMNI_PROGRAM_TERMINOLOGY_AR,
+    ALUMNI_PROGRAM_SCOPE_HINT_AR,
     ALUMNI_QUESTION_SECTIONS,
+    ALUMNI_DEPARTMENT_FIELD_LABEL,
+    ALUMNI_DEPARTMENT_FIELD_HINT,
+    ALUMNI_TRACK_FIELD_LABEL,
+    ALUMNI_TRACK_FIELD_HINT,
+    ALUMNI_TAIL_PROGRAM_HINT_AR,
     EMPLOYER_OPEN_COMMENT_LABEL,
     EMPLOYER_ORG_TYPES,
     EXTERNAL_SURVEY_CODES,
@@ -322,11 +330,13 @@ def _validate_alumni_profile(profile: dict) -> dict:
     program_development_choice = (profile.get("program_development_choice") or "").strip()
     valid_program = {k for k, _ in ALUMNI_PROGRAM_DEVELOPMENT_OPTIONS}
     if program_development_choice not in valid_program:
-        raise ValueError("يرجى اختيار مقترحكم لتطوير البرنامج أو تجميده")
+        raise ValueError("يرجى اختيار مقترحكم في حال تجميد البرنامج")
 
     employment_labels = dict(ALUMNI_EMPLOYMENT_STATUSES)
     qual_labels = dict(ALUMNI_ENGINEERING_QUAL_OPTIONS)
-    program_labels = dict(ALUMNI_PROGRAM_DEVELOPMENT_OPTIONS)
+    from backend.core.survey_platform import program_development_label
+
+    program_labels = {k: program_development_label(k) for k in valid_program}
     return {
         "full_name": (profile.get("full_name") or "").strip(),
         "graduation_year": grad_year,
@@ -560,6 +570,14 @@ def invite_fill_context(conn, token: str) -> dict[str, Any]:
         ctx["alumni_employment_statuses"] = list(ALUMNI_EMPLOYMENT_STATUSES)
         ctx["alumni_engineering_qual_options"] = list(ALUMNI_ENGINEERING_QUAL_OPTIONS)
         ctx["alumni_program_development_options"] = list(ALUMNI_PROGRAM_DEVELOPMENT_OPTIONS)
+        ctx["alumni_program_freeze_question_ar"] = ALUMNI_PROGRAM_FREEZE_QUESTION_AR
+        ctx["alumni_program_terminology_ar"] = ALUMNI_PROGRAM_TERMINOLOGY_AR
+        ctx["alumni_program_scope_hint_ar"] = ALUMNI_PROGRAM_SCOPE_HINT_AR
+        ctx["alumni_department_field_label"] = ALUMNI_DEPARTMENT_FIELD_LABEL
+        ctx["alumni_department_field_hint"] = ALUMNI_DEPARTMENT_FIELD_HINT
+        ctx["alumni_track_field_label"] = ALUMNI_TRACK_FIELD_LABEL
+        ctx["alumni_track_field_hint"] = ALUMNI_TRACK_FIELD_HINT
+        ctx["alumni_tail_program_hint_ar"] = ALUMNI_TAIL_PROGRAM_HINT_AR
         ctx["alumni_form_items"] = _alumni_form_items(questions)
     return ctx
 

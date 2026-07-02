@@ -139,7 +139,7 @@ def test_alumni_invite_submit(db_conn):
             "engineering_qualification": "yes",
             "job_rejection": "no",
             "recommend_enrollment": "yes",
-            "program_development_choice": "curriculum",
+            "program_development_choice": "merge_dept",
         },
         answers_payload={"answers": answers},
     )

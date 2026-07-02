@@ -135,12 +135,140 @@ def _can_transfer_student_department() -> bool:
     return True
 
 
+def _can_rename_student_id() -> bool:
+    """تصحيح الرقم الدراسي — نفس صلاحيات نقل القسم."""
+    return _can_transfer_student_department()
+
+
+def _discover_student_id_tables(conn) -> list[str]:
+    """جداول تحتوي عمود student_id (students في النهاية)."""
+    from backend.database.database import conn_is_postgresql, fetch_table_columns, table_exists
+
+    cur = conn.cursor()
+    tables: list[str] = []
+    if conn_is_postgresql(conn):
+        cur.execute(
+            """
+            SELECT DISTINCT table_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND lower(column_name) = 'student_id'
+            ORDER BY table_name
+            """
+        )
+        for r in cur.fetchall() or []:
+            t = r[0] if not hasattr(r, "keys") else r["table_name"]
+            if t and table_exists(conn, str(t)):
+                tables.append(str(t))
+    else:
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        for r in cur.fetchall() or []:
+            t = r[0] if not hasattr(r, "keys") else r["name"]
+            if not t or str(t).startswith("sqlite_"):
+                continue
+            if not table_exists(conn, str(t)):
+                continue
+            if "student_id" in fetch_table_columns(conn, str(t)):
+                tables.append(str(t))
+    ordered = [t for t in tables if t.lower() != "students"]
+    if any(t.lower() == "students" for t in tables):
+        ordered.append("students")
+    return ordered
+
+
+def _student_row_as_dict(row, cols: list[str]) -> dict:
+    out: dict = {}
+    for c in cols:
+        try:
+            if hasattr(row, "keys"):
+                out[c] = row[c]
+            else:
+                idx = cols.index(c)
+                out[c] = row[idx] if idx < len(row) else None
+        except (KeyError, IndexError, ValueError):
+            out[c] = None
+    return out
+
+
+def _apply_student_id_rename(
+    conn,
+    *,
+    old_student_id: str,
+    new_student_id: str,
+    actor: str,
+) -> dict:
+    """تصحيح الرقم الدراسي مع نقل كل السجلات المرتبطة."""
+    from backend.core.exceptions import ConflictError, NotFoundError, ValidationError
+
+    old_sid = normalize_sid(old_student_id)
+    new_sid = normalize_sid(new_student_id)
+    if not old_sid:
+        raise ValidationError("الرقم الدراسي الحالي مطلوب")
+    if not new_sid:
+        raise ValidationError("الرقم الدراسي الجديد مطلوب")
+    if old_sid == new_sid:
+        raise ValidationError("الرقم الجديد مطابق للرقم الحالي")
+
+    cur = conn.cursor()
+    cols = fetch_table_columns(conn, "students")
+    old_row = cur.execute(
+        "SELECT * FROM students WHERE student_id = ? LIMIT 1",
+        (old_sid,),
+    ).fetchone()
+    if not old_row:
+        raise NotFoundError("الطالب غير موجود")
+
+    dup = cur.execute(
+        "SELECT 1 FROM students WHERE student_id = ? LIMIT 1",
+        (new_sid,),
+    ).fetchone()
+    if dup:
+        raise ConflictError("الرقم الدراسي الجديد مستخدم لطالب آخر")
+
+    data = _student_row_as_dict(old_row, cols)
+    data["student_id"] = new_sid
+    if "updated_at" in cols:
+        data["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    col_list = ", ".join(cols)
+    placeholders = ", ".join("?" for _ in cols)
+    cur.execute(
+        f"INSERT INTO students ({col_list}) VALUES ({placeholders})",
+        tuple(data.get(c) for c in cols),
+    )
+
+    for tbl in _discover_student_id_tables(conn):
+        if tbl.lower() == "students":
+            continue
+        cur.execute(
+            f"UPDATE {tbl} SET student_id = ? WHERE student_id = ?",
+            (new_sid, old_sid),
+        )
+
+    cur.execute("DELETE FROM students WHERE student_id = ?", (old_sid,))
+    if int(cur.rowcount or 0) < 1:
+        raise NotFoundError("تعذّر إكمال تصحيح الرقم الدراسي")
+
+    try:
+        log_activity(
+            action="student_id_rename",
+            actor=actor,
+            details=f"old_student_id={old_sid}; new_student_id={new_sid}",
+        )
+    except Exception:
+        pass
+
+    return {
+        "old_student_id": old_sid,
+        "new_student_id": new_sid,
+        "student_id": new_sid,
+    }
+
+
 def _invalidate_students_list_cache() -> None:
     try:
-        from backend.core.cache_setup import cache, list_cache_key
+        from backend.core.cache_setup import invalidate_list_prefix
 
-        if cache:
-            cache.delete(list_cache_key("students"))
+        invalidate_list_prefix("students")
     except Exception:
         pass
 
@@ -227,6 +355,8 @@ def _apply_student_department_transfer(
         f"UPDATE students SET {', '.join(sets)} WHERE student_id = ?",
         tuple(params),
     )
+    if int(cur.rowcount or 0) < 1:
+        raise NotFoundError("الطالب غير موجود أو لم يُحدَّث")
 
     dept_name_row = cur.execute(
         "SELECT COALESCE(name_ar, code, '') FROM departments WHERE id = ? LIMIT 1",
@@ -1964,6 +2094,83 @@ def _get_allowed_student_ids_for_role(conn, user_role: str) -> set:
     # أي role غير معروف: نمنع (بدون تسريب)
     return set()
 
+
+def _students_list_fallback_payload(user_role: str) -> list[dict]:
+    """جلب قائمة طلاب مباشرة من DB عند فشل Service Layer — يشمل القسم عند توفره."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cols = fetch_table_columns(conn, "students")
+        has_status = "enrollment_status" in cols
+        has_dept = "department_id" in cols
+        has_pathway = "pathway_stage" in cols
+        has_track = "track_code" in cols
+        if has_dept:
+            sel = [
+                "s.student_id",
+                "COALESCE(s.student_name, '') AS student_name",
+            ]
+            if has_status:
+                sel.append("COALESCE(s.enrollment_status, 'active') AS enrollment_status")
+            sel.extend(
+                [
+                    "s.department_id",
+                    "COALESCE(d.name_ar, d.code, '') AS department_name",
+                ]
+            )
+            if has_pathway:
+                sel.append("COALESCE(s.pathway_stage, 'dept_admitted') AS pathway_stage")
+            if has_track:
+                sel.append("COALESCE(s.track_code, '') AS track_code")
+            rows = cur.execute(
+                f"SELECT {', '.join(sel)} FROM students s "
+                "LEFT JOIN departments d ON d.id = s.department_id "
+                "ORDER BY s.student_name, s.student_id"
+            ).fetchall()
+        else:
+            rows = cur.execute(
+                "SELECT student_id, COALESCE(student_name,'') AS student_name "
+                "FROM students ORDER BY student_name, student_id"
+            ).fetchall()
+        allowed_student_ids = _get_allowed_student_ids_for_role(conn, user_role)
+
+    def _cell(row, idx: int, key: str, default=None):
+        if hasattr(row, "keys"):
+            try:
+                return row[key]
+            except (KeyError, IndexError):
+                return row[idx] if idx < len(row) else default
+        return row[idx] if idx < len(row) else default
+
+    out: list[dict] = []
+    for r in rows:
+        sid = _cell(r, 0, "student_id", "")
+        if allowed_student_ids is not None and normalize_sid(sid) not in allowed_student_ids:
+            continue
+        item: dict = {
+            "student_id": sid,
+            "student_name": (_cell(r, 1, "student_name", "") or ""),
+        }
+        if has_dept:
+            idx = 2
+            if has_status:
+                item["enrollment_status"] = (_cell(r, idx, "enrollment_status", "active") or "active")
+                idx += 1
+            raw_dep = _cell(r, idx, "department_id")
+            try:
+                item["department_id"] = int(raw_dep) if raw_dep not in (None, "") else None
+            except (TypeError, ValueError):
+                item["department_id"] = None
+            item["department_name"] = (_cell(r, idx + 1, "department_name", "") or "")
+            idx += 2
+            if has_pathway:
+                item["pathway_stage"] = (_cell(r, idx, "pathway_stage", "dept_admitted") or "dept_admitted")
+                idx += 1
+            if has_track:
+                item["track_code"] = (_cell(r, idx, "track_code", "") or "")
+        out.append(item)
+    return out
+
+
 # -----------------------------
 # CRUD أساسي للطلاب
 # -----------------------------
@@ -1972,14 +2179,12 @@ def _get_allowed_student_ids_for_role(conn, user_role: str) -> set:
 def list_students():
     """جلب قائمة الطلاب. معاملات: active_only=1، enrollment_status=active|withdrawn|suspended|graduated، join_term، join_year."""
     try:
-        from backend.core.cache_setup import cache, list_cache_key
+        from backend.core.cache_setup import list_cache_key, safe_cache_get, safe_cache_set
         from backend.core.exceptions import AppException
 
-        if cache:
-            _ck = list_cache_key("students")
-            _hit = cache.get(_ck)
-            if _hit is not None:
-                return _hit
+        _hit = safe_cache_get(list_cache_key("students"))
+        if _hit is not None:
+            return _hit
 
         user_role = session.get("user_role")
         with get_connection() as conn:
@@ -2068,51 +2273,22 @@ def list_students():
             setattr(obj, "department_name", dept_labels.get(dep_id, "") if dep_id is not None else "")
             students_objects.append(obj)
         resp = jsonify([s.__dict__ for s in students_objects])
-        try:
-            from backend.core.cache_setup import cache, list_cache_key
-
-            if cache:
-                cache.set(list_cache_key("students"), resp)
-        except Exception:
-            pass
+        safe_cache_set(list_cache_key("students"), resp)
         return resp
-    except AppException:
-        # fallback مباشر من قاعدة البيانات إذا فشل Service Layer
-        try:
-            with get_connection() as conn:
-                cur = conn.cursor()
-                rows = cur.execute(
-                    "SELECT student_id, COALESCE(student_name,'') AS student_name FROM students ORDER BY student_name, student_id"
-                ).fetchall()
-            user_role = session.get("user_role")
-            with get_connection() as conn:
-                allowed_student_ids = _get_allowed_student_ids_for_role(conn, user_role)
-            if allowed_student_ids is None:
-                return jsonify([{"student_id": r[0], "student_name": r[1]} for r in rows])
-            return jsonify(
-                [{"student_id": r[0], "student_name": r[1]} for r in rows if normalize_sid(r[0]) in allowed_student_ids]
-            )
-        except Exception:
-            raise
+    except AppException as _list_app_exc:
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "list_students AppException fallback: %s", _list_app_exc, exc_info=True
+        )
+        return jsonify(_students_list_fallback_payload(session.get("user_role")))
     except Exception as e:
-        # fallback مباشر من قاعدة البيانات بدلاً من كسر صفحة كشف الدرجات
-        try:
-            with get_connection() as conn:
-                cur = conn.cursor()
-                rows = cur.execute(
-                    "SELECT student_id, COALESCE(student_name,'') AS student_name FROM students ORDER BY student_name, student_id"
-                ).fetchall()
-            user_role = session.get("user_role")
-            with get_connection() as conn:
-                allowed_student_ids = _get_allowed_student_ids_for_role(conn, user_role)
-            if allowed_student_ids is None:
-                return jsonify([{"student_id": r[0], "student_name": r[1]} for r in rows])
-            return jsonify(
-                [{"student_id": r[0], "student_name": r[1]} for r in rows if normalize_sid(r[0]) in allowed_student_ids]
-            )
-        except Exception:
-            from backend.core.exceptions import DatabaseError
-            raise DatabaseError(f"فشل جلب قائمة الطلاب: {str(e)}")
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "list_students Exception fallback: %s", e, exc_info=True
+        )
+        return jsonify(_students_list_fallback_payload(session.get("user_role")))
 
 
 @students_bp.route("/graduates")
@@ -2235,9 +2411,7 @@ def update_student_status():
 @students_bp.route("/department/options", methods=["GET"])
 @login_required
 def student_department_options():
-    """قائمة الأقسام النشطة لنقل/تحديد قسم الطالب."""
-    if not _can_transfer_student_department():
-        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+    """قائمة الأقسام النشطة (فلترة القائمة أو نقل/تحديد قسم الطالب)."""
     with get_connection() as conn:
         cur = conn.cursor()
         rows = cur.execute(
@@ -2299,6 +2473,43 @@ def transfer_student_department():
         from backend.core.exceptions import DatabaseError
 
         raise DatabaseError(f"فشل نقل قسم الطالب: {str(exc)}")
+
+
+@students_bp.route("/student_id/rename", methods=["POST"])
+@login_required
+def rename_student_id():
+    """تصحيح الرقم الدراسي — للمسؤول الرئيسي والعميد والوكيل في وضع القيادة."""
+    if not _can_rename_student_id():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+    data = request.get_json(force=True) or {}
+    old_sid = normalize_sid(data.get("old_student_id") or data.get("student_id"))
+    new_sid = normalize_sid(data.get("new_student_id"))
+    if not old_sid or not new_sid:
+        return jsonify({"status": "error", "message": "الرقم الحالي والجديد مطلوبان"}), 400
+
+    actor = (session.get("user") or session.get("username") or "").strip()
+    try:
+        with get_connection() as conn:
+            allowed = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+            if allowed is not None and old_sid not in allowed:
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+            result = _apply_student_id_rename(
+                conn,
+                old_student_id=old_sid,
+                new_student_id=new_sid,
+                actor=actor,
+            )
+            conn.commit()
+        _invalidate_students_list_cache()
+        return jsonify({"status": "ok", **result}), 200
+    except Exception as exc:
+        from backend.core.exceptions import AppException, ConflictError, NotFoundError, ValidationError
+
+        if isinstance(exc, (ValidationError, NotFoundError, ConflictError, AppException)):
+            raise
+        from backend.core.exceptions import DatabaseError
+
+        raise DatabaseError(f"فشل تصحيح الرقم الدراسي: {str(exc)}")
 
 
 @students_bp.route("/pathway_stage/update", methods=["POST"])
@@ -4959,6 +5170,7 @@ def students_import_excel():
                     conn, imported_ids, dept_id, prog_id
                 )
             conn.commit()
+        _invalidate_students_list_cache()
         payload: dict = {"status": "ok", "imported": len(imported_ids)}
         if dept_id is not None:
             payload["department_id"] = dept_id

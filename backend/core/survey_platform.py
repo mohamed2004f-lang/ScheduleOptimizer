@@ -39,9 +39,28 @@ ALUMNI_OPEN_COMMENT_LABEL = (
 EMPLOYER_OPEN_COMMENT_LABEL = "أهم ثلاث توصيات لتحسين الخطة الاستراتيجية أو مخرجات التعلم (اختياري)"
 
 ALUMNI_INTRO_AR = (
-    "تسعى الكلية لمراجعة استراتيجية للبرنامج الأكاديمي لضمان مواءمة مخرجاته مع سوق العمل. "
-    "رأيك المهني أساس قراراتنا. المدة التقريبية: ٨–١٠ دقائق. "
-    "جميع الإجابات مجمّعة ولا تُنشر بأسماء الأفراد."
+    "تسعى الكلية لمراجعة البرامج الأكاديمية لضمان مواءمة مخرجاتها مع سوق العمل. "
+    "حدّد أولاً قسمك وتخصصك الدقيق في الحقول أدناه — فجميع أسئلة الاستبيان التالية "
+    "تخص ذلك البرنامج الذي درسته وليس الكلية عموماً. "
+    "المدة التقريبية: ٨–١٠ دقائق. جميع الإجابات مجمّعة ولا تُنشر بأسماء الأفراد."
+)
+
+ALUMNI_PROGRAM_TERMINOLOGY_AR = (
+    "لتجنّب الالتباس: «البرنامج» في هذا الاستبيان = التخصص الذي درسته (القسم + الشعبة/المسار إن وُجد). "
+    "«القسم» هو تخصصك الرئيسي (مثل: الهندسة الميكانيكية). "
+    "«الشعبة/المسار» هو التخصص الدقيق داخل القسم (مثل: طاقة، تصنيع) — اختر «لا ينطبق» إن لم تكن ضمن شعبة."
+)
+
+ALUMNI_PROGRAM_SCOPE_HINT_AR = (
+    "الأسئلة التالية عن البرنامج الذي حدّدته أعلاه (قسمك ومسارك إن وُجد)، وليس عن الكلية بأكملها."
+)
+
+ALUMNI_DEPARTMENT_FIELD_LABEL = "قسمك / التخصص الرئيسي"
+ALUMNI_DEPARTMENT_FIELD_HINT = "مثال: الهندسة الميكانيكية، الهندسة الكهربائية — هذا هو «برنامجك» بمعناه العام."
+ALUMNI_TRACK_FIELD_LABEL = "الشعبة أو المسار الدقيق (إن وُجد)"
+ALUMNI_TRACK_FIELD_HINT = "مثال: طاقة، تصنيع. إن لم تكن في شعبة محددة اختر «لا ينطبق»."
+ALUMNI_TAIL_PROGRAM_HINT_AR = (
+    "الإجابات التالية تخص البرنامج الذي حدّدته أعلاه (قسمك ومسارك)، وليس الكلية بأكملها."
 )
 
 ALUMNI_EMPLOYMENT_STATUSES: tuple[tuple[str, str], ...] = (
@@ -69,12 +88,51 @@ ALUMNI_ENGINEERING_QUAL_OPTIONS: tuple[tuple[str, str], ...] = (
 )
 
 ALUMNI_PROGRAM_DEVELOPMENT_OPTIONS: tuple[tuple[str, str], ...] = (
-    ("curriculum", "تعديل الخطة الدراسية"),
-    ("rename", "تغيير اسم التخصص"),
-    ("merge", "دمج البرنامج مع تخصص آخر"),
-    ("new_tracks", "استحداث شعب جديدة داخل القسم"),
-    ("freeze", "تجميد البرنامج"),
-    ("no_change", "لا تغيير جوهري"),
+    ("merge_dept", "دمج مع قسم آخر"),
+    ("freeze_conditions", "تجميد حتى تتغير ظروف الحالية"),
+    ("replace_program", "استبدال ببرنامج آخر أكثر طلباً في سوق العمل"),
+)
+
+ALUMNI_PROGRAM_FREEZE_QUESTION_AR = (
+    "في حال قررت الكلية تجميد البرنامج، ما مقترحك؟"
+)
+
+# تسميات قديمة لعرض الردود السابقة في التقارير
+ALUMNI_LEGACY_PROGRAM_DEVELOPMENT_LABELS: dict[str, str] = {
+    "curriculum": "تعديل الخطة الدراسية",
+    "rename": "تغيير اسم التخصص",
+    "merge": "دمج البرنامج مع تخصص آخر",
+    "new_tracks": "استحداث شعب جديدة داخل القسم",
+    "freeze": "تجميد البرنامج",
+    "no_change": "لا تغيير جوهري",
+}
+
+ALUMNI_PROFILE_FIELD_LABELS: tuple[str, ...] = (
+    "الاسم الثلاثي (اختياري)",
+    "سنة التخرج *",
+    f"{ALUMNI_DEPARTMENT_FIELD_LABEL} *",
+    ALUMNI_TRACK_FIELD_LABEL,
+    "اسم التخصص (أخرى / غير متذكر)",
+    "ملخص البرنامج المُقيَّم (يتحدّث تلقائياً)",
+    "الحالة المهنية الحالية *",
+    "مسمى وظيفتك الحالي (حسب الحالة)",
+    "هل تتطلب وظيفتك مؤهلاً هندسياً؟ (حسب الحالة)",
+    "هل واجهت رفضاً عند التقديم على وظائف؟ (حسب الحالة)",
+    "رقم الهاتف (اختياري)",
+)
+
+ALUMNI_TAIL_FIXED_FIELDS: tuple[dict[str, Any], ...] = (
+    {"label_ar": "هل تنصح الطلاب الجدد بالالتحاق بهذا التخصص (البرنامج الذي حدّدته أعلاه) في ظل الظروف الحالية؟", "field_type": "select", "options": ("نعم", "لا")},
+    {"label_ar": "لماذا؟", "field_type": "text", "optional": True},
+    {
+        "label_ar": ALUMNI_PROGRAM_FREEZE_QUESTION_AR,
+        "field_type": "select",
+        "options": tuple(lbl for _, lbl in ALUMNI_PROGRAM_DEVELOPMENT_OPTIONS),
+    },
+    {"label_ar": "ما أبرز صعوبة واجهتها عند بدء العمل؟", "field_type": "text", "optional": True},
+    {"label_ar": "ما المهارة التقنية أو البرمجية التي تمنيت التركيز عليها أكثر؟", "field_type": "text", "optional": True},
+    {"label_ar": "ما التقنيات أو الأدوات التي يتطلبها عملك ولم يغطّها البرنامج؟", "field_type": "text", "optional": True},
+    {"label_ar": ALUMNI_OPEN_COMMENT_LABEL, "field_type": "textarea", "optional": True},
 )
 
 ALUMNI_QUESTION_SECTIONS: list[tuple[int, str]] = [
@@ -84,6 +142,40 @@ ALUMNI_QUESTION_SECTIONS: list[tuple[int, str]] = [
 ]
 
 ALUMNI_V2_MARKER_PREFIX = "إلى أي مدى كان البرنامج متوازناً"
+
+
+def build_alumni_admin_outline(questions: list[dict]) -> list[dict[str, Any]]:
+    """هيكل النموذج الكامل كما يظهر للخريج — لصفحة إدارة البنود."""
+    sections = list(ALUMNI_QUESTION_SECTIONS)
+    next_section = 0
+    items: list[dict[str, Any]] = [
+        {"kind": "section", "title_ar": "أولاً — معلومات الخريج والواقع المهني", "fixed_block": True},
+    ]
+    for lbl in ALUMNI_PROFILE_FIELD_LABELS:
+        items.append({"kind": "fixed", "label_ar": lbl, "fixed_block": True, "field_type": "profile"})
+    for q in questions:
+        sort_order = int(q.get("sort_order") or 0)
+        while next_section < len(sections) and sort_order >= int(sections[next_section][0]):
+            items.append({"kind": "section", "title_ar": sections[next_section][1]})
+            next_section += 1
+        items.append({"kind": "question", **q})
+    items.append(
+        {"kind": "section", "title_ar": "خامساً — التوصيات ومستقبل البرنامج", "fixed_block": True}
+    )
+    for fx in ALUMNI_TAIL_FIXED_FIELDS:
+        items.append({"kind": "fixed", "fixed_block": True, **fx})
+    return items
+
+
+def program_development_label(choice_key: str) -> str:
+    """تسمية عربية لخيار تجميد/تطوير البرنامج (حالية أو قديمة)."""
+    key = (choice_key or "").strip()
+    if not key:
+        return ""
+    for k, lbl in ALUMNI_PROGRAM_DEVELOPMENT_OPTIONS:
+        if k == key:
+            return lbl
+    return ALUMNI_LEGACY_PROGRAM_DEVELOPMENT_LABELS.get(key, key)
 
 # ما يُفترض أن يملأه كل دور في صفحة «تعبئة الاستبيانات»
 SURVEY_METRIC_LABELS: dict[str, str] = {

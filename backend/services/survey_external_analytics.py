@@ -100,8 +100,12 @@ def _profile_breakdown_alumni(rows: list[dict]) -> dict[str, list[dict]]:
         rec = recommend_labels.get((p.get("recommend_enrollment") or "").strip().lower(), "")
         if rec:
             by_recommend[rec] += 1
-        prog = (p.get("program_development_label") or p.get("program_development_choice") or "").strip()
-        if prog:
+        prog_key = (p.get("program_development_choice") or "").strip()
+        prog_lbl = (p.get("program_development_label") or "").strip()
+        if prog_lbl or prog_key:
+            from backend.core.survey_platform import program_development_label
+
+            prog = prog_lbl or program_development_label(prog_key)
             by_program_choice[prog] += 1
     return {
         "by_graduation_year": [

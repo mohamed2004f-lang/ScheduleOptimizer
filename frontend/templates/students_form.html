@@ -117,6 +117,22 @@
                 <option value="">كل المراحل</option>
               </select>
             </div>
+            <div class="col-md-3">
+              <label class="form-label small mb-0">القسم</label>
+              <select id="filter_department" class="form-select form-select-sm" title="فلترة حسب قسم الطالب">
+                <option value="">كل الأقسام</option>
+                <option value="none">بلا قسم</option>
+              </select>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label small mb-0">عدد العرض</label>
+              <select id="filter_page_size" class="form-select form-select-sm" title="عدد الطلبة في كل صفحة">
+                <option value="25">25</option>
+                <option value="50" selected>50</option>
+                <option value="100">100</option>
+                <option value="200">200</option>
+              </select>
+            </div>
             <div class="col-auto">
               <button type="button" class="btn btn-outline-secondary btn-sm" id="btnApplyFilter">تطبيق</button>
             </div>
@@ -198,7 +214,7 @@
             <div class="mb-2">
               <label class="form-label">الرقم الدراسي</label>
               <input id="es_student_id" class="form-control" disabled>
-              <div class="form-text small">الرقم لا يمكن تغييره. الواجهة تستخدم upsert عبر /add_student.</div>
+              <div id="es_student_id_hint" class="form-text small">الرقم لا يمكن تغييره من هذه الواجهة.</div>
             </div>
             <div class="mb-2">
               <label class="form-label">اسم الطالب</label>
@@ -342,11 +358,66 @@
   <script>
   let STUDENTS_VIEW_ONLY = false;
   let CAN_TRANSFER_DEPARTMENT = false;
+  let CAN_RENAME_STUDENT_ID = false;
   let DEPARTMENT_OPTIONS = [];
   let PATHWAY_STAGE_META = {};
   let STUDENTS_ALL = [];
   let STUDENTS_PAGE = 1;
-  const STUDENTS_PAGE_SIZE = 25;
+  let STUDENTS_PAGE_SIZE = 50;
+
+  const STUDENTS_PAGE_SIZE_KEY = 'studentsListPageSize';
+
+  function readStudentsPageSize() {
+    const sel = document.getElementById('filter_page_size');
+    const stored = parseInt(localStorage.getItem(STUDENTS_PAGE_SIZE_KEY) || '', 10);
+    const fromStore = [25, 50, 100, 200].includes(stored) ? stored : 50;
+    STUDENTS_PAGE_SIZE = fromStore;
+    if (sel) sel.value = String(fromStore);
+  }
+
+  function applyStudentsPageSize() {
+    const sel = document.getElementById('filter_page_size');
+    const n = parseInt((sel && sel.value) || '50', 10);
+    STUDENTS_PAGE_SIZE = [25, 50, 100, 200].includes(n) ? n : 50;
+    localStorage.setItem(STUDENTS_PAGE_SIZE_KEY, String(STUDENTS_PAGE_SIZE));
+    STUDENTS_PAGE = 1;
+    renderStudentsPage();
+  }
+
+  async function populateDepartmentFilter() {
+    const sel = document.getElementById('filter_department');
+    if (!sel) return;
+    const current = sel.value || '';
+    try {
+      const r = await fetch('/students/department/options', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.status === 'ok') {
+        DEPARTMENT_OPTIONS = j.items || [];
+      }
+    } catch (_e) { /* ignore */ }
+    const deptOpts = (DEPARTMENT_OPTIONS || []).map(d =>
+      `<option value="${d.id}">${d.label || d.code || d.id}</option>`
+    ).join('');
+    sel.innerHTML = '<option value="">كل الأقسام</option><option value="none">بلا قسم</option>' + deptOpts;
+    if (current && [...sel.options].some(o => o.value === current)) sel.value = current;
+  }
+
+  function filterStudentsForDisplay(rows) {
+    const q = (document.getElementById('studentsListSearch')?.value || '').trim().toLowerCase();
+    let filtered = rows || [];
+    if (q) {
+      filtered = filtered.filter(s =>
+        `${s.student_id} ${s.student_name || ''}`.toLowerCase().includes(q)
+      );
+    }
+    const depFilter = (document.getElementById('filter_department') || {}).value || '';
+    if (depFilter === 'none') {
+      filtered = filtered.filter(s => s.department_id == null || s.department_id === '');
+    } else if (depFilter) {
+      filtered = filtered.filter(s => String(s.department_id) === String(depFilter));
+    }
+    return filtered;
+  }
 
   const PATHWAY_STAGE_BADGE = {
     dept_admitted: { label: 'داخل القسم', cls: 'bg-primary-subtle text-primary' },
@@ -390,13 +461,7 @@
 
   function renderStudentsPage() {
     const el = document.getElementById('studentsList');
-    const q = (document.getElementById('studentsListSearch')?.value || '').trim().toLowerCase();
-    let filtered = STUDENTS_ALL;
-    if (q) {
-      filtered = STUDENTS_ALL.filter(s =>
-        `${s.student_id} ${s.student_name || ''}`.toLowerCase().includes(q)
-      );
-    }
+    const filtered = filterStudentsForDisplay(STUDENTS_ALL);
     const total = filtered.length;
     const pages = Math.max(1, Math.ceil(total / STUDENTS_PAGE_SIZE) || 1);
     if (STUDENTS_PAGE > pages) STUDENTS_PAGE = pages;
@@ -524,6 +589,7 @@
       const caps = j.capabilities || {};
       const isSupervisorOnly = role === 'supervisor' || !!caps.is_supervisor_effective;
       CAN_TRANSFER_DEPARTMENT = !!caps.can_transfer_student_department;
+      CAN_RENAME_STUDENT_ID = !!caps.can_rename_student_id;
       STUDENTS_VIEW_ONLY = isSupervisorOnly || !!caps.students_data_view_only || caps.can_manage_students === false;
       if (!STUDENTS_VIEW_ONLY) return;
       const createCard = document.getElementById('studentCreateCard');
@@ -567,16 +633,23 @@
   }
 
   /* تحميل وعرض الطلبة */
-  async function loadStudents(){
+  async function loadStudents(opts = {}){
+    const resetPage = opts.resetPage !== false;
+    const prevPage = STUDENTS_PAGE;
     try {
       updateExportLinks();
       const params = buildStudentsQueryParams();
       let url = '/students/list';
       const q = params.toString();
       if (q) url += '?' + q;
-      const r = await fetch(url);
+      url += (url.includes('?') ? '&' : '?') + '_=' + Date.now();
+      const r = await fetch(url, { credentials: 'include', cache: 'no-store' });
       STUDENTS_ALL = r.ok ? await r.json() : [];
-      STUDENTS_PAGE = 1;
+      if (resetPage) {
+        STUDENTS_PAGE = 1;
+      } else {
+        STUDENTS_PAGE = prevPage;
+      }
       renderStudentsPage();
     } catch (err) {
       console.error(err);
@@ -593,8 +666,18 @@
       const joinTermSelect = document.getElementById('es_join_term');
       const joinYearInput = document.getElementById('es_join_year');
       const msgEl = document.getElementById('es_msg');
+      const idHint = document.getElementById('es_student_id_hint');
       if(msgEl) msgEl.innerHTML = '';
-      if(sidInput) sidInput.value = student.student_id || '';
+      if(sidInput) {
+        sidInput.value = student.student_id || '';
+        sidInput.dataset.originalId = student.student_id || '';
+        sidInput.disabled = !CAN_RENAME_STUDENT_ID;
+      }
+      if (idHint) {
+        idHint.textContent = CAN_RENAME_STUDENT_ID
+          ? 'يمكنك تصحيح الرقم الدراسي؛ سيُنقل كل سجل الطالب المرتبط تلقائياً.'
+          : 'الرقم لا يمكن تغييره من هذه الواجهة.';
+      }
       if(nameInput) nameInput.value = student.student_name || '';
       if(planSelect) planSelect.value = (student.graduation_plan || '').trim() || '';
       if(joinTermSelect) joinTermSelect.value = (student.join_term || '').trim() || '';
@@ -855,7 +938,7 @@
             if (msgEl) msgEl.innerHTML = '<div class="alert alert-success p-1">تم حفظ مرحلة المسار.</div>';
             setTimeout(async () => {
               bootstrap.Modal.getInstance(document.getElementById('pathwayStudentModal'))?.hide();
-              await loadStudents();
+              await loadStudents({ resetPage: false });
             }, 600);
           } else {
             if (msgEl) msgEl.innerHTML = '<div class="alert alert-danger p-1">' + (j.message || 'فشل الحفظ') + '</div>';
@@ -866,6 +949,8 @@
       });
     }
     bootstrapStudentsRoleView().finally(() => {
+      readStudentsPageSize();
+      populateDepartmentFilter();
       updateExportLinks();
       loadStudents();
     });
@@ -905,7 +990,9 @@
     const esSaveBtn = document.getElementById('esSaveBtn');
     if (esSaveBtn) {
       esSaveBtn.addEventListener('click', async () => {
-        const sid = document.getElementById('es_student_id').value.trim();
+        const sidInput = document.getElementById('es_student_id');
+        const sid = sidInput.value.trim();
+        const originalSid = (sidInput.dataset.originalId || '').trim();
         const name = document.getElementById('es_student_name').value.trim();
         if(!sid){
           document.getElementById('es_msg').innerHTML = '<div class="alert alert-warning p-1">الرقم الدراسي مفقود</div>';
@@ -915,10 +1002,25 @@
         const joinTerm = (document.getElementById('es_join_term')||{}).value || '';
         const joinYear = (document.getElementById('es_join_year')||{}).value || '';
         try {
+          let effectiveSid = sid;
+          if (CAN_RENAME_STUDENT_ID && originalSid && sid !== originalSid) {
+            const renameResp = await fetch('/students/student_id/rename', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({ old_student_id: originalSid, new_student_id: sid }),
+            });
+            const renameJson = await renameResp.json().catch(() => ({}));
+            if (!renameResp.ok) {
+              document.getElementById('es_msg').innerHTML = `<div class="alert alert-danger p-1">${renameJson.message || 'فشل تصحيح الرقم الدراسي'}</div>`;
+              return;
+            }
+            effectiveSid = renameJson.new_student_id || renameJson.student_id || sid;
+          }
           const resp = await fetch('/add_student', {
             method: 'POST',
             headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({student_id: sid, student_name: name, graduation_plan: plan, join_term: joinTerm, join_year: joinYear})
+            body: JSON.stringify({student_id: effectiveSid, student_name: name, graduation_plan: plan, join_term: joinTerm, join_year: joinYear})
           });
           const j = await resp.json().catch(()=>null);
           if(resp.ok){
@@ -927,7 +1029,7 @@
               const modalEl = document.getElementById('editStudentModal');
               const modal = bootstrap.Modal.getInstance(modalEl);
               if(modal) modal.hide();
-              loadStudents();
+              loadStudents({ resetPage: false });
             }, 700);
           } else {
             document.getElementById('es_msg').innerHTML = `<div class="alert alert-danger p-1">${j?.message || resp.statusText || 'خطأ'}</div>`;
@@ -953,6 +1055,15 @@
 
     const filterScope = document.getElementById('filter_list_scope');
     if (filterScope) filterScope.addEventListener('change', () => { updateExportLinks(); loadStudents(); });
+
+    const filterDept = document.getElementById('filter_department');
+    if (filterDept) filterDept.addEventListener('change', () => {
+      STUDENTS_PAGE = 1;
+      renderStudentsPage();
+    });
+
+    const filterPageSize = document.getElementById('filter_page_size');
+    if (filterPageSize) filterPageSize.addEventListener('change', applyStudentsPageSize);
 
     const stStatusSelect = document.getElementById('st_status_select');
     if (stStatusSelect) {
@@ -1015,7 +1126,7 @@
               const modalEl = document.getElementById('statusStudentModal');
               const modal = bootstrap.Modal.getInstance(modalEl);
               if(modal) modal.hide();
-              await loadStudents();
+              await loadStudents({ resetPage: false });
             }, 800);
           } else {
             if(msgEl) msgEl.innerHTML = `<div class="alert alert-danger p-1">${(j && j.message) || 'فشل حفظ حالة القيد'}</div>`;
@@ -1045,14 +1156,22 @@
             credentials: 'include',
             body: JSON.stringify({ student_id: sid, department_id: parseInt(depId, 10) }),
           });
-          const j = await resp.json().catch(() => null);
           if (resp.ok) {
+            const j = await resp.json().catch(() => ({}));
+            const sidNorm = (sid || '').trim();
+            const idx = STUDENTS_ALL.findIndex(s => String(s.student_id || '').trim() === sidNorm);
+            if (idx >= 0) {
+              STUDENTS_ALL[idx].department_id = j.department_id;
+              STUDENTS_ALL[idx].department_name = j.department_name || '';
+              renderStudentsPage();
+            }
             if (msgEl) msgEl.innerHTML = '<div class="alert alert-success p-1">تم تحديث قسم الطالب</div>';
             setTimeout(async () => {
               bootstrap.Modal.getInstance(document.getElementById('deptStudentModal'))?.hide();
-              await loadStudents();
+              await loadStudents({ resetPage: false });
             }, 700);
           } else if (msgEl) {
+            const j = await resp.json().catch(() => null);
             msgEl.innerHTML = `<div class="alert alert-danger p-1">${(j && j.message) || 'فشل حفظ القسم'}</div>`;
           }
         } catch (err) {

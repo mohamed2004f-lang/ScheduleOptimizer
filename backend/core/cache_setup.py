@@ -50,19 +50,39 @@ def cached_list(prefix: str, timeout: int | None = None):
             if cache is None:
                 return fn(*args, **kwargs)
             key = list_cache_key(prefix)
-            hit = cache.get(key)
+            hit = safe_cache_get(key)
             if hit is not None:
                 return hit
             resp = fn(*args, **kwargs)
-            try:
-                cache.set(key, resp, timeout=timeout)
-            except Exception:
-                pass
+            safe_cache_set(key, resp, timeout=timeout)
             return resp
 
         return wrapper
 
     return decorator
+
+
+def safe_cache_get(key: str):
+    """قراءة آمنة من الكاش — تتجاهل أخطاء backend غير المهيّأ."""
+    if cache is None:
+        return None
+    try:
+        return cache.get(key)
+    except Exception:
+        return None
+
+
+def safe_cache_set(key: str, value, timeout: int | None = None) -> None:
+    """كتابة آمنة إلى الكاش."""
+    if cache is None:
+        return
+    try:
+        if timeout is not None:
+            cache.set(key, value, timeout=timeout)
+        else:
+            cache.set(key, value)
+    except Exception:
+        pass
 
 
 def invalidate_list_prefix(prefix: str) -> None:
