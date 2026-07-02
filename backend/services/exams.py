@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify, send_file, session, render_template
-from backend.core.auth import login_required, role_required, SESSION_ACTIVE_MODE, _normalize_role, get_admin_department_scope_id
+from backend.core.auth import login_required, role_required, SESSION_ACTIVE_MODE, _normalize_role
 from backend.core import department_scope_policy as dept_scope_policy
+from backend.core.department_scope_policy import resolve_effective_department_scope_id
 
 from backend.services.coverage_insights import (
     normalize_coverage_course_key,
@@ -93,45 +94,9 @@ def _role_may_edit_exam_schedule():
     return False
 
 
-def _resolve_actor_department_id(conn) -> int | None:
-    cur = conn.cursor()
-    uname = (session.get("user") or session.get("username") or "").strip()
-    if uname:
-        try:
-            row = cur.execute(
-                "SELECT department_id FROM users WHERE lower(username)=lower(?) LIMIT 1",
-                (uname,),
-            ).fetchone()
-            if row and row[0] not in (None, ""):
-                return int(row[0])
-        except Exception:
-            pass
-    try:
-        iid = int(session.get("instructor_id") or 0)
-    except (TypeError, ValueError):
-        iid = 0
-    if iid:
-        try:
-            row = cur.execute(
-                "SELECT department_id FROM instructors WHERE id = ? LIMIT 1",
-                (iid,),
-            ).fetchone()
-            if row and row[0] not in (None, ""):
-                return int(row[0])
-        except Exception:
-            pass
-    return None
-
-
 def _effective_department_scope_id(conn) -> int | None:
-    role_n = _normalize_role((session.get("user_role") or "").strip())
-    if role_n in ("admin", "admin_main"):
-        return get_admin_department_scope_id()
-    if role_n == "head_of_department":
-        mode = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
-        if mode in ("", "head", "hod", "department_head"):
-            return _resolve_actor_department_id(conn)
-    return None
+    uname = (session.get("user") or session.get("username") or "").strip()
+    return resolve_effective_department_scope_id(conn, uname)
 
 
 def _course_in_scope(conn, course_name: str) -> bool:
@@ -454,10 +419,7 @@ def exam_schedule_version_restore_draft(version_id: int):
                 rows = []
 
             dep_r = _effective_department_scope_id(conn)
-            role_r = _normalize_role((session.get("user_role") or "").strip())
-            dept_scoped_r = bool(
-                dep_r is not None and role_r in ("admin", "admin_main", "head_of_department")
-            )
+            dept_scoped_r = dep_r is not None
             _delete_exams_for_type_respecting_scope(
                 cur, exam_type, int(dep_r) if dept_scoped_r else None, dept_scoped_r
             )
@@ -648,8 +610,7 @@ def _fetch_exam_conflict_aggregate_rows(conn, exam_type: str):
     """
     cur = conn.cursor()
     dep = _effective_department_scope_id(conn)
-    role_cov = _normalize_role((session.get("user_role") or "").strip())
-    dept_scoped = bool(dep is not None and role_cov in ("admin", "admin_main", "head_of_department"))
+    dept_scoped = dep is not None
     uname = (session.get("user") or session.get("username") or "").strip()
     scope_sql, scope_params = dept_scope_policy.resolve_scope_sql_for_aliased_student(conn, uname, "st")
     if scope_sql == "1=0":
@@ -746,10 +707,7 @@ def exam_schedule_coverage(exam_type):
             term_label = f"{(tname or '').strip()} {(tyear or '').strip()}".strip() or SEMESTER_LABEL
             cur = conn.cursor()
             dep = _effective_department_scope_id(conn)
-            role_cov = _normalize_role((session.get("user_role") or "").strip())
-            dept_scoped_user = (
-                dep is not None and role_cov in ("admin", "admin_main", "head_of_department")
-            )
+            dept_scoped_user = dep is not None
 
             schedule_names, scope = schedule_distinct_course_names_for_coverage(
                 conn,
@@ -1135,10 +1093,7 @@ def distribute_exams(exam_type):
     with get_connection() as conn:
         cur = conn.cursor()
         dep = _effective_department_scope_id(conn)
-        role_cov = _normalize_role((session.get("user_role") or "").strip())
-        dept_scoped_user = bool(
-            dep is not None and role_cov in ("admin", "admin_main", "head_of_department")
-        )
+        dept_scoped_user = dep is not None
         try:
             tname, tyear = get_current_term(conn=conn)
             term_label = f"{(tname or '').strip()} {(tyear or '').strip()}".strip() or SEMESTER_LABEL
@@ -1283,10 +1238,7 @@ def available_courses():
     with get_connection() as conn:
         cur = conn.cursor()
         dep = _effective_department_scope_id(conn)
-        role_cov = _normalize_role((session.get("user_role") or "").strip())
-        dept_scoped_user = bool(
-            dep is not None and role_cov in ("admin", "admin_main", "head_of_department")
-        )
+        dept_scoped_user = dep is not None
         try:
             tname, tyear = get_current_term(conn=conn)
             term_label = f"{(tname or '').strip()} {(tyear or '').strip()}".strip() or SEMESTER_LABEL

@@ -35,7 +35,7 @@ from backend.core.program_tracks import (
     track_group_label,
     track_template_presets,
 )
-from backend.core.auth import get_admin_department_scope_id, role_required
+from backend.core.auth import role_required
 from backend.core.course_master_catalog import (
     LIFECYCLE_LABELS_AR,
     LIFECYCLE_SHARED,
@@ -46,7 +46,7 @@ from backend.core.course_master_catalog import (
     normalize_catalog_lifecycle,
     title_suggests_transitional,
 )
-from backend.core.department_scope_policy import head_home_department_id
+from backend.core.department_scope_policy import resolve_effective_department_scope_id
 from backend.core.feature_flags import registration_program_course_mode
 from backend.database.database import fetch_table_columns, is_postgresql
 from backend.services.utilities import excel_response_from_frames, get_connection
@@ -110,13 +110,8 @@ def _rows(cur, sql: str, params=()):
 
 
 def _catalog_scope_department_id(conn) -> int | None:
-    role = (session.get("user_role") or "").strip().lower()
-    if role == "head_of_department":
-        uname = (session.get("user") or session.get("username") or "").strip()
-        dep = head_home_department_id(conn, uname)
-        return int(dep) if dep is not None else None
-    scoped = get_admin_department_scope_id()
-    return int(scoped) if scoped is not None else None
+    uname = (session.get("user") or session.get("username") or "").strip()
+    return resolve_effective_department_scope_id(conn, uname)
 
 
 def _program_belongs_to_scope(conn, program_id: int | None) -> bool:

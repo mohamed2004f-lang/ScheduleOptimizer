@@ -139,28 +139,18 @@ def _rows_to_dicts(cur, rows):
 
 def _scope_program_ids(conn) -> list[int] | None:
     """None = كل البرامج؛ قائمة = برامج القسم فقط."""
-    role = _normalize_role((session.get("user_role") or "").strip())
-    if role in ("admin", "admin_main"):
-        dep = get_admin_department_scope_id()
-        if dep is None:
-            return None
-        cur = conn.cursor()
-        rows = cur.execute(
-            "SELECT id FROM programs WHERE department_id = ? AND COALESCE(is_active,1)=1",
-            (int(dep),),
-        ).fetchall()
-        return [int(r[0] if not hasattr(r, "keys") else r["id"]) for r in rows]
-    if role == "head_of_department":
-        mode, dept = resolve_users_list_scope(conn, session.get("user"))
-        dep_id = dept if mode == "department" else head_home_department_id(conn, session.get("user"))
-        if dep_id is None:
-            return []
+    uname = (session.get("user") or session.get("username") or "").strip()
+    mode, dep_id = resolve_users_list_scope(conn, uname)
+    if mode == "empty":
+        return []
+    if mode == "department" and dep_id is not None:
         cur = conn.cursor()
         rows = cur.execute(
             "SELECT id FROM programs WHERE department_id = ? AND COALESCE(is_active,1)=1",
             (int(dep_id),),
         ).fetchall()
         return [int(r[0] if not hasattr(r, "keys") else r["id"]) for r in rows]
+    role = _normalize_role((session.get("user_role") or "").strip())
     if role in ("instructor", "supervisor"):
         dep_id = _resolve_instructor_department(conn)
         if dep_id is None:

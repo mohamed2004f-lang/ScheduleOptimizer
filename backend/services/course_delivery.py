@@ -8,7 +8,8 @@ from typing import Any
 
 from flask import Blueprint, jsonify, request, session
 
-from backend.core.auth import login_required, role_required, get_admin_department_scope_id
+from backend.core.auth import login_required, role_required
+from backend.core.department_scope_policy import resolve_effective_department_scope_id
 from backend.database.database import fetch_table_columns, is_postgresql
 from backend.services.utilities import get_connection, get_current_term
 
@@ -42,6 +43,11 @@ def _row_dict(row) -> dict:
 def _is_hod_or_admin() -> bool:
     role = (session.get("user_role") or "").strip()
     return role in ("head_of_department", "admin_main", "admin")
+
+
+def _delivery_department_scope_id(conn) -> int | None:
+    uname = (session.get("user") or session.get("username") or "").strip()
+    return resolve_effective_department_scope_id(conn, uname)
 
 
 def ensure_course_delivery_schema(conn) -> None:
@@ -1297,8 +1303,8 @@ def api_gate_status():
 @course_delivery_bp.route("/hod/pending", methods=["GET"])
 @role_required("head_of_department")
 def api_hod_pending():
-    dept_id = get_admin_department_scope_id()
     with get_connection() as conn:
+        dept_id = _delivery_department_scope_id(conn)
         ensure_course_delivery_schema(conn)
         cur = conn.cursor()
         sem = _current_semester_label(conn)
@@ -1393,8 +1399,8 @@ def api_hod_pending():
 @role_required("head_of_department")
 def api_hod_department_summary():
     """8.8 — ملخص متابعة القسم: تقدم تقرير التنفيذ لكل مجموعة تدريس."""
-    dept_id = get_admin_department_scope_id()
     with get_connection() as conn:
+        dept_id = _delivery_department_scope_id(conn)
         ensure_course_delivery_schema(conn)
         from backend.services import teaching_groups as tg
 
@@ -1456,8 +1462,8 @@ def api_hod_department_summary():
 @course_delivery_bp.route("/gate_policy", methods=["GET", "PUT"])
 @role_required("head_of_department", "admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
 def api_gate_policy():
-    dept_id = get_admin_department_scope_id()
     with get_connection() as conn:
+        dept_id = _delivery_department_scope_id(conn)
         ensure_course_delivery_schema(conn)
         sem = _current_semester_label(conn)
         if request.method == "GET":

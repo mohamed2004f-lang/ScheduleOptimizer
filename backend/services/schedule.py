@@ -17,7 +17,11 @@ import datetime
 import base64
 from backend.database.database import is_postgresql, schedule_pk_column, fetch_table_columns, table_exists
 from backend.core.exceptions import ValidationError
-from backend.core.department_scope_policy import student_matches_department, resolve_users_list_scope
+from backend.core.department_scope_policy import (
+    student_matches_department,
+    resolve_users_list_scope,
+    resolve_effective_department_scope_id,
+)
 from backend.core.faculty_axes import (
     AUTO_DERIVED_AXIS_KEYS,
     FACULTY_AXIS_KEYS,
@@ -440,14 +444,43 @@ def _resolve_actor_department_id(conn) -> int | None:
 
 
 def _effective_schedule_department_scope_id(conn) -> int | None:
-    role_n = _normalize_role((session.get("user_role") or "").strip())
-    if role_n in ("admin", "admin_main"):
-        return get_admin_department_scope_id()
-    if role_n == "head_of_department":
-        mode = (session.get("active_mode") or "head").strip().lower()
-        if mode in ("", "head", "hod", "department_head"):
-            return _resolve_actor_department_id(conn)
-    return None
+    uname = (session.get("user") or session.get("username") or "").strip()
+    return resolve_effective_department_scope_id(conn, uname)
+
+
+def _resolve_schedule_row_department_id(conn, course_name: str | None) -> int | None:
+    """قسم صف الجدول: نطاق المنفّذ أولاً، ثم قسم المقرر إن وُجد."""
+    uname = (session.get("user") or session.get("username") or "").strip()
+    dept_id = resolve_effective_department_scope_id(conn, uname)
+    if dept_id is not None:
+        return int(dept_id)
+    cname = (course_name or "").strip()
+    if not cname:
+        return None
+    try:
+        cols = fetch_table_columns(conn, "courses")
+    except Exception:
+        return None
+    if "owning_department_id" not in cols:
+        return None
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT owning_department_id FROM courses
+        WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))
+        LIMIT 1
+        """,
+        (cname,),
+    ).fetchone()
+    if not row:
+        return None
+    raw = row[0] if not hasattr(row, "keys") else row["owning_department_id"]
+    if raw in (None, ""):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def _teaching_groups_role_ok() -> bool:
@@ -665,14 +698,9 @@ def list_schedule_rows():
             except Exception:
                 scols = []
             scope = _effective_schedule_department_scope_id(conn)
-            role_n = _normalize_role((session.get("user_role") or "").strip())
             dept_where = ""
             dept_params: tuple = ()
-            if (
-                scope is not None
-                and role_n in ("admin", "admin_main", "head_of_department")
-                and "department_id" in scols
-            ):
+            if scope is not None and "department_id" in scols:
                 dept_where = " AND s.department_id = ? "
                 dept_params = (scope,)
             tg_join = ""
@@ -1444,6 +1472,10 @@ def add_schedule_row():
         if not sem:
             return jsonify({"status": "error", "message": "يجب تحديد الفصل الحالي أولاً من الإعدادات"}), 400
 
+        dept_id = None
+        with get_connection() as conn:
+            dept_id = _resolve_schedule_row_department_id(conn, data.get("course_name"))
+
         res = ScheduleService.add_schedule_row(
             data.get("course_name"),
             data.get("day"),
@@ -1452,6 +1484,7 @@ def add_schedule_row():
             instructor=data.get("instructor", ""),
             semester=sem,
             instructor_id=_parse_instructor_id_payload(data.get("instructor_id")),
+            department_id=dept_id,
         )
         last = res.get("section_id")
         try:

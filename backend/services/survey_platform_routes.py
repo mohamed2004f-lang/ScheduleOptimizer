@@ -18,7 +18,10 @@ from backend.core.auth import (
     login_required,
     role_required,
 )
-from backend.core.department_scope_policy import head_home_department_id, resolve_users_list_scope
+from backend.core.department_scope_policy import (
+    head_home_department_id,
+    resolve_effective_department_scope_id,
+)
 from backend.core.survey_platform import (
     EMPLOYER_ORG_TYPES,
     EXTERNAL_SURVEY_CODES,
@@ -122,16 +125,15 @@ def _session_payload() -> dict:
 
 
 def _user_department_id(conn) -> int | None:
+    uname = (session.get("user") or session.get("username") or "").strip()
+    scoped = resolve_effective_department_scope_id(conn, uname)
+    if scoped is not None:
+        return int(scoped)
     role = _normalize_role((session.get("user_role") or "").strip())
-    if role in ("admin", "admin_main"):
-        return get_admin_department_scope_id()
     if role == "head_of_department":
-        hid = head_home_department_id(conn, session.get("user"))
+        hid = head_home_department_id(conn, uname)
         if hid is not None:
             return int(hid)
-        _mode, dept = resolve_users_list_scope(conn, session.get("user"))
-        if dept is not None:
-            return int(dept)
     cur = conn.cursor()
     row = cur.execute(
         "SELECT department_id FROM users WHERE lower(username)=lower(?) LIMIT 1",

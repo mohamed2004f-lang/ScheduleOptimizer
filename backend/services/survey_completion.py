@@ -23,7 +23,14 @@ logger = logging.getLogger(__name__)
 ROLE_KEYS = ("student", "instructor", "supervisor", "staff")
 
 SCOPE_ADMIN_ROLES = frozenset(
-    {"admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean"}
+    {
+        "admin",
+        "admin_main",
+        "system_admin",
+        "college_dean",
+        "academic_vice_dean",
+        "staff",
+    }
 )
 
 

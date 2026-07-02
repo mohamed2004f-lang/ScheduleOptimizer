@@ -961,6 +961,7 @@ class ScheduleService:
         instructor: str = "",
         semester: str = "",
         instructor_id: Optional[int] = None,
+        department_id: Optional[int] = None,
     ) -> Dict:
         """إضافة صف جديد للجدول الدراسي"""
         name = sanitize_input(course_name, 200)
@@ -1003,12 +1004,33 @@ class ScheduleService:
                     if row_n and (row_n[0] or "").strip():
                         inst_text = sanitize_input((row_n[0] or "").strip(), 100)
 
+                try:
+                    from backend.database.database import fetch_table_columns
+
+                    scols = fetch_table_columns(conn, "schedule")
+                except Exception:
+                    scols = []
+                has_dept = "department_id" in scols
+                dept_val = None
+                if has_dept and department_id not in (None, ""):
+                    try:
+                        dept_val = int(department_id)
+                    except (TypeError, ValueError):
+                        dept_val = None
+
                 if is_postgresql():
-                    row_new = cur.execute(
-                        f"""INSERT INTO schedule (course_name, day, time, room, instructor, instructor_id, semester)
-                           VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING {SCHEDULE_PK_COL}""",
-                        (name, day_val, time_val, room_v, inst_text, iid, sem_v),
-                    ).fetchone()
+                    if has_dept and dept_val is not None:
+                        row_new = cur.execute(
+                            f"""INSERT INTO schedule (course_name, day, time, room, instructor, instructor_id, semester, department_id)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING {SCHEDULE_PK_COL}""",
+                            (name, day_val, time_val, room_v, inst_text, iid, sem_v, dept_val),
+                        ).fetchone()
+                    else:
+                        row_new = cur.execute(
+                            f"""INSERT INTO schedule (course_name, day, time, room, instructor, instructor_id, semester)
+                               VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING {SCHEDULE_PK_COL}""",
+                            (name, day_val, time_val, room_v, inst_text, iid, sem_v),
+                        ).fetchone()
                     try:
                         section_id = int(row_new[0]) if row_new and row_new[0] is not None else 0
                     except (TypeError, ValueError):
@@ -1032,11 +1054,18 @@ class ScheduleService:
                         except (TypeError, ValueError):
                             section_id = 0
                 else:
-                    cur.execute(
-                        """INSERT INTO schedule (course_name, day, time, room, instructor, instructor_id, semester)
-                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                        (name, day_val, time_val, room_v, inst_text, iid, sem_v),
-                    )
+                    if has_dept and dept_val is not None:
+                        cur.execute(
+                            """INSERT INTO schedule (course_name, day, time, room, instructor, instructor_id, semester, department_id)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (name, day_val, time_val, room_v, inst_text, iid, sem_v, dept_val),
+                        )
+                    else:
+                        cur.execute(
+                            """INSERT INTO schedule (course_name, day, time, room, instructor, instructor_id, semester)
+                               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                            (name, day_val, time_val, room_v, inst_text, iid, sem_v),
+                        )
                     section_id = int(cur.lastrowid or 0)
 
                 # أي تغيير في الجدول الدراسي يجعل الجدول النهائي/تقرير التعارضات قديمة،

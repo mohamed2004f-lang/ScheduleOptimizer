@@ -14,8 +14,8 @@ from backend.core.auth import (
     SESSION_ACTIVE_MODE,
     _normalize_role,
     current_supervisor_effective,
-    get_admin_department_scope_id,
 )
+from backend.core.department_scope_policy import resolve_effective_department_scope_id
 from backend.database.database import fetch_table_columns
 
 
@@ -136,6 +136,23 @@ def _collapse_ws_equal(a: str, b: str) -> bool:
 
 
 # طالب نشط فقط — لا تُعرض مقررات من تسجيلات قديمة لطلبة غير مسجّلين أو منسحبين
+_ATTENDANCE_DEPT_SCOPE_ROLES = frozenset(
+    {
+        "admin",
+        "admin_main",
+        "system_admin",
+        "college_dean",
+        "academic_vice_dean",
+        "staff",
+        "head_of_department",
+    }
+)
+
+
+def attendance_uses_department_scope(role_bucket: str) -> bool:
+    return (role_bucket or "").strip() in _ATTENDANCE_DEPT_SCOPE_ROLES
+
+
 _SQL_REG_ACTIVE_STUDENT = (
     "INNER JOIN students st ON st.student_id = r.student_id "
     "AND COALESCE(st.enrollment_status, 'active') = 'active'"
@@ -165,46 +182,10 @@ def attendance_export_role_bucket() -> str:
     return rn
 
 
-def _resolve_actor_department_id(conn) -> int | None:
-    cur = conn.cursor()
-    uname = (session.get("user") or session.get("username") or "").strip()
-    if uname:
-        try:
-            row = cur.execute(
-                "SELECT department_id FROM users WHERE lower(username)=lower(?) LIMIT 1",
-                (uname,),
-            ).fetchone()
-            if row and row[0] not in (None, ""):
-                return int(row[0])
-        except Exception:
-            pass
-    try:
-        iid = int(session.get("instructor_id") or 0)
-    except (TypeError, ValueError):
-        iid = 0
-    if iid:
-        try:
-            row = cur.execute(
-                "SELECT department_id FROM instructors WHERE id = ? LIMIT 1",
-                (iid,),
-            ).fetchone()
-            if row and row[0] not in (None, ""):
-                return int(row[0])
-        except Exception:
-            pass
-    return None
-
-
 def effective_attendance_department_scope(conn) -> int | None:
-    """نفس نطاق جداول الامتحانات: مسؤول بقسم + رئيس قسم في وضع القسم."""
-    role_n = _normalize_role((session.get("user_role") or "").strip())
-    if role_n in ("admin", "admin_main"):
-        return get_admin_department_scope_id()
-    if role_n == "head_of_department":
-        mode = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
-        if mode in ("", "head", "hod", "department_head"):
-            return _resolve_actor_department_id(conn)
-    return None
+    """نطاق القسم الفعّال لتصدير الحضور (شريط الجلسة أو قسم رئيس القسم)."""
+    uname = (session.get("user") or session.get("username") or "").strip()
+    return resolve_effective_department_scope_id(conn, uname)
 
 
 def _schedule_dept_join_and_params(conn, dept_id: int | None) -> tuple[str, str, tuple]:
@@ -473,7 +454,7 @@ def collect_attendance_export_state(
         role_bucket = attendance_export_role_bucket()
         dep_scope_joint = (
             effective_attendance_department_scope(conn)
-            if role_bucket in ("admin", "admin_main", "head_of_department")
+            if attendance_uses_department_scope(role_bucket)
             else None
         )
         term_name, term_year = get_current_term(conn=conn)
@@ -485,7 +466,7 @@ def collect_attendance_export_state(
         allowed_student_filter_sql = None
         allowed_student_filter_params: list = []
 
-        if role_bucket in ("admin", "admin_main", "head_of_department"):
+        if attendance_uses_department_scope(role_bucket):
             if not (semester_label or "").strip():
                 return {
                     "kind": "http",
@@ -671,7 +652,7 @@ def collect_attendance_export_state(
             sem = (semester_label or "").strip()
             if sem:
                 names: list = []
-                if role_bucket in ("admin", "admin_main", "head_of_department"):
+                if attendance_uses_department_scope(role_bucket):
                     er = attendance_eligible_course_rows(
                         conn, cur, term_name, term_year, dept_scope_id=dep_scope_joint
                     )
@@ -736,13 +717,13 @@ def collect_attendance_export_state(
                 normalized_map[k] = c
 
         # تقييد الإدارة بمجموعة المقررات المستخرجة من التسجيلات + الجدول (all_courses)
-        if role_bucket in ("admin", "admin_main", "head_of_department") and (semester_label or "").strip():
+        if attendance_uses_department_scope(role_bucket) and (semester_label or "").strip():
             allowed_course_set = set(all_courses)
 
         if not selected_courses:
             sem = (semester_label or "").strip()
             if sem:
-                if role_bucket in ("admin", "admin_main", "head_of_department"):
+                if attendance_uses_department_scope(role_bucket):
                     er2 = attendance_eligible_course_rows(
                         conn, cur, term_name, term_year, dept_scope_id=dep_scope_joint
                     )
@@ -769,7 +750,7 @@ def collect_attendance_export_state(
                 auto_courses = []
             if not auto_courses and sem:
                 fb_kw = {}
-                if role_bucket in ("admin", "admin_main", "head_of_department"):
+                if attendance_uses_department_scope(role_bucket):
                     fb_kw = {"conn": conn, "dept_scope_id": dep_scope_joint}
                 auto_courses = fallback_distinct_attendance_courses(cur, term_name, term_year, **fb_kw)
             if not auto_courses:
@@ -823,7 +804,7 @@ def collect_attendance_export_state(
         course_seen = {c: set() for c in selected_courses}
 
         joint_scope_suffix, joint_scope_params = ("", ())
-        if role_bucket in ("admin", "admin_main", "head_of_department"):
+        if attendance_uses_department_scope(role_bucket):
             joint_scope_suffix, joint_scope_params = attendance_student_scope_and_params(conn)
             if joint_scope_suffix == "EMPTY":
                 summaries.append(
@@ -846,7 +827,7 @@ def collect_attendance_export_state(
             where_clauses.append(allowed_student_filter_sql)
             params.extend(allowed_student_filter_params)
         if (
-            role_bucket in ("admin", "admin_main", "head_of_department")
+            attendance_uses_department_scope(role_bucket)
             and joint_scope_suffix
             and joint_scope_suffix != "EMPTY"
         ):

@@ -18,6 +18,69 @@ from backend.services.quality_metrics import term_label_from_conn
 
 logger = logging.getLogger(__name__)
 
+_SURVEY_CUSTOMIZED_KEY_PREFIX = "survey_questions_customized:"
+_SURVEY_MIGRATION_ALUMNI_V2 = "survey_migration_alumni_v2"
+_SURVEY_MIGRATION_FACULTY_DEAN_DROP = "survey_migration_faculty_dean_drop_resources_v1"
+
+
+def _survey_customized_setting_key(template_code: str) -> str:
+    return f"{_SURVEY_CUSTOMIZED_KEY_PREFIX}{(template_code or '').strip()}"
+
+
+def _setting_value(conn, key: str) -> str:
+    if not table_exists(conn, "system_settings"):
+        return ""
+    row = conn.cursor().execute(
+        "SELECT value FROM system_settings WHERE key = ? LIMIT 1",
+        (key.strip(),),
+    ).fetchone()
+    if not row:
+        return ""
+    return str((row[0] if not hasattr(row, "keys") else row["value"]) or "").strip()
+
+
+def _set_setting_value(conn, key: str, value: str) -> None:
+    if not table_exists(conn, "system_settings"):
+        return
+    cur = conn.cursor()
+    cur.execute("DELETE FROM system_settings WHERE key = ?", (key.strip(),))
+    cur.execute(
+        "INSERT INTO system_settings (key, value) VALUES (?, ?)",
+        (key.strip(), (value or "").strip()),
+    )
+
+
+def _is_survey_questions_customized(conn, template_code: str) -> bool:
+    return _setting_value(conn, _survey_customized_setting_key(template_code)) == "1"
+
+
+def _mark_survey_questions_customized(conn, template_code: str) -> None:
+    code = (template_code or "").strip()
+    if not code:
+        return
+    _set_setting_value(conn, _survey_customized_setting_key(code), "1")
+    conn.commit()
+
+
+def _migration_done(conn, key: str) -> bool:
+    return _setting_value(conn, key) == "1"
+
+
+def _set_migration_done(conn, key: str) -> None:
+    _set_setting_value(conn, key, "1")
+    conn.commit()
+
+
+def _run_survey_platform_migrations(conn) -> None:
+    """ترحيلات لمرة واحدة — لا تُعاد عند كل طلب."""
+    if not _migration_done(conn, _SURVEY_MIGRATION_FACULTY_DEAN_DROP):
+        _migrate_faculty_dean_drop_internal_resources(conn)
+        _set_migration_done(conn, _SURVEY_MIGRATION_FACULTY_DEAN_DROP)
+    if not _migration_done(conn, _SURVEY_MIGRATION_ALUMNI_V2):
+        if not _is_survey_questions_customized(conn, "alumni"):
+            _migrate_alumni_survey_v2(conn)
+        _set_migration_done(conn, _SURVEY_MIGRATION_ALUMNI_V2)
+
 
 def _row_dict(row) -> dict:
     if row is None:
@@ -38,8 +101,6 @@ def ensure_survey_platform_tables(conn) -> None:
 
     ensure_survey_invite_schema(conn)
     ensure_survey_templates_seeded(conn)
-    _sync_template_titles_from_seed(conn)
-    _upgrade_platform_questions_from_seed(conn)
 
 
 def _sync_template_titles_from_seed(conn) -> None:
@@ -72,37 +133,6 @@ def _sync_template_titles_from_seed(conn) -> None:
     if updated:
         conn.commit()
         logger.info("Synced survey template titles from seed")
-
-    _sync_all_question_labels_from_seed(conn)
-
-
-def _sync_all_question_labels_from_seed(conn) -> None:
-    """تحديث نصوص بنود كل قوالب الاستبيان من البذرة (حسب sort_order) دون تغيير question_id."""
-    if not table_exists(conn, "survey_questions"):
-        return
-    cur = conn.cursor()
-    now = datetime.datetime.utcnow().isoformat()
-    updated = 0
-    for code, items in QUESTION_SEED.items():
-        tid = _template_id_by_code(cur, code)
-        if not tid:
-            continue
-        for label, sort_order in items:
-            cur.execute(
-                """
-                UPDATE survey_questions
-                SET label_ar = ?, updated_at = ?
-                WHERE template_id = ? AND sort_order = ?
-                """,
-                (label.strip(), now, tid, int(sort_order)),
-            )
-            updated += int(cur.rowcount or 0)
-    if updated:
-        conn.commit()
-        logger.info("Synced %s platform survey question labels from seed", updated)
-
-    _migrate_faculty_dean_drop_internal_resources(conn)
-    _migrate_alumni_survey_v2(conn)
 
 
 def _migrate_alumni_survey_v2(conn) -> None:
@@ -261,6 +291,7 @@ def ensure_survey_templates_seeded(conn) -> None:
     if int((n[0] if n else 0) or 0) > 0:
         _ensure_missing_templates_from_seed(conn)
         _sync_template_titles_from_seed(conn)
+        _run_survey_platform_migrations(conn)
         return
     now = datetime.datetime.utcnow().isoformat()
     for t in SURVEY_TEMPLATE_SEED:
@@ -288,6 +319,7 @@ def ensure_survey_templates_seeded(conn) -> None:
     conn.commit()
     _seed_questions_for_templates(conn)
     _upgrade_platform_questions_from_seed(conn)
+    _run_survey_platform_migrations(conn)
     logger.info("Seeded %s survey templates", len(SURVEY_TEMPLATE_SEED))
 
 
@@ -361,6 +393,8 @@ def _upgrade_platform_questions_from_seed(conn) -> None:
     now = datetime.datetime.utcnow().isoformat()
     total_added = 0
     for code, items in QUESTION_SEED.items():
+        if _is_survey_questions_customized(conn, code):
+            continue
         tid = _template_id_by_code(cur, code)
         if not tid:
             continue
@@ -959,7 +993,9 @@ def create_admin_question(conn, template_code: str, label_ar: str) -> dict:
     if not tpl:
         raise ValueError("قالب الاستبيان غير موجود")
     if is_legacy_course_template(tpl):
-        return create_survey_question(conn, label_ar)
+        q = create_survey_question(conn, label_ar)
+        _mark_survey_questions_customized(conn, template_code)
+        return q
     label = (label_ar or "").strip()
     if not label:
         raise ValueError("نص البند مطلوب")
@@ -989,6 +1025,7 @@ def create_admin_question(conn, template_code: str, label_ar: str) -> dict:
         )
         qid = int(cur.lastrowid or 0)
     conn.commit()
+    _mark_survey_questions_customized(conn, template_code)
     return _platform_question_by_id(conn, qid) or {"id": qid, "label_ar": label}
 
 
@@ -1006,7 +1043,10 @@ def update_admin_question(
     if not tpl:
         raise ValueError("قالب الاستبيان غير موجود")
     if is_legacy_course_template(tpl):
-        return update_survey_question(conn, question_id, label_ar=label_ar, is_active=is_active)
+        result = update_survey_question(conn, question_id, label_ar=label_ar, is_active=is_active)
+        if result is not None:
+            _mark_survey_questions_customized(conn, template_code)
+        return result
     q = _platform_question_by_id(conn, question_id)
     if not q or (q.get("template_code") or "").strip() != template_code.strip():
         return None
@@ -1024,6 +1064,7 @@ def update_admin_question(
         (label, active, now, int(question_id)),
     )
     conn.commit()
+    _mark_survey_questions_customized(conn, template_code)
     return _platform_question_by_id(conn, question_id)
 
 
@@ -1034,7 +1075,9 @@ def reorder_admin_questions(conn, template_code: str, ordered_ids: list[int]) ->
     if not tpl:
         raise ValueError("قالب الاستبيان غير موجود")
     if is_legacy_course_template(tpl):
-        return reorder_survey_questions(conn, ordered_ids)
+        result = reorder_survey_questions(conn, ordered_ids)
+        _mark_survey_questions_customized(conn, template_code)
+        return result
     ids = [int(x) for x in ordered_ids if int(x) > 0]
     if not ids:
         raise ValueError("قائمة الترتيب فارغة")
@@ -1048,6 +1091,7 @@ def reorder_admin_questions(conn, template_code: str, ordered_ids: list[int]) ->
         )
         order_val += 10
     conn.commit()
+    _mark_survey_questions_customized(conn, template_code)
     return list_admin_questions(conn, template_code)
 
 
@@ -1058,7 +1102,10 @@ def delete_admin_question(conn, template_code: str, question_id: int) -> tuple[b
     if not tpl:
         return False, "قالب غير موجود"
     if is_legacy_course_template(tpl):
-        return delete_survey_question(conn, question_id)
+        ok, msg = delete_survey_question(conn, question_id)
+        if ok:
+            _mark_survey_questions_customized(conn, template_code)
+        return ok, msg
     q = _platform_question_by_id(conn, question_id)
     if not q or (q.get("template_code") or "").strip() != template_code.strip():
         return False, "البند غير موجود لهذا القالب"
@@ -1071,4 +1118,5 @@ def delete_admin_question(conn, template_code: str, question_id: int) -> tuple[b
         return False, "لا يمكن حذف بند لديه إجابات — استخدم «إيقاف»"
     cur.execute("DELETE FROM survey_questions WHERE id = ?", (int(question_id),))
     conn.commit()
+    _mark_survey_questions_customized(conn, template_code)
     return True, "ok"

@@ -194,7 +194,7 @@
     </div>
     <div class="d-flex align-items-center gap-2 flex-wrap">
       <label for="adminDeptScopeSelect" class="small mb-0 visually-hidden">اختر القسم للتصفية</label>
-      <select id="adminDeptScopeSelect" class="form-select form-select-sm admin-dept-scope-select" title="تصفية الكتالوج والطلاب والمقررات حسب القسم" aria-describedby="adminDeptScopeHint adminDeptScopeEmptyWarn"></select>
+      <select id="adminDeptScopeSelect" class="form-select form-select-sm admin-dept-scope-select" title="تصفية الطلاب والمقررات والجدول وهيئة التدريس حسب القسم" aria-describedby="adminDeptScopeHint adminDeptScopeWorkflowHint adminDeptScopeEmptyWarn"></select>
       <button type="button" class="btn btn-sm btn-link text-secondary p-0 d-none" id="adminDeptScopeHelpBtn"
         title="تفاصيل تقنية لمسؤول النظام"
         data-bs-toggle="popover" data-bs-trigger="focus" data-bs-placement="bottom" data-bs-html="true"
@@ -202,8 +202,12 @@
         <i class="fa-regular fa-circle-question" aria-hidden="true"></i>
       </button>
     </div>
-    <p id="adminDeptScopeHint" class="small text-muted mb-0">تصفية العرض حسب القسم — يشمل الطلاب المسجّلين في القسم أو في برامجه الأكاديمية.</p>
+    <p id="adminDeptScopeHint" class="small text-muted mb-0">تصفية العرض حسب القسم — يشمل الطلاب والمقررات والجدول وأعضاء هيئة التدريس المرتبطين بالقسم.</p>
   </div>
+  <p id="adminDeptScopeWorkflowHint" class="small text-muted mb-0 mt-2 w-100">
+    <strong>ترتيب العمل الموصى به:</strong> طلبة ← مقررات ← جدول دراسي ← تسجيلات ← درجات.
+    عند الإدخال أو الاستيراد، اختر القسم من القائمة أولاً؛ أو ادخل من حساب <strong>رئيس القسم</strong> ليربط السجلات تلقائياً بقسمه.
+  </p>
   <div id="adminDeptScopeEmptyWarn" class="alert alert-warning py-1 px-2 mb-0 mt-2 small d-none" role="status">
     <i class="fa-solid fa-triangle-exclamation ms-1" aria-hidden="true"></i>
     لا توجد سجلات طلاب أو مقررات لهذا القسم. إذا كان ذلك غير متوقّع، تواصل مع مسؤول النظام.

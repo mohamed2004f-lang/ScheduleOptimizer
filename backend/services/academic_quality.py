@@ -6,9 +6,8 @@ import datetime
 
 from flask import Blueprint, jsonify, render_template, request, session
 
-from backend.core.auth import login_required, role_required, current_supervisor_effective, _normalize_role
-from backend.core.department_scope_policy import head_home_department_id, resolve_users_list_scope
-from backend.core.auth import get_admin_department_scope_id
+from backend.core.auth import login_required, role_required, current_supervisor_effective
+from backend.core.department_scope_policy import resolve_effective_department_scope_id
 from backend.services.utilities import get_connection, pdf_response_from_html
 from backend.core.survey_platform import RESPONDENT_ROLE_LABELS
 from backend.services.multi_surveys import (
@@ -31,16 +30,8 @@ academic_quality_bp = Blueprint("academic_quality", __name__)
 
 
 def _resolve_department_scope(conn) -> int | None:
-    role = _normalize_role((session.get("user_role") or "").strip())
-    if role in ("admin", "admin_main"):
-        return get_admin_department_scope_id()
-    if role == "head_of_department":
-        mode, dept = resolve_users_list_scope(conn, session.get("user"))
-        if mode == "department" and dept is not None:
-            return int(dept)
-        hid = head_home_department_id(conn, session.get("user"))
-        return int(hid) if hid is not None else None
-    return None
+    uname = (session.get("user") or session.get("username") or "").strip()
+    return resolve_effective_department_scope_id(conn, uname)
 
 
 def _quality_scope_label(conn, department_id: int | None) -> str:

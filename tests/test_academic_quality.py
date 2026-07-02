@@ -162,6 +162,31 @@ def test_survey_admin_platform_template(app):
         c.delete(f"/academic_quality/api/survey_questions/{qid}?template=faculty_hod")
 
 
+def test_survey_admin_edit_persists_after_seed_sync(app, db_conn):
+    """تعديل نص بند يدوياً لا يُستبدل عند إعادة مزامنة البذرة."""
+    from backend.services.multi_surveys import ensure_survey_templates_seeded, list_admin_questions
+
+    ensure_survey_templates_seeded(db_conn)
+    with app.test_client() as c:
+        c.post("/auth/login", json={"username": "admin-test", "password": "TestP@ssw0rd!"})
+        r = c.get("/academic_quality/api/survey_questions?template=faculty_hod")
+        qs = (r.get_json() or {}).get("questions") or []
+        assert qs
+        qid = qs[0]["id"]
+        edited = "بند معدّل يدوياً — يجب أن يبقى بعد التحديث"
+        r2 = c.put(
+            f"/academic_quality/api/survey_questions/{qid}",
+            json={"label_ar": edited, "template_code": "faculty_hod"},
+        )
+        assert r2.status_code == 200
+        ensure_survey_templates_seeded(db_conn)
+        ensure_survey_templates_seeded(db_conn)
+        after = list_admin_questions(db_conn, "faculty_hod")
+        found = next((q for q in after if int(q["id"]) == int(qid)), None)
+        assert found is not None
+        assert found["label_ar"] == edited
+
+
 def test_quality_metrics_api(app):
     with app.test_client() as c:
         c.post("/auth/login", json={"username": "admin-test", "password": "TestP@ssw0rd!"})

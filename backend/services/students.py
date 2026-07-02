@@ -43,6 +43,8 @@ from backend.services.registration_policy import (
 from backend.services import teaching_groups as tg_svc
 from .attendance_export_core import (
     attendance_eligible_course_rows,
+    attendance_export_role_bucket,
+    attendance_uses_department_scope,
     build_schedule_semester_match,
     collect_attendance_export_state as _collect_attendance_export_state,
     course_rows_with_meta,
@@ -4104,8 +4106,8 @@ def attendance_allowed_courses():
     if not user_role:
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
 
-    # الإدارة: مقررات لها تسجيل فعلي للفصل الحالي، مربوطة بالجدول بعد تطبيع اسم المقرر (كما في التصدير)
-    if role_for_scope in ("admin", "admin_main", "head_of_department"):
+    role_bucket = attendance_export_role_bucket()
+    if attendance_uses_department_scope(role_bucket):
         with get_connection() as conn:
             cur = conn.cursor()
             term_name, term_year = get_current_term(conn=conn)
