@@ -311,6 +311,10 @@ _startup_verify_critical_symbols()
 try:
     csrf.exempt(students_api_bp)
     csrf.exempt(instructors_api_bp)
+    # استبيانات الدعوة الخارجية (خريج/قطاع): رابط الدعوة هو التحقق — لا جلسة دخول
+    _invite_submit = app.view_functions.get("academic_quality.survey_invite_submit_api")
+    if _invite_submit is not None:
+        csrf.exempt(_invite_submit)
 except Exception:
     pass
 
