@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>سجل المقررات المشتركة</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main">
+    <div class="page-header mb-3">
+      <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+        <div>
+          <h1 class="page-title">سجل المقررات المشتركة بين الأقسام</h1>
+          <p class="page-subtitle mb-0">
+            مصدر مركزي للمقررات الموحّدة (GS) والمشتركة برموز مختلفة — يُزامَن تلقائياً مع المقررات التشغيلية وخطط الأقسام.
+          </p>
+          <p class="small text-muted mt-1 mb-0">
+            هذا سجل <strong>المقررات المشتركة</strong> — ليس كتالوج معايير الاعتماد (QAA) ولا كتالوج خطط الأقسام.
+          </p>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+          <a class="btn btn-outline-secondary btn-sm" href="/college_catalog_page">كتالوج الأقسام والخطط</a>
+          <a class="btn btn-outline-info btn-sm" href="/academic_quality/glossary">تمييز «كتالوج»</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="alert alert-info small">
+      <strong>أنواع المشاركة:</strong>
+      <span class="badge bg-primary">unified</span> نفس الاسم والرمز لكل الأقسام &nbsp;
+      <span class="badge bg-secondary">multi_code</span> محتوى واحد — رمز مختلف لكل قسم &nbsp;
+      <span class="badge bg-warning text-dark">subset</span> مشترك بين أقسام محددة فقط
+    </div>
+
+    <div id="adminTools" class="card mb-3 d-none">
+      <div class="card-body">
+        <div class="d-flex flex-wrap gap-2 mb-2">
+          <button type="button" class="btn btn-primary btn-sm" id="btnNew">مقرر مشترك جديد</button>
+          <a class="btn btn-outline-secondary btn-sm" href="/college/catalog/shared_catalog/import/template">تحميل قالب Excel</a>
+          <label class="btn btn-outline-primary btn-sm mb-0">
+            استيراد Excel
+            <input type="file" id="importFile" accept=".xlsx,.xls" hidden>
+          </label>
+        </div>
+        <div id="msg" class="small"></div>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>السجل</strong>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="btnRefresh">تحديث</button>
+      </div>
+      <div class="card-body table-responsive">
+        <table class="table table-sm table-hover" id="tbl">
+          <thead class="table-light">
+            <tr>
+              <th>الاسم الرسمي</th>
+              <th>الرمز</th>
+              <th>النوع</th>
+              <th>و.</th>
+              <th>أقسام</th>
+              <th>حالة</th>
+              <th class="admin-col d-none">إجراء</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card d-none" id="editCard">
+      <div class="card-header"><strong id="editTitle">تحرير</strong></div>
+      <div class="card-body">
+        <input type="hidden" id="fId">
+        <div class="row g-2 mb-2">
+          <div class="col-md-3">
+            <label class="form-label small">نوع المشاركة</label>
+            <select class="form-select form-select-sm" id="fShareType">
+              <option value="unified">unified — موحّد GS</option>
+              <option value="multi_code">multi_code — رمز لكل قسم</option>
+              <option value="subset">subset — أقسام محددة</option>
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small">الاسم الرسمي (تشغيل)</label>
+            <input class="form-control form-control-sm" id="fName">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label small">الرمز المرجعي</label>
+            <input class="form-control form-control-sm" id="fCode">
+          </div>
+          <div class="col-md-1">
+            <label class="form-label small">وحدات</label>
+            <input class="form-control form-control-sm" id="fUnits" type="number" min="0" value="3">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label small">نطاق الخطة</label>
+            <select class="form-select form-select-sm" id="fScope">
+              <option value="pre_track">pre_track</option>
+              <option value="dept_common">dept_common</option>
+              <option value="track">track</option>
+            </select>
+          </div>
+        </div>
+        <div class="mb-2">
+          <label class="form-label small">ملاحظات</label>
+          <input class="form-control form-control-sm" id="fNotes">
+        </div>
+        <div id="deptSection" class="d-none">
+          <label class="form-label small fw-bold">أقسام المشاركة (multi_code / subset)</label>
+          <div id="deptRows"></div>
+          <button type="button" class="btn btn-sm btn-outline-secondary mt-1" id="btnAddDept">+ قسم</button>
+        </div>
+        <div class="mt-3 d-flex gap-2">
+          <button type="button" class="btn btn-success btn-sm" id="btnSave">حفظ ومزامنة</button>
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="btnCancel">إلغاء</button>
+        </div>
+      </div>
+    </div>
+  </main>
+  <script>
+    const IS_ADMIN = {{ 'true' if session.get('user_role') in ('admin','admin_main','system_admin','college_dean') else 'false' }};
+    const IS_VIEW_ONLY = {{ 'true' if session.get('user_role') in ('head_of_department','academic_vice_dean') else 'false' }};
+    let ITEMS = [];
+    let DEPS = [];
+
+    function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+
+    async function apiGet(url){
+      const r = await fetch(url, { credentials: 'include' });
+      return r.json().catch(()=>({}));
+    }
+    async function apiPost(url, body){
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body || {})
+      });
+      return { ok: r.ok, data: await r.json().catch(()=>({})) };
+    }
+
+    function showMsg(html, cls='text-muted'){
+      document.getElementById('msg').innerHTML = `<div class="${cls}">${html}</div>`;
+    }
+
+    function toggleDeptSection(){
+      const st = document.getElementById('fShareType').value;
+      const show = st === 'multi_code' || st === 'subset';
+      document.getElementById('deptSection').classList.toggle('d-none', !show);
+    }
+
+    function renderDeptRow(dep){
+      const wrap = document.createElement('div');
+      wrap.className = 'row g-1 mb-1 dept-row';
+      const opts = DEPS.map(d => `<option value="${d.id}" ${dep && dep.department_id==d.id?'selected':''}>${esc(d.name_ar)} (${esc(d.code)})</option>`).join('');
+      wrap.innerHTML = `
+        <div class="col-md-4"><select class="form-select form-select-sm dept-id"><option value="">— قسم —</option>${opts}</select></div>
+        <div class="col-md-3"><input class="form-control form-control-sm dept-code" placeholder="رمز الخطة" value="${esc(dep&&dep.plan_course_code)}"></div>
+        <div class="col-md-4"><input class="form-control form-control-sm dept-name" placeholder="اسم العرض (اختياري)" value="${esc(dep&&dep.plan_course_name_override)}"></div>
+        <div class="col-md-1"><button type="button" class="btn btn-sm btn-outline-danger w-100 btn-rm">×</button></div>`;
+      wrap.querySelector('.btn-rm').onclick = () => wrap.remove();
+      return wrap;
+    }
+
+    function collectDepartments(){
+      return [...document.querySelectorAll('.dept-row')].map(row => ({
+        department_id: parseInt(row.querySelector('.dept-id').value, 10),
+        plan_course_code: row.querySelector('.dept-code').value.trim(),
+        plan_course_name_override: row.querySelector('.dept-name').value.trim(),
+        is_active: true
+      })).filter(x => x.department_id > 0);
+    }
+
+    function renderTable(){
+      const tb = document.querySelector('#tbl tbody');
+      tb.innerHTML = '';
+      ITEMS.forEach(it => {
+        const tr = document.createElement('tr');
+        const active = it.is_active ? '<span class="badge bg-success">نشط</span>' : '<span class="badge bg-secondary">موقوف</span>';
+        tr.innerHTML = `
+          <td>${esc(it.canonical_course_name)}</td>
+          <td><code>${esc(it.canonical_course_code)}</code></td>
+          <td><span class="badge bg-light text-dark border">${esc(it.share_type_label||it.share_type)}</span></td>
+          <td>${it.units||0}</td>
+          <td>${it.department_count||0}</td>
+          <td>${active}</td>
+          <td class="admin-col d-none text-nowrap">
+            <button class="btn btn-sm btn-outline-primary btn-edit" data-id="${it.id}">تحرير</button>
+            ${it.is_active ? `<button class="btn btn-sm btn-outline-warning btn-off" data-id="${it.id}">إيقاف</button>` : ''}
+          </td>`;
+        tb.appendChild(tr);
+      });
+      if (IS_ADMIN) {
+        document.querySelectorAll('.admin-col').forEach(el => el.classList.remove('d-none'));
+      }
+      tb.querySelectorAll('.btn-edit').forEach(b => b.onclick = () => openEdit(parseInt(b.dataset.id,10)));
+      tb.querySelectorAll('.btn-off').forEach(b => b.onclick = () => setActive(parseInt(b.dataset.id,10), false));
+    }
+
+    async function load(){
+      const [lr, dr] = await Promise.all([
+        apiGet('/college/catalog/shared_catalog/list?include_inactive=1'),
+        apiGet('/college/catalog/shared_catalog/departments')
+      ]);
+      ITEMS = lr.items || [];
+      DEPS = dr.departments || [];
+      renderTable();
+    }
+
+    function openEdit(id){
+      const it = id ? ITEMS.find(x => x.id === id) : null;
+      document.getElementById('editCard').classList.remove('d-none');
+      document.getElementById('editTitle').textContent = it ? 'تحرير مقرر مشترك' : 'مقرر مشترك جديد';
+      document.getElementById('fId').value = it ? it.id : '';
+      document.getElementById('fShareType').value = it ? it.share_type : 'unified';
+      document.getElementById('fName').value = it ? it.canonical_course_name : '';
+      document.getElementById('fCode').value = it ? it.canonical_course_code : '';
+      document.getElementById('fUnits').value = it ? (it.units||3) : 3;
+      document.getElementById('fScope').value = it ? (it.requirement_scope||'pre_track') : 'pre_track';
+      document.getElementById('fNotes').value = it ? (it.notes||'') : '';
+      const dr = document.getElementById('deptRows');
+      dr.innerHTML = '';
+      (it && it.departments ? it.departments : [{}]).forEach(d => dr.appendChild(renderDeptRow(d)));
+      toggleDeptSection();
+    }
+
+    async function saveEntry(){
+      const st = document.getElementById('fShareType').value;
+      const payload = {
+        id: document.getElementById('fId').value || undefined,
+        share_type: st,
+        canonical_course_name: document.getElementById('fName').value.trim(),
+        canonical_course_code: document.getElementById('fCode').value.trim(),
+        units: parseInt(document.getElementById('fUnits').value, 10) || 0,
+        requirement_scope: document.getElementById('fScope').value,
+        notes: document.getElementById('fNotes').value.trim(),
+        departments: (st === 'unified') ? [] : collectDepartments()
+      };
+      const { ok, data } = await apiPost('/college/catalog/shared_catalog/save', payload);
+      if (ok) {
+        showMsg('تم الحفظ والمزامنة.', 'text-success');
+        document.getElementById('editCard').classList.add('d-none');
+        await load();
+      } else {
+        showMsg(esc(data.message || 'فشل الحفظ'), 'text-danger');
+      }
+    }
+
+    async function setActive(id, active){
+      const { ok, data } = await apiPost('/college/catalog/shared_catalog/set_active', { id, is_active: active });
+      showMsg(ok ? 'تم.' : esc(data.message), ok ? 'text-success' : 'text-danger');
+      await load();
+    }
+
+    document.getElementById('fShareType').addEventListener('change', toggleDeptSection);
+    document.getElementById('btnAddDept').onclick = () => document.getElementById('deptRows').appendChild(renderDeptRow(null));
+    document.getElementById('btnNew').onclick = () => openEdit(null);
+    document.getElementById('btnSave').onclick = saveEntry;
+    document.getElementById('btnCancel').onclick = () => document.getElementById('editCard').classList.add('d-none');
+    document.getElementById('btnRefresh').onclick = load;
+    document.getElementById('importFile').addEventListener('change', async (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const fd = new FormData();
+      fd.append('file', f);
+      const r = await fetch('/college/catalog/shared_catalog/import/excel', { method: 'POST', body: fd, credentials: 'include' });
+      const j = await r.json().catch(()=>({}));
+      showMsg(r.ok ? `استُورد ${j.imported||0} مقرر.` : esc(j.message||'فشل'), r.ok ? 'text-success' : 'text-danger');
+      e.target.value = '';
+      await load();
+    });
+
+    if (IS_ADMIN) document.getElementById('adminTools').classList.remove('d-none');
+    if (IS_VIEW_ONLY && !IS_ADMIN) {
+      showMsg('عرض فقط — الإضافة والتعديل والاستيراد من صلاحية عميد الكلية أو admin_main.', 'text-muted');
+    }
+    load();
+  </script>
+</body>
+</html>

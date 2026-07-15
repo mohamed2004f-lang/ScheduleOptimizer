@@ -40,6 +40,10 @@ from backend.services.survey_invites import (
     submit_invite_survey,
     validate_invite,
 )
+from backend.services.survey_eligibility import (
+    FACULTY_EXTERNAL_COLLABORATOR_TEMPLATE,
+    is_instructor_template_required,
+)
 from backend.services.multi_surveys import (
     aggregate_template,
     get_template_by_code,
@@ -62,11 +66,17 @@ from backend.services.survey_analytics import (
     export_course_eval_section_xlsx,
     export_course_eval_missing_sections_xlsx,
     export_course_eval_sections_xlsx,
+    export_course_eval_sections_docx,
+    build_course_eval_sections_export_context,
+    course_eval_sections_export_bytes,
     export_package_xlsx,
     export_single_survey_xlsx,
     is_exportable_template_code,
     prepare_combined_pdf_context,
     prepare_single_survey_pdf_context,
+    prepare_course_eval_section_pdf_context,
+    prepare_course_eval_by_course_pdf_context,
+    enrich_survey_export_context,
 )
 from backend.services.survey_accreditation_links import SurveyLinkCache
 from backend.services.survey_accreditation import (
@@ -489,6 +499,17 @@ def register_survey_platform_routes(bp) -> None:
                         conn, student_id, semester=sem
                     )
                     pending = ce_pending + pending
+            # تقارير جودة المقرر كمعلّقات في مركز الاستبيانات للأستاذ
+            eff_early = survey_respondent_role(role, active_mode)
+            if eff_early == "instructor" and session.get("instructor_id"):
+                from backend.services.course_delivery import list_pending_quality_reports
+
+                q_pending = list_pending_quality_reports(
+                    conn,
+                    instructor_id=int(session["instructor_id"]),
+                    semester=sem,
+                )
+                pending = q_pending + pending
             pending = _enrich_pending_surveys(pending)
             eff = survey_respondent_role(role, active_mode)
             fill_guide = ROLE_SURVEY_FILL_GUIDE.get(role) or ROLE_SURVEY_FILL_GUIDE.get(eff, "")
@@ -563,9 +584,35 @@ def register_survey_platform_routes(bp) -> None:
                 return jsonify({"status": "error", "message": "غير مصرح بهذا الاستبيان"}), 403
             sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
             dept_id = _user_department_id(conn)
+            if eff == "instructor":
+                iid = session.get("instructor_id")
+                try:
+                    iid_int = int(iid) if iid is not None else None
+                except (TypeError, ValueError):
+                    iid_int = None
+                if iid_int and not is_instructor_template_required(
+                    conn,
+                    template_code=template_code,
+                    instructor_id=iid_int,
+                    department_id=dept_id,
+                ):
+                    return jsonify(
+                        {
+                            "status": "error",
+                            "message": "هذا الاستبيان غير مطلوب من حسابك (رئيس قسم أو متعاون خارجي).",
+                        }
+                    ), 403
             subj_type, subj_id = _resolve_subject(
                 conn, template, department_id=dept_id, subject_id_arg=dept_id
             )
+            code = (template.get("code") or "").strip()
+            if code == FACULTY_EXTERNAL_COLLABORATOR_TEMPLATE and eff == "instructor":
+                try:
+                    ext_iid = int(session.get("instructor_id") or 0)
+                except (TypeError, ValueError):
+                    ext_iid = 0
+                if ext_iid:
+                    subj_type, subj_id = "external_teaching", ext_iid
             questions = list_template_questions(conn, int(template["id"]))
         code = (template.get("code") or "").strip()
         question_sections: list[dict] = []
@@ -620,11 +667,33 @@ def register_survey_platform_routes(bp) -> None:
                 subj_type, subj_id = _resolve_subject(
                     conn, template, department_id=dept_id, subject_id_arg=dept_id
                 )
+            resp_role, resp_id = _respondent_key_from_session(eff)
+            if code == FACULTY_EXTERNAL_COLLABORATOR_TEMPLATE and eff == "instructor" and resp_id:
+                try:
+                    subj_type, subj_id = "external_teaching", int(resp_id)
+                except (TypeError, ValueError):
+                    pass
             questions = list_template_questions(conn, int(template["id"]))
             answers = parse_answers_payload(dict(data), questions)
-            resp_role, resp_id = _respondent_key_from_session(eff)
             if not resp_id:
                 return jsonify({"status": "error", "message": "تعذر تحديد هوية المُقيِّم"}), 400
+            if eff == "instructor":
+                try:
+                    iid_int = int(resp_id)
+                except (TypeError, ValueError):
+                    iid_int = None
+                if iid_int and not is_instructor_template_required(
+                    conn,
+                    template_code=code,
+                    instructor_id=iid_int,
+                    department_id=dept_id,
+                ):
+                    return jsonify(
+                        {
+                            "status": "error",
+                            "message": "هذا الاستبيان غير مطلوب من حسابك (رئيس قسم أو متعاون خارجي).",
+                        }
+                    ), 403
             try:
                 rid = submit_survey_response(
                     conn,
@@ -887,6 +956,18 @@ def register_survey_platform_routes(bp) -> None:
             course_eval_summary = build_course_eval_report(
                 conn, semester=sem, department_id=dept_id
             )
+            try:
+                course_eval_summary["primary_indicator"] = (
+                    primary_evidence_indicator_code(
+                        "student_course",
+                        conn,
+                        semester=sem,
+                        department_id=dept_id,
+                    )
+                    or "INST-09-15"
+                )
+            except Exception:
+                course_eval_summary["primary_indicator"] = "INST-09-15"
             semester_closure = get_semester_closure(conn, sem, dept_id)
             agg_for_closure = sum(1 for a in aggregates if a.get("aggregated"))
             total_for_closure = len(aggregates) + 1
@@ -1148,8 +1229,11 @@ def register_survey_platform_routes(bp) -> None:
             if not is_exportable_template_code(conn, template_code):
                 return jsonify({"status": "error", "message": "قالب الاستبيان غير موجود"}), 404
             if not indicator_code:
-                indicator_code = primary_evidence_indicator_code(template_code, conn) or ""
-            if not indicator_code:
+                if template_code == "course_eval_sections":
+                    indicator_code = ""
+                else:
+                    indicator_code = primary_evidence_indicator_code(template_code, conn) or ""
+            if not indicator_code and template_code != "course_eval_sections":
                 return jsonify({"status": "error", "message": "لا يوجد مؤشر اعتماد مرتبط بهذا الاستبيان"}), 400
             sem = (
                 (data.get("cycle") or data.get("cycle_label") or data.get("semester") or "")
@@ -1159,14 +1243,16 @@ def register_survey_platform_routes(bp) -> None:
             dept_id = _user_department_id(conn)
             if template_code in EXTERNAL_SURVEY_CODES:
                 dept_id = None
+            export_format = (data.get("export_format") or data.get("format") or "").strip() or None
             try:
                 result = register_survey_as_evidence(
                     conn,
                     template_code=template_code,
                     semester=sem,
                     department_id=dept_id,
-                    indicator_code=indicator_code,
+                    indicator_code=indicator_code or None,
                     uploaded_by=(session.get("user") or "").strip(),
+                    export_format=export_format,
                 )
             except ValueError as exc:
                 return jsonify({"status": "error", "message": str(exc)}), 400
@@ -1280,6 +1366,7 @@ def register_survey_platform_routes(bp) -> None:
                 department_id=dept_id,
                 include_course_eval=include_ce,
             )
+            ctx = enrich_survey_export_context(ctx, for_pdf=True)
         html = render_template("survey_export_package.html", for_pdf=True, **ctx)
         sem_slug = (ctx.get("semester") or "report").replace(" ", "_")[:40]
         return pdf_response_from_html(html, filename_prefix=f"survey_package_{sem_slug}")
@@ -1303,9 +1390,21 @@ def register_survey_platform_routes(bp) -> None:
             return jsonify({"status": "error", "message": "cycle مطلوب"}), 400
         with get_connection() as conn:
             ctx = prepare_external_combined_pdf_context(conn, cycle_label=cycle)
+            ctx = enrich_survey_export_context(ctx, for_pdf=True)
         html = render_template("survey_export_package.html", for_pdf=True, **ctx)
         cycle_slug = (cycle or "report").replace(" ", "_")[:40]
         return pdf_response_from_html(html, filename_prefix=f"survey_external_{cycle_slug}")
+
+    @bp.route("/surveys/export/external/package")
+    @login_required
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    def surveys_export_external_package_html():
+        cycle = (request.args.get("cycle") or "").strip()
+        if not cycle:
+            return jsonify({"status": "error", "message": "cycle مطلوب"}), 400
+        with get_connection() as conn:
+            ctx = prepare_external_combined_pdf_context(conn, cycle_label=cycle)
+        return render_template("survey_export_package.html", for_pdf=False, **ctx)
 
     @bp.route("/surveys/export/external/bundle.zip")
     @login_required
@@ -1368,8 +1467,25 @@ def register_survey_platform_routes(bp) -> None:
             ctx = prepare_external_single_pdf_context(conn, code, cycle_label=cycle)
             if not ctx:
                 return jsonify({"status": "error", "message": "قالب الاستبيان غير موجود"}), 404
+            ctx = enrich_survey_export_context(ctx, for_pdf=True)
         html = render_template("survey_export_single.html", for_pdf=True, **ctx)
         return pdf_response_from_html(html, filename_prefix=ctx.get("filename_prefix", f"survey_{code}"))
+
+    @bp.route("/surveys/export/external/<template_code>")
+    @login_required
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    def surveys_export_external_single_html(template_code: str):
+        code = (template_code or "").strip()
+        if code not in EXTERNAL_SURVEY_CODES:
+            return jsonify({"status": "error", "message": "قالب خارجي غير معروف"}), 404
+        cycle = (request.args.get("cycle") or "").strip()
+        if not cycle:
+            return jsonify({"status": "error", "message": "cycle مطلوب"}), 400
+        with get_connection() as conn:
+            ctx = prepare_external_single_pdf_context(conn, code, cycle_label=cycle)
+            if not ctx:
+                return jsonify({"status": "error", "message": "قالب الاستبيان غير موجود"}), 404
+        return render_template("survey_export_single.html", for_pdf=False, **ctx)
 
     @bp.route("/surveys/export/bundle.zip")
     @login_required
@@ -1436,6 +1552,48 @@ def register_survey_platform_routes(bp) -> None:
                 conn, semester=sem, department_id=dept_id
             )
 
+    @bp.route("/surveys/export/course_eval_sections.docx")
+    @login_required
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    def surveys_export_course_eval_sections_docx():
+        """تصدير Word لتقييم المقررات حسب الشعبة."""
+        with get_connection() as conn:
+            sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
+            dept_id = _user_department_id(conn)
+            try:
+                return export_course_eval_sections_docx(
+                    conn, semester=sem, department_id=dept_id
+                )
+            except RuntimeError as exc:
+                return jsonify({"status": "error", "message": str(exc)}), 500
+
+    @bp.route("/surveys/export/course_eval_sections")
+    @login_required
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    def surveys_export_course_eval_sections_html():
+        """معاينة HTML لتقرير الشعب."""
+        with get_connection() as conn:
+            sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
+            dept_id = _user_department_id(conn)
+            ctx = build_course_eval_sections_export_context(
+                conn, semester=sem, department_id=dept_id
+            )
+        return render_template("survey_export_course_eval_sections.html", for_pdf=False, **ctx)
+
+    @bp.route("/surveys/export/course_eval_sections.pdf")
+    @login_required
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    def surveys_export_course_eval_sections_pdf():
+        """تقرير PDF لتقييم المقررات حسب الشعبة."""
+        with get_connection() as conn:
+            sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
+            dept_id = _user_department_id(conn)
+            ctx = build_course_eval_sections_export_context(
+                conn, semester=sem, department_id=dept_id
+            )
+        html = render_template("survey_export_course_eval_sections.html", for_pdf=True, **ctx)
+        return pdf_response_from_html(html, filename_prefix=ctx.get("filename_prefix", "course_eval_sections"))
+
     @bp.route("/surveys/export/course_eval_missing_sections.xlsx")
     @login_required
     @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
@@ -1459,6 +1617,21 @@ def register_survey_platform_routes(bp) -> None:
             if resp is None:
                 return jsonify({"status": "error", "message": "الشعبة غير موجودة أو بلا تقييمات"}), 404
             return resp
+
+    @bp.route("/surveys/export/course_eval/section/<int:section_id>")
+    @login_required
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    def surveys_export_course_eval_section_html(section_id: int):
+        """معاينة HTML لتقييم شعبة واحدة — للطباعة أو حفظ PDF من المتصفح."""
+        with get_connection() as conn:
+            sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
+            dept_id = _user_department_id(conn)
+            ctx = prepare_course_eval_section_pdf_context(
+                conn, section_id, semester=sem, department_id=dept_id
+            )
+            if not ctx:
+                return jsonify({"status": "error", "message": "الشعبة غير موجودة أو بلا تقييمات"}), 404
+        return render_template("survey_export_single.html", for_pdf=False, **ctx)
 
     @bp.route("/surveys/export/course_eval/by-course.xlsx")
     @login_required
@@ -1485,6 +1658,32 @@ def register_survey_platform_routes(bp) -> None:
             if resp is None:
                 return jsonify({"status": "error", "message": "لا توجد تقييمات لهذا المقرر والأستاذ"}), 404
             return resp
+
+    @bp.route("/surveys/export/course_eval/by-course")
+    @login_required
+    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    def surveys_export_course_eval_by_course_html():
+        """معاينة HTML لتجميع مقرر + أستاذ."""
+        course_name = (request.args.get("course_name") or "").strip()
+        try:
+            instructor_id = int(request.args.get("instructor_id") or 0)
+        except (TypeError, ValueError):
+            instructor_id = 0
+        if not course_name or not instructor_id:
+            return jsonify({"status": "error", "message": "course_name و instructor_id مطلوبان"}), 400
+        with get_connection() as conn:
+            sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
+            dept_id = _user_department_id(conn)
+            ctx = prepare_course_eval_by_course_pdf_context(
+                conn,
+                course_name,
+                instructor_id,
+                semester=sem,
+                department_id=dept_id,
+            )
+            if not ctx:
+                return jsonify({"status": "error", "message": "لا توجد تقييمات لهذا المقرر والأستاذ"}), 404
+        return render_template("survey_export_single.html", for_pdf=False, **ctx)
 
     @bp.route("/surveys/export/<template_code>")
     @login_required
@@ -1520,6 +1719,7 @@ def register_survey_platform_routes(bp) -> None:
             )
             if not ctx:
                 return jsonify({"status": "error", "message": "قالب الاستبيان غير موجود"}), 404
+            ctx = enrich_survey_export_context(ctx, for_pdf=True)
         html = render_template("survey_export_single.html", for_pdf=True, **ctx)
         return pdf_response_from_html(html, filename_prefix=ctx.get("filename_prefix", f"survey_{code}"))
 

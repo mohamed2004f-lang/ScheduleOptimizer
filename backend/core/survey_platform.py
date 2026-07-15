@@ -33,6 +33,15 @@ EMPLOYER_ORG_TYPES: tuple[tuple[str, str], ...] = (
     ("other", "أخرى"),
 )
 
+EMPLOYER_HIRE_DEPARTMENTS_LABEL = "من أي أقسام توظّفون (أو تحتاجون) خريجين الكلية؟"
+EMPLOYER_HIRE_DEPARTMENTS_HINT = (
+    "يمكن اختيار أكثر من قسم. تحت كل قسم ستظهر خانة لكتابة التخصص أو الشعبة/المسار المطلوب."
+)
+EMPLOYER_HIRE_NEEDS_FIELD_LABEL = "التخصص / الشعبة أو المسار المطلوب من هذا القسم"
+EMPLOYER_HIRE_NEEDS_FIELD_HINT = (
+    "اكتب بحرية ما تحتاجونه — مثال: «طاقة»، «تصنيع»، «اتصالات»، أو «أي تخصص في القسم»."
+)
+
 ALUMNI_OPEN_COMMENT_LABEL = (
     "بناءً على خبرتك، ما التوصية التي تقدمها للكلية لضمان توظيف الخريجين في مسميات وظيفية معتمدة؟ (اختياري)"
 )
@@ -58,7 +67,9 @@ ALUMNI_PROGRAM_SCOPE_HINT_AR = (
 ALUMNI_DEPARTMENT_FIELD_LABEL = "قسمك / التخصص الرئيسي"
 ALUMNI_DEPARTMENT_FIELD_HINT = "مثال: الهندسة الميكانيكية، الهندسة الكهربائية — هذا هو «برنامجك» بمعناه العام."
 ALUMNI_TRACK_FIELD_LABEL = "الشعبة أو المسار الدقيق (إن وُجد)"
-ALUMNI_TRACK_FIELD_HINT = "مثال: طاقة، تصنيع. إن لم تكن في شعبة محددة اختر «لا ينطبق»."
+ALUMNI_TRACK_FIELD_HINT = "مثال: طاقة، تصنيع. إن لم تكن في شعبة محددة اختر «لا ينطبق». إن كان مسارك غير مدرج (برنامج قديم/موقوف) اختر «مسار غير مدرج» واكتب اسمه."
+ALUMNI_TRACK_CUSTOM_OPTION_LABEL = "مسار/شعبة غير مدرج (برنامج قديم أو موقوف)"
+ALUMNI_TRACK_CUSTOM_FIELD_LABEL = "اسم المسار أو الشعبة التي تخرّجت منها"
 ALUMNI_TAIL_PROGRAM_HINT_AR = (
     "الإجابات التالية تخص البرنامج الذي حدّدته أعلاه (قسمك ومسارك)، وليس الكلية بأكملها."
 )
@@ -93,6 +104,10 @@ ALUMNI_PROGRAM_DEVELOPMENT_OPTIONS: tuple[tuple[str, str], ...] = (
     ("replace_program", "استبدال ببرنامج آخر أكثر طلباً في سوق العمل"),
 )
 
+ALUMNI_PROGRAM_FREEZE_SUPPORT_QUESTION_AR = (
+    "هل تؤيد تجميد البرنامج الذي قيّمته أعلاه في ظل الظروف الحالية؟"
+)
+
 ALUMNI_PROGRAM_FREEZE_QUESTION_AR = (
     "في حال قررت الكلية تجميد البرنامج، ما مقترحك؟"
 )
@@ -123,10 +138,12 @@ ALUMNI_PROFILE_FIELD_LABELS: tuple[str, ...] = (
 ALUMNI_TAIL_FIXED_FIELDS: tuple[dict[str, Any], ...] = (
     {"label_ar": "هل تنصح الطلاب الجدد بالالتحاق بهذا التخصص (البرنامج الذي حدّدته أعلاه) في ظل الظروف الحالية؟", "field_type": "select", "options": ("نعم", "لا")},
     {"label_ar": "لماذا؟", "field_type": "text", "optional": True},
+    {"label_ar": ALUMNI_PROGRAM_FREEZE_SUPPORT_QUESTION_AR, "field_type": "select", "options": ("نعم", "لا")},
     {
         "label_ar": ALUMNI_PROGRAM_FREEZE_QUESTION_AR,
         "field_type": "select",
         "options": tuple(lbl for _, lbl in ALUMNI_PROGRAM_DEVELOPMENT_OPTIONS),
+        "conditional": True,
     },
     {"label_ar": "ما أبرز صعوبة واجهتها عند بدء العمل؟", "field_type": "text", "optional": True},
     {"label_ar": "ما المهارة التقنية أو البرمجية التي تمنيت التركيز عليها أكثر؟", "field_type": "text", "optional": True},
@@ -183,6 +200,7 @@ SURVEY_METRIC_LABELS: dict[str, str] = {
     "faculty_hod": "رأي الأستاذ — رئيس القسم",
     "faculty_dean": "رأي الأستاذ — قيادة الكلية وسياساتها",
     "faculty_educational_process": "تقييم العملية التعليمية في القسم",
+    "faculty_external_collaborator": "المتعاون الخارجي — تجربة التدريس والتنسيق",
     "supervisor_advising": "المشرف — جودة الإرشاد والمتابعة",
     "supervisor_coordination": "المشرف — التنسيق مع القسم والخدمات",
     "staff_workplace": "رضا الموظف — بيئة العمل",
@@ -217,6 +235,15 @@ SURVEY_TEMPLATE_INTRO: dict[str, dict[str, str]] = {
         ),
         "duration_hint": "٣–٥ دقائق · ١٠ بنود",
         "icon": "fa-chalkboard",
+    },
+    "faculty_external_collaborator": {
+        "subtitle_ar": "تجربتك في التعاون التدريسي مع القسم (متعاون خارجي)",
+        "about_ar": (
+            "يُخصَّص لمن يُكلف بتدريس مقرر أو أكثر دون انتماء دائم للقسم. "
+            "قيّم وضوح التكليف، التنسيق، والدعم المتاح — دون أسئلة عن اجتماعات أو سياسات داخلية لا تشارك فيها."
+        ),
+        "duration_hint": "٢–٣ دقائق · ٦ بنود",
+        "icon": "fa-handshake",
     },
 }
 
@@ -501,6 +528,15 @@ SURVEY_TEMPLATE_SEED: list[dict[str, Any]] = [
         "department_scoped": 1,
     },
     {
+        "code": "faculty_external_collaborator",
+        "title_ar": "استبيان المتعاون الخارجي — تجربة التدريس والتنسيق",
+        "respondent_role": "instructor",
+        "subject_type": "external_teaching",
+        "is_anonymous": 1,
+        "min_aggregate": 1,
+        "department_scoped": 0,
+    },
+    {
         "code": "supervisor_advising",
         "title_ar": "استبيان المشرف الأكاديمي — جودة الإرشاد والمتابعة",
         "respondent_role": "supervisor",
@@ -617,6 +653,14 @@ QUESTION_SEED: dict[str, list[tuple[str, int]]] = {
         ("أدلة التعلم والمنصات الإلكترونية مدعومة ومتاحة", 80),
         ("التدريس والاختبارات والإرشاد الأكاديمي متكاملون في القسم", 90),
         ("تقييمي الإجمالي للعملية التعليمية في قسمي هذا الفصل", 100),
+    ],
+    "faculty_external_collaborator": [
+        ("كان التكليف التدريسي والمهام المتفق عليها واضحة لي منذ البداية", 10),
+        ("حصلت على تنسيق كافٍ مع القسم أو منسق المقرر خلال الفصل", 20),
+        ("توفرت لي المعلومات اللازمة (جدول، شعب، منصة، قنوات تواصل)", 30),
+        ("تلقيت دعماً إدارياً وفنياً مناسباً عند الحاجة", 40),
+        ("أستطيع إنجاز مهام التدريس المتفق عليها ضمن الإطار المعطى", 50),
+        ("بشكل عام، تجربة التعاون التدريسي مع القسم هذا الفصل كانت مرضية", 60),
     ],
     "staff_workplace": [
         ("وضوح الأدوار والمسؤوليات الوظيفية", 10),

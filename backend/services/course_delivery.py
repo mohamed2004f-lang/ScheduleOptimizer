@@ -5,11 +5,17 @@ from __future__ import annotations
 
 import datetime
 from typing import Any
+from urllib.parse import urlencode
 
 from flask import Blueprint, jsonify, request, session
 
 from backend.core.auth import login_required, role_required
-from backend.core.department_scope_policy import resolve_effective_department_scope_id
+from backend.core.department_scope_policy import (
+    assert_hod_for_course_operation,
+    filter_items_for_course_hod_scope,
+    hod_may_operate_on_course,
+    resolve_effective_department_scope_id,
+)
 from backend.database.database import fetch_table_columns, is_postgresql
 from backend.services.utilities import get_connection, get_current_term
 
@@ -21,6 +27,9 @@ BASELINE_DRAFT = "draft"
 BASELINE_PENDING = "pending_hod"
 BASELINE_APPROVED = "approved"
 BASELINE_SUPERSEDED = "superseded"
+INCOMPLETE_PCT_THRESHOLD = 50.0  # ما لم يُنجز = نسبة أقل من 50%
+MIN_BOOK_REFERENCES = 2
+REF_TYPE_BOOK = "book"
 
 
 def _now_iso() -> str:
@@ -42,12 +51,69 @@ def _row_dict(row) -> dict:
 
 def _is_hod_or_admin() -> bool:
     role = (session.get("user_role") or "").strip()
-    return role in ("head_of_department", "admin_main", "admin")
+    return role in (
+        "head_of_department",
+        "admin_main",
+        "admin",
+        "system_admin",
+        "college_dean",
+        "academic_vice_dean",
+    )
+
+
+def _is_college_leadership_or_admin() -> bool:
+    role = (session.get("user_role") or "").strip()
+    return role in (
+        "admin_main",
+        "admin",
+        "system_admin",
+        "college_dean",
+        "academic_vice_dean",
+    )
 
 
 def _delivery_department_scope_id(conn) -> int | None:
     uname = (session.get("user") or session.get("username") or "").strip()
     return resolve_effective_department_scope_id(conn, uname)
+
+
+def _resolve_baseline_teaching_context(conn, bl: dict) -> dict[str, Any]:
+    """يستنتج سياق التدريس لقائمة المفردات من مجموعة التدريس أو الفصل."""
+    cn = str(bl.get("course_name") or "").strip()
+    sem = str(bl.get("semester_label") or "").strip() or _current_semester_label(conn)
+    tgid = None
+    iid = bl.get("created_by_instructor_id")
+    if iid and cn:
+        row = conn.cursor().execute(
+            """
+            SELECT id FROM teaching_groups
+            WHERE lower(trim(course_name)) = lower(trim(?))
+              AND instructor_id = ?
+              AND (semester = ? OR COALESCE(?, '') = '')
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (cn, int(iid), sem, sem),
+        ).fetchone()
+        if row:
+            tgid = int(row["id"] if hasattr(row, "keys") else row[0])
+    return {"teaching_group_id": tgid, "section_id": None, "semester": sem}
+
+
+def _guard_hod_course(conn, course_name: str, *, teaching_group_id=None, section_id=None, semester=None):
+    actor = (session.get("user") or session.get("username") or "").strip()
+    try:
+        assert_hod_for_course_operation(
+            conn,
+            actor,
+            str(course_name or ""),
+            teaching_group_id=teaching_group_id,
+            section_id=section_id,
+            semester=semester,
+        )
+    except PermissionError as exc:
+        return jsonify({"status": "error", "message": str(exc) or "FORBIDDEN_DEPARTMENT_SCOPE"}), 403
+    return None
 
 
 def ensure_course_delivery_schema(conn) -> None:
@@ -103,6 +169,8 @@ def ensure_course_delivery_schema(conn) -> None:
             phase TEXT NOT NULL,
             overall_pct REAL,
             below_threshold_reason TEXT DEFAULT '',
+            instructor_comments TEXT DEFAULT '',
+            instructor_recommendations TEXT DEFAULT '',
             status TEXT NOT NULL DEFAULT 'draft',
             submitted_at TEXT,
             reviewed_by TEXT,
@@ -133,6 +201,42 @@ def ensure_course_delivery_schema(conn) -> None:
             FOREIGN KEY (report_id) REFERENCES course_delivery_reports(id) ON DELETE CASCADE
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS course_delivery_references (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id INTEGER NOT NULL,
+            ref_type TEXT NOT NULL DEFAULT 'book',
+            title TEXT NOT NULL,
+            publication_date TEXT DEFAULT '',
+            url_or_isbn TEXT DEFAULT '',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (report_id) REFERENCES course_delivery_reports(id) ON DELETE CASCADE
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS course_delivery_assessment_methods (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id INTEGER NOT NULL,
+            method_label TEXT NOT NULL,
+            weight_pct REAL,
+            notes TEXT DEFAULT '',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (report_id) REFERENCES course_delivery_reports(id) ON DELETE CASCADE
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS grade_entry_locks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            teaching_group_id INTEGER NOT NULL,
+            semester TEXT NOT NULL,
+            phase TEXT NOT NULL,
+            is_open INTEGER NOT NULL DEFAULT 0,
+            set_by TEXT DEFAULT '',
+            set_at TEXT,
+            note TEXT DEFAULT '',
+            UNIQUE (teaching_group_id, semester, phase)
+        )
+        """,
     ]
     if is_postgresql():
         stmts = [
@@ -148,6 +252,9 @@ def ensure_course_delivery_schema(conn) -> None:
         stmts[3] = stmts[3].replace("BIGINT PRIMARY KEY", "BIGSERIAL PRIMARY KEY", 1)
         stmts[4] = stmts[4].replace("BIGINT PRIMARY KEY", "BIGSERIAL PRIMARY KEY", 1)
         stmts[5] = stmts[5].replace("BIGINT PRIMARY KEY", "BIGSERIAL PRIMARY KEY", 1)
+        stmts[6] = stmts[6].replace("BIGINT PRIMARY KEY", "BIGSERIAL PRIMARY KEY", 1)
+        stmts[7] = stmts[7].replace("BIGINT PRIMARY KEY", "BIGSERIAL PRIMARY KEY", 1)
+        stmts[8] = stmts[8].replace("BIGINT PRIMARY KEY", "BIGSERIAL PRIMARY KEY", 1)
     for stmt in stmts:
         try:
             cur.execute(stmt)
@@ -161,6 +268,18 @@ def ensure_course_delivery_schema(conn) -> None:
             )
         except Exception:
             pass
+    try:
+        rep_cols = {c.lower() for c in fetch_table_columns(conn, "course_delivery_reports")}
+        if "instructor_comments" not in rep_cols:
+            cur.execute(
+                "ALTER TABLE course_delivery_reports ADD COLUMN instructor_comments TEXT DEFAULT ''"
+            )
+        if "instructor_recommendations" not in rep_cols:
+            cur.execute(
+                "ALTER TABLE course_delivery_reports ADD COLUMN instructor_recommendations TEXT DEFAULT ''"
+            )
+    except Exception:
+        pass
     _ensure_grade_drafts_phase_unique(conn)
     conn.commit()
 
@@ -227,16 +346,20 @@ def get_gate_policy(conn, department_id: int | None, semester: str) -> dict:
 
 
 def get_active_baseline(conn, course_name: str) -> dict | None:
+    """المفردات المعتمدة النشطة للمقرر — مشتركة بين كل الأساتذة."""
     ensure_course_delivery_schema(conn)
     cur = conn.cursor()
+    cn = (course_name or "").strip()
+    if not cn:
+        return None
     row = cur.execute(
         """
         SELECT * FROM course_syllabus_baselines
-        WHERE course_name = ? AND status = ?
+        WHERE lower(trim(course_name)) = lower(trim(?)) AND status = ?
         ORDER BY version DESC, id DESC
         LIMIT 1
         """,
-        (course_name.strip(), BASELINE_APPROVED),
+        (cn, BASELINE_APPROVED),
     ).fetchone()
     if not row:
         return None
@@ -251,7 +374,751 @@ def get_active_baseline(conn, course_name: str) -> dict | None:
         (int(bl["id"]),),
     ).fetchall()
     bl["topics"] = [_row_dict(t) for t in topics or []]
+    bl["reusable"] = True
     return bl
+
+
+def list_incomplete_topics(items: list[dict], topics_by_id: dict[int, dict] | None = None) -> list[dict]:
+    """مفردات نسبة إنجازها أقل من 50%."""
+    out = []
+    for it in items or []:
+        pct = it.get("completion_pct")
+        if pct is None:
+            continue
+        try:
+            pct_f = float(pct)
+        except (TypeError, ValueError):
+            continue
+        if pct_f >= INCOMPLETE_PCT_THRESHOLD:
+            continue
+        tid = int(it.get("topic_id") or 0)
+        title = (it.get("topic_title") or "").strip()
+        if not title and topics_by_id and tid in topics_by_id:
+            title = topics_by_id[tid].get("topic_title") or ""
+        out.append(
+            {
+                "topic_id": tid,
+                "topic_title": title,
+                "completion_pct": pct_f,
+                "incomplete_reason": (it.get("incomplete_reason") or "").strip(),
+            }
+        )
+    return out
+
+
+def _is_book_ref(ref: dict) -> bool:
+    t = (ref.get("ref_type") or "").strip().lower()
+    return t in (REF_TYPE_BOOK, "كتاب", "كتب")
+
+
+def _replace_report_references(conn, report_id: int, references: list[dict]) -> None:
+    cur = conn.cursor()
+    cur.execute("DELETE FROM course_delivery_references WHERE report_id=?", (int(report_id),))
+    for i, ref in enumerate(references or []):
+        title = (ref.get("title") or "").strip()
+        if not title:
+            continue
+        cur.execute(
+            """
+            INSERT INTO course_delivery_references
+                (report_id, ref_type, title, publication_date, url_or_isbn, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(report_id),
+                (ref.get("ref_type") or REF_TYPE_BOOK).strip() or REF_TYPE_BOOK,
+                title,
+                (ref.get("publication_date") or "").strip(),
+                (ref.get("url_or_isbn") or "").strip(),
+                int(ref.get("sort_order") if ref.get("sort_order") is not None else i),
+            ),
+        )
+
+
+def _replace_assessment_methods(conn, report_id: int, methods: list[dict]) -> None:
+    cur = conn.cursor()
+    cur.execute("DELETE FROM course_delivery_assessment_methods WHERE report_id=?", (int(report_id),))
+    for i, m in enumerate(methods or []):
+        label = (m.get("method_label") or m.get("label") or "").strip()
+        if not label:
+            continue
+        w = m.get("weight_pct")
+        try:
+            w_f = float(w) if w is not None and w != "" else None
+        except (TypeError, ValueError):
+            w_f = None
+        cur.execute(
+            """
+            INSERT INTO course_delivery_assessment_methods
+                (report_id, method_label, weight_pct, notes, sort_order)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                int(report_id),
+                label,
+                w_f,
+                (m.get("notes") or "").strip(),
+                int(m.get("sort_order") if m.get("sort_order") is not None else i),
+            ),
+        )
+
+
+def validate_quality_report_for_submit(rep: dict, *, require_books: bool = True, require_assessments: bool = True) -> str | None:
+    """يعيد رسالة خطأ عربية أو None إن جاز الإرسال."""
+    items = rep.get("items") or []
+    incomplete = list_incomplete_topics(items)
+    for it in incomplete:
+        if not (it.get("incomplete_reason") or "").strip():
+            title = it.get("topic_title") or f"#{it.get('topic_id')}"
+            return f"أدخل سبب عدم الإنجاز للمفردة «{title}» (نسبة أقل من {int(INCOMPLETE_PCT_THRESHOLD)}%)"
+    for ex in rep.get("extra_topics") or []:
+        if (ex.get("title") or "").strip() and not (ex.get("reason") or "").strip():
+            return f"برّر أهمية المفردة خارج المقرر: «{(ex.get('title') or '').strip()}»"
+    if require_books:
+        books = [r for r in (rep.get("references") or []) if _is_book_ref(r)]
+        if len(books) < MIN_BOOK_REFERENCES:
+            return f"يُفضَّل توثيق كتابين رسميّين على الأقل (الموجود: {len(books)})"
+        for b in books:
+            if not (b.get("publication_date") or "").strip():
+                return f"أضف تاريخ الإصدار للكتاب: «{(b.get('title') or '').strip()}»"
+    if require_assessments:
+        methods = rep.get("assessment_methods") or []
+        if not methods:
+            return "اختر طريقة تقييم واحدة على الأقل لهذا المقرر"
+    return None
+
+
+def list_pending_quality_reports(
+    conn,
+    *,
+    instructor_id: int,
+    semester: str | None = None,
+) -> list[dict]:
+    """تقارير جودة المقرر المعلّقة للأستاذ — تظهر في مركز الاستبيانات."""
+    ensure_course_delivery_schema(conn)
+    from backend.services import teaching_groups as tg
+
+    sem = (semester or "").strip() or _current_semester_label(conn)
+    groups = tg.list_teaching_groups(conn, semester=sem, active_only=True)
+    out: list[dict] = []
+    for g in groups or []:
+        if int(g.get("instructor_id") or 0) != int(instructor_id):
+            continue
+        tgid = int(g.get("id") or 0)
+        cn = (g.get("course_name") or "").strip()
+        baseline = get_active_baseline(conn, cn)
+        for phase, label in ((PHASE_PARTIAL, "جزئي"), (PHASE_FINAL, "نهائي")):
+            rep = get_delivery_report(conn, tgid, sem, phase)
+            submitted = _report_submitted(rep)
+            if submitted:
+                continue
+            out.append(
+                {
+                    "pending_kind": "course_quality_report",
+                    "code": f"quality_{phase}_{tgid}",
+                    "title_ar": f"تقرير مقرر دراسي ({label}): {cn}",
+                    "fill_url": f"/course_delivery_page?teaching_group_id={tgid}&phase={phase}",
+                    "teaching_group_id": tgid,
+                    "course_name": cn,
+                    "phase": phase,
+                    "baseline_ok": bool(baseline and baseline.get("topics")),
+                    "group_code": g.get("group_code") or "",
+                }
+            )
+    return out
+
+
+def build_progress_board_rows(
+    conn,
+    *,
+    semester: str | None = None,
+    department_id: int | None = None,
+) -> list[dict]:
+    """صفوف لوحة المتابعة: نسب، فجوات، أقفال درجات، مراجع."""
+    from backend.services import teaching_groups as tg
+
+    sem = (semester or "").strip() or _current_semester_label(conn)
+    groups = tg.list_teaching_groups(
+        conn, semester=sem, department_id=department_id, active_only=True
+    )
+    rows: list[dict] = []
+    for g in groups or []:
+        tgid = int(g.get("id") or 0)
+        cn = (g.get("course_name") or "").strip()
+        partial = get_delivery_report(conn, tgid, sem, PHASE_PARTIAL)
+        final = get_delivery_report(conn, tgid, sem, PHASE_FINAL)
+        primary = final or partial
+        incomplete = (primary or {}).get("incomplete_topics") or []
+        lock_p = get_grade_entry_lock(conn, tgid, sem, PHASE_PARTIAL)
+        lock_f = get_grade_entry_lock(conn, tgid, sem, PHASE_FINAL)
+        books = int((primary or {}).get("book_reference_count") or 0)
+        rows.append(
+            {
+                "teaching_group_id": tgid,
+                "group_code": g.get("group_code"),
+                "course_name": cn,
+                "instructor_id": int(g.get("instructor_id") or 0),
+                "instructor_name": g.get("instructor_name") or "",
+                "department_id": g.get("department_id"),
+                "overall_pct": (primary or {}).get("overall_pct"),
+                "partial_pct": (partial or {}).get("overall_pct"),
+                "final_pct": (final or {}).get("overall_pct"),
+                "partial_status": (partial or {}).get("status") or "missing",
+                "final_status": (final or {}).get("status") or "missing",
+                "incomplete_count": len(incomplete),
+                "incomplete_topics": incomplete[:8],
+                "book_reference_count": books,
+                "books_ok": books >= MIN_BOOK_REFERENCES,
+                "partial_lock_open": bool(lock_p.get("is_open")),
+                "final_lock_open": bool(lock_f.get("is_open")),
+                "survey_url": f"/course_delivery_page?teaching_group_id={tgid}",
+                "preview_url": f"/academic_quality/course_reports/{tgid}",
+                "pdf_url": f"/academic_quality/course_reports/{tgid}.pdf",
+                "warn_url": f"/course_delivery/hod/warn_instructor",
+            }
+        )
+    return rows
+
+
+_REPORT_STATUS_AR = {
+    "missing": "غير موجود",
+    "draft": "مسودة",
+    "auto_approved": "مُرسل",
+    "gate_pending": "مُرسل — متابعة القسم",
+    "gate_approved": "مُرسل — موافق عليه",
+    "gate_rejected": "مرفوض",
+    "submitted": "مُرسل",
+}
+
+_REF_TYPE_AR = {
+    "book": "كتاب",
+    "paper": "ورقة علمية",
+    "website": "موقع",
+    "video": "فيديو",
+    "other": "أخرى",
+    "كتاب": "كتاب",
+}
+
+
+def report_status_label_ar(status: str | None) -> str:
+    st = (status or "missing").strip()
+    return _REPORT_STATUS_AR.get(st, st or "—")
+
+
+def _phase_analysis_bits(rep: dict | None, *, phase_label: str, follow_min: float) -> list[str]:
+    bits: list[str] = []
+    if not rep:
+        bits.append(f"تقرير {phase_label}: لم يُنشأ بعد.")
+        return bits
+    st = report_status_label_ar(rep.get("status"))
+    ov = rep.get("overall_pct")
+    bits.append(f"تقرير {phase_label}: {st}" + (f" — نسبة {ov}%" if ov is not None else ""))
+    incomplete = rep.get("incomplete_topics") or []
+    if incomplete:
+        bits.append(f"فجوات إنجاز (أقل من {int(INCOMPLETE_PCT_THRESHOLD)}٪) في {phase_label}: {len(incomplete)} مفردة.")
+    if ov is not None and float(ov) < float(follow_min):
+        bits.append(f"النسبة دون حد متابعة {phase_label} ({follow_min}٪) — للمتابعة الإدارية فقط.")
+    books = int(rep.get("book_reference_count") or 0)
+    if books < MIN_BOOK_REFERENCES:
+        bits.append(f"المراجع المصنّفة ككتب: {books} من {MIN_BOOK_REFERENCES} المفضّلة.")
+    return bits
+
+
+def _dedupe_keep_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for it in items:
+        t = (it or "").strip()
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+    return out
+
+
+def build_executive_summary_lines(
+    *,
+    primary: dict | None,
+    primary_phase: str | None,
+    partial: dict | None,
+    final: dict | None,
+    policy: dict,
+    baseline_ok: bool,
+) -> list[str]:
+    """سطور ملخص تنفيذي قصيرة لغلاف التقرير."""
+    lines: list[str] = []
+    if not baseline_ok:
+        lines.append("لا توجد قائمة مفردات معتمدة بعد.")
+    phase_ar = "النهائي" if primary_phase == PHASE_FINAL else ("الجزئي" if primary_phase == PHASE_PARTIAL else None)
+    if primary and phase_ar:
+        st = report_status_label_ar(primary.get("status"))
+        ov = primary.get("overall_pct")
+        bit = f"التقرير المعروض ({phase_ar}): {st}"
+        if ov is not None:
+            bit += f" — نسبة الإنجاز {ov}%"
+        lines.append(bit)
+        gaps = len(primary.get("incomplete_topics") or [])
+        lines.append(f"فجوات أقل من {int(INCOMPLETE_PCT_THRESHOLD)}٪: {gaps} مفردة.")
+        books = int(primary.get("book_reference_count") or 0)
+        lines.append(f"كتب مرجعية: {books}/{MIN_BOOK_REFERENCES}.")
+        follow = (
+            policy.get("final_min_pct")
+            if primary_phase == PHASE_FINAL
+            else policy.get("partial_min_pct")
+        )
+        if ov is not None and follow is not None and float(ov) < float(follow):
+            lines.append(f"دون حد المتابعة ({follow}٪).")
+        else:
+            lines.append(f"ضمن/فوق حد المتابعة ({follow}٪)." if follow is not None else "")
+    else:
+        lines.append("لم يُنشأ تقرير جزئي أو نهائي بعد.")
+    p_st = report_status_label_ar(partial.get("status")) if partial else "غير موجود"
+    f_st = report_status_label_ar(final.get("status")) if final else "غير موجود"
+    lines.append(f"حالة الإرسال — جزئي: {p_st} · نهائي: {f_st}.")
+    return [x for x in lines if x]
+
+
+def build_operational_recommendations(
+    *,
+    partial: dict | None,
+    final: dict | None,
+    policy: dict,
+    baseline_ok: bool,
+) -> list[str]:
+    """توصيات تشغيلية مبنية على قواعد (قابلة للطباعة كشاهد)."""
+    recs: list[str] = []
+    if not baseline_ok:
+        recs.append("اعتماد قائمة مفردات المقرر قبل استكمال نسب الإنجاز والإرسال.")
+
+    phases = (
+        ("الجزئي", partial, float(policy.get("partial_min_pct") or 0)),
+        ("النهائي", final, float(policy.get("final_min_pct") or 0)),
+    )
+    for phase_label, rep, follow_min in phases:
+        if not rep:
+            recs.append(f"إنشاء تقرير {phase_label} وإكماله وفق جدول القسم.")
+            continue
+        if not _report_submitted(rep):
+            recs.append(f"إرسال تقرير {phase_label} بعد استيفاء البنود الإلزامية.")
+        incomplete = rep.get("incomplete_topics") or []
+        if incomplete:
+            titles = [str(x.get("topic_title") or "").strip() for x in incomplete[:3] if x.get("topic_title")]
+            hint = (" — منها: " + "؛ ".join(titles)) if titles else ""
+            recs.append(
+                f"معالجة فجوات إنجاز تقرير {phase_label} "
+                f"({len(incomplete)} مفردة دون {int(INCOMPLETE_PCT_THRESHOLD)}٪){hint} "
+                "بإعادة جدولة أو جلسة تعويضية مع توثيق السبب."
+            )
+        ov = rep.get("overall_pct")
+        if ov is not None and float(ov) < follow_min:
+            recs.append(
+                f"رفع نسبة إنجاز {phase_label} فوق حد المتابعة ({follow_min}٪) "
+                "أو توثيق تبرير واضح لرئيس القسم."
+            )
+        books = int(rep.get("book_reference_count") or 0)
+        if books < MIN_BOOK_REFERENCES:
+            recs.append(
+                f"استكمال المراجع في تقرير {phase_label}: "
+                f"يُفضَّل {MIN_BOOK_REFERENCES} كتاباً رسمياً على الأقل (حالياً {books})."
+            )
+        if not (rep.get("assessment_methods") or []):
+            recs.append(f"تسجيل طرق التقييم وأوزانها في تقرير {phase_label}.")
+        if not (rep.get("instructor_recommendations") or "").strip() and _report_submitted(rep):
+            recs.append(
+                f"إضافة توصيات تحسين واضحة من الأستاذ في تقرير {phase_label} قبل الطباعة للاعتماد."
+            )
+
+    if not partial and not final:
+        recs.append("بدء تعبئة التقرير من صفحة مقرراتي / تعبئة تنفيذ المقرر.")
+    return _dedupe_keep_order(recs)[:8]
+
+
+def build_course_report_view(
+    conn,
+    *,
+    teaching_group_id: int,
+    semester: str | None = None,
+    phase: str | None = None,
+) -> dict[str, Any] | None:
+    """سياق معاينة/طباعة تقرير مقرر واحد."""
+    ensure_course_delivery_schema(conn)
+    from backend.services import teaching_groups as tg
+
+    tgid = int(teaching_group_id)
+    g = tg.get_teaching_group(conn, tgid)
+    if not g:
+        return None
+    sem = (semester or "").strip() or _current_semester_label(conn)
+    cn = (g.get("course_name") or "").strip()
+    dept_id = int(g.get("department_id") or 0) or None
+    policy = get_gate_policy(conn, dept_id, sem)
+    baseline = get_active_baseline(conn, cn)
+    partial = get_delivery_report(conn, tgid, sem, PHASE_PARTIAL)
+    final = get_delivery_report(conn, tgid, sem, PHASE_FINAL)
+    show_phase = (phase or "").strip().lower()
+    if show_phase == PHASE_PARTIAL:
+        primary = partial
+        primary_phase = PHASE_PARTIAL
+    elif show_phase == PHASE_FINAL:
+        primary = final
+        primary_phase = PHASE_FINAL
+    else:
+        primary = final or partial
+        primary_phase = PHASE_FINAL if final else (PHASE_PARTIAL if partial else None)
+
+    lock_p = get_grade_entry_lock(conn, tgid, sem, PHASE_PARTIAL)
+    lock_f = get_grade_entry_lock(conn, tgid, sem, PHASE_FINAL)
+    baseline_ok = bool(baseline and baseline.get("topics"))
+    analysis_bits: list[str] = []
+    analysis_bits.extend(
+        _phase_analysis_bits(partial, phase_label="الجزئي", follow_min=policy["partial_min_pct"])
+    )
+    analysis_bits.extend(
+        _phase_analysis_bits(final, phase_label="النهائي", follow_min=policy["final_min_pct"])
+    )
+    if not baseline_ok:
+        analysis_bits.insert(0, "لا توجد قائمة مفردات معتمدة لهذا المقرر بعد.")
+
+    executive_summary = build_executive_summary_lines(
+        primary=primary,
+        primary_phase=primary_phase,
+        partial=partial,
+        final=final,
+        policy=policy,
+        baseline_ok=baseline_ok,
+    )
+    operational_recommendations = build_operational_recommendations(
+        partial=partial,
+        final=final,
+        policy=policy,
+        baseline_ok=baseline_ok,
+    )
+
+    def _decorate_report(rep: dict | None) -> dict | None:
+        if not rep:
+            return None
+        out = dict(rep)
+        out["status_ar"] = report_status_label_ar(out.get("status"))
+        refs = []
+        for r in out.get("references") or []:
+            rr = dict(r)
+            rt = (rr.get("ref_type") or "").strip().lower()
+            rr["ref_type_ar"] = _REF_TYPE_AR.get(rt, rr.get("ref_type") or "—")
+            refs.append(rr)
+        out["references"] = refs
+        return out
+
+    try:
+        from backend.services.survey_analytics import COLLEGE_NAME_AR, pdf_arabic_extra_css
+    except Exception:
+        COLLEGE_NAME_AR = "كلية الهندسة"
+        def pdf_arabic_extra_css(*, for_pdf: bool = False) -> str:
+            return ""
+
+    return {
+        "title": f"تقرير مقرر دراسي: {cn}",
+        "college_name_ar": COLLEGE_NAME_AR,
+        "semester": sem,
+        "teaching_group_id": tgid,
+        "group_code": g.get("group_code") or "",
+        "course_name": cn,
+        "instructor_id": int(g.get("instructor_id") or 0),
+        "instructor_name": g.get("instructor_name") or "",
+        "department_id": dept_id,
+        "baseline": baseline,
+        "baseline_ok": baseline_ok,
+        "partial": _decorate_report(partial),
+        "final": _decorate_report(final),
+        "primary": _decorate_report(primary),
+        "primary_phase": primary_phase,
+        "policy": policy,
+        "incomplete_threshold": INCOMPLETE_PCT_THRESHOLD,
+        "min_book_references": MIN_BOOK_REFERENCES,
+        "partial_lock_open": bool(lock_p.get("is_open")),
+        "final_lock_open": bool(lock_f.get("is_open")),
+        "executive_summary": executive_summary,
+        "analysis_bits": analysis_bits,
+        "operational_recommendations": operational_recommendations,
+        "fill_url": f"/course_delivery_page?teaching_group_id={tgid}",
+        "preview_url": f"/academic_quality/course_reports/{tgid}",
+        "pdf_url": f"/academic_quality/course_reports/{tgid}.pdf",
+        "assistant_url": (
+            "/academic_quality/assistant?"
+            + urlencode(
+                {
+                    "hint": "course_report",
+                    "teaching_group_id": str(tgid),
+                    "course": cn,
+                }
+            )
+        ),
+        "pdf_arabic_css": pdf_arabic_extra_css(for_pdf=False),
+        "pdf_arabic_css_print": pdf_arabic_extra_css(for_pdf=True),
+        "export_date": datetime.datetime.now().strftime("%Y-%m-%d"),
+        "evidence_type_code": "course_delivery_quality_report",
+        "evidence_hint_ar": (
+            "يُقترح كشاهد تشغيل/تدريس في خريطة الاعتماد بعد المراجعة البشرية "
+            "وربطه يدوياً بنوع «تقرير مقرر دراسي (تنفيذ المفردات)»."
+        ),
+    }
+
+
+def build_course_reports_index(
+    conn,
+    *,
+    semester: str | None = None,
+    department_id: int | None = None,
+    instructor_id: int | None = None,
+    status_filter: str | None = None,
+) -> dict[str, Any]:
+    """فهرس تقارير جودة المقررات للواجهة."""
+    sem = (semester or "").strip() or _current_semester_label(conn)
+    rows = build_progress_board_rows(conn, semester=sem, department_id=department_id)
+    if instructor_id is not None:
+        rows = [r for r in rows if int(r.get("instructor_id") or 0) == int(instructor_id)]
+    sf = (status_filter or "").strip().lower()
+    if sf == "low":
+        rows = [
+            r
+            for r in rows
+            if r.get("overall_pct") is not None and float(r["overall_pct"]) < INCOMPLETE_PCT_THRESHOLD
+        ]
+    elif sf == "missing_books":
+        rows = [r for r in rows if not r.get("books_ok")]
+    elif sf == "unsubmitted":
+        rows = [
+            r
+            for r in rows
+            if (r.get("final_status") in ("missing", "draft"))
+            and (r.get("partial_status") in ("missing", "draft"))
+        ]
+    elif sf == "submitted":
+        rows = [
+            r
+            for r in rows
+            if r.get("final_status") not in ("missing", "draft")
+            or r.get("partial_status") not in ("missing", "draft")
+        ]
+
+    for r in rows:
+        r["partial_status_ar"] = report_status_label_ar(r.get("partial_status"))
+        r["final_status_ar"] = report_status_label_ar(r.get("final_status"))
+
+    low = sum(
+        1
+        for r in rows
+        if r.get("overall_pct") is not None and float(r["overall_pct"]) < INCOMPLETE_PCT_THRESHOLD
+    )
+    missing_books = sum(1 for r in rows if not r.get("books_ok"))
+    submitted = sum(
+        1
+        for r in rows
+        if r.get("final_status") not in ("missing", "draft")
+        or r.get("partial_status") not in ("missing", "draft")
+    )
+    return {
+        "semester": sem,
+        "department_id": department_id,
+        "rows": rows,
+        "summary": {
+            "groups_total": len(rows),
+            "low_completion": low,
+            "missing_books": missing_books,
+            "submitted": submitted,
+            "unsubmitted": len(rows) - submitted,
+        },
+        "incomplete_threshold": INCOMPLETE_PCT_THRESHOLD,
+        "min_book_references": MIN_BOOK_REFERENCES,
+        "package_preview_url": "/academic_quality/course_reports/package",
+        "package_pdf_url": "/academic_quality/course_reports/package.pdf",
+    }
+
+
+def build_course_reports_package_context(
+    conn,
+    *,
+    semester: str | None = None,
+    department_id: int | None = None,
+    college_wide: bool = False,
+    max_detail: int = 40,
+) -> dict[str, Any]:
+    """سياق الحزمة الإجمالية للمعاينة/PDF."""
+    try:
+        from backend.services.survey_analytics import COLLEGE_NAME_AR, pdf_arabic_extra_css
+    except Exception:
+        COLLEGE_NAME_AR = "كلية الهندسة"
+        def pdf_arabic_extra_css(*, for_pdf: bool = False) -> str:
+            return ""
+
+    sem = (semester or "").strip() or _current_semester_label(conn)
+    dept = None if college_wide else department_id
+    index = build_course_reports_index(conn, semester=sem, department_id=dept)
+    details: list[dict] = []
+    for row in (index.get("rows") or [])[: int(max_detail)]:
+        view = build_course_report_view(
+            conn,
+            teaching_group_id=int(row["teaching_group_id"]),
+            semester=sem,
+        )
+        if view:
+            details.append(view)
+
+    by_dept: dict[str, dict] = {}
+    for r in index.get("rows") or []:
+        did = str(r.get("department_id") if r.get("department_id") is not None else "بدون")
+        slot = by_dept.setdefault(
+            did,
+            {
+                "department_id": r.get("department_id"),
+                "groups": 0,
+                "low_completion": 0,
+                "missing_books": 0,
+                "pct_sum": 0.0,
+                "pct_n": 0,
+            },
+        )
+        slot["groups"] += 1
+        if r.get("overall_pct") is not None:
+            slot["pct_sum"] += float(r["overall_pct"])
+            slot["pct_n"] += 1
+        if r.get("overall_pct") is not None and float(r["overall_pct"]) < INCOMPLETE_PCT_THRESHOLD:
+            slot["low_completion"] += 1
+        if not r.get("books_ok"):
+            slot["missing_books"] += 1
+    dept_summary = []
+    for slot in by_dept.values():
+        n = slot.pop("pct_n")
+        s = slot.pop("pct_sum")
+        slot["avg_overall_pct"] = round(s / n, 1) if n else None
+        dept_summary.append(slot)
+
+    return {
+        "title": "حزمة تقارير جودة المقررات",
+        "college_name_ar": COLLEGE_NAME_AR,
+        "semester": sem,
+        "college_wide": bool(college_wide),
+        "department_id": dept,
+        "summary": index.get("summary") or {},
+        "by_department": dept_summary,
+        "rows": index.get("rows") or [],
+        "details": details,
+        "incomplete_threshold": INCOMPLETE_PCT_THRESHOLD,
+        "min_book_references": MIN_BOOK_REFERENCES,
+        "pdf_arabic_css": pdf_arabic_extra_css(for_pdf=False),
+        "pdf_arabic_css_print": pdf_arabic_extra_css(for_pdf=True),
+        "export_date": datetime.datetime.now().strftime("%Y-%m-%d"),
+        "evidence_type_code": "course_delivery_quality_report",
+        "evidence_hint_ar": (
+            "الحزمة تدعم شواهد البرامج/القسم؛ الربط النهائي يدوي في خريطة الاعتماد."
+        ),
+        "preview_url": "/academic_quality/course_reports/package",
+        "pdf_url": "/academic_quality/course_reports/package.pdf",
+        "index_url": "/academic_quality/course_reports",
+    }
+
+
+def user_may_view_course_report(
+    conn,
+    *,
+    teaching_group_id: int,
+    user_role: str,
+    instructor_id: int | None,
+    username: str | None,
+) -> bool:
+    """صلاحية معاينة تقرير مقرر."""
+    role = (user_role or "").strip()
+    if role in ("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean"):
+        return True
+    from backend.services import teaching_groups as tg
+
+    g = tg.get_teaching_group(conn, int(teaching_group_id))
+    if not g:
+        return False
+    if instructor_id and int(g.get("instructor_id") or 0) == int(instructor_id):
+        return True
+    if role == "head_of_department":
+        try:
+            assert_hod_for_course_operation(
+                conn,
+                (username or "").strip(),
+                str(g.get("course_name") or ""),
+                teaching_group_id=int(teaching_group_id),
+                semester=str(g.get("semester") or ""),
+            )
+            return True
+        except PermissionError:
+            return False
+    return False
+
+
+def get_grade_entry_lock(conn, teaching_group_id: int, semester: str, phase: str) -> dict:
+    ensure_course_delivery_schema(conn)
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT * FROM grade_entry_locks
+        WHERE teaching_group_id = ? AND semester = ? AND phase = ?
+        LIMIT 1
+        """,
+        (int(teaching_group_id), (semester or "").strip(), (phase or "").strip()),
+    ).fetchone()
+    if not row:
+        return {
+            "teaching_group_id": int(teaching_group_id),
+            "semester": semester,
+            "phase": phase,
+            "is_open": False,
+            "set_by": None,
+            "set_at": None,
+            "note": "",
+        }
+    d = _row_dict(row)
+    d["is_open"] = bool(int(d.get("is_open") or 0))
+    return d
+
+
+def set_grade_entry_lock(
+    conn,
+    *,
+    teaching_group_id: int,
+    semester: str,
+    phase: str,
+    is_open: bool,
+    set_by: str,
+    note: str = "",
+) -> dict:
+    ensure_course_delivery_schema(conn)
+    cur = conn.cursor()
+    now = _now_iso()
+    existing = cur.execute(
+        """
+        SELECT id FROM grade_entry_locks
+        WHERE teaching_group_id = ? AND semester = ? AND phase = ?
+        LIMIT 1
+        """,
+        (int(teaching_group_id), semester, phase),
+    ).fetchone()
+    if existing:
+        eid = int(_row_dict(existing)["id"])
+        cur.execute(
+            """
+            UPDATE grade_entry_locks
+            SET is_open=?, set_by=?, set_at=?, note=?
+            WHERE id=?
+            """,
+            (1 if is_open else 0, set_by, now, note or "", eid),
+        )
+    else:
+        cur.execute(
+            """
+            INSERT INTO grade_entry_locks
+                (teaching_group_id, semester, phase, is_open, set_by, set_at, note)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (int(teaching_group_id), semester, phase, 1 if is_open else 0, set_by, now, note or ""),
+        )
+    conn.commit()
+    return get_grade_entry_lock(conn, teaching_group_id, semester, phase)
 
 
 def get_baseline_with_topics(conn, baseline_id: int) -> dict | None:
@@ -297,6 +1164,8 @@ def get_delivery_report(conn, teaching_group_id: int, semester: str, phase: str)
     if not row:
         return None
     rep = _row_dict(row)
+    rep["instructor_comments"] = (rep.get("instructor_comments") or "").strip()
+    rep["instructor_recommendations"] = (rep.get("instructor_recommendations") or "").strip()
     items = cur.execute(
         """
         SELECT i.*, t.topic_title, t.sort_order
@@ -313,6 +1182,45 @@ def get_delivery_report(conn, teaching_group_id: int, semester: str, phase: str)
         (int(rep["id"]),),
     ).fetchall()
     rep["extra_topics"] = [_row_dict(e) for e in extras or []]
+    try:
+        refs = cur.execute(
+            """
+            SELECT id, ref_type, title, publication_date, url_or_isbn, sort_order
+            FROM course_delivery_references
+            WHERE report_id = ?
+            ORDER BY sort_order, id
+            """,
+            (int(rep["id"]),),
+        ).fetchall()
+        rep["references"] = [_row_dict(r) for r in refs or []]
+    except Exception:
+        rep["references"] = []
+    try:
+        methods = cur.execute(
+            """
+            SELECT id, method_label, weight_pct, notes, sort_order
+            FROM course_delivery_assessment_methods
+            WHERE report_id = ?
+            ORDER BY sort_order, id
+            """,
+            (int(rep["id"]),),
+        ).fetchall()
+        rep["assessment_methods"] = [_row_dict(m) for m in methods or []]
+    except Exception:
+        rep["assessment_methods"] = []
+    topics_by_id = {
+        int(it.get("topic_id") or 0): {"topic_title": it.get("topic_title")}
+        for it in rep["items"]
+    }
+    rep["incomplete_topics"] = list_incomplete_topics(rep["items"], topics_by_id)
+    rep["incomplete_threshold"] = INCOMPLETE_PCT_THRESHOLD
+    book_count = sum(
+        1
+        for r in rep["references"]
+        if (r.get("ref_type") or "").strip().lower() in (REF_TYPE_BOOK, "كتاب")
+    )
+    rep["book_reference_count"] = book_count
+    rep["min_book_references"] = MIN_BOOK_REFERENCES
     return rep
 
 
@@ -709,19 +1617,17 @@ def grade_draft_gate_status(
     department_id: int | None,
     phase: str,
 ) -> dict[str, Any]:
-    """حالة بوابة فتح مسودة جزئي/نهائي."""
+    """
+    بوابة فتح مسودة الدرجات:
+    - فتح/إقفال يدوي من رئيس القسم لكل مقرر ومرحلة
+    - لا يعتمد على نسبة إنجاز المفردات
+    - مسودة النهائي تتطلب اعتماد مسودة الجزئي (مسار النشر كما هو)
+    """
     policy = get_gate_policy(conn, department_id, semester)
-    min_pct = policy["partial_min_pct"] if phase == PHASE_PARTIAL else policy["final_min_pct"]
     baseline = get_active_baseline(conn, course_name)
-    if not baseline or not baseline.get("topics"):
-        return {
-            "unlocked": False,
-            "reason": "لا توجد قائمة مفردات معتمدة — أكمل اعتماد رئيس القسم أولاً",
-            "baseline_status": baseline.get("status") if baseline else "missing",
-            "partial_min_pct": policy["partial_min_pct"],
-            "final_min_pct": policy["final_min_pct"],
-        }
+    lock = get_grade_entry_lock(conn, teaching_group_id, semester, phase)
     rep = get_delivery_report(conn, teaching_group_id, semester, phase)
+
     if phase == PHASE_FINAL:
         cur = conn.cursor()
         partial_draft = cur.execute(
@@ -737,23 +1643,35 @@ def grade_draft_gate_status(
             return {
                 "unlocked": False,
                 "reason": "يجب اعتماد مسودة الجزئي قبل فتح مسودة النهائي",
+                "lock": lock,
+                "report": rep,
+                "baseline_status": baseline.get("status") if baseline else "missing",
                 "partial_min_pct": policy["partial_min_pct"],
                 "final_min_pct": policy["final_min_pct"],
+                "overall_pct": rep.get("overall_pct") if rep else None,
             }
-    unlocked = _report_unlocks_draft(rep, min_pct)
-    reason = ""
-    if not rep:
-        reason = f"أكمل تقرير {'الجزئي' if phase == PHASE_PARTIAL else 'النهائي'} أولاً"
-    elif not unlocked:
-        if str(rep.get("status") or "") == "gate_pending":
-            reason = "بانتظار موافقة رئيس القسم على التبرير (النسبة دون الحد)"
-        else:
-            reason = f"نسبة الإنجاز {rep.get('overall_pct')}% — أرسل التقرير أو اطلب موافقة رئيس القسم"
+
+    if not lock.get("is_open"):
+        return {
+            "unlocked": False,
+            "reason": "إدخال الدرجات مغلق لهذا المقرر — بانتظار فتح رئيس القسم",
+            "lock": lock,
+            "report": rep,
+            "baseline_status": baseline.get("status") if baseline else "missing",
+            "baseline_id": int(baseline["id"]) if baseline else None,
+            "overall_pct": rep.get("overall_pct") if rep else None,
+            "report_status": rep.get("status") if rep else None,
+            "partial_min_pct": policy["partial_min_pct"],
+            "final_min_pct": policy["final_min_pct"],
+        }
+
     return {
-        "unlocked": unlocked,
-        "reason": reason,
+        "unlocked": True,
+        "reason": "",
+        "lock": lock,
         "report": rep,
-        "baseline_id": int(baseline["id"]),
+        "baseline_id": int(baseline["id"]) if baseline else None,
+        "baseline_status": baseline.get("status") if baseline else "missing",
         "overall_pct": rep.get("overall_pct") if rep else None,
         "report_status": rep.get("status") if rep else None,
         "partial_min_pct": policy["partial_min_pct"],
@@ -895,6 +1813,7 @@ def api_baseline_create():
     course_name = (data.get("course_name") or "").strip()
     topics = data.get("topics") or []
     revise = bool(data.get("revise"))
+    reuse_active = bool(data.get("reuse_active", True))
     if not course_name:
         return jsonify({"status": "error", "message": "course_name مطلوب"}), 400
     instructor_id = session.get("instructor_id")
@@ -904,6 +1823,12 @@ def api_baseline_create():
         cur = conn.cursor()
         sem = _current_semester_label(conn)
         active = get_active_baseline(conn, course_name)
+        # إعادة استخدام المفردات المعتمدة للمقرر إن لم تُرسل قائمة جديدة
+        if (not topics) and reuse_active and active and active.get("topics"):
+            topics = [
+                {"sort_order": t.get("sort_order"), "topic_title": t.get("topic_title")}
+                for t in active["topics"]
+            ]
         if active and not revise and not _is_hod_or_admin():
             return jsonify({
                 "status": "error",
@@ -952,7 +1877,7 @@ def api_baseline_create():
             )
         conn.commit()
         bl = get_baseline_with_topics(conn, bid)
-    return jsonify({"status": "ok", "baseline": bl}), 200
+    return jsonify({"status": "ok", "baseline": bl, "reused_from_active": bool(active and reuse_active)}), 200
 
 
 @course_delivery_bp.route("/baseline/<int:baseline_id>/topics", methods=["PUT"])
@@ -1011,7 +1936,15 @@ def api_baseline_submit(baseline_id: int):
         conn.commit()
         from backend.services.course_workflow import notify_baseline_submitted
 
-        notify_baseline_submitted(conn, course_name=str(bl.get("course_name") or ""), baseline_id=baseline_id)
+        ctx = _resolve_baseline_teaching_context(conn, bl)
+        notify_baseline_submitted(
+            conn,
+            course_name=str(bl.get("course_name") or ""),
+            baseline_id=baseline_id,
+            teaching_group_id=ctx.get("teaching_group_id"),
+            section_id=ctx.get("section_id"),
+            semester=str(ctx.get("semester") or ""),
+        )
     return jsonify({"status": "ok"}), 200
 
 
@@ -1028,6 +1961,16 @@ def api_baseline_review(baseline_id: int):
         bl = get_baseline_with_topics(conn, baseline_id)
         if not bl:
             return jsonify({"status": "error", "message": "not found"}), 404
+        ctx = _resolve_baseline_teaching_context(conn, bl)
+        denied = _guard_hod_course(
+            conn,
+            str(bl.get("course_name") or ""),
+            teaching_group_id=ctx.get("teaching_group_id"),
+            section_id=ctx.get("section_id"),
+            semester=str(ctx.get("semester") or ""),
+        )
+        if denied:
+            return denied
         cur = conn.cursor()
         if action == "approve":
             cur.execute(
@@ -1089,7 +2032,9 @@ def api_report_get():
             g = tg.get_teaching_group(conn, tgid)
             if g:
                 baseline = get_active_baseline(conn, g.get("course_name") or "")
-    return jsonify({"status": "ok", "report": rep, "baseline": baseline, "semester": sem}), 200
+    return jsonify({"status": "ok", "report": rep, "baseline": baseline, "semester": sem,
+                    "incomplete_threshold": INCOMPLETE_PCT_THRESHOLD,
+                    "min_book_references": MIN_BOOK_REFERENCES}), 200
 
 
 @course_delivery_bp.route("/report", methods=["POST"])
@@ -1100,6 +2045,10 @@ def api_report_save():
     phase = (data.get("phase") or PHASE_PARTIAL).strip()
     items = data.get("items") or []
     extra_topics = data.get("extra_topics") or []
+    references = data.get("references") or []
+    assessment_methods = data.get("assessment_methods") or []
+    instructor_comments = (data.get("instructor_comments") or "").strip()
+    instructor_recommendations = (data.get("instructor_recommendations") or "").strip()
     if not tgid:
         return jsonify({"status": "error", "message": "teaching_group_id مطلوب"}), 400
     instructor_id = session.get("instructor_id")
@@ -1150,8 +2099,12 @@ def api_report_save():
                 rid = int(cur.lastrowid or 0)
         overall = _compute_overall_pct(items)
         cur.execute(
-            "UPDATE course_delivery_reports SET overall_pct=?, updated_at=? WHERE id=?",
-            (overall, now, rid),
+            """
+            UPDATE course_delivery_reports
+            SET overall_pct=?, instructor_comments=?, instructor_recommendations=?, updated_at=?
+            WHERE id=?
+            """,
+            (overall, instructor_comments, instructor_recommendations, now, rid),
         )
         cur.execute("DELETE FROM course_delivery_report_items WHERE report_id=?", (rid,))
         for it in items:
@@ -1166,22 +2119,26 @@ def api_report_save():
                 """,
                 (rid, tid, pct, (it.get("incomplete_reason") or "").strip()),
             )
-        if phase == PHASE_FINAL:
-            cur.execute("DELETE FROM course_delivery_extra_topics WHERE report_id=?", (rid,))
-            for ex in extra_topics:
-                title = (ex.get("title") or "").strip()
-                if not title:
-                    continue
-                cur.execute(
-                    "INSERT INTO course_delivery_extra_topics (report_id, title, reason) VALUES (?, ?, ?)",
-                    (rid, title, (ex.get("reason") or "").strip()),
-                )
+        # مفردات خارج المقرر: مسموح في الجزئي والنهائي
+        cur.execute("DELETE FROM course_delivery_extra_topics WHERE report_id=?", (rid,))
+        for ex in extra_topics:
+            title = (ex.get("title") or "").strip()
+            if not title:
+                continue
+            cur.execute(
+                "INSERT INTO course_delivery_extra_topics (report_id, title, reason) VALUES (?, ?, ?)",
+                (rid, title, (ex.get("reason") or "").strip()),
+            )
+        _replace_report_references(conn, rid, references)
+        _replace_assessment_methods(conn, rid, assessment_methods)
         conn.commit()
         rep = get_delivery_report(conn, tgid, sem, phase)
     return jsonify({
         "status": "ok",
         "report": rep,
         "overall_pct": overall,
+        "incomplete_threshold": INCOMPLETE_PCT_THRESHOLD,
+        "min_book_references": MIN_BOOK_REFERENCES,
         "partial_min_pct": policy["partial_min_pct"],
         "final_min_pct": policy["final_min_pct"],
     }), 200
@@ -1194,25 +2151,40 @@ def api_report_submit(report_id: int):
     reason = (data.get("below_threshold_reason") or "").strip()
     with get_connection() as conn:
         cur = conn.cursor()
-        rep = _row_dict(cur.execute("SELECT * FROM course_delivery_reports WHERE id=?", (report_id,)).fetchone())
+        row = cur.execute("SELECT * FROM course_delivery_reports WHERE id=?", (report_id,)).fetchone()
+        if not row:
+            return jsonify({"status": "error", "message": "not found"}), 404
+        base = _row_dict(row)
+        phase = base.get("phase")
+        tgid = int(base["teaching_group_id"])
+        sem = str(base.get("semester") or "")
+        rep = get_delivery_report(conn, tgid, sem, str(phase or PHASE_PARTIAL))
         if not rep:
             return jsonify({"status": "error", "message": "not found"}), 404
-        phase = rep.get("phase")
         from backend.services import teaching_groups as tg
 
-        g = tg.get_teaching_group(conn, int(rep["teaching_group_id"]))
+        g = tg.get_teaching_group(conn, tgid)
         dept_id = int(g.get("department_id") or 0) if g else None
-        policy = get_gate_policy(conn, dept_id, rep.get("semester") or "")
+        policy = get_gate_policy(conn, dept_id, sem)
         min_pct = policy["partial_min_pct"] if phase == PHASE_PARTIAL else policy["final_min_pct"]
         overall = float(rep.get("overall_pct") or 0)
+        require_books = phase == PHASE_FINAL
+        err = validate_quality_report_for_submit(
+            rep,
+            require_books=require_books,
+            require_assessments=require_books,
+        )
+        if err:
+            return jsonify({"status": "error", "message": err}), 400
         now = _now_iso()
+        # حالات المتابعة لرئيس القسم فقط — لا تفتح الدرجات
         if overall >= min_pct:
             st = "auto_approved"
         else:
             if not reason:
                 return jsonify({
                     "status": "error",
-                    "message": f"النسبة {overall}% أقل من {min_pct}% — التبرير مطلوب",
+                    "message": f"النسبة {overall}% أقل من حد المتابعة {min_pct}% — التبرير مطلوب لعلم رئيس القسم",
                 }), 400
             st = "gate_pending"
         cur.execute(
@@ -1232,9 +2204,14 @@ def api_report_submit(report_id: int):
             phase=str(phase or ""),
             report_status=st,
             department_id=dept_id,
-            teaching_group_id=int(rep.get("teaching_group_id") or 0),
+            teaching_group_id=tgid,
         )
-    return jsonify({"status": "ok", "report_status": st, "overall_pct": overall}), 200
+    return jsonify({
+        "status": "ok",
+        "report_status": st,
+        "overall_pct": overall,
+        "note": "إرسال التقرير للمتابعة — فتح الدرجات قرار منفصل لرئيس القسم",
+    }), 200
 
 
 @course_delivery_bp.route("/report/<int:report_id>/gate_review", methods=["POST"])
@@ -1247,6 +2224,21 @@ def api_report_gate_review(report_id: int):
     now = _now_iso()
     with get_connection() as conn:
         cur = conn.cursor()
+        rep_row = cur.execute(
+            "SELECT * FROM course_delivery_reports WHERE id=? AND status=?",
+            (report_id, "gate_pending"),
+        ).fetchone()
+        if not rep_row:
+            return jsonify({"status": "error", "message": "not found"}), 404
+        rep = _row_dict(rep_row)
+        denied = _guard_hod_course(
+            conn,
+            str(rep.get("course_name") or ""),
+            teaching_group_id=rep.get("teaching_group_id"),
+            semester=str(rep.get("semester") or ""),
+        )
+        if denied:
+            return denied
         if action == "approve":
             st = "gate_approved"
         elif action == "reject":
@@ -1308,14 +2300,7 @@ def api_hod_pending():
         ensure_course_delivery_schema(conn)
         cur = conn.cursor()
         sem = _current_semester_label(conn)
-        dept_courses: list[str] = []
-        if dept_id is not None:
-            from backend.services import teaching_groups as tg
-
-            for g in tg.list_teaching_groups(conn, semester=sem, department_id=dept_id, active_only=True):
-                cn = (g.get("course_name") or "").strip()
-                if cn and cn not in dept_courses:
-                    dept_courses.append(cn)
+        actor = (session.get("user") or session.get("username") or "").strip()
         baselines = cur.execute(
             """
             SELECT * FROM course_syllabus_baselines
@@ -1327,8 +2312,15 @@ def api_hod_pending():
         bl_out = []
         for b in baselines or []:
             item = _row_dict(b)
-            cn = (item.get("course_name") or "").strip()
-            if dept_id is not None and dept_courses and cn not in dept_courses:
+            ctx = _resolve_baseline_teaching_context(conn, item)
+            if not hod_may_operate_on_course(
+                conn,
+                actor,
+                str(item.get("course_name") or ""),
+                teaching_group_id=ctx.get("teaching_group_id"),
+                section_id=ctx.get("section_id"),
+                semester=str(ctx.get("semester") or sem),
+            ):
                 continue
             item["topics"] = [
                 _row_dict(t)
@@ -1366,17 +2358,13 @@ def api_hod_pending():
                        d.instructor_id, COALESCE(i.name, '') AS instructor_name
                 FROM grade_drafts d
                 LEFT JOIN instructors i ON i.id = d.instructor_id
-                LEFT JOIN teaching_groups tg ON tg.id = d.teaching_group_id
                 WHERE d.semester = ? AND d.status = 'Submitted'
+                ORDER BY d.submitted_at DESC, d.course_name
             """
-            gd_params: list[Any] = [sem]
-            if dept_id is not None:
-                gd_sql += " AND (tg.department_id = ? OR d.course_name IN (SELECT course_name FROM teaching_groups WHERE department_id = ? AND semester = ?))"
-                gd_params.extend([int(dept_id), int(dept_id), sem])
-            gd_sql += " ORDER BY d.submitted_at DESC, d.course_name"
-            rows = cur.execute(gd_sql, tuple(gd_params)).fetchall()
+            rows = cur.execute(gd_sql, (sem,)).fetchall()
             gd_out = [_row_dict(r) for r in rows or []]
             _enrich_drafts_with_group_labels(conn, gd_out)
+            gd_out = filter_items_for_course_hod_scope(conn, actor, gd_out)
 
         summary = {
             "pending_baselines": len(bl_out),
@@ -1498,3 +2486,191 @@ def api_gate_policy():
             )
         conn.commit()
     return jsonify({"status": "ok", "partial_min_pct": partial_min, "final_min_pct": final_min}), 200
+
+
+@course_delivery_bp.route("/hod/progress_board", methods=["GET"])
+@role_required("head_of_department", "admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
+def api_hod_progress_board():
+    """لوحة نسب الإنجاز / الفجوات / أقفال إدخال الدرجات."""
+    with get_connection() as conn:
+        ensure_course_delivery_schema(conn)
+        sem = (request.args.get("semester") or "").strip() or _current_semester_label(conn)
+        college_wide = _is_college_leadership_or_admin() and request.args.get("all_departments") in (
+            "1", "true", "yes",
+        )
+        dept_id = None if college_wide else _delivery_department_scope_id(conn)
+        rows = build_progress_board_rows(conn, semester=sem, department_id=dept_id)
+        low = sum(1 for r in rows if (r.get("overall_pct") is not None and float(r["overall_pct"]) < 50))
+        unlocked_partial = sum(1 for r in rows if r.get("partial_lock_open"))
+        unlocked_final = sum(1 for r in rows if r.get("final_lock_open"))
+    return jsonify({
+        "status": "ok",
+        "semester": sem,
+        "department_id": dept_id,
+        "college_wide": bool(college_wide),
+        "summary": {
+            "groups_total": len(rows),
+            "low_completion": low,
+            "partial_open": unlocked_partial,
+            "final_open": unlocked_final,
+        },
+        "rows": rows,
+        "incomplete_threshold": INCOMPLETE_PCT_THRESHOLD,
+        "min_book_references": MIN_BOOK_REFERENCES,
+    }), 200
+
+
+@course_delivery_bp.route("/hod/grade_locks", methods=["GET", "POST"])
+@role_required("head_of_department", "admin_main", "admin", "system_admin")
+def api_hod_grade_locks():
+    """فتح/إقفال إدخال الدرجات لكل مقرر ومرحلة — يدوياً من رئيس القسم."""
+    with get_connection() as conn:
+        ensure_course_delivery_schema(conn)
+        sem = (request.args.get("semester") or "").strip() or _current_semester_label(conn)
+        if request.method == "GET":
+            dept_id = _delivery_department_scope_id(conn)
+            rows = build_progress_board_rows(conn, semester=sem, department_id=dept_id)
+            return jsonify({"status": "ok", "semester": sem, "rows": rows}), 200
+
+        data = request.get_json(force=True) or {}
+        items = data.get("locks") or []
+        if not items and data.get("teaching_group_id"):
+            items = [data]
+        actor = (session.get("user") or "").strip()
+        results = []
+        for it in items:
+            tgid = int(it.get("teaching_group_id") or 0)
+            phase = (it.get("phase") or PHASE_PARTIAL).strip()
+            if phase not in (PHASE_PARTIAL, PHASE_FINAL) or not tgid:
+                continue
+            is_open = bool(it.get("is_open"))
+            note = (it.get("note") or "").strip()
+            from backend.services import teaching_groups as tg
+
+            g = tg.get_teaching_group(conn, tgid)
+            if not g:
+                continue
+            denied = _guard_hod_course(
+                conn,
+                str(g.get("course_name") or ""),
+                teaching_group_id=tgid,
+                semester=sem,
+            )
+            if denied and (session.get("user_role") or "").strip() == "head_of_department":
+                return denied
+            lock = set_grade_entry_lock(
+                conn,
+                teaching_group_id=tgid,
+                semester=sem,
+                phase=phase,
+                is_open=is_open,
+                set_by=actor,
+                note=note,
+            )
+            results.append(lock)
+            if is_open:
+                from backend.services.course_workflow import notify_instructor
+
+                ph = "الجزئي" if phase == PHASE_PARTIAL else "النهائي"
+                notify_instructor(
+                    conn,
+                    int(g.get("instructor_id") or 0),
+                    title=f"فُتح إدخال درجات {ph}: {g.get('course_name')}",
+                    body="يمكنك إنشاء/تعبئة مسودة الدرجات من مقرراتي.",
+                )
+        return jsonify({"status": "ok", "locks": results, "count": len(results)}), 200
+
+
+@course_delivery_bp.route("/hod/warn_instructor", methods=["POST"])
+@role_required("head_of_department", "admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
+def api_hod_warn_instructor():
+    """تنبيه يدوي للأستاذ بخصوص تقرير المقرر / الإنجاز."""
+    data = request.get_json(force=True) or {}
+    tgid = int(data.get("teaching_group_id") or 0)
+    message = (data.get("message") or "").strip()
+    if not tgid:
+        return jsonify({"status": "error", "message": "teaching_group_id مطلوب"}), 400
+    with get_connection() as conn:
+        from backend.services import teaching_groups as tg
+        from backend.services.course_workflow import notify_instructor
+
+        g = tg.get_teaching_group(conn, tgid)
+        if not g:
+            return jsonify({"status": "error", "message": "مجموعة تدريس غير موجودة"}), 404
+        if session.get("user_role") == "head_of_department":
+            denied = _guard_hod_course(
+                conn,
+                str(g.get("course_name") or ""),
+                teaching_group_id=tgid,
+                semester=str(g.get("semester") or ""),
+            )
+            if denied:
+                return denied
+        default_msg = (
+            f"يُرجى استكمال تقرير المقرر الدراسي وبيان نسب الإنجاز لمقرر «{g.get('course_name')}» "
+            f"قبل موعد الامتحانات. راجع: /course_delivery_page?teaching_group_id={tgid}"
+        )
+        body = message or default_msg
+        notify_instructor(
+            conn,
+            int(g.get("instructor_id") or 0),
+            title=f"تنبيه رئيس القسم — تقرير المقرر: {g.get('course_name')}",
+            body=body,
+        )
+    return jsonify({"status": "ok"}), 200
+
+
+@course_delivery_bp.route("/college/reports_overview", methods=["GET"])
+@role_required("college_dean", "academic_vice_dean", "admin_main", "admin", "system_admin")
+def api_college_reports_overview():
+    """اطلاع الوكيل/العميد على تقارير جودة المقررات لكل الأقسام."""
+    with get_connection() as conn:
+        ensure_course_delivery_schema(conn)
+        sem = (request.args.get("semester") or "").strip() or _current_semester_label(conn)
+        rows = build_progress_board_rows(conn, semester=sem, department_id=None)
+        by_dept: dict[str, dict] = {}
+        for r in rows:
+            did = str(r.get("department_id") or "بدون قسم")
+            slot = by_dept.setdefault(
+                did,
+                {
+                    "department_id": r.get("department_id"),
+                    "groups": 0,
+                    "avg_pct_sum": 0.0,
+                    "avg_pct_n": 0,
+                    "low_completion": 0,
+                    "missing_books": 0,
+                    "partial_submitted": 0,
+                    "final_submitted": 0,
+                },
+            )
+            slot["groups"] += 1
+            if r.get("overall_pct") is not None:
+                slot["avg_pct_sum"] += float(r["overall_pct"])
+                slot["avg_pct_n"] += 1
+            if r.get("overall_pct") is not None and float(r["overall_pct"]) < INCOMPLETE_PCT_THRESHOLD:
+                slot["low_completion"] += 1
+            if not r.get("books_ok"):
+                slot["missing_books"] += 1
+            if r.get("partial_status") not in ("missing", "draft"):
+                slot["partial_submitted"] += 1
+            if r.get("final_status") not in ("missing", "draft"):
+                slot["final_submitted"] += 1
+        dept_summary = []
+        for slot in by_dept.values():
+            n = slot.pop("avg_pct_n")
+            s = slot.pop("avg_pct_sum")
+            slot["avg_overall_pct"] = round(s / n, 1) if n else None
+            dept_summary.append(slot)
+    return jsonify({
+        "status": "ok",
+        "semester": sem,
+        "summary": {
+            "groups_total": len(rows),
+            "departments": len(dept_summary),
+            "low_completion": sum(1 for r in rows if r.get("overall_pct") is not None and float(r["overall_pct"]) < 50),
+            "missing_books": sum(1 for r in rows if not r.get("books_ok")),
+        },
+        "by_department": dept_summary,
+        "rows": rows,
+    }), 200

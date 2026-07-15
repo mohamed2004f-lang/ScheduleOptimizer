@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8">
@@ -219,7 +219,15 @@ async function importCourses(){
       const boundMsg = (j.department_bound != null && j.department_bound > 0)
         ? ` وربط ${j.department_bound} بقسمك`
         : '';
-      window.showToast?.(`تم استيراد ${j.imported ?? 'عدد'} مقرر${boundMsg}`, 'success');
+      const ignoredN = Number(j.ignored_count || (j.ignored || []).length || 0);
+      const ignoredMsg = ignoredN > 0
+        ? ` — تُجاهل ${ignoredN} (رمز موجود مسبقاً/كلية)`
+        : '';
+      window.showToast?.(`تم استيراد ${j.imported ?? 'عدد'} مقرر${boundMsg}${ignoredMsg}`, ignoredN ? 'warning' : 'success');
+      if (ignoredN > 0 && Array.isArray(j.ignored)) {
+        const details = j.ignored.slice(0, 5).map(x => x.message || `${x.course_code}: ${x.course_name}`).join('<br>');
+        msg.innerHTML = `<div class="alert alert-warning p-2 small">تُجاهلت مقررات مكررة الرمز:<br>${details}${ignoredN > 5 ? '<br>…' : ''}</div>`;
+      }
       await loadCourses();
       form.reset();
     } else {

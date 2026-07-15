@@ -29,6 +29,10 @@ from .utilities import (
 from .prereg_helpers import evaluate_courses_prereqs
 from backend.core.feature_flags import registration_program_course_mode
 from backend.core.department_scope_policy import (
+    assert_course_in_actor_scope,
+    assert_student_in_actor_scope,
+    resolve_import_department_binding,
+    resolve_registration_course_scope_sql,
     resolve_scope_sql_for_aliased_student,
     resolve_effective_department_scope_id,
     resolve_users_list_scope,
@@ -641,6 +645,7 @@ def _course_registration_count_rows(conn):
     actor = (session.get("user") or session.get("username") or "").strip()
     scope_sql, scope_params = resolve_scope_sql_for_aliased_student(conn, actor, "s")
     scope_and = f" AND ({scope_sql})" if scope_sql else ""
+    course_scope_sql, course_scope_params = resolve_registration_course_scope_sql(conn, actor)
     if active_only:
         q = f"""
         SELECT r.course_name,
@@ -652,6 +657,7 @@ def _course_registration_count_rows(conn):
         LEFT JOIN students s ON s.student_id = r.student_id
         WHERE COALESCE(s.enrollment_status, 'active') = 'active'
           {scope_and}
+          {course_scope_sql}
         GROUP BY r.course_name, c.course_code, c.units
         ORDER BY r.course_name
         """
@@ -666,10 +672,12 @@ def _course_registration_count_rows(conn):
         LEFT JOIN students s ON s.student_id = r.student_id
         WHERE COALESCE(r.student_id, '') <> ''
           {scope_and}
+          {course_scope_sql}
         GROUP BY r.course_name, c.course_code, c.units
         ORDER BY r.course_name
         """
-    rows = cur.execute(q, scope_params if scope_params else ()).fetchall()
+    params = tuple(scope_params or ()) + tuple(course_scope_params or ())
+    rows = cur.execute(q, params).fetchall()
     items = []
     for row in rows or []:
         d = dict(row)
@@ -1933,12 +1941,7 @@ def _resolve_actor_department_id(conn) -> int | None:
 
 def _resolve_student_import_department_binding(conn) -> tuple[int | None, int | None]:
     """قسم/برنامج الربط التلقائي عند استيراد Excel حسب نطاق المنفّذ."""
-    uname = (session.get("user") or session.get("username") or "").strip()
-    dept_id = resolve_effective_department_scope_id(conn, uname)
-    if dept_id is None:
-        return None, None
-    prog_id = major_program_id_for_department(conn, int(dept_id))
-    return int(dept_id), prog_id
+    return resolve_import_department_binding(conn)
 
 
 def _bind_imported_students_department(
@@ -3072,6 +3075,17 @@ def save_registrations():
         return jsonify({"status": "error", "message": "courses/registrations يجب أن تكون قائمة"}), 400
     courses = [it["course_name"] for it in reg_items]
 
+    try:
+        from backend.core.department_scope_policy import resolve_effective_department_scope_id
+        from backend.services.term_closure import TermClosedError, assert_term_writable
+
+        with get_connection() as conn:
+            actor = (session.get("user") or session.get("username") or "").strip()
+            dept_id = resolve_effective_department_scope_id(conn, actor)
+            assert_term_writable(conn, stage="registrations", department_id=dept_id)
+    except TermClosedError as exc:
+        return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
+
     old_courses = set()
     # منع تسجيل طالب غير فعّال (سحب ملف، موقوف قيده، خريج)
     try:
@@ -3601,6 +3615,16 @@ def delete_registrations():
     if not sid:
         return jsonify({"status":"error","message":"student_id مطلوب"}), 400
     try:
+        from backend.core.department_scope_policy import resolve_effective_department_scope_id
+        from backend.services.term_closure import TermClosedError, assert_term_writable
+
+        with get_connection() as conn:
+            actor = (session.get("user") or session.get("username") or "").strip()
+            dept_id = resolve_effective_department_scope_id(conn, actor)
+            assert_term_writable(conn, stage="registrations", department_id=dept_id)
+    except TermClosedError as exc:
+        return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
+    try:
         with get_connection() as conn:
             cur = conn.cursor()
             rows = cur.execute(
@@ -3702,6 +3726,17 @@ def import_registrations():
     data = request.get_json(force=True) or {}
     items = data.get("items", []) or []
     added = 0
+    skipped = 0
+    actor = (session.get("user") or session.get("username") or "").strip()
+    try:
+        from backend.core.department_scope_policy import resolve_effective_department_scope_id
+        from backend.services.term_closure import TermClosedError, assert_term_writable
+
+        with get_connection() as conn:
+            dept_id = resolve_effective_department_scope_id(conn, actor)
+            assert_term_writable(conn, stage="registrations", department_id=dept_id)
+    except TermClosedError as exc:
+        return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
     with get_connection() as conn:
         cur = conn.cursor()
         cols = fetch_table_columns(conn, "students")
@@ -3722,6 +3757,13 @@ def import_registrations():
                         _dedup.append(c)
                 regs = _dedup
             if not sid:
+                continue
+            try:
+                assert_student_in_actor_scope(conn, sid, actor)
+                for cname in regs:
+                    assert_course_in_actor_scope(conn, (cname or "").strip(), actor)
+            except ValueError:
+                skipped += 1
                 continue
             try:
                 if has_uni:
@@ -3759,7 +3801,7 @@ def import_registrations():
             except Exception:
                 current_app.logger.exception("import_registrations failed for %s", sid)
         conn.commit()
-    return jsonify({"status":"ok","imported": added})
+    return jsonify({"status":"ok","imported": added, "skipped": skipped})
 
 # -----------------------------
 # Export registrations

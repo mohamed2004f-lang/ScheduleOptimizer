@@ -72,7 +72,19 @@ def set_current_term():
                 (year,),
             )
             conn.commit()
-    return jsonify({"status": "ok", "message": "تم حفظ الفصل الحالي", "term_name": name, "term_year": year})
+    label = f"{name} {year}".strip()
+    return jsonify(
+        {
+            "status": "ok",
+            "message": (
+                "تم حفظ الفصل الحالي. "
+                "الفصول المغلقة سابقاً تبقى مقفلة تحت ملصقها — الفصل الجديد دورة تشغيل مستقلة."
+            ),
+            "term_name": name,
+            "term_year": year,
+            "term_label": label,
+        }
+    )
 
 
 @admin_bp.route("/settings/attendance_term_weeks", methods=["GET"])

@@ -1463,6 +1463,7 @@ def add_schedule_row():
             return jsonify({"status": "error", "message": f"{k} مطلوب"}), 400
     try:
         from backend.core.services import ScheduleService
+        from backend.services.term_closure import TermClosedError, assert_term_writable
 
         sem = (data.get("semester") or "").strip()
         if not sem:
@@ -1475,6 +1476,12 @@ def add_schedule_row():
         dept_id = None
         with get_connection() as conn:
             dept_id = _resolve_schedule_row_department_id(conn, data.get("course_name"))
+            try:
+                assert_term_writable(
+                    conn, stage="schedule", semester=sem, department_id=dept_id
+                )
+            except TermClosedError as exc:
+                return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
 
         res = ScheduleService.add_schedule_row(
             data.get("course_name"),
@@ -1522,6 +1529,38 @@ def delete_schedule_row():
     section_id = data.get("section_id")
     try:
         from backend.core.services import ScheduleService
+        from backend.services.term_closure import TermClosedError, assert_term_writable
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            pk = schedule_pk_column(conn)
+            row = cur.execute(
+                f"SELECT semester, department_id, course_name FROM schedule WHERE {pk} = ? LIMIT 1",
+                (int(section_id),),
+            ).fetchone()
+            sem = ""
+            dept_id = None
+            if row:
+                if hasattr(row, "keys"):
+                    sem = str(row["semester"] or "")
+                    dept_id = row["department_id"]
+                    cname = row["course_name"]
+                else:
+                    sem = str(row[0] or "")
+                    dept_id = row[1]
+                    cname = row[2]
+                if dept_id is None and cname:
+                    dept_id = _resolve_schedule_row_department_id(conn, cname)
+            try:
+                assert_term_writable(
+                    conn,
+                    stage="schedule",
+                    semester=sem or None,
+                    department_id=int(dept_id) if dept_id not in (None, "") else None,
+                )
+            except TermClosedError as exc:
+                return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
+
         res = ScheduleService.delete_schedule_row(int(section_id))
         try:
             with get_connection() as conn:
@@ -1551,6 +1590,40 @@ def update_schedule_row():
             fields[k] = data.get(k)
     try:
         from backend.core.services import ScheduleService
+        from backend.services.term_closure import TermClosedError, assert_term_writable
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            pk = schedule_pk_column(conn)
+            row = cur.execute(
+                f"SELECT semester, department_id, course_name FROM schedule WHERE {pk} = ? LIMIT 1",
+                (int(section_id),),
+            ).fetchone()
+            sem = (fields.get("semester") or "").strip()
+            dept_id = None
+            if row:
+                if hasattr(row, "keys"):
+                    if not sem:
+                        sem = str(row["semester"] or "")
+                    dept_id = row["department_id"]
+                    cname = fields.get("course_name") or row["course_name"]
+                else:
+                    if not sem:
+                        sem = str(row[0] or "")
+                    dept_id = row[1]
+                    cname = fields.get("course_name") or row[2]
+                if dept_id is None and cname:
+                    dept_id = _resolve_schedule_row_department_id(conn, cname)
+            try:
+                assert_term_writable(
+                    conn,
+                    stage="schedule",
+                    semester=sem or None,
+                    department_id=int(dept_id) if dept_id not in (None, "") else None,
+                )
+            except TermClosedError as exc:
+                return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
+
         res = ScheduleService.update_schedule_row(int(section_id), **fields)
         try:
             with get_connection() as conn:
@@ -1648,6 +1721,15 @@ def clear_schedule_all():
     """مسح كل صفوف الجدول الدراسي (schedule) مع تفريغ الجداول المشتقة."""
     deleted = 0
     with get_connection() as conn:
+        try:
+            from backend.core.department_scope_policy import resolve_effective_department_scope_id
+            from backend.services.term_closure import TermClosedError, assert_term_writable
+
+            actor = (session.get("user") or session.get("username") or "").strip()
+            dept_id = resolve_effective_department_scope_id(conn, actor)
+            assert_term_writable(conn, stage="schedule", department_id=dept_id)
+        except TermClosedError as exc:
+            return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
         cur = conn.cursor()
         cur.execute("DELETE FROM schedule")
         deleted = int(cur.rowcount or 0)
@@ -2017,6 +2099,86 @@ def export_schedule_excel():
 
     df = pd.DataFrame(out_rows, columns=multi_cols)
     return excel_response_from_df(df, filename_prefix="schedule")
+
+
+@schedule_bp.route("/import/excel", methods=["POST"])
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+def import_schedule_excel():
+    """
+    استيراد صفوف جدول من Excel (أعمدة: course_name, day, time, room, instructor, semester).
+    يُقيَّد بمقررات وقسم المنفّذ عند تفعيل نطاق القسم.
+    """
+    from backend.core.department_scope_policy import assert_course_in_actor_scope
+    from backend.core.services import ScheduleService
+
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"status": "error", "message": "file required"}), 400
+    try:
+        df = pd.read_excel(f)
+    except Exception as exc:
+        return jsonify({"status": "error", "message": f"فشل قراءة Excel: {exc}"}), 400
+    if df.empty:
+        return jsonify({"status": "error", "message": "الملف فارغ"}), 400
+    df.columns = [str(c).lower().strip() for c in df.columns]
+    required = {"course_name", "day", "time"}
+    if not required.issubset(set(df.columns)):
+        return jsonify({
+            "status": "error",
+            "message": "الأعمدة المطلوبة: course_name, day, time (واختياري: room, instructor, semester)",
+        }), 400
+
+    with get_connection() as conn:
+        term_name, term_year = get_current_term(conn=conn)
+        default_sem = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
+        actor = (session.get("user") or session.get("username") or "").strip()
+        imported = 0
+        skipped = 0
+
+        def _cell_str(val) -> str:
+            if val is None:
+                return ""
+            return str(val).strip()
+
+        for r in df.to_dict(orient="records"):
+            cname = (r.get("course_name") or "").strip()
+            day = (r.get("day") or "").strip()
+            time_val = (r.get("time") or "").strip()
+            if not cname or not day or not time_val:
+                skipped += 1
+                continue
+            try:
+                assert_course_in_actor_scope(conn, cname, actor)
+            except ValueError:
+                skipped += 1
+                continue
+            sem = (r.get("semester") or "").strip() or default_sem
+            if not sem:
+                return jsonify({"status": "error", "message": "يجب تحديد الفصل الحالي أو عمود semester"}), 400
+            dept_id = _resolve_schedule_row_department_id(conn, cname)
+            try:
+                ScheduleService.add_schedule_row(
+                    cname,
+                    day,
+                    time_val,
+                    room=_cell_str(r.get("room")),
+                    instructor=_cell_str(r.get("instructor")),
+                    semester=sem,
+                    instructor_id=None,
+                    department_id=dept_id,
+                )
+                imported += 1
+            except ValidationError as e:
+                return jsonify({"status": "error", "message": str(e)}), 400
+            except Exception as e:
+                logger.exception("import_schedule_excel row failed")
+                return jsonify({"status": "error", "message": str(e)}), 500
+        try:
+            touch_schedule_updated_at(conn)
+            conn.commit()
+        except Exception:
+            conn.commit()
+    return jsonify({"status": "ok", "imported": imported, "skipped": skipped})
 
 
 def _sync_optimized_schedule_from_current(conn) -> int:

@@ -11,7 +11,7 @@ from backend.services.accreditation_manual import (
 
 
 def test_manual_inputs_save_and_load(db_conn):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     save_manual_inputs(
         db_conn,
         semester="h4-sem",
@@ -33,7 +33,7 @@ def test_manual_inputs_save_and_load(db_conn):
 
 
 def test_improvement_plan_crud(db_conn):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     ind_id = db_conn.cursor().execute(
         "SELECT id FROM accreditation_indicators ORDER BY id LIMIT 1"
     ).fetchone()[0]
@@ -72,7 +72,7 @@ def test_improvement_plan_crud(db_conn):
 
 
 def test_manual_sync_updates_indicators(db_conn):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     save_manual_inputs(
         db_conn,
         semester="sync-sem",
@@ -83,6 +83,7 @@ def test_manual_sync_updates_indicators(db_conn):
             "community_events_count": 4,
             "research_outputs_count": 2,
             "governance_meetings_count": 5,
+            "catalog_version": "2026.1",
         },
         actor="tester",
     )
@@ -102,7 +103,7 @@ def test_manual_sync_updates_indicators(db_conn):
 
 
 def test_manual_and_plans_api(app, db_conn, auth_client):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     save = auth_client.post(
         "/academic_quality/api/accreditation/manual_inputs/save",
         json={"semester": "api-h4", "classrooms_count": 8, "finance_notes": "ملاحظة"},

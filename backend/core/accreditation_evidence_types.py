@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 LINK_MODE_LABELS = {
-    "auto": "ربط آلي",
+    "auto": "حساب من النظام",
     "hybrid": "هجين",
     "manual": "يدوي",
     "evidence": "شاهد",
@@ -179,6 +179,16 @@ DEFAULT_EVIDENCE_TYPES: list[tuple] = [
         130,
     ),
     (
+        "course_delivery_quality_report",
+        "تقرير مقرر دراسي (تنفيذ المفردات)",
+        "تقرير جودة تنفيذ المقرر: نسب إنجاز المفردات، الفجوات، خارج المقرر، المراجع، وطرق التقييم — معاينة/PDF من الجودة.",
+        "report",
+        "course_delivery",
+        "quality_report",
+        1,
+        135,
+    ),
+    (
         "instructor_qualifications",
         "مؤهلات هيئة التدريس",
         "نسب المؤهلات من سجل الأساتذة.",
@@ -285,6 +295,8 @@ KEYWORD_EVIDENCE_RULES: list[tuple[tuple[str, ...], str, str]] = [
     (("لائحة",), "policy_department", "evidence"),
     (("سياسة",), "policy_department", "evidence"),
     (("إقفال", "مقرر"), "course_closure_reports", "evidence"),
+    (("تقرير مقرر", "مفردات", "نسب إنجاز"), "course_delivery_quality_report", "evidence"),
+    (("تنفيذ المقرر",), "course_delivery_quality_report", "evidence"),
     (("رؤية", "رسالة"), "college_identity_docs", "evidence"),
     (("خطة", "إستراتيج"), "college_identity_docs", "evidence"),
     (("مؤهل", "هيئة التدريس"), "instructor_qualifications", "auto"),

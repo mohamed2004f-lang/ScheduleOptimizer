@@ -14,7 +14,7 @@ from backend.services.accreditation_evidence_matrix import (
 
 
 def test_bindable_sources_has_expected_and_surveys(db_conn):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     ensure_evidence_binding_schema(db_conn)
     ensure_bindings_schema(db_conn)
     cur = db_conn.cursor()
@@ -42,7 +42,7 @@ def test_bindable_sources_has_expected_and_surveys(db_conn):
 
 
 def test_save_binding_witness(db_conn):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     ensure_evidence_binding_schema(db_conn)
     ensure_bindings_schema(db_conn)
     cur = db_conn.cursor()
@@ -107,7 +107,7 @@ def test_save_binding_witness(db_conn):
 
 
 def test_bindable_sources_api(app, db_conn, auth_client):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     ensure_bindings_schema(db_conn)
     cur = db_conn.cursor()
     ind = cur.execute(

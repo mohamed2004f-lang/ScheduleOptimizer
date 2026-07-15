@@ -52,14 +52,33 @@
             <label class="form-label">المنصب أو الدور</label>
             <input type="text" class="form-control" name="position_text" maxlength="120">
           </div>
-          <div class="mb-0">
+          <div class="mb-3">
             <label class="form-label">هل توظّفون خريجين من الكلية؟ <span class="text-danger">*</span></label>
-            <select class="form-select" name="hires_graduates" required>
+            <select class="form-select" name="hires_graduates" id="hires_graduates" required>
               <option value="">— اختر —</option>
               <option value="yes">نعم</option>
               <option value="sometimes">أحياناً</option>
               <option value="no">لا</option>
             </select>
+          </div>
+          <div class="mb-0" id="employerHireDeptsWrap" style="display:none;">
+            <label class="form-label">{{ employer_hire_departments_label }} <span class="text-danger">*</span></label>
+            <div class="form-text">{{ employer_hire_departments_hint }}</div>
+            <div class="row g-2 mt-2" id="employerHireDeptsList">
+              {% for d in public_departments %}
+              <div class="col-md-6">
+                <div class="form-check">
+                  <input class="form-check-input hire-dept-cb" type="checkbox"
+                         name="hire_department_ids" value="{{ d.id }}" id="hire_dept_{{ d.id }}">
+                  <label class="form-check-label" for="hire_dept_{{ d.id }}">{{ d.name_ar }}</label>
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+            <div class="mb-0 mt-3" id="employerHireNeedsWrap" style="display:none;">
+              <div class="form-text mb-2">{{ employer_hire_needs_field_hint }}</div>
+              <div id="employerHireNeedsFields"></div>
+            </div>
           </div>
           {% else %}
           <p class="text-muted small">{{ alumni_intro_ar }}</p>
@@ -87,6 +106,11 @@
               </select>
               <input type="hidden" name="track_label" id="track_label" value="">
               <div class="form-text">{{ alumni_track_field_hint }}</div>
+            </div>
+            <div class="col-12" id="alumniCustomTrackWrap" style="display:none;">
+              <label class="form-label">{{ alumni_track_custom_field_label }} <span class="text-danger">*</span></label>
+              <input type="text" class="form-control" name="track_custom_label" id="track_custom_label" maxlength="120"
+                     placeholder="مثال: طاقة (برنامج قديم)، تصنيع —">
             </div>
             <div class="col-12">
               <div id="alumniProgramSummary" class="alert alert-success py-2 small mb-0 d-none" role="status">
@@ -253,8 +277,16 @@
             <input type="text" class="form-control" name="recommend_reason_text" maxlength="400">
           </div>
           <div class="mb-3">
+            <label class="form-label">{{ alumni_program_freeze_support_question_ar }} <span class="text-danger">*</span></label>
+            <select class="form-select" name="program_freeze_support" id="program_freeze_support" required>
+              <option value="">— اختر —</option>
+              <option value="yes">نعم</option>
+              <option value="no">لا</option>
+            </select>
+          </div>
+          <div class="mb-3" id="programFreezeChoiceWrap" style="display:none;">
             <label class="form-label">{{ alumni_program_freeze_question_ar }} <span class="text-danger">*</span></label>
-            <select class="form-select" name="program_development_choice" required>
+            <select class="form-select" name="program_development_choice" id="program_development_choice">
               <option value="">— اختر —</option>
               {% for val, label in alumni_program_development_options %}
               <option value="{{ val }}">{{ label }}</option>
@@ -299,6 +331,11 @@
       </div>
     </form>
 
+    <div id="alreadyDoneBox" class="alert alert-warning d-none shadow-sm">
+      <h5 class="alert-heading">تم تسجيل مشاركتكم مسبقاً</h5>
+      <p class="mb-0">يبدو أن هذا المتصفح أرسل استبيان هذه الدورة من قبل. شكراً لمساهمتكم.</p>
+    </div>
+
     <div id="successBox" class="alert alert-success d-none shadow-sm">
       <h5 class="alert-heading">شكراً لمشاركتكم</h5>
       <p class="mb-0">تم تسجيل إجاباتكم بنجاح.</p>
@@ -309,8 +346,50 @@
   <script>
     const TOKEN = {{ invite.token|tojson }};
     const TEMPLATE = {{ template_code|tojson }};
+    const CYCLE_LABEL = {{ cycle_label|tojson }};
+    {% if template_code == 'alumni' %}
+    const ALUMNI_TRACK_CUSTOM_LABEL = {{ alumni_track_custom_option_label|tojson }};
+    {% endif %}
+    {% if template_code == 'employer_strategic' %}
+    const EMPLOYER_HIRE_NEEDS_LABEL = {{ employer_hire_needs_field_label|tojson }};
+    {% endif %}
     const EMPLOYED_STATUSES = new Set(['in_specialty', 'other_engineering', 'non_engineering', 'self_employed']);
     const WORKING_STATUSES = new Set([...EMPLOYED_STATUSES, 'job_seeking']);
+
+    function alumniDoneStorageKey() {
+      return 'so_ext_survey_done:' + TEMPLATE + ':' + (CYCLE_LABEL || '');
+    }
+    function markAlumniInviteDone() {
+      if (TEMPLATE !== 'alumni') return;
+      try { localStorage.setItem(alumniDoneStorageKey(), '1'); } catch (e) {}
+    }
+    function isAlumniInviteAlreadyDone() {
+      if (TEMPLATE !== 'alumni') return false;
+      try { return localStorage.getItem(alumniDoneStorageKey()) === '1'; } catch (e) { return false; }
+    }
+    function showAlreadyDoneState() {
+      const form = document.getElementById('inviteSurveyForm');
+      form?.classList.add('d-none');
+      document.getElementById('successBox')?.classList.add('d-none');
+      document.getElementById('alreadyDoneBox')?.classList.remove('d-none');
+    }
+    function assertInviteFormComplete(form) {
+      if (!form.checkValidity()) {
+        form.reportValidity();
+        return false;
+      }
+      const qNames = new Set();
+      form.querySelectorAll('input[type="radio"][name^="q_"]').forEach((el) => qNames.add(el.name));
+      for (const name of qNames) {
+        if (!form.querySelector('input[name="' + name + '"]:checked')) {
+          alert('يرجى الإجابة على جميع بنود التقييم قبل الإرسال');
+          const first = form.querySelector('input[name="' + name + '"]');
+          first?.focus();
+          return false;
+        }
+      }
+      return true;
+    }
 
     function updateAlumniProgramSummary() {
       const box = document.getElementById('alumniProgramSummary');
@@ -327,8 +406,12 @@
 
       let trackLabel = '';
       if (trackSel && trackSel.value) {
-        const t = (trackSel.selectedOptions[0]?.textContent || '').trim();
-        if (t && !t.startsWith('—')) trackLabel = t;
+        if (trackSel.value === 'custom') {
+          trackLabel = (document.getElementById('track_custom_label')?.value || '').trim();
+        } else {
+          const t = (trackSel.selectedOptions[0]?.textContent || '').trim();
+          if (t && !t.startsWith('—')) trackLabel = t;
+        }
       }
 
       if (!deptLabel) {
@@ -366,6 +449,9 @@
       toggle('jobRejectionReasonWrap', isWorking && rejection === 'yes');
       toggle('openAdaptationWrap', isWorking);
       toggle('openTechnologyWrap', isEmployed);
+
+      const freezeSupport = document.getElementById('program_freeze_support')?.value || '';
+      toggle('programFreezeChoiceWrap', freezeSupport === 'yes', ['program_development_choice']);
     }
 
     async function loadDepartments() {
@@ -407,8 +493,24 @@
       (j.items || []).forEach(t => {
         html += `<option value="${t.track_code}" data-label="${t.track_label}">${t.track_label}</option>`;
       });
+      if (typeof ALUMNI_TRACK_CUSTOM_LABEL !== 'undefined') {
+        html += `<option value="custom" data-label="">${ALUMNI_TRACK_CUSTOM_LABEL}</option>`;
+      }
       sel.innerHTML = html;
       sel.disabled = false;
+      updateAlumniCustomTrack();
+    }
+
+    function updateAlumniCustomTrack() {
+      const trackSel = document.getElementById('track_code');
+      const wrap = document.getElementById('alumniCustomTrackWrap');
+      const input = document.getElementById('track_custom_label');
+      const isCustom = trackSel?.value === 'custom';
+      if (wrap) wrap.style.display = isCustom ? 'block' : 'none';
+      if (input) {
+        input.required = isCustom;
+        if (!isCustom) input.value = '';
+      }
     }
 
     document.getElementById('department_id')?.addEventListener('change', (e) => {
@@ -419,21 +521,113 @@
     document.getElementById('track_code')?.addEventListener('change', (e) => {
       const opt = e.target.selectedOptions[0];
       const lbl = document.getElementById('track_label');
-      if (lbl) lbl.value = opt ? (opt.dataset.label || opt.textContent || '') : '';
+      if (lbl) {
+        if (e.target.value === 'custom') {
+          lbl.value = '';
+        } else {
+          lbl.value = opt ? (opt.dataset.label || opt.textContent || '') : '';
+        }
+      }
+      updateAlumniCustomTrack();
       updateAlumniProgramSummary();
     });
 
-    document.getElementById('employment_status')?.addEventListener('change', updateAlumniConditionalFields);
+    document.getElementById('track_custom_label')?.addEventListener('input', updateAlumniProgramSummary);
+
+    function rebuildEmployerHireNeedsFields() {
+      const container = document.getElementById('employerHireNeedsFields');
+      const needsWrap = document.getElementById('employerHireNeedsWrap');
+      if (!container) return;
+      const checked = [...document.querySelectorAll('.hire-dept-cb:checked')];
+      const existing = {};
+      container.querySelectorAll('.hire-needs-input').forEach((inp) => {
+        existing[inp.dataset.deptId] = inp.value;
+      });
+      container.innerHTML = '';
+      if (needsWrap) needsWrap.style.display = checked.length ? 'block' : 'none';
+      const fieldLabel = typeof EMPLOYER_HIRE_NEEDS_LABEL !== 'undefined'
+        ? EMPLOYER_HIRE_NEEDS_LABEL
+        : 'التخصص / الشعبة المطلوبة';
+      checked.forEach((cb) => {
+        const deptId = cb.value;
+        const label = cb.nextElementSibling?.textContent?.trim() || '';
+        const div = document.createElement('div');
+        div.className = 'mb-3';
+        const safeVal = (existing[deptId] || '').replace(/"/g, '&quot;');
+        div.innerHTML = `
+          <label class="form-label">${label} — ${fieldLabel} <span class="text-danger">*</span></label>
+          <input type="text" class="form-control hire-needs-input" data-dept-id="${deptId}"
+                 maxlength="300" required placeholder="مثال: طاقة، تصنيع، اتصالات..."
+                 value="${safeVal}">
+        `;
+        container.appendChild(div);
+      });
+    }
+
+    function updateEmployerHireDepts() {
+      const hires = document.getElementById('hires_graduates')?.value || '';
+      const wrap = document.getElementById('employerHireDeptsWrap');
+      const show = hires === 'yes' || hires === 'sometimes';
+      if (wrap) wrap.style.display = show ? 'block' : 'none';
+      if (!show) {
+        wrap?.querySelectorAll('.hire-dept-cb').forEach((cb) => { cb.checked = false; });
+        rebuildEmployerHireNeedsFields();
+      }
+    }
+
+    document.getElementById('employerHireDeptsList')?.addEventListener('change', (e) => {
+      if (e.target.classList?.contains('hire-dept-cb')) rebuildEmployerHireNeedsFields();
+    });
+
+    document.getElementById('hires_graduates')?.addEventListener('change', updateEmployerHireDepts);
     document.getElementById('job_rejection')?.addEventListener('change', updateAlumniConditionalFields);
+    document.getElementById('program_freeze_support')?.addEventListener('change', updateAlumniConditionalFields);
 
     document.getElementById('inviteSurveyForm')?.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (TEMPLATE === 'alumni' && isAlumniInviteAlreadyDone()) {
+        showAlreadyDoneState();
+        return;
+      }
+      if (!assertInviteFormComplete(e.target)) return;
       const fd = new FormData(e.target);
       const profile = {};
       const answers = {};
+      const hireDeptIds = [];
       for (const [k, v] of fd.entries()) {
         if (k.startsWith('q_')) answers[k.slice(2)] = v;
+        else if (k === 'hire_department_ids') hireDeptIds.push(v);
         else if (k !== 'comments') profile[k] = v;
+      }
+      if (TEMPLATE === 'employer_strategic') {
+        profile.hire_department_ids = hireDeptIds;
+        const hires = profile.hires_graduates || '';
+        if ((hires === 'yes' || hires === 'sometimes') && !hireDeptIds.length) {
+          alert('يرجى اختيار قسم واحد على الأقل الذي توظّفون من خريجيه');
+          return;
+        }
+        profile.hire_department_needs = [];
+        const needsInputs = document.querySelectorAll('.hire-needs-input');
+        for (const inp of needsInputs) {
+          const text = (inp.value || '').trim();
+          if (!text) {
+            alert('يرجى كتابة التخصص/الشعبة المطلوبة لكل قسم اخترتموه');
+            inp.focus();
+            return;
+          }
+          profile.hire_department_needs.push({
+            department_id: parseInt(inp.dataset.deptId, 10),
+            specialty_needs_text: text,
+          });
+        }
+      }
+      if (TEMPLATE === 'alumni' && profile.track_code === 'custom') {
+        const custom = (profile.track_custom_label || '').trim();
+        if (!custom) {
+          alert('يرجى كتابة اسم المسار/الشعبة غير المدرجة');
+          return;
+        }
+        profile.track_custom_label = custom;
       }
       const body = {
         profile,
@@ -454,15 +648,22 @@
         alert(j.message || 'تعذر الإرسال');
         return;
       }
+      markAlumniInviteDone();
       e.target.classList.add('d-none');
       document.getElementById('successBox')?.classList.remove('d-none');
       window.scrollTo(0, 0);
     });
 
+    if (TEMPLATE === 'alumni' && isAlumniInviteAlreadyDone()) {
+      showAlreadyDoneState();
+    }
     if (TEMPLATE === 'alumni') {
       fillGradYears();
       loadDepartments();
       updateAlumniConditionalFields();
+    }
+    if (TEMPLATE === 'employer_strategic') {
+      updateEmployerHireDepts();
     }
   </script>
 </body>

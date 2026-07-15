@@ -1,0 +1,130 @@
+{# شريط خيارات المعاينة: إظهار/إخفاء الأسماء (اختياري) + طباعة + رابط PDF #}
+{% if not for_pdf %}
+<style>
+  .preview-banner {
+    background: #e7f1ff; border: 1px solid #0d6efd; border-radius: 6px;
+    padding: 10px 14px; margin-bottom: 18px;
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;
+  }
+  .preview-banner .preview-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .preview-banner .mode-group {
+    display: inline-flex; border: 1px solid #0d6efd; border-radius: 6px; overflow: hidden;
+  }
+  .preview-banner .mode-group button {
+    padding: 6px 12px; border: none; background: #fff; color: #0d6efd; cursor: pointer; font-size: 13px;
+  }
+  .preview-banner .mode-group button + button { border-right: 1px solid #0d6efd; }
+  .preview-banner .mode-group button.active { background: #0d6efd; color: #fff; }
+  .preview-banner .btn-print {
+    padding: 6px 14px; border: 1px solid #198754; background: #198754;
+    color: #fff; border-radius: 4px; cursor: pointer; font-weight: 600;
+  }
+  .preview-banner .btn-pdf-dl {
+    padding: 6px 14px; border: 1px solid #dc3545; background: #fff;
+    color: #dc3545; border-radius: 4px; cursor: pointer; font-weight: 600; text-decoration: none;
+    font-size: 13px;
+  }
+  .preview-banner .btn-pdf-dl:hover { background: #dc3545; color: #fff; }
+  .preview-hint {
+    font-size: 12px; color: #0f5132; margin: 0 0 12px;
+    padding: 8px 10px; background: #d1e7dd; border-right: 3px solid #198754;
+  }
+  .preview-mode-note {
+    font-size: 12px; color: #555; margin: 0 0 14px;
+    padding: 8px 10px; background: #f8f9fa; border-right: 3px solid #6c757d;
+  }
+  /* تنسيق مع الأسماء */
+  body.preview-names-on .open-text-named { display: block; }
+  body.preview-names-on .open-text-anon { display: none; }
+  body.preview-names-on .preview-mode-note-named { display: block; }
+  body.preview-names-on .preview-mode-note-anon { display: none; }
+  /* تنسيق بدون أسماء */
+  body.preview-names-off .open-text-named { display: none; }
+  body.preview-names-off .open-text-anon { display: block; }
+  body.preview-names-off .preview-mode-note-named { display: none; }
+  body.preview-names-off .preview-mode-note-anon { display: block; }
+
+  .open-text-table .col-name { font-weight: 600; white-space: nowrap; }
+  .open-text-quotes {
+    padding-right: 22px; margin: 8px 0 16px;
+  }
+  .open-text-quotes li { margin-bottom: 10px; }
+  .open-text-quotes blockquote {
+    margin: 0;
+    padding: 8px 12px;
+    background: #f8fafc;
+    border-right: 3px solid #0d6efd;
+    line-height: 1.55;
+    font-style: normal;
+  }
+  @media print {
+    .no-print { display: none !important; }
+    .preview-mode-note { border: none; background: transparent; padding: 0 0 8px; }
+  }
+</style>
+<div class="preview-banner no-print">
+  <span>
+    <strong>{{ preview_banner_title|default('معاينة التقرير') }}</strong>
+    {% if not preview_hide_names_toggle %}
+    — اختر تنسيق الأسماء ثم اطبع.
+    {% else %}
+    — راجع المحتوى ثم اطبع أو احفظ PDF.
+    {% endif %}
+  </span>
+  <div class="preview-actions">
+    {% if not preview_hide_names_toggle %}
+    <div class="mode-group" role="group" aria-label="إظهار الأسماء">
+      <button type="button" id="btnNamesOn" class="active" data-names="on" title="للمراجعة الداخلية">إظهار الأسماء</button>
+      <button type="button" id="btnNamesOff" data-names="off" title="لشواهد الاعتماد والطباعة الرسمية">إخفاء الأسماء</button>
+    </div>
+    {% endif %}
+    <button type="button" class="btn-print" onclick="window.print()">طباعة / حفظ PDF (موصى به)</button>
+    {% if pdf_download_url %}
+    <a class="btn-pdf-dl" href="{{ pdf_download_url }}" title="تنزيل PDF عبر Chromium">تنزيل PDF</a>
+    {% endif %}
+  </div>
+</div>
+<p class="preview-hint no-print">
+  <strong>الأفضل للشواهد:</strong> استخدم «طباعة / حفظ PDF» من هنا (جودة عربية وهوامش صحيحة).
+  {% if pdf_download_url %}زر «تنزيل PDF» يعتمد على Chromium بنفس الأسلوب تقريباً.{% else %}زر PDF من الصفحة السابقة يعتمد الآن على Chromium بنفس الأسلوب تقريباً.{% endif %}
+</p>
+{% if not preview_hide_names_toggle %}
+<p class="preview-mode-note preview-mode-note-named">
+  <strong>التنسيق الحالي:</strong> مراجعة داخلية — النصوص الحرة مع أسماء المستجيبين (إن وُجدت).
+</p>
+<p class="preview-mode-note preview-mode-note-anon">
+  <strong>التنسيق الحالي:</strong> شاهد اعتماد — نصوص حرة مجهولة الهوية (قائمة مرقّمة بدون أسماء).
+</p>
+<script>
+(function () {
+  var KEY = 'surveyPreviewShowNames';
+  function apply(show) {
+    document.body.classList.toggle('preview-names-on', show);
+    document.body.classList.toggle('preview-names-off', !show);
+    var onBtn = document.getElementById('btnNamesOn');
+    var offBtn = document.getElementById('btnNamesOff');
+    if (onBtn) onBtn.classList.toggle('active', show);
+    if (offBtn) offBtn.classList.toggle('active', !show);
+    try { localStorage.setItem(KEY, show ? '1' : '0'); } catch (e) {}
+    var url = new URL(window.location.href);
+    url.searchParams.set('names', show ? '1' : '0');
+    window.history.replaceState({}, '', url);
+  }
+  function fromQuery() {
+    var q = new URLSearchParams(window.location.search).get('names');
+    if (q === '1' || q === 'true' || q === 'on') return true;
+    if (q === '0' || q === 'false' || q === 'off') return false;
+    try {
+      var s = localStorage.getItem(KEY);
+      if (s === '1') return true;
+      if (s === '0') return false;
+    } catch (e) {}
+    return false; /* افتراضي: إخفاء الأسماء (أنسب للطباعة الرسمية) */
+  }
+  document.getElementById('btnNamesOn')?.addEventListener('click', function () { apply(true); });
+  document.getElementById('btnNamesOff')?.addEventListener('click', function () { apply(false); });
+  apply(fromQuery());
+})();
+</script>
+{% endif %}
+{% endif %}

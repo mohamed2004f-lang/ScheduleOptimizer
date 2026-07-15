@@ -13,12 +13,18 @@
     <div class="page-header mb-3">
       <div>
         <h1 class="page-title">كتالوج الأقسام والخطط</h1>
-        <p class="page-subtitle small text-muted mb-0" id="catalogSubtitle">
-          خطة القسم وبرنامج التخرج (ميكانيكي): مقررات مشتركة، ما قبل الشعبة، وشعب التخصص.
-          طلابكم الحاليون مقبولون في القسم بعد الاتجاه العام — لا حاجة لإدارة مرحلة الكلية هنا.
-          نظام 150/155 يبقى في سجل الطالب فقط (انتقالي).
-          — <a href="/course_equivalences_page">تكافؤ المقررات</a>
+        <p class="page-subtitle small text-muted mb-2" id="catalogSubtitle">
+          خطة القسم وبرنامج التخرج: وحدات التخرج تختلف بكل قسم (شاملة 36 اتجاه عام — ليست +36).
+          نظام 150/155 يبقى في سجل طلاب ميكانيكا القدامى فقط (انتقالي).
         </p>
+        <p class="small text-muted mb-2">
+          ملاحظة: هذا كتالوج <strong>الخطط والبرامج</strong> — مختلف عن كتالوج معايير الاعتماد (QAA) في خريطة الامتثال، وعن سجل المقررات المشتركة.
+        </p>
+        <div class="d-flex flex-wrap gap-2 mb-0">
+          <a class="btn btn-primary btn-sm" href="/college_shared_catalog_page">سجل المقررات المشتركة</a>
+          <a class="btn btn-outline-secondary btn-sm" href="/course_equivalences_page">تكافؤ المقررات</a>
+          <a class="btn btn-outline-info btn-sm" href="/academic_quality/glossary">تمييز المصطلحات</a>
+        </div>
       </div>
       <button class="btn btn-outline-info btn-sm" onclick="PageGuide.open()">❓ دليل الاستخدام</button>
     </div>
@@ -122,7 +128,7 @@
             <label class="form-label small">تسمية الشعبة (اختياري)</label>
             <input class="form-control form-control-sm" id="progTrackLabelAr" placeholder="مثل: شعبة الروبوتات">
           </div>
-          <div class="col-md-2"><label class="form-label small">min_total_units</label><input class="form-control form-control-sm" id="progUnits" type="number" value="155"></div>
+          <div class="col-md-2"><label class="form-label small">min_total_units</label><input class="form-control form-control-sm" id="progUnits" type="number" value="0" min="0"></div>
           <div class="col-md-2"><label class="form-label small">نشط</label><select id="progActive" class="form-select form-select-sm"><option value="1">1</option><option value="0">0</option></select></div>
           <div class="col-12"><label class="form-label small">rules_json</label><input class="form-control form-control-sm" id="progRules" placeholder="JSON اختياري"></div>
           <div class="col-auto"><button class="btn btn-primary btn-sm" id="btnProgSave">حفظ البرنامج</button></div>
@@ -144,6 +150,11 @@
         </div>
       </div>
       <div class="card-body">
+        <div class="alert alert-warning py-2 small mb-2" id="cmSharedCatalogBanner">
+          <strong>المقررات المشتركة بين الأقسام</strong> (GS، رموز متعددة، subset) تُدار من
+          <a href="/college_shared_catalog_page" class="alert-link fw-bold">سجل المقررات المشتركة</a>
+          — تُزامَن تلقائياً إلى الخطة. هذا القسم للتدقيق والمحتوى القسمي والانتقالي فقط.
+        </div>
         <div id="cmImplBanner" class="alert alert-info py-2 small d-none mb-2"></div>
         <div id="cmPhasePanel" class="border rounded p-2 mb-2 small bg-light d-none">
           <div class="fw-bold mb-1">خطة التنفيذ (كتالوج فقط)</div>
@@ -156,7 +167,7 @@
           <label class="small mb-0">فلتر الحالة:</label>
           <select class="form-select form-select-sm" id="cmLifecycleFilter" style="width:12rem;">
             <option value="all">الكل</option>
-            <option value="standard">معياري (155)</option>
+            <option value="standard">معياري (خطة القسم)</option>
             <option value="transitional">انتقالي (قديم)</option>
             <option value="shared">مشترك بين أقسام</option>
           </select>
@@ -172,7 +183,7 @@
           <div class="col-md-2">
             <label class="form-label small">حالة المحتوى</label>
             <select class="form-select form-select-sm" id="cmLifecycle">
-              <option value="standard">معياري (155)</option>
+              <option value="standard">معياري (خطة القسم)</option>
               <option value="transitional">انتقالي (قديم)</option>
               <option value="shared">مشترك بين أقسام</option>
             </select>
@@ -291,6 +302,8 @@
           عند اختيار المقرر تُملأ تلقائياً: <strong>الرمز</strong> و<strong>الوحدات</strong> من القائمة،
           و<strong>المستوى</strong> من أول رقم في الرمز (مثل GE 102 → مستوى 1)،
           و<strong>النطاق</strong> (1 اتجاه عام، 2–4 قبل الشعبة، 5+ شعبة). يمكن التعديل يدوياً.
+          البنود ذات شارة <span class="badge bg-info text-dark">سجل مشترك</span> تُدار من
+          <a href="/college_shared_catalog_page">سجل المقررات المشتركة</a> — لا تُعاد إدخالها يدوياً.
         </p>
         <div id="pcUnitsSummary" class="alert alert-info py-2 small d-none mb-2"></div>
         <div id="pcClassifySummary" class="row g-2 mb-2 d-none">
@@ -325,7 +338,7 @@
             <div class="border rounded p-2 text-center small bg-light">
               <span class="text-muted d-block">مجموع الوحدات</span>
               <span class="fw-bold d-block fs-6" id="pcStatPlanUnits">0</span>
-              <span class="text-muted" style="font-size:0.72rem">/ 155</span>
+              <span class="text-muted" style="font-size:0.72rem">/ <span id="pcGradTargetSuffix">—</span></span>
             </div>
           </div>
         </div>
@@ -398,7 +411,7 @@
           <div class="col-md-2"><label class="form-label small">course_code</label><input class="form-control form-control-sm" id="pcCode"></div>
           <div class="col-md-3"><label class="form-label small">نطاق المتطلب</label>
             <select class="form-select form-select-sm" id="pcRequirementScope">
-              <option value="college_general">اتجاه عام (كلية — ضمن 155)</option>
+              <option value="college_general">اتجاه عام (كلية — ضمن هدف التخرج)</option>
               <option value="pre_track">قبل اختيار الشعبة</option>
               <option value="track">شعبة / تخصص</option>
               <option value="elective">اختياري</option>
@@ -441,15 +454,16 @@
     <div class="card mb-3" id="cardPathwayRegs">
       <div class="card-header d-flex flex-wrap gap-2 align-items-center justify-content-between">
         <strong>بنود لائحة المسار الأكاديمي</strong>
-        <div class="d-flex gap-2 align-items-center">
-          <select id="pathwayDeptSelect" class="form-select form-select-sm" style="min-width:14rem; display:none;"></select>
+        <div class="d-flex gap-2 align-items-center flex-wrap">
+          <label class="small mb-0 text-muted" for="pathwayDeptSelect">قسم اللائحة:</label>
+          <select id="pathwayDeptSelect" class="form-select form-select-sm" style="min-width:16rem;"></select>
           <button type="button" class="btn btn-sm btn-outline-primary" id="btnPathwayRegsRefresh">تحديث</button>
         </div>
       </div>
       <div class="card-body">
         <p class="small text-muted mb-2">
-          عتبات قابلة للتعديل حسب اللائحة (مثل 36 و 22 للاتجاه العام، وحدات التخرج للقسم).
-          طلاب ميكانيك الحاليون داخل القسم — بنود العام للمرجع أو للدفعات القادمة.
+          عتبات قابلة للتعديل لكل قسم: اتجاه عام 36 (مشترك)، وحدات التخرج (مثال: ميكانيكا 155، مدني 161)،
+          وما قبل الشعبة (= التخرج − 36)، ووحدات التخصص (0 حتى تفعيل الشعب).
         </p>
         <div id="pathwaySyncAlert" class="alert alert-warning py-2 small d-none mb-2"></div>
         <div class="d-flex flex-wrap gap-2 mb-2">
@@ -521,7 +535,12 @@
   <script>
     let IS_HEAD_ONLY = false;
     let IS_FULL_ADMIN = false;
+    let IS_CM_TECH = false;
     let CAN_EDIT_COLLEGE_REGS = false;
+    let PATHWAY_DEPT_ID = null;
+    let ACTIVE_GRAD_TARGET = null;
+    let DEPT_GRAD_TARGETS = { MECH: 155, CIVIL: 161, ELEC: 160, RENEW: 160 };
+    const COLLEGE_GENERAL_UNITS = 36;
     let MASTER_ITEMS = [];
     let PC_ITEMS = [];
     let CATALOG_PROGRAMS_LIST = [];
@@ -548,7 +567,56 @@
 
     let PROG_TEMPLATE_PRESETS = {};
     let BUILTIN_TRACKS = new Set();
-    let CURRENT_DEPT_CODE = 'MECH';
+    let CURRENT_DEPT_CODE = '';
+
+    function deptGraduationDefault(code) {
+      const c = String(code || '').trim().toUpperCase();
+      if (!c) return null;
+      if (Object.prototype.hasOwnProperty.call(DEPT_GRAD_TARGETS, c)) {
+        return Number(DEPT_GRAD_TARGETS[c]);
+      }
+      return null;
+    }
+
+    function activeProgramRecord() {
+      const pf = document.getElementById('pcProgFilter');
+      if (!pf) return null;
+      const pid = String(pf.value || '').trim();
+      if (!pid) return null;
+      return CATALOG_PROGRAMS_LIST.find(x => String(x.id) === pid) || null;
+    }
+
+    function updateGradTargetUi() {
+      const suffix = document.getElementById('pcGradTargetSuffix');
+      const p = activeProgramRecord();
+      let target = null;
+      if (p) {
+        target = Number(p.min_total_units) || deptGraduationDefault(p.department_code);
+      }
+      ACTIVE_GRAD_TARGET = target;
+      if (suffix) suffix.textContent = target != null ? String(target) : '—';
+      if (p && p.department_code) CURRENT_DEPT_CODE = String(p.department_code).toUpperCase();
+    }
+
+    function bindPathwayDeptSelect(choices) {
+      const sel = document.getElementById('pathwayDeptSelect');
+      if (!sel) return;
+      const list = Array.isArray(choices) ? choices : [];
+      sel.innerHTML = list.map(d =>
+        `<option value="${d.id}">${d.code} — ${d.name_ar || d.code} (${d.graduation_units || '—'} و.)</option>`
+      ).join('');
+      if (IS_HEAD_ONLY) {
+        sel.style.display = 'none';
+        sel.previousElementSibling && (sel.previousElementSibling.style.display = 'none');
+      } else {
+        sel.style.display = '';
+      }
+      if (PATHWAY_DEPT_ID) sel.value = String(PATHWAY_DEPT_ID);
+      sel.onchange = () => {
+        PATHWAY_DEPT_ID = parseInt(sel.value, 10) || null;
+        loadPathwayRegulations();
+      };
+    }
 
     function selectedDepartmentCode() {
       const deptSel = document.getElementById('selProgDept');
@@ -696,7 +764,9 @@
       document.getElementById('progNameAr').value = '';
       document.getElementById('progNameEn').value = '';
       document.getElementById('progPhase').value = 'major';
-      document.getElementById('progUnits').value = '155';
+      const dc = selectedDepartmentCode();
+      const def = deptGraduationDefault(dc) || 0;
+      document.getElementById('progUnits').value = String(def);
       document.getElementById('progActive').value = '0';
       document.getElementById('progRules').value = '';
       document.getElementById('progKind').value = deptSel && deptSel.value ? 'base' : 'custom';
@@ -753,6 +823,7 @@
         deptLine.textContent = '';
       }
       idLine.textContent = 'program_id: ' + pid;
+      updateGradTargetUi();
     }
 
     const SCOPE_LABELS = {
@@ -1343,6 +1414,7 @@
         document.getElementById('pcStatTrack').textContent = String(by.track || 0);
         document.getElementById('pcStatTrackUnits').textContent = (u.track || 0) + ' و.';
         document.getElementById('pcStatPlanUnits').textContent = String(s.plan_units_total || 0);
+        updateGradTargetUi();
         const sumEl = document.getElementById('pcUnitsSummary');
         if (sumEl) {
           const regG = s.regulation_college_general_units;
@@ -1385,6 +1457,17 @@
       } catch (e) { /* optional */ }
     }
 
+    function sharedCatalogBadge(row) {
+      if (!row || !row.from_shared_catalog) return '';
+      const tip = escHtml(row.shared_catalog_name || 'مقرر مشترك');
+      return ` <span class="badge bg-info text-dark" title="${tip}">سجل مشترك</span>`;
+    }
+
+    function applyCmTechUi() {
+      const btnNew = document.getElementById('btnCmNew');
+      if (btnNew) btnNew.style.display = IS_CM_TECH ? '' : 'none';
+    }
+
     function renderPcTable() {
       const filter = (document.getElementById('pcFilterScope') || {}).value || '';
       const tbody = document.querySelector('#tblPc tbody');
@@ -1400,7 +1483,7 @@
         tbody.insertAdjacentHTML('beforeend', `<tr data-pc-id="${x.id}" data-scope="${sc}">
           <td><input type="checkbox" class="form-check-input pc-row-cb" value="${x.id}"></td>
           <td>${x.id}</td>
-          <td><code>${x.course_code}</code></td>
+          <td><code>${x.course_code}</code>${sharedCatalogBadge(x)}</td>
           <td class="small">${(x.master_title_ar||'').slice(0,40)}</td>
           <td><select class="form-select form-select-sm pc-inline-scope" data-id="${x.id}" style="min-width:9rem;">${SCOPE_OPTIONS}</select></td>
           <td>${gcCell}</td>
@@ -1675,7 +1758,7 @@
             '<div class="fw-bold mb-1">' + (data.student_name || sid) +
             (data.operating_mode ? ' <span class="badge bg-secondary">' + data.operating_mode + '</span>' : '') + '</div>' +
             '<div>منجز الخطة: <strong>' + (t.plan_completed_units || 0) + '</strong> / ' +
-            (t.graduation_target || 155) + ' — متبقي: <strong>' + (t.graduation_remaining || 0) + '</strong></div>' +
+            (t.graduation_target || ACTIVE_GRAD_TARGET || '—') + ' — متبقي: <strong>' + (t.graduation_remaining || 0) + '</strong></div>' +
             '<div>اتجاه عام: ' + (t.college_general_completed || 0) + ' / ' +
             (t.college_general_target || 36) + '</div>' +
             '<div class="text-muted mt-1">' + scopeLines.join(' · ') + '</div>';
@@ -1757,7 +1840,7 @@
       sel.disabled = false;
       sel.style.pointerEvents = '';
       sel.title = IS_HEAD_ONLY
-        ? 'اختر خطة القسم (MECH) أو شعبة مفعّلة لعرض مقرراتها'
+        ? 'اختر خطة القسم أو شعبة مفعّلة لعرض مقرراتها'
         : '';
       sel.onchange = () => {
         const v = sel.value || '';
@@ -1800,7 +1883,7 @@
       } else {
         await apiPost('/college/catalog/department_program_tracks/ensure', {
           department_code: deptCode,
-          min_total_units: +(document.getElementById('progUnits').value || 155),
+          min_total_units: +(document.getElementById('progUnits').value || deptGraduationDefault(selectedDepartmentCode()) || 0),
         });
         await loadDepartmentTrackPrograms(false);
       }
@@ -2118,6 +2201,8 @@
       if (PATHWAY_DEPT_ID) url += '?department_id=' + encodeURIComponent(PATHWAY_DEPT_ID);
       const data = await apiGet(url);
       PATHWAY_DEPT_ID = data.department_id || PATHWAY_DEPT_ID;
+      if (data.graduation_targets) DEPT_GRAD_TARGETS = data.graduation_targets;
+      bindPathwayDeptSelect(data.department_choices || []);
       CAN_EDIT_COLLEGE_REGS = !!data.can_edit_college_items;
       document.getElementById('pathwayRegDeptId').value = PATHWAY_DEPT_ID || '';
       const collegeBody = document.getElementById('pathwayCollegeBody');
@@ -2216,10 +2301,13 @@
           const role = String((a && a.role) || '').trim().toLowerCase();
           IS_HEAD_ONLY = role === 'head_of_department';
           IS_FULL_ADMIN = role === 'admin' || role === 'admin_main';
+          IS_CM_TECH = role === 'admin' || role === 'admin_main' || role === 'system_admin';
         } catch(e) {
           IS_HEAD_ONLY = false;
           IS_FULL_ADMIN = false;
+          IS_CM_TECH = false;
         }
+        applyCmTechUi();
 
         if (IS_HEAD_ONLY) {
           const h = document.querySelector('.page-subtitle');
@@ -2266,11 +2354,7 @@
           const data = await apiGet('/college/catalog/programs');
           bindProgramSelect(data.items || []);
           const items = data.items || [];
-          const mechBase = items.find(p =>
-            (p.department_code || '').toUpperCase() === 'MECH' &&
-            (p.is_base_program || !(p.track_group || '').trim())
-          );
-          const first = mechBase || items.find(p => (p.department_code || '').toUpperCase() === 'MECH') || items[0];
+          const first = pickPreferredBaseProgram(items) || items[0];
           if (first) {
             if (first.department_id) PATHWAY_DEPT_ID = first.department_id;
             document.getElementById('pcProgFilter').value = first.id || '';

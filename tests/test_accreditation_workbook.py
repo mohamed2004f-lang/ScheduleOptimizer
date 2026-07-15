@@ -11,7 +11,7 @@ from backend.services.institutional_accreditation import build_compliance_map
 
 
 def test_workbook_frames(db_conn):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     data = build_compliance_map(db_conn, semester="wb-sem", department_id=None, ensure_seed=False)
     frames = frames_for_accreditation_workbook(data)
     names = [n for n, _ in frames]
@@ -22,7 +22,7 @@ def test_workbook_frames(db_conn):
 
 
 def test_workbook_html(db_conn):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     data = build_compliance_map(db_conn, semester="wb-sem", department_id=None, ensure_seed=False)
     html = html_for_accreditation_workbook(data)
     assert "دفتر اعتماد" in html
@@ -30,7 +30,7 @@ def test_workbook_html(db_conn):
 
 
 def test_import_catalog_from_excel(db_conn):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     rows = [
         {
             "catalog_version": "2099.test",
@@ -60,7 +60,7 @@ def test_import_catalog_from_excel(db_conn):
 
 
 def test_export_xlsx_route(app, db_conn, auth_client):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     r = auth_client.get("/academic_quality/api/accreditation/export/xlsx?semester=exp-sem")
     assert r.status_code == 200
     assert "spreadsheetml" in (r.content_type or "")

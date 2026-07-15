@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>اعتماد حزم الدرجات النهائية</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100">
+    <div class="page-header">
+      <h1 class="page-title">اعتماد ونشر الدرجات النهائية</h1>
+      <p class="page-subtitle">حزم الأقسام المرسلة — اعتماد ونشر للطلبة</p>
+    </div>
+
+    <div id="loadMsg" class="text-muted py-3">جاري التحميل…</div>
+    <div class="row g-3">
+      <div class="col-md-5">
+        <div class="card">
+          <div class="card-header fw-semibold">الأقسام</div>
+          <div class="list-group list-group-flush" id="batchList"></div>
+        </div>
+      </div>
+      <div class="col-md-7">
+        <div class="card d-none" id="detailCard">
+          <div class="card-header fw-semibold" id="detailTitle">تفاصيل الحزمة</div>
+          <div class="card-body">
+            <div class="small text-muted mb-2" id="detailMeta"></div>
+            <div class="table-responsive mb-3">
+              <table class="table table-sm">
+                <thead><tr><th>المقرر</th><th>الأستاذ</th><th>الحالة</th></tr></thead>
+                <tbody id="detailDrafts"></tbody>
+              </table>
+            </div>
+            <textarea id="deanNote" class="form-control form-control-sm mb-2" rows="2" placeholder="ملاحظة عند الإرجاع (اختياري)"></textarea>
+            <div class="d-flex gap-2 flex-wrap">
+              <button type="button" class="btn btn-success btn-sm" id="btnPublish">اعتماد ونشر للطلبة</button>
+              <button type="button" class="btn btn-outline-danger btn-sm" id="btnReturn">إرجاع لرئيس القسم</button>
+            </div>
+            <div id="detailFeedback" class="small mt-2"></div>
+          </div>
+        </div>
+        <div id="detailEmpty" class="text-muted">اختر حزمة من القائمة.</div>
+      </div>
+    </div>
+  </main>
+  <script>
+    let selectedId = null;
+    const statusAr = {
+      submitted_to_dean: 'بانتظار الاعتماد',
+      returned_to_hod: 'مُعاد',
+      published: 'منشور',
+      collecting: 'جمع'
+    };
+
+    function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+
+    async function loadBatches() {
+      const r = await fetch('/grades/dean/final_batches', { credentials: 'include' });
+      const j = await r.json().catch(() => null);
+      document.getElementById('loadMsg').classList.add('d-none');
+      const list = document.getElementById('batchList');
+      const batches = (j && j.batches) || [];
+      if (!batches.length) {
+        list.innerHTML = '<div class="list-group-item text-muted">لا توجد حزم.</div>';
+        return;
+      }
+      list.innerHTML = batches.map(b => `
+        <button type="button" class="list-group-item list-group-item-action batch-item" data-id="${b.id}">
+          <div class="fw-semibold">${esc(b.department_name || ('قسم #' + b.department_id))}</div>
+          <div class="small text-muted">${esc(b.semester || '')} — ${statusAr[b.status] || b.status} — ${b.completion_percent || 0}%</div>
+        </button>`).join('');
+      list.querySelectorAll('.batch-item').forEach(el => {
+        el.addEventListener('click', () => openBatch(Number(el.dataset.id)));
+      });
+    }
+
+    async function openBatch(id) {
+      selectedId = id;
+      const r = await fetch('/grades/dean/final_batches/' + id, { credentials: 'include' });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) return;
+      const b = j.batch || {};
+      document.getElementById('detailEmpty').classList.add('d-none');
+      document.getElementById('detailCard').classList.remove('d-none');
+      document.getElementById('detailTitle').textContent = b.department_name || ('قسم #' + b.department_id);
+      document.getElementById('detailMeta').textContent =
+        `الفصل: ${b.semester || ''} | الحالة: ${statusAr[b.status] || b.status} | المقررات: ${(b.drafts || []).length}`;
+      document.getElementById('detailDrafts').innerHTML = (b.drafts || []).map(d =>
+        `<tr><td>${esc(d.course_name)}</td><td>${esc(d.instructor_name)}</td><td>${esc(d.status)}</td></tr>`
+      ).join('') || '<tr><td colspan="3" class="text-muted">—</td></tr>';
+      const canAct = b.status === 'submitted_to_dean';
+      document.getElementById('btnPublish').disabled = !canAct;
+      document.getElementById('btnReturn').disabled = !canAct;
+      document.getElementById('detailFeedback').textContent = '';
+    }
+
+    document.getElementById('btnPublish').addEventListener('click', async () => {
+      if (!selectedId) return;
+      const fb = document.getElementById('detailFeedback');
+      fb.textContent = 'جاري النشر…';
+      const r = await fetch('/grades/dean/final_batches/' + selectedId + '/publish', {
+        method: 'POST', credentials: 'include'
+      });
+      const j = await r.json().catch(() => null);
+      fb.className = 'small ' + (r.ok ? 'text-success' : 'text-danger');
+      fb.textContent = r.ok
+        ? ('تم النشر — ' + (j.published_grades || 0) + ' سجل')
+        : ((j && j.message) || 'فشل');
+      loadBatches();
+      if (selectedId) openBatch(selectedId);
+    });
+
+    document.getElementById('btnReturn').addEventListener('click', async () => {
+      if (!selectedId) return;
+      const fb = document.getElementById('detailFeedback');
+      const r = await fetch('/grades/dean/final_batches/' + selectedId + '/return', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: document.getElementById('deanNote').value || '' })
+      });
+      const j = await r.json().catch(() => null);
+      fb.className = 'small ' + (r.ok ? 'text-success' : 'text-danger');
+      fb.textContent = r.ok ? 'تم الإرجاع لرئيس القسم.' : ((j && j.message) || 'فشل');
+      loadBatches();
+    });
+
+    loadBatches();
+  </script>
+</body>
+</html>

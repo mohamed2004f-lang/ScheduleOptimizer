@@ -77,14 +77,26 @@
       semesterNames.forEach(sem => {
         const courses = transcript[sem] || [];
         let semUnits = 0, semPoints = 0;
+        const details = Array.isArray(data.term_grade_details) ? data.term_grade_details : [];
+        const detailByCourse = {};
+        details.forEach(d => { if (d && d.course_name) detailByCourse[d.course_name] = d; });
         let rows = courses.map((c, i) => {
           const units = Number(c.units) || 0;
           const grade = (c.grade == null) ? null : Number(c.grade);
+          const det = detailByCourse[c.course_name];
+          const partial = det && det.partial;
+          const pending = c.grade_pending_final && grade == null;
           semUnits += units;
           if (grade != null) semPoints += grade * units;
           const bb = bestByCourse[c.course_name];
           const uncompleted = bb && bb.passed === false;
-          return `<tr class="${uncompleted ? 'row-uncompleted' : ''}"><td>${i+1}</td><td>${esc(c.course_name)}</td><td><code>${esc(c.course_code||'—')}</code></td><td class="text-center">${units}</td><td class="text-center fw-semibold">${grade != null ? grade : '—'}</td></tr>`;
+          let gradeCell = grade != null ? String(grade) : '—';
+          if (pending && partial && partial.partial_total != null) {
+            gradeCell = '<span class="text-muted" title="جزئي منشور">ج: ' + partial.partial_total + '</span>';
+          } else if (pending) {
+            gradeCell = '<span class="text-muted small">بانتظار النهائي</span>';
+          }
+          return `<tr class="${uncompleted ? 'row-uncompleted' : ''}"><td>${i+1}</td><td>${esc(c.course_name)}</td><td><code>${esc(c.course_code||'—')}</code></td><td class="text-center">${units}</td><td class="text-center fw-semibold">${gradeCell}</td></tr>`;
         }).join('');
         const gpaSem = semesterGPAs[sem] ?? (semUnits ? Math.round((semPoints/semUnits)*100)/100 : '—');
         const card = document.createElement('div');

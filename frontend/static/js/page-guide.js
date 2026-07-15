@@ -15,6 +15,7 @@
     '/attendance_export': 'attendance_export',
     '/users_admin': 'users_admin',
     '/college_catalog_page': 'college_catalog',
+    '/college_shared_catalog_page': 'college_shared_catalog',
     '/academic_rules_page': 'academic_rules',
     '/ilo_catalog_page': 'ilo_catalog',
     '/course_closure_reports_page': 'course_closure_reports',
@@ -66,6 +67,11 @@
     '/academic_quality/ilo/department/dashboard': 'department_lo_dashboard',
     '/academic_quality/ilo/student/learning-outcomes': 'student_learning_outcomes',
     '/academic_quality/accreditation/map': 'accreditation_map',
+    '/academic_quality/archive': 'department_archive',
+    '/academic_quality/archive/guide': 'department_archive',
+    '/academic_quality/glossary': 'quality_glossary',
+    '/academic_quality/assistant': 'quality_assistant',
+    '/academic_quality/assistant/knowledge': 'quality_knowledge',
     '/students/evaluations/form': 'student_evaluations',
   };
 

@@ -8,6 +8,8 @@
   const SEM = cfg.semester || '';
   let catalogVersion = cfg.catalogVersion || '';
   let activeScopeKey = cfg.activeScopeKey || 'inst';
+  let selectedProgramId = cfg.programId || null;
+  let selectedDepartmentId = cfg.departmentId || null;
   const mapScopes = cfg.mapScopes || [];
   const domainLabels = cfg.domainLabels || {};
   const statusLabels = cfg.statusLabels || {};
@@ -28,6 +30,12 @@
     const qs = new URLSearchParams({ semester: SEM });
     if (activeScopeKey) qs.set('scope', activeScopeKey);
     if (catalogVersion) qs.set('catalog_version', catalogVersion);
+    if (activeScopeKey === 'prog' && selectedProgramId) {
+      qs.set('program_id', String(selectedProgramId));
+    }
+    if (activeScopeKey === 'prog' && selectedDepartmentId) {
+      qs.set('department_id', String(selectedDepartmentId));
+    }
     return qs.toString();
   }
 
@@ -51,6 +59,16 @@
       if (activeScopeKey) u.searchParams.set('scope', activeScopeKey);
       else u.searchParams.delete('scope');
       if (catalogVersion) u.searchParams.set('catalog_version', catalogVersion);
+      if (activeScopeKey === 'prog' && selectedProgramId) {
+        u.searchParams.set('program_id', String(selectedProgramId));
+      } else {
+        u.searchParams.delete('program_id');
+      }
+      if (activeScopeKey === 'prog' && selectedDepartmentId) {
+        u.searchParams.set('department_id', String(selectedDepartmentId));
+      } else {
+        u.searchParams.delete('department_id');
+      }
       window.history.replaceState({}, '', u.pathname + u.search);
     } catch (_e) { /* ignore */ }
   }
@@ -124,7 +142,7 @@
       '<td><div><span class="fw-semibold text-secondary">' + escapeHtml(ind.seq || '') + '.</span> ' +
       escapeHtml(ind.title_ar) + '</div>' +
       '<code class="small text-muted">' + escapeHtml(ind.code) + '</code>' +
-      (ind.is_auto_computable ? ' <span class="badge bg-primary ms-1">آلي</span>' : '') + '</td>' +
+      (ind.is_auto_computable ? ' <span class="badge bg-primary ms-1">حساب من النظام</span>' : '') + '</td>' +
       '<td>' + escapeHtml(ind.source_type_label) + '</td>' +
       targetCol +
       '<td><span class="badge rounded-pill ' + statusBadgeClass(st) + '">' +
@@ -1095,6 +1113,18 @@
     if (typeof window.initNavDropdowns === 'function') window.initNavDropdowns();
 
     updateExportLinks();
+    syncScopeTabs();
+
+    document.getElementById('programScopeSelect')?.addEventListener('change', (e) => {
+      const opt = e.target.selectedOptions && e.target.selectedOptions[0];
+      selectedProgramId = e.target.value ? parseInt(e.target.value, 10) : null;
+      selectedDepartmentId = opt?.dataset?.departmentId
+        ? parseInt(opt.dataset.departmentId, 10)
+        : null;
+      updateScopeInUrl();
+      // إعادة تحميل الصفحة لنطاق البرنامج المختار (أدلة/إدخال يدوي مرتبطة)
+      window.location.search = '?' + mapQuery();
+    });
 
     document.getElementById('catalogVersionSelect')?.addEventListener('change', (e) => {
       catalogVersion = e.target.value || '';
@@ -1219,6 +1249,10 @@
     document.getElementById('btnSaveAssess')?.addEventListener('click', async () => {
       const body = {
         semester: SEM,
+        scope: activeScopeKey,
+        catalog_version: catalogVersion,
+        program_id: selectedProgramId,
+        department_id: selectedDepartmentId,
         indicator_id: +document.getElementById('assessIndicatorId').value,
         compliance_status: document.getElementById('assessStatus').value,
         score_percent: parseFloat(document.getElementById('assessScore').value) || null,
@@ -1294,10 +1328,17 @@
     });
 
     document.getElementById('btnComputeAuto')?.addEventListener('click', async () => {
-      if (!confirm('حساب المؤشرات الآلية من بيانات النظام لهذا الفصل؟\nلن يُستبدل التقييم اليدوي السابق (غير الآلي).')) return;
+      if (!confirm('حساب درجات المؤشرات القابلة للحساب من بيانات النظام لهذا الفصل؟\nلن يُستبدل التقييم اليدوي السابق.')) return;
       const r = await fetch('/academic_quality/api/accreditation/compute_auto', {
         method: 'POST', credentials: 'include', headers: hdr(),
-        body: JSON.stringify({ semester: SEM, only_not_started: true }),
+        body: JSON.stringify({
+          semester: SEM,
+          only_not_started: true,
+          scope: activeScopeKey,
+          catalog_version: catalogVersion,
+          program_id: selectedProgramId,
+          department_id: selectedDepartmentId,
+        }),
       });
       const j = await r.json().catch(() => ({}));
       if (r.ok) {
@@ -1307,7 +1348,7 @@
     });
 
     document.getElementById('btnEnsureCatalog')?.addEventListener('click', async () => {
-      if (!confirm('إعادة بذر كتالوج المعايير الافتراضي (2026.1)؟\nلن يحذف التقييمات المحفوظة.')) return;
+      if (!confirm('تحديث كتالوجات معايير المركز (مؤسسي + برامجي)؟\nلن يحذف التقييمات المحفوظة.')) return;
       const r = await fetch('/academic_quality/api/accreditation/ensure_catalog', {
         method: 'POST', credentials: 'include', headers: hdr(),
         body: JSON.stringify({}),

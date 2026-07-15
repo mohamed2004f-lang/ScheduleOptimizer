@@ -33,11 +33,27 @@ def init_app_cache(app) -> None:
 
 
 def list_cache_key(prefix: str) -> str:
-    """مفتاح يعتمد على المستخدم والدور ومعاملات الاستعلام."""
+    """مفتاح يعتمد على المستخدم والدور ونطاق القسم ومعاملات الاستعلام."""
     user = (session.get("user") or session.get("username") or "").strip()
     role = (session.get("user_role") or "").strip()
+    scope_part = ""
+    try:
+        from backend.core.auth import get_admin_department_scope_id
+        from backend.database.database import get_connection
+        from backend.core.department_scope_policy import resolve_effective_department_scope_id
+
+        sid = get_admin_department_scope_id()
+        if sid is not None:
+            scope_part = str(int(sid))
+        elif user:
+            with get_connection() as conn:
+                eff = resolve_effective_department_scope_id(conn, user)
+            if eff is not None:
+                scope_part = f"h{int(eff)}"
+    except Exception:
+        pass
     qs = (request.query_string or b"").decode("utf-8", errors="replace")
-    raw = f"{prefix}|{user}|{role}|{qs}"
+    raw = f"{prefix}|{user}|{role}|{scope_part}|{qs}"
     return f"list:{prefix}:{hashlib.sha256(raw.encode()).hexdigest()[:24]}"
 
 

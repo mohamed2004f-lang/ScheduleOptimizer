@@ -54,9 +54,26 @@ def resolve_users_list_scope(conn, actor_username: str | None) -> tuple[UsersLis
     try:
         from flask import has_request_context, session
     except Exception:
-        return ("none", None)
+        has_request_context = lambda: False  # type: ignore[assignment,misc]
+        session = None  # type: ignore[assignment]
 
     if not has_request_context():
+        un = (actor_username or "").strip()
+        if un:
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT role FROM users WHERE lower(username) = lower(?) LIMIT 1",
+                (un,),
+            ).fetchone()
+            role = ""
+            if row:
+                raw_role = row["role"] if hasattr(row, "keys") else row[0]
+                role = _normalize_role(str(raw_role or "").strip())
+            if role == "head_of_department":
+                hid = head_home_department_id(conn, un)
+                if hid is None:
+                    return ("empty", None)
+                return ("department", int(hid))
         return ("none", None)
 
     role = _normalize_role((session.get("user_role") or "").strip())
@@ -623,4 +640,762 @@ def proposed_department_allowed_for_scope(
     except (TypeError, ValueError):
         return False, "معرّف القسم غير صالح."
     return True, None
+
+
+# ---------------------------------------------------------------------------
+# مقررات: تصدير / تحقق نطاق / ربط استيراد
+# ---------------------------------------------------------------------------
+
+def resolve_college_general_department_id(conn) -> int | None:
+    """معرّف قسم GENERAL (اتجاه عام الكلية)."""
+    from backend.core.academic_pathway import resolve_college_general_department_id as _resolve
+
+    return _resolve(conn.cursor())
+
+
+def course_is_college_general(
+    conn,
+    course_name: str,
+    *,
+    course_code: str | None = None,
+) -> bool:
+    """هل المقرر ضمن اتجاه عام الكلية (خطة PROG_U1 أو ملكية قسم GENERAL)؟"""
+    cname = (course_name or "").strip()
+    if not cname:
+        return False
+    cur = conn.cursor()
+    from backend.database.database import fetch_table_columns
+
+    gen_id = resolve_college_general_department_id(conn)
+    cols = fetch_table_columns(conn, "courses")
+    if "owning_department_id" in cols and gen_id is not None:
+        row = cur.execute(
+            """
+            SELECT owning_department_id FROM courses
+            WHERE lower(trim(course_name)) = lower(trim(?))
+            LIMIT 1
+            """,
+            (cname,),
+        ).fetchone()
+        if row:
+            raw = row["owning_department_id"] if hasattr(row, "keys") else row[0]
+            if raw not in (None, ""):
+                try:
+                    if int(raw) == int(gen_id):
+                        return True
+                except (TypeError, ValueError):
+                    pass
+
+    pc_cols = fetch_table_columns(conn, "program_courses")
+    if "requirement_scope" not in pc_cols:
+        return False
+    code = (course_code or "").strip()
+    row = cur.execute(
+        """
+        SELECT 1 FROM program_courses pc
+        WHERE COALESCE(pc.requirement_scope, 'dept_common') = 'college_general'
+          AND COALESCE(pc.is_active, 1) = 1
+          AND (
+            EXISTS (
+              SELECT 1 FROM courses c
+              LEFT JOIN course_master cm ON cm.id = c.course_master_id
+              WHERE lower(trim(c.course_name)) = lower(trim(?))
+                AND (
+                  (c.course_master_id IS NOT NULL AND c.course_master_id = pc.course_master_id)
+                  OR lower(trim(COALESCE(pc.course_code, ''))) = lower(trim(COALESCE(c.course_code, '')))
+                  OR lower(trim(COALESCE(cm.title_ar, ''))) = lower(trim(?))
+                )
+            )
+            OR (
+              ? <> ''
+              AND lower(trim(COALESCE(pc.course_code, ''))) = lower(trim(?))
+            )
+          )
+        LIMIT 1
+        """,
+        (cname, cname, code, code),
+    ).fetchone()
+    return bool(row)
+
+
+def _ensure_shared_catalog_tables(conn) -> None:
+    try:
+        from backend.core.college_shared_catalog import ensure_college_shared_catalog_schema
+
+        ensure_college_shared_catalog_schema(conn)
+    except Exception:
+        pass
+
+
+def course_is_college_shared_catalog(
+    conn,
+    course_name: str,
+    *,
+    department_id: int | None = None,
+) -> bool:
+    """هل المقرر في سجل المقررات المشتركة (مع اختيار تحقق قسم للنوع subset)؟"""
+    cname = (course_name or "").strip()
+    if not cname:
+        return False
+    _ensure_shared_catalog_tables(conn)
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT id, share_type FROM college_shared_catalog
+        WHERE lower(trim(canonical_course_name)) = lower(trim(?))
+          AND COALESCE(is_active, 1) = 1
+        LIMIT 1
+        """,
+        (cname,),
+    ).fetchone()
+    if not row:
+        return False
+    cid = int(row[0] if not hasattr(row, "keys") else row["id"])
+    st = str(row[1] if not hasattr(row, "keys") else row["share_type"] or "")
+    if st != "subset" or department_id is None:
+        return True
+    hit = cur.execute(
+        """
+        SELECT 1 FROM college_shared_catalog_depts
+        WHERE catalog_id = ? AND department_id = ? AND COALESCE(is_active, 1) = 1
+        LIMIT 1
+        """,
+        (cid, int(department_id)),
+    ).fetchone()
+    return bool(hit)
+
+
+def _general_owned_visibility_sql(
+    conn,
+    dep: int,
+    *,
+    owning_col: str = "owning_department_id",
+    course_name_col: str = "course_name",
+    table_alias: str = "",
+) -> tuple[str, tuple]:
+    """
+    مقررات GENERAL الظاهرة لقسم: اتجاه عام + مشترك unified/multi_code + subset للمشاركين.
+    """
+    _ensure_shared_catalog_tables(conn)
+    gen_id = resolve_college_general_department_id(conn)
+    if gen_id is None:
+        return " AND 1=0 ", ()
+    prefix = f"{table_alias}." if table_alias else ""
+    own_expr = f"{prefix}{owning_col.split('.')[-1]}" if table_alias else owning_col
+    cname_expr = f"{prefix}{course_name_col.split('.')[-1]}" if table_alias else course_name_col
+    return (
+        f"""
+         AND (
+           COALESCE({own_expr}, -1) = ?
+           OR {own_expr} IS NULL
+           OR (
+             COALESCE({own_expr}, -1) = ?
+             AND (
+               EXISTS (
+                 SELECT 1 FROM program_courses pc
+                 INNER JOIN courses __cg_c
+                   ON lower(trim(__cg_c.course_name)) = lower(trim({cname_expr}))
+                 WHERE COALESCE(pc.requirement_scope, 'dept_common') = 'college_general'
+                   AND COALESCE(pc.is_active, 1) = 1
+                   AND (
+                     (__cg_c.course_master_id IS NOT NULL AND __cg_c.course_master_id = pc.course_master_id)
+                     OR lower(trim(COALESCE(pc.course_code, ''))) = lower(trim(COALESCE(__cg_c.course_code, '')))
+                   )
+               )
+               OR EXISTS (
+                 SELECT 1 FROM college_shared_catalog csc
+                 WHERE lower(trim(csc.canonical_course_name)) = lower(trim({cname_expr}))
+                   AND COALESCE(csc.is_active, 1) = 1
+                   AND csc.share_type IN ('unified', 'multi_code')
+               )
+               OR EXISTS (
+                 SELECT 1 FROM college_shared_catalog csc
+                 INNER JOIN college_shared_catalog_depts csd ON csd.catalog_id = csc.id
+                 WHERE lower(trim(csc.canonical_course_name)) = lower(trim({cname_expr}))
+                   AND COALESCE(csc.is_active, 1) = 1
+                   AND csc.share_type = 'subset'
+                   AND COALESCE(csd.is_active, 1) = 1
+                   AND csd.department_id = ?
+               )
+             )
+           )
+         )
+        """,
+        (dep, int(gen_id), dep),
+    )
+
+
+def resolve_course_responsible_department_id(
+    conn,
+    course_name: str,
+    *,
+    teaching_group_id: int | None = None,
+    section_id: int | None = None,
+    semester: str | None = None,
+) -> int | None:
+    """
+    القسم المختص بالمقرر للإشعارات والتقارير والاستبيانات.
+    يعتمد سياق التدريس (مجموعة تدريس / شعبة / جدول) — وليس قسم المنزل للأستاذ.
+    لا يُستخدم GENERAL كقسم تشغيلي للتوجيه.
+    """
+    cname = (course_name or "").strip()
+    if not cname:
+        return None
+    cur = conn.cursor()
+    gen_id = resolve_college_general_department_id(conn)
+
+    def _valid_dept(raw) -> int | None:
+        if raw in (None, ""):
+            return None
+        try:
+            did = int(raw)
+        except (TypeError, ValueError):
+            return None
+        if did <= 0:
+            return None
+        if gen_id is not None and did == int(gen_id):
+            return None
+        return did
+
+    if teaching_group_id not in (None, ""):
+        try:
+            row = cur.execute(
+                "SELECT department_id FROM teaching_groups WHERE id = ? LIMIT 1",
+                (int(teaching_group_id),),
+            ).fetchone()
+            if row:
+                did = _valid_dept(row["department_id"] if hasattr(row, "keys") else row[0])
+                if did is not None:
+                    return did
+        except (TypeError, ValueError):
+            pass
+
+    if section_id not in (None, ""):
+        try:
+            from backend.database.database import schedule_pk_column
+
+            pk = schedule_pk_column(conn)
+            row = cur.execute(
+                f"SELECT department_id FROM schedule WHERE {pk} = ? LIMIT 1",
+                (int(section_id),),
+            ).fetchone()
+            if row:
+                did = _valid_dept(row["department_id"] if hasattr(row, "keys") else row[0])
+                if did is not None:
+                    return did
+        except (TypeError, ValueError):
+            pass
+
+    sem = (semester or "").strip()
+    if sem:
+        row = cur.execute(
+            """
+            SELECT department_id FROM schedule
+            WHERE lower(trim(course_name)) = lower(trim(?))
+              AND department_id IS NOT NULL
+              AND COALESCE(semester, '') LIKE ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (cname, f"%{sem}%"),
+        ).fetchone()
+        if row:
+            did = _valid_dept(row[0] if not hasattr(row, "keys") else row["department_id"])
+            if did is not None:
+                return did
+
+    row = cur.execute(
+        """
+        SELECT department_id FROM schedule
+        WHERE lower(trim(course_name)) = lower(trim(?))
+          AND department_id IS NOT NULL
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (cname,),
+    ).fetchone()
+    if row:
+        did = _valid_dept(row[0] if not hasattr(row, "keys") else row["department_id"])
+        if did is not None:
+            return did
+
+    row = cur.execute(
+        """
+        SELECT department_id FROM teaching_groups
+        WHERE lower(trim(course_name)) = lower(trim(?))
+          AND department_id IS NOT NULL
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (cname,),
+    ).fetchone()
+    if row:
+        did = _valid_dept(row[0] if not hasattr(row, "keys") else row["department_id"])
+        if did is not None:
+            return did
+
+    from backend.database.database import fetch_table_columns
+
+    cols = fetch_table_columns(conn, "courses")
+    if "owning_department_id" in cols:
+        row = cur.execute(
+            """
+            SELECT owning_department_id FROM courses
+            WHERE lower(trim(course_name)) = lower(trim(?))
+            LIMIT 1
+            """,
+            (cname,),
+        ).fetchone()
+        if row:
+            did = _valid_dept(row[0] if not hasattr(row, "keys") else row["owning_department_id"])
+            if did is not None:
+                return did
+
+    return None
+
+
+_COLLEGE_WIDE_COURSE_OPS_ROLES = frozenset(
+    {
+        "admin",
+        "admin_main",
+        "system_admin",
+        "college_dean",
+        "academic_vice_dean",
+    }
+)
+
+
+def actor_role_for_username(conn, actor_username: str | None) -> str:
+    """دور المستخدم من قاعدة البيانات (بدون الاعتماد على الجلسة فقط)."""
+    un = _actor_username(actor_username)
+    if not un:
+        return ""
+    row = conn.cursor().execute(
+        "SELECT role FROM users WHERE lower(username) = lower(?) LIMIT 1",
+        (un,),
+    ).fetchone()
+    if not row:
+        return ""
+    raw = row["role"] if hasattr(row, "keys") else row[0]
+    return _normalize_role(str(raw or "").strip())
+
+
+def actor_bypasses_course_department_guard(conn, actor_username: str | None) -> bool:
+    """أدوار الكلية/الإدارة التي لا تُقيَّد بقسم عرض المقرر."""
+    return actor_role_for_username(conn, actor_username) in _COLLEGE_WIDE_COURSE_OPS_ROLES
+
+
+def hod_may_operate_on_course(
+    conn,
+    actor_username: str | None,
+    course_name: str,
+    *,
+    teaching_group_id: int | None = None,
+    section_id: int | None = None,
+    semester: str | None = None,
+) -> bool:
+    """
+    هل يجوز لرئيس القسم (أو الإدارة العليا) اعتماد/مراجعة عمليات هذا المقرر؟
+    يعتمد على قسم العرض (مجموعة تدريس / جدول) وليس قسم منزل الأستاذ.
+    """
+    if actor_bypasses_course_department_guard(conn, actor_username):
+        return True
+    role = actor_role_for_username(conn, actor_username)
+    if role != "head_of_department":
+        return False
+    scope_dep = resolve_effective_department_scope_id(conn, actor_username)
+    if scope_dep is None:
+        return False
+    responsible = resolve_course_responsible_department_id(
+        conn,
+        course_name,
+        teaching_group_id=teaching_group_id,
+        section_id=section_id,
+        semester=semester,
+    )
+    if responsible is None:
+        return False
+    return int(responsible) == int(scope_dep)
+
+
+def assert_hod_for_course_operation(
+    conn,
+    actor_username: str | None,
+    course_name: str,
+    *,
+    teaching_group_id: int | None = None,
+    section_id: int | None = None,
+    semester: str | None = None,
+) -> None:
+    """يرفض العملية إذا كان رئيس القسم خارج نطاق قسم عرض المقرر."""
+    if hod_may_operate_on_course(
+        conn,
+        actor_username,
+        course_name,
+        teaching_group_id=teaching_group_id,
+        section_id=section_id,
+        semester=semester,
+    ):
+        return
+    raise PermissionError("FORBIDDEN_DEPARTMENT_SCOPE")
+
+
+def filter_items_for_course_hod_scope(
+    conn,
+    actor_username: str | None,
+    items: list[dict],
+    *,
+    course_name_key: str = "course_name",
+    teaching_group_id_key: str = "teaching_group_id",
+    section_id_key: str = "section_id",
+    semester_key: str = "semester",
+) -> list[dict]:
+    """يُبقي عناصر القائمة التي يجوز لرئيس القسم رؤيتها/اعتمادها."""
+    if actor_bypasses_course_department_guard(conn, actor_username):
+        return items
+    if actor_role_for_username(conn, actor_username) != "head_of_department":
+        return items
+    out: list[dict] = []
+    for item in items:
+        if hod_may_operate_on_course(
+            conn,
+            actor_username,
+            str(item.get(course_name_key) or ""),
+            teaching_group_id=item.get(teaching_group_id_key),
+            section_id=item.get(section_id_key),
+            semester=item.get(semester_key),
+        ):
+            out.append(item)
+    return out
+
+
+def courses_department_scope_filter(
+    conn,
+    scope_dep: int | None,
+    *,
+    owning_col: str = "owning_department_id",
+    course_name_col: str = "course_name",
+) -> tuple[str, tuple]:
+    """
+    شرط SQL لعرض مقررات القسم + الاتجاه العام + المشترك حسب النوع.
+    """
+    if scope_dep is None:
+        return "", ()
+    dep = int(scope_dep)
+    table_alias = ""
+    own_col = owning_col
+    cname_col = course_name_col
+    if "." in own_col:
+        parts = own_col.split(".", 1)
+        table_alias, own_col = parts[0], parts[1]
+    if "." in cname_col:
+        cname_col = cname_col.split(".", 1)[1]
+    return _general_owned_visibility_sql(
+        conn,
+        dep,
+        owning_col=own_col,
+        course_name_col=cname_col,
+        table_alias=table_alias,
+    )
+
+
+def resolve_import_owning_department_id(
+    conn,
+    course_name: str,
+    importer_dept_id: int | None,
+    *,
+    course_code: str | None = None,
+) -> int | None:
+    """قسم المالك عند الاستيراد: GENERAL للاتجاه العام، وإلا قسم المنفّذ."""
+    if importer_dept_id is None:
+        return None
+    if course_is_college_general(conn, course_name, course_code=course_code):
+        return resolve_college_general_department_id(conn)
+    if course_is_college_shared_catalog(conn, course_name):
+        return resolve_college_general_department_id(conn)
+    return int(importer_dept_id)
+
+
+def _actor_username(actor_username: str | None) -> str:
+    if actor_username is not None:
+        return (actor_username or "").strip()
+    try:
+        from flask import session
+
+        return (session.get("user") or session.get("username") or "").strip()
+    except Exception:
+        return ""
+
+
+def courses_export_sql_and_params(
+    conn,
+    actor_username: str | None = None,
+) -> tuple[str, tuple]:
+    """استعلام تصدير المقررات مع احترام نطاق قسم المنفّذ."""
+    from backend.database.database import fetch_table_columns
+
+    scope_dep = resolve_effective_department_scope_id(conn, _actor_username(actor_username))
+    try:
+        cols = fetch_table_columns(conn, "courses")
+    except Exception:
+        cols = []
+    has_owning = "owning_department_id" in cols
+
+    if scope_dep is not None and has_owning:
+        scope_sql, scope_params = courses_department_scope_filter(conn, int(scope_dep))
+        return (
+            "SELECT course_name, course_code, units FROM courses "
+            f"WHERE COALESCE(course_name, '') <> ''{scope_sql}"
+            "ORDER BY course_name",
+            scope_params,
+        )
+    if scope_dep is not None:
+        try:
+            sch_cols = fetch_table_columns(conn, "schedule")
+        except Exception:
+            sch_cols = []
+        if "department_id" in sch_cols:
+            return (
+                """
+                SELECT DISTINCT COALESCE(s.course_name, '') AS course_name,
+                       COALESCE(c.course_code, '') AS course_code,
+                       COALESCE(c.units, 0) AS units
+                FROM schedule s
+                LEFT JOIN courses c
+                  ON LOWER(TRIM(COALESCE(c.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
+                WHERE COALESCE(s.course_name, '') <> ''
+                  AND COALESCE(s.department_id, -1) = ?
+                ORDER BY course_name
+                """,
+                (int(scope_dep),),
+            )
+        return (
+            "SELECT course_name, course_code, units FROM courses WHERE 1 = 0",
+            (),
+        )
+    return (
+        "SELECT course_name, course_code, units FROM courses "
+        "WHERE COALESCE(course_name, '') <> '' ORDER BY course_name",
+        (),
+    )
+
+
+def course_in_actor_scope(
+    conn,
+    course_name: str,
+    actor_username: str | None = None,
+) -> bool:
+    """هل المقرر ضمن نطاق قسم المنفّذ؟"""
+    dep = resolve_effective_department_scope_id(conn, _actor_username(actor_username))
+    if dep is None:
+        return True
+    cname = (course_name or "").strip()
+    if not cname:
+        return False
+    cur = conn.cursor()
+    from backend.database.database import fetch_table_columns
+
+    cols = fetch_table_columns(conn, "courses")
+    if course_is_college_general(conn, cname):
+        return True
+    if course_is_college_shared_catalog(conn, cname, department_id=int(dep)):
+        return True
+    if "owning_department_id" in cols:
+        gen_id = resolve_college_general_department_id(conn)
+        row = cur.execute(
+            """
+            SELECT owning_department_id FROM courses
+            WHERE lower(trim(course_name)) = lower(trim(?))
+            LIMIT 1
+            """,
+            (cname,),
+        ).fetchone()
+        if row:
+            raw = row["owning_department_id"] if hasattr(row, "keys") else row[0]
+            if raw in (None, ""):
+                return True
+            try:
+                oid = int(raw)
+                if oid == int(dep):
+                    return True
+                if gen_id is not None and oid == int(gen_id):
+                    return course_is_college_general(conn, cname) or course_is_college_shared_catalog(
+                        conn, cname, department_id=int(dep)
+                    )
+                return False
+            except (TypeError, ValueError):
+                return False
+    sch_cols = fetch_table_columns(conn, "schedule")
+    if "department_id" in sch_cols:
+        row = cur.execute(
+            """
+            SELECT 1 FROM schedule
+            WHERE lower(trim(course_name)) = lower(trim(?))
+              AND COALESCE(department_id, -1) = ?
+            LIMIT 1
+            """,
+            (cname, int(dep)),
+        ).fetchone()
+        return bool(row)
+    return False
+
+
+def assert_course_in_actor_scope(
+    conn,
+    course_name: str,
+    actor_username: str | None = None,
+) -> None:
+    if not course_in_actor_scope(conn, course_name, actor_username):
+        label = (course_name or "").strip() or "—"
+        raise ValueError(f"المقرر «{label}» خارج نطاق قسمك.")
+
+
+def student_in_actor_scope(
+    conn,
+    student_id: str,
+    actor_username: str | None = None,
+) -> bool:
+    mode, dep_id = resolve_users_list_scope(conn, _actor_username(actor_username))
+    if mode == "none":
+        return True
+    if mode == "empty" or dep_id is None:
+        return False
+    return student_matches_department(conn, student_id, int(dep_id))
+
+
+def assert_student_in_actor_scope(
+    conn,
+    student_id: str,
+    actor_username: str | None = None,
+) -> None:
+    if not student_in_actor_scope(conn, student_id, actor_username):
+        sid = (student_id or "").strip() or "—"
+        raise ValueError(f"الطالب {sid} خارج نطاق قسمك.")
+
+
+def resolve_import_department_binding(
+    conn,
+    actor_username: str | None = None,
+) -> tuple[int | None, int | None]:
+    """قسم/برنامج الربط التلقائي عند الاستيراد حسب نطاق المنفّذ."""
+    dept_id = resolve_effective_department_scope_id(conn, _actor_username(actor_username))
+    if dept_id is None:
+        return None, None
+    prog_id = major_program_id_for_department(conn, int(dept_id))
+    return int(dept_id), prog_id
+
+
+def resolve_registration_course_scope_sql(
+    conn,
+    actor_username: str | None,
+    *,
+    registration_course_col: str = "r.course_name",
+) -> tuple[str, tuple]:
+    """جزء AND لفلترة أسماء المقررات في تقارير التسجيل حسب القسم."""
+    scope_dep = resolve_effective_department_scope_id(conn, _actor_username(actor_username))
+    if scope_dep is None:
+        return "", ()
+    dep = int(scope_dep)
+    from backend.database.database import fetch_table_columns
+
+    cols = fetch_table_columns(conn, "courses")
+    if "owning_department_id" in cols:
+        scope_sql, scope_params = courses_department_scope_filter(
+            conn, dep, owning_col="__c_reg_scope.owning_department_id"
+        )
+        return (
+            f"""
+            AND EXISTS (
+                SELECT 1 FROM courses __c_reg_scope
+                WHERE lower(trim(__c_reg_scope.course_name)) = lower(trim({registration_course_col}))
+                {scope_sql}
+            )
+            """,
+            scope_params,
+        )
+    sch_cols = fetch_table_columns(conn, "schedule")
+    if "department_id" in sch_cols:
+        return (
+            f"""
+            AND EXISTS (
+                SELECT 1 FROM schedule __sch_reg_scope
+                WHERE lower(trim(__sch_reg_scope.course_name)) = lower(trim({registration_course_col}))
+                  AND COALESCE(__sch_reg_scope.department_id, -1) = ?
+            )
+            """,
+            (dep,),
+        )
+    return " AND 1=0 ", ()
+
+
+def backfill_courses_owning_department_from_schedule(
+    conn,
+    *,
+    department_id: int | None = None,
+) -> int:
+    """
+    ربط owning_department_id من جدول schedule للمقررات التي تفتقد مالكاً.
+    يُرجع عدد الصفوف المُحدَّثة.
+    """
+    from backend.database.database import fetch_table_columns
+
+    cols = fetch_table_columns(conn, "courses")
+    sch_cols = fetch_table_columns(conn, "schedule")
+    if "owning_department_id" not in cols or "department_id" not in sch_cols:
+        return 0
+    cur = conn.cursor()
+    pc_cols = fetch_table_columns(conn, "program_courses")
+    college_general_guard = ""
+    if "requirement_scope" in pc_cols:
+        college_general_guard = """
+          AND NOT EXISTS (
+            SELECT 1 FROM program_courses pc
+            INNER JOIN courses c2 ON (
+              (c2.course_master_id IS NOT NULL AND c2.course_master_id = pc.course_master_id)
+              OR lower(trim(COALESCE(pc.course_code, ''))) = lower(trim(COALESCE(c2.course_code, '')))
+            )
+            WHERE lower(trim(c2.course_name)) = lower(trim(courses.course_name))
+              AND COALESCE(pc.requirement_scope, 'dept_common') = 'college_general'
+              AND COALESCE(pc.is_active, 1) = 1
+          )
+        """
+    params: list = []
+    dept_filter = ""
+    if department_id is not None:
+        dep = int(department_id)
+        dept_filter = " AND COALESCE(s.department_id, -1) = ? "
+        params = [dep, dep]
+    cur.execute(
+        f"""
+        UPDATE courses
+        SET owning_department_id = (
+            SELECT s.department_id FROM schedule s
+            WHERE lower(trim(s.course_name)) = lower(trim(courses.course_name))
+              AND COALESCE(s.department_id, -1) > 0
+              {dept_filter}
+            LIMIT 1
+        )
+        WHERE COALESCE(owning_department_id, 0) = 0
+          {college_general_guard}
+          AND EXISTS (
+            SELECT 1 FROM schedule s
+            WHERE lower(trim(s.course_name)) = lower(trim(courses.course_name))
+              AND COALESCE(s.department_id, -1) > 0
+              {dept_filter}
+          )
+        """,
+        tuple(params),
+    )
+    return int(cur.rowcount or 0)
+
+
+def invalidate_department_scope_list_caches() -> None:
+    """إبطال قوائم القراءة عند تغيير نطاق القسم في الجلسة."""
+    try:
+        from backend.core.cache_setup import invalidate_list_prefix
+
+        for prefix in ("courses", "students", "schedule", "instructors"):
+            invalidate_list_prefix(prefix)
+    except Exception:
+        pass
 

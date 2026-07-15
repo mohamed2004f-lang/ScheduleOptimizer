@@ -11,6 +11,10 @@
 <body>
   {% include "base_nav.html" %}
   <main class="container-fluid mt-4 px-3" style="max-width:1100px;">
+    {% set qa_crumb_mid_href = '/academic_quality/surveys/results' %}
+    {% set qa_crumb_mid_label = 'نتائج الاستبيانات' %}
+    {% set qa_crumb_title = 'اتجاهات الاستبيانات' %}
+    {% include 'partials/quality_breadcrumb.html' %}
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
       <h4 class="mb-0"><i class="fa-solid fa-chart-line"></i> اتجاهات ومقارنة الاستبيانات (لقطات الفصول)</h4>
       <div class="d-flex gap-2 flex-wrap">

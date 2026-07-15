@@ -10,13 +10,10 @@
 <body>
   {% include "base_nav.html" %}
   <main class="container-fluid mt-4 px-3" style="max-width:1000px;">
-    <nav aria-label="breadcrumb" class="mb-2">
-      <ol class="breadcrumb small mb-0">
-        <li class="breadcrumb-item">ضمان الجودة</li>
-        <li class="breadcrumb-item"><a href="/academic_quality/surveys">الاستبيانات</a></li>
-        <li class="breadcrumb-item active">دعوات خارجية</li>
-      </ol>
-    </nav>
+    {% set qa_crumb_mid_href = '/academic_quality/surveys' %}
+    {% set qa_crumb_mid_label = 'الاستبيانات' %}
+    {% set qa_crumb_title = 'دعوات خارجية' %}
+    {% include 'partials/quality_breadcrumb.html' %}
 
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
       <h4 class="mb-0">دعوات الاستبيانات الخارجية</h4>

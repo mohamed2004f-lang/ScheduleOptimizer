@@ -1,0 +1,743 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>المساعد الذكي لضمان الجودة</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .qa-mode-card { cursor: pointer; border: 1px solid #dee2e6; transition: border-color .15s, box-shadow .15s; }
+    .qa-mode-card.active { border-color: #0d6efd; box-shadow: 0 0 0 .15rem rgba(13,110,253,.2); }
+    .qa-mode-card:hover { border-color: #0d6efd; }
+    .topic-chip { margin: .15rem; }
+    .chat-shell {
+      background: linear-gradient(180deg, #f3f6fa 0%, #eef2f7 100%);
+      border: 1px solid #dee2e6;
+      border-radius: .5rem;
+      min-height: 22rem;
+      max-height: 28rem;
+      overflow-y: auto;
+      padding: 1rem;
+    }
+    .chat-row { display: flex; margin-bottom: .75rem; }
+    .chat-row.me { justify-content: flex-start; }
+    .chat-row.bot { justify-content: flex-end; }
+    .chat-bubble {
+      max-width: min(92%, 40rem);
+      padding: .65rem .85rem;
+      border-radius: .85rem;
+      white-space: pre-wrap;
+      font-size: .9rem;
+      line-height: 1.45;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, .06);
+    }
+    .chat-row.me .chat-bubble { background: #0d6efd; color: #fff; border-bottom-right-radius: .2rem; }
+    .chat-row.bot .chat-bubble { background: #fff; border: 1px solid #e5e7eb; border-bottom-left-radius: .2rem; }
+    .chat-meta { font-size: .72rem; opacity: .75; margin-bottom: .2rem; }
+    .chat-channel .btn.active { pointer-events: none; }
+    .chat-actions { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .45rem; }
+    .chat-feedback { margin-top: .4rem; display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; }
+    .welcome-tasks { list-style: none; padding: 0; margin: 0; }
+    .welcome-tasks li { padding: .35rem 0; border-bottom: 1px dashed #e5e7eb; }
+    .welcome-tasks li:last-child { border-bottom: 0; }
+  </style>
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal mt-4">
+    {% set qa_crumb_title = 'المساعد الذكي للجودة' %}
+    {% include 'partials/quality_breadcrumb.html' %}
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+      <div>
+        <h1 class="page-title h4 mb-1"><i class="fa-solid fa-robot text-primary"></i> المساعد الذكي لضمان الجودة</h1>
+        <p class="text-muted small mb-0">دردشة أسئلة · مساعدة استخدام المنظومة · صياغة جودة · مراجع معتمدة</p>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <button type="button" class="btn btn-outline-info btn-sm" onclick="PageGuide.open()">❓ دليل الاستخدام</button>
+        <a class="btn btn-outline-primary btn-sm" href="/academic_quality/assistant/knowledge">مكتبة المعرفة</a>
+        <a class="btn btn-outline-success btn-sm" href="/academic_quality/assistant/references.zip" title="بطاقات مراجع Markdown لكل قسم">⬇ مراجع ZIP</a>
+        <a class="btn btn-outline-success btn-sm" href="/academic_quality/assistant/references.json" title="JSON لكل الحزم">⬇ مراجع JSON</a>
+        <a class="btn btn-outline-dark btn-sm" href="/academic_quality/assistant/export/committee.docx">ملخص لجنة Word</a>
+        <a class="btn btn-outline-dark btn-sm" href="/academic_quality/assistant/export/committee.pdf">ملخص لجنة PDF</a>
+        <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/assistant/export/style-pack.zip" title="حزمة أسلوب لوثائقكم المعتمدة — تدريب مستقبلي اختياري">حزمة أسلوب</a>
+        <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/dashboard">لوحة الجودة</a>
+        <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/glossary">المصطلحات</a>
+        <a class="btn btn-outline-primary btn-sm" href="/academic_quality/archive">أرشيف القسم</a>
+      </div>
+    </div>
+
+    <div class="alert alert-warning small">
+      <strong>سياسة:</strong> {{ bootstrap.policy_ar }}
+    </div>
+    <div class="alert alert-info small">
+      <strong>تحميل المراجع:</strong>
+      {{ bootstrap.references_downloads.note_ar if bootstrap.references_downloads else 'بطاقات الروابط والنصائح المعتمدة في المنظومة.' }}
+      الملفات تشمل أقسام MECH / CIVIL / ELEC / RENEW / GENERAL + بطاقات كلية (ABET / Washington / EUR-ACE / CDIO …).
+      {% if bootstrap.llm and bootstrap.llm.enabled %}
+      · <strong>LLM:</strong> مفعّل ({{ bootstrap.llm.model }}) — اقتراح فقط.
+      {% else %}
+      · <strong>LLM:</strong> غير مفعّل (يمكن تفعيله عبر متغيرات البيئة).
+      {% endif %}
+    </div>
+
+    <div class="row g-3 mb-3">
+      <div class="col-md-4">
+        <label class="form-label small">الفصل</label>
+        <input type="text" class="form-control form-control-sm" id="qaSemester" value="{{ semester }}">
+      </div>
+      <div class="col-md-5">
+        <label class="form-label small">القسم / البرنامج</label>
+        <select class="form-select form-select-sm" id="qaDepartment">
+          <option value="">— الكلية / بدون قسم —</option>
+          {% for d in departments %}
+          <option value="{{ d.id }}" {% if selected_department_id == d.id %}selected{% endif %}>
+            {{ d.code }} — {{ d.name_ar }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3 d-flex align-items-end">
+        <button type="button" class="btn btn-outline-primary btn-sm w-100" id="btnRefreshCtx">تحديث السياق</button>
+      </div>
+    </div>
+
+    <div class="row g-2 mb-3" id="modeCards">
+      {% for m in bootstrap.allowed_modes %}
+      <div class="col-md-4 col-lg">
+        <div class="card qa-mode-card h-100 {% if bootstrap.active_mode == m.code %}active{% endif %}"
+             data-mode="{{ m.code }}">
+          <div class="card-body py-2 px-3">
+            <div class="fw-semibold small">{{ m.title_ar }}</div>
+            <div class="text-muted" style="font-size:.75rem;">{{ m.subtitle_ar }}</div>
+            <span class="badge bg-light text-dark border mt-1">م{{ m.phase }}</span>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header bg-light d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <strong id="activeModeTitle">الدردشة</strong>
+        <div class="d-flex flex-wrap gap-2">
+          <div class="btn-group btn-group-sm chat-channel" role="group">
+            <button type="button" class="btn btn-outline-primary active" id="btnChannelQuality" data-channel="quality">دردشة الجودة</button>
+            <button type="button" class="btn btn-outline-primary" id="btnChannelUsage" data-channel="usage">مساعدة المنظومة</button>
+          </div>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="btnLoadEscalations">تصعيدات واردة</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="border rounded p-2 mb-3 bg-white small" id="welcomeBox">
+          <strong class="d-block mb-1" id="welcomeGreeting">مرحباً</strong>
+          <div class="text-muted mb-1">أهم 3 مهام الآن:</div>
+          <ul class="welcome-tasks small" id="welcomeTasks"></ul>
+        </div>
+
+        <div class="border rounded p-2 mb-3 bg-white small" id="discussGuideBox">
+          <strong class="d-block mb-1" id="guideTitle">كيف تستخدم الدردشة؟</strong>
+          <ul class="mb-2 ps-3" id="discussHowList"></ul>
+          <div class="text-muted mb-1">أمثلة أسئلة:</div>
+          <div id="discussExamples" class="d-flex flex-wrap gap-1"></div>
+        </div>
+
+        <div class="mb-2">
+          <div class="small text-muted mb-1">مواضيع سريعة</div>
+          <div id="topicChips"></div>
+        </div>
+
+        <div class="chat-shell mb-3" id="chatShell" aria-live="polite"></div>
+        <div id="assistantLinks" class="mb-3 d-flex flex-wrap gap-2"></div>
+
+        <div class="row g-2 align-items-end">
+          <div class="col-md-3">
+            <label class="form-label small mb-1">عنوان اختياري</label>
+            <input type="text" class="form-control form-control-sm" id="qaTopic" placeholder="للمسودات/التصعيد">
+          </div>
+          <div class="col-md-7">
+            <label class="form-label small mb-1">رسالتك</label>
+            <textarea class="form-control form-control-sm" id="qaNotes" rows="2" placeholder="اكتب سؤالك هنا…"></textarea>
+          </div>
+          <div class="col-md-2 d-grid gap-1">
+            <button type="button" class="btn btn-primary btn-sm" id="btnSend">
+              <i class="fa-solid fa-paper-plane"></i> إرسال
+            </button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="btnClearThread">مسح</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header bg-light d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <strong>المراجع العالمية المعتمدة في المساعد</strong>
+        <a class="btn btn-sm btn-outline-primary" href="/academic_quality/assistant/knowledge">فتح مكتبة المعرفة</a>
+      </div>
+      <div class="card-body small">
+        <p class="text-muted mb-2">{{ bootstrap.catalog.reference_disclaimer_ar if bootstrap.catalog else '' }}</p>
+        <div class="table-responsive">
+          <table class="table table-sm align-middle mb-0">
+            <thead>
+              <tr>
+                <th>المرجع</th>
+                <th>النطاق</th>
+                <th>رابط رسمي</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in (bootstrap.catalog.approved_global_references or []) %}
+              <tr>
+                <td>
+                  <div class="fw-semibold">{{ r.label_ar }}</div>
+                  <div class="text-muted" style="font-size:.75rem;">{{ r.label_en }}</div>
+                </td>
+                <td>{{ r.scope_ar }}</td>
+                <td>
+                  {% if r.official_url %}
+                  <a href="{{ r.official_url }}" target="_blank" rel="noopener">اطّلاع</a>
+                  {% else %}—{% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mb-4 d-none" id="escalationCard">
+      <div class="card-header bg-light"><strong>مسودات التصعيد</strong></div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm mb-0 align-middle">
+            <thead><tr><th>#</th><th>من</th><th>إلى</th><th>العنوان</th><th>الحالة</th><th></th></tr></thead>
+            <tbody id="escalationBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+  (function () {
+    var boot = {{ bootstrap | tojson }};
+    var activeMode = boot.active_mode || 'instructor';
+    var modesByCode = {};
+    (boot.allowed_modes || []).forEach(function (m) { modesByCode[m.code] = m; });
+    var discussGuides = boot.discussion_guides || {};
+    var usageTopics = (boot.catalog && boot.catalog.system_usage_topics) || [];
+    var channel = 'quality';
+    var thread = [];
+    var HISTORY_MAX = 5;
+
+    function $(id) { return document.getElementById(id); }
+
+    function welcomeMessage() {
+      if (channel === 'usage') {
+        return 'مرحباً — اسأل عن استخدام المنظومة (أرشيف، شواهد، استبيانات، درجات…) أو اختر موضوعاً سريعاً.';
+      }
+      return 'مرحباً — اسأل عن الجودة والصياغة والمراجع، أو اختر موضوعاً سريعاً حسب دورك.';
+    }
+
+    function renderWelcome(w) {
+      w = w || boot.welcome || {};
+      $('welcomeGreeting').textContent = w.greeting_ar || welcomeMessage();
+      var ul = $('welcomeTasks');
+      ul.innerHTML = '';
+      (w.tasks || []).forEach(function (t) {
+        var li = document.createElement('li');
+        if (t.href) {
+          var a = document.createElement('a');
+          a.href = t.href;
+          a.textContent = t.title_ar || t.href;
+          li.appendChild(a);
+        } else {
+          li.textContent = t.title_ar || '';
+        }
+        ul.appendChild(li);
+      });
+      if (!(w.tasks || []).length) {
+        ul.innerHTML = '<li class="text-muted">لا مهام بارزة — ابدأ بالدردشة أو موضوع سريع.</li>';
+      }
+    }
+
+    function historyPayload() {
+      return thread
+        .filter(function (t) { return t.side === 'me' || t.side === 'bot'; })
+        .filter(function (t) { return t.text && t.text.indexOf('جاري التحليل') !== 0; })
+        .slice(-HISTORY_MAX)
+        .map(function (t) {
+          return { role: t.side === 'me' ? 'user' : 'assistant', text: String(t.text || '').slice(0, 2000) };
+        });
+    }
+
+    function renderGuide() {
+      var how = $('discussHowList');
+      var ex = $('discussExamples');
+      how.innerHTML = '';
+      ex.innerHTML = '';
+      if (channel === 'usage') {
+        $('guideTitle').textContent = 'مساعدة استخدام المنظومة';
+        [
+          'اختر تبويب «مساعدة المنظومة» ثم اكتب سؤالاً مثل: كيف أربط شاهداً؟',
+          'أو اضغط موضوعاً سريعاً أدناه لفتح خطوات وروابط الصفحة.',
+          'يمكنك العودة لتبويب «دردشة الجودة» للصياغة والمعايير.'
+        ].forEach(function (line) {
+          var li = document.createElement('li');
+          li.textContent = line;
+          how.appendChild(li);
+        });
+        [
+          'كيف أفتح أرشيف القسم؟',
+          'أين خريطة الاعتماد البرامجي؟',
+          'كيف أرفع وثيقة لمكتبة المعرفة؟'
+        ].forEach(function (p) {
+          var b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'btn btn-sm btn-outline-dark';
+          b.textContent = p;
+          b.addEventListener('click', function () {
+            $('qaNotes').value = p;
+            sendChat();
+          });
+          ex.appendChild(b);
+        });
+        return;
+      }
+      $('guideTitle').textContent = 'كيف تناقش بهذا الدور؟';
+      var g = discussGuides[activeMode] || boot.active_discussion_guide || {};
+      (g.how_ar || ['اختر موضوعاً أو اكتب سؤالاً ثم أرسل.']).forEach(function (line) {
+        var li = document.createElement('li');
+        li.textContent = line;
+        how.appendChild(li);
+      });
+      (g.example_prompts_ar || []).forEach(function (p) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'btn btn-sm btn-outline-dark';
+        b.textContent = p;
+        b.addEventListener('click', function () {
+          $('qaNotes').value = p;
+          sendChat();
+        });
+        ex.appendChild(b);
+      });
+    }
+
+    function renderTopics() {
+      var m = modesByCode[activeMode] || {};
+      var title = (m.title_ar || activeMode) + (channel === 'usage' ? ' — مساعدة المنظومة' : ' — دردشة الجودة');
+      $('activeModeTitle').textContent = title;
+      var box = $('topicChips');
+      box.innerHTML = '';
+      var items = [];
+      if (channel === 'usage') {
+        items = usageTopics.map(function (t) {
+          return { code: 'system_help', label_ar: t.label_ar, topicCode: t.code };
+        });
+      } else {
+        items = (m.intents || []).map(function (it) {
+          return { code: it.code, label_ar: it.label_ar, topicCode: '' };
+        });
+      }
+      items.forEach(function (it) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'btn btn-sm btn-outline-primary topic-chip';
+        b.textContent = it.label_ar;
+        b.addEventListener('click', function () {
+          if (channel === 'usage') {
+            $('qaTopic').value = it.topicCode || it.label_ar;
+            $('qaNotes').value = '';
+            runTopic('system_help', it.label_ar);
+          } else if (it.code === 'discuss' || it.code === 'system_help') {
+            setChannel(it.code === 'system_help' ? 'usage' : 'quality');
+          } else {
+            runTopic(it.code, it.label_ar);
+          }
+        });
+        box.appendChild(b);
+      });
+      renderGuide();
+    }
+
+    function setChannel(next) {
+      channel = next === 'usage' ? 'usage' : 'quality';
+      $('btnChannelQuality').classList.toggle('active', channel === 'quality');
+      $('btnChannelUsage').classList.toggle('active', channel === 'usage');
+      $('btnChannelQuality').classList.toggle('btn-primary', channel === 'quality');
+      $('btnChannelQuality').classList.toggle('btn-outline-primary', channel !== 'quality');
+      $('btnChannelUsage').classList.toggle('btn-primary', channel === 'usage');
+      $('btnChannelUsage').classList.toggle('btn-outline-primary', channel !== 'usage');
+      renderTopics();
+      appendThread('bot', welcomeMessage(), 'المساعد');
+    }
+
+    async function refreshWelcome() {
+      try {
+        var q = new URLSearchParams({
+          mode: activeMode,
+          semester: $('qaSemester').value.trim(),
+          department_id: $('qaDepartment').value || ''
+        });
+        var r = await fetch('/academic_quality/api/assistant/welcome?' + q.toString(), { credentials: 'include' });
+        var j = await r.json();
+        boot.welcome = j;
+        renderWelcome(j);
+      } catch (e) {}
+    }
+
+    function setActiveMode(code) {
+      activeMode = code;
+      document.querySelectorAll('.qa-mode-card').forEach(function (el) {
+        el.classList.toggle('active', el.dataset.mode === code);
+      });
+      renderTopics();
+      appendThread('bot', 'تم التبديل إلى: ' + ((modesByCode[code] || {}).title_ar || code), 'المساعد');
+      $('assistantLinks').innerHTML = '';
+      refreshWelcome();
+    }
+
+    function appendThread(side, text, who, meta) {
+      thread.push({
+        side: side,
+        who: who || (side === 'me' ? 'أنت' : 'المساعد'),
+        text: text,
+        at: new Date().toLocaleTimeString('ar'),
+        reply_id: (meta && meta.reply_id) || '',
+        intent: (meta && meta.intent) || '',
+        actions: (meta && meta.actions) || [],
+        mode: (meta && meta.mode) || activeMode
+      });
+      renderThread();
+    }
+
+    async function sendFeedback(replyId, rating, intent, mode) {
+      var reason = '';
+      if (rating === 'down') {
+        reason = window.prompt('ما سبب ضعف الرد؟ (اختياري)', '') || '';
+      }
+      try {
+        await fetch('/academic_quality/api/assistant/feedback', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+          body: JSON.stringify({
+            reply_id: replyId,
+            rating: rating,
+            reason_ar: reason,
+            mode: mode || activeMode,
+            intent: intent || '',
+            semester: $('qaSemester').value.trim(),
+            department_id: $('qaDepartment').value || null
+          })
+        });
+      } catch (e) {}
+    }
+
+    function runAction(action, replyMeta) {
+      if (!action) return;
+      if (action.type === 'open_link' && action.href) {
+        window.open(action.href, '_blank');
+        return;
+      }
+      if (action.type === 'copy_text') {
+        var txt = action.text || '';
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(txt).then(function () {
+            appendThread('bot', 'تم نسخ النص إلى الحافظة.', 'المساعد');
+          });
+        } else {
+          window.prompt('انسخ النص:', txt);
+        }
+        return;
+      }
+      if (action.type === 'escalate' && action.intent) {
+        $('qaTopic').value = $('qaTopic').value || 'متابعة من الدردشة';
+        $('qaNotes').value = $('qaNotes').value || 'طلب مسودة تصعيد/متابعة من آخر نقاش.';
+        runTopic(action.intent, action.label_ar || action.intent);
+      }
+    }
+
+    function renderThread() {
+      var shell = $('chatShell');
+      if (!thread.length) {
+        shell.innerHTML = '<div class="text-muted small p-2">' + welcomeMessage() + '</div>';
+        return;
+      }
+      shell.innerHTML = '';
+      thread.forEach(function (t, idx) {
+        var row = document.createElement('div');
+        row.className = 'chat-row ' + (t.side === 'me' ? 'me' : 'bot');
+        var bubble = document.createElement('div');
+        bubble.className = 'chat-bubble';
+        var meta = document.createElement('div');
+        meta.className = 'chat-meta';
+        meta.textContent = t.who + ' · ' + t.at;
+        var body = document.createElement('div');
+        body.textContent = t.text;
+        bubble.appendChild(meta);
+        bubble.appendChild(body);
+        if (t.side === 'bot' && t.actions && t.actions.length) {
+          var acts = document.createElement('div');
+          acts.className = 'chat-actions';
+          t.actions.forEach(function (act) {
+            var b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'btn btn-sm btn-light border';
+            b.textContent = act.label_ar || act.type;
+            b.addEventListener('click', function () { runAction(act, t); });
+            acts.appendChild(b);
+          });
+          bubble.appendChild(acts);
+        }
+        if (t.side === 'bot' && t.reply_id && t.text.indexOf('جاري التحليل') !== 0) {
+          var fb = document.createElement('div');
+          fb.className = 'chat-feedback';
+          var up = document.createElement('button');
+          up.type = 'button';
+          up.className = 'btn btn-sm btn-outline-success';
+          up.textContent = '👍 مفيد';
+          up.addEventListener('click', function () {
+            sendFeedback(t.reply_id, 'up', t.intent, t.mode);
+            up.disabled = true;
+            down.disabled = true;
+          });
+          var down = document.createElement('button');
+          down.type = 'button';
+          down.className = 'btn btn-sm btn-outline-danger';
+          down.textContent = '👎 ضعيف';
+          down.addEventListener('click', function () {
+            sendFeedback(t.reply_id, 'down', t.intent, t.mode);
+            up.disabled = true;
+            down.disabled = true;
+          });
+          fb.appendChild(up);
+          fb.appendChild(down);
+          bubble.appendChild(fb);
+        }
+        row.appendChild(bubble);
+        shell.appendChild(row);
+      });
+      shell.scrollTop = shell.scrollHeight;
+    }
+
+    function formatResult(j) {
+      var lines = [];
+      if (j.message_ar) lines.push(j.message_ar);
+      if (j.knowledge_tag) lines.push('[' + j.knowledge_tag + ']');
+      if (j.disclaimer_ar) lines.push(j.disclaimer_ar);
+      if (j.bullets && j.bullets.length) {
+        lines.push('');
+        j.bullets.forEach(function (b) { lines.push(String(b)); });
+      }
+      if (j.tips && j.tips.length) {
+        lines.push('');
+        j.tips.forEach(function (t) {
+          lines.push('• ' + (t.topic_ar || '') + ': ' + (t.tip_ar || ''));
+        });
+      }
+      if (j.review_questions_ar && j.review_questions_ar.length) {
+        lines.push('');
+        lines.push('أسئلة مراجعة:');
+        j.review_questions_ar.forEach(function (q) { lines.push('؟ ' + q); });
+      }
+      if (j.draft_text) {
+        lines.push('');
+        lines.push('—— مسودة ——');
+        lines.push(j.draft_text);
+      }
+      if (j.escalation) {
+        lines.push('');
+        lines.push('تصعيد #' + j.escalation.id + ' → ' + (j.escalation.to_label_ar || j.escalation.to_mode));
+        lines.push(j.escalation.title_ar || '');
+        lines.push(j.escalation.body_ar || '');
+      }
+      if (j.policy_ar) {
+        lines.push('');
+        lines.push('— ' + j.policy_ar);
+      }
+      return lines.join('\n');
+    }
+
+    function renderLinks(links) {
+      var box = $('assistantLinks');
+      box.innerHTML = '';
+      (links || []).forEach(function (l) {
+        var a = document.createElement('a');
+        a.href = l.href;
+        a.className = 'btn btn-outline-secondary btn-sm';
+        a.textContent = l.label_ar || l.href;
+        box.appendChild(a);
+      });
+    }
+
+    async function runTopic(intent, labelForUser) {
+      var notes = $('qaNotes').value.trim();
+      var topic = $('qaTopic').value.trim();
+      var hist = historyPayload();
+      if (labelForUser) {
+        appendThread('me', 'موضوع: ' + labelForUser + (notes ? ('\n' + notes) : ''), 'أنت');
+      } else if (notes) {
+        appendThread('me', notes, 'أنت');
+      } else {
+        appendThread('me', 'موضوع: ' + intent + (topic ? (' — ' + topic) : ''), 'أنت');
+      }
+      appendThread('bot', 'جاري التحليل…', 'المساعد');
+      $('assistantLinks').innerHTML = '';
+      var body = {
+        mode: activeMode,
+        intent: intent,
+        semester: $('qaSemester').value.trim(),
+        department_id: $('qaDepartment').value || null,
+        topic: topic,
+        notes: notes,
+        history: hist
+      };
+      try {
+        var r = await fetch('/academic_quality/api/assistant/run', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+          body: JSON.stringify(body)
+        });
+        var j = await r.json();
+        if (thread.length && thread[thread.length - 1].text.indexOf('جاري التحليل') === 0) {
+          thread.pop();
+        }
+        if (!r.ok) {
+          appendThread('bot', j.message || 'تعذّر تنفيذ الطلب', 'المساعد');
+          return;
+        }
+        appendThread('bot', formatResult(j), 'المساعد', {
+          reply_id: j.reply_id || '',
+          intent: j.intent || intent,
+          actions: j.actions || [],
+          mode: j.mode || activeMode
+        });
+        renderLinks(j.links || []);
+        if (j.welcome) renderWelcome(j.welcome);
+      } catch (e) {
+        if (thread.length && thread[thread.length - 1].text.indexOf('جاري التحليل') === 0) {
+          thread.pop();
+        }
+        appendThread('bot', 'خطأ اتصال بالخادم', 'المساعد');
+      }
+    }
+
+    function sendChat() {
+      var notes = $('qaNotes').value.trim();
+      if (!notes && !$('qaTopic').value.trim()) {
+        appendThread('bot', 'اكتب سؤالاً أولاً، أو اختر موضوعاً سريعاً.', 'المساعد');
+        return;
+      }
+      runTopic(channel === 'usage' ? 'system_help' : 'discuss');
+      $('qaNotes').value = '';
+    }
+
+    document.querySelectorAll('.qa-mode-card').forEach(function (el) {
+      el.addEventListener('click', function () { setActiveMode(el.dataset.mode); });
+    });
+    $('btnChannelQuality').addEventListener('click', function () { setChannel('quality'); });
+    $('btnChannelUsage').addEventListener('click', function () { setChannel('usage'); });
+    $('btnSend').addEventListener('click', sendChat);
+    $('qaNotes').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendChat();
+      }
+    });
+    $('btnClearThread').addEventListener('click', function () {
+      thread = [];
+      renderThread();
+      $('assistantLinks').innerHTML = '';
+    });
+
+    $('btnRefreshCtx').addEventListener('click', async function () {
+      var q = new URLSearchParams({
+        mode: activeMode,
+        semester: $('qaSemester').value.trim(),
+        department_id: $('qaDepartment').value || ''
+      });
+      appendThread('bot', 'تحديث السياق…', 'المساعد');
+      try {
+        var r = await fetch('/academic_quality/api/assistant/context?' + q.toString(), { credentials: 'include' });
+        var j = await r.json();
+        var ctx = j.context || {};
+        var lines = ['السياق محدّث.', 'الفصل: ' + (ctx.semester || '—')];
+        if (ctx.department && ctx.department.name_ar) lines.push('القسم: ' + ctx.department.name_ar);
+        if (ctx.metrics) lines.push('مؤشر تشغيلي داخلي: ' + (ctx.metrics.overall_accreditation_score ?? '—'));
+        if (ctx.college_metrics) lines.push('مؤشر كلية: ' + (ctx.college_metrics.overall_accreditation_score ?? '—'));
+        if (thread.length && thread[thread.length - 1].text.indexOf('تحديث السياق') === 0) thread.pop();
+        appendThread('bot', lines.join('\n'), 'المساعد');
+      } catch (e) {
+        appendThread('bot', 'تعذّر تحديث السياق', 'المساعد');
+      }
+    });
+
+    async function loadEscalations() {
+      $('escalationCard').classList.remove('d-none');
+      var q = new URLSearchParams({
+        mode: activeMode,
+        department_id: $('qaDepartment').value || ''
+      });
+      try {
+        var r = await fetch('/academic_quality/api/assistant/escalations?' + q.toString(), { credentials: 'include' });
+        var j = await r.json();
+        var tb = $('escalationBody');
+        tb.innerHTML = '';
+        (j.items || []).forEach(function (it) {
+          var tr = document.createElement('tr');
+          tr.innerHTML =
+            '<td>' + it.id + '</td>' +
+            '<td class="small">' + (it.from_mode || '') + '</td>' +
+            '<td class="small">' + (it.to_mode || '') + '</td>' +
+            '<td><div class="fw-semibold small">' + (it.title_ar || '') + '</div>' +
+            '<div class="text-muted small" style="max-width:28rem;white-space:pre-wrap;">' + (it.body_ar || '') + '</div></td>' +
+            '<td><span class="badge bg-secondary">' + (it.status || '') + '</span></td>' +
+            '<td><button type="button" class="btn btn-link btn-sm p-0 btn-ack" data-id="' + it.id + '">تأشير مستلم</button></td>';
+          tb.appendChild(tr);
+        });
+        if (!(j.items || []).length) {
+          tb.innerHTML = '<tr><td colspan="6" class="text-muted p-3">لا تصعيدات واردة.</td></tr>';
+        }
+        tb.querySelectorAll('.btn-ack').forEach(function (btn) {
+          btn.addEventListener('click', async function () {
+            var id = btn.dataset.id;
+            await fetch('/academic_quality/api/assistant/escalations/' + id + '/status', {
+              method: 'POST', credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ status: 'acknowledged' })
+            });
+            loadEscalations();
+          });
+        });
+      } catch (e) {
+        $('escalationBody').innerHTML = '<tr><td colspan="6" class="text-danger p-3">فشل التحميل</td></tr>';
+      }
+    }
+
+    $('btnLoadEscalations').addEventListener('click', loadEscalations);
+    renderWelcome(boot.welcome);
+    renderTopics();
+    renderThread();
+    // رسالة ترحيب سياقية أول مرة
+    if (boot.welcome && boot.welcome.greeting_ar) {
+      var lines = [boot.welcome.greeting_ar];
+      (boot.welcome.tasks || []).forEach(function (t, i) {
+        lines.push((i + 1) + ') ' + (t.title_ar || ''));
+      });
+      appendThread('bot', lines.join('\n'), 'المساعد', {
+        reply_id: 'welcome-' + Date.now(),
+        intent: 'welcome',
+        actions: (boot.welcome.tasks || []).filter(function (t) { return t.href; }).map(function (t) {
+          return { type: 'open_link', label_ar: 'فتح: ' + String(t.title_ar || '').slice(0, 36), href: t.href };
+        }),
+        mode: activeMode
+      });
+    }
+  })();
+  </script>
+</body>
+</html>

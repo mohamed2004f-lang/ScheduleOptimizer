@@ -15,6 +15,8 @@
 <body>
   {% include "base_nav.html" %}
   <main class="container-main container-1100 theme-formal">
+    {% set qa_crumb_title = 'هوية الكلية' %}
+    {% include 'partials/quality_breadcrumb.html' %}
     <div class="page-header d-flex justify-content-between flex-wrap gap-2">
       <div>
         <h1 class="page-title">هوية الكلية</h1>
@@ -23,6 +25,9 @@
       <div class="d-flex flex-wrap gap-2 align-items-center">
         <button class="btn btn-outline-info btn-sm" onclick="PageGuide.open()">❓ دليل الاستخدام</button>
         <a href="/academic_quality/programs" class="btn btn-outline-primary btn-sm">برامج الكلية</a>
+        <a href="/academic_quality/accreditation/map?scope=inst" class="btn btn-outline-primary btn-sm">امتثال مؤسسي</a>
+        <a href="/academic_quality/archive" class="btn btn-outline-secondary btn-sm">أرشيف القسم</a>
+        <a href="/academic_quality/glossary" class="btn btn-outline-info btn-sm">المصطلحات</a>
         <button type="button" class="btn btn-outline-primary btn-sm d-none" id="btnToggleEditMode">وضع التحرير</button>
         <a href="/academic_quality/export/college-strategic" class="btn btn-outline-secondary btn-sm" target="_blank">تقرير HTML</a>
         <a href="/academic_quality/export/college-strategic.pdf" class="btn btn-outline-secondary btn-sm">تقرير PDF</a>

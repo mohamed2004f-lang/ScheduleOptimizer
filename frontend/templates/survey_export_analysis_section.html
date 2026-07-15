@@ -1,0 +1,127 @@
+{# قسم التحليل والاستنتاجات — استبيان واحد أو موحّد #}
+{% if analysis %}
+<section class="analysis-section">
+  <h2>التحليل</h2>
+  {% if for_pdf %}
+  <div class="analysis-panel">
+    {% for p in analysis.narrative_paragraphs or [] %}
+    <div class="narrative-block">{{ p }}</div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="analysis-box">
+    {% for p in analysis.narrative_paragraphs or [] %}
+    <p>{{ p }}</p>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if analysis.distribution_rows %}
+  <h3>توزيع التصنيف</h3>
+  <table>
+    <thead>
+      <tr><th>التصنيف</th><th>العدد</th><th>أمثلة</th></tr>
+    </thead>
+    <tbody>
+      {% for r in analysis.distribution_rows %}
+      <tr>
+        <td>{{ r['التصنيف'] }}</td>
+        <td>{{ r.get('العدد', r.get('عدد_الشعب', '—')) }}</td>
+        <td>{{ r['أمثلة'] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if analysis.strongest_items or analysis.weakest_items %}
+  <h3>أبرز البنود</h3>
+  <table>
+    <thead>
+      <tr><th>المحور</th><th>البند</th><th>النسبة %</th><th>التصنيف</th></tr>
+    </thead>
+    <tbody>
+      {% for q in analysis.strongest_items or [] %}
+      <tr>
+        <td>قوة</td>
+        <td>{{ q.label_ar if q.label_ar is defined else q.get('label_ar', '—') }}</td>
+        <td>{{ q.score_percent if q.score_percent is defined else q.get('score_percent', '—') }}%</td>
+        <td>{{ q.classification_ar if q.classification_ar is defined else q.get('classification_ar', '—') }}</td>
+      </tr>
+      {% endfor %}
+      {% for q in analysis.weakest_items or [] %}
+      <tr>
+        <td>تحسين</td>
+        <td>{{ q.label_ar if q.label_ar is defined else q.get('label_ar', '—') }}</td>
+        <td>{{ q.score_percent if q.score_percent is defined else q.get('score_percent', '—') }}%</td>
+        <td>{{ q.classification_ar if q.classification_ar is defined else q.get('classification_ar', '—') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if analysis.top_sections or analysis.bottom_sections %}
+  <h3>أعلى وأدنى النتائج</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>التصنيف</th>
+        <th>{{ 'الاستبيان' if analysis.top_sections and analysis.top_sections[0].get('الاستبيان') else 'المقرر' }}</th>
+        {% if analysis.top_sections and analysis.top_sections[0].get('الفئة') %}<th>الفئة</th>{% endif %}
+        {% if analysis.top_sections and analysis.top_sections[0].get('الشعبة') %}<th>الشعبة</th>{% endif %}
+        {% if analysis.top_sections and analysis.top_sections[0].get('الأستاذ') %}<th>الأستاذ</th>{% endif %}
+        <th>النتيجة %</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in analysis.top_sections or [] %}
+      <tr>
+        <td>أعلى</td>
+        <td>{{ r.get('الاستبيان') or r.get('المقرر') }}</td>
+        {% if r.get('الفئة') %}<td>{{ r['الفئة'] }}</td>{% endif %}
+        {% if r.get('الشعبة') %}<td>{{ r['الشعبة'] }}</td>{% endif %}
+        {% if r.get('الأستاذ') %}<td>{{ r['الأستاذ'] }}</td>{% endif %}
+        <td>{{ r.get('النتيجة_%') }}%</td>
+      </tr>
+      {% endfor %}
+      {% for r in analysis.bottom_sections or [] %}
+      <tr>
+        <td>أدنى</td>
+        <td>{{ r.get('الاستبيان') or r.get('المقرر') }}</td>
+        {% if r.get('الفئة') %}<td>{{ r['الفئة'] }}</td>{% endif %}
+        {% if r.get('الشعبة') %}<td>{{ r['الشعبة'] }}</td>{% endif %}
+        {% if r.get('الأستاذ') %}<td>{{ r['الأستاذ'] }}</td>{% endif %}
+        <td>{{ r.get('النتيجة_%') }}%</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <h2>الاستنتاجات</h2>
+  <ol class="conclusions">
+    {% for c in analysis.conclusions or [] %}
+    <li>{{ c }}</li>
+    {% endfor %}
+  </ol>
+
+  {% if analysis.recommendations %}
+  <h2>التوصيات</h2>
+  <table class="tbl-rec">
+    <thead>
+      <tr><th>التوصية</th><th>المسؤول</th><th>الإطار</th></tr>
+    </thead>
+    <tbody>
+      {% for r in analysis.recommendations %}
+      <tr>
+        <td>{% if r is mapping %}{{ r['التوصية'] }}{% else %}{{ r }}{% endif %}</td>
+        <td>{% if r is mapping %}{{ r.get('المسؤول', '—') }}{% else %}—{% endif %}</td>
+        <td>{% if r is mapping %}{{ r.get('الإطار', '—') }}{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endif %}

@@ -20,6 +20,7 @@ from backend.services.survey_invites import (
     list_public_departments,
     submit_invite_survey,
     validate_invite,
+    validate_respondent_profile,
 )
 
 
@@ -71,6 +72,12 @@ def test_invite_create_submit_aggregate(db_conn):
 
     questions = ctx["questions"]
     answers = {str(q["id"]): 4 for q in questions}
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES ('EMPEXT', 'قسم توظيف اختبار', 'EH', 1)"
+    )
+    dept_id = int(cur.lastrowid)
+    db_conn.commit()
     rid = submit_invite_survey(
         db_conn,
         token=token,
@@ -78,6 +85,10 @@ def test_invite_create_submit_aggregate(db_conn):
             "org_type": "private",
             "org_name": "شركة اختبار",
             "hires_graduates": "yes",
+            "hire_department_ids": [dept_id],
+            "hire_department_needs": [
+                {"department_id": dept_id, "specialty_needs_text": "طاقة وتصنيع"},
+            ],
         },
         answers_payload={"answers": answers},
         comments="توصية اختبار",
@@ -103,6 +114,10 @@ def test_invite_create_submit_aggregate(db_conn):
                 "org_type": "government",
                 "org_name": f"جهة {i}",
                 "hires_graduates": "sometimes",
+                "hire_department_ids": [dept_id],
+                "hire_department_needs": [
+                    {"department_id": dept_id, "specialty_needs_text": "أي تخصص هندسي"},
+                ],
             },
             answers_payload={"answers": ans},
         )
@@ -115,6 +130,53 @@ def test_invite_create_submit_aggregate(db_conn):
     assert agg["aggregated"] is True
     cycles = list_external_cycles(db_conn)
     assert "استشارة قطاع اختبار" in cycles
+
+
+def test_employer_profile_requires_specialty_needs(db_conn):
+    ensure_survey_invite_schema(db_conn)
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES ('NEEDST', 'قسم احتياج', 'NS', 1)"
+    )
+    dept_id = int(cur.lastrowid)
+    db_conn.commit()
+    with pytest.raises(ValueError, match="التخصص"):
+        validate_respondent_profile(
+            "employer_strategic",
+            {
+                "org_type": "private",
+                "org_name": "شركة",
+                "hires_graduates": "yes",
+                "hire_department_ids": [dept_id],
+            },
+            conn=db_conn,
+        )
+
+
+def test_alumni_custom_track_profile(db_conn):
+    ensure_survey_invite_schema(db_conn)
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES ('OLDTR', 'قسم قديم', 'OT', 1)"
+    )
+    dept_id = int(cur.lastrowid)
+    db_conn.commit()
+    profile = validate_respondent_profile(
+        "alumni",
+        {
+            "graduation_year": 2010,
+            "department_id": dept_id,
+            "track_code": "custom",
+            "track_custom_label": "برنامج طاقة (موقوف)",
+            "employment_status": "in_specialty",
+            "engineering_qualification": "yes",
+            "job_rejection": "no",
+            "recommend_enrollment": "yes",
+            "program_freeze_support": "no",
+        },
+    )
+    assert profile["track_code"] == "custom"
+    assert profile["track_label"] == "برنامج طاقة (موقوف)"
 
 
 def test_alumni_invite_submit(db_conn):
@@ -146,6 +208,7 @@ def test_alumni_invite_submit(db_conn):
             "engineering_qualification": "yes",
             "job_rejection": "no",
             "recommend_enrollment": "yes",
+            "program_freeze_support": "yes",
             "program_development_choice": "merge_dept",
         },
         answers_payload={"answers": answers},
@@ -200,7 +263,7 @@ def test_alumni_public_departments_exclude_general_and_other(db_conn):
                 "department_id": "other",
                 "employment_status": "not_working",
                 "recommend_enrollment": "no",
-                "program_development_choice": "merge_dept",
+                "program_freeze_support": "no",
             },
             answers_payload={"answers": {}},
         )
@@ -232,6 +295,7 @@ def test_alumni_invite_submit_http_csrf_enabled(app, db_conn):
         "department_id": dept_id,
         "employment_status": "postgrad",
         "recommend_enrollment": "yes",
+        "program_freeze_support": "yes",
         "program_development_choice": "merge_dept",
     }
     with app.test_client() as client:
@@ -245,3 +309,111 @@ def test_alumni_invite_submit_http_csrf_enabled(app, db_conn):
         )
         assert r.status_code == 200, r.get_json()
         assert (r.get_json() or {}).get("status") == "ok"
+
+
+def _alumni_base_profile(dept_id: int, **extra) -> dict:
+    profile = {
+        "graduation_year": 2020,
+        "department_id": dept_id,
+        "employment_status": "in_specialty",
+        "engineering_qualification": "yes",
+        "job_rejection": "no",
+        "recommend_enrollment": "yes",
+        "program_freeze_support": "no",
+    }
+    profile.update(extra)
+    return profile
+
+
+def test_alumni_duplicate_name_department_same_cycle_blocked(db_conn):
+    ensure_survey_invite_schema(db_conn)
+    ensure_survey_templates_seeded(db_conn)
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES ('DUPN', 'قسم تكرار اسم', 'DN', 1)"
+    )
+    dept_id = int(cur.lastrowid)
+    invite = create_survey_invite(
+        db_conn,
+        template_code="alumni",
+        cycle_label="دورة-تكرار-اسم",
+        invite_kind="campaign",
+        created_by="test",
+    )
+    db_conn.commit()
+    qs = list_template_questions(db_conn, int(get_template_by_code(db_conn, "alumni")["id"]))
+    answers = {str(q["id"]): 4 for q in qs}
+    submit_invite_survey(
+        db_conn,
+        token=invite["token"],
+        profile=_alumni_base_profile(dept_id, full_name="أحمد علي محمد"),
+        answers_payload={"answers": answers},
+    )
+    db_conn.commit()
+    with pytest.raises(ValueError, match="نفس الاسم والقسم"):
+        submit_invite_survey(
+            db_conn,
+            token=invite["token"],
+            profile=_alumni_base_profile(dept_id, full_name="  أحمد   علي محمد  "),
+            answers_payload={"answers": answers},
+        )
+
+
+def test_alumni_empty_name_not_blocked_by_name_filter(db_conn):
+    ensure_survey_invite_schema(db_conn)
+    ensure_survey_templates_seeded(db_conn)
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES ('EMPN', 'قسم بدون اسم', 'EN', 1)"
+    )
+    dept_id = int(cur.lastrowid)
+    invite = create_survey_invite(
+        db_conn,
+        template_code="alumni",
+        cycle_label="دورة-بدون-اسم",
+        invite_kind="campaign",
+        created_by="test",
+    )
+    db_conn.commit()
+    qs = list_template_questions(db_conn, int(get_template_by_code(db_conn, "alumni")["id"]))
+    answers = {str(q["id"]): 3 for q in qs}
+    rid1 = submit_invite_survey(
+        db_conn,
+        token=invite["token"],
+        profile=_alumni_base_profile(dept_id, full_name=""),
+        answers_payload={"answers": answers},
+    )
+    rid2 = submit_invite_survey(
+        db_conn,
+        token=invite["token"],
+        profile=_alumni_base_profile(dept_id, full_name=""),
+        answers_payload={"answers": answers},
+        comments="ثاني بدون اسم",
+    )
+    db_conn.commit()
+    assert rid1 > 0 and rid2 > 0 and rid1 != rid2
+
+
+def test_alumni_incomplete_answers_rejected(db_conn):
+    ensure_survey_invite_schema(db_conn)
+    ensure_survey_templates_seeded(db_conn)
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES ('INCQ', 'قسم إجابات ناقصة', 'IQ', 1)"
+    )
+    dept_id = int(cur.lastrowid)
+    invite = create_survey_invite(
+        db_conn,
+        template_code="alumni",
+        cycle_label="دورة-ناقص",
+        invite_kind="campaign",
+        created_by="test",
+    )
+    db_conn.commit()
+    with pytest.raises(ValueError, match="جميع البنود"):
+        submit_invite_survey(
+            db_conn,
+            token=invite["token"],
+            profile=_alumni_base_profile(dept_id),
+            answers_payload={"answers": {}},
+        )

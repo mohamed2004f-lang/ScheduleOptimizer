@@ -14,6 +14,8 @@
     {% if page_error %}
     <div class="alert alert-danger">{{ page_error }}</div>
     {% endif %}
+    {% set qa_crumb_title = page_title_ar | default('خريطة امتثال الاعتماد') %}
+    {% include 'partials/quality_breadcrumb.html' %}
     <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
       <div>
         <h1 class="page-title h4 mb-1" id="pageTitle">
@@ -34,21 +36,24 @@
       </div>
       <div class="d-flex flex-wrap gap-2">
         <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/dashboard">لوحة الجودة</a>
+        <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/archive">أرشيف القسم</a>
+        <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/surveys/results">نتائج الاستبيانات</a>
+        <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/glossary">دليل المصطلحات</a>
         <a class="btn btn-outline-success btn-sm" id="btnExportXlsx" href="#">Excel دفتر (هـ-5)</a>
         <a class="btn btn-outline-danger btn-sm" id="btnExportPdf" href="#" target="_blank">PDF دفتر</a>
         <button type="button" class="btn btn-success btn-sm" id="btnComputeAuto"
-          title="يملأ المؤشرات الرقمية الآلية من قاعدة البيانات (معدلات، أعداد…) — لا يربط استبيانات">
-          احسب من النظام (هـ-2)
+          title="يملأ درجات رقمية من قاعدة البيانات عند توفرها — لا يربط استبيانات ولا يعتمد الامتثال">
+          احسب من النظام (درجات)
         </button>
         <button type="button" class="btn btn-outline-primary btn-sm" id="btnRefreshMap">تحديث</button>
       </div>
     </div>
 
-    <ul class="nav nav-pills nav-fill mb-3 gap-1" id="catalogScopeTabs" role="tablist">
+            <ul class="nav nav-pills nav-fill mb-3 gap-1" id="catalogScopeTabs" role="tablist">
       {% for sc in map_scopes | default([]) %}
       <li class="nav-item" role="presentation">
         <button type="button"
-          class="nav-link {% if sc.key == active_scope_key %}active{% endif %}{% if sc.key == 'internal' and not is_admin_main %} d-none{% endif %}"
+          class="nav-link {% if sc.key == active_scope_key %}active{% endif %}"
           data-scope="{{ sc.key }}"
           data-catalog="{{ sc.catalog_version }}"
           role="tab">
@@ -59,16 +64,38 @@
       {% endfor %}
     </ul>
 
+    {% if active_scope_key == 'prog' and (programs_available | default([])) %}
+    <div class="card mb-3 border-0 bg-light">
+      <div class="card-body py-2">
+        <label class="form-label small mb-1" for="programScopeSelect"><strong>البرنامج الأكاديمي</strong></label>
+        <select class="form-select form-select-sm" id="programScopeSelect" style="max-width:28rem">
+          {% for p in programs_available %}
+          <option value="{{ p.program_id }}"
+            data-department-id="{{ p.department_id }}"
+            {% if org_scope and org_scope.program_id == p.program_id %}selected{% endif %}>
+            {{ p.label_ar }}{% if p.department_code %} ({{ p.department_code }}){% endif %}
+          </option>
+          {% endfor %}
+        </select>
+        <p class="text-muted small mb-0 mt-1">اليوم: برنامج واحد لكل قسم. لاحقاً يمكن إضافة مسارات كبرامج مستقلة.</p>
+      </div>
+    </div>
+    {% elif active_scope_key == 'inst' %}
+    <div class="alert alert-light border small py-2">
+      الاعتماد المؤسسي يُدار على مستوى <strong>الكلية</strong> (جميع الأقسام)، بمعايير المركز الرسمية.
+    </div>
+    {% endif %}
+
     <div class="card mb-3 border-0 bg-light">
       <div class="card-body py-2 small">
         <div class="row g-2">
           <div class="col-md-6">
             <strong><i class="fa-solid fa-calculator text-success"></i> «احسب من النظام»</strong>
-            <p class="text-muted mb-0">يملأ <em>المؤشرات الرقمية الآلية</em> من بيانات النظام (معدلات تخرج، أعداد طلاب، نسب…). لا يربط استبيانات ولا يرفع ملفات.</p>
+            <p class="text-muted mb-0">يملأ <em>درجات رقمية</em> من بيانات النظام عند توفرها (معدلات، أعداد…). لا يربط استبيانات ولا يرفع ملفات ولا يعتمد حالة الامتثال من الشواهد.</p>
           </div>
           <div class="col-md-6">
             <strong><i class="fa-solid fa-link text-primary"></i> زر «إدارة» في عمود الأدلة</strong>
-            <p class="text-muted mb-0">ربط <em>اختياري يدوي</em>: اختر استبياناً أو تقريراً أو ارفع ملفاً شاهداً للمؤشر — عند الحاجة فقط.</p>
+            <p class="text-muted mb-0">ربط <em>يدوي</em>: اختر استبياناً أو ملفاً من أرشيف القسم أو ارفع شاهداً للمؤشر — بعد مراجعة الجودة.</p>
           </div>
         </div>
       </div>
@@ -99,8 +126,10 @@
       (<a href="{{ qaa_url }}" target="_blank" rel="noopener">المركز الوطني للتعليم الجامعي</a>):
       معايير الاعتماد — الإصدار الرابع 2023.
       <span class="d-block mt-1 text-muted">
-        استخدم التبويبات أعلاه للتبديل بين <strong>الاعتماد المؤسسي</strong> و<strong>الاعتماد البرامجي</strong>.
-        الكتالوج الداخلي المختصر (15 مؤشر) للتجربة فقط.
+        التشغيل اليومي عبر التبويبين: <strong>اعتماد مؤسسي</strong> (للكلية)
+        و<strong>اعتماد برامجي</strong> (لكل برنامج/قسم).
+        ربط الشواهد يدوياً بعد الاقتراح — من الاستبيانات أو
+        <a href="/academic_quality/archive">أرشيف القسم</a>.
       </span>
     </div>
 
@@ -216,7 +245,7 @@
                   <td>
                     <div><span class="fw-semibold text-secondary">{{ ind.seq }}.</span> {{ ind.title_ar }}</div>
                     <code class="small text-muted">{{ ind.code }}</code>
-                    {% if ind.is_auto_computable %}<span class="badge bg-primary ms-1">آلي</span>{% endif %}
+                    {% if ind.is_auto_computable %}<span class="badge bg-primary ms-1">حساب من النظام</span>{% endif %}
                   </td>
                   <td>{{ ind.source_type_label }}</td>
                   {% if not is_qaa %}<td class="text-muted">{{ ind.target_hint_ar }}</td>{% endif %}
@@ -312,7 +341,7 @@
           <div class="card-body">
             <p class="small text-muted mb-2">
               كل صف = نوع دليل متوقّع لمؤشر في كتالوج <strong id="evMatrixCatalog">{{ map_data.catalog_version }}</strong>.
-              الربط: <span class="badge bg-primary">آلي</span>
+              النمط: <span class="badge bg-primary">حساب من النظام</span>
               <span class="badge bg-info text-dark">هجين</span>
               <span class="badge bg-secondary">شاهد</span>
               <span class="badge bg-dark">يدوي</span>
@@ -323,8 +352,8 @@
             <div class="row g-2 mb-2">
               <div class="col-md-4">
                 <select class="form-select form-select-sm" id="evMatrixFilterMode">
-                  <option value="">كل أنماط الربط</option>
-                  <option value="auto">آلي</option>
+                  <option value="">كل الأنماط</option>
+                  <option value="auto">حساب من النظام</option>
                   <option value="hybrid">هجين</option>
                   <option value="evidence">شاهد</option>
                   <option value="manual">يدوي</option>
@@ -782,6 +811,8 @@
       semester: {{ map_data.semester | tojson }},
       catalogVersion: {{ map_data.catalog_version | tojson }},
       activeScopeKey: {{ active_scope_key | default('inst') | tojson }},
+      programId: {{ (org_scope.program_id if org_scope else none) | tojson }},
+      departmentId: {{ (org_scope.department_id if org_scope else none) | tojson }},
       mapScopes: {{ (map_scopes | default([])) | tojson }},
       pageTitleAr: {{ page_title_ar | default('خريطة امتثال الاعتماد') | tojson }},
       catalogVersionLabels: {{ (catalog_version_labels | default({})) | tojson }},
@@ -799,6 +830,6 @@
       evidenceCategoryLabels: {{ evidence_category_labels | tojson }},
     };
   </script>
-  <script src="/static/js/accreditation_compliance_map.js?v=20260610b"></script>
+  <script src="/static/js/accreditation_compliance_map.js?v=20260714qaa"></script>
 </body>
 </html>

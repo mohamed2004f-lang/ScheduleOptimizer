@@ -15,6 +15,10 @@ from backend.core.survey_platform import (
 from backend.database.database import is_postgresql, table_exists
 from backend.services.evaluation_survey import likert_labels_ar
 from backend.services.quality_metrics import term_label_from_conn
+from backend.services.survey_eligibility import (
+    FACULTY_EXTERNAL_COLLABORATOR_TEMPLATE,
+    is_instructor_template_required,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -517,6 +521,8 @@ def _resolve_subject(
     ):
         dept = int(department_id or subject_id_arg or 0)
         return st, dept
+    if st == "external_teaching":
+        return st, int(subject_id_arg or 0)
     if st == "dean":
         return st, 0
     if st in ("student_services", "facilities", "workplace"):
@@ -603,15 +609,30 @@ def list_pending_for_respondent_role(
         if t.get("respondent_role") == resp_role and not int(t.get("legacy_course_eval") or 0)
     ]
     pending: list[dict] = []
+    instructor_id: int | None = None
+    if resp_role == "instructor":
+        try:
+            instructor_id = int(resp_id)
+        except (TypeError, ValueError):
+            instructor_id = None
     for t in templates:
         if int(t.get("department_scoped") or 0) and department_id is None and resp_role in (
             "instructor",
             "supervisor",
         ):
             continue
+        if instructor_id is not None and not is_instructor_template_required(
+            conn,
+            template_code=str(t.get("code") or ""),
+            instructor_id=instructor_id,
+            department_id=department_id,
+        ):
+            continue
         subj_type, subj_id = _resolve_subject(
             conn, t, department_id=department_id, subject_id_arg=department_id
         )
+        if (t.get("code") or "").strip() == FACULTY_EXTERNAL_COLLABORATOR_TEMPLATE and instructor_id:
+            subj_type, subj_id = "external_teaching", int(instructor_id)
         if has_submitted(
             conn,
             template_code=t["code"],

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }}</title>
+  {% include "survey_export_pdf_styles.html" %}
+  <style>
+    {% if for_pdf %}
+    {{ pdf_arabic_css_print|safe }}
+    {% else %}
+    {{ pdf_arabic_css|safe }}
+    {% endif %}
+    .cover-dept { font-size: 15px; font-weight: 700; color: #0d3b66; margin-bottom: 10px; }
+    .analysis-box { background: #f0f6fc; border-right: 4px solid #198754; padding: 10px 12px; margin: 12px 0 16px; }
+    {% if not for_pdf %}
+    body { max-width: 980px; margin: 0 auto; padding: 20px 24px 40px; background: #fff; }
+    @media print { body { padding: 0; max-width: none; } }
+    {% endif %}
+  </style>
+</head>
+<body>
+  {% if not for_pdf %}
+  {% set preview_banner_title = 'معاينة حزمة تقارير المقررات' %}
+  {% set pdf_download_url = pdf_url %}
+  {% set preview_hide_names_toggle = true %}
+  {% include "survey_export_preview_controls.html" %}
+  {% endif %}
+
+  <div class="cover-dept">{{ college_name_ar or 'كلية الهندسة' }}</div>
+  <h1>{{ title }}</h1>
+  <p class="meta">الفصل: <strong>{{ semester }}</strong> — {% if college_wide %}نطاق الكلية{% else %}نطاق القسم{% endif %} — {{ export_date }}</p>
+
+  <h2>ملخص تنفيذي</h2>
+  <table>
+    <tbody>
+      <tr><th style="width:40%">مجموعات التدريس</th><td>{{ summary.groups_total }}</td></tr>
+      <tr><th>بتقارير مُرسلة</th><td>{{ summary.submitted }}</td></tr>
+      <tr><th>غير مُرسلة</th><td>{{ summary.unsubmitted }}</td></tr>
+      <tr><th>نسبة منخفضة (&lt; {{ incomplete_threshold|int }}%)</th><td>{{ summary.low_completion }}</td></tr>
+      <tr><th>نقص كتب (&lt; {{ min_book_references }})</th><td>{{ summary.missing_books }}</td></tr>
+    </tbody>
+  </table>
+
+  {% if by_department and by_department|length > 1 %}
+  <h2>حسب القسم</h2>
+  <table>
+    <thead><tr><th>القسم</th><th>مجموعات</th><th>متوسط النسبة</th><th>منخفضة</th><th>نقص كتب</th></tr></thead>
+    <tbody>
+      {% for d in by_department %}
+      <tr>
+        <td>{% if d.department_id is not none %}#{{ d.department_id }}{% else %}—{% endif %}</td>
+        <td>{{ d.groups }}</td>
+        <td>{% if d.avg_overall_pct is not none %}{{ d.avg_overall_pct }}%{% else %}—{% endif %}</td>
+        <td>{{ d.low_completion }}</td>
+        <td>{{ d.missing_books }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <h2>قائمة المقررات</h2>
+  <table>
+    <thead><tr><th>المقرر</th><th>الأستاذ</th><th>نسبة</th><th>فجوات</th><th>كتب</th><th>جزئي</th><th>نهائي</th></tr></thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>{{ row.course_name }}</td>
+        <td>{{ row.instructor_name }}</td>
+        <td>{% if row.overall_pct is not none %}{{ row.overall_pct }}%{% else %}—{% endif %}</td>
+        <td>{{ row.incomplete_count }}</td>
+        <td>{{ row.book_reference_count }}/{{ min_book_references }}</td>
+        <td>{{ row.partial_status_ar }}</td>
+        <td>{{ row.final_status_ar }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7">لا بيانات</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% for view in details %}
+  <div class="page-break section-block">
+    <h2>{{ view.course_name }} — {{ view.instructor_name }}</h2>
+    <p class="meta">مجموعة #{{ view.teaching_group_id }}</p>
+    {% if view.analysis_bits %}
+    <div class="analysis-box">
+      <ul>{% for b in view.analysis_bits %}<li>{{ b }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+    {% set rep = view.primary %}
+    {% set rep_items = rep['items'] if rep else [] %}
+    {% if rep_items %}
+    <table>
+      <thead><tr><th>المفرد</th><th>٪</th></tr></thead>
+      <tbody>
+        {% for it in rep_items %}
+        <tr><td>{{ it.topic_title }}</td><td>{% if it.completion_pct is not none %}{{ it.completion_pct }}{% else %}—{% endif %}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">لا تقرير تفصيلي بعد.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <div class="footer-note">
+    شاهد مقترح: <code>{{ evidence_type_code }}</code> — {{ evidence_hint_ar }}
+  </div>
+</body>
+</html>

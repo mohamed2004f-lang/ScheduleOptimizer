@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>تقرير تنفيذ المقرر</title>
+  <title>تقرير مقرر دراسي</title>
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
@@ -12,8 +12,8 @@
   <main class="container-main container-1100 theme-formal">
     <div class="page-header">
       <div>
-        <h1 class="page-title">📋 تقرير تنفيذ المقرر</h1>
-        <p class="page-subtitle" id="pageSub">قائمة مفردات المقرر + تقارير الإنجاز (جزئي / نهائي)</p>
+        <h1 class="page-title">تقرير مقرر دراسي (جودة)</h1>
+        <p class="page-subtitle" id="pageSub">مفردات معتمدة + نسب إنجاز + مراجع + تقويم</p>
       </div>
       <a href="/my_courses" class="btn btn-outline-secondary btn-sm">← مقرراتي</a>
     </div>
@@ -21,10 +21,15 @@
     <div id="loadMsg" class="text-muted small">جاري التحميل…</div>
 
     <div id="mainPanel" class="d-none">
+      <div class="alert alert-light border small mb-3">
+        المفردات تُخزَّن على مستوى <strong>المقرر</strong> بعد اعتماد رئيس القسم وتُعاد لأي أستاذ لاحق.
+        فتح إدخال الدرجات قرار منفصل لرئيس القسم — لا يعتمد على نسبة الإنجاز.
+      </div>
+
       <div class="card mb-3">
-        <div class="card-header fw-semibold">1 — قائمة مفردات المقرر (مرة أولى / تعديل)</div>
+        <div class="card-header fw-semibold">1 — قائمة مفردات المقرر (مخزون معتمد)</div>
         <div class="card-body">
-          <p class="small text-muted">حدّد مفردات المقرر الرسمية ثم أرسلها لاعتماد رئيس القسم. بعد الاعتماد يمكنك تعبئة تقرير نسب الإنجاز.</p>
+          <p class="small text-muted mb-1">إن وُجدت قائمة معتمدة تظهر هنا جاهزة. لاقتراح تعديل أرسل نسخة جديدة لرئيس القسم.</p>
           <p id="baselineStatus" class="small fw-semibold"></p>
           <div id="topicsEditor"></div>
           <div class="d-flex gap-2 flex-wrap mt-2">
@@ -36,31 +41,66 @@
       </div>
 
       <ul class="nav nav-tabs mb-2" id="phaseTabs">
-        <li class="nav-item"><button class="nav-link active" data-phase="partial" type="button">تقرير الجزئي (مبسّط)</button></li>
-        <li class="nav-item"><button class="nav-link" data-phase="final" type="button">تقرير النهائي (مطوّل)</button></li>
+        <li class="nav-item"><button class="nav-link active" data-phase="partial" type="button">تقرير الجزئي</button></li>
+        <li class="nav-item"><button class="nav-link" data-phase="final" type="button">تقرير النهائي (كامل)</button></li>
       </ul>
 
       <div class="card mb-3">
         <div class="card-header fw-semibold">2 — نسب إنجاز المفردات</div>
         <div class="card-body">
-          <p class="small">النسبة الكلية = <strong>متوسط</strong> نسب المفردات الرسمية.</p>
+          <p class="small">النسبة الكلية = متوسط نسب المفردات. أي مفردة أقل من <strong>50%</strong> تُعدّ غير منجزة وتحتاج سبباً.</p>
           <p id="overallLine" class="fw-semibold"></p>
           <div id="reportEditor"></div>
-          <div id="extraTopicsWrap" class="d-none mt-3">
-            <h6 class="fw-semibold">مفردات خارج المقرر أُعطيت للطلاب</h6>
-            <div id="extraTopicsEditor"></div>
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="btnAddExtra">+ إضافة</button>
-          </div>
-          <div class="mt-3 d-none" id="belowReasonWrap">
-            <label class="form-label small">تبرير (إلزامي إذا النسبة دون الحد)</label>
-            <textarea id="belowReason" class="form-control form-control-sm" rows="2"></textarea>
-          </div>
-          <div class="d-flex gap-2 flex-wrap mt-3">
-            <button type="button" class="btn btn-sm btn-primary" id="btnSaveReport">حفظ التقرير</button>
-            <button type="button" class="btn btn-sm btn-success" id="btnSubmitReport">إرسال التقرير</button>
-            <a id="gradeDraftLink" class="btn btn-sm btn-outline-primary d-none" href="/grade_drafts">→ مسودات الدرجات</a>
+          <div id="incompleteWrap" class="mt-3 d-none">
+            <h6 class="fw-semibold text-danger">ما لم يُنجز (&lt; 50%)</h6>
+            <ul id="incompleteList" class="small mb-0"></ul>
           </div>
         </div>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-header fw-semibold">3 — مفردات من خارج المقرر</div>
+        <div class="card-body">
+          <p class="small text-muted">أضف ما دُرّس خارج القائمة الرسمية مع بيان لماذا هو مهم.</p>
+          <div id="extraTopicsEditor"></div>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="btnAddExtra">+ إضافة</button>
+        </div>
+      </div>
+
+      <div class="card mb-3" id="qualityExtraCard">
+        <div class="card-header fw-semibold">4 — المراجع وطرق التقييم والملاحظات والتوصيات</div>
+        <div class="card-body">
+          <p class="small" id="booksHint">يُفضَّل كتابان رسميّان على الأقل (إلزامي عند إرسال التقرير النهائي) — لكل كتاب: عنوان + تاريخ إصدار.</p>
+          <h6 class="fw-semibold small">المراجع</h6>
+          <div id="refsEditor"></div>
+          <button type="button" class="btn btn-sm btn-outline-secondary mb-3" id="btnAddRef">+ مرجع</button>
+          <h6 class="fw-semibold small">طرق التقييم المختارة</h6>
+          <div id="methodsEditor"></div>
+          <button type="button" class="btn btn-sm btn-outline-secondary mb-3" id="btnAddMethod">+ طريقة</button>
+          <label class="form-label small">ملاحظات الأستاذ</label>
+          <textarea id="instructorComments" class="form-control form-control-sm mb-2" rows="2" placeholder="ملاحظات عامة حول التنفيذ أو الظروف"></textarea>
+          <label class="form-label small">توصيات التحسين</label>
+          <textarea id="instructorRecommendations" class="form-control form-control-sm" rows="2" placeholder="توصيات للفصل القادم / لجنة البرنامج / الاعتماد"></textarea>
+        </div>
+      </div>
+
+      <div class="mt-2 d-none" id="belowReasonWrap">
+        <label class="form-label small">تبرير انخفاض النسبة عن حد المتابعة (لعلم رئيس القسم)</label>
+        <textarea id="belowReason" class="form-control form-control-sm" rows="2"></textarea>
+      </div>
+      <div class="d-flex gap-2 flex-wrap mt-3 mb-4">
+        <button type="button" class="btn btn-sm btn-primary" id="btnSaveReport">حفظ التقرير</button>
+        <button type="button" class="btn btn-sm btn-success" id="btnSubmitReport">إرسال التقرير</button>
+        <a id="previewReportLink" class="btn btn-sm btn-info text-white" href="#" target="_blank"
+           title="معاينة في المتصفح — للطباعة أو حفظ PDF بجودة عربية أفضل">
+          <i class="fa-solid fa-display"></i> معاينة / طباعة
+        </a>
+        <a id="pdfReportLink" class="btn btn-sm btn-outline-danger d-none" href="#"
+           title="PDF — للطباعة والأرشفة">
+          <i class="fa-solid fa-file-pdf"></i> PDF
+        </a>
+        <a id="gradeDraftLink" class="btn btn-sm btn-outline-primary d-none" href="/grade_drafts">→ مسودات الدرجات</a>
+        <span id="lockHint" class="small text-muted align-self-center"></span>
       </div>
     </div>
   </main>
@@ -68,7 +108,8 @@
     const params = new URLSearchParams(window.location.search);
     const tgid = Number(params.get('teaching_group_id') || '0');
     const courseParam = (params.get('course_name') || '').trim();
-    let state = { courseName: courseParam, tgid, baseline: null, phase: 'partial', report: null, policy: {} };
+    const phaseParam = (params.get('phase') || '').trim();
+    let state = { courseName: courseParam, tgid, baseline: null, phase: phaseParam === 'final' ? 'final' : 'partial', report: null, policy: {} };
 
     function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
 
@@ -82,7 +123,7 @@
 
     function baselineStatusAr(st) {
       const m = {
-        approved: 'معتمدة من رئيس القسم',
+        approved: 'معتمدة من رئيس القسم (مخزون المقرر)',
         pending_hod: 'بانتظار اعتماد رئيس القسم',
         draft: 'مسودة — لم تُرسل بعد',
         superseded: 'نسخة قديمة',
@@ -98,12 +139,9 @@
       document.getElementById('baselineStatus').textContent = 'حالة قائمة المفردات: ' + baselineStatusAr(st) +
         (state.baseline ? (' — إصدار ' + (state.baseline.version || 1)) : '');
       const locked = st === 'approved' || st === 'pending_hod';
-      const btnAdd = document.getElementById('btnAddTopic');
-      const btnSave = document.getElementById('btnSaveBaseline');
-      const btnSubmit = document.getElementById('btnSubmitBaseline');
-      if (btnAdd) btnAdd.classList.toggle('d-none', locked);
-      if (btnSave) btnSave.classList.toggle('d-none', locked);
-      if (btnSubmit) btnSubmit.classList.toggle('d-none', locked);
+      document.getElementById('btnAddTopic').classList.toggle('d-none', locked);
+      document.getElementById('btnSaveBaseline').classList.toggle('d-none', locked);
+      document.getElementById('btnSubmitBaseline').classList.toggle('d-none', locked);
       el.innerHTML = topics.map((t, i) =>
         '<div class="input-group input-group-sm mb-1 topic-row">' +
         '<span class="input-group-text">' + (i + 1) + '</span>' +
@@ -130,6 +168,22 @@
       renderTopicsEditor();
     }
 
+    function updateIncompleteHint() {
+      const items = collectReportItems();
+      const low = items.filter(x => x.completion_pct != null && x.completion_pct < 50);
+      const wrap = document.getElementById('incompleteWrap');
+      const list = document.getElementById('incompleteList');
+      if (!low.length) { wrap.classList.add('d-none'); return; }
+      wrap.classList.remove('d-none');
+      const bl = state.baseline;
+      const titles = {};
+      (bl && bl.topics || []).forEach(t => { titles[t.id] = t.topic_title; });
+      list.innerHTML = low.map(it =>
+        '<li>' + esc(titles[it.topic_id] || ('#' + it.topic_id)) + ' — ' + it.completion_pct + '%' +
+        (it.incomplete_reason ? (' — ' + esc(it.incomplete_reason)) : ' <span class="text-danger">(سبب مطلوب)</span>') + '</li>'
+      ).join('');
+    }
+
     function renderReportEditor() {
       const el = document.getElementById('reportEditor');
       const bl = state.baseline;
@@ -138,25 +192,30 @@
         return;
       }
       if (bl.status !== 'approved') {
-        el.innerHTML = '<p class="text-warning small">قائمة المفردات لم تعتمد بعد — أكمل الخطوة 1 وأرسلها لرئيس القسم.</p>';
+        el.innerHTML = '<p class="text-warning small">قائمة المفردات لم تعتمد بعد — أكمل الخطوة 1.</p>';
         return;
       }
       const items = (state.report && state.report.items) || [];
       const map = {};
       items.forEach(it => { map[it.topic_id] = it; });
-      el.innerHTML = '<table class="table table-sm"><thead><tr><th>المفرد</th><th>نسبة الإنجاز %</th><th id="reasonCol" class="d-none">سبب عدم الإنجاز</th></tr></thead><tbody>' +
+      el.innerHTML = '<table class="table table-sm"><thead><tr><th>المفرد</th><th>نسبة %</th><th>سبب إن &lt; 50%</th></tr></thead><tbody>' +
         bl.topics.map(t => {
           const it = map[t.id] || {};
           const pct = it.completion_pct != null ? it.completion_pct : '';
           const reason = it.incomplete_reason || '';
           return '<tr data-topic-id="' + t.id + '"><td>' + esc(t.topic_title) + '</td>' +
-            '<td><input type="number" min="0" max="100" step="1" class="form-control form-control-sm inp-pct" value="' + pct + '"></td>' +
-            '<td class="reason-cell d-none"><input class="form-control form-control-sm inp-reason" value="' + esc(reason) + '"></td></tr>';
+            '<td style="max-width:6rem"><input type="number" min="0" max="100" step="1" class="form-control form-control-sm inp-pct" value="' + pct + '"></td>' +
+            '<td><input class="form-control form-control-sm inp-reason" placeholder="إلزامي إن النسبة &lt; 50" value="' + esc(reason) + '"></td></tr>';
         }).join('') + '</tbody></table>';
-      const isFinal = state.phase === 'final';
-      document.getElementById('extraTopicsWrap').classList.toggle('d-none', !isFinal);
-      document.querySelectorAll('#reasonCol, .reason-cell').forEach(c => c.classList.toggle('d-none', !isFinal));
       updateOverall();
+      renderExtras();
+      renderRefs();
+      renderMethods();
+      document.getElementById('instructorComments').value = (state.report && state.report.instructor_comments) || '';
+      document.getElementById('instructorRecommendations').value = (state.report && state.report.instructor_recommendations) || '';
+      document.getElementById('booksHint').textContent = state.phase === 'final'
+        ? 'التقرير النهائي: كتابان رسميان على الأقل مطلوبان للإرسال (نوع + عنوان + تاريخ إصدار).'
+        : 'يمكن حفظ المراجع الآن؛ الإلزام (كتابان) عند إرسال التقرير النهائي.';
     }
 
     function collectReportItems() {
@@ -167,13 +226,84 @@
       }));
     }
 
+    function renderExtras() {
+      const el = document.getElementById('extraTopicsEditor');
+      const rows = (state.report && state.report.extra_topics) || [];
+      const data = rows.length ? rows : [{ title: '', reason: '' }];
+      el.innerHTML = data.map(ex =>
+        '<div class="row g-1 mb-1 extra-row">' +
+        '<div class="col-md-4"><input class="form-control form-control-sm extra-title" placeholder="عنوان المفردة" value="' + esc(ex.title || '') + '"></div>' +
+        '<div class="col-md-7"><input class="form-control form-control-sm extra-reason" placeholder="لماذا مهمة؟" value="' + esc(ex.reason || '') + '"></div>' +
+        '<div class="col-md-1"><button type="button" class="btn btn-sm btn-outline-danger btn-del-extra">×</button></div></div>'
+      ).join('');
+      el.querySelectorAll('.btn-del-extra').forEach(btn => { btn.onclick = () => btn.closest('.extra-row').remove(); });
+    }
+
+    function renderRefs() {
+      const el = document.getElementById('refsEditor');
+      const rows = (state.report && state.report.references) || [];
+      const data = rows.length ? rows : [{ ref_type: 'book', title: '', publication_date: '', url_or_isbn: '' }];
+      el.innerHTML = data.map(ref =>
+        '<div class="row g-1 mb-1 ref-row">' +
+        '<div class="col-md-2"><select class="form-select form-select-sm ref-type">' +
+        ['book','paper','website','video','other'].map(t =>
+          '<option value="' + t + '"' + ((ref.ref_type||'book')===t?' selected':'') + '>' +
+          ({book:'كتاب',paper:'ورقة',website:'موقع',video:'فيديو',other:'أخرى'}[t]) + '</option>'
+        ).join('') + '</select></div>' +
+        '<div class="col-md-4"><input class="form-control form-control-sm ref-title" placeholder="العنوان" value="' + esc(ref.title||'') + '"></div>' +
+        '<div class="col-md-2"><input class="form-control form-control-sm ref-date" placeholder="تاريخ الإصدار" value="' + esc(ref.publication_date||'') + '"></div>' +
+        '<div class="col-md-3"><input class="form-control form-control-sm ref-isbn" placeholder="رابط / ISBN" value="' + esc(ref.url_or_isbn||'') + '"></div>' +
+        '<div class="col-md-1"><button type="button" class="btn btn-sm btn-outline-danger btn-del-ref">×</button></div></div>'
+      ).join('');
+      el.querySelectorAll('.btn-del-ref').forEach(btn => { btn.onclick = () => btn.closest('.ref-row').remove(); });
+    }
+
+    function renderMethods() {
+      const el = document.getElementById('methodsEditor');
+      const rows = (state.report && state.report.assessment_methods) || [];
+      const data = rows.length ? rows : [{ method_label: '', weight_pct: '', notes: '' }];
+      el.innerHTML = data.map(m =>
+        '<div class="row g-1 mb-1 method-row">' +
+        '<div class="col-md-5"><input class="form-control form-control-sm method-label" placeholder="طريقة التقييم" value="' + esc(m.method_label||'') + '"></div>' +
+        '<div class="col-md-2"><input type="number" class="form-control form-control-sm method-weight" placeholder="وزن %" value="' + (m.weight_pct != null ? m.weight_pct : '') + '"></div>' +
+        '<div class="col-md-4"><input class="form-control form-control-sm method-notes" placeholder="ملاحظات" value="' + esc(m.notes||'') + '"></div>' +
+        '<div class="col-md-1"><button type="button" class="btn btn-sm btn-outline-danger btn-del-method">×</button></div></div>'
+      ).join('');
+      el.querySelectorAll('.btn-del-method').forEach(btn => { btn.onclick = () => btn.closest('.method-row').remove(); });
+    }
+
+    function collectExtras() {
+      return Array.from(document.querySelectorAll('.extra-row')).map(row => ({
+        title: row.querySelector('.extra-title')?.value || '',
+        reason: row.querySelector('.extra-reason')?.value || ''
+      })).filter(x => x.title.trim());
+    }
+    function collectRefs() {
+      return Array.from(document.querySelectorAll('.ref-row')).map((row, i) => ({
+        sort_order: i,
+        ref_type: row.querySelector('.ref-type')?.value || 'book',
+        title: row.querySelector('.ref-title')?.value || '',
+        publication_date: row.querySelector('.ref-date')?.value || '',
+        url_or_isbn: row.querySelector('.ref-isbn')?.value || ''
+      })).filter(x => x.title.trim());
+    }
+    function collectMethods() {
+      return Array.from(document.querySelectorAll('.method-row')).map((row, i) => ({
+        sort_order: i,
+        method_label: row.querySelector('.method-label')?.value || '',
+        weight_pct: row.querySelector('.method-weight')?.value === '' ? null : Number(row.querySelector('.method-weight').value),
+        notes: row.querySelector('.method-notes')?.value || ''
+      })).filter(x => x.method_label.trim());
+    }
+
     function updateOverall() {
       const items = collectReportItems();
       const pcts = items.map(x => x.completion_pct).filter(x => x != null && !isNaN(x));
       const ov = pcts.length ? Math.round(pcts.reduce((a,b)=>a+b,0) / pcts.length * 10) / 10 : 0;
       const min = state.phase === 'partial' ? (state.policy.partial_min_pct || 50) : (state.policy.final_min_pct || 80);
-      document.getElementById('overallLine').textContent = 'النسبة الكلية: ' + ov + '% — الحد الأدنى: ' + min + '%';
+      document.getElementById('overallLine').textContent = 'النسبة الكلية: ' + ov + '% — حد المتابعة: ' + min + '% (لا يفتح الدرجات)';
       document.getElementById('belowReasonWrap').classList.toggle('d-none', ov >= min);
+      updateIncompleteHint();
     }
 
     async function loadReport() {
@@ -182,14 +312,20 @@
       const j = await r.json().catch(() => ({}));
       state.report = j.report;
       if (j.baseline && j.baseline.status === 'approved') state.baseline = j.baseline;
-      state.policy = { partial_min_pct: j.partial_min_pct, final_min_pct: j.final_min_pct };
+      if (j.partial_min_pct != null) state.policy.partial_min_pct = j.partial_min_pct;
+      if (j.final_min_pct != null) state.policy.final_min_pct = j.final_min_pct;
       renderReportEditor();
       const gs = await fetch('/course_delivery/gate_status?teaching_group_id=' + tgid + '&phase=' + state.phase, { credentials: 'include' });
       const gj = await gs.json().catch(() => ({}));
+      const lk = document.getElementById('gradeDraftLink');
+      const hint = document.getElementById('lockHint');
       if (gj.unlocked) {
-        const lk = document.getElementById('gradeDraftLink');
         lk.classList.remove('d-none');
         lk.href = '/grade_drafts?teaching_group_id=' + tgid + '&course_name=' + encodeURIComponent(state.courseName) + '&action=create&draft_phase=' + state.phase;
+        hint.textContent = 'إدخال الدرجات مفتوح لهذا المقرر.';
+      } else {
+        lk.classList.add('d-none');
+        hint.textContent = gj.reason || 'إدخال الدرجات مغلق — بانتظار رئيس القسم.';
       }
     }
 
@@ -200,6 +336,21 @@
       div.innerHTML = '<span class="input-group-text">+</span><input class="form-control topic-title"><button type="button" class="btn btn-outline-danger btn-del-topic">×</button>';
       div.querySelector('.btn-del-topic').onclick = () => div.remove();
       el.appendChild(div);
+    };
+    document.getElementById('btnAddExtra').onclick = () => {
+      state.report = state.report || {};
+      state.report.extra_topics = collectExtras().concat([{ title: '', reason: '' }]);
+      renderExtras();
+    };
+    document.getElementById('btnAddRef').onclick = () => {
+      state.report = state.report || {};
+      state.report.references = collectRefs().concat([{ ref_type: 'book', title: '', publication_date: '', url_or_isbn: '' }]);
+      renderRefs();
+    };
+    document.getElementById('btnAddMethod').onclick = () => {
+      state.report = state.report || {};
+      state.report.assessment_methods = collectMethods().concat([{ method_label: '', weight_pct: '', notes: '' }]);
+      renderMethods();
     };
 
     document.getElementById('btnSaveBaseline').onclick = async () => {
@@ -214,7 +365,6 @@
         const j = await r.json().catch(() => ({}));
         if (!r.ok) { alert(j.message || 'فشل'); return; }
         state.baseline = j.baseline;
-        bid = j.baseline.id;
       } else {
         const r = await fetch('/course_delivery/baseline/' + bid + '/topics', {
           method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' },
@@ -238,14 +388,16 @@
     };
 
     document.getElementById('btnSaveReport').onclick = async () => {
-      const items = collectReportItems();
-      const body = { teaching_group_id: tgid, phase: state.phase, items };
-      if (state.phase === 'final') {
-        body.extra_topics = Array.from(document.querySelectorAll('.extra-row')).map(row => ({
-          title: row.querySelector('.extra-title')?.value || '',
-          reason: row.querySelector('.extra-reason')?.value || ''
-        })).filter(x => x.title.trim());
-      }
+      const body = {
+        teaching_group_id: tgid,
+        phase: state.phase,
+        items: collectReportItems(),
+        extra_topics: collectExtras(),
+        references: collectRefs(),
+        assessment_methods: collectMethods(),
+        instructor_comments: document.getElementById('instructorComments').value || '',
+        instructor_recommendations: document.getElementById('instructorRecommendations').value || ''
+      };
       const r = await fetch('/course_delivery/report', {
         method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
@@ -258,7 +410,8 @@
     };
 
     document.getElementById('btnSubmitReport').onclick = async () => {
-      if (!state.report || !state.report.id) { alert('احفظ التقرير أولاً'); return; }
+      await document.getElementById('btnSaveReport').onclick();
+      if (!state.report || !state.report.id) return;
       const body = { below_threshold_reason: document.getElementById('belowReason').value || '' };
       const r = await fetch('/course_delivery/report/' + state.report.id + '/submit', {
         method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
@@ -267,7 +420,9 @@
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { alert(j.message || 'فشل'); return; }
       await loadReport();
-      alert(j.report_status === 'gate_pending' ? 'بانتظار موافقة رئيس القسم' : 'تمت الموافقة التلقائية — يمكن فتح مسودة الدرجات');
+      alert(j.report_status === 'gate_pending'
+        ? 'أُرسل للمتابعة — بانتظار اطلاع رئيس القسم (لا يفتح الدرجات تلقائياً)'
+        : 'تم إرسال التقرير لمتابعة الجودة');
     };
 
     document.querySelectorAll('#phaseTabs .nav-link').forEach(tab => {
@@ -278,6 +433,11 @@
         loadReport();
       };
     });
+    if (state.phase === 'final') {
+      document.querySelectorAll('#phaseTabs .nav-link').forEach(t => {
+        t.classList.toggle('active', t.getAttribute('data-phase') === 'final');
+      });
+    }
 
     document.getElementById('reportEditor').addEventListener('input', updateOverall);
 
@@ -292,6 +452,16 @@
         return;
       }
       document.getElementById('pageSub').textContent = state.courseName + (tgid ? (' — مجموعة #' + tgid) : '');
+      const prev = document.getElementById('previewReportLink');
+      const pdfL = document.getElementById('pdfReportLink');
+      if (prev && tgid) {
+        prev.href = '/academic_quality/course_reports/' + tgid;
+        prev.classList.remove('d-none');
+      }
+      if (pdfL && tgid) {
+        pdfL.href = '/academic_quality/course_reports/' + tgid + '.pdf';
+        pdfL.classList.remove('d-none');
+      }
       document.getElementById('loadMsg').classList.add('d-none');
       document.getElementById('mainPanel').classList.remove('d-none');
       await loadBaseline();

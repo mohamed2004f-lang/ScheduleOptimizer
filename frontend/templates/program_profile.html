@@ -30,6 +30,11 @@
         {% if can_edit_goals %}
         <a href="/academic_quality/ilo/catalog" class="btn btn-outline-warning btn-sm">كتالوج المخرجات</a>
         {% endif %}
+        {% if not is_student %}
+        <a href="/academic_quality/accreditation/map?scope=prog" class="btn btn-outline-primary btn-sm">لشواهد الاعتماد</a>
+        <a href="/academic_quality/archive" class="btn btn-outline-secondary btn-sm">أرشيف القسم</a>
+        <a href="/academic_quality/glossary" class="btn btn-outline-info btn-sm">المصطلحات</a>
+        {% endif %}
         <button type="button" class="btn btn-primary btn-sm d-none" id="btnEditProg">تعديل نصوص البرنامج</button>
         {% if not is_student %}
         <a href="/student/learning-outcomes" class="btn btn-outline-info btn-sm d-none" id="linkStudentLo">مخرجاتي</a>

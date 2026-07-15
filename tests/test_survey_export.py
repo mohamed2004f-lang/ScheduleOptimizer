@@ -22,10 +22,12 @@ from backend.services.survey_analytics import (
     build_course_eval_missing_sections_audit,
     _course_teaching_group_count,
     build_course_eval_section_report,
+    build_course_eval_sections_analysis,
     build_course_eval_sections_summary,
     build_survey_report,
     course_eval_missing_audit_excel_frames,
     classify_item_score,
+    classify_section_score,
     course_eval_is_aggregated,
     course_eval_min_required,
     generate_executive_narrative_ar,
@@ -35,6 +37,8 @@ from backend.services.survey_analytics import (
     package_excel_frames,
     prepare_combined_pdf_context,
     prepare_single_survey_pdf_context,
+    prepare_course_eval_section_pdf_context,
+    prepare_course_eval_by_course_pdf_context,
     set_course_eval_response_rate_percent,
     single_survey_excel_frames,
 )
@@ -201,6 +205,16 @@ def test_course_eval_per_section_export(db_conn):
     assert by_course["response_count"] == 8
     assert by_course["aggregated"] is True
 
+    ctx_sec = prepare_course_eval_section_pdf_context(db_conn, sec_a, semester=sem)
+    assert ctx_sec and ctx_sec.get("report")
+    assert int(ctx_sec["report"]["section_id"]) == sec_a
+    assert any(r.get("البند") == "الشعبة" for r in ctx_sec["metadata_rows"])
+    ctx_by = prepare_course_eval_by_course_pdf_context(
+        db_conn, "مقرر تصدير اختبار", 1, semester=sem
+    )
+    assert ctx_by and ctx_by.get("report")
+    assert int(ctx_by["report"].get("section_count") or 0) == 2
+
     groups = list_course_eval_course_instructor_groups(db_conn, semester=sem)
     multi = [g for g in groups if int(g.get("section_count") or 0) > 1]
     assert multi
@@ -252,6 +266,65 @@ def test_course_eval_per_section_export(db_conn):
     assert "مقرر_وأستاذ" in sheet_names
 
 
+def test_course_eval_section_preview_http(app, db_conn):
+    """مسار معاينة HTML لشعبة واحدة وتجميع مقرر+أستاذ."""
+    sem = term_label_from_conn(db_conn)
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT INTO schedule (course_name, day, time, room, instructor_id, semester) VALUES (?,?,?,?,?,?)",
+        ("مقرر معاينة شعبة", "الأحد", "08:00", "201", 1, sem),
+    )
+    db_conn.commit()
+    cur.execute("UPDATE schedule SET id = rowid WHERE id IS NULL")
+    db_conn.commit()
+    sec_id = int(cur.execute("SELECT id FROM schedule ORDER BY rowid DESC LIMIT 1").fetchone()[0])
+    for i in range(4):
+        cur.execute(
+            "INSERT OR IGNORE INTO registrations (student_id, course_name) VALUES (?, ?)",
+            (f"prev-stu-{i}", "مقرر معاينة شعبة"),
+        )
+    db_conn.commit()
+    _seed_course_eval_for_section(
+        db_conn,
+        section_id=sec_id,
+        course_name="مقرر معاينة شعبة",
+        instructor_id=1,
+        sem=sem,
+        n=4,
+    )
+    with app.test_client() as c:
+        lg = c.post("/auth/login", json={"username": "admin-test", "password": "TestP@ssw0rd!"})
+        assert lg.status_code == 200
+        r = c.get(f"/academic_quality/surveys/export/course_eval/section/{sec_id}?semester={sem}")
+        assert r.status_code == 200, r.get_data(as_text=True)
+        body = r.get_data(as_text=True) or ""
+        assert "مقرر معاينة شعبة" in body
+        assert "معاينة" in body or "تقرير" in body
+        r2 = c.get(
+            "/academic_quality/surveys/export/course_eval/by-course"
+            f"?semester={sem}&course_name=مقرر معاينة شعبة&instructor_id=1"
+        )
+        assert r2.status_code == 200, r2.get_data(as_text=True)
+
+
+
+def test_course_eval_sections_analysis(db_conn):
+    sem = term_label_from_conn(db_conn)
+    sections = build_course_eval_sections_summary(db_conn, semester=sem)
+    stats = {"section_count": len(sections), "aggregated_count": 0, "pending_count": len(sections), "avg_score_percent": None}
+    analysis = build_course_eval_sections_analysis(
+        sections=sections,
+        stats=stats,
+        missing_audit={"rows": []},
+        department_label="قسم اختبار",
+        semester=sem,
+        course_eval_policy_ar="50% من المسجّلين",
+    )
+    assert analysis["narrative_paragraphs"]
+    assert analysis["conclusions"]
+    assert analysis["recommendations"]
+
+
 def test_pdf_context_builders(db_conn):
     ensure_survey_templates_seeded(db_conn)
     sem = term_label_from_conn(db_conn)
@@ -271,6 +344,18 @@ def test_pdf_context_builders(db_conn):
 def test_interpret_overall_score_ar():
     assert "خصوصية" in interpret_overall_score_ar(None, False)
     assert "ممتاز" in interpret_overall_score_ar(85, True)
+
+
+def test_classify_section_score():
+    assert classify_section_score(92) == "excellent"
+    assert classify_section_score(90) == "excellent"
+    assert classify_section_score(80) == "very_good"
+    assert classify_section_score(75) == "very_good"
+    assert classify_section_score(74) == "good"
+    assert classify_section_score(65) == "good"
+    assert classify_section_score(64.9) == "needs_improvement"
+    assert classify_section_score(50) == "needs_improvement"
+    assert classify_section_score(None) == "pending"
 
 
 def test_executive_narrative(db_conn):
@@ -307,7 +392,28 @@ def test_export_routes(app):
         r_secs = c.get("/academic_quality/surveys/export/course_eval_sections.xlsx")
         assert r_secs.status_code == 200
         xls_secs = pd.ExcelFile(io.BytesIO(r_secs.data))
+        assert "الغلاف" in xls_secs.sheet_names
         assert "ملخص_الشعب" in xls_secs.sheet_names
+        assert "التحليل" in xls_secs.sheet_names
+        assert "الاستنتاجات" in xls_secs.sheet_names
+        assert "اعتماد_القسم" in xls_secs.sheet_names
+        cover = pd.read_excel(xls_secs, sheet_name="الغلاف")
+        assert "القسم" in cover["البند"].values
+
+        r_secs_docx = c.get("/academic_quality/surveys/export/course_eval_sections.docx")
+        assert r_secs_docx.status_code == 200
+        assert "wordprocessingml" in (r_secs_docx.content_type or "")
+
+        r_secs_pdf = c.get("/academic_quality/surveys/export/course_eval_sections.pdf")
+        assert r_secs_pdf.status_code in (200, 500)
+        if r_secs_pdf.status_code == 200:
+            assert "pdf" in (r_secs_pdf.content_type or "").lower()
+
+        r_secs_html = c.get("/academic_quality/surveys/export/course_eval_sections")
+        assert r_secs_html.status_code == 200
+        body = r_secs_html.get_data(as_text=True) or ""
+        assert "حسب الشعبة" in body
+        assert "SS-01" not in body
 
         r_pkg_html = c.get("/academic_quality/surveys/export/package")
         assert r_pkg_html.status_code == 200

@@ -175,9 +175,9 @@ def resolve_indicator_id(
         return _indicator_id_by_code(conn, code, catalog_version.strip())
     for ver in (
         resolve_catalog_version(conn),
-        CATALOG_VERSION,
         "QAA-2023.4-INST",
         "QAA-2023.4-PROG-UG",
+        CATALOG_VERSION,
     ):
         iid = _indicator_id_by_code(conn, code, ver)
         if iid:
@@ -191,11 +191,13 @@ def build_survey_export_bytes(
     *,
     semester: str,
     department_id: int | None = None,
+    export_format: str | None = None,
 ) -> tuple[bytes, str, dict[str, Any]]:
-    """إنشاء ملف Excel كشاهد لاستبيان واحد."""
+    """إنشاء ملف Excel أو Word كشاهد لاستبيان واحد."""
     from backend.services.survey_analytics import (
         build_course_eval_report,
         build_survey_report,
+        course_eval_sections_export_bytes,
         single_survey_excel_frames,
     )
     from backend.services.utilities import excel_bytes_from_frames
@@ -203,6 +205,13 @@ def build_survey_export_bytes(
     from backend.core.survey_platform import EXTERNAL_SURVEY_CODES
 
     code = (template_code or "").strip()
+    if code == "course_eval_sections":
+        return course_eval_sections_export_bytes(
+            conn,
+            semester=semester,
+            department_id=department_id,
+            fmt=export_format or "docx",
+        )
     if code == "student_course":
         report = build_course_eval_report(conn, semester=semester, department_id=department_id)
     elif code in EXTERNAL_SURVEY_CODES:
@@ -226,35 +235,54 @@ def register_survey_as_evidence(
     template_code: str,
     semester: str,
     department_id: int | None,
-    indicator_code: str,
+    indicator_code: str | None,
     uploaded_by: str,
+    export_format: str | None = None,
 ) -> dict[str, Any]:
     """رفع تقرير استبيان كشاهد في خريطة الامتثال."""
     from backend.services.accreditation_evidence import save_file_evidence
 
     ind_code = (indicator_code or "").strip().upper()
-    iid = resolve_indicator_id(conn, ind_code)
-    if not iid:
+    iid = resolve_indicator_id(conn, ind_code) if ind_code else None
+    if ind_code and not iid:
         raise ValueError(f"المؤشر {ind_code} غير موجود في كتالوج الاعتماد")
 
     raw, filename, report = build_survey_export_bytes(
-        conn, template_code, semester=semester, department_id=department_id
+        conn,
+        template_code,
+        semester=semester,
+        department_id=department_id,
+        export_format=export_format,
     )
-    title_ar = f"نتائج {report.get('title_ar') or template_code} — {semester}"
+    dept_label = (report.get("department_label") or "").strip()
+    title_base = report.get("title_ar") or template_code
+    if dept_label:
+        title_ar = f"{title_base} — {dept_label} — {semester}"
+    else:
+        title_ar = f"نتائج {title_base} — {semester}"
     score_txt = report.get("overall_score_percent")
     score_part = f"{score_txt}%" if score_txt is not None else "بانتظار التجميع"
-    description = (
-        f"تصدير آلي من منصة الاستبيانات. المؤشر: {ind_code}. "
-        f"النتيجة المجمّعة: {score_part}. "
-        f"عدد الإجابات: {report.get('response_count') or 0}."
-    )
+    if template_code == "course_eval_sections":
+        description = (
+            f"تصدير آلي من منصة الاستبيانات — تقييم المقررات حسب الشعبة. "
+            f"متوسط النتائج المجمّعة: {score_part}. "
+            f"شعب مجمّعة: {report.get('response_count') or 0}."
+        )
+    else:
+        description = (
+            f"تصدير آلي من منصة الاستبيانات."
+            + (f" المؤشر: {ind_code}." if ind_code else "")
+            + f" النتيجة المجمّعة: {score_part}. "
+            f"عدد الإجابات: {report.get('response_count') or 0}."
+        )
+    mime = report.get("_mime") or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     result = save_file_evidence(
         conn,
         semester=semester,
         department_id=department_id,
         raw=raw,
         original_name=filename,
-        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        mime_type=mime,
         uploaded_by=uploaded_by,
         indicator_id=iid,
         title_ar=title_ar,
@@ -267,12 +295,14 @@ def register_survey_as_evidence(
         if template_code in EXTERNAL_SURVEY_CODES
         else f"semester={quote(semester, safe='')}"
     )
-    return {
+    out = {
         **result,
-        "indicator_code": ind_code,
         "template_code": template_code,
         "compliance_map_url": f"/academic_quality/accreditation/map?{map_q}",
     }
+    if ind_code:
+        out["indicator_code"] = ind_code
+    return out
 
 
 def build_program_survey_summary(

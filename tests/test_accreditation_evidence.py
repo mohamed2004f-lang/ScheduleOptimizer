@@ -15,7 +15,7 @@ from backend.services.institutional_accreditation import build_compliance_map
 
 
 def test_build_checklist_status_empty(db_conn):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     items = build_checklist_status(db_conn, "ev-sem", None)
     assert len(items) >= 7
     assert all("checklist_key" in x and "has_evidence" in x for x in items)
@@ -23,7 +23,7 @@ def test_build_checklist_status_empty(db_conn):
 
 
 def test_evidence_upload_link_and_map_count(db_conn):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     cur = db_conn.cursor()
     ind_id = cur.execute(
         "SELECT id FROM accreditation_indicators ORDER BY id LIMIT 1"
@@ -83,7 +83,7 @@ def test_evidence_upload_link_and_map_count(db_conn):
 
 
 def test_evidence_api_routes(app, db_conn, auth_client):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     ind_id = db_conn.cursor().execute(
         "SELECT id FROM accreditation_indicators ORDER BY id LIMIT 1"
     ).fetchone()[0]

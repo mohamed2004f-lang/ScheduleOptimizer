@@ -553,6 +553,7 @@ def compute_capabilities(
             "nav_my_assigned_courses": nav_my,
             "nav_users_admin": False,
             "nav_college_catalog": False,
+            "nav_college_shared_catalog": True,
             "nav_supervision": False,
             "nav_academic_rules": False,
             "nav_course_registration_report": staff_planning,
@@ -576,11 +577,13 @@ def compute_capabilities(
             # - active_mode=supervisor => respondent_role=supervisor
             "nav_surveys_hub": hod_mode in ("head", "instructor", "supervisor"),
             "nav_surveys_results": staff_quality,
+            "nav_term_closure": staff_quality,
             "is_supervisor_effective": bool(is_supervisor_effective),
             "is_instructor_or_supervisor_nav": inst_sup_nav,
             "nav_staff_operations_menu": hod_mode == "head",
             "nav_instructor_portal_menu": hod_mode in ("instructor", "supervisor"),
             "nav_instructor_quality_hub": hod_mode == "instructor",
+            "nav_quality_assistant": hod_mode in ("head", "instructor") or staff_quality,
             "can_switch_active_mode": can_switch,
             "active_mode_switch_profile": switch_profile,
             "is_student": False,
@@ -621,6 +624,15 @@ def compute_capabilities(
         "nav_my_assigned_courses": inst_portal,
         "nav_users_admin": role in ("admin", "admin_main", "system_admin", "college_dean"),
         "nav_college_catalog": role in ("admin", "admin_main", "system_admin", "college_dean"),
+        "nav_college_shared_catalog": role
+        in (
+            "admin",
+            "admin_main",
+            "system_admin",
+            "college_dean",
+            "academic_vice_dean",
+            "head_of_department",
+        ),
         "nav_supervision": role in ("admin", "admin_main", "system_admin", "college_dean"),
         "nav_academic_rules": role in ("admin", "admin_main", "system_admin", "college_dean"),
         "nav_course_registration_report": staff_planning,
@@ -649,13 +661,15 @@ def compute_capabilities(
         # طالب / أستاذ / مشرف / موظف
         "nav_surveys_hub": role in ("student", "instructor", "supervisor", "staff"),
         "nav_surveys_results": staff_quality,
+        "nav_term_closure": staff_quality,
         "nav_dashboard": role != "student",
-        "nav_admin_settings": role in ("admin", "admin_main", "system_admin"),
+        "nav_admin_settings": role in ("admin", "admin_main", "system_admin", "college_dean"),
         "nav_student_affairs_menu": role != "student" and not sup_portal and not inst_portal,
         "nav_planning_student_view": role == "student",
         "nav_staff_operations_menu": staff_planning,
         "nav_instructor_portal_menu": inst_portal,
         "nav_instructor_quality_hub": inst_portal,
+        "nav_quality_assistant": staff_quality or inst_portal,
         "is_supervisor_effective": bool(is_supervisor_effective),
         "is_instructor_or_supervisor_nav": inst_portal or sup_portal,
         "can_switch_active_mode": can_switch,
@@ -2134,6 +2148,12 @@ def init_auth(app):
             session.pop(SESSION_ADMIN_DEPARTMENT_SCOPE_ID, None)
             session.modified = True
             try:
+                from backend.core.department_scope_policy import invalidate_department_scope_list_caches
+
+                invalidate_department_scope_list_caches()
+            except Exception:
+                pass
+            try:
                 caps = compute_capabilities(role, isv, am)
             except Exception:
                 logger.exception("compute_capabilities failed (admin_department_scope clear)")
@@ -2198,6 +2218,12 @@ def init_auth(app):
                 )
             session[SESSION_ADMIN_DEPARTMENT_SCOPE_ID] = iid
             session.modified = True
+            try:
+                from backend.core.department_scope_policy import invalidate_department_scope_list_caches
+
+                invalidate_department_scope_list_caches()
+            except Exception:
+                pass
             if hasattr(row, "keys"):
                 payload = {
                     "id": int(row["id"]),

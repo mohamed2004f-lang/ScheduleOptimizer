@@ -9,9 +9,16 @@ from backend.core.auth import (
     _normalize_role,
     students_registry_view_only,
 )
-from backend.core.department_scope_policy import resolve_effective_department_scope_id
+from backend.core.department_scope_policy import (
+    courses_department_scope_filter,
+    courses_export_sql_and_params,
+    course_is_college_general,
+    course_is_college_shared_catalog,
+    resolve_effective_department_scope_id,
+    resolve_import_owning_department_id,
+)
 from collections import defaultdict
-from .utilities import get_connection, df_from_query, excel_response_from_df, pdf_response_from_html
+from .utilities import get_connection, excel_response_from_df, pdf_response_from_html
 from backend.database.database import fetch_table_columns, is_postgresql
 from backend.repositories import courses_repo
 import io
@@ -32,6 +39,16 @@ def _is_instructor_or_supervisor_view_only() -> bool:
 def _effective_department_scope_id(conn) -> int | None:
     uname = (session.get("user") or session.get("username") or "").strip()
     return resolve_effective_department_scope_id(conn, uname)
+
+
+def _courses_export_dataframe(conn) -> pd.DataFrame:
+    """DataFrame لتصدير المقررات (SQLite أو PostgreSQL)."""
+    sql, params = courses_export_sql_and_params(conn)
+    cur = conn.cursor()
+    cur.execute(sql, params)
+    rows = cur.fetchall()
+    cols = [d[0] for d in (cur.description or [])] or ["course_name", "course_code", "units"]
+    return pd.DataFrame(rows, columns=cols)
 
 
 def _normalize_assessment_type(raw: str) -> str:
@@ -76,6 +93,11 @@ def list_courses():
     role_n = _normalize_role((session.get("user_role") or "").strip())
     with get_connection() as conn:
         scope_dep = _effective_department_scope_id(conn)
+        admin_scoped = scope_dep is not None and role_n in (
+            "admin",
+            "admin_main",
+            "head_of_department",
+        )
         cur = conn.cursor()
         try:
             try:
@@ -105,8 +127,9 @@ def list_courses():
             sel += " FROM courses WHERE COALESCE(course_name,'') <> ''"
             q_params: tuple = ()
             if scope_dep is not None and has_owning_dept:
-                sel += " AND owning_department_id = ?"
-                q_params = (scope_dep,)
+                scope_sql, scope_params = courses_department_scope_filter(conn, int(scope_dep))
+                sel += scope_sql
+                q_params = scope_params
             sel += " ORDER BY course_name"
             rows = cur.execute(sel, q_params).fetchall()
             # إزالة التكرار البرمجيًا أيضًا (احتياطي)
@@ -239,6 +262,25 @@ def add_course():
         # منع تكرار الاسم (تطبيع بسيط lower/strip)
         row = courses_repo.find_course_name_duplicate_ci(conn, cname)
         if row:
+            from backend.core.department_scope_policy import (
+                course_is_college_general,
+                course_is_college_shared_catalog,
+            )
+
+            if course_is_college_general(conn, cname, course_code=code) or course_is_college_shared_catalog(
+                conn, cname
+            ):
+                return jsonify(
+                    {
+                        "status": "error",
+                        "code": "COLLEGE_SHARED_COURSE",
+                        "message": (
+                            "هذا المقرر مُعرَّف في سجل المقررات المشتركة/الكلية — "
+                            "متاح لقسمك تلقائياً في القائمة والجدول والتسجيل. "
+                            "راجع «سجل المقررات المشتركة» أو حدّث الصفحة."
+                        ),
+                    }
+                ), 409
             return jsonify({"status": "error", "message": "يوجد مقرر آخر بنفس الاسم. استخدم زر \"تحرير\" لتعديله."}), 400
 
         # منع تكرار الرمز إذا تم إدخاله
@@ -259,6 +301,11 @@ def add_course():
             cols = []
         has_owning_dept = "owning_department_id" in cols
         scope_dep = _effective_department_scope_id(conn)
+        owning_id = (
+            resolve_import_owning_department_id(conn, cname, scope_dep, course_code=code)
+            if has_owning_dept
+            else None
+        )
         if "category" in cols:
             has_assessment_cols = all(k in cols for k in ("assessment_type", "coursework_weight", "midterm_weight", "final_exam_weight"))
             if has_assessment_cols:
@@ -278,7 +325,7 @@ def add_course():
                             coursework_weight,
                             midterm_weight,
                             final_exam_weight,
-                            (int(scope_dep) if scope_dep is not None else None),
+                            (int(owning_id) if owning_id is not None else None),
                         ),
                     )
                 else:
@@ -294,7 +341,7 @@ def add_course():
                 if has_owning_dept:
                     cur.execute(
                         "INSERT INTO courses (course_name, course_code, units, category, owning_department_id) VALUES (?, ?, ?, ?, ?)",
-                        (cname, code, units, category, (int(scope_dep) if scope_dep is not None else None)),
+                        (cname, code, units, category, (int(owning_id) if owning_id is not None else None)),
                     )
                 else:
                     cur.execute(
@@ -305,7 +352,7 @@ def add_course():
             if has_owning_dept:
                 cur.execute(
                     "INSERT INTO courses (course_name, course_code, units, owning_department_id) VALUES (?, ?, ?, ?)",
-                    (cname, code, units, (int(scope_dep) if scope_dep is not None else None)),
+                    (cname, code, units, (int(owning_id) if owning_id is not None else None)),
                 )
             else:
                 cur.execute(
@@ -316,7 +363,7 @@ def add_course():
             from backend.services.college_catalog import _link_operational_course_to_master
 
             _link_operational_course_to_master(
-                conn, cur, cname, int(scope_dep) if scope_dep is not None else None
+                conn, cur, cname, int(owning_id) if owning_id is not None else None
             )
         except Exception:
             pass
@@ -706,15 +753,16 @@ def list_prereqs():
         if scope_dep is None:
             rows = cur.execute("SELECT course_name, required_course_name FROM prereqs ORDER BY course_name, required_course_name").fetchall()
         else:
+            scope_sql, scope_params = courses_department_scope_filter(conn, int(scope_dep))
             rows = cur.execute(
-                """
+                f"""
                 SELECT p.course_name, p.required_course_name
                 FROM prereqs p
                 JOIN courses c ON LOWER(TRIM(c.course_name)) = LOWER(TRIM(p.course_name))
-                WHERE COALESCE(c.owning_department_id,-1) = ?
+                WHERE 1=1{scope_sql}
                 ORDER BY p.course_name, p.required_course_name
                 """,
-                (int(scope_dep),),
+                scope_params,
             ).fetchall()
         return jsonify([{"course_name": r[0], "required_course_name": r[1]} for r in rows])
 
@@ -732,9 +780,10 @@ def prereq_status():
             if scope_dep is None:
                 rows_c = cur.execute("SELECT course_name FROM courses").fetchall()
             else:
+                scope_sql, scope_params = courses_department_scope_filter(conn, int(scope_dep))
                 rows_c = cur.execute(
-                    "SELECT course_name FROM courses WHERE COALESCE(owning_department_id,-1) = ?",
-                    (int(scope_dep),),
+                    f"SELECT course_name FROM courses WHERE 1=1{scope_sql}",
+                    scope_params,
                 ).fetchall()
             courses = [r[0] for r in rows_c]
         except Exception:
@@ -783,8 +832,9 @@ def _load_courses_and_prereqs(conn):
         )
         qp: tuple = ()
         if admin_scoped and has_owning:
-            q += " AND owning_department_id = ?"
-            qp = (int(scope_dep),)
+            scope_sql, scope_params = courses_department_scope_filter(conn, int(scope_dep))
+            q += scope_sql
+            qp = scope_params
         rows_c = cur.execute(q, qp).fetchall()
         courses = [{"course_name": r[0], "course_code": (r[1] or "")} for r in (rows_c or []) if r and r[0]]
         if admin_scoped and not courses and has_owning:
@@ -1273,13 +1323,20 @@ def _bind_imported_courses_department(
     course_names: list[str],
     dept_id: int,
 ) -> int:
-    """تعيين قسم المالك للمقررات المستوردة دون الكتابة فوق تعيين سابق."""
+    """تعيين قسم المالك للمقررات المستوردة دون الكتابة فوق تعيين سابق (باستثناء الاتجاه العام)."""
     if not course_names:
         return 0
     cols = fetch_table_columns(conn, "courses")
     if "owning_department_id" not in cols:
         return 0
-    placeholders = ",".join("?" for _ in course_names)
+    bound_names = [
+        n
+        for n in course_names
+        if n and not course_is_college_general(conn, n)
+    ]
+    if not bound_names:
+        return 0
+    placeholders = ",".join("?" for _ in bound_names)
     cur = conn.cursor()
     cur.execute(
         f"""
@@ -1287,9 +1344,17 @@ def _bind_imported_courses_department(
         SET owning_department_id = COALESCE(owning_department_id, ?)
         WHERE course_name IN ({placeholders})
         """,
-        (int(dept_id), *course_names),
+        (int(dept_id), *bound_names),
     )
     return int(cur.rowcount or 0)
+
+
+def _course_row_name(row) -> str:
+    if row is None:
+        return ""
+    if hasattr(row, "keys"):
+        return str(row["course_name"] or "").strip()
+    return str(row[0] or "").strip()
 
 
 @courses_bp.route("/import/excel", methods=["POST"])
@@ -1307,6 +1372,7 @@ def courses_import_excel():
             return jsonify({"status": "error", "message": "Columns required: course_name"}), 400
         rows = df.to_dict(orient="records")
         imported_names: list[str] = []
+        ignored: list[dict] = []
         with get_connection() as conn:
             cur = conn.cursor()
             cols = fetch_table_columns(conn, "courses")
@@ -1325,8 +1391,37 @@ def courses_import_excel():
                 category = (r.get("category") or "required").strip() or "required"
                 if category not in ("required", "elective_major", "elective_free"):
                     category = "required"
-                imported_names.append(cname)
-                if has_cat and has_owning and dept_id is not None:
+
+                # رمز مستخدم لمقرر باسم آخر (مثل GS 201 للكلية) — تجاهل دون إيقاف الاستيراد
+                if code:
+                    code_hit = courses_repo.find_course_code_duplicate_ci(conn, code)
+                    existing_name = _course_row_name(code_hit)
+                    if existing_name and existing_name.casefold() != cname.casefold():
+                        reason = "course_code_exists"
+                        if course_is_college_general(
+                            conn, existing_name, course_code=code
+                        ) or course_is_college_shared_catalog(conn, existing_name):
+                            reason = "college_shared_or_general"
+                        ignored.append(
+                            {
+                                "course_name": cname,
+                                "course_code": code,
+                                "existing_course_name": existing_name,
+                                "reason": reason,
+                                "message": (
+                                    f"الرمز {code} مستخدم مسبقاً للمقرر «{existing_name}» "
+                                    "— لم يُنشأ صف جديد (مقرر كلية/موجود)."
+                                ),
+                            }
+                        )
+                        continue
+
+                owning_id = (
+                    resolve_import_owning_department_id(conn, cname, dept_id, course_code=code)
+                    if has_owning
+                    else None
+                )
+                if has_cat and has_owning and owning_id is not None:
                     cur.execute(
                         """
                         INSERT INTO courses (course_name, course_code, units, category, owning_department_id)
@@ -1337,7 +1432,7 @@ def courses_import_excel():
                           category = excluded.category,
                           owning_department_id = COALESCE(courses.owning_department_id, excluded.owning_department_id)
                         """,
-                        (cname, code, units, category, int(dept_id)),
+                        (cname, code, units, category, int(owning_id)),
                     )
                 elif has_cat and has_owning:
                     cur.execute(
@@ -1363,7 +1458,7 @@ def courses_import_excel():
                         """,
                         (cname, code, units, category),
                     )
-                elif has_owning and dept_id is not None:
+                elif has_owning and owning_id is not None:
                     cur.execute(
                         """
                         INSERT INTO courses (course_name, course_code, units, owning_department_id)
@@ -1373,7 +1468,7 @@ def courses_import_excel():
                           units = excluded.units,
                           owning_department_id = COALESCE(courses.owning_department_id, excluded.owning_department_id)
                         """,
-                        (cname, code, units, int(dept_id)),
+                        (cname, code, units, int(owning_id)),
                     )
                 else:
                     cur.execute(
@@ -1386,18 +1481,27 @@ def courses_import_excel():
                         """,
                         (cname, code, units),
                     )
+                imported_names.append(cname)
             department_bound = 0
             if dept_id is not None and imported_names and has_owning:
                 department_bound = _bind_imported_courses_department(
                     conn, imported_names, int(dept_id)
                 )
+                from backend.core.department_scope_policy import backfill_courses_owning_department_from_schedule
+
+                backfill_courses_owning_department_from_schedule(conn, department_id=int(dept_id))
             conn.commit()
             try:
                 from backend.core.cache_setup import invalidate_list_prefix
                 invalidate_list_prefix("courses")
             except Exception:
                 pass
-        payload: dict = {"status": "ok", "imported": len(imported_names)}
+        payload: dict = {
+            "status": "ok",
+            "imported": len(imported_names),
+            "ignored": ignored,
+            "ignored_count": len(ignored),
+        }
         if dept_id is not None:
             payload["department_id"] = int(dept_id)
             payload["department_bound"] = department_bound
@@ -1415,12 +1519,13 @@ def courses_import_excel():
 @login_required
 def export_courses_excel():
     """
-    Export full courses table as an Excel file using utilities.excel_response_from_df.
+    Export courses table as Excel, scoped to the actor's department when applicable.
     """
     if _is_instructor_or_supervisor_view_only():
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     try:
-        df = df_from_query("SELECT course_name, course_code, units FROM courses")
+        with get_connection() as conn:
+            df = _courses_export_dataframe(conn)
     except Exception:
         # If table doesn't exist or query fails, return empty CSV-like response
         from io import StringIO
@@ -1434,13 +1539,13 @@ def export_courses_excel():
 @login_required
 def export_courses_pdf():
     """
-    Export courses list as PDF. If pdf generation is not available, the underlying utility
-    will return a JSON error response explaining the issue.
+    Export courses list as PDF, scoped to the actor's department when applicable.
     """
     if _is_instructor_or_supervisor_view_only():
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     try:
-        df = df_from_query("SELECT course_name, course_code, units FROM courses")
+        with get_connection() as conn:
+            df = _courses_export_dataframe(conn)
     except Exception:
         df = None
 

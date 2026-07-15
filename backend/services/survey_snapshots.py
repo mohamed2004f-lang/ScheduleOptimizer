@@ -732,13 +732,13 @@ def closure_reminder_status(
         "aggregated_count": agg,
         "total_count": total,
         "department_label": department_label,
-        "title_ar": "تذكير: إغلاق الفصل وحفظ اللقطة",
+        "title_ar": "تذكير: إكمال إغلاق الفصل",
         "message_ar": (
             f"الفصل «{sem}» لديه {agg} استبيان(ات) مجمّعة من أصل {total} "
-            "— يُنصح بإغلاق الفصل وحفظ لقطة قبل بدء فصل جديد "
-            "للمقارنة عبر السنوات ولأرشفة الشواهد."
+            "— يُنصح بإكمال مرحلة الاستبيانات من لوحة إغلاق الفصل الموحّد "
+            "قبل بدء فصل جديد للمقارنة عبر السنوات ولأرشفة الشواهد."
         ),
-        "action_url": f"/academic_quality/surveys/results?semester={sem}",
+        "action_url": "/academic_quality/term_closure",
     }
 
 

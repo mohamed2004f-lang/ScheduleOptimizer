@@ -46,6 +46,54 @@ def _rows(cur, sql: str, params=()):
 
 _RULE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
 
+# وحدات التخرج الرسمية لكل قسم (شاملة اتجاه عام 36 — ليست +36)
+COLLEGE_GENERAL_UNITS_IN_GRAD = 36
+DEPT_GRADUATION_TARGETS: dict[str, int] = {
+    "MECH": 155,
+    "CIVIL": 161,
+    "ELEC": 160,
+    "RENEW": 160,
+}
+
+
+def _dept_operating_regulation_rows() -> list[tuple]:
+    """بنود لائحة التشغيل لكل قسم (تخرج + ما قبل الشعبة + تخصص)."""
+    rows: list[tuple] = []
+    for code, grad in DEPT_GRADUATION_TARGETS.items():
+        pre = float(int(grad) - COLLEGE_GENERAL_UNITS_IN_GRAD)
+        rows.extend(
+            [
+                (
+                    "dept_graduation_min_units",
+                    "وحدات التخرج من القسم",
+                    "الحد الأدنى للوحدات لإتمام التخرج من برنامج القسم "
+                    f"({grad} شاملة اتجاه عام {COLLEGE_GENERAL_UNITS_IN_GRAD} — ليست +{COLLEGE_GENERAL_UNITS_IN_GRAD}).",
+                    "graduation",
+                    float(grad),
+                    code,
+                ),
+                (
+                    "dept_pre_track_min_units",
+                    "وحدات ما قبل التخصص (شعبة)",
+                    "وحدات يجب إنجازها في القسم قبل اختيار الشعبة/التخصص "
+                    f"(افتراضياً {int(pre)} = التخرج − الاتجاه العام).",
+                    "dept_track",
+                    pre,
+                    code,
+                ),
+                (
+                    "dept_specialization_min_units",
+                    "وحدات التخصص (الشعبة)",
+                    "وحدات مقررات الشعبة المختارة بعد التخصص (0 حتى تفعيل الشعب).",
+                    "dept_track",
+                    0.0,
+                    code,
+                ),
+            ]
+        )
+    return rows
+
+
 # (rule_key, title_ar, description_ar, category, value_number, department_code)
 DEFAULT_PATHWAY_REGULATIONS: list[tuple] = [
     (
@@ -53,7 +101,7 @@ DEFAULT_PATHWAY_REGULATIONS: list[tuple] = [
         "إجمالي وحدات الاتجاه العام",
         "إجمالي الوحدات المطلوبة في مرحلة الاتجاه العام بالكلية (قابل للتعديل حسب اللائحة).",
         "college_general",
-        36.0,
+        float(COLLEGE_GENERAL_UNITS_IN_GRAD),
         "GENERAL",
     ),
     (
@@ -80,30 +128,7 @@ DEFAULT_PATHWAY_REGULATIONS: list[tuple] = [
         22.0,
         "GENERAL",
     ),
-    (
-        "dept_graduation_min_units",
-        "وحدات التخرج من القسم",
-        "الحد الأدنى للوحدات لإتمام التخرج من برنامج القسم (يُكمّل أو يُستبدل بـ min_total_units للبرنامج).",
-        "graduation",
-        155.0,
-        "MECH",
-    ),
-    (
-        "dept_pre_track_min_units",
-        "وحدات ما قبل التخصص (شعبة)",
-        "وحدات يجب إنجازها في القسم قبل اختيار الشعبة/التخصص.",
-        "dept_track",
-        0.0,
-        "MECH",
-    ),
-    (
-        "dept_specialization_min_units",
-        "وحدات التخصص (الشعبة)",
-        "وحدات مقررات الشعبة المختارة بعد التخصص.",
-        "dept_track",
-        0.0,
-        "MECH",
-    ),
+    *(_dept_operating_regulation_rows()),
     (
         "college_pathway_cohort_from_join_year",
         "دفعات مسار الكلية (من سنة الالتحاق)",
@@ -142,6 +167,64 @@ def _can_edit_department(conn, department_id: int) -> bool:
     return False
 
 
+def _sync_pre_track_from_graduation(cur) -> None:
+    """يملأ dept_pre_track من (التخرج − الاتجاه العام) إذا كان 0 أو غير معرّف."""
+    for code in DEPT_GRADUATION_TARGETS:
+        dept_id = _dept_id_by_code(cur, code)
+        if dept_id is None:
+            continue
+        grad = get_pathway_regulation_value(cur, int(dept_id), "dept_graduation_min_units")
+        if grad is None:
+            grad = float(DEPT_GRADUATION_TARGETS[code])
+        pre = float(int(grad) - COLLEGE_GENERAL_UNITS_IN_GRAD)
+        row = cur.execute(
+            """
+            SELECT id, value_number FROM pathway_regulation_items
+            WHERE department_id = ? AND rule_key = 'dept_pre_track_min_units'
+            LIMIT 1
+            """,
+            (int(dept_id),),
+        ).fetchone()
+        if not row:
+            continue
+        rid = int(row[0] if not hasattr(row, "keys") else row["id"])
+        cur_val = row[1] if not hasattr(row, "keys") else row["value_number"]
+        try:
+            cur_num = float(cur_val) if cur_val not in (None, "") else 0.0
+        except (TypeError, ValueError):
+            cur_num = 0.0
+        if cur_num <= 0:
+            cur.execute(
+                "UPDATE pathway_regulation_items SET value_number = ? WHERE id = ?",
+                (pre, rid),
+            )
+
+
+def _department_choices(cur) -> list[dict]:
+    out: list[dict] = []
+    for code, grad in sorted(DEPT_GRADUATION_TARGETS.items()):
+        dept_id = _dept_id_by_code(cur, code)
+        if dept_id is None:
+            continue
+        row = cur.execute(
+            "SELECT name_ar FROM departments WHERE id = ? LIMIT 1",
+            (int(dept_id),),
+        ).fetchone()
+        name_ar = ""
+        if row:
+            name_ar = row[0] if not hasattr(row, "keys") else row["name_ar"]
+        out.append(
+            {
+                "id": int(dept_id),
+                "code": code,
+                "name_ar": name_ar or code,
+                "graduation_units": int(grad),
+                "pre_track_units": int(grad) - COLLEGE_GENERAL_UNITS_IN_GRAD,
+            }
+        )
+    return out
+
+
 def ensure_pathway_regulation_defaults(conn) -> None:
     cur = conn.cursor()
     for rule_key, title, desc, cat, val, dept_code in DEFAULT_PATHWAY_REGULATIONS:
@@ -167,6 +250,7 @@ def ensure_pathway_regulation_defaults(conn) -> None:
                 """,
                 (dept_id, rule_key, title, desc, cat, val),
             )
+    _sync_pre_track_from_graduation(cur)
     conn.commit()
 
 
@@ -202,12 +286,22 @@ def register_pathway_regulation_routes(bp) -> None:
             ensure_pathway_regulation_defaults(conn)
             cur = conn.cursor()
             scope = get_admin_department_scope_id()
+            dept_choices = _department_choices(cur)
             if scope is not None:
                 dept_id = int(scope)
             elif dept_id is None:
-                dept_id = _dept_id_by_code(cur, "MECH")
+                dept_id = int(dept_choices[0]["id"]) if dept_choices else _dept_id_by_code(cur, "MECH")
             if dept_id is None:
-                return jsonify({"status": "ok", "items": [], "department_id": None}), 200
+                return jsonify(
+                    {
+                        "status": "ok",
+                        "items": [],
+                        "department_id": None,
+                        "department_choices": dept_choices,
+                        "college_general_units": COLLEGE_GENERAL_UNITS_IN_GRAD,
+                        "graduation_targets": DEPT_GRADUATION_TARGETS,
+                    }
+                ), 200
             rows = _rows(
                 cur,
                 """
@@ -249,6 +343,9 @@ def register_pathway_regulation_routes(bp) -> None:
                 "college_items": college_rows,
                 "category_labels": CATEGORY_LABELS,
                 "can_edit_college_items": is_full_admin,
+                "department_choices": dept_choices,
+                "college_general_units": COLLEGE_GENERAL_UNITS_IN_GRAD,
+                "graduation_targets": DEPT_GRADUATION_TARGETS,
             }
         ), 200
 

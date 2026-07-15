@@ -1644,7 +1644,7 @@ TABLES_SCHEMA = {
     'accreditation_standards': """
         CREATE TABLE IF NOT EXISTS accreditation_standards (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            catalog_version TEXT NOT NULL DEFAULT '2026.1',
+            catalog_version TEXT NOT NULL DEFAULT 'QAA-2023.4-INST',
             domain_code TEXT NOT NULL,
             code TEXT NOT NULL,
             title_ar TEXT NOT NULL,
@@ -1678,6 +1678,7 @@ TABLES_SCHEMA = {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             semester TEXT NOT NULL,
             department_id INTEGER,
+            program_id INTEGER,
             indicator_id INTEGER NOT NULL,
             score_percent REAL,
             compliance_status TEXT NOT NULL DEFAULT 'not_started',
@@ -1757,6 +1758,34 @@ TABLES_SCHEMA = {
             updated_by TEXT DEFAULT '',
             is_active INTEGER NOT NULL DEFAULT 1,
             FOREIGN KEY (indicator_id) REFERENCES accreditation_indicators(id) ON DELETE SET NULL
+        )
+    """,
+
+    'department_archive_items': """
+        CREATE TABLE IF NOT EXISTS department_archive_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            department_id INTEGER NOT NULL,
+            program_id INTEGER,
+            record_type TEXT NOT NULL,
+            title_ar TEXT NOT NULL DEFAULT '',
+            ref_number TEXT DEFAULT '',
+            doc_date TEXT DEFAULT '',
+            semester TEXT DEFAULT '',
+            party_ar TEXT DEFAULT '',
+            tags TEXT DEFAULT '',
+            body_text TEXT DEFAULT '',
+            follow_up_status TEXT DEFAULT 'na',
+            original_name TEXT DEFAULT '',
+            stored_path TEXT DEFAULT '',
+            mime_type TEXT DEFAULT '',
+            file_size INTEGER DEFAULT 0,
+            sha256 TEXT DEFAULT '',
+            created_by TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_by TEXT DEFAULT '',
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            FOREIGN KEY (department_id) REFERENCES departments(id)
         )
     """,
 
@@ -1982,6 +2011,7 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_accred_std_domain ON accreditation_standards(domain_code, catalog_version)",
     "CREATE INDEX IF NOT EXISTS idx_accred_ind_standard ON accreditation_indicators(standard_id)",
     "CREATE INDEX IF NOT EXISTS idx_accred_asm_sem ON accreditation_assessments(semester, department_id)",
+    "CREATE INDEX IF NOT EXISTS idx_dept_archive_dept_sem ON department_archive_items(department_id, semester, record_type)",
     "CREATE INDEX IF NOT EXISTS idx_accred_ev_sem ON accreditation_evidence(semester, department_id, indicator_id)",
     "CREATE INDEX IF NOT EXISTS idx_accred_manual_sem ON accreditation_manual_inputs(semester, department_id)",
     "CREATE INDEX IF NOT EXISTS idx_accred_plan_sem ON accreditation_improvement_plans(semester, department_id, status)",
@@ -2056,6 +2086,11 @@ def _ensure_tables_postgresql() -> None:
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS admission_program_id BIGINT",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS current_program_id BIGINT",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS track_code TEXT",
+        "ALTER TABLE accreditation_assessments ADD COLUMN IF NOT EXISTS program_id BIGINT",
+        "ALTER TABLE accreditation_evidence ADD COLUMN IF NOT EXISTS program_id BIGINT",
+        "ALTER TABLE accreditation_manual_inputs ADD COLUMN IF NOT EXISTS program_id BIGINT",
+        "ALTER TABLE accreditation_improvement_plans ADD COLUMN IF NOT EXISTS program_id BIGINT",
+        "ALTER TABLE accreditation_evidence_bindings ADD COLUMN IF NOT EXISTS program_id BIGINT",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS specialized_at_term TEXT",
         (
             "ALTER TABLE students ADD COLUMN IF NOT EXISTS enrollment_status TEXT "
@@ -2874,7 +2909,7 @@ def _ensure_tables_postgresql() -> None:
                 """
                 CREATE TABLE IF NOT EXISTS accreditation_standards (
                     id BIGSERIAL PRIMARY KEY,
-                    catalog_version TEXT NOT NULL DEFAULT '2026.1',
+                    catalog_version TEXT NOT NULL DEFAULT 'QAA-2023.4-INST',
                     domain_code TEXT NOT NULL,
                     code TEXT NOT NULL,
                     title_ar TEXT NOT NULL,
@@ -2913,6 +2948,7 @@ def _ensure_tables_postgresql() -> None:
                     id BIGSERIAL PRIMARY KEY,
                     semester TEXT NOT NULL,
                     department_id BIGINT,
+                    program_id BIGINT,
                     indicator_id BIGINT NOT NULL,
                     score_percent REAL,
                     compliance_status TEXT NOT NULL DEFAULT 'not_started',

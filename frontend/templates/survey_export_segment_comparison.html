@@ -1,0 +1,68 @@
+{# جداول مقارنة الشرائح — خارجي (قسم / برنامج / توظيف) #}
+{% set dept_rows = department_comparison_rows if department_comparison_rows is defined else (report.department_comparison_rows if report is defined else []) %}
+{% set prog_rows = program_comparison_rows if program_comparison_rows is defined else (report.program_comparison_rows if report is defined else []) %}
+{% set hire_rows = hire_department_comparison_rows if hire_department_comparison_rows is defined else (report.hire_department_comparison_rows if report is defined else []) %}
+
+{% if dept_rows or prog_rows or hire_rows %}
+<section class="segment-comparison">
+  {% if dept_rows %}
+  <h3>مقارنة الأقسام</h3>
+  <table>
+    <thead>
+      <tr><th>الشريحة</th><th>عدد الردود</th><th>النتيجة %</th><th>التصنيف</th><th>التجميع</th></tr>
+    </thead>
+    <tbody>
+      {% for r in dept_rows %}
+      <tr>
+        <td>{{ r['الشريحة'] }}</td>
+        <td>{{ r['عدد_الردود'] }}</td>
+        <td>{{ r['النتيجة_%'] if r['النتيجة_%'] is not none else '—' }}</td>
+        <td>{{ r['التصنيف'] }}</td>
+        <td>{{ r['التجميع'] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if prog_rows %}
+  <h3>مقارنة البرامج (قسم + مسار/شعبة)</h3>
+  <table>
+    <thead>
+      <tr><th>البرنامج</th><th>عدد الردود</th><th>النتيجة %</th><th>التصنيف</th><th>التجميع</th></tr>
+    </thead>
+    <tbody>
+      {% for r in prog_rows %}
+      <tr>
+        <td>{{ r['الشريحة'] }}</td>
+        <td>{{ r['عدد_الردود'] }}</td>
+        <td>{{ r['النتيجة_%'] if r['النتيجة_%'] is not none else '—' }}</td>
+        <td>{{ r['التصنيف'] }}</td>
+        <td>{{ r['التجميع'] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if hire_rows %}
+  <h3>استشارة القطاع — حسب أقسام التوظيف</h3>
+  <table>
+    <thead>
+      <tr><th>القسم</th><th>عدد الجهات</th><th>النتيجة %</th><th>التصنيف</th><th>التجميع</th></tr>
+    </thead>
+    <tbody>
+      {% for r in hire_rows %}
+      <tr>
+        <td>{{ r['الشريحة'] }}</td>
+        <td>{{ r['عدد_الردود'] }}</td>
+        <td>{{ r['النتيجة_%'] if r['النتيجة_%'] is not none else '—' }}</td>
+        <td>{{ r['التصنيف'] }}</td>
+        <td>{{ r['التجميع'] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endif %}

@@ -56,30 +56,24 @@ def usernames_for_department_hods(conn, department_id: int | None) -> list[str]:
     return out
 
 
-def department_id_for_course(conn, course_name: str) -> int | None:
-    cn = (course_name or "").strip()
-    if not cn:
-        return None
-    cur = conn.cursor()
-    row = cur.execute(
-        "SELECT department_id FROM teaching_groups WHERE TRIM(course_name) = ? LIMIT 1",
-        (cn,),
-    ).fetchone()
-    if row and row[0] is not None:
-        try:
-            return int(row[0])
-        except (TypeError, ValueError):
-            pass
-    row = cur.execute(
-        "SELECT department_id FROM schedule WHERE TRIM(course_name) = ? AND department_id IS NOT NULL LIMIT 1",
-        (cn,),
-    ).fetchone()
-    if row and row[0] is not None:
-        try:
-            return int(row[0])
-        except (TypeError, ValueError):
-            pass
-    return None
+def department_id_for_course(
+    conn,
+    course_name: str,
+    *,
+    teaching_group_id: int | None = None,
+    section_id: int | None = None,
+    semester: str | None = None,
+) -> int | None:
+    """القسم المختص بالمقرر — سياق التدريس وليس قسم منزل الأستاذ."""
+    from backend.core.department_scope_policy import resolve_course_responsible_department_id
+
+    return resolve_course_responsible_department_id(
+        conn,
+        course_name,
+        teaching_group_id=teaching_group_id,
+        section_id=section_id,
+        semester=semester,
+    )
 
 
 def notify_users(usernames: list[str], *, title: str, body: str = "") -> None:
@@ -100,8 +94,22 @@ def notify_instructor(conn, instructor_id: int | None, *, title: str, body: str 
         notify_users([u], title=title, body=body)
 
 
-def notify_baseline_submitted(conn, *, course_name: str, baseline_id: int) -> None:
-    dept_id = department_id_for_course(conn, course_name)
+def notify_baseline_submitted(
+    conn,
+    *,
+    course_name: str,
+    baseline_id: int,
+    teaching_group_id: int | None = None,
+    section_id: int | None = None,
+    semester: str | None = None,
+) -> None:
+    dept_id = department_id_for_course(
+        conn,
+        course_name,
+        teaching_group_id=teaching_group_id,
+        section_id=section_id,
+        semester=semester,
+    )
     notify_department_hods(
         conn,
         dept_id,

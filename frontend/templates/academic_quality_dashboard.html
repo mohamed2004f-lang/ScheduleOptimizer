@@ -29,11 +29,8 @@
 
     <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
       <div>
-        <nav aria-label="breadcrumb" class="mb-1">
-          <ol class="breadcrumb small mb-0">
-            <li class="breadcrumb-item active">ضمان الجودة والاعتماد</li>
-          </ol>
-        </nav>
+        {% set qa_crumb_hub = true %}
+        {% include 'partials/quality_breadcrumb.html' %}
         <h2 class="h4 mb-1"><i class="fa-solid fa-gauge-high text-primary"></i> لوحة القيادة</h2>
         <p class="text-muted small mb-0">
           الفصل: <strong>{{ metrics.semester }}</strong> · {{ scope_label }}
@@ -51,7 +48,7 @@
         <div class="card shadow-sm border-start border-success border-4 h-100">
           <div class="card-body">
             <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-              <h6 class="text-muted mb-0">مؤشر الاعتماد الكلي</h6>
+              <h6 class="text-muted mb-0">مؤشر الامتثال التشغيلي (داخلي)</h6>
               <span class="badge {% if metrics.overall_accreditation_score >= 70 %}bg-success{% elif metrics.overall_accreditation_score >= 50 %}bg-warning text-dark{% else %}bg-danger{% endif %}">
                 {{ metrics.accreditation_status_ar }}
               </span>
@@ -72,26 +69,79 @@
                 <div class="progress" style="height:6px;"><div class="progress-bar bg-info" style="width:{{ metrics.institutional_score }}%;"></div></div>
               </div>
             </div>
-            <small class="text-muted d-block mt-2">الحد الأدنى المستهدف للاعتماد: 70/100</small>
+            <small class="text-muted d-block mt-2">مؤشر داخلي لمتابعة التوثيق — ليس درجة اعتماد رسمية من المركز. الحد الأدنى المستهدف داخلياً: 70/100</small>
           </div>
         </div>
       </div>
       <div class="col-lg-4">
         <div class="card h-100 bg-light border-0">
           <div class="card-body small">
-            <h6 class="fw-bold mb-2"><i class="fa-solid fa-bolt text-warning"></i> إجراءات سريعة</h6>
+            <h6 class="fw-bold mb-2"><i class="fa-solid fa-bolt text-warning"></i> مسارات أساسية</h6>
             <div class="d-grid gap-2">
-              <a href="/academic_quality/accreditation/map?scope=inst" class="btn btn-primary btn-sm">امتثال مؤسسي</a>
-              <a href="/academic_quality/accreditation/map?scope=prog" class="btn btn-outline-primary btn-sm">امتثال برامجي</a>
-              <a href="/academic_quality/surveys/results?semester={{ metrics.semester|urlencode }}" class="btn btn-outline-primary btn-sm">نتائج الاستبيانات</a>
-              <a href="/academic_quality/survey_admin" class="btn btn-outline-secondary btn-sm">إعداد بنود الاستبيانات</a>
+              <a href="/academic_quality/surveys/results?semester={{ metrics.semester|urlencode }}" class="btn btn-primary btn-sm">نتائج الاستبيانات</a>
+              <a href="/academic_quality/term_closure" class="btn btn-warning btn-sm">إغلاق الفصل (موحّد)</a>
+              <a href="/academic_quality/accreditation/map?scope=inst" class="btn btn-outline-primary btn-sm">امتثال مؤسسي</a>
+              <a href="/academic_quality/archive" class="btn btn-outline-primary btn-sm">أرشيف القسم</a>
+              <a href="/academic_quality/assistant" class="btn btn-outline-primary btn-sm">المساعد الذكي</a>
             </div>
           </div>
         </div>
       </div>
     </div>
 
-    <h6 class="text-muted mb-2">أدوات وتقارير</h6>
+    <h6 class="text-muted mb-2">مراكز العمل</h6>
+    <div class="row g-3 mb-4">
+      <div class="col-md-4 col-lg-2">
+        <a href="/academic_quality/surveys" class="action-tile">
+          <div class="card p-3 h-100">
+            <div class="fw-semibold small mb-1"><i class="fa-solid fa-pen-to-square text-primary"></i> الاستبيانات</div>
+            <div class="small text-muted">تعبئة وتحليل وتصدير النتائج</div>
+          </div>
+        </a>
+      </div>
+      <div class="col-md-4 col-lg-2">
+        <a href="/academic_quality/term_closure" class="action-tile">
+          <div class="card p-3 h-100 border-warning">
+            <div class="fw-semibold small mb-1"><i class="fa-solid fa-lock text-warning"></i> إغلاق الفصل</div>
+            <div class="small text-muted">قفل المراحل وبناء الأرشيف</div>
+          </div>
+        </a>
+      </div>
+      <div class="col-md-4 col-lg-2">
+        <a href="/academic_quality/accreditation/map?scope=prog" class="action-tile">
+          <div class="card p-3 h-100">
+            <div class="fw-semibold small mb-1"><i class="fa-solid fa-map text-success"></i> خريطة الامتثال</div>
+            <div class="small text-muted">مؤشرات وشواهد الاعتماد</div>
+          </div>
+        </a>
+      </div>
+      <div class="col-md-4 col-lg-2">
+        <a href="/academic_quality/archive" class="action-tile">
+          <div class="card p-3 h-100">
+            <div class="fw-semibold small mb-1"><i class="fa-solid fa-folder-open text-secondary"></i> أرشيف القسم</div>
+            <div class="small text-muted">وثائق وشواهد القسم</div>
+          </div>
+        </a>
+      </div>
+      <div class="col-md-4 col-lg-2">
+        <a href="/academic_quality/assistant" class="action-tile">
+          <div class="card p-3 h-100">
+            <div class="fw-semibold small mb-1"><i class="fa-solid fa-robot text-info"></i> المساعد الذكي</div>
+            <div class="small text-muted">إرشاد ومتابعة للجودة</div>
+          </div>
+        </a>
+      </div>
+      <div class="col-md-4 col-lg-2">
+        <a href="/academic_quality/college" class="action-tile">
+          <div class="card p-3 h-100">
+            <div class="fw-semibold small mb-1"><i class="fa-solid fa-building-columns"></i> الكلية والمخرجات</div>
+            <div class="small text-muted">هوية · برامج · ILO</div>
+          </div>
+        </a>
+      </div>
+    </div>
+
+    <h6 class="text-muted mb-2">تقارير سريعة</h6>
     <div class="row g-2 mb-4">
       <div class="col-6 col-md-3">
         <a href="/academic_quality/export/program.pdf" class="action-tile">
@@ -109,12 +159,7 @@
         </a>
       </div>
       <div class="col-6 col-md-3">
-        <a href="/academic_quality/surveys/export/package.pdf?semester={{ metrics.semester|urlencode }}" class="action-tile">
-          <div class="card p-3 text-center small"><i class="fa-solid fa-file-pdf text-danger d-block mb-1 fs-5"></i>تقرير استبيانات PDF</div>
-        </a>
-      </div>
-      <div class="col-6 col-md-3">
-        <a href="/ilo_catalog_page" class="action-tile">
+        <a href="/academic_quality/ilo/catalog" class="action-tile">
           <div class="card p-3 text-center small"><i class="fa-solid fa-book-open d-block mb-1 fs-5"></i>كتالوج المخرجات</div>
         </a>
       </div>

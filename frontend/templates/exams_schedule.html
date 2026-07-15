@@ -256,19 +256,36 @@ function renderExamRegistrationInsights(cov){
     return;
   }
   const base = cov.registration_baseline || {};
-  const missing = Array.isArray(base.missing_in_exam) ? base.missing_in_exam : [];
+  const required = Array.isArray(base.missing_required)
+    ? base.missing_required
+    : (Array.isArray(base.missing_in_exam) ? base.missing_in_exam : []);
+  const optional = Array.isArray(base.missing_optional_shared) ? base.missing_optional_shared : [];
+  const exempt = Array.isArray(base.missing_exempt) ? base.missing_exempt : [];
   const extra = Array.isArray(base.extra_in_exam) ? base.extra_in_exam : [];
   const counts = cov.counts || {};
   let html = '<div class="card border-secondary"><div class="card-body py-2 px-3">';
   html += `<div class="small text-muted mb-2"><strong>مقارنة بالتسجيل الفعلي بالمقررات</strong> — الفصل: ${esc(cov.term_label || '')}</div>`;
-  html += `<div class="small mb-2">المقررات الفعلية: <strong>${Number(counts.registrations_distinct || 0)}</strong> | الموجودة في جدول الامتحانات: <strong>${Number(counts.exam_distinct_courses || 0)}</strong></div>`;
-  if(missing.length){
-    html += `<div class="alert alert-warning py-2 mb-2"><strong>مقررات مسجلة فعلياً وغير موجودة في جدول الامتحانات (${missing.length}):</strong><div class="small mt-1">${missing.map(esc).join('، ')}</div></div>`;
+  html += `<div class="small mb-2">المقررات الفعلية: <strong>${Number(counts.registrations_distinct || 0)}</strong>`
+    + ` | الموجودة في جدول الامتحانات: <strong>${Number(counts.exam_distinct_courses || 0)}</strong>`
+    + ` | يلزم إجراء: <strong class="text-danger">${Number(counts.required_missing != null ? counts.required_missing : required.length)}</strong>`
+    + ` | اختياري مشترك: <strong>${Number(counts.optional_shared_missing != null ? counts.optional_shared_missing : optional.length)}</strong></div>`;
+  if(required.length){
+    html += `<div class="alert alert-warning py-2 mb-2"><strong>يلزم إجراء — مقررات القسم بلا امتحان (${required.length}):</strong>`
+      + `<div class="small mt-1">${required.map(esc).join('، ')}</div></div>`;
+  }
+  if(optional.length){
+    html += `<div class="alert alert-secondary py-2 mb-2"><strong>اختياري — مشتركة / كلية عامة (${optional.length}):</strong>`
+      + `<div class="small mt-1 mb-1">ليست إلزامية لكل الأقسام؛ أضفها إن كان طلبتك يمتحنون ضمن جدول قسمك هذا الفصل.</div>`
+      + `<div class="small">${optional.map(esc).join('، ')}</div></div>`;
+  }
+  if(exempt.length){
+    html += `<div class="alert alert-light border py-2 mb-2"><strong>مستثناة — بلا امتحان تقليدي (${exempt.length}):</strong>`
+      + `<div class="small mt-1">${exempt.map(esc).join('، ')}</div></div>`;
   }
   if(extra.length){
     html += `<div class="alert alert-secondary py-2 mb-0"><strong>مقررات في جدول الامتحانات بلا تسجيل فعلي (${extra.length}):</strong><div class="small mt-1">${extra.map(esc).join('، ')}</div></div>`;
   }
-  if(!missing.length && !extra.length){
+  if(!required.length && !optional.length && !exempt.length && !extra.length){
     html += '<div class="alert alert-success py-2 mb-0 small">لا توجد فروقات مع التسجيل الفعلي للمقررات.</div>';
   }
   html += '</div></div>';

@@ -63,6 +63,7 @@
           <div class="d-flex gap-2 flex-wrap">
             <span class="badge bg-secondary" id="editorStatus"></span>
             <button type="button" class="btn btn-sm btn-outline-primary" id="btnSaveDraft">حفظ</button>
+            <button type="button" class="btn btn-sm btn-outline-success d-none" id="btnPublishPartial">نشر الجزئي للطلبة</button>
             <button type="button" class="btn btn-sm btn-primary" id="btnSubmitDraft">إرسال للاعتماد</button>
             <button type="button" class="btn btn-sm btn-outline-danger d-none" id="btnDeleteDraft">حذف المسودة</button>
             <button type="button" class="btn btn-sm btn-outline-warning d-none" id="btnRequestCorrection">طلب تصحيح بعد الاعتماد</button>
@@ -1204,6 +1205,12 @@
         const isReadOnly = !canEdit;
         document.getElementById('btnSaveDraft').disabled = isReadOnly;
         document.getElementById('btnSubmitDraft').disabled = isReadOnly;
+        const btnPubPartial = document.getElementById('btnPublishPartial');
+        if (btnPubPartial) {
+          const ph = draftPhase;
+          btnPubPartial.classList.toggle('d-none', !(ph === 'partial' || ph === 'combined'));
+          btnPubPartial.disabled = isReadOnly && ph !== 'partial';
+        }
         const btnDelete = document.getElementById('btnDeleteDraft');
         const canDelete = !!(dj.draft && dj.draft.can_delete);
         const btnCorrection = document.getElementById('btnRequestCorrection');
@@ -1852,7 +1859,7 @@
     });
 
     async function approveDraft(id) {
-      if (!confirm('اعتماد هذه المسودة ونشر الدرجات في السجل؟')) return;
+      if (!confirm('اعتماد هذه المسودة؟ (النهائي يُرسل لاحقاً ضمن حزمة القسم للعميد)')) return;
       const r = await fetch('/grades/drafts/' + id + '/approve', {
         method: 'POST',
         credentials: 'include',
@@ -1861,12 +1868,29 @@
       });
       const j = await r.json().catch(() => ({}));
       if (r.ok) {
-        window.showToast && window.showToast('تم الاعتماد ونشر ' + (j.published || 0) + ' سجل', 'success');
+        const msg = j.hod_approved
+          ? (j.message || 'تم الاعتماد الداخلي')
+          : ('تم الاعتماد — ' + (j.message || ''));
+        window.showToast && window.showToast(msg, 'success');
         location.reload();
       } else {
         window.showToast && window.showToast(j.message || 'فشل الاعتماد', 'danger');
       }
     }
+
+    document.getElementById('btnPublishPartial')?.addEventListener('click', async () => {
+      if (!state.draftId) return;
+      if (!confirm('نشر درجات الجزئي (أعمال + نصفي) للطلبة؟')) return;
+      const r = await fetch('/grades/drafts/' + state.draftId + '/publish_partial', {
+        method: 'POST', credentials: 'include'
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        window.showToast && window.showToast('تم النشر لـ ' + (j.published_students || 0) + ' طالب', 'success');
+      } else {
+        window.showToast && window.showToast(j.message || 'فشل النشر', 'danger');
+      }
+    });
 
     async function returnDraft(id) {
       const note = prompt('سبب الإرجاع للأستاذ:', '') || '';

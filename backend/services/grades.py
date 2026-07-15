@@ -13,7 +13,15 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from flask import Blueprint, request, jsonify, Response, send_file, session, current_app
 from backend.core.auth import login_required, role_required, current_supervisor_effective
 from backend.database.database import is_postgresql, schedule_pk_column, fetch_table_columns
-from backend.core.department_scope_policy import resolve_users_list_scope, student_matches_department
+from backend.core.department_scope_policy import (
+    assert_course_in_actor_scope,
+    assert_hod_for_course_operation,
+    assert_student_in_actor_scope,
+    course_in_actor_scope,
+    filter_items_for_course_hod_scope,
+    resolve_users_list_scope,
+    student_matches_department,
+)
 from .utilities import (
     get_connection,
     get_current_term,
@@ -49,7 +57,54 @@ def _now_iso_z() -> str:
 
 
 def _current_user_name() -> str:
-    return (session.get("user") or session.get("username") or "").strip()
+    try:
+        return (session.get("user") or session.get("username") or "").strip()
+    except RuntimeError:
+        return ""
+
+
+def _session_role() -> str:
+    try:
+        return (session.get("user_role") or "").strip().lower()
+    except RuntimeError:
+        return ""
+
+
+def _is_hod_transcript_editor() -> bool:
+    """رئيس القسم في وضع الإدارة — صلاحية التصحيح المباشر من السجل بعد النشر."""
+    return _session_role() == "head_of_department"
+
+
+def _is_college_transcript_editor() -> bool:
+    """أدمن رئيسي/نظام — تصحيح أي سجل درجات على مستوى الكلية."""
+    return _session_role() in ("admin", "admin_main", "system_admin")
+
+
+def _assert_transcript_edit_student_scope(conn, student_id: str) -> None:
+    """
+    نطاق التصحيح من السجل:
+    - أدمن رئيسي/نظام: كل الطلبة (يتجاهل فلتر القسم المؤقت في الجلسة)
+    - غيرهم: نطاق القسم الفعال (رئيس قسم / …)
+    """
+    if _is_college_transcript_editor():
+        return
+    assert_student_in_actor_scope(conn, str(student_id or "").strip(), _current_user_name())
+
+
+def _require_post_publish_reason(reason: str | None, *, required: bool) -> str:
+    text = (reason or "").strip()
+    if required and len(text) < 5:
+        raise ValueError(
+            "سبب التصحيح مطلوب (٥ أحرف على الأقل) لتعديل الدرجة من السجل بعد النشر."
+        )
+    return text
+
+
+def _audit_changed_by(*, reason: str = "", kind: str = "transcript") -> str:
+    actor = _current_user_name() or "system"
+    if reason:
+        return f"{actor}|{kind}|{reason}"
+    return actor
 
 
 def _student_in_effective_scope(conn, student_id: str) -> bool:
@@ -732,8 +787,9 @@ def list_pending_grade_drafts():
             """,
             (semester_label,),
         ).fetchall()
-    pending = [dict(r) for r in rows] if rows else []
-    _enrich_drafts_with_group_labels(conn, pending)
+        pending = [dict(r) for r in rows] if rows else []
+        _enrich_drafts_with_group_labels(conn, pending)
+        pending = filter_items_for_course_hod_scope(conn, _current_user_name(), pending)
     return jsonify({"status": "ok", "pending": pending, "semester": semester_label}), 200
 
 
@@ -1240,7 +1296,13 @@ def submit_grade_draft(draft_id: int):
             conn,
             course_name=str(drow.get("course_name") or ""),
             draft_phase=str(drow.get("draft_phase") or "combined"),
-            department_id=department_id_for_course(conn, str(drow.get("course_name") or "")),
+            department_id=department_id_for_course(
+                conn,
+                str(drow.get("course_name") or ""),
+                teaching_group_id=drow.get("teaching_group_id"),
+                section_id=drow.get("section_id"),
+                semester=str(drow.get("semester") or ""),
+            ),
             draft_id=int(draft_id),
         )
     return jsonify({"status": "ok"}), 200
@@ -1261,6 +1323,18 @@ def approve_grade_draft(draft_id: int):
             return jsonify({"status": "error", "message": "draft not found"}), 404
         if (d["status"] or "") not in ("Submitted",):
             return jsonify({"status": "error", "message": "لا يمكن الاعتماد إلا لمسودة Submitted"}), 400
+        drow = dict(d)
+        try:
+            assert_hod_for_course_operation(
+                conn,
+                actor,
+                str(drow.get("course_name") or ""),
+                teaching_group_id=drow.get("teaching_group_id"),
+                section_id=drow.get("section_id"),
+                semester=str(drow.get("semester") or ""),
+            )
+        except PermissionError:
+            return jsonify({"status": "error", "message": "FORBIDDEN_DEPARTMENT_SCOPE"}), 403
 
         semester = d["semester"]
         course_name = d["course_name"]
@@ -1283,7 +1357,7 @@ def approve_grade_draft(draft_id: int):
                 course_name=str(course_name or ""),
                 draft_phase=draft_phase,
                 approved=True,
-                instructor_id=int(d.get("instructor_id") or 0),
+                instructor_id=int(drow.get("instructor_id") or 0),
             )
             return jsonify({
                 "status": "ok",
@@ -1293,57 +1367,37 @@ def approve_grade_draft(draft_id: int):
                 "message": "تم اعتماد الجزئي ونسخ الدرجات إلى مسودة النهائي",
             }), 200
 
-        # نشر الدرجات (نهائي أو combined)
-        items = cur.execute(
-            "SELECT student_id, computed_total FROM grade_draft_items WHERE draft_id = ?",
-            (int(draft_id),),
-        ).fetchall()
-        published = 0
-        for it in items or []:
-            sid = (it["student_id"] if hasattr(it, "keys") else it[0]) or ""
-            grade_val = (it["computed_total"] if hasattr(it, "keys") else it[1])
-            # نسمح بـ NULL (لم يُدخل)
-            old = cur.execute(
-                "SELECT grade FROM grades WHERE student_id=? AND semester=? AND course_name=?",
-                (sid, semester, course_name),
-            ).fetchone()
-            old_grade = old[0] if old else None
+        # نهائي/مجمّع: اعتماد داخلي لرئيس القسم فقط — النشر للطالب عبر حزمة العميد
+        user_role = (session.get("user_role") or "").strip().lower()
+        if user_role == "head_of_department":
+            from backend.services.grade_publication import hod_approve_final_draft
 
-            cur.execute(
-                """
-                INSERT INTO grades (student_id, semester, course_name, grade, updated_at)
-                VALUES (?,?,?,?,?)
-                ON CONFLICT(student_id, semester, course_name) DO UPDATE SET
-                  grade=excluded.grade,
-                  updated_at=excluded.updated_at
-                """,
-                (sid, semester, course_name, grade_val, now),
-            )
-            try:
-                cur.execute(
-                    "INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (sid, semester, course_name, old_grade, grade_val, actor, now),
+            result = hod_approve_final_draft(conn, int(draft_id), actor=actor)
+            if not result.get("ok"):
+                return jsonify({"status": "error", "message": result.get("message")}), int(
+                    result.get("code") or 400
                 )
-            except Exception:
-                pass
-            published += 1
+            from backend.services.course_workflow import notify_grade_draft_reviewed
 
-        cur.execute(
-            "UPDATE grade_drafts SET status='Approved', approved_at=?, approved_by=?, updated_at=? WHERE id=?",
-            (now, actor, now, int(draft_id)),
-        )
-        conn.commit()
-        from backend.services.course_workflow import notify_grade_draft_reviewed
+            notify_grade_draft_reviewed(
+                conn,
+                course_name=str(course_name or ""),
+                draft_phase=draft_phase,
+                approved=True,
+                instructor_id=int(drow.get("instructor_id") or 0),
+            )
+            return jsonify({
+                "status": "ok",
+                "published": 0,
+                "hod_approved": True,
+                "draft_phase": draft_phase,
+                "message": "تم اعتماد النهائي داخلياً — يُرسل ضمن حزمة القسم للعميد",
+            }), 200
 
-        notify_grade_draft_reviewed(
-            conn,
-            course_name=str(course_name or ""),
-            draft_phase=draft_phase,
-            approved=True,
-            instructor_id=int(d.get("instructor_id") or 0),
-        )
-
-    return jsonify({"status": "ok", "published": int(published)}), 200
+        return jsonify({
+            "status": "error",
+            "message": "النشر النهائي يتم عبر حزمة القسم من لوحة عميد الكلية",
+        }), 403
 
 
 @grades_bp.route("/drafts/<int:draft_id>/reject", methods=["POST"])
@@ -1361,8 +1415,19 @@ def reject_grade_draft(draft_id: int):
             return jsonify({"status": "error", "message": "draft not found"}), 404
         if (d["status"] or "") not in ("Submitted",):
             return jsonify({"status": "error", "message": "لا يمكن الإرجاع إلا لمسودة Submitted"}), 400
-        new_note = note or f"Returned by {actor}"
         drow = dict(d)
+        try:
+            assert_hod_for_course_operation(
+                conn,
+                actor,
+                str(drow.get("course_name") or ""),
+                teaching_group_id=drow.get("teaching_group_id"),
+                section_id=drow.get("section_id"),
+                semester=str(drow.get("semester") or ""),
+            )
+        except PermissionError:
+            return jsonify({"status": "error", "message": "FORBIDDEN_DEPARTMENT_SCOPE"}), 403
+        new_note = note or f"Returned by {actor}"
         cur.execute(
             "UPDATE grade_drafts SET status='Rejected', note=?, updated_at=? WHERE id=?",
             (new_note, now, int(draft_id)),
@@ -1720,13 +1785,21 @@ def save_grades():
     sid = data.get("student_id")
     semester = data.get("semester")
     grades = data.get("grades", [])
-    changed_by = data.get("changed_by", "system")
+    reason_raw = data.get("reason")
     if not sid or not semester:
         return jsonify({"status": "error", "message": "student_id و semester مطلوبة"}), 400
 
     with get_connection() as conn:
         cur = conn.cursor()
         try:
+            _assert_transcript_edit_student_scope(conn, str(sid).strip())
+            reason = _require_post_publish_reason(
+                reason_raw, required=_is_hod_transcript_editor()
+            )
+            changed_by = _audit_changed_by(
+                reason=reason,
+                kind="post_publish" if reason else "transcript",
+            )
             for g in grades:
                 course = (g.get("course_name") or "").strip()
                 course_code_in = (g.get("course_code") or "").strip()
@@ -2012,6 +2085,48 @@ def import_semester_excel():
             400,
         )
 
+    actor = _current_user_name()
+    with get_connection() as conn:
+        blocked_courses = [
+            cname for _idx, cname, _units in course_columns
+            if not course_in_actor_scope(conn, cname, actor)
+        ]
+        if blocked_courses:
+            sample = "، ".join(blocked_courses[:5])
+            extra = f" (+{len(blocked_courses) - 5})" if len(blocked_courses) > 5 else ""
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": f"مقررات خارج نطاق قسمك: {sample}{extra}",
+                    }
+                ),
+                400,
+            )
+
+        scoped_students: list[tuple] = []
+        skipped_students: list[str] = []
+        for student_id, student_name, grades in students_data:
+            try:
+                assert_student_in_actor_scope(conn, student_id, actor)
+            except ValueError:
+                skipped_students.append(student_id)
+                continue
+            scoped_students.append((student_id, student_name, grades))
+
+    if not scoped_students:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "لا يوجد طلاب ضمن نطاق قسمك في هذا الملف",
+                }
+            ),
+            400,
+        )
+
+    students_data = scoped_students
+
     # في نمط المعاينة: لا نكتب شيئاً في قاعدة البيانات، نعيد فقط ملخصاً
     if preview_flag:
         total_students = len(students_data)
@@ -2026,6 +2141,7 @@ def import_semester_excel():
                 "courses": total_courses,
                 "records": total_records,
                 "invalid_grades": invalid_grades,
+                "skipped_students": skipped_students,
             }
         )
 
@@ -2966,7 +3082,7 @@ def update_grade():
     new_course_name = (data.get("new_course_name") or "").strip()  # الاسم الجديد عند اختيار مقرر من القائمة
     new_grade_raw = data.get("grade")
     new_course_code = (data.get("course_code") or "").strip()
-    changed_by = data.get("changed_by", "admin")
+    reason_raw = data.get("reason")
 
     if not sid or not semester or not course:
         return jsonify({"status": "error", "message": "student_id و semester و course_name مطلوبة"}), 400
@@ -2978,6 +3094,17 @@ def update_grade():
 
     with get_connection() as conn:
         cur = conn.cursor()
+        try:
+            _assert_transcript_edit_student_scope(conn, str(sid).strip())
+            reason = _require_post_publish_reason(
+                reason_raw, required=_is_hod_transcript_editor()
+            )
+        except ValueError as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 400
+        changed_by = _audit_changed_by(
+            reason=reason,
+            kind="post_publish" if reason else "transcript",
+        )
         # fetch existing grade row to preserve course_code and units if present
         existing = cur.execute(
             "SELECT course_code, units, grade FROM grades WHERE student_id=? AND semester=? AND course_name=?",
@@ -3398,6 +3525,23 @@ def get_transcript(student_id):
                     "code": "FORBIDDEN"
                 }), 403
     data = _load_transcript_data(student_id)
+    user_role = session.get("user_role")
+    if user_role == "student":
+        with get_connection() as conn:
+            from backend.services.grade_publication import (
+                filter_transcript_for_student_visibility,
+                student_term_grade_details,
+            )
+
+            term_name, term_year = get_current_term(conn=conn)
+            current_sem = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
+            data["transcript"] = filter_transcript_for_student_visibility(
+                conn,
+                student_id,
+                data.get("transcript") or {},
+                current_semester=current_sem,
+            )
+            data["term_grade_details"] = student_term_grade_details(conn, student_id, current_sem)
     return jsonify({
         "student_id": data["student_id"],
         "student_name": data.get("student_name", ""),
@@ -3778,13 +3922,24 @@ def delete_semester():
     data = request.get_json(force=True)
     student_id = data.get("student_id")
     semester = data.get("semester")
-    changed_by = data.get("changed_by", "admin")
+    reason_raw = data.get("reason")
 
     if not student_id or not semester:
         return jsonify({"status": "error", "message": "student_id و semester مطلوبة"}), 400
 
     with get_connection() as conn:
         cur = conn.cursor()
+        try:
+            _assert_transcript_edit_student_scope(conn, str(student_id).strip())
+            reason = _require_post_publish_reason(
+                reason_raw, required=_is_hod_transcript_editor()
+            )
+        except ValueError as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 400
+        changed_by = _audit_changed_by(
+            reason=reason,
+            kind="post_publish_delete" if reason else "transcript_delete",
+        )
         rows = cur.execute(
             "SELECT course_name, grade FROM grades WHERE student_id = ? AND semester = ?",
             (student_id, semester),
@@ -3827,13 +3982,24 @@ def delete_course():
     student_id = data.get("student_id")
     semester = data.get("semester")
     course_name = data.get("course_name")
-    changed_by = data.get("changed_by", "admin")
+    reason_raw = data.get("reason")
 
     if not student_id or not semester or not course_name:
         return jsonify({"status": "error", "message": "student_id و semester و course_name مطلوبة"}), 400
 
     with get_connection() as conn:
         cur = conn.cursor()
+        try:
+            _assert_transcript_edit_student_scope(conn, str(student_id).strip())
+            reason = _require_post_publish_reason(
+                reason_raw, required=_is_hod_transcript_editor()
+            )
+        except ValueError as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 400
+        changed_by = _audit_changed_by(
+            reason=reason,
+            kind="post_publish_delete" if reason else "transcript_delete",
+        )
         row = cur.execute(
             "SELECT grade FROM grades WHERE student_id = ? AND semester = ? AND course_name = ?",
             (student_id, semester, course_name),
@@ -3913,4 +4079,148 @@ def draft_outcome_assessment(draft_id: int):
         conn.commit()
         matrix = get_scores_matrix(cur, section_id, semester)
     return jsonify({"status": "ok", "assessment_items": matrix.get("items") or [], "scores": matrix.get("scores") or []})
+
+
+# --- نشر الدرجات: جزئي + حزمة نهائية للقسم ---
+
+
+@grades_bp.route("/drafts/<int:draft_id>/publish_partial", methods=["POST"])
+@role_required("instructor", "head_of_department", "admin_main", "admin")
+def publish_partial_grade_draft(draft_id: int):
+    """نشر درجات الجزئي (أعمال + نصفي) للطلبة."""
+    with get_connection() as conn:
+        from backend.services.grade_publication import publish_partial_draft
+
+        result = publish_partial_draft(conn, int(draft_id))
+    if not result.get("ok"):
+        return jsonify({"status": "error", "message": result.get("message")}), int(result.get("code") or 400)
+    return jsonify({"status": "ok", **result}), 200
+
+
+@grades_bp.route("/hod/final_batch", methods=["GET"])
+@role_required("head_of_department", "admin_main", "admin")
+def hod_final_batch_summary():
+    """ملخص حزمة الدرجات النهائية للقسم + نسبة الإنجاز."""
+    with get_connection() as conn:
+        from backend.services.grade_publication import (
+            _hod_department_id,
+            build_hod_final_batch_summary,
+            ensure_grade_publication_schema,
+        )
+
+        ensure_grade_publication_schema(conn)
+        actor = _current_user_name()
+        dept_id = _hod_department_id(conn, actor)
+        if dept_id is None:
+            return jsonify({"status": "error", "message": "لا يمكن تحديد قسمك"}), 403
+        semester = _current_semester_label(conn)
+        summary = build_hod_final_batch_summary(
+            conn, department_id=int(dept_id), semester=semester, actor=actor
+        )
+    return jsonify({"status": "ok", **summary}), 200
+
+
+@grades_bp.route("/hod/final_batch/submit", methods=["POST"])
+@role_required("head_of_department", "admin_main", "admin")
+def hod_submit_final_batch():
+    """إرسال حزمة الدرجات النهائية للعميد بعد اكتمال 100%."""
+    data = request.get_json(force=True) or {}
+    with get_connection() as conn:
+        from backend.services.grade_publication import (
+            _hod_department_id,
+            ensure_grade_publication_schema,
+            submit_department_batch_to_dean,
+        )
+
+        ensure_grade_publication_schema(conn)
+        actor = _current_user_name()
+        dept_id = _hod_department_id(conn, actor)
+        if dept_id is None:
+            return jsonify({"status": "error", "message": "لا يمكن تحديد قسمك"}), 403
+        semester = (data.get("semester") or "").strip() or _current_semester_label(conn)
+        result = submit_department_batch_to_dean(
+            conn,
+            department_id=int(dept_id),
+            semester=semester,
+            actor=actor,
+            hod_note=(data.get("hod_note") or "").strip(),
+        )
+    if not result.get("ok"):
+        return jsonify({"status": "error", "message": result.get("message")}), int(result.get("code") or 400)
+    return jsonify({"status": "ok", **result}), 200
+
+
+@grades_bp.route("/dean/final_batches", methods=["GET"])
+@role_required("admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
+def dean_list_final_batches():
+    """حزم الدرجات النهائية المرسلة من الأقسام."""
+    semester = (request.args.get("semester") or "").strip() or None
+    with get_connection() as conn:
+        from backend.services.grade_publication import ensure_grade_publication_schema, list_dean_batches
+
+        ensure_grade_publication_schema(conn)
+        batches = list_dean_batches(conn, semester)
+    return jsonify({"status": "ok", "batches": batches}), 200
+
+
+@grades_bp.route("/dean/final_batches/<int:batch_id>", methods=["GET"])
+@role_required("admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
+def dean_get_final_batch(batch_id: int):
+    with get_connection() as conn:
+        from backend.services.grade_publication import ensure_grade_publication_schema, get_dean_batch_detail
+
+        ensure_grade_publication_schema(conn)
+        detail = get_dean_batch_detail(conn, int(batch_id))
+    if not detail:
+        return jsonify({"status": "error", "message": "الحزمة غير موجودة"}), 404
+    return jsonify({"status": "ok", "batch": detail}), 200
+
+
+@grades_bp.route("/dean/final_batches/<int:batch_id>/publish", methods=["POST"])
+@role_required("admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
+def dean_publish_final_batch(batch_id: int):
+    """اعتماد ونشر حزمة الدرجات النهائية للطلبة."""
+    actor = _current_user_name() or "system"
+    with get_connection() as conn:
+        from backend.services.grade_publication import dean_publish_batch, ensure_grade_publication_schema
+
+        ensure_grade_publication_schema(conn)
+        result = dean_publish_batch(conn, int(batch_id), actor=actor)
+    if not result.get("ok"):
+        return jsonify({"status": "error", "message": result.get("message")}), int(result.get("code") or 400)
+    log_activity("dean_publish_grade_batch", f"batch_id={batch_id}, published={result.get('published_grades')}")
+    return jsonify({"status": "ok", **result}), 200
+
+
+@grades_bp.route("/dean/final_batches/<int:batch_id>/return", methods=["POST"])
+@role_required("admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
+def dean_return_final_batch(batch_id: int):
+    data = request.get_json(force=True) or {}
+    actor = _current_user_name() or "system"
+    with get_connection() as conn:
+        from backend.services.grade_publication import dean_return_batch, ensure_grade_publication_schema
+
+        ensure_grade_publication_schema(conn)
+        result = dean_return_batch(conn, int(batch_id), actor=actor, note=(data.get("note") or "").strip())
+    if not result.get("ok"):
+        return jsonify({"status": "error", "message": result.get("message")}), int(result.get("code") or 400)
+    return jsonify({"status": "ok", **result}), 200
+
+
+@grades_bp.route("/student/term_grades", methods=["GET"])
+@login_required
+def student_term_grades():
+    """درجات الفصل المنشورة للطالب (جزئي/نهائي)."""
+    if (session.get("user_role") or "").strip() != "student":
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+    sid = (session.get("student_id") or session.get("user") or "").strip()
+    if not sid:
+        return jsonify({"status": "error", "message": "لا يوجد ربط طالب"}), 403
+    with get_connection() as conn:
+        from backend.services.grade_publication import ensure_grade_publication_schema, student_term_grade_details
+
+        ensure_grade_publication_schema(conn)
+        semester = (request.args.get("semester") or "").strip() or _current_semester_label(conn)
+        courses = student_term_grade_details(conn, sid, semester)
+    return jsonify({"status": "ok", "semester": semester, "courses": courses}), 200
 

@@ -16,11 +16,14 @@ from backend.services.survey_external_analytics import (
     build_external_export_bytes,
     external_package_excel_frames,
     survey_external_metrics_summary,
+    _alumni_profile_open_texts,
+    _dedupe_open_text_entries,
 )
 from backend.services.survey_invites import (
     create_survey_invite,
     ensure_survey_invite_schema,
     list_external_cycles,
+    list_public_departments,
     submit_invite_survey,
 )
 from backend.services.survey_snapshots import (
@@ -39,10 +42,23 @@ from backend.services.survey_accreditation import (
 CYCLE = "دورة تصدير خارجي 9"
 
 
+def _ensure_test_department_id(db_conn) -> int:
+    depts = list_public_departments(db_conn)
+    if depts:
+        return int(depts[0]["id"])
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES ('TSTEXT', 'قسم اختبار خارجي', 'EXT', 1)"
+    )
+    db_conn.commit()
+    return int(cur.lastrowid)
+
+
 def _seed_employer_cycle(db_conn, cycle: str = CYCLE, n: int = 5):
     tpl = get_template_by_code(db_conn, "employer_strategic")
     qs = list_template_questions(db_conn, int(tpl["id"]))
     answers = {str(q["id"]): 4 for q in qs}
+    dept_id = _ensure_test_department_id(db_conn)
     for i in range(n):
         inv = create_survey_invite(
             db_conn,
@@ -59,6 +75,10 @@ def _seed_employer_cycle(db_conn, cycle: str = CYCLE, n: int = 5):
                 "org_type": "private",
                 "org_name": f"جهة {i}",
                 "hires_graduates": "yes",
+                "hire_department_ids": [dept_id],
+                "hire_department_needs": [
+                    {"department_id": dept_id, "specialty_needs_text": "هندسة مدنية"},
+                ],
             },
             answers_payload={"answers": answers},
         )
@@ -172,9 +192,85 @@ def test_external_export_routes(app, db_conn):
             )
             assert r3.status_code == 200
 
+        r_html = c.get(
+            f"/academic_quality/surveys/export/external/package?cycle={cycle_q}"
+        )
+        assert r_html.status_code == 200
+        assert "text/html" in (r_html.content_type or "")
+
+        r_pdf = c.get(
+            f"/academic_quality/surveys/export/external/package.pdf?cycle={cycle_q}"
+        )
+        assert r_pdf.status_code == 200
+
+        for code in EXTERNAL_SURVEY_CODES:
+            r_prev = c.get(
+                f"/academic_quality/surveys/export/external/{code}?cycle={cycle_q}"
+            )
+            assert r_prev.status_code == 200
+            r_spdf = c.get(
+                f"/academic_quality/surveys/export/external/{code}.pdf?cycle={cycle_q}"
+            )
+            assert r_spdf.status_code == 200
+
         r4 = c.post(
             "/academic_quality/surveys/api/close_cycle",
             json={"cycle_label": cycle_q, "force": True},
         )
         assert r4.status_code == 200
         assert r4.get_json().get("status") == "ok"
+
+
+def test_alumni_open_texts_dedupe_identical():
+    rows = [
+        {
+            "comments": "توصية عامة",
+            "profile": {
+                "full_name": "أ",
+                "department_label": "مدني",
+                "recommend_reason_text": "هو مجال التكنولوجيا الحديث",
+                "open_adaptation_difficulty": "عدم الخبره",
+            },
+        },
+        {
+            "comments": "",
+            "profile": {
+                "full_name": "ب",
+                "department_label": "مدني",
+                "recommend_reason_text": "  هو مجال التكنولوجيا الحديث  ",
+                "open_adaptation_difficulty": "عدم الخبره",
+            },
+        },
+        {
+            "comments": "توصية عامة",
+            "profile": {
+                "full_name": "",
+                "recommend_reason_text": "لا توجد فرص",
+            },
+        },
+    ]
+    ot = _alumni_profile_open_texts(rows)
+    reasons = ot["recommend_reasons"]
+    assert len(reasons) == 2
+    assert reasons[0]["العدد"] == 2
+    assert "×2" in reasons[0]["النص_المعروض"]
+    assert reasons[1]["النص"] == "لا توجد فرص"
+    diffs = ot["adaptation_difficulties"]
+    assert len(diffs) == 1
+    assert diffs[0]["العدد"] == 2
+    comments = ot["open_comments"]
+    assert len(comments) == 1
+    assert comments[0]["العدد"] == 2
+
+
+def test_dedupe_open_text_entries_preserves_first_wording():
+    out = _dedupe_open_text_entries(
+        [
+            {"الاسم": "أ", "النص": "عدم الخبرة"},
+            {"الاسم": "ب", "النص": "عدم   الخبرة"},
+        ]
+    )
+    assert len(out) == 1
+    assert out[0]["النص"] == "عدم الخبرة"
+    assert out[0]["العدد"] == 2
+

@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>مكتبة معرفة المساعد الذكي</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal mt-4">
+    {% set qa_crumb_mid_href = '/academic_quality/assistant' %}
+    {% set qa_crumb_mid_label = 'المساعد الذكي' %}
+    {% set qa_crumb_title = 'مكتبة المعرفة' %}
+    {% include 'partials/quality_breadcrumb.html' %}
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+      <div>
+        <h1 class="page-title h4 mb-1"><i class="fa-solid fa-books text-primary"></i> مكتبة معرفة المساعد</h1>
+        <p class="text-muted small mb-0">رفع وثائق معتمدة → اعتماد → استرجاع في نقاش المساعد (RAG خفيف)</p>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <button type="button" class="btn btn-outline-info btn-sm" onclick="PageGuide.open()">❓ دليل الاستخدام</button>
+        <a class="btn btn-outline-primary btn-sm" href="/academic_quality/assistant">المساعد الذكي</a>
+        {% if bootstrap.can_upload or bootstrap.can_approve %}
+        <a class="btn btn-outline-success btn-sm" href="/academic_quality/assistant/knowledge/export.zip">تصدير المعتمد (ZIP)</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="alert alert-warning small">{{ bootstrap.policy_ar }}</div>
+    {% if bootstrap.seed and bootstrap.seed.seeded %}
+    <div class="alert alert-success small">{{ bootstrap.seed.message_ar }}</div>
+    {% endif %}
+
+    <div class="row g-3 mb-3">
+      <div class="col-md-4">
+        <label class="form-label small">القسم (اختياري — فارغ = كلية)</label>
+        <select class="form-select form-select-sm" id="deptSel">
+          <option value="">— على مستوى الكلية —</option>
+          {% for d in departments %}
+          <option value="{{ d.id }}" {% if selected_department_id == d.id %}selected{% endif %}>{{ d.code }} — {{ d.name_ar }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small">تصفية الحالة</label>
+        <select class="form-select form-select-sm" id="statusFilter">
+          <option value="">الكل</option>
+          {% for s in bootstrap.catalog.statuses %}
+          <option value="{{ s.code }}">{{ s.title_ar }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small">التصنيف</label>
+        <select class="form-select form-select-sm" id="catFilter">
+          <option value="">الكل</option>
+          {% for c in bootstrap.catalog.categories %}
+          <option value="{{ c.code }}">{{ c.title_ar }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2 d-flex align-items-end">
+        <button type="button" class="btn btn-outline-primary btn-sm w-100" id="btnReload">تحديث</button>
+      </div>
+    </div>
+
+    {% if bootstrap.can_upload %}
+    <div class="card mb-3">
+      <div class="card-header bg-light"><strong>رفع وثيقة معرفة</strong></div>
+      <div class="card-body">
+        <div class="row g-2">
+          <div class="col-md-6">
+            <input class="form-control form-control-sm" id="upTitle" placeholder="عنوان الوثيقة *">
+          </div>
+          <div class="col-md-3">
+            <select class="form-select form-select-sm" id="upCat">
+              {% for c in bootstrap.catalog.categories %}
+              <option value="{{ c.code }}">{{ c.title_ar }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-3">
+            <select class="form-select form-select-sm" id="upStatus">
+              <option value="draft">مسودة</option>
+              <option value="pending_review">بانتظار الاعتماد</option>
+              {% if bootstrap.can_approve %}<option value="approved">معتمد مباشرة</option>{% endif %}
+            </select>
+          </div>
+          <div class="col-md-4">
+            <input class="form-control form-control-sm" id="upSource" placeholder="وسم المصدر (مثل: ملخص لجنة عن ABET)">
+          </div>
+          <div class="col-md-4">
+            <input class="form-control form-control-sm" id="upUrl" placeholder="رابط اطّلاع اختياري">
+          </div>
+          <div class="col-md-4">
+            <input type="file" class="form-control form-control-sm" id="upFile"
+                   accept=".txt,.md,.markdown,.pdf,.docx,.json">
+          </div>
+          <div class="col-12">
+            <textarea class="form-control form-control-sm" id="upBody" rows="3"
+                      placeholder="أو الصق نصاً مباشرة (Markdown/نص) إن لم ترفع ملفاً"></textarea>
+          </div>
+          <div class="col-12">
+            <button type="button" class="btn btn-primary btn-sm" id="btnUpload">حفظ في المكتبة</button>
+            <span class="text-muted small ms-2" id="upMsg"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="card mb-3">
+      <div class="card-header bg-light d-flex justify-content-between align-items-center">
+        <strong>الوثائق</strong>
+        <div class="input-group input-group-sm" style="max-width:22rem;">
+          <input type="search" class="form-control" id="retrieveQ" placeholder="جرّب استرجاع RAG…">
+          <button class="btn btn-outline-secondary" type="button" id="btnRetrieve">استرجاع</button>
+        </div>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm mb-0 align-middle">
+            <thead>
+              <tr>
+                <th>#</th><th>العنوان</th><th>التصنيف</th><th>المصدر</th><th>الحالة</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="docsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <pre class="border rounded p-3 small bg-light" id="retrieveOut" style="white-space:pre-wrap;min-height:6rem;">نتائج الاسترجاع تظهر هنا…</pre>
+  </main>
+
+  <script>
+  (function () {
+    var boot = {{ bootstrap | tojson }};
+    var canUpload = !!boot.can_upload;
+    var canApprove = !!boot.can_approve;
+
+    function $(id) { return document.getElementById(id); }
+
+    function deptParam() {
+      var v = $('deptSel').value;
+      return v ? ('department_id=' + encodeURIComponent(v)) : '';
+    }
+
+    async function reloadDocs() {
+      var q = new URLSearchParams();
+      if ($('deptSel').value) q.set('department_id', $('deptSel').value);
+      if ($('statusFilter').value) q.set('status', $('statusFilter').value);
+      if ($('catFilter').value) q.set('category', $('catFilter').value);
+      var r = await fetch('/academic_quality/api/assistant/knowledge/docs?' + q.toString(), { credentials: 'include' });
+      var j = await r.json();
+      var tb = $('docsBody');
+      tb.innerHTML = '';
+      (j.docs || []).forEach(function (d) {
+        var tr = document.createElement('tr');
+        var actions = '';
+        if (canApprove && d.status !== 'approved') {
+          actions += '<button type="button" class="btn btn-link btn-sm p-0 me-2 btn-approve" data-id="' + d.id + '">اعتماد</button>';
+        }
+        if (canUpload && d.status === 'approved') {
+          actions += '<button type="button" class="btn btn-link btn-sm p-0 me-2 btn-archive" data-id="' + d.id + '">أرشفة</button>';
+        }
+        if (canUpload) {
+          actions += '<button type="button" class="btn btn-link btn-sm p-0 text-danger btn-del" data-id="' + d.id + '">حذف</button>';
+        }
+        tr.innerHTML =
+          '<td>' + d.id + '</td>' +
+          '<td><div class="fw-semibold small">' + (d.title_ar || '') + '</div>' +
+          '<div class="text-muted small">' + (d.text_preview || '') + '</div></td>' +
+          '<td class="small">' + (d.category_label_ar || '') + '</td>' +
+          '<td class="small">' + (d.source_label_ar || '—') + '</td>' +
+          '<td><span class="badge bg-secondary">' + (d.status_label_ar || d.status) + '</span></td>' +
+          '<td>' + actions + '</td>';
+        tb.appendChild(tr);
+      });
+      if (!(j.docs || []).length) {
+        tb.innerHTML = '<tr><td colspan="6" class="text-muted p-3">لا وثائق.</td></tr>';
+      }
+      tb.querySelectorAll('.btn-approve').forEach(function (b) {
+        b.addEventListener('click', function () { setStatus(b.dataset.id, 'approved'); });
+      });
+      tb.querySelectorAll('.btn-archive').forEach(function (b) {
+        b.addEventListener('click', function () { setStatus(b.dataset.id, 'archived'); });
+      });
+      tb.querySelectorAll('.btn-del').forEach(function (b) {
+        b.addEventListener('click', async function () {
+          if (!confirm('حذف الوثيقة؟')) return;
+          await fetch('/academic_quality/api/assistant/knowledge/docs/' + b.dataset.id + '/delete', {
+            method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}'
+          });
+          reloadDocs();
+        });
+      });
+    }
+
+    async function setStatus(id, status) {
+      await fetch('/academic_quality/api/assistant/knowledge/docs/' + id + '/status', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: status })
+      });
+      reloadDocs();
+    }
+
+    if ($('btnUpload')) {
+      $('btnUpload').addEventListener('click', async function () {
+        $('upMsg').textContent = 'جاري الحفظ…';
+        var fd = new FormData();
+        fd.append('title_ar', $('upTitle').value.trim());
+        fd.append('category', $('upCat').value);
+        fd.append('status', $('upStatus').value);
+        fd.append('source_label_ar', $('upSource').value.trim());
+        fd.append('source_url', $('upUrl').value.trim());
+        fd.append('body_text', $('upBody').value);
+        if ($('deptSel').value) fd.append('department_id', $('deptSel').value);
+        var file = $('upFile').files[0];
+        if (file) fd.append('file', file);
+        try {
+          var r = await fetch('/academic_quality/api/assistant/knowledge/docs', {
+            method: 'POST', credentials: 'include', body: fd
+          });
+          var j = await r.json();
+          if (!r.ok) { $('upMsg').textContent = j.message || 'فشل'; return; }
+          $('upMsg').textContent = 'تم الحفظ #' + (j.doc && j.doc.id);
+          $('upTitle').value = '';
+          $('upBody').value = '';
+          $('upFile').value = '';
+          reloadDocs();
+        } catch (e) {
+          $('upMsg').textContent = 'خطأ اتصال';
+        }
+      });
+    }
+
+    $('btnReload').addEventListener('click', reloadDocs);
+    $('deptSel').addEventListener('change', reloadDocs);
+    $('statusFilter').addEventListener('change', reloadDocs);
+    $('catFilter').addEventListener('change', reloadDocs);
+
+    $('btnRetrieve').addEventListener('click', async function () {
+      $('retrieveOut').textContent = 'جاري الاسترجاع…';
+      var r = await fetch('/academic_quality/api/assistant/knowledge/retrieve', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: $('retrieveQ').value.trim(),
+          department_id: $('deptSel').value || null,
+          category: $('catFilter').value || null,
+          approved_only: true
+        })
+      });
+      var j = await r.json();
+      var lines = [j.message_ar || ''];
+      (j.hits || []).forEach(function (h, i) {
+        lines.push('');
+        lines.push((i + 1) + ') ' + h.title_ar + ' [' + (h.category_label_ar || '') + '] score=' + h.score);
+        lines.push(h.excerpt || '');
+      });
+      $('retrieveOut').textContent = lines.join('\n');
+    });
+
+    reloadDocs();
+  })();
+  </script>
+</body>
+</html>

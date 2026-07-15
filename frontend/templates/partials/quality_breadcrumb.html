@@ -1,0 +1,24 @@
+{# breadcrumb موحّد لصفحات ضمان الجودة
+   الاستخدام:
+   {% set qa_crumb_title = 'إغلاق الفصل' %}
+   {% include 'partials/quality_breadcrumb.html' %}
+
+   للوحة الجودة نفسها:
+   {% set qa_crumb_hub = true %}
+   {% include 'partials/quality_breadcrumb.html' %}
+#}
+<nav aria-label="breadcrumb" class="so-quality-breadcrumb mb-2">
+  <ol class="breadcrumb small mb-0">
+    {% if qa_crumb_hub %}
+    <li class="breadcrumb-item active" aria-current="page">ضمان الجودة والاعتماد</li>
+    {% else %}
+    <li class="breadcrumb-item">
+      <a href="/academic_quality/dashboard">ضمان الجودة والاعتماد</a>
+    </li>
+    {% if qa_crumb_mid_href and qa_crumb_mid_label %}
+    <li class="breadcrumb-item"><a href="{{ qa_crumb_mid_href }}">{{ qa_crumb_mid_label }}</a></li>
+    {% endif %}
+    <li class="breadcrumb-item active" aria-current="page">{{ qa_crumb_title|default('…') }}</li>
+    {% endif %}
+  </ol>
+</nav>

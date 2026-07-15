@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }}</title>
+  {% include "survey_export_pdf_styles.html" %}
+  <style>
+    {% if for_pdf %}
+    {{ pdf_arabic_css_print|safe }}
+    {% else %}
+    {{ pdf_arabic_css|safe }}
+    {% endif %}
+    .cover-title { font-size: 22px; font-weight: 700; color: #0d3b66; margin-bottom: 4px; }
+    .cover-dept { font-size: 17px; font-weight: 700; color: #0d3b66; margin-bottom: 14px; }
+    .cover-sub { font-size: 15px; color: #333; margin-bottom: 6px; }
+    .summary-box, .analysis-box { background: #f0f6fc; border-right: 4px solid #0d6efd; padding: 10px 12px; margin: 12px 0 16px; }
+    .analysis-box { border-right-color: #198754; }
+    .interpret { font-style: italic; color: #444; margin-top: 6px; }
+    ol.conclusions { padding-right: 22px; }
+    ol.conclusions li { margin-bottom: 6px; }
+    .sign-block { margin-top: 24px; padding: 12px; border: 1px dashed #999; }
+    {% if not for_pdf %}
+    body { max-width: 980px; margin: 0 auto; padding: 20px 24px 40px; background: #fff; }
+    .preview-banner {
+      background: #e7f1ff;
+      border: 1px solid #0d6efd;
+      border-radius: 6px;
+      padding: 10px 14px;
+      margin-bottom: 18px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .preview-banner button {
+      padding: 6px 14px;
+      border: 1px solid #0d6efd;
+      background: #0d6efd;
+      color: #fff;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    @media print {
+      .no-print { display: none !important; }
+      body { padding: 0; max-width: none; }
+    }
+    {% endif %}
+  </style>
+</head>
+<body>
+  {% if not for_pdf %}
+  <div class="preview-banner no-print">
+    <span><strong>معاينة التقرير</strong> — للحصول على PDF بجودة عربية أفضل: اضغط «طباعة» ثم اختر «حفظ كـ PDF» من المتصفح.</span>
+    <button type="button" onclick="window.print()">طباعة / حفظ PDF</button>
+  </div>
+  {% endif %}
+
+  <div class="cover-title">{{ college_name_ar }}</div>
+  <div class="cover-dept">القسم: {{ department_label }}</div>
+  <h1>{{ title }}</h1>
+  <p class="cover-sub">الفصل الدراسي: <strong>{{ semester }}</strong> — تاريخ التصدير: <strong>{{ export_date }}</strong></p>
+
+  {% if for_pdf %}
+  <div class="summary-panel">
+    <strong>ملخص تنفيذي</strong>
+    <p class="narrative-block">
+      عدد الشعب: {{ stats.section_count or 0 }} —
+      مجمّعة: {{ stats.aggregated_count or 0 }} —
+      ناقصة: {{ stats.pending_count or 0 }} —
+      متوسط النتائج المجمّعة:
+      {% if stats.avg_score_percent is not none %}{{ stats.avg_score_percent }}%{% else %}—{% endif %}
+      <br>
+      سياسة التجميع: {{ course_eval_policy_ar }}
+      {% if analysis and analysis.interpretation_ar %}
+      <br>
+      <span class="interpret">{{ analysis.interpretation_ar }}</span>
+      {% endif %}
+    </p>
+  </div>
+  {% else %}
+  <div class="summary-box">
+    <strong>ملخص تنفيذي</strong>
+    <p>
+      عدد الشعب: {{ stats.section_count or 0 }} —
+      مجمّعة: {{ stats.aggregated_count or 0 }} —
+      ناقصة: {{ stats.pending_count or 0 }} —
+      متوسط النتائج المجمّعة:
+      {% if stats.avg_score_percent is not none %}{{ stats.avg_score_percent }}%{% else %}—{% endif %}
+    </p>
+    <p>سياسة التجميع: {{ course_eval_policy_ar }}</p>
+    {% if analysis and analysis.interpretation_ar %}
+    <p class="interpret">{{ analysis.interpretation_ar }}</p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if analysis %}
+  <h2>التحليل</h2>
+  {% if for_pdf %}
+  <div class="analysis-panel">
+    {% for p in analysis.narrative_paragraphs or [] %}
+    <div class="narrative-block">{{ p }}</div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="analysis-box">
+    {% for p in analysis.narrative_paragraphs or [] %}
+    <p>{{ p }}</p>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if analysis.distribution_rows %}
+  <h3>توزيع النتائج</h3>
+  <table>
+    <thead>
+      <tr><th>التصنيف</th><th>عدد الشعب</th><th>أمثلة</th></tr>
+    </thead>
+    <tbody>
+      {% for r in analysis.distribution_rows %}
+      <tr>
+        <td>{{ r['التصنيف'] }}</td>
+        <td>{{ r['عدد_الشعب'] }}</td>
+        <td>{{ r['أمثلة'] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if analysis.top_sections or analysis.bottom_sections %}
+  <h3>أعلى وأدنى الشعب</h3>
+  <table>
+    <thead>
+      <tr><th>التصنيف</th><th>المقرر</th><th>الشعبة</th><th>الأستاذ</th><th>النتيجة %</th></tr>
+    </thead>
+    <tbody>
+      {% for r in analysis.top_sections or [] %}
+      <tr>
+        <td>أعلى</td>
+        <td>{{ r['المقرر'] }}</td>
+        <td>{{ r['الشعبة'] }}</td>
+        <td>{{ r['الأستاذ'] }}</td>
+        <td>{{ r['النتيجة_%'] }}%</td>
+      </tr>
+      {% endfor %}
+      {% for r in analysis.bottom_sections or [] %}
+      <tr>
+        <td>أدنى</td>
+        <td>{{ r['المقرر'] }}</td>
+        <td>{{ r['الشعبة'] }}</td>
+        <td>{{ r['الأستاذ'] }}</td>
+        <td>{{ r['النتيجة_%'] }}%</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if analysis.strongest_items or analysis.weakest_items %}
+  <h3>ملحق ج — أبرز البنود على مستوى القسم</h3>
+  <table>
+    <thead>
+      <tr><th>المحور</th><th>البند</th><th>النسبة %</th><th>التصنيف</th></tr>
+    </thead>
+    <tbody>
+      {% for q in analysis.strongest_items or [] %}
+      <tr>
+        <td>قوة</td>
+        <td>{{ q.label_ar }}</td>
+        <td>{{ q.score_percent }}%</td>
+        <td>{{ q.classification_ar }}</td>
+      </tr>
+      {% endfor %}
+      {% for q in analysis.weakest_items or [] %}
+      <tr>
+        <td>تحسين</td>
+        <td>{{ q.label_ar }}</td>
+        <td>{{ q.score_percent }}%</td>
+        <td>{{ q.classification_ar }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <h2>الاستنتاجات</h2>
+  <ol class="conclusions">
+    {% for c in analysis.conclusions or [] %}
+    <li>{{ c }}</li>
+    {% endfor %}
+  </ol>
+
+  {% if analysis.recommendations %}
+  <h2>التوصيات</h2>
+  <table class="tbl-rec">
+    <thead>
+      <tr><th>التوصية</th><th>المسؤول</th><th>الإطار</th></tr>
+    </thead>
+    <tbody>
+      {% for r in analysis.recommendations %}
+      <tr>
+        <td>{{ r['التوصية'] }}</td>
+        <td>{{ r['المسؤول'] }}</td>
+        <td>{{ r['الإطار'] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% endif %}
+
+  <div class="page-break"></div>
+  <h2>ملحق أ — جدول الشعب</h2>
+  <table class="tbl-data">
+    <thead>
+      <tr>
+        <th>المقرر</th>
+        <th>الشعبة</th>
+        <th>الأستاذ</th>
+        <th>القسم</th>
+        <th>مسجّلون</th>
+        <th>تقييمات</th>
+        <th>الحد</th>
+        <th>النتيجة %</th>
+        <th>التجميع</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in sections %}
+      <tr>
+        <td>{{ s.course_name }}</td>
+        <td>{{ s.section_id }}</td>
+        <td>{{ s.instructor_name }}</td>
+        <td>{{ s.department_name }}</td>
+        <td>{{ s.enrolled_count if s.enrolled_count is not none else '—' }}</td>
+        <td>{{ s.response_count if s.response_count is not none else '—' }}</td>
+        <td>{{ s.min_aggregate if s.min_aggregate is not none else '—' }}</td>
+        <td>{% if s.aggregated and s.overall_score_percent is not none %}{{ s.overall_score_percent }}%{% else %}—{% endif %}</td>
+        <td>{% if s.aggregated %}مكتمل{% else %}ناقص{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if missing_audit and missing_audit.rows %}
+  <h2>ملحق ب — شعب بلا تقييم</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>المقرر</th>
+        <th>الشعبة</th>
+        <th>الأستاذ</th>
+        <th>القسم</th>
+        <th>مسجّلون</th>
+        <th>أسباب الفجوة</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in missing_audit.rows %}
+      <tr>
+        <td>{{ r.course_name }}</td>
+        <td>{{ r.section_id }}</td>
+        <td>{{ r.instructor_name }}</td>
+        <td>{{ r.department_name }}</td>
+        <td>{{ r.enrolled_count if r.enrolled_count is not none else '—' }}</td>
+        <td>{{ r.gap_reasons_ar or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if analysis and analysis.follow_up_sections %}
+  <h2>ملحق د — شعب تحتاج متابعة</h2>
+  <table>
+    <thead>
+      <tr><th>المقرر</th><th>الشعبة</th><th>الأستاذ</th><th>السبب</th></tr>
+    </thead>
+    <tbody>
+      {% for r in analysis.follow_up_sections %}
+      <tr>
+        <td>{{ r['المقرر'] }}</td>
+        <td>{{ r['الشعبة'] }}</td>
+        <td>{{ r['الأستاذ'] }}</td>
+        <td>{{ r['السبب'] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <h2>المنهجية والخصوصية</h2>
+  <table class="tbl-method">
+    <tbody>
+      {% for row in methodology_rows %}
+      <tr><th style="width:32%">{{ row['البند'] }}</th><td>{{ row['القيمة'] }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="sign-block">
+    <strong>اعتماد القسم</strong>
+    <p>رأي رئيس القسم / ملاحظات إضافية:</p>
+    <p style="min-height:48px;border-bottom:1px solid #ccc;"></p>
+    <p>التوقيع: ___________________ &nbsp;&nbsp;&nbsp; التاريخ: ___________________</p>
+  </div>
+
+  <p class="footer-note">مُنشأ آلياً من منصة ضمان الجودة — لا يُعتمد دون توقيع الجهة المختصة عند الحاجة. لا تُعرض إجابات فردية.</p>
+</body>
+</html>

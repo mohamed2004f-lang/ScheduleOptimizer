@@ -265,3 +265,92 @@ def test_derive_documentation_axis_pending(app):
             )
     assert out["auto"] is True
     assert out["status"] == "pending"
+
+
+def test_syllabus_reuse_case_insensitive(app):
+    with app.app_context():
+        with get_connection() as conn:
+            ensure_course_delivery_schema(conn)
+            course = "مقرر إعادة استخدام XYZ"
+            _seed_approved_baseline(conn, course)
+            bl = cd.get_active_baseline(conn, "مقرر إعادة استخدام xyz")
+            assert bl is not None
+            assert bl.get("reusable") is True
+            assert len(bl["topics"]) >= 1
+
+
+def test_incomplete_topics_threshold():
+    items = [
+        {"topic_id": 1, "completion_pct": 49, "incomplete_reason": "وقت", "topic_title": "أ"},
+        {"topic_id": 2, "completion_pct": 50, "incomplete_reason": "", "topic_title": "ب"},
+        {"topic_id": 3, "completion_pct": 10, "incomplete_reason": "", "topic_title": "ج"},
+    ]
+    low = cd.list_incomplete_topics(items)
+    assert len(low) == 2
+    assert {x["topic_id"] for x in low} == {1, 3}
+
+
+def test_validate_quality_report_requires_books_and_reasons():
+    rep = {
+        "items": [
+            {"topic_id": 1, "completion_pct": 40, "incomplete_reason": "", "topic_title": "م1"},
+        ],
+        "extra_topics": [{"title": "موضوع إضافي", "reason": ""}],
+        "references": [{"ref_type": "book", "title": "كتاب واحد", "publication_date": "2020"}],
+        "assessment_methods": [],
+    }
+    err = cd.validate_quality_report_for_submit(rep, require_books=True, require_assessments=True)
+    assert err and "سبب" in err
+
+    rep["items"][0]["incomplete_reason"] = "ضيق الوقت"
+    err = cd.validate_quality_report_for_submit(rep, require_books=True, require_assessments=True)
+    assert err and "خارج المقرر" in err
+
+    rep["extra_topics"][0]["reason"] = "مهم للتطبيق"
+    err = cd.validate_quality_report_for_submit(rep, require_books=True, require_assessments=True)
+    assert err and "كتابين" in err
+
+    rep["references"].append({"ref_type": "book", "title": "كتاب 2", "publication_date": "2021"})
+    err = cd.validate_quality_report_for_submit(rep, require_books=True, require_assessments=True)
+    assert err and "تقييم" in err
+
+    rep["assessment_methods"] = [{"method_label": "امتحان جزئي", "weight_pct": 30}]
+    assert cd.validate_quality_report_for_submit(rep, require_books=True, require_assessments=True) is None
+
+
+def test_grade_entry_lock_controls_draft_gate(app):
+    with app.app_context():
+        with get_connection() as conn:
+            ensure_course_delivery_schema(conn)
+            tgid = 88001
+            sem = "ربيع 25-26"
+            course = "مقرر قفل درجات"
+            _seed_approved_baseline(conn, course)
+            gate = cd.grade_draft_gate_status(
+                conn,
+                teaching_group_id=tgid,
+                semester=sem,
+                course_name=course,
+                department_id=1,
+                phase=cd.PHASE_PARTIAL,
+            )
+            assert gate["unlocked"] is False
+            assert "رئيس القسم" in (gate.get("reason") or "")
+
+            cd.set_grade_entry_lock(
+                conn,
+                teaching_group_id=tgid,
+                semester=sem,
+                phase=cd.PHASE_PARTIAL,
+                is_open=True,
+                set_by="hod-test",
+            )
+            gate2 = cd.grade_draft_gate_status(
+                conn,
+                teaching_group_id=tgid,
+                semester=sem,
+                course_name=course,
+                department_id=1,
+                phase=cd.PHASE_PARTIAL,
+            )
+            assert gate2["unlocked"] is True

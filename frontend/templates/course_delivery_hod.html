@@ -16,6 +16,7 @@
         <p class="page-subtitle" id="hodSubtitle">مفردات المقررات · تقارير التنفيذ · مسودات الدرجات</p>
       </div>
       <a href="/grade_drafts" class="btn btn-outline-secondary btn-sm">مسودات الدرجات (تفصيلي)</a>
+      <a href="/grades_hod_final_batch" class="btn btn-primary btn-sm">حزمة الدرجات النهائية</a>
     </div>
 
     <div id="hodSummary" class="row g-2 mb-3">
@@ -40,7 +41,8 @@
       <li class="nav-item"><button class="nav-link active" data-tab="baselines" type="button">قوائم المفردات <span class="badge bg-warning text-dark ms-1" id="tabBadgeBl">0</span></button></li>
       <li class="nav-item"><button class="nav-link" data-tab="gates" type="button">تقارير دون الحد <span class="badge bg-info ms-1" id="tabBadgeGt">0</span></button></li>
       <li class="nav-item"><button class="nav-link" data-tab="drafts" type="button">مسودات الدرجات <span class="badge bg-primary ms-1" id="tabBadgeGd">0</span></button></li>
-      <li class="nav-item"><button class="nav-link" data-tab="followup" type="button">متابعة القسم</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="locks" type="button">فتح/إقفال الدرجات</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="followup" type="button">متابعة الإنجاز</button></li>
     </ul>
 
     <div id="panelBaselines" class="card mb-3">
@@ -66,15 +68,29 @@
       </div>
     </div>
 
+    <div id="panelLocks" class="card mb-3 d-none">
+      <div class="card-header fw-semibold">فتح / إقفال إدخال الدرجات (لكل مقرر ومرحلة)</div>
+      <div class="card-body p-0">
+        <p class="small text-muted p-3 mb-0 border-bottom">النسبة تُعرض لدعم القرار فقط — فتح المسودة لا يعتمد عليها.</p>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead><tr><th>المقرر</th><th>الأستاذ</th><th>نسبة</th><th>فجوات &lt;50%</th><th>جزئي</th><th>نهائي</th><th></th></tr></thead>
+            <tbody id="locksBody"></tbody>
+          </table>
+        </div>
+        <div id="locksEmpty" class="p-3 text-muted small d-none">لا مجموعات تدريس.</div>
+      </div>
+    </div>
+
     <div id="panelFollowup" class="card mb-3 d-none">
       <div class="card-header fw-semibold d-flex justify-content-between align-items-center flex-wrap gap-2">
-        <span>متابعة تنفيذ المقررات — القسم</span>
+        <span>متابعة إنجاز المقررات — نسب وفجوات</span>
         <span class="small text-muted" id="followupSummary">جاري التحميل…</span>
       </div>
       <div class="card-body p-0">
         <div class="table-responsive">
           <table class="table table-sm mb-0">
-            <thead><tr><th>المقرر</th><th>الأستاذ</th><th>مفردات</th><th>جزئي</th><th>نهائي</th><th>المحاور</th><th></th></tr></thead>
+            <thead><tr><th>المقرر</th><th>الأستاذ</th><th>نسبة</th><th>فجوات</th><th>كتب</th><th>جزئي</th><th>نهائي</th><th></th></tr></thead>
             <tbody id="followupBody"></tbody>
           </table>
         </div>
@@ -93,18 +109,106 @@
     }
 
     function showTab(name) {
-      ['baselines', 'gates', 'drafts', 'followup'].forEach(t => {
+      ['baselines', 'gates', 'drafts', 'locks', 'followup'].forEach(t => {
         document.getElementById('panel' + t.charAt(0).toUpperCase() + t.slice(1))?.classList.toggle('d-none', t !== name);
       });
       document.querySelectorAll('#hodTabs .nav-link').forEach(btn => {
         btn.classList.toggle('active', btn.getAttribute('data-tab') === name);
       });
-      if (name === 'followup') loadFollowup();
+      if (name === 'followup' || name === 'locks') loadProgressBoard(name);
     }
 
     document.querySelectorAll('#hodTabs .nav-link').forEach(btn => {
       btn.addEventListener('click', () => showTab(btn.getAttribute('data-tab')));
     });
+
+    async function setLock(tgid, phase, isOpen) {
+      const r = await fetch('/course_delivery/hod/grade_locks', {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teaching_group_id: tgid, phase, is_open: isOpen })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(j.message || 'فشل'); return; }
+      loadProgressBoard('locks');
+    }
+
+    async function warnInstructor(tgid, courseName) {
+      const message = prompt('نص التنبيه للأستاذ (اختياري):') || '';
+      const r = await fetch('/course_delivery/hod/warn_instructor', {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teaching_group_id: tgid, message })
+      });
+      if (r.ok) alert('تم إرسال التنبيه'); else alert('فشل الإرسال');
+    }
+
+    async function loadProgressBoard(which) {
+      const r = await fetch('/course_delivery/hod/progress_board', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      const rows = j.rows || [];
+      const sum = j.summary || {};
+      if (which === 'followup' || !which) {
+        const body = document.getElementById('followupBody');
+        const empty = document.getElementById('followupEmpty');
+        const sumEl = document.getElementById('followupSummary');
+        sumEl.textContent = 'الفصل: ' + (j.semester || '') + ' — منخفضة: ' + (sum.low_completion || 0) + ' / ' + (sum.groups_total || 0);
+        if (!rows.length) { body.innerHTML = ''; empty.classList.remove('d-none'); }
+        else {
+          empty.classList.add('d-none');
+          body.innerHTML = rows.map(row =>
+            '<tr>' +
+            '<td>' + esc(row.course_name) + '</td>' +
+            '<td>' + esc(row.instructor_name) + '</td>' +
+            '<td>' + (row.overall_pct != null ? row.overall_pct + '%' : '—') + '</td>' +
+            '<td>' + (row.incomplete_count || 0) + '</td>' +
+            '<td>' + (row.books_ok ? '✓' : (row.book_reference_count || 0) + '/2') + '</td>' +
+            '<td class="small">' + esc(row.partial_status) + '</td>' +
+            '<td class="small">' + esc(row.final_status) + '</td>' +
+            '<td class="text-nowrap">' +
+            '<a class="btn btn-sm btn-outline-info me-1" href="/academic_quality/course_reports/' + row.teaching_group_id + '" target="_blank" title="معاينة / طباعة">' +
+            '<i class="fa-solid fa-display"></i> معاينة</a>' +
+            '<a class="btn btn-sm btn-outline-danger me-1" href="/academic_quality/course_reports/' + row.teaching_group_id + '.pdf" title="PDF">' +
+            '<i class="fa-solid fa-file-pdf"></i> PDF</a>' +
+            '<button type="button" class="btn btn-sm btn-outline-warning me-1 btn-warn" data-tgid="' + row.teaching_group_id + '">تنبيه</button>' +
+            '<a class="btn btn-sm btn-outline-secondary" href="' + esc(row.survey_url || '#') + '">تعبئة</a></td></tr>'
+          ).join('');
+          body.querySelectorAll('.btn-warn').forEach(btn => {
+            btn.onclick = () => warnInstructor(Number(btn.getAttribute('data-tgid')));
+          });
+        }
+      }
+      if (which === 'locks' || !which) {
+        const body = document.getElementById('locksBody');
+        const empty = document.getElementById('locksEmpty');
+        if (!rows.length) { body.innerHTML = ''; empty.classList.remove('d-none'); }
+        else {
+          empty.classList.add('d-none');
+          body.innerHTML = rows.map(row =>
+            '<tr>' +
+            '<td>' + esc(row.course_name) + '</td>' +
+            '<td>' + esc(row.instructor_name) + '</td>' +
+            '<td>' + (row.overall_pct != null ? row.overall_pct + '%' : '—') + '</td>' +
+            '<td>' + (row.incomplete_count || 0) + '</td>' +
+            '<td>' + (row.partial_lock_open
+              ? '<button class="btn btn-sm btn-success btn-lock" data-tgid="' + row.teaching_group_id + '" data-phase="partial" data-open="0">مفتوح — إقفال</button>'
+              : '<button class="btn btn-sm btn-outline-secondary btn-lock" data-tgid="' + row.teaching_group_id + '" data-phase="partial" data-open="1">مقفل — فتح</button>') + '</td>' +
+            '<td>' + (row.final_lock_open
+              ? '<button class="btn btn-sm btn-success btn-lock" data-tgid="' + row.teaching_group_id + '" data-phase="final" data-open="0">مفتوح — إقفال</button>'
+              : '<button class="btn btn-sm btn-outline-secondary btn-lock" data-tgid="' + row.teaching_group_id + '" data-phase="final" data-open="1">مقفل — فتح</button>') + '</td>' +
+            '<td><button type="button" class="btn btn-sm btn-outline-warning btn-warn" data-tgid="' + row.teaching_group_id + '">تنبيه</button> ' +
+            '<a class="btn btn-sm btn-outline-info" href="/academic_quality/course_reports/' + row.teaching_group_id + '" target="_blank" title="معاينة / طباعة">' +
+            '<i class="fa-solid fa-display"></i> معاينة</a> ' +
+            '<a class="btn btn-sm btn-outline-danger" href="/academic_quality/course_reports/' + row.teaching_group_id + '.pdf" title="PDF">' +
+            '<i class="fa-solid fa-file-pdf"></i> PDF</a></td></tr>'
+          ).join('');
+          body.querySelectorAll('.btn-lock').forEach(btn => {
+            btn.onclick = () => setLock(Number(btn.getAttribute('data-tgid')), btn.getAttribute('data-phase'), btn.getAttribute('data-open') === '1');
+          });
+          body.querySelectorAll('.btn-warn').forEach(btn => {
+            btn.onclick = () => warnInstructor(Number(btn.getAttribute('data-tgid')));
+          });
+        }
+      }
+    }
 
     async function loadPolicy() {
       const r = await fetch('/course_delivery/gate_policy', { credentials: 'include' });
@@ -197,41 +301,6 @@
       if (r.ok) loadPending(); else alert('فشل الإرجاع');
     }
 
-    async function loadFollowup() {
-      const body = document.getElementById('followupBody');
-      const empty = document.getElementById('followupEmpty');
-      const sumEl = document.getElementById('followupSummary');
-      const r = await fetch('/course_delivery/hod/department_summary', { credentials: 'include' });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        body.innerHTML = '';
-        sumEl.textContent = 'تعذر التحميل';
-        return;
-      }
-      const rows = j.rows || [];
-      const sum = j.summary || {};
-      sumEl.textContent = 'الفصل: ' + (j.semester || '') + ' — مكتمل: ' + (sum.groups_documentation_complete || 0) + ' / ' + (sum.groups_total || 0);
-      if (!rows.length) {
-        body.innerHTML = '';
-        empty.classList.remove('d-none');
-        return;
-      }
-      empty.classList.add('d-none');
-      const tick = (ok) => ok ? '<span class="text-success">✓</span>' : '<span class="text-muted">○</span>';
-      body.innerHTML = rows.map(row => {
-        const d = row.delivery || {};
-        return '<tr>' +
-          '<td>' + esc(row.course_name) + (row.group_code ? ' <small class="text-muted">(' + esc(row.group_code) + ')</small>' : '') + '</td>' +
-          '<td>' + esc(row.instructor_name) + '</td>' +
-          '<td>' + tick(d.baseline_ok) + '</td>' +
-          '<td>' + tick(d.partial_submitted) + '</td>' +
-          '<td>' + tick(d.final_submitted) + '</td>' +
-          '<td class="small">' + (row.progress_done || 0) + '/' + (row.progress_total || 0) + '</td>' +
-          '<td><a class="btn btn-sm btn-outline-primary" href="' + esc(row.survey_url || '#') + '">عرض</a></td>' +
-          '</tr>';
-      }).join('');
-    }
-
     async function loadPending() {
       const r = await fetch('/course_delivery/hod/pending', { credentials: 'include' });
       const j = await r.json().catch(() => ({}));
@@ -255,7 +324,7 @@
       document.getElementById('tabBadgeGd').textContent = sum.pending_grade_drafts ?? 0;
       if (sum.semester) {
         document.getElementById('hodSubtitle').textContent =
-          'الفصل: ' + sum.semester + ' — مفردات · تقارير · مسودات';
+          'الفصل: ' + sum.semester + ' — مفردات · تقارير · أقفال درجات · مسودات';
       }
 
       const bls = j.pending_baselines || [];

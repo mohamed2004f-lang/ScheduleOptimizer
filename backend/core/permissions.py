@@ -28,6 +28,7 @@ PERMISSION_CATALOG: list[dict[str, Any]] = [
     {"key": "nav_grade_drafts", "group_key": "records", "group_label_ar": "السجل الأكademي", "label_ar": "مسودات الدرجات"},
     {"key": "nav_academic_quality_dashboard", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "لوحة الجودة"},
     {"key": "nav_surveys_results", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "نتائج الاستبيانات"},
+    {"key": "nav_term_closure", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "إغلاق الفصل الموحّد"},
     {"key": "nav_evaluation_survey_admin", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "إعداد الاستبيانات"},
     {"key": "can_edit_college_identity", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "تعديل هوية الكلية"},
     {"key": "can_edit_accreditation_catalog", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "تعديل كتalog الاعتماد"},
@@ -349,6 +350,7 @@ TEACHING_PORTAL_ADMIN_DENY_KEYS: tuple[str, ...] = (
 SUPERVISOR_PORTAL_QUALITY_DENY_KEYS: tuple[str, ...] = (
     "nav_academic_quality_dashboard",
     "nav_surveys_results",
+    "nav_term_closure",
     "nav_evaluation_survey_admin",
     "nav_college_profile",
     "nav_programs_portal",

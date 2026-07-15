@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>أرشيف القسم — ضمان الجودة</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal mt-4">
+    {% if page_error %}
+    <div class="alert alert-danger">{{ page_error }}</div>
+    {% endif %}
+
+    {% set qa_crumb_title = 'أرشيف القسم' %}
+    {% include 'partials/quality_breadcrumb.html' %}
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+      <div>
+        <h1 class="page-title h4 mb-1"><i class="fa-solid fa-folder-open text-primary"></i> أرشيف القسم</h1>
+        <p class="text-muted small mb-0">
+          محاضر · قرارات · مراسلات · دفتر ملاحظات — الربط بالاعتماد يدوي بعد اقتراح المؤشر.
+        </p>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/archive/guide">دليل الأرشفة والقوالب</a>
+        <a class="btn btn-outline-primary btn-sm" href="/academic_quality/accreditation/map?scope=inst">امتثال مؤسسي</a>
+        <a class="btn btn-outline-primary btn-sm" href="/academic_quality/accreditation/map?scope=prog">امتثال برامجي</a>
+        <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/surveys/results">نتائج الاستبيانات</a>
+        <a class="btn btn-outline-info btn-sm" href="/academic_quality/glossary">المصطلحات</a>
+      </div>
+    </div>
+
+    <form class="row g-2 align-items-end mb-3" method="get" action="/academic_quality/archive">
+      <div class="col-md-4">
+        <label class="form-label small">القسم</label>
+        <select class="form-select form-select-sm" name="department_id" {% if scoped_locked %}disabled{% endif %}>
+          {% for d in departments %}
+          <option value="{{ d.id }}" {% if department_id == d.id %}selected{% endif %}>{{ d.name_ar }} ({{ d.code }})</option>
+          {% endfor %}
+        </select>
+        {% if scoped_locked %}<input type="hidden" name="department_id" value="{{ department_id }}">{% endif %}
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small">الفصل</label>
+        <input class="form-control form-control-sm" name="semester" value="{{ semester }}">
+      </div>
+      <div class="col-md-2">
+        <button class="btn btn-primary btn-sm w-100" type="submit">عرض</button>
+      </div>
+    </form>
+
+    {% if checklist %}
+    <div class="card mb-3 border-0 bg-light">
+      <div class="card-body py-2">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <strong class="small">قائمة التحقق الفصلية</strong>
+          <span class="badge {% if checklist.complete %}bg-success{% else %}bg-warning text-dark{% endif %}">{{ checklist.summary_ar }}</span>
+        </div>
+        <div class="row g-2 small">
+          {% for row in checklist.rows %}
+          <div class="col-md">
+            <div class="border rounded p-2 bg-white h-100">
+              <div class="fw-semibold">{{ row.title_ar }}</div>
+              <div class="text-muted">{{ row.count }} سند — {{ row.hint_ar }}</div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="row g-3">
+      <div class="col-lg-5">
+        <div class="card shadow-sm">
+          <div class="card-header bg-white"><strong>إضافة سجل</strong></div>
+          <div class="card-body">
+            <form id="archiveCreateForm" enctype="multipart/form-data">
+              <input type="hidden" name="department_id" value="{{ department_id }}">
+              <input type="hidden" name="semester" value="{{ semester }}">
+              <div class="mb-2">
+                <label class="form-label small">النوع</label>
+                <select class="form-select form-select-sm" name="record_type" id="recordType" required>
+                  {% for t in record_types %}
+                  <option value="{{ t.code }}">{{ t.title_ar }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small">العنوان</label>
+                <input class="form-control form-control-sm" name="title_ar" id="titleAr" required>
+              </div>
+              <div class="row g-2">
+                <div class="col-6">
+                  <label class="form-label small">التاريخ</label>
+                  <input type="date" class="form-control form-control-sm" name="doc_date">
+                </div>
+                <div class="col-6">
+                  <label class="form-label small">الرقم</label>
+                  <input class="form-control form-control-sm" name="ref_number">
+                </div>
+              </div>
+              <div class="mb-2 mt-2">
+                <label class="form-label small">الجهة / الحضور</label>
+                <input class="form-control form-control-sm" name="party_ar">
+              </div>
+              <div class="mb-2">
+                <label class="form-label small">الملخص / النص</label>
+                <textarea class="form-control form-control-sm" name="body_text" id="bodyText" rows="3"></textarea>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small">حالة المتابعة (للملاحظات)</label>
+                <select class="form-select form-select-sm" name="follow_up_status">
+                  {% for s in catalog.follow_up_statuses %}
+                  <option value="{{ s.code }}">{{ s.label_ar }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small">ملف مرفق (اختياري)</label>
+                <input type="file" class="form-control form-control-sm" name="file" id="archiveFile">
+              </div>
+              <div class="d-flex flex-wrap gap-2">
+                <button type="submit" class="btn btn-success btn-sm">حفظ</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="btnClassify">اقتراح تصنيف</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="btnDraft">مسودة من المساعد</button>
+              </div>
+              <div class="small text-muted mt-2" id="assistantHint"></div>
+            </form>
+          </div>
+        </div>
+
+        <div class="card shadow-sm mt-3">
+          <div class="card-header bg-white"><strong>المساعد الذكي</strong></div>
+          <div class="card-body">
+            <p class="small text-muted">اقتراح فقط — لا يغيّر حالة الامتثال تلقائياً.</p>
+            <div class="d-flex flex-wrap gap-2 mb-2">
+              <button type="button" class="btn btn-outline-primary btn-sm" id="btnGaps">نواقص الأرشيف</button>
+              <button type="button" class="btn btn-outline-primary btn-sm" id="btnAssistHelp">ماذا يفعل؟</button>
+            </div>
+            <pre class="small bg-light border rounded p-2 mb-0" id="assistantOut" style="white-space:pre-wrap;min-height:4rem;"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-7">
+        <div class="card shadow-sm">
+          <div class="card-header bg-white d-flex justify-content-between align-items-center">
+            <strong>سجلات {{ department_name_ar or '' }}</strong>
+            <span class="badge bg-light text-dark border">{{ items|length }}</span>
+          </div>
+          <div class="card-body p-0">
+            <div class="table-responsive">
+              <table class="table table-sm table-hover mb-0 align-middle">
+                <thead class="table-light">
+                  <tr>
+                    <th>النوع</th>
+                    <th>العنوان</th>
+                    <th>التاريخ</th>
+                    <th>ملف</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for it in items %}
+                  <tr>
+                    <td class="small">{{ it.record_type_label_ar }}</td>
+                    <td>
+                      <div class="fw-semibold small">{{ it.title_ar }}</div>
+                      <div class="text-muted" style="font-size:0.75rem;">{{ it.ref_number or '—' }} · {{ it.party_ar or '' }}</div>
+                    </td>
+                    <td class="small">{{ it.doc_date or '—' }}</td>
+                    <td class="small">
+                      {% if it.has_file %}
+                      <a href="/academic_quality/api/archive/file/{{ it.id }}">تنزيل</a>
+                      {% else %}—{% endif %}
+                    </td>
+                    <td class="text-nowrap">
+                      <button type="button" class="btn btn-outline-primary btn-sm btn-suggest"
+                        data-id="{{ it.id }}">ربط اعتماد</button>
+                      <button type="button" class="btn btn-outline-danger btn-sm btn-del"
+                        data-id="{{ it.id }}">حذف</button>
+                    </td>
+                  </tr>
+                  {% else %}
+                  <tr><td colspan="5" class="text-center text-muted py-4">لا سجلات لهذا الفصل بعد.</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div class="modal fade" id="linkModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">اقتراح ربط يدوي بمؤشر اعتماد</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <p class="small text-muted" id="linkPolicy"></p>
+          <div id="linkSuggestions"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    const deptId = {{ department_id | tojson }};
+    const semester = {{ semester | tojson }};
+    const deptName = {{ (department_name_ar or '') | tojson }};
+
+    function hdr() {
+      const c = document.querySelector('meta[name=csrf-token]')?.content || '';
+      const h = {};
+      if (c) h['X-CSRFToken'] = c;
+      return h;
+    }
+
+    function setAssist(msg) {
+      document.getElementById('assistantOut').textContent = msg || '';
+      document.getElementById('assistantHint').textContent = msg || '';
+    }
+
+    async function assist(body) {
+      const r = await fetch('/academic_quality/api/archive/assistant', {
+        method: 'POST', credentials: 'include',
+        headers: { ...hdr(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ department_id: deptId, semester, department_name_ar: deptName, ...body }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.message || 'فشل المساعد');
+      return j;
+    }
+
+    document.getElementById('archiveCreateForm')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const r = await fetch('/academic_quality/api/archive/items', {
+        method: 'POST', credentials: 'include', headers: hdr(), body: fd,
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) location.reload();
+      else alert(j.message || 'فشل الحفظ');
+    });
+
+    document.getElementById('btnClassify')?.addEventListener('click', async () => {
+      try {
+        const j = await assist({
+          intent: 'classify',
+          title_ar: document.getElementById('titleAr').value,
+          body_text: document.getElementById('bodyText').value,
+          filename: document.getElementById('archiveFile').files[0]?.name || '',
+        });
+        if (j.suggested_type) document.getElementById('recordType').value = j.suggested_type;
+        setAssist(j.message_ar || '');
+      } catch (err) { alert(err.message); }
+    });
+
+    document.getElementById('btnDraft')?.addEventListener('click', async () => {
+      try {
+        const j = await assist({
+          intent: 'draft',
+          record_type: document.getElementById('recordType').value,
+          fields: {
+            title_ar: document.getElementById('titleAr').value,
+            body_text: document.getElementById('bodyText').value,
+          },
+        });
+        document.getElementById('bodyText').value = j.draft_text || '';
+        setAssist(j.message_ar || '');
+      } catch (err) { alert(err.message); }
+    });
+
+    document.getElementById('btnGaps')?.addEventListener('click', async () => {
+      try {
+        const j = await assist({ intent: 'gaps' });
+        setAssist((j.tips_ar || []).join('\n') || j.summary_ar || '');
+      } catch (err) { alert(err.message); }
+    });
+
+    document.getElementById('btnAssistHelp')?.addEventListener('click', async () => {
+      try {
+        const j = await assist({ intent: 'help' });
+        setAssist(j.message_ar || '');
+      } catch (err) { alert(err.message); }
+    });
+
+    document.querySelectorAll('.btn-del').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('حذف السجل؟')) return;
+        const r = await fetch('/academic_quality/api/archive/items/' + btn.dataset.id, {
+          method: 'DELETE', credentials: 'include', headers: hdr(),
+        });
+        if (r.ok) location.reload();
+        else alert('فشل الحذف');
+      });
+    });
+
+    const linkModal = () => bootstrap.Modal.getOrCreateInstance(document.getElementById('linkModal'));
+
+    document.querySelectorAll('.btn-suggest').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await fetch('/academic_quality/api/archive/suggest_qaa/' + btn.dataset.id, {
+          credentials: 'include',
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { alert(j.message || 'فشل'); return; }
+        document.getElementById('linkPolicy').textContent = j.policy_ar || '';
+        const box = document.getElementById('linkSuggestions');
+        box.innerHTML = '';
+        (j.suggestions || []).forEach((s) => {
+          const row = document.createElement('div');
+          row.className = 'border rounded p-2 mb-2 d-flex justify-content-between align-items-center gap-2';
+          row.innerHTML = '<div><div class="fw-semibold small">' + (s.indicator_code || '') +
+            ' <span class="text-muted">(' + (s.catalog_version || '') + ')</span></div>' +
+            '<div class="small text-muted">' + (s.indicator_title_ar || s.usage_ar || '') + '</div></div>';
+          const b = document.createElement('button');
+          b.className = 'btn btn-sm btn-primary';
+          b.textContent = 'تأكيد الربط اليدوي';
+          b.addEventListener('click', async () => {
+            const rr = await fetch('/academic_quality/api/archive/link_evidence', {
+              method: 'POST', credentials: 'include',
+              headers: { ...hdr(), 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                item_id: +btn.dataset.id,
+                indicator_code: s.indicator_code,
+                catalog_version: s.catalog_version,
+                semester,
+              }),
+            });
+            const jj = await rr.json().catch(() => ({}));
+            if (rr.ok) {
+              alert(jj.policy_ar || 'تم الربط');
+              linkModal().hide();
+            } else alert(jj.message || 'فشل الربط');
+          });
+          row.appendChild(b);
+          box.appendChild(row);
+        });
+        if (!(j.suggestions || []).length) box.innerHTML = '<div class="text-muted">لا اقتراحات</div>';
+        linkModal().show();
+      });
+    });
+  })();
+  </script>
+</body>
+</html>

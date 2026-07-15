@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>إغلاق الفصل</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-fluid mt-4 px-3" style="max-width:1100px;">
+    {% set qa_crumb_title = 'إغلاق الفصل' %}
+    {% include 'partials/quality_breadcrumb.html' %}
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+      <div>
+        <h4 class="mb-1">لوحة إغلاق الفصل</h4>
+        <p class="text-muted small mb-0">إغلاق مرحلي للتسجيلات والجدول والامتحانات والاستبيانات — الدرجات مستثناة من الموجة الأولى.</p>
+      </div>
+      <div class="d-flex flex-wrap gap-2 align-items-end">
+        <div>
+          <label class="form-label small mb-0">الفصل</label>
+          <input id="tcSemester" class="form-control form-control-sm" style="min-width:12rem" placeholder="خريف 25-26">
+        </div>
+        <button type="button" class="btn btn-sm btn-outline-primary" id="tcReload">تحديث الحالة</button>
+        <button type="button" class="btn btn-sm btn-success" id="tcBuildArchive" disabled>بناء الأرشيف</button>
+        <a id="tcArchiveLink" class="btn btn-sm btn-outline-secondary d-none" href="#">تنزيل الأرشيف</a>
+      </div>
+    </div>
+
+    <div id="tcMsg"></div>
+
+    <div class="row g-3 mb-3">
+      <div class="col-md-4">
+        <div class="border rounded p-3 bg-light h-100">
+          <div class="small text-muted">النطاق</div>
+          <div class="fw-semibold" id="tcScopeLabel">—</div>
+          <div class="small mono" id="tcScopeKey"></div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="border rounded p-3 bg-light h-100">
+          <div class="small text-muted">اكتمال المراحل التشغيلية</div>
+          <div class="fw-semibold" id="tcOpsComplete">—</div>
+          <div class="small text-muted" id="tcFacultyLock"></div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="border rounded p-3 bg-light h-100">
+          <div class="small text-muted">سياسة الدرجات</div>
+          <div class="small" id="tcGradesPolicy">مستثناة من الإغلاق التشغيلي</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="table-responsive">
+      <table class="table table-bordered align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>المرحلة</th>
+            <th>الحالة</th>
+            <th>ملاحظات / نشر</th>
+            <th class="text-center" style="width:14rem">إجراءات</th>
+          </tr>
+        </thead>
+        <tbody id="tcStagesBody">
+          <tr><td colspan="4" class="text-muted text-center">جاري التحميل…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+
+<script>
+(function(){
+  const elSem = document.getElementById('tcSemester');
+  const elBody = document.getElementById('tcStagesBody');
+  const elMsg = document.getElementById('tcMsg');
+  let STATE = null;
+  let CAN_REOPEN = false;
+
+  function setMsg(text, kind){
+    elMsg.innerHTML = text ? `<div class="alert alert-${kind||'info'} py-2">${text}</div>` : '';
+  }
+
+  async function fetchJSON(url, opts){
+    const r = await fetch(url, { credentials:'include', ...(opts||{}) });
+    const j = await r.json().catch(()=>null);
+    return { ok:r.ok, status:r.status, json:j };
+  }
+
+  function render(){
+    if(!STATE) return;
+    document.getElementById('tcScopeLabel').textContent = STATE.department_label || '—';
+    document.getElementById('tcScopeKey').textContent = STATE.scope_key || '';
+    document.getElementById('tcOpsComplete').textContent = STATE.operational_complete ? 'مكتمل — جاهز للأرشيف' : 'غير مكتمل';
+    const fl = STATE.faculty_cycle_lock || {};
+    document.getElementById('tcFacultyLock').textContent = fl.locked
+      ? 'قفل دورة أعضاء هيئة التدريس: مفعّل (مستقل)'
+      : 'قفل دورة أعضاء هيئة التدريس: غير مفعّل';
+    const gp = STATE.grades_policy || {};
+    document.getElementById('tcGradesPolicy').textContent = gp.note_ar || 'مستثناة من الموجة الأولى';
+
+    const archBtn = document.getElementById('tcBuildArchive');
+    archBtn.disabled = !STATE.operational_complete;
+    const link = document.getElementById('tcArchiveLink');
+    if (STATE.archive_url) {
+      link.href = STATE.archive_url;
+      link.classList.remove('d-none');
+      link.textContent = 'تنزيل الأرشيف';
+    } else {
+      link.classList.add('d-none');
+    }
+
+    const board = STATE.stage_board || [];
+    elBody.innerHTML = '';
+    board.forEach(item => {
+      const tr = document.createElement('tr');
+      const closed = !!item.closed;
+      const badge = closed
+        ? '<span class="badge text-bg-success">مغلقة</span>'
+        : (item.optional ? '<span class="badge text-bg-secondary">اختيارية / مفتوحة</span>' : '<span class="badge text-bg-warning text-dark">مفتوحة</span>');
+      let hints = '';
+      if (item.publish_hint) {
+        const ph = item.publish_hint;
+        if (item.stage === 'schedule') {
+          hints = ph.published ? `منشور${ph.published_at ? ' — '+ph.published_at : ''}` : 'غير منشور بعد';
+        } else if (item.stage === 'exams') {
+          hints = `نصفي: ${ph.midterm_published?'منشور':'لا'} · نهائي: ${ph.final_published?'منشور':'لا'}`;
+        }
+      }
+      if (item.note) hints = (hints ? hints+' · ' : '') + item.note;
+      if (item.closed_at) hints = (hints ? hints+' · ' : '') + `أُغلق: ${item.closed_at}` + (item.closed_by?` بواسطة ${item.closed_by}`:'');
+
+      let actions = '';
+      if (!closed) {
+        actions += `<button type="button" class="btn btn-sm btn-primary tc-close" data-stage="${item.stage}">إغلاق</button>`;
+      } else if (CAN_REOPEN) {
+        actions += `<button type="button" class="btn btn-sm btn-outline-danger tc-reopen" data-stage="${item.stage}">إعادة فتح</button>`;
+      } else {
+        actions += '<span class="text-muted small">—</span>';
+      }
+      if (item.optional && !closed) {
+        actions += ' <span class="small text-muted">لاحقًا</span>';
+      }
+
+      tr.innerHTML = `
+        <td><strong>${item.label_ar||item.stage}</strong><div class="small text-muted mono">${item.stage}</div></td>
+        <td>${badge}</td>
+        <td class="small">${hints||'—'}</td>
+        <td class="text-center">${actions}</td>`;
+      elBody.appendChild(tr);
+    });
+  }
+
+  async function load(){
+    setMsg('جاري تحديث الحالة…','info');
+    const sem = (elSem.value||'').trim();
+    let url = '/academic_quality/term_closure/status';
+    if (sem) url += `?semester=${encodeURIComponent(sem)}`;
+    const r = await fetchJSON(url);
+    if (!r.ok) {
+      setMsg((r.json&&r.json.message)||'فشل تحميل الحالة','danger');
+      return;
+    }
+    STATE = r.json;
+    if (STATE.semester && !elSem.value) elSem.value = STATE.semester;
+    setMsg('','');
+    render();
+  }
+
+  async function closeStage(stage){
+    if (!confirm(`إغلاق مرحلة «${stage}» لهذا الفصل/النطاق؟`)) return;
+    const body = {
+      stage,
+      semester: (elSem.value||'').trim() || (STATE&&STATE.semester) || '',
+    };
+    setMsg('جاري الإغلاق…','info');
+    const r = await fetchJSON('/academic_quality/term_closure/close_stage', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      setMsg((r.json&&r.json.message)||'فشل الإغلاق','danger');
+      return;
+    }
+    STATE = r.json;
+    if (STATE.semester) elSem.value = STATE.semester;
+    setMsg(STATE.archive_filename ? 'تم الإغلاق وبناء الأرشيف.' : 'تم إغلاق المرحلة.','success');
+    render();
+  }
+
+  async function reopenStage(stage){
+    const reason = prompt('سبب إعادة فتح المرحلة (مطلوب):','');
+    if (reason === null) return;
+    if (String(reason).trim().length < 5) {
+      setMsg('سبب إعادة الفتح مطلوب (٥ أحرف على الأقل).','warning');
+      return;
+    }
+    const body = {
+      stage,
+      reason: String(reason).trim(),
+      semester: (elSem.value||'').trim() || (STATE&&STATE.semester) || '',
+    };
+    const r = await fetchJSON('/academic_quality/term_closure/reopen_stage', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      setMsg((r.json&&r.json.message)||'فشل إعادة الفتح','danger');
+      return;
+    }
+    STATE = r.json;
+    setMsg('أُعيد فتح المرحلة.','success');
+    render();
+  }
+
+  document.getElementById('tcReload').addEventListener('click', load);
+  document.getElementById('tcBuildArchive').addEventListener('click', async ()=>{
+    const body = { semester: (elSem.value||'').trim() || (STATE&&STATE.semester) || '' };
+    setMsg('جاري بناء الأرشيف…','info');
+    const r = await fetchJSON('/academic_quality/term_closure/build_archive', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      setMsg((r.json&&r.json.message)||'فشل بناء الأرشيف','danger');
+      return;
+    }
+    STATE = r.json;
+    setMsg('تم بناء الأرشيف.','success');
+    render();
+  });
+  elBody.addEventListener('click', (ev)=>{
+    const closeBtn = ev.target.closest('.tc-close');
+    if (closeBtn) { closeStage(closeBtn.dataset.stage); return; }
+    const reopenBtn = ev.target.closest('.tc-reopen');
+    if (reopenBtn) reopenStage(reopenBtn.dataset.stage);
+  });
+
+  (async function init(){
+    try {
+      const auth = await fetchJSON('/auth/check');
+      const role = (auth.json && auth.json.role) || '';
+      CAN_REOPEN = ['admin','admin_main','system_admin','college_dean','academic_vice_dean'].includes(role);
+    } catch(e) { CAN_REOPEN = false; }
+    await load();
+  })();
+})();
+</script>
+</body>
+</html>

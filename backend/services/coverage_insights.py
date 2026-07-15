@@ -261,6 +261,112 @@ def schedule_course_primary_assignments(
     return out
 
 
+def is_exam_exempt_course(course_name: str) -> bool:
+    """مقررات بلا امتحان تقليدي (مشروع تخرج …)."""
+    n = normalize_coverage_course_key(course_name)
+    if not n:
+        return False
+    markers = (
+        "مشروع تخرج",
+        "مشروع التخرج",
+        "graduation project",
+        "capstone",
+    )
+    return any(m in n for m in markers)
+
+
+def course_owning_department_id(conn, course_name: str) -> int | None:
+    cname = (course_name or "").strip()
+    if not cname:
+        return None
+    try:
+        cols = fetch_table_columns(conn, "courses")
+    except Exception:
+        cols = []
+    if "owning_department_id" not in {str(c).strip().lower() for c in (cols or [])}:
+        return None
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT owning_department_id FROM courses
+        WHERE lower(trim(course_name)) = lower(trim(?))
+        LIMIT 1
+        """,
+        (cname,),
+    ).fetchone()
+    if not row or row[0] is None:
+        return None
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def course_is_optional_shared_for_exam(
+    conn,
+    course_name: str,
+    *,
+    department_id: int | None,
+) -> bool:
+    """
+    مقرر مشترك/كلية عامة بالنسبة لقسم ما:
+    ليس مملوكاً للقسم، أو في كتالوج المشتركة / اتجاه عام الكلية.
+    """
+    from backend.core.department_scope_policy import (
+        course_is_college_general,
+        course_is_college_shared_catalog,
+    )
+
+    cname = (course_name or "").strip()
+    if not cname:
+        return False
+    if is_exam_exempt_course(cname):
+        return False
+    own = course_owning_department_id(conn, cname)
+    if department_id is not None and own is not None and int(own) == int(department_id):
+        return False
+    if course_is_college_shared_catalog(conn, cname, department_id=department_id):
+        return True
+    if course_is_college_general(conn, cname):
+        return True
+    if department_id is not None and (own is None or int(own) != int(department_id)):
+        return True
+    return False
+
+
+def classify_registration_exam_gaps(
+    conn,
+    missing_course_names: list[str],
+    *,
+    department_id: int | None,
+) -> dict[str, list[str]]:
+    """
+    تصنيف مقررات مسجّلة بلا امتحان:
+    - required: مقررات القسم (يلزم إجراء)
+    - optional_shared: مشتركة/عامة (اختيارية حسب الفصل والقسم)
+    - exempt: بلا امتحان تقليدي
+    """
+    required: list[str] = []
+    optional_shared: list[str] = []
+    exempt: list[str] = []
+    for name in missing_course_names or []:
+        display = (name or "").strip()
+        if not display:
+            continue
+        if is_exam_exempt_course(display):
+            exempt.append(display)
+            continue
+        if course_is_optional_shared_for_exam(conn, display, department_id=department_id):
+            optional_shared.append(display)
+        else:
+            required.append(display)
+    return {
+        "required": required,
+        "optional_shared": optional_shared,
+        "exempt": exempt,
+    }
+
+
 def registered_distinct_course_names(cur, conn, *, actor_username: str | None = None) -> list[str]:
     """مقررات التسجيل الفعلي (طلاب نشطون) وفق نطاق المستخدم عند تنشيطه."""
     try:

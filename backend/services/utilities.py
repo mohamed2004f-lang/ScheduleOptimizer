@@ -409,11 +409,27 @@ def _pdf_available():
     # رسالة واضحة إن لم يوجد
     return False, "البرنامج wkhtmltopdf غير مثبت أو غير موجود في PATH. نزّله وثبتّه من https://wkhtmltopdf.org/ ثم أعد التشغيل."
 
-def pdf_bytes_from_html(html: str) -> tuple[bytes | None, str | None]:
-    """توليد بايتات PDF من HTML. يُرجع (None, رسالة خطأ) عند الفشل."""
+def pdf_bytes_from_html(html: str, *, extra_options: dict | None = None) -> tuple[bytes | None, str | None]:
+    """توليد بايتات PDF من HTML. يفضّل Chromium ثم wkhtmltopdf."""
+    prefer = (os.environ.get("PDF_ENGINE") or "chromium").strip().lower()
+    errors: list[str] = []
+
+    if prefer != "wkhtmltopdf":
+        try:
+            from backend.core.chromium_pdf import pdf_bytes_from_html_chromium
+
+            raw, err = pdf_bytes_from_html_chromium(html)
+            if raw is not None:
+                return raw, None
+            if err:
+                errors.append(err)
+        except Exception as exc:
+            errors.append(f"Chromium: {exc}")
+
     ok, info = _pdf_available()
     if not ok:
-        return None, str(info)
+        msg = "؛ ".join(errors) if errors else str(info)
+        return None, msg or str(info)
     try:
         config = PDFKIT_CONFIG if PDFKIT_CONFIG is not None else None
         if config is None:
@@ -421,6 +437,14 @@ def pdf_bytes_from_html(html: str) -> tuple[bytes | None, str | None]:
             if wkpath:
                 config = pdfkit.configuration(wkhtmltopdf=wkpath)
         options = {"enable-local-file-access": None, "encoding": "UTF-8"}
+        try:
+            from backend.core.arabic_export import WKHTMLTOPDF_ARABIC_OPTIONS
+
+            options.update(WKHTMLTOPDF_ARABIC_OPTIONS)
+        except Exception:
+            options["disable-smart-shrinking"] = None
+        if extra_options:
+            options.update(extra_options)
         tmpf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
         tmp_path = tmpf.name
         tmpf.close()
@@ -434,7 +458,8 @@ def pdf_bytes_from_html(html: str) -> tuple[bytes | None, str | None]:
             except OSError:
                 pass
     except Exception as e:
-        return None, f"فشل توليد PDF: {e}"
+        errors.append(f"wkhtmltopdf: {e}")
+        return None, "؛ ".join(errors) if errors else f"فشل توليد PDF: {e}"
 
 
 def pdf_response_from_html(html, filename_prefix="export"):

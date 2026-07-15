@@ -123,13 +123,15 @@
     {% if pending %}
     <div class="list-group mb-3">
       {% for p in pending %}
-      <a href="{{ p.fill_url }}?semester={{ semester|urlencode }}" class="list-group-item list-group-item-action">
+      <a href="{{ p.fill_url }}{{ '&' if '?' in (p.fill_url or '') else '?' }}semester={{ semester|urlencode }}" class="list-group-item list-group-item-action">
         <div class="d-flex justify-content-between align-items-center gap-2">
           <div>
             <span class="fw-semibold">{{ p.title_ar }}</span>
             <div class="small text-muted">
               {% if p.pending_kind == 'course_eval' %}
               تقييم مقرر وشعبة — {{ p.code }}
+              {% elif p.pending_kind == 'course_quality_report' %}
+              تقرير جودة المقرر — نسب الإنجاز والمراجع
               {% else %}
               تقييم سري (1–5) — {{ p.code }}
               {% endif %}
@@ -201,16 +203,20 @@
     </p>
     <div class="list-group mb-4">
       {% for p in pending %}
-      <a href="{{ p.fill_url }}?semester={{ semester|urlencode }}" class="list-group-item list-group-item-action py-3">
+      <a href="{{ p.fill_url }}{{ '&' if '?' in (p.fill_url or '') else '?' }}semester={{ semester|urlencode }}" class="list-group-item list-group-item-action py-3">
         <div class="d-flex justify-content-between align-items-start gap-3">
           <div class="flex-grow-1">
             <div class="d-flex align-items-center gap-2 mb-1">
               {% if p.intro and p.intro.icon %}
               <i class="fa-solid {{ p.intro.icon }} text-primary"></i>
+              {% elif p.pending_kind == 'course_quality_report' %}
+              <i class="fa-solid fa-clipboard-list text-primary"></i>
               {% endif %}
               <span class="fw-semibold">{{ p.title_ar }}</span>
             </div>
-            {% if p.intro and p.intro.subtitle_ar %}
+            {% if p.pending_kind == 'course_quality_report' %}
+            <div class="small text-muted mb-1">تقرير جودة المقرر — نسب الإنجاز، الفجوات، المراجع، وطرق التقييم</div>
+            {% elif p.intro and p.intro.subtitle_ar %}
             <div class="small text-muted mb-1">{{ p.intro.subtitle_ar }}</div>
             {% endif %}
             {% if p.intro and p.intro.about_ar %}
@@ -230,13 +236,15 @@
     {% if pending %}
     <div class="list-group mb-4">
       {% for p in pending %}
-      <a href="{{ p.fill_url }}?semester={{ semester|urlencode }}" class="list-group-item list-group-item-action">
+      <a href="{{ p.fill_url }}{{ '&' if '?' in (p.fill_url or '') else '?' }}semester={{ semester|urlencode }}" class="list-group-item list-group-item-action">
         <div class="d-flex justify-content-between align-items-center gap-2">
           <div>
             <span class="fw-semibold">{{ p.title_ar }}</span>
             <div class="small text-muted">
               {% if p.pending_kind == 'course_eval' %}
               تقييم مقرر وشعبة — {{ p.course_name or p.code }}
+              {% elif p.pending_kind == 'course_quality_report' %}
+              تقرير جودة المقرر — نسب الإنجاز والمراجع
               {% elif p.intro and p.intro.subtitle_ar %}
               {{ p.intro.subtitle_ar }}
               {% else %}

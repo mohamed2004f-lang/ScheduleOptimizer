@@ -12,6 +12,18 @@ from typing import Any
 
 DEFAULT_DEPT_GRADUATION_UNITS = 155
 
+DEPT_GRADUATION_UNITS: dict[str, int] = {
+    "MECH": 155,
+    "CIVIL": 161,
+    "ELEC": 160,
+    "RENEW": 160,
+}
+
+
+def graduation_units_for_department_code(code: str | None) -> int:
+    c = (code or "").strip().upper()
+    return int(DEPT_GRADUATION_UNITS.get(c, DEFAULT_DEPT_GRADUATION_UNITS))
+
 # أكواد البرنامج الأساسي (قديم → جديد)
 LEGACY_BASE_PROGRAM_CODES = ("PROG_MAJOR",)
 CANONICAL_BASE_PROGRAM_CODE = "MECH"
@@ -370,7 +382,7 @@ def ensure_department_track_programs(
     conn,
     department_code: str = "MECH",
     *,
-    graduation_units: int = DEFAULT_DEPT_GRADUATION_UNITS,
+    graduation_units: int | None = None,
 ) -> dict[str, Any]:
     """
     يضمن برنامج الأساس + قوالب الشعب (معطّلة افتراضياً).
@@ -379,6 +391,11 @@ def ensure_department_track_programs(
     from backend.database.database import is_postgresql
 
     dept_code = (department_code or "").strip().upper()
+    grad_units = (
+        int(graduation_units)
+        if graduation_units is not None
+        else graduation_units_for_department_code(dept_code)
+    )
     templates = DEPARTMENT_TRACK_CATALOGS.get(dept_code)
     if not templates:
         return {"status": "skipped", "department_code": dept_code, "reason": "no_catalog"}
@@ -408,7 +425,7 @@ def ensure_department_track_programs(
                 CANONICAL_BASE_PROGRAM_CODE,
                 templates[0].name_ar,
                 templates[0].name_en,
-                int(graduation_units),
+                int(grad_units),
                 legacy_id,
             ),
         )
@@ -470,7 +487,7 @@ def ensure_department_track_programs(
                     """,
                     (
                         tpl.track_group,
-                        int(graduation_units),
+                        int(grad_units),
                         cur_rules,
                         existing_id,
                     ),
@@ -487,7 +504,7 @@ def ensure_department_track_programs(
                         tpl.name_ar,
                         tpl.name_en,
                         tpl.track_group,
-                        int(graduation_units),
+                        int(grad_units),
                         existing_id,
                     ),
                 )
@@ -508,7 +525,7 @@ def ensure_department_track_programs(
                     tpl.name_ar,
                     tpl.name_en,
                     tpl.track_group,
-                    int(graduation_units),
+                    int(grad_units),
                     is_active,
                 ),
             )
@@ -528,7 +545,7 @@ def ensure_department_track_programs(
                     tpl.name_ar,
                     tpl.name_en,
                     tpl.track_group,
-                    int(graduation_units),
+                    int(grad_units),
                     is_active,
                 ),
             )

@@ -10,108 +10,106 @@
 <body>
   {% include "base_nav.html" %}
   <main class="container-fluid mt-4 px-3" style="max-width:1200px;">
-    <nav aria-label="breadcrumb" class="mb-2">
-      <ol class="breadcrumb small mb-0">
-        <li class="breadcrumb-item">ضمان الجودة والاعتماد</li>
-        <li class="breadcrumb-item"><a href="/academic_quality/surveys">تعبئة الاستبيانات</a></li>
-        <li class="breadcrumb-item active" aria-current="page">النتائج المجمّعة</li>
-      </ol>
-    </nav>
+    {% set qa_crumb_mid_href = '/academic_quality/surveys' %}
+    {% set qa_crumb_mid_label = 'تعبئة الاستبيانات' %}
+    {% set qa_crumb_title = 'النتائج المجمّعة' %}
+    {% include 'partials/quality_breadcrumb.html' %}
 
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-      <h4 class="mb-0"><i class="fa-solid fa-chart-bar"></i> نتائج الاستبيانات المجمّعة</h4>
+      <div>
+        <h4 class="mb-0"><i class="fa-solid fa-chart-bar"></i> نتائج الاستبيانات المجمّعة</h4>
+        <p class="small text-muted mb-0">تحليل وتصدير النتائج — إغلاق الفصل التشغيلي من لوحة إغلاق الفصل.</p>
+      </div>
       <div class="d-flex gap-2 flex-wrap align-items-center">
         {% if results_view == 'external' %}
-        <a class="btn btn-outline-dark btn-sm" href="/academic_quality/surveys/invites">
-          <i class="fa-solid fa-link"></i> دعوات خارجية
+        <a class="btn btn-info btn-sm text-white" href="/academic_quality/surveys/export/external/package?cycle={{ external_cycle|urlencode }}" target="_blank"
+           title="معاينة التقرير الموحّد">
+          <i class="fa-solid fa-display"></i> معاينة موحّدة
         </a>
         {% if external_cycle %}
         <a class="btn btn-success btn-sm" href="/academic_quality/surveys/export/external/package.xlsx?cycle={{ external_cycle|urlencode }}">
           <i class="fa-solid fa-file-excel"></i> تصدير الدورة (Excel)
         </a>
-        <a class="btn btn-danger btn-sm" href="/academic_quality/surveys/export/external/package.pdf?cycle={{ external_cycle|urlencode }}">
-          <i class="fa-solid fa-file-pdf"></i> تقرير PDF موحّد
-        </a>
-        <a class="btn btn-outline-dark btn-sm" href="/academic_quality/surveys/export/external/bundle.zip?cycle={{ external_cycle|urlencode }}" title="Excel + PDF لكل الاستبيانات الخارجية">
-          <i class="fa-solid fa-file-zipper"></i> حزمة ZIP
-        </a>
+        {% endif %}
         <div class="dropdown">
-          <button class="btn btn-outline-success btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-            Excel — استبيان واحد
+          <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+            المزيد
           </button>
-          <ul class="dropdown-menu dropdown-menu-end">
+          <ul class="dropdown-menu dropdown-menu-end" style="max-height:22rem;overflow:auto;">
+            <li><a class="dropdown-item" href="/academic_quality/surveys/invites"><i class="fa-solid fa-link me-1"></i> دعوات خارجية</a></li>
+            {% if external_cycle %}
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/external/package.pdf?cycle={{ external_cycle|urlencode }}"><i class="fa-solid fa-file-pdf me-1"></i> تقرير PDF موحّد</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/external/bundle.zip?cycle={{ external_cycle|urlencode }}"><i class="fa-solid fa-file-zipper me-1"></i> حزمة ZIP</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><h6 class="dropdown-header">Excel — استبيان واحد</h6></li>
             {% for agg in external_aggregates %}
             <li><a class="dropdown-item" href="/academic_quality/surveys/export/external/{{ agg.template_code }}.xlsx?cycle={{ external_cycle|urlencode }}">{{ agg.title_ar }}</a></li>
             {% endfor %}
-          </ul>
-        </div>
-        <div class="dropdown">
-          <button class="btn btn-outline-danger btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-            PDF — استبيان واحد
-          </button>
-          <ul class="dropdown-menu dropdown-menu-end">
+            <li><hr class="dropdown-divider"></li>
+            <li><h6 class="dropdown-header">PDF — استبيان واحد</h6></li>
             {% for agg in external_aggregates %}
             <li><a class="dropdown-item" href="/academic_quality/surveys/export/external/{{ agg.template_code }}.pdf?cycle={{ external_cycle|urlencode }}">{{ agg.title_ar }}</a></li>
             {% endfor %}
+            <li><hr class="dropdown-divider"></li>
+            <li><h6 class="dropdown-header">معاينة — استبيان واحد</h6></li>
+            {% for agg in external_aggregates %}
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/external/{{ agg.template_code }}?cycle={{ external_cycle|urlencode }}" target="_blank">{{ agg.title_ar }}</a></li>
+            {% endfor %}
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" href="/academic_quality/accreditation/map?cycle={{ external_cycle|urlencode }}"><i class="fa-solid fa-map me-1"></i> خريطة الامتثال</a></li>
+            {% endif %}
+            <li><a class="dropdown-item" href="/academic_quality/surveys/trends#externalTrends">اتجاهات الدورات</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/dashboard">لوحة الجودة</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/glossary">المصطلحات</a></li>
           </ul>
         </div>
-        <a class="btn btn-outline-primary btn-sm" href="/academic_quality/accreditation/map?cycle={{ external_cycle|urlencode }}" title="خريطة امتثال الاعتماد">
-          <i class="fa-solid fa-map"></i> خريطة الامتثال
-        </a>
-        {% endif %}
-        <a class="btn btn-outline-info btn-sm" href="/academic_quality/surveys/trends#externalTrends">اتجاهات الدورات</a>
-        <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/dashboard">لوحة الجودة</a>
-        <a class="btn btn-outline-info btn-sm" href="/academic_quality/glossary">ⓘ المصطلحات</a>
         {% else %}
-        <a class="btn btn-primary btn-sm" href="/academic_quality/surveys"><i class="fa-solid fa-pen-to-square"></i> تعبئة الاستبيانات (دوري)</a>
+        <a class="btn btn-info btn-sm text-white" href="/academic_quality/surveys/export/package?semester={{ semester|urlencode }}" target="_blank"
+           title="معاينة التقرير الموحّد مع تحليل ورسوم بيانية">
+          <i class="fa-solid fa-display"></i> معاينة موحّدة
+        </a>
         <a class="btn btn-success btn-sm" href="/academic_quality/surveys/export/package.xlsx?semester={{ semester|urlencode }}">
           <i class="fa-solid fa-file-excel"></i> تصدير الكل (Excel)
         </a>
-        <a class="btn btn-danger btn-sm" href="/academic_quality/surveys/export/package.pdf?semester={{ semester|urlencode }}">
-          <i class="fa-solid fa-file-pdf"></i> تقرير PDF موحّد
-        </a>
-        <a class="btn btn-outline-dark btn-sm" href="/academic_quality/surveys/export/bundle.zip?semester={{ semester|urlencode }}" title="Excel + PDF لكل الاستبيانات">
-          <i class="fa-solid fa-file-zipper"></i> حزمة ZIP
-        </a>
+        <a class="btn btn-outline-primary btn-sm" href="/academic_quality/surveys"><i class="fa-solid fa-pen-to-square"></i> تعبئة</a>
         <div class="dropdown">
-          <button class="btn btn-outline-success btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-            تصدير Excel — استبيان واحد
+          <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+            المزيد
           </button>
-          <ul class="dropdown-menu dropdown-menu-end">
+          <ul class="dropdown-menu dropdown-menu-end" style="max-height:22rem;overflow:auto;">
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/package.pdf?semester={{ semester|urlencode }}"><i class="fa-solid fa-file-pdf me-1"></i> تقرير PDF موحّد</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/bundle.zip?semester={{ semester|urlencode }}"><i class="fa-solid fa-file-zipper me-1"></i> حزمة ZIP</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export.xlsx?semester={{ semester|urlencode }}">ملخص سريع</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><h6 class="dropdown-header">تصدير Excel — استبيان واحد</h6></li>
             <li><a class="dropdown-item" href="/academic_quality/surveys/export/student_course.xlsx?semester={{ semester|urlencode }}">تقييم المقرر والأستاذ (مجمّع)</a></li>
-            <li><a class="dropdown-item" href="/academic_quality/surveys/export/course_eval_sections.xlsx?semester={{ semester|urlencode }}">جميع المقررات — ملخص الشعب</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/course_eval_sections?semester={{ semester|urlencode }}" target="_blank">جميع المقررات — معاينة / طباعة</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/course_eval_sections.xlsx?semester={{ semester|urlencode }}">جميع المقررات — ملخص الشعب (Excel)</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/course_eval_sections.docx?semester={{ semester|urlencode }}">جميع المقررات — ملخص الشعب (Word)</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/course_eval_sections.pdf?semester={{ semester|urlencode }}">جميع المقررات — ملخص الشعب (PDF)</a></li>
             <li><a class="dropdown-item" href="/academic_quality/surveys/export/course_eval_missing_sections.xlsx?semester={{ semester|urlencode }}">تدقيق — شعب بلا تقييم</a></li>
             {% for agg in aggregates %}
-            <li><a class="dropdown-item" href="/academic_quality/surveys/export/{{ agg.template_code }}.xlsx?semester={{ semester|urlencode }}">{{ agg.title_ar }}</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/{{ agg.template_code }}.xlsx?semester={{ semester|urlencode }}">{{ agg.title_ar }} (Excel)</a></li>
             {% endfor %}
-          </ul>
-        </div>
-        <div class="dropdown">
-          <button class="btn btn-outline-danger btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-            تصدير PDF — استبيان واحد
-          </button>
-          <ul class="dropdown-menu dropdown-menu-end">
-            <li><a class="dropdown-item" href="/academic_quality/surveys/export/student_course.pdf?semester={{ semester|urlencode }}">تقييم المقرر والأستاذ (مجمّع)</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><h6 class="dropdown-header">تصدير PDF — استبيان واحد</h6></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/student_course?semester={{ semester|urlencode }}" target="_blank">تقييم المقرر — معاينة</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/student_course.pdf?semester={{ semester|urlencode }}">تقييم المقرر والأستاذ (PDF)</a></li>
             {% for agg in aggregates %}
-            <li><a class="dropdown-item" href="/academic_quality/surveys/export/{{ agg.template_code }}.pdf?semester={{ semester|urlencode }}">{{ agg.title_ar }}</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/{{ agg.template_code }}?semester={{ semester|urlencode }}" target="_blank">معاينة — {{ agg.title_ar }}</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/{{ agg.template_code }}.pdf?semester={{ semester|urlencode }}">{{ agg.title_ar }} (PDF)</a></li>
             {% endfor %}
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" href="/academic_quality/accreditation/map?semester={{ semester|urlencode }}"><i class="fa-solid fa-map me-1"></i> خريطة الامتثال</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/archive"><i class="fa-solid fa-folder-open me-1"></i> أرشيف القسم</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/completion?semester={{ semester|urlencode }}"><i class="fa-solid fa-clipboard-check me-1"></i> تغطية التعبئة</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/trends"><i class="fa-solid fa-chart-line me-1"></i> مقارنة الفصول</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/invites"><i class="fa-solid fa-link me-1"></i> دعوات خارجية</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/term_closure"><i class="fa-solid fa-lock me-1"></i> إغلاق الفصل (موحّد)</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/dashboard">لوحة الجودة</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/glossary">المصطلحات</a></li>
           </ul>
         </div>
-        <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/surveys/export.xlsx?semester={{ semester|urlencode }}" title="ملخص سريع — صف واحد لكل استبيان">ملخص سريع</a>
-        <a class="btn btn-outline-primary btn-sm" href="/academic_quality/accreditation/map?semester={{ semester|urlencode }}" title="خريطة امتثال الاعتماد والشواهد">
-          <i class="fa-solid fa-map"></i> خريطة الامتثال
-        </a>
-        <a class="btn btn-outline-info btn-sm" href="/academic_quality/surveys/completion?semester={{ semester|urlencode }}">
-          <i class="fa-solid fa-clipboard-check"></i> تغطية التعبئة
-        </a>
-        <a class="btn btn-outline-info btn-sm" href="/academic_quality/surveys/trends">
-          <i class="fa-solid fa-chart-line"></i> مقارنة الفصول
-        </a>
-        <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/dashboard">لوحة الجودة</a>
-        <a class="btn btn-outline-dark btn-sm" href="/academic_quality/surveys/invites">
-          <i class="fa-solid fa-link"></i> دعوات خارجية
-        </a>
-        <a class="btn btn-outline-info btn-sm" href="/academic_quality/glossary">ⓘ المصطلحات</a>
         {% endif %}
       </div>
     </div>
@@ -202,6 +200,7 @@
           {% endif %}
           {% if external_cycle %}
           <div class="d-flex gap-2 flex-wrap">
+            <a class="btn btn-sm btn-outline-info" href="/academic_quality/surveys/export/external/{{ agg.template_code }}?cycle={{ external_cycle|urlencode }}" target="_blank">معاينة</a>
             <a class="btn btn-sm btn-outline-success" href="/academic_quality/surveys/export/external/{{ agg.template_code }}.xlsx?cycle={{ external_cycle|urlencode }}">Excel</a>
             <a class="btn btn-sm btn-outline-danger" href="/academic_quality/surveys/export/external/{{ agg.template_code }}.pdf?cycle={{ external_cycle|urlencode }}">PDF</a>
             <a class="btn btn-sm btn-outline-secondary"
@@ -225,10 +224,11 @@
       <div class="small">
         <strong><i class="fa-solid fa-bell"></i> {{ closure_reminder.title_ar }}</strong>
         <p class="mb-0 mt-1">{{ closure_reminder.message_ar }}</p>
+        <p class="mb-0 mt-1 text-muted">المسار الرسمي: أكمل مرحلة الاستبيانات من لوحة إغلاق الفصل الموحّد.</p>
       </div>
       <div class="d-flex gap-2 flex-wrap">
-        <button type="button" class="btn btn-primary btn-sm" id="btnCloseSemesterFromReminder"
-                data-semester="{{ closure_reminder.semester }}">إغلاق الفصل الآن</button>
+        <a class="btn btn-primary btn-sm" href="/academic_quality/term_closure"
+           id="btnCloseSemesterFromReminder">إغلاق الفصل (لوحة موحّدة)</a>
         <button type="button" class="btn btn-outline-secondary btn-sm" id="btnDismissClosureReminder">تذكير لاحقاً</button>
       </div>
     </div>
@@ -237,7 +237,7 @@
     {% if results_view != 'external' %}
     {% if semester_closure %}
     <div class="alert alert-success border-start border-success border-4 mb-3">
-      <strong><i class="fa-solid fa-lock"></i> الفصل مُغلق — لقطة محفوظة</strong>
+      <strong><i class="fa-solid fa-lock"></i> لقطة الاستبيانات محفوظة لهذا الفصل</strong>
       <p class="small mb-1">
         أُغلق بتاريخ <strong>{{ semester_closure.closed_at }}</strong>
         بواسطة {{ semester_closure.closed_by or '—' }} —
@@ -249,23 +249,32 @@
       </a>
       {% endif %}
       <a class="btn btn-sm btn-outline-primary" href="/academic_quality/surveys/trends">مقارنة مع فصول أخرى</a>
+      <a class="btn btn-sm btn-warning" href="/academic_quality/term_closure">متابعة إغلاق الفصل الموحّد</a>
     </div>
     {% else %}
-    <div class="alert alert-warning border-start border-warning border-4 mb-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
-      <div class="small">
-        <strong>إغلاق الفصل وحفظ لقطة</strong> — يُجمّد أرقام هذا الفصل للمقارنة عبر السنوات ويحفظ أرشيف Excel.
-        البيانات الخام تبقى في النظام؛ اللقطة لا تتغيّر لاحقاً.
+    <div class="alert alert-warning border-start border-warning border-4 mb-3">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <div class="small">
+          <strong>إغلاق الاستبيانات ضمن لوحة إغلاق الفصل</strong> —
+          المسار الرسمي لإغلاق التسجيلات والجدول والامتحانات والاستبيانات ثم بناء الأرشيف.
+        </div>
+        <a class="btn btn-warning btn-sm" href="/academic_quality/term_closure">
+          <i class="fa-solid fa-lock"></i> فتح لوحة إغلاق الفصل
+        </a>
       </div>
-      <div class="d-flex gap-2 flex-wrap">
-        <button type="button" class="btn btn-warning btn-sm" id="btnCloseSemester"
-                data-semester="{{ semester }}">
-          <i class="fa-solid fa-camera"></i> إغلاق الفصل وحفظ لقطة
-        </button>
-        <button type="button" class="btn btn-outline-warning btn-sm" id="btnCloseSemesterEvidence"
-                data-semester="{{ semester }}" title="إغلاق + رفع الأرشيف كشاهد QA-01-1">
-          إغلاق + شاهد اعتماد
-        </button>
-      </div>
+      <details class="mt-2 small">
+        <summary class="text-muted" style="cursor:pointer">خيارات متقدمة — إغلاق لقطة الاستبيانات فقط من هنا</summary>
+        <div class="d-flex gap-2 flex-wrap mt-2">
+          <button type="button" class="btn btn-outline-warning btn-sm" id="btnCloseSemester"
+                  data-semester="{{ semester }}">
+            <i class="fa-solid fa-camera"></i> إغلاق لقطة الاستبيانات فقط
+          </button>
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="btnCloseSemesterEvidence"
+                  data-semester="{{ semester }}" title="إغلاق اللقطة + ترشيح الأرشيف كشاهد اعتماد">
+            لقطة + شاهد اعتماد
+          </button>
+        </div>
+      </details>
     </div>
     {% endif %}
 
@@ -308,8 +317,10 @@
           <a class="btn btn-sm btn-outline-success" href="/academic_quality/surveys/export/student_course.xlsx?semester={{ semester|urlencode }}">Excel</a>
           <a class="btn btn-sm btn-outline-danger" href="/academic_quality/surveys/export/student_course.pdf?semester={{ semester|urlencode }}">PDF</a>
           <button type="button" class="btn btn-sm btn-primary js-survey-evidence"
-                  data-template="student_course" data-indicator="SS-01-1" data-semester="{{ semester }}"
-                  title="حفظ تقرير Excel كشاهد في خريطة الامتثال">
+                  data-template="student_course"
+                  data-indicator="{{ course_eval_summary.primary_indicator|default('INST-09-15') }}"
+                  data-semester="{{ semester }}"
+                  title="حفظ تقرير Excel كشاهد في خريطة الامتثال (مؤشر QAA مقترح — الربط يدوي)">
             <i class="fa-solid fa-cloud-arrow-up"></i> رفع كشاهد
           </button>
         </div>
@@ -321,10 +332,34 @@
     <div class="card shadow-sm mb-4">
       <div class="card-header bg-light d-flex flex-wrap justify-content-between align-items-center gap-2">
         <strong><i class="fa-solid fa-book text-primary"></i> تقييم المقرر والأستاذ — حسب الشعبة</strong>
-        <a class="btn btn-sm btn-outline-success"
-           href="/academic_quality/surveys/export/course_eval_sections.xlsx?semester={{ semester|urlencode }}">
-          <i class="fa-solid fa-file-excel"></i> تصدير كل الشعب
-        </a>
+        <div class="d-flex flex-wrap gap-2">
+          <a class="btn btn-sm btn-info text-white"
+             href="/academic_quality/surveys/export/course_eval_sections?semester={{ semester|urlencode }}"
+             target="_blank"
+             title="معاينة في المتصفح — للطباعة أو حفظ PDF بجودة عربية أفضل">
+            <i class="fa-solid fa-display"></i> معاينة / طباعة
+          </a>
+          <a class="btn btn-sm btn-outline-success"
+             href="/academic_quality/surveys/export/course_eval_sections.xlsx?semester={{ semester|urlencode }}"
+             title="Excel — غلاف + ملخص الشعب">
+            <i class="fa-solid fa-file-excel"></i> Excel
+          </a>
+          <a class="btn btn-sm btn-outline-primary"
+             href="/academic_quality/surveys/export/course_eval_sections.docx?semester={{ semester|urlencode }}"
+             title="Word — وثيقة شاهد">
+            <i class="fa-solid fa-file-word"></i> Word
+          </a>
+          <a class="btn btn-sm btn-outline-danger"
+             href="/academic_quality/surveys/export/course_eval_sections.pdf?semester={{ semester|urlencode }}"
+             title="PDF — للطباعة والأرشفة">
+            <i class="fa-solid fa-file-pdf"></i> PDF
+          </a>
+          <button type="button" class="btn btn-sm btn-primary js-survey-evidence-sections"
+                  data-semester="{{ semester }}"
+                  title="رفع تقرير Word كشاهد — الربط بالمؤشر يدوياً لاحقاً">
+            <i class="fa-solid fa-cloud-arrow-up"></i> رفع كشاهد
+          </button>
+        </div>
       </div>
       <div class="table-responsive">
         <table class="table table-sm table-hover mb-0">
@@ -339,7 +374,7 @@
               <th>تقييمات</th>
               <th>الحد</th>
               <th>النتيجة</th>
-              <th>تصدير</th>
+              <th>معاينة / تصدير</th>
             </tr>
           </thead>
           <tbody>
@@ -371,6 +406,12 @@
                 {% endif %}
               </td>
               <td class="text-nowrap">
+                <a class="btn btn-outline-info btn-sm py-0"
+                   href="/academic_quality/surveys/export/course_eval/section/{{ s.section_id }}?semester={{ semester|urlencode }}"
+                   target="_blank"
+                   title="معاينة / طباعة تقرير الشعبة">
+                  <i class="fa-solid fa-display"></i> معاينة
+                </a>
                 <a class="btn btn-outline-success btn-sm py-0"
                    href="/academic_quality/surveys/export/course_eval/section/{{ s.section_id }}.xlsx?semester={{ semester|urlencode }}">
                   Excel
@@ -471,7 +512,7 @@
               <th>شعب</th>
               <th>تقييمات</th>
               <th>النتيجة</th>
-              <th>تصدير</th>
+              <th>معاينة / تصدير</th>
             </tr>
           </thead>
           <tbody>
@@ -486,8 +527,14 @@
                 <strong class="text-success">{{ g.overall_score_percent }}%</strong>
                 {% else %}<span class="text-muted">—</span>{% endif %}
               </td>
-              <td>
+              <td class="text-nowrap">
                 <a class="btn btn-outline-info btn-sm py-0"
+                   href="/academic_quality/surveys/export/course_eval/by-course?semester={{ semester|urlencode }}&course_name={{ g.course_name|urlencode }}&instructor_id={{ g.instructor_id }}"
+                   target="_blank"
+                   title="معاينة / طباعة تجميع المقرر + الأستاذ">
+                  <i class="fa-solid fa-display"></i> معاينة
+                </a>
+                <a class="btn btn-outline-success btn-sm py-0"
                    href="/academic_quality/surveys/export/course_eval/by-course.xlsx?semester={{ semester|urlencode }}&course_name={{ g.course_name|urlencode }}&instructor_id={{ g.instructor_id }}">
                   Excel
                 </a>
@@ -538,6 +585,11 @@
             <span class="badge bg-secondary mb-2">بانتظار إجابات كافية</span>
             {% endif %}
             <div class="d-flex flex-wrap gap-1 mt-2 align-self-start">
+              <a class="btn btn-info btn-sm text-white"
+                 href="/academic_quality/surveys/export/{{ agg.template_code }}?semester={{ semester|urlencode }}"
+                 target="_blank" title="معاينة مع تحليل ورسوم">
+                <i class="fa-solid fa-display"></i> معاينة
+              </a>
               <a class="btn btn-outline-success btn-sm"
                  href="/academic_quality/surveys/export/{{ agg.template_code }}.xlsx?semester={{ semester|urlencode }}">
                 <i class="fa-solid fa-download"></i> Excel
@@ -605,7 +657,7 @@
   <script>
   async function closeSemester(semester, registerEvidence, force) {
     if (!confirm(
-      (registerEvidence ? 'إغلاق الفصل وحفظ لقطة + رفع أرشيف كشاهد QA-01-1؟\n' : 'إغلاق الفصل وحفظ لقطة الاستبيانات؟\n') +
+      (registerEvidence ? 'إغلاق الفصل وحفظ لقطة + ترشيح الأرشيف كشاهد اعتماد؟\n(الربط بمؤشر QAA يبقى يدوياً من خريطة الامتثال أو أرشيف القسم)\n' : 'إغلاق الفصل وحفظ لقطة الاستبيانات؟\n') +
       'الفصل: ' + semester + (force ? '\n(إعادة لقطة — استبدال السابقة)' : '')
     )) return;
     const r = await fetch('/academic_quality/surveys/api/close_semester', {
@@ -643,9 +695,7 @@
         localStorage.setItem('survey_closure_remind_dismiss_' + sem, '1');
         banner.style.display = 'none';
       });
-      document.getElementById('btnCloseSemesterFromReminder')?.addEventListener('click', function() {
-        closeSemester(this.dataset.semester, false, false);
-      });
+      // زر التذكير أصبح رابطاً إلى لوحة الإغلاق الموحّدة
     }
   })();
 
@@ -710,6 +760,35 @@
         if (j.compliance_map_url) window.open(j.compliance_map_url, '_blank');
       } else {
         alert(j.message || 'فشل رفع الشاهد');
+      }
+    });
+  });
+
+  document.querySelectorAll('.js-survey-evidence-sections').forEach(function(btn) {
+    btn.addEventListener('click', async function() {
+      var semester = btn.dataset.semester;
+      if (!confirm('رفع تقرير «تقييم المقرر والأستاذ — حسب الشعبة» كشاهد؟\nسيتم رفع ملف Word — يمكنك ربطه بالمؤشر يدوياً في خريطة الامتثال.')) return;
+      btn.disabled = true;
+      var oldHtml = btn.innerHTML;
+      btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+      try {
+        var r = await fetch('/academic_quality/surveys/api/register_evidence', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+          body: JSON.stringify({template_code: 'course_eval_sections', semester: semester, export_format: 'docx'})
+        });
+        var j = await r.json();
+        if (j.status === 'ok') {
+          alert('تم رفع الشاهد بنجاح (#' + (j.id || '') + '). يمكنك ربطه بالمؤشر يدوياً في خريطة الامتثال.');
+          if (j.compliance_map_url) window.open(j.compliance_map_url, '_blank');
+        } else {
+          alert(j.message || 'فشل رفع الشاهد');
+        }
+      } catch (e) {
+        alert('خطأ في الاتصال بالخادم');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = oldHtml;
       }
     });
   });

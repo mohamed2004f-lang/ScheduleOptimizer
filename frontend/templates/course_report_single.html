@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }}</title>
+  {% include "survey_export_pdf_styles.html" %}
+  <style>
+    {% if for_pdf %}
+    {{ pdf_arabic_css_print|safe }}
+    {% else %}
+    {{ pdf_arabic_css|safe }}
+    {% endif %}
+    .cover-dept { font-size: 15px; font-weight: 700; color: #0d3b66; margin-bottom: 10px; }
+    .analysis-box { background: #f0f6fc; border-right: 4px solid #198754; padding: 10px 12px; margin: 12px 0 16px; }
+    .kpi-row { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0 16px; }
+    .kpi { border: 1px solid #c8d6e5; background: #f8fafc; padding: 8px 12px; min-width: 120px; }
+    .kpi .v { font-size: 18px; font-weight: 700; color: #0d3b66; }
+    .kpi .l { font-size: 11px; color: #555; }
+    .muted { color: #666; font-size: 11px; }
+    {% if not for_pdf %}
+    body { max-width: 980px; margin: 0 auto; padding: 20px 24px 40px; background: #fff; }
+    @media print { body { padding: 0; max-width: none; } }
+    {% endif %}
+  </style>
+</head>
+<body>
+  {% if not for_pdf %}
+  {% set preview_banner_title = 'معاينة تقرير المقرر' %}
+  {% set pdf_download_url = pdf_url %}
+  {% set preview_hide_names_toggle = true %}
+  {% include "survey_export_preview_controls.html" %}
+  {% endif %}
+
+  <div class="cover-dept">{{ college_name_ar or 'كلية الهندسة' }}</div>
+  <h1>{{ title }}</h1>
+  <p class="meta">الفصل: <strong>{{ semester }}</strong> — تاريخ التصدير: {{ export_date }}</p>
+
+  <h2>بيانات التقرير</h2>
+  <table>
+    <tbody>
+      <tr><th style="width:35%">المقرر</th><td>{{ course_name }}{% if group_code %} ({{ group_code }}){% endif %}</td></tr>
+      <tr><th>الأستاذ</th><td>{{ instructor_name or '—' }}</td></tr>
+      <tr><th>مجموعة التدريس</th><td>#{{ teaching_group_id }}</td></tr>
+      <tr><th>القسم</th><td>{% if department_id %}#{{ department_id }}{% else %}—{% endif %}</td></tr>
+      <tr><th>المفردات المعتمدة</th><td>{% if baseline_ok %}نعم — إصدار {{ baseline.version if baseline else '—' }}{% else %}لا{% endif %}</td></tr>
+      <tr><th>إدخال الدرجات</th><td>جزئي: {% if partial_lock_open %}مفتوح{% else %}مقفل{% endif %} · نهائي: {% if final_lock_open %}مفتوح{% else %}مقفل{% endif %}</td></tr>
+    </tbody>
+  </table>
+
+  <div class="kpi-row">
+    <div class="kpi"><div class="v">{% if primary and primary.overall_pct is not none %}{{ primary.overall_pct }}%{% else %}—{% endif %}</div><div class="l">نسبة التقرير المعروض</div></div>
+    <div class="kpi"><div class="v">{% if primary %}{{ (primary.incomplete_topics or [])|length }}{% else %}—{% endif %}</div><div class="l">فجوات &lt; {{ incomplete_threshold|int }}%</div></div>
+    <div class="kpi"><div class="v">{% if primary %}{{ primary.book_reference_count or 0 }}/{{ min_book_references }}{% else %}—{% endif %}</div><div class="l">كتب مرجعية</div></div>
+  </div>
+
+  {% if executive_summary %}
+  <h2>ملخص تنفيذي</h2>
+  <div class="analysis-box">
+    <ul class="mb-0">
+      {% for line in executive_summary %}
+      <li>{{ line }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if analysis_bits %}
+  <h2>تحليل موجز</h2>
+  <div class="analysis-box">
+    <ul class="mb-0">
+      {% for b in analysis_bits %}
+      <li>{{ b }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if operational_recommendations %}
+  <h2>توصيات تشغيلية (آلية)</h2>
+  <p class="muted">مستنتجة من نسب الإنجاز والفجوات والمراجع وحدود المتابعة — للمراجعة قبل الاعتماد.</p>
+  <ol>
+    {% for r in operational_recommendations %}
+    <li>{{ r }}</li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+
+  {% macro render_phase(rep, label) %}
+  <div class="section-block">
+    <h2>تقرير {{ label }}</h2>
+    {% if not rep %}
+    <p class="muted">لم يُنشأ تقرير {{ label }} بعد.</p>
+    {% else %}
+    <p>الحالة: <strong>{{ rep.status_ar }}</strong>
+      {% if rep.overall_pct is not none %} — النسبة الكلية: <strong>{{ rep.overall_pct }}%</strong>{% endif %}
+      {% if rep.submitted_at %} — أُرسل: {{ rep.submitted_at }}{% endif %}
+    </p>
+    {% if rep.below_threshold_reason %}
+    <p><strong>تبرير انخفاض النسبة:</strong> {{ rep.below_threshold_reason }}</p>
+    {% endif %}
+
+    <h3>مفردات المقرر ونسب الإنجاز</h3>
+    {% set rep_items = rep['items'] if rep else [] %}
+    {% if rep_items %}
+    <table>
+      <thead><tr><th>المفرد</th><th style="width:12%">النسبة %</th><th>سبب إن أقل من {{ incomplete_threshold|int }}%</th></tr></thead>
+      <tbody>
+        {% for it in rep_items %}
+        <tr>
+          <td>{{ it.topic_title }}</td>
+          <td>{% if it.completion_pct is not none %}{{ it.completion_pct }}{% else %}—{% endif %}</td>
+          <td>{{ it.incomplete_reason or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">لا بنود إنجاز مسجّلة.</p>
+    {% endif %}
+
+    {% if rep.incomplete_topics %}
+    <h3>ما لم يُنجز (أقل من {{ incomplete_threshold|int }}%)</h3>
+    <table>
+      <thead><tr><th>المفرد</th><th>النسبة</th><th>السبب</th></tr></thead>
+      <tbody>
+        {% for it in rep.incomplete_topics %}
+        <tr>
+          <td>{{ it.topic_title }}</td>
+          <td>{{ it.completion_pct }}%</td>
+          <td>{{ it.incomplete_reason or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    {% if rep.extra_topics %}
+    <h3>مفردات من خارج المقرر</h3>
+    <table>
+      <thead><tr><th>العنوان</th><th>لماذا مهمة؟</th></tr></thead>
+      <tbody>
+        {% for ex in rep.extra_topics %}
+        <tr><td>{{ ex.title }}</td><td>{{ ex.reason or '—' }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    <h3>المراجع</h3>
+    {% if rep.references %}
+    <table>
+      <thead><tr><th>النوع</th><th>العنوان</th><th>تاريخ الإصدار</th><th>رابط/ISBN</th></tr></thead>
+      <tbody>
+        {% for r in rep.references %}
+        <tr>
+          <td>{{ r.ref_type_ar or r.ref_type }}</td>
+          <td>{{ r.title }}</td>
+          <td>{{ r.publication_date or '—' }}</td>
+          <td>{{ r.url_or_isbn or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">لا مراجع مسجّلة.</p>
+    {% endif %}
+
+    <h3>طرق التقييم المختارة</h3>
+    {% if rep.assessment_methods %}
+    <table>
+      <thead><tr><th>الطريقة</th><th style="width:12%">الوزن %</th><th>ملاحظات</th></tr></thead>
+      <tbody>
+        {% for m in rep.assessment_methods %}
+        <tr>
+          <td>{{ m.method_label }}</td>
+          <td>{% if m.weight_pct is not none %}{{ m.weight_pct }}{% else %}—{% endif %}</td>
+          <td>{{ m.notes or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">لم تُسجَّل طرق تقييم.</p>
+    {% endif %}
+
+    {% if rep.instructor_comments %}
+    <h3>ملاحظات الأستاذ</h3>
+    <div class="narrative"><p>{{ rep.instructor_comments }}</p></div>
+    {% endif %}
+    {% if rep.instructor_recommendations %}
+    <h3>توصيات الأستاذ</h3>
+    <div class="narrative"><p>{{ rep.instructor_recommendations }}</p></div>
+    {% endif %}
+    {% endif %}
+  </div>
+  {% endmacro %}
+
+  {{ render_phase(partial, 'الجزئي') }}
+  {{ render_phase(final, 'النهائي') }}
+
+  <div class="footer-note">
+    شاهد مقترح للاعتماد: <code>{{ evidence_type_code }}</code> — {{ evidence_hint_ar }}
+    {% if not for_pdf %}
+    <br>التعبئة: <a href="{{ fill_url }}">{{ fill_url }}</a>
+    {% if assistant_url %}
+    <br>لصياغة توصيات إضافية عبر المساعد الذكي (ثم اعتمدها يدوياً في حقل التوصيات قبل إعادة الطباعة):
+    <a href="{{ assistant_url }}">فتح المساعد</a>
+    {% endif %}
+    {% endif %}
+  </div>
+</body>
+</html>

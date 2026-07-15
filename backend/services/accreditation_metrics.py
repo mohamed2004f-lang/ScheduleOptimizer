@@ -360,7 +360,7 @@ def apply_auto_assessments(
     semester: str | None = None,
     department_id: int | None = None,
     actor: str = "",
-    catalog_version: str = "2026.1",
+    catalog_version: str | None = None,
     only_not_started: bool = True,
     indicator_codes: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -368,13 +368,18 @@ def apply_auto_assessments(
     يحسب ويحفظ تقييمات المؤشرات الآلية/المختلطة.
     only_not_started: لا يستبدل تقييماً يدوياً (ملاحظات لا تبدأ بـ [آلي])
     """
-    from backend.core.accreditation_catalog import ensure_accreditation_catalog
+    from backend.core.accreditation_catalog import (
+        QAA_INST_CATALOG_VERSION,
+        ensure_accreditation_catalog,
+        resolve_catalog_version,
+    )
     from backend.services.institutional_accreditation import _ensure_accreditation_tables
 
     _ensure_accreditation_tables(conn)
     ensure_accreditation_catalog(conn)
     cur = conn.cursor()
     sem = (semester or term_label_from_conn(conn)).strip()
+    cat_ver = resolve_catalog_version(conn, catalog_version or QAA_INST_CATALOG_VERSION)
 
     existing = {}
     dept_clause = "department_id IS NULL" if department_id is None else "department_id = ?"
@@ -401,7 +406,7 @@ def apply_auto_assessments(
     updated = 0
     skipped = 0
 
-    for row in list_auto_indicator_rows(cur, catalog_version):
+    for row in list_auto_indicator_rows(cur, cat_ver):
         code = str(row.get("code") or "").strip().upper()
         if codes_filter and code not in codes_filter:
             continue

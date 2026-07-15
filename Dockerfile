@@ -22,8 +22,10 @@ COPY --from=pgclient /usr/lib/postgresql/17/bin/pg_dump /usr/local/bin/pg_dump
 COPY --from=pgclient /usr/lib/postgresql/17/bin/pg_restore /usr/local/bin/pg_restore
 
 # libxml2/libxslt + gcc: wheels لـ lxml (python-pptx)؛ freetype/png لـ matplotlib
+# خطوط عربية: fonts-noto-extra (يشمل Noto Naskh/Sans Arabic) + Amiri على Debian bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wkhtmltopdf \
+    chromium \
     xvfb \
     libpq5 \
     gcc \
@@ -34,7 +36,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libfreetype6-dev \
     libpng-dev \
     pkg-config \
+    fonts-noto-core \
+    fonts-noto-extra \
+    fonts-hosny-amiri \
     && rm -rf /var/lib/apt/lists/*
+
+ENV CHROMIUM_PATH=/usr/bin/chromium \
+    PDF_ENGINE=chromium
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \

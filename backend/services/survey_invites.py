@@ -16,6 +16,7 @@ from backend.core.survey_platform import (
     ALUMNI_OPEN_COMMENT_LABEL,
     ALUMNI_PROGRAM_DEVELOPMENT_OPTIONS,
     ALUMNI_PROGRAM_FREEZE_QUESTION_AR,
+    ALUMNI_PROGRAM_FREEZE_SUPPORT_QUESTION_AR,
     ALUMNI_PROGRAM_TERMINOLOGY_AR,
     ALUMNI_PROGRAM_SCOPE_HINT_AR,
     ALUMNI_QUESTION_SECTIONS,
@@ -23,9 +24,15 @@ from backend.core.survey_platform import (
     ALUMNI_DEPARTMENT_FIELD_HINT,
     ALUMNI_TRACK_FIELD_LABEL,
     ALUMNI_TRACK_FIELD_HINT,
+    ALUMNI_TRACK_CUSTOM_OPTION_LABEL,
+    ALUMNI_TRACK_CUSTOM_FIELD_LABEL,
     ALUMNI_TAIL_PROGRAM_HINT_AR,
     EMPLOYER_OPEN_COMMENT_LABEL,
     EMPLOYER_ORG_TYPES,
+    EMPLOYER_HIRE_DEPARTMENTS_LABEL,
+    EMPLOYER_HIRE_DEPARTMENTS_HINT,
+    EMPLOYER_HIRE_NEEDS_FIELD_LABEL,
+    EMPLOYER_HIRE_NEEDS_FIELD_HINT,
     EXTERNAL_SURVEY_CODES,
 )
 from backend.database.database import conn_is_postgresql, fetch_table_columns, is_postgresql, table_exists
@@ -282,6 +289,11 @@ def _phone_hash(phone: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:32]
 
 
+def _normalize_person_name(name: str) -> str:
+    """تطبيع الاسم للمقارنة (مسافات + حالة الأحرف). الاسم الفارغ → ''."""
+    return " ".join((name or "").split()).casefold()
+
+
 def _resolve_public_department(conn, department_id: int) -> str:
     """اسم قسم مسموح به في استبيان الخريج (يستبعد القسم العام)."""
     if not table_exists(conn, "departments"):
@@ -325,7 +337,12 @@ def _validate_alumni_profile(profile: dict) -> dict:
     if track_code == "unknown":
         track_code = ""
     track_label = (profile.get("track_label") or "").strip()
-    if not track_code:
+    if track_code == "custom":
+        track_label = (profile.get("track_custom_label") or track_label or "").strip()
+        if not track_label:
+            raise ValueError("يرجى كتابة اسم المسار/الشعبة غير المدرجة")
+        track_code = "custom"
+    elif not track_code:
         track_label = ""
 
     employment_status = (profile.get("employment_status") or "").strip()
@@ -353,10 +370,16 @@ def _validate_alumni_profile(profile: dict) -> dict:
     if recommend_enrollment not in ("yes", "no"):
         raise ValueError("يرجى الإجابة: هل تنصح الطلاب الجدد بالالتحاق بهذا البرنامج؟")
 
-    program_development_choice = (profile.get("program_development_choice") or "").strip()
+    program_freeze_support = (profile.get("program_freeze_support") or "").strip().lower()
+    if program_freeze_support not in ("yes", "no"):
+        raise ValueError("يرجى الإجابة: هل تؤيد تجميد البرنامج في ظل الظروف الحالية؟")
+
+    program_development_choice = ""
     valid_program = {k for k, _ in ALUMNI_PROGRAM_DEVELOPMENT_OPTIONS}
-    if program_development_choice not in valid_program:
-        raise ValueError("يرجى اختيار مقترحكم في حال تجميد البرنامج")
+    if program_freeze_support == "yes":
+        program_development_choice = (profile.get("program_development_choice") or "").strip()
+        if program_development_choice not in valid_program:
+            raise ValueError("يرجى اختيار مقترحكم في حال تجميد البرنامج")
 
     employment_labels = dict(ALUMNI_EMPLOYMENT_STATUSES)
     qual_labels = dict(ALUMNI_ENGINEERING_QUAL_OPTIONS)
@@ -379,10 +402,12 @@ def _validate_alumni_profile(profile: dict) -> dict:
         "job_rejection_reason": job_rejection_reason,
         "recommend_enrollment": recommend_enrollment,
         "recommend_reason_text": (profile.get("recommend_reason_text") or "").strip(),
+        "program_freeze_support": program_freeze_support,
+        "program_freeze_support_label": {"yes": "نعم", "no": "لا"}.get(program_freeze_support, ""),
         "program_development_choice": program_development_choice,
         "program_development_label": program_labels.get(
             program_development_choice, program_development_choice
-        ),
+        ) if program_development_choice else "",
         "open_missing_skill": (profile.get("open_missing_skill") or "").strip(),
         "open_adaptation_difficulty": (profile.get("open_adaptation_difficulty") or "").strip(),
         "open_missing_technology": (profile.get("open_missing_technology") or "").strip(),
@@ -390,7 +415,59 @@ def _validate_alumni_profile(profile: dict) -> dict:
     }
 
 
-def _validate_employer_profile(profile: dict) -> dict:
+def _parse_int_list(raw) -> list[int]:
+    """تحويل قائمة معرفات من JSON أو قائمة أو نص مفصول بفواصل."""
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        out: list[int] = []
+        for item in raw:
+            try:
+                val = int(item)
+            except (TypeError, ValueError):
+                continue
+            if val > 0:
+                out.append(val)
+        return out
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return []
+        if s.startswith("["):
+            try:
+                return _parse_int_list(json.loads(s))
+            except Exception:
+                pass
+        return _parse_int_list([p.strip() for p in s.split(",") if p.strip()])
+    return []
+
+
+def _parse_hire_department_needs(profile: dict, hire_department_ids: list[int]) -> list[dict[str, Any]]:
+    """استخراج احتياجات التخصص/الشعبة لكل قسم (نص حر)."""
+    raw = profile.get("hire_department_needs")
+    parsed: list[dict[str, Any]] = []
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            try:
+                dept_id = int(item.get("department_id"))
+            except (TypeError, ValueError):
+                continue
+            text = str(item.get("specialty_needs_text") or item.get("needs_text") or "").strip()
+            if dept_id > 0 and text:
+                parsed.append({"department_id": dept_id, "specialty_needs_text": text})
+    if parsed:
+        return parsed
+    for dept_id in hire_department_ids:
+        key = f"hire_needs_{dept_id}"
+        text = str(profile.get(key) or "").strip()
+        if text:
+            parsed.append({"department_id": int(dept_id), "specialty_needs_text": text})
+    return parsed
+
+
+def _validate_employer_profile(profile: dict, conn=None) -> dict:
     org_type = (profile.get("org_type") or "").strip()
     valid_types = {k for k, _ in EMPLOYER_ORG_TYPES}
     if org_type not in valid_types:
@@ -401,6 +478,39 @@ def _validate_employer_profile(profile: dict) -> dict:
     hires = (profile.get("hires_graduates") or "").strip().lower()
     if hires not in ("yes", "no", "sometimes"):
         raise ValueError("يرجى الإجابة: هل توظّفون خريجين من الكلية؟")
+
+    hire_department_ids = _parse_int_list(profile.get("hire_department_ids"))
+    if hires in ("yes", "sometimes") and not hire_department_ids:
+        raise ValueError("يرجى اختيار قسم واحد على الأقل الذي توظّفون من خريجيه")
+
+    hire_department_labels: list[str] = []
+    hire_department_needs: list[dict[str, Any]] = []
+    if conn is not None and hire_department_ids:
+        for dept_id in hire_department_ids:
+            try:
+                hire_department_labels.append(_resolve_public_department(conn, dept_id))
+            except ValueError:
+                raise ValueError(f"قسم غير صالح في قائمة التوظيف: {dept_id}") from None
+        hire_department_needs = _parse_hire_department_needs(profile, hire_department_ids)
+        allowed = set(hire_department_ids)
+        hire_department_needs = [
+            n for n in hire_department_needs if int(n["department_id"]) in allowed
+        ]
+        needs_by_dept = {int(n["department_id"]): n for n in hire_department_needs}
+        for idx, dept_id in enumerate(hire_department_ids):
+            if dept_id not in needs_by_dept:
+                raise ValueError(
+                    f"يرجى كتابة التخصص/الشعبة المطلوبة للقسم: {hire_department_labels[idx]}"
+                )
+            text = needs_by_dept[dept_id]["specialty_needs_text"]
+            if len(text) < 2:
+                raise ValueError(
+                    f"يرجى وصف التخصص/الشعبة المطلوبة بشكل أوضح للقسم: {hire_department_labels[idx]}"
+                )
+        label_by_id = dict(zip(hire_department_ids, hire_department_labels))
+        for item in hire_department_needs:
+            item["department_label"] = label_by_id.get(int(item["department_id"]), "")
+
     org_type_label = dict(EMPLOYER_ORG_TYPES).get(org_type, org_type)
     return {
         "org_type": org_type,
@@ -409,26 +519,26 @@ def _validate_employer_profile(profile: dict) -> dict:
         "sector_label": (profile.get("sector_label") or "").strip(),
         "position_text": (profile.get("position_text") or "").strip(),
         "hires_graduates": hires,
+        "hire_department_ids": hire_department_ids,
+        "hire_department_labels": hire_department_labels,
+        "hire_department_needs": hire_department_needs,
     }
 
 
-def validate_respondent_profile(template_code: str, profile: dict) -> dict:
+def validate_respondent_profile(template_code: str, profile: dict, conn=None) -> dict:
     code = (template_code or "").strip()
     if code == "alumni":
         return _validate_alumni_profile(profile or {})
     if code == "employer_strategic":
-        return _validate_employer_profile(profile or {})
+        return _validate_employer_profile(profile or {}, conn=conn)
     raise ValueError("قالب غير مدعوم")
 
 
 def _check_duplicate_submission(conn, invite: dict, profile: dict) -> None:
-    invite_id = int(invite.get("id") or 0)
     kind = (invite.get("invite_kind") or "").strip()
     if kind == "personal" and int(invite.get("use_count") or 0) > 0:
         raise ValueError("تم استخدام هذا الرابط مسبقاً")
-    phone_hash = profile.get("phone_hash") or ""
-    if not phone_hash:
-        return
+
     cycle = (invite.get("cycle_label") or "").strip()
     code = (invite.get("template_code") or "").strip()
     cur = conn.cursor()
@@ -439,6 +549,34 @@ def _check_duplicate_submission(conn, invite: dict, profile: dict) -> None:
         """,
         (code, cycle),
     ).fetchall()
+
+    # خريج: اسم غير فارغ + نفس القسم + نفس الدورة → رفض
+    if code == "alumni":
+        name_norm = _normalize_person_name(profile.get("full_name") or "")
+        dept_id = profile.get("department_id")
+        if name_norm and isinstance(dept_id, int) and dept_id > 0:
+            for row in rows or []:
+                raw = row[0] if not hasattr(row, "keys") else row["respondent_profile_json"]
+                try:
+                    existing = json.loads(raw or "{}")
+                except Exception:
+                    existing = {}
+                existing_name = _normalize_person_name(existing.get("full_name") or "")
+                if not existing_name:
+                    continue
+                try:
+                    existing_dept = int(existing.get("department_id"))
+                except (TypeError, ValueError):
+                    continue
+                if existing_name == name_norm and existing_dept == int(dept_id):
+                    raise ValueError(
+                        "يبدو أن ردّاً بنفس الاسم والقسم سُجّل في هذه الدورة مسبقاً. "
+                        "إن لم تكن أنت من أرسله، اترك حقل الاسم فارغاً أو راجع منسق الجودة."
+                    )
+
+    phone_hash = profile.get("phone_hash") or ""
+    if not phone_hash:
+        return
     for row in rows or []:
         raw = row[0] if not hasattr(row, "keys") else row["respondent_profile_json"]
         try:
@@ -459,11 +597,16 @@ def submit_invite_survey(
 ) -> int:
     invite = validate_invite(conn, token)
     template_code = (invite.get("template_code") or "").strip()
-    cleaned_profile = validate_respondent_profile(template_code, profile)
+    cleaned_profile = validate_respondent_profile(template_code, profile, conn=conn)
     if template_code == "alumni":
         dept_id = cleaned_profile.get("department_id")
         if isinstance(dept_id, int):
             cleaned_profile["department_label"] = _resolve_public_department(conn, dept_id)
+    elif template_code == "employer_strategic" and cleaned_profile.get("hire_department_ids"):
+        cleaned_profile["hire_department_labels"] = [
+            _resolve_public_department(conn, int(d))
+            for d in cleaned_profile["hire_department_ids"]
+        ]
     _check_duplicate_submission(conn, invite, cleaned_profile)
 
     template = get_template_by_code(conn, template_code)
@@ -481,6 +624,10 @@ def submit_invite_survey(
     cur = conn.cursor()
     tid = int(template["id"])
     profile_json = json.dumps(cleaned_profile, ensure_ascii=False)
+    response_dept_id = cleaned_profile.get("department_id")
+    if template_code == "employer_strategic":
+        hire_ids = cleaned_profile.get("hire_department_ids") or []
+        response_dept_id = int(hire_ids[0]) if hire_ids else None
 
     if is_postgresql():
         cur.execute(
@@ -502,7 +649,7 @@ def submit_invite_survey(
                 respondent_id,
                 subject_type,
                 0,
-                cleaned_profile.get("department_id"),
+                response_dept_id,
                 (comments or "").strip(),
                 f"invite:{token[:12]}",
                 now,
@@ -531,7 +678,7 @@ def submit_invite_survey(
                 respondent_id,
                 subject_type,
                 0,
-                cleaned_profile.get("department_id"),
+                response_dept_id,
                 (comments or "").strip(),
                 f"invite:{token[:12]}",
                 now,
@@ -595,11 +742,17 @@ def invite_fill_context(conn, token: str) -> dict[str, Any]:
         from backend.services.survey_identity_context import build_employer_identity_panel
 
         ctx["identity_panel"] = build_employer_identity_panel(conn)
+        ctx["employer_hire_departments_label"] = EMPLOYER_HIRE_DEPARTMENTS_LABEL
+        ctx["employer_hire_departments_hint"] = EMPLOYER_HIRE_DEPARTMENTS_HINT
+        ctx["employer_hire_needs_field_label"] = EMPLOYER_HIRE_NEEDS_FIELD_LABEL
+        ctx["employer_hire_needs_field_hint"] = EMPLOYER_HIRE_NEEDS_FIELD_HINT
+        ctx["public_departments"] = list_public_departments(conn)
     elif template_code == "alumni":
         ctx["alumni_intro_ar"] = ALUMNI_INTRO_AR
         ctx["alumni_employment_statuses"] = list(ALUMNI_EMPLOYMENT_STATUSES)
         ctx["alumni_engineering_qual_options"] = list(ALUMNI_ENGINEERING_QUAL_OPTIONS)
         ctx["alumni_program_development_options"] = list(ALUMNI_PROGRAM_DEVELOPMENT_OPTIONS)
+        ctx["alumni_program_freeze_support_question_ar"] = ALUMNI_PROGRAM_FREEZE_SUPPORT_QUESTION_AR
         ctx["alumni_program_freeze_question_ar"] = ALUMNI_PROGRAM_FREEZE_QUESTION_AR
         ctx["alumni_program_terminology_ar"] = ALUMNI_PROGRAM_TERMINOLOGY_AR
         ctx["alumni_program_scope_hint_ar"] = ALUMNI_PROGRAM_SCOPE_HINT_AR
@@ -607,6 +760,8 @@ def invite_fill_context(conn, token: str) -> dict[str, Any]:
         ctx["alumni_department_field_hint"] = ALUMNI_DEPARTMENT_FIELD_HINT
         ctx["alumni_track_field_label"] = ALUMNI_TRACK_FIELD_LABEL
         ctx["alumni_track_field_hint"] = ALUMNI_TRACK_FIELD_HINT
+        ctx["alumni_track_custom_option_label"] = ALUMNI_TRACK_CUSTOM_OPTION_LABEL
+        ctx["alumni_track_custom_field_label"] = ALUMNI_TRACK_CUSTOM_FIELD_LABEL
         ctx["alumni_tail_program_hint_ar"] = ALUMNI_TAIL_PROGRAM_HINT_AR
         ctx["alumni_form_items"] = _alumni_form_items(questions)
     return ctx
@@ -652,6 +807,7 @@ def list_public_departments(conn) -> list[dict]:
 
 
 def list_public_tracks_for_department(conn, department_id: int) -> list[dict]:
+    """مسارات/شعب التخصص النشطة فقط (لا تُعرض البرامج المجمّدة)."""
     if not table_exists(conn, "programs"):
         return []
     cur = conn.cursor()
@@ -660,7 +816,8 @@ def list_public_tracks_for_department(conn, department_id: int) -> list[dict]:
         SELECT DISTINCT COALESCE(p.track_group, '') AS track_group,
                COALESCE(p.name_ar, p.code) AS program_name
         FROM programs p
-        WHERE p.department_id = ? AND COALESCE(p.is_active, 1) = 1
+        WHERE p.department_id = ?
+          AND COALESCE(p.is_active, 1) = 1
           AND COALESCE(p.track_group, '') != ''
         ORDER BY track_group
         """,

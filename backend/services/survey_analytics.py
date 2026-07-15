@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import datetime
+import io
 import math
+import tempfile
 from typing import Any
 
 import pandas as pd
+from flask import send_file
 
 from backend.core.survey_platform import (
     LINK_TYPE_LABELS_AR,
@@ -17,6 +20,16 @@ from backend.database.database import fetch_table_columns, schedule_pk_column, t
 from backend.services.accreditation_metrics import suggest_compliance_status
 from backend.services.multi_surveys import aggregate_template, get_template_by_code, list_templates
 from backend.services.quality_metrics import _avg_eval_score, term_label_from_conn
+from backend.core.arabic_export import (
+    docx_add_rtl_heading,
+    docx_add_rtl_paragraph,
+    docx_fill_rtl_table,
+    excel_arabic_workbook_formats,
+    pdf_arabic_extra_css,
+    set_docx_paragraph_rtl,
+    set_docx_run_arabic_font,
+    write_excel_sheet_rtl,
+)
 from backend.services.utilities import excel_response_from_frames, schedule_semester_matches_current_term
 
 COMPLIANCE_STATUS_LABELS_AR: dict[str, str] = {
@@ -41,6 +54,8 @@ COURSE_EVAL_RATE_MIN_PERCENT = 5
 COURSE_EVAL_RATE_MAX_PERCENT = 100
 # عند غياب بيانات التسجيل لا تُطبَّق النسبة — لا يُعرض التجميع
 COURSE_EVAL_NO_ENROLLMENT_MIN = 2**30
+
+COLLEGE_NAME_AR = "كلية الهندسة"
 
 
 def _read_system_setting(cur, key: str, default: str = "") -> str:
@@ -118,6 +133,37 @@ def classify_item_score(percent: float | None) -> str:
     if p >= 50:
         return "needs_improvement"
     return "critical"
+
+
+def classify_section_score(percent: float | None) -> str:
+    """تصنيف نتيجة الشعبة في تقارير الشواهد."""
+    if percent is None:
+        return "pending"
+    p = float(percent)
+    if p >= 90:
+        return "excellent"
+    if p >= 75:
+        return "very_good"
+    if p >= 65:
+        return "good"
+    return "needs_improvement"
+
+
+SECTION_SCORE_LABELS_AR: dict[str, str] = {
+    "excellent": "ممتاز (≥90%)",
+    "very_good": "جيد جداً (75–89%)",
+    "good": "جيد (65–74.99%)",
+    "needs_improvement": "يحتاج تحسين (<65%)",
+    "pending": "ناقص التجميع",
+}
+
+SECTION_SCORE_BUCKET_ORDER: tuple[str, ...] = (
+    "excellent",
+    "very_good",
+    "good",
+    "needs_improvement",
+    "pending",
+)
 
 
 def classify_compliance_status(score_percent: float | None) -> str:
@@ -1695,6 +1741,399 @@ def _sheet_name_for_code(code: str, title_ar: str = "") -> str:
     return short.get(code, (title_ar or code)[:28])
 
 
+def _course_eval_sections_export_stats(sections: list[dict]) -> dict[str, Any]:
+    """إحصاءات ملخصة لتصدير الشعب (بدون ربط اعتماد)."""
+    aggregated = [s for s in sections if s.get("aggregated")]
+    pending = [s for s in sections if not s.get("aggregated")]
+    scores = [
+        float(s["overall_score_percent"])
+        for s in aggregated
+        if s.get("overall_score_percent") is not None
+    ]
+    avg_score = round(sum(scores) / len(scores), 1) if scores else None
+    return {
+        "section_count": len(sections),
+        "aggregated_count": len(aggregated),
+        "pending_count": len(pending),
+        "avg_score_percent": avg_score,
+    }
+
+
+def _aggregate_department_question_scores(sections: list[dict]) -> list[dict[str, Any]]:
+    """متوسط بنود الاستبيان عبر الشعب المجمّعة في القسم."""
+    by_label: dict[str, list[float]] = {}
+    for s in sections:
+        if not s.get("aggregated"):
+            continue
+        for q in s.get("questions") or []:
+            pct = q.get("score_percent")
+            if pct is None:
+                continue
+            label = (q.get("label_ar") or "").strip()
+            if not label:
+                continue
+            by_label.setdefault(label, []).append(float(pct))
+    out: list[dict[str, Any]] = []
+    for label, scores in by_label.items():
+        avg = round(sum(scores) / len(scores), 1)
+        cls = classify_item_score(avg)
+        out.append(
+            {
+                "label_ar": label,
+                "score_percent": avg,
+                "classification": cls,
+                "classification_ar": SCORE_CLASS_LABELS_AR.get(cls, cls),
+                "section_count": len(scores),
+            }
+        )
+    out.sort(key=lambda x: float(x["score_percent"]), reverse=True)
+    return out
+
+
+def _section_label_short(s: dict) -> str:
+    course = (s.get("course_name") or "—").strip()
+    sec = s.get("section_id")
+    return f"{course} (ش.{sec})" if sec is not None else course
+
+
+def build_course_eval_sections_analysis(
+    *,
+    sections: list[dict],
+    stats: dict[str, Any],
+    missing_audit: dict[str, Any] | None,
+    department_label: str,
+    semester: str,
+    course_eval_policy_ar: str,
+) -> dict[str, Any]:
+    """تحليل واستنتاجات آلية لتقرير الشعب (شاهد)."""
+    aggregated = [s for s in sections if s.get("aggregated") and s.get("overall_score_percent") is not None]
+    pending = [s for s in sections if not s.get("aggregated")]
+    missing_rows = (missing_audit or {}).get("rows") or []
+    avg = stats.get("avg_score_percent")
+    interpretation = interpret_overall_score_ar(avg, bool(aggregated))
+
+    dist_labels = dict(SECTION_SCORE_LABELS_AR)
+    buckets: dict[str, list[dict]] = {key: [] for key in SECTION_SCORE_BUCKET_ORDER}
+    for s in sections:
+        if not s.get("aggregated") or s.get("overall_score_percent") is None:
+            buckets["pending"].append(s)
+            continue
+        buckets[classify_section_score(float(s["overall_score_percent"]))].append(s)
+
+    distribution_rows = [
+        {
+            "التصنيف": dist_labels[key],
+            "عدد_الشعب": len(bucket),
+            "أمثلة": "؛ ".join(_section_label_short(s) for s in bucket[:3]) or "—",
+        }
+        for key in SECTION_SCORE_BUCKET_ORDER
+        for bucket in [buckets[key]]
+        if bucket
+    ]
+
+    sorted_agg = sorted(aggregated, key=lambda x: float(x["overall_score_percent"]), reverse=True)
+    top_sections = [
+        {
+            "المقرر": s.get("course_name"),
+            "الشعبة": s.get("section_id"),
+            "الأستاذ": s.get("instructor_name"),
+            "النتيجة_%": s.get("overall_score_percent"),
+        }
+        for s in sorted_agg[:3]
+    ]
+    bottom_sections = [
+        {
+            "المقرر": s.get("course_name"),
+            "الشعبة": s.get("section_id"),
+            "الأستاذ": s.get("instructor_name"),
+            "النتيجة_%": s.get("overall_score_percent"),
+        }
+        for s in sorted(sorted_agg, key=lambda x: float(x["overall_score_percent"]))[:3]
+    ]
+
+    dept_questions = _aggregate_department_question_scores(sections)
+    strongest_items = dept_questions[:3]
+    weakest_items = list(reversed(dept_questions[-3:])) if dept_questions else []
+
+    follow_up: list[dict[str, Any]] = []
+    for s in pending:
+        reason = "لم يكتمل عدد المقيّمين"
+        if int(s.get("response_count") or 0) == 0:
+            reason = "لا يوجد أي تقييم"
+        follow_up.append(
+            {
+                "المقرر": s.get("course_name"),
+                "الشعبة": s.get("section_id"),
+                "الأستاذ": s.get("instructor_name"),
+                "السبب": reason,
+            }
+        )
+    for s in aggregated:
+        if float(s["overall_score_percent"]) < 65:
+            follow_up.append(
+                {
+                    "المقرر": s.get("course_name"),
+                    "الشعبة": s.get("section_id"),
+                    "الأستاذ": s.get("instructor_name"),
+                    "السبب": f"نتيجة منخفضة ({s['overall_score_percent']}%)",
+                }
+            )
+
+    total = int(stats.get("section_count") or 0)
+    agg_n = int(stats.get("aggregated_count") or 0)
+    pend_n = int(stats.get("pending_count") or 0)
+    cov_pct = round((agg_n / total) * 100, 1) if total else 0
+    avg_txt = f"{avg}%" if avg is not None else "—"
+
+    narrative: list[str] = [
+        (
+            f"يغطي هذا التقرير {total} شعبة في قسم «{department_label}» للفصل «{semester}». "
+            f"اكتمل التجميع في {agg_n} شعبة ({cov_pct}%) وفق سياسة {course_eval_policy_ar}."
+        ),
+        (
+            f"بلغ متوسط نتائج الشعب المجمّعة {avg_txt}. {interpretation}"
+            if aggregated
+            else "لا تتوفر نتيجة مجمّعة كافية لإصدار حكم عام على مستوى القسم."
+        ),
+    ]
+    if top_sections:
+        best = sorted_agg[0]
+        narrative.append(
+            f"أعلى نتيجة: «{best.get('course_name')}» شعبة {best.get('section_id')} "
+            f"({best.get('overall_score_percent')}%)."
+        )
+    if len(sorted_agg) > 1:
+        worst = sorted(sorted_agg, key=lambda x: float(x["overall_score_percent"]))[0]
+        narrative.append(
+            f"أدنى نتيجة مجمّعة: «{worst.get('course_name')}» شعبة {worst.get('section_id')} "
+            f"({worst.get('overall_score_percent')}%)."
+        )
+    if strongest_items:
+        labels = "، ".join(f"«{q['label_ar']}» ({q['score_percent']}%)" for q in strongest_items)
+        narrative.append(f"أبرز نقاط القوة على مستوى القسم: {labels}.")
+    if weakest_items:
+        labels = "، ".join(f"«{q['label_ar']}» ({q['score_percent']}%)" for q in weakest_items)
+        narrative.append(f"أبرز محاور التحسين: {labels}.")
+    if missing_rows:
+        narrative.append(
+            f"وُجدت {len(missing_rows)} شعبة في الجدول الدراسي بلا أي تقييم مقرر — يستحق الأمر متابعة إدارية."
+        )
+
+    conclusions: list[str] = []
+    if agg_n >= max(1, total // 2):
+        conclusions.append("تغطية التقييم على مستوى الشعب مقبولة بشكل عام لهذا الفصل.")
+    elif total:
+        conclusions.append("تغطية التقييم دون المستوى المطلوب — يُنصح بتعزيز حث الطلبة على التقييم.")
+    if avg is not None and avg >= 75:
+        conclusions.append("مستوى الرضا العام عن المقررات والتدريس يُعد جيداً ضمن الشعب المجمّعة.")
+    elif avg is not None:
+        conclusions.append("النتائج العامة تستدعي خطة تحسين فصلية في جودة التدريس والتقييم.")
+    if buckets["needs_improvement"]:
+        conclusions.append("توجد شعب بنتائج دون 65% تستدعي متابعة فردية مع الأساتذة وخطة تحسين.")
+    elif buckets["good"]:
+        conclusions.append("بعض الشعب في نطاق «جيد» (65–75%) — يُنصح بمتابعة دورية دون تأخير.")
+    if pend_n:
+        conclusions.append(f"وجود {pend_n} شعبة بلا تجميع كافٍ يحد من دقة الصورة الكاملة للقسم.")
+    if missing_rows:
+        conclusions.append("شعب بلا تقييم تُثير تساؤلاً عن اكتمال آلية التقييم — يُراجع مع الشؤون الأكاديمية.")
+    if not conclusions:
+        conclusions.append("لا تتوفر بيانات كافية لاستنتاجات نهائية — يُعاد التقييم بعد اكتمال التغطية.")
+
+    recommendations: list[dict[str, str]] = []
+    for q in weakest_items[:2]:
+        recommendations.append(
+            {
+                "التوصية": f"عقد ورشة أو اجتماع لجنة الجودة حول بند «{q['label_ar']}» ({q['score_percent']}%).",
+                "المسؤول": "رئيس القسم / لجنة الجودة",
+                "الإطار": "خلال الفصل الحالي",
+            }
+        )
+    for fu in follow_up[:3]:
+        recommendations.append(
+            {
+                "التوصية": (
+                    f"متابعة شعبة {fu.get('شعبة')} — {fu.get('المقرر')} "
+                    f"({fu.get('السبب')})."
+                ),
+                "المسؤول": "رئيس القسم",
+                "الإطار": "خلال أسبوعين",
+            }
+        )
+    if top_sections and not recommendations:
+        recommendations.append(
+            {
+                "التوصية": "توثيق ممارسات الشعب ذات النتائج العالية كمرجع للتدريس في القسم.",
+                "المسؤول": "لجنة الجودة",
+                "الإطار": "الفصل القادم",
+            }
+        )
+    if not recommendations:
+        recommendations.append(
+            {
+                "التوصية": "مراجعة نتائج التقييم في اجتماع دوري لضمان الجودة.",
+                "المسؤول": "رئيس القسم",
+                "الإطار": "نهاية الفصل",
+            }
+        )
+
+    return {
+        "interpretation_ar": interpretation,
+        "narrative_paragraphs": narrative,
+        "conclusions": conclusions,
+        "recommendations": recommendations,
+        "distribution_rows": distribution_rows,
+        "top_sections": top_sections,
+        "bottom_sections": bottom_sections,
+        "strongest_items": strongest_items,
+        "weakest_items": weakest_items,
+        "follow_up_sections": follow_up,
+    }
+
+
+def _analysis_excel_frames(analysis: dict[str, Any]) -> list[tuple[str, pd.DataFrame]]:
+    """أوراق التحليل والاستنتاجات."""
+    frames: list[tuple[str, pd.DataFrame]] = []
+    narrative_rows = [{"الفقرة": p} for p in analysis.get("narrative_paragraphs") or []]
+    frames.append(("التحليل", pd.DataFrame(narrative_rows or [{"الفقرة": "—"}])))
+    if analysis.get("distribution_rows"):
+        frames.append(("توزيع_النتائج", pd.DataFrame(analysis["distribution_rows"])))
+    if analysis.get("top_sections"):
+        frames.append(("أعلى_الشعب", pd.DataFrame(analysis["top_sections"])))
+    if analysis.get("bottom_sections"):
+        frames.append(("أدنى_الشعب", pd.DataFrame(analysis["bottom_sections"])))
+    if analysis.get("strongest_items") or analysis.get("weakest_items"):
+        item_rows = []
+        for q in analysis.get("strongest_items") or []:
+            item_rows.append(
+                {
+                    "المحور": "قوة",
+                    "البند": q.get("label_ar"),
+                    "النسبة_%": q.get("score_percent"),
+                    "التصنيف": q.get("classification_ar"),
+                }
+            )
+        for q in analysis.get("weakest_items") or []:
+            item_rows.append(
+                {
+                    "المحور": "تحسين",
+                    "البند": q.get("label_ar"),
+                    "النسبة_%": q.get("score_percent"),
+                    "التصنيف": q.get("classification_ar"),
+                }
+            )
+        frames.append(("بنود_القسم", pd.DataFrame(item_rows)))
+    conclusion_rows = [{"#": i + 1, "الاستنتاج": c} for i, c in enumerate(analysis.get("conclusions") or [])]
+    frames.append(("الاستنتاجات", pd.DataFrame(conclusion_rows or [{"#": 1, "الاستنتاج": "—"}])))
+    rec_rows = analysis.get("recommendations") or []
+    frames.append(
+        (
+            "التوصيات",
+            pd.DataFrame(rec_rows)
+            if rec_rows
+            else pd.DataFrame(columns=["التوصية", "المسؤول", "الإطار"]),
+        )
+    )
+    if analysis.get("follow_up_sections"):
+        frames.append(("متابعة_الشعب", pd.DataFrame(analysis["follow_up_sections"])))
+    return frames
+
+
+def _department_approval_excel_rows() -> list[dict[str, str]]:
+    """ورقة اعتماد القسم — للتوقيع اليدوي."""
+    return [
+        {"البند": "اعتماد القسم", "القيمة": ""},
+        {"البند": "رأي رئيس القسم / ملاحظات إضافية", "القيمة": ""},
+        {"البند": "", "القيمة": ""},
+        {"البند": "", "القيمة": ""},
+        {"البند": "التوقيع", "القيمة": ""},
+        {"البند": "التاريخ", "القيمة": ""},
+    ]
+
+
+def _course_eval_sections_cover_rows(
+    *,
+    college_name_ar: str,
+    department_label: str,
+    semester: str,
+    stats: dict[str, Any],
+    course_eval_policy_ar: str,
+    export_date: str,
+    interpretation_ar: str | None = None,
+) -> list[dict[str, str]]:
+    avg = stats.get("avg_score_percent")
+    avg_txt = f"{avg}%" if avg is not None else "—"
+    rows = [
+        {"البند": college_name_ar, "القيمة": ""},
+        {"البند": "القسم", "القيمة": department_label},
+        {"البند": "", "القيمة": ""},
+        {"البند": "الوثيقة", "القيمة": "نتائج تقييم المقرر والأستاذ — حسب الشعبة"},
+        {"البند": "الفصل الدراسي", "القيمة": semester},
+        {"البند": "تاريخ التصدير", "القيمة": export_date},
+        {"البند": "", "القيمة": ""},
+        {"البند": "عدد الشعب", "القيمة": str(stats.get("section_count") or 0)},
+        {"البند": "شعب مجمّعة", "القيمة": str(stats.get("aggregated_count") or 0)},
+        {"البند": "شعب ناقصة", "القيمة": str(stats.get("pending_count") or 0)},
+        {"البند": "متوسط النتائج المجمّعة", "القيمة": avg_txt},
+        {"البند": "سياسة التجميع", "القيمة": course_eval_policy_ar},
+    ]
+    if interpretation_ar:
+        rows.append({"البند": "التفسير العام", "القيمة": interpretation_ar})
+    rows.append(
+        {
+            "البند": "الخصوصية",
+            "القيمة": "لا تُعرض إجابات فردية — التجميع بعد بلوغ الحد الأدنى في الشعبة.",
+        }
+    )
+    return rows
+
+
+def _course_eval_section_evidence_rows(sections: list[dict]) -> list[dict]:
+    """صفوف جدول الشعب للتصدير الرسمي — بلا ربط اعتماد."""
+    rows: list[dict] = []
+    for r in sections:
+        rows.append(
+            {
+                "المقرر": r.get("course_name"),
+                "الشعبة": r.get("section_id"),
+                "الأستاذ": r.get("instructor_name"),
+                "القسم": r.get("department_name"),
+                "مسجّلون_تقدير": r.get("enrolled_count"),
+                "إجمالي_تسجيل_المقرر": r.get("course_registration_count"),
+                "عدد_التقييمات": r.get("response_count"),
+                "نسبة_المشاركة_%": r.get("response_rate_percent"),
+                "الحد_الأدنى": r.get("min_aggregate"),
+                "حالة_التجميع": "مكتمل" if r.get("aggregated") else "ناقص",
+                "النتيجة_%": r.get("overall_score_percent"),
+                "أضعف_بند": r.get("weakest_item", "—"),
+                "أقوى_بند": r.get("strongest_item", "—"),
+            }
+        )
+    return rows
+
+
+def _course_eval_by_course_evidence_rows(groups: list[dict]) -> list[dict]:
+    rows: list[dict] = []
+    for r in groups:
+        rows.append(
+            {
+                "المقرر": r.get("course_name"),
+                "الأستاذ": r.get("instructor_name"),
+                "عدد_الشعب": r.get("section_count"),
+                "معرّفات_الشعب": ", ".join(str(x) for x in (r.get("section_ids") or [])),
+                "القسم": r.get("department_name"),
+                "مسجّلون": r.get("enrolled_count"),
+                "عدد_التقييمات": r.get("response_count"),
+                "نسبة_المشاركة_%": r.get("response_rate_percent"),
+                "الحد_الأدنى": r.get("min_aggregate"),
+                "حالة_التجميع": "مكتمل" if r.get("aggregated") else "ناقص",
+                "النتيجة_%": r.get("overall_score_percent"),
+                "أضعف_بند": r.get("weakest_item", "—"),
+                "أقوى_بند": r.get("strongest_item", "—"),
+            }
+        )
+    return rows
+
+
 def _course_eval_section_summary_rows(sections: list[dict]) -> list[dict]:
     rows: list[dict] = []
     for r in sections:
@@ -1777,6 +2216,12 @@ def package_excel_frames(
         ("ربط_المعايير", pd.DataFrame(_accreditation_map_rows(reports, course_eval))),
         ("تحليل_مقارن", pd.DataFrame(_comparative_analysis_rows(reports, course_eval))),
     ]
+    analysis = combined.get("analysis")
+    if analysis:
+        insert_at = 1
+        for af_name, af_df in _analysis_excel_frames(analysis):
+            frames.insert(insert_at, (af_name, af_df))
+            insert_at += 1
     if course_sections:
         frames.append(
             ("ملخص_المقررات", pd.DataFrame(_course_eval_section_summary_rows(course_sections)))
@@ -1816,11 +2261,33 @@ def course_eval_sections_excel_frames(
     semester: str = "",
     department_label: str = "",
     course_eval_policy_ar: str = "",
+    missing_audit: dict[str, Any] | None = None,
+    college_name_ar: str = COLLEGE_NAME_AR,
+    export_date: str | None = None,
+    analysis: dict[str, Any] | None = None,
 ) -> list[tuple[str, pd.DataFrame]]:
-    """أوراق Excel لتصدير تقييم المقررات حسب الشعبة."""
+    """أوراق Excel لتصدير تقييم المقررات حسب الشعبة (شاهد رسمي)."""
+    exp_date = export_date or datetime.datetime.now().strftime("%Y-%m-%d")
+    stats = _course_eval_sections_export_stats(sections)
     frames: list[tuple[str, pd.DataFrame]] = [
-        ("ملخص_الشعب", pd.DataFrame(_course_eval_section_summary_rows(sections))),
+        (
+            "الغلاف",
+            pd.DataFrame(
+                _course_eval_sections_cover_rows(
+                    college_name_ar=college_name_ar,
+                    department_label=department_label,
+                    semester=semester,
+                    stats=stats,
+                    course_eval_policy_ar=course_eval_policy_ar or format_course_eval_aggregation_policy(),
+                    export_date=exp_date,
+                    interpretation_ar=(analysis or {}).get("interpretation_ar"),
+                )
+            ),
+        ),
     ]
+    if analysis:
+        frames.extend(_analysis_excel_frames(analysis))
+    frames.append(("ملخص_الشعب", pd.DataFrame(_course_eval_section_evidence_rows(sections))))
     detail = _course_eval_section_detail_rows(sections)
     frames.append(
         (
@@ -1830,22 +2297,352 @@ def course_eval_sections_excel_frames(
     )
     if by_course:
         frames.append(
-            ("مقرر_وأستاذ", pd.DataFrame(_course_eval_by_course_summary_rows(by_course)))
+            ("مقرر_وأستاذ", pd.DataFrame(_course_eval_by_course_evidence_rows(by_course)))
         )
+    if missing_audit and (missing_audit.get("rows") or []):
+        miss_frames = course_eval_missing_audit_excel_frames(missing_audit)
+        for sheet_name, df in miss_frames:
+            if sheet_name == "شعب_بلا_تقييم":
+                frames.append((sheet_name, df))
+                break
     meta = [
         {"البند": "الفصل", "القيمة": semester},
-        {"البند": "النطاق", "القيمة": department_label},
+        {"البند": "القسم", "القيمة": department_label},
         {"البند": "عدد الشعب", "القيمة": len(sections)},
+        {"البند": "شعب مجمّعة", "القيمة": stats.get("aggregated_count")},
+        {"البند": "شعب ناقصة", "القيمة": stats.get("pending_count")},
         {
-            "البند": "سياسة الخصوصية",
-            "القيمة": (
-                f"تجميع الشعبة عند {course_eval_policy_ar or format_course_eval_aggregation_policy()} "
-                "— لا أسماء طلاب."
-            ),
+            "البند": "سياسة التجميع",
+            "القيمة": course_eval_policy_ar or format_course_eval_aggregation_policy(),
         },
+        {
+            "البند": "منهجية القياس",
+            "القيمة": "مقياس Likert 1–5؛ النسبة = (متوسط البند / 5) × 100",
+        },
+        {"البند": "تاريخ التصدير", "القيمة": exp_date},
     ]
     frames.append(("بيانات_وصفية", pd.DataFrame(meta)))
+    frames.append(("اعتماد_القسم", pd.DataFrame(_department_approval_excel_rows())))
     return frames
+
+
+def course_eval_sections_excel_bytes(
+    sections: list[dict],
+    *,
+    by_course: list[dict] | None = None,
+    semester: str = "",
+    department_label: str = "",
+    course_eval_policy_ar: str = "",
+    missing_audit: dict[str, Any] | None = None,
+    college_name_ar: str = COLLEGE_NAME_AR,
+    export_date: str | None = None,
+    analysis: dict[str, Any] | None = None,
+) -> bytes:
+    """بايتات Excel مع تنسيق عربي RTL."""
+    frames = course_eval_sections_excel_frames(
+        sections,
+        by_course=by_course,
+        semester=semester,
+        department_label=department_label,
+        course_eval_policy_ar=course_eval_policy_ar,
+        missing_audit=missing_audit,
+        college_name_ar=college_name_ar,
+        export_date=export_date,
+        analysis=analysis,
+    )
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        workbook = writer.book
+        formats = excel_arabic_workbook_formats(workbook)
+        used_names: set[str] = set()
+        for sheet_name, df in frames:
+            from backend.services.utilities import _sanitize_excel_sheet_name
+
+            safe_name = _sanitize_excel_sheet_name(sheet_name, used_names)
+            data = df if isinstance(df, pd.DataFrame) else pd.DataFrame(df)
+            data.to_excel(writer, index=False, sheet_name=safe_name)
+            ws = writer.sheets[safe_name]
+            write_excel_sheet_rtl(
+                ws,
+                data,
+                formats=formats,
+                cover_sheet=safe_name in ("الغلاف", "اعتماد_القسم"),
+            )
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def build_course_eval_sections_export_context(
+    conn,
+    *,
+    semester: str | None = None,
+    department_id: int | None = None,
+) -> dict[str, Any]:
+    """سياق مشترك لتصدير تقييم المقررات حسب الشعبة (Excel / Word / PDF)."""
+    sem = (semester or "").strip() or term_label_from_conn(conn)
+    sections, by_course = build_course_eval_results_bundle(
+        conn, semester=sem, department_id=department_id
+    )
+    missing_audit = build_course_eval_missing_sections_audit(
+        conn, semester=sem, department_id=department_id
+    )
+    policy = format_course_eval_aggregation_policy(conn)
+    dept_label = _department_label(conn, department_id)
+    export_date = datetime.datetime.now().strftime("%Y-%m-%d")
+    stats = _course_eval_sections_export_stats(sections)
+    sem_slug = sem.replace(" ", "_")[:40]
+    analysis = build_course_eval_sections_analysis(
+        sections=sections,
+        stats=stats,
+        missing_audit=missing_audit,
+        department_label=dept_label,
+        semester=sem,
+        course_eval_policy_ar=policy,
+    )
+    return {
+        "college_name_ar": COLLEGE_NAME_AR,
+        "department_label": dept_label,
+        "semester": sem,
+        "export_date": export_date,
+        "sections": sections,
+        "by_course": by_course,
+        "missing_audit": missing_audit,
+        "course_eval_policy_ar": policy,
+        "stats": stats,
+        "analysis": analysis,
+        "title": "نتائج تقييم المقرر والأستاذ — حسب الشعبة",
+        "filename_prefix": f"course_eval_sections_{sem_slug}",
+        "pdf_arabic_css": pdf_arabic_extra_css(for_pdf=False),
+        "pdf_arabic_css_print": pdf_arabic_extra_css(for_pdf=True),
+        "methodology_rows": [
+            {"البند": "مقياس التقييم", "القيمة": "Likert 1–5"},
+            {"البند": "طريقة الحساب", "القيمة": "النسبة = (متوسط البند / 5) × 100"},
+            {"البند": "قاعدة التجميع", "القيمة": policy},
+            {"البند": "الخصوصية", "القيمة": "لا تُعرض إجابات فردية في التصدير"},
+        ],
+    }
+
+
+def course_eval_sections_docx_bytes(ctx: dict[str, Any]) -> bytes:
+    """مستند Word لتقرير الشعب مع تحليل واستنتاجات."""
+    try:
+        from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+    except ImportError as exc:
+        raise RuntimeError(
+            "مكتبة python-docx غير متوفرة. ثبّت docxtpl أو python-docx."
+        ) from exc
+
+    doc = Document()
+    college = ctx.get("college_name_ar") or COLLEGE_NAME_AR
+    dept = ctx.get("department_label") or "—"
+    sem = ctx.get("semester") or "—"
+    stats = ctx.get("stats") or {}
+    policy = ctx.get("course_eval_policy_ar") or ""
+    analysis = ctx.get("analysis") or {}
+
+    docx_add_rtl_paragraph(doc, college, bold=True, center=True, font_size=16)
+    docx_add_rtl_paragraph(doc, f"القسم: {dept}", bold=True, center=True, font_size=14)
+    docx_add_rtl_paragraph(
+        doc,
+        ctx.get("title") or "نتائج تقييم المقرر والأستاذ — حسب الشعبة",
+        bold=True,
+        center=True,
+        font_size=13,
+    )
+    docx_add_rtl_paragraph(doc, f"الفصل الدراسي: {sem}")
+    docx_add_rtl_paragraph(doc, f"تاريخ التصدير: {ctx.get('export_date') or '—'}")
+
+    docx_add_rtl_heading(doc, "ملخص تنفيذي", level=2)
+    avg = stats.get("avg_score_percent")
+    avg_txt = f"{avg}%" if avg is not None else "—"
+    docx_add_rtl_paragraph(
+        doc,
+        f"عدد الشعب: {stats.get('section_count') or 0} — "
+        f"مجمّعة: {stats.get('aggregated_count') or 0} — "
+        f"ناقصة: {stats.get('pending_count') or 0} — "
+        f"متوسط النتائج المجمّعة: {avg_txt}",
+    )
+    docx_add_rtl_paragraph(doc, f"سياسة التجميع: {policy}")
+    if analysis.get("interpretation_ar"):
+        docx_add_rtl_paragraph(doc, analysis["interpretation_ar"], italic=True)
+
+    docx_add_rtl_heading(doc, "التحليل", level=2)
+    for para in analysis.get("narrative_paragraphs") or []:
+        docx_add_rtl_paragraph(doc, para)
+
+    if analysis.get("distribution_rows"):
+        docx_add_rtl_heading(doc, "توزيع النتائج", level=3)
+        dist_table = doc.add_table(rows=1, cols=3)
+        dist_table.style = "Table Grid"
+        docx_fill_rtl_table(
+            dist_table,
+            ["التصنيف", "عدد الشعب", "أمثلة"],
+            [
+                [r.get("التصنيف"), r.get("عدد_الشعب"), r.get("أمثلة")]
+                for r in analysis["distribution_rows"]
+            ],
+        )
+
+    top_secs = analysis.get("top_sections") or []
+    bottom_secs = analysis.get("bottom_sections") or []
+    if top_secs or bottom_secs:
+        docx_add_rtl_heading(doc, "أعلى وأدنى الشعب", level=3)
+        rank_table = doc.add_table(rows=1, cols=5)
+        rank_table.style = "Table Grid"
+        rank_rows = []
+        for r in top_secs:
+            rank_rows.append(
+                [
+                    "أعلى",
+                    r.get("المقرر"),
+                    r.get("الشعبة"),
+                    r.get("الأستاذ"),
+                    f"{r.get('النتيجة_%')}%",
+                ]
+            )
+        for r in bottom_secs:
+            rank_rows.append(
+                [
+                    "أدنى",
+                    r.get("المقرر"),
+                    r.get("الشعبة"),
+                    r.get("الأستاذ"),
+                    f"{r.get('النتيجة_%')}%",
+                ]
+            )
+        docx_fill_rtl_table(
+            rank_table,
+            ["التصنيف", "المقرر", "الشعبة", "الأستاذ", "النتيجة %"],
+            rank_rows,
+        )
+
+    strongest = analysis.get("strongest_items") or []
+    weakest = analysis.get("weakest_items") or []
+    if strongest or weakest:
+        docx_add_rtl_heading(doc, "ملحق ج — أبرز البنود على مستوى القسم", level=3)
+        item_table = doc.add_table(rows=1, cols=4)
+        item_table.style = "Table Grid"
+        item_rows = []
+        for q in strongest:
+            item_rows.append(["قوة", q.get("label_ar"), f"{q.get('score_percent')}%", q.get("classification_ar")])
+        for q in weakest:
+            item_rows.append(["تحسين", q.get("label_ar"), f"{q.get('score_percent')}%", q.get("classification_ar")])
+        docx_fill_rtl_table(item_table, ["المحور", "البند", "النسبة", "التصنيف"], item_rows)
+
+    docx_add_rtl_heading(doc, "الاستنتاجات", level=2)
+    for i, c in enumerate(analysis.get("conclusions") or [], start=1):
+        docx_add_rtl_paragraph(doc, f"{i}. {c}")
+
+    recs = analysis.get("recommendations") or []
+    if recs:
+        docx_add_rtl_heading(doc, "التوصيات", level=2)
+        rec_table = doc.add_table(rows=1, cols=3)
+        rec_table.style = "Table Grid"
+        docx_fill_rtl_table(
+            rec_table,
+            ["التوصية", "المسؤول", "الإطار"],
+            [[r.get("التوصية"), r.get("المسؤول"), r.get("الإطار")] for r in recs],
+        )
+
+    docx_add_rtl_heading(doc, "ملحق أ — جدول الشعب", level=2)
+    headers = [
+        "المقرر",
+        "الشعبة",
+        "الأستاذ",
+        "القسم",
+        "مسجّلون",
+        "تقييمات",
+        "الحد",
+        "النتيجة %",
+        "التجميع",
+    ]
+    table = doc.add_table(rows=1, cols=len(headers))
+    table.style = "Table Grid"
+    section_rows = []
+    for s in ctx.get("sections") or []:
+        pct = s.get("overall_score_percent")
+        section_rows.append(
+            [
+                s.get("course_name"),
+                s.get("section_id"),
+                s.get("instructor_name"),
+                s.get("department_name"),
+                s.get("enrolled_count") if s.get("enrolled_count") is not None else "—",
+                s.get("response_count") if s.get("response_count") is not None else "—",
+                s.get("min_aggregate") if s.get("min_aggregate") is not None else "—",
+                f"{pct}%" if pct is not None and s.get("aggregated") else "—",
+                "مكتمل" if s.get("aggregated") else "ناقص",
+            ]
+        )
+    docx_fill_rtl_table(table, headers, section_rows)
+
+    missing = (ctx.get("missing_audit") or {}).get("rows") or []
+    if missing:
+        docx_add_rtl_heading(doc, "ملحق ب — شعب بلا تقييم", level=2)
+        mtable = doc.add_table(rows=1, cols=6)
+        mtable.style = "Table Grid"
+        docx_fill_rtl_table(
+            mtable,
+            ["المقرر", "الشعبة", "الأستاذ", "القسم", "مسجّلون", "أسباب الفجوة"],
+            [
+                [
+                    r.get("course_name"),
+                    r.get("section_id"),
+                    r.get("instructor_name"),
+                    r.get("department_name"),
+                    r.get("enrolled_count") if r.get("enrolled_count") is not None else "—",
+                    r.get("gap_reasons_ar") or "—",
+                ]
+                for r in missing
+            ],
+        )
+
+    follow = analysis.get("follow_up_sections") or []
+    if follow:
+        docx_add_rtl_heading(doc, "ملحق د — شعب تحتاج متابعة", level=2)
+        ftable = doc.add_table(rows=1, cols=4)
+        ftable.style = "Table Grid"
+        docx_fill_rtl_table(
+            ftable,
+            ["المقرر", "الشعبة", "الأستاذ", "السبب"],
+            [
+                [r.get("المقرر"), r.get("الشعبة"), r.get("الأستاذ"), r.get("السبب")]
+                for r in follow
+            ],
+        )
+
+    docx_add_rtl_heading(doc, "المنهجية والخصوصية", level=2)
+    for row in ctx.get("methodology_rows") or []:
+        docx_add_rtl_paragraph(doc, f"{row.get('البند')}: {row.get('القيمة')}")
+
+    docx_add_rtl_heading(doc, "اعتماد القسم", level=2)
+    docx_add_rtl_paragraph(doc, "رأي رئيس القسم / ملاحظات إضافية:")
+    docx_add_rtl_paragraph(doc, "_" * 60)
+    docx_add_rtl_paragraph(doc, "التوقيع: ___________________     التاريخ: ___________________")
+
+    foot = doc.add_paragraph()
+    foot.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    set_docx_paragraph_rtl(foot, align_right=False)
+    fr = foot.add_run(
+        "مُنشأ آلياً من منصة ضمان الجودة — لا يُعتمد دون توقيع الجهة المختصة عند الحاجة."
+    )
+    fr.italic = True
+    set_docx_run_arabic_font(fr)
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
+    tmp_path = tmp.name
+    tmp.close()
+    doc.save(tmp_path)
+    with open(tmp_path, "rb") as fh:
+        raw = fh.read()
+    try:
+        import os
+
+        os.unlink(tmp_path)
+    except OSError:
+        pass
+    return raw
 
 
 def single_survey_excel_frames(report: dict[str, Any]) -> list[tuple[str, pd.DataFrame]]:
@@ -1895,13 +2692,20 @@ def single_survey_excel_frames(report: dict[str, Any]) -> list[tuple[str, pd.Dat
         },
         {"البند": "الخصوصية", "القيمة": "لا تُعرض إجابات فردية في التصدير"},
     ]
-    return [
+    analysis = report.get("analysis") or build_survey_report_analysis(report)
+    frames: list[tuple[str, pd.DataFrame]] = [
         ("ملخص", pd.DataFrame([summary])),
+    ]
+    frames.extend(_analysis_excel_frames(analysis))
+    frames.extend(
+        [
         ("البنود", pd.DataFrame(_question_rows(report))),
         ("المعايير", pd.DataFrame(acc_rows) if acc_rows else pd.DataFrame(columns=["المؤشر"])),
         ("توصيات", pd.DataFrame(rec_rows) if rec_rows else pd.DataFrame(columns=["التوصية"])),
         ("منهجية", pd.DataFrame(method_rows)),
-    ]
+        ]
+    )
+    return frames
 
 
 def export_package_xlsx(
@@ -1917,10 +2721,19 @@ def export_package_xlsx(
         department_id=department_id,
         include_course_eval=include_course_eval,
     )
+    combined["analysis"] = build_combined_survey_analysis(combined)
+    from backend.services.survey_report_charts import build_chart_data_for_combined
+
+    chart_data = build_chart_data_for_combined(combined, combined["analysis"])
     sem_slug = (combined.get("semester") or "report").replace(" ", "_")[:40]
-    return excel_response_from_frames(
-        package_excel_frames(combined),
-        filename_prefix=f"survey_package_{sem_slug}",
+    now = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    fname = f"survey_package_{sem_slug}_{now}.xlsx"
+    raw = survey_excel_bytes_from_frames(package_excel_frames(combined), chart_data=chart_data)
+    return send_file(
+        io.BytesIO(raw),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=fname,
     )
 
 
@@ -1935,22 +2748,30 @@ def export_single_survey_xlsx(
     if code == "student_course":
         report = build_course_eval_report(conn, semester=semester, department_id=department_id)
         report["department_label"] = _department_label(conn, department_id)
-        report["weakest_item"], report["strongest_item"] = _weakest_strongest(report.get("questions") or [])
-        report["recommendations"] = generate_recommendations(
-            report.get("questions") or [], report.get("title_ar") or code
-        )
+        report = _enrich_course_eval_report_for_display(report)
     else:
         report = build_survey_report(conn, code, semester=semester, department_id=department_id)
+    report["analysis"] = build_survey_report_analysis(report)
+    from backend.services.survey_report_charts import build_chart_data_for_survey
+
+    chart_data = build_chart_data_for_survey(report, report["analysis"])
     sem_slug = (report.get("semester") or "report").replace(" ", "_")[:40]
-    return excel_response_from_frames(
-        single_survey_excel_frames(report),
-        filename_prefix=f"survey_{code}_{sem_slug}",
+    now = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    fname = f"survey_{code}_{sem_slug}_{now}.xlsx"
+    raw = survey_excel_bytes_from_frames(
+        single_survey_excel_frames(report), chart_data=chart_data
+    )
+    return send_file(
+        io.BytesIO(raw),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=fname,
     )
 
 
 def is_exportable_template_code(conn, template_code: str) -> bool:
     code = (template_code or "").strip()
-    if code == "student_course":
+    if code in ("student_course", "course_eval_sections"):
         return True
     return get_template_by_code(conn, code) is not None
 
@@ -1961,21 +2782,90 @@ def export_course_eval_sections_xlsx(
     semester: str | None = None,
     department_id: int | None = None,
 ):
-    sem = (semester or "").strip() or term_label_from_conn(conn)
-    sections, by_course = build_course_eval_results_bundle(
-        conn, semester=sem, department_id=department_id
+    ctx = build_course_eval_sections_export_context(
+        conn, semester=semester, department_id=department_id
     )
-    sem_slug = sem.replace(" ", "_")[:40]
-    return excel_response_from_frames(
-        course_eval_sections_excel_frames(
-            sections,
-            by_course=by_course,
-            semester=sem,
-            department_label=_department_label(conn, department_id),
-            course_eval_policy_ar=format_course_eval_aggregation_policy(conn),
-        ),
-        filename_prefix=f"course_eval_sections_{sem_slug}",
+    now = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    fname = f"{ctx['filename_prefix']}_{now}.xlsx"
+    raw = course_eval_sections_excel_bytes(
+        ctx["sections"],
+        by_course=ctx.get("by_course"),
+        semester=ctx["semester"],
+        department_label=ctx["department_label"],
+        course_eval_policy_ar=ctx.get("course_eval_policy_ar"),
+        missing_audit=ctx.get("missing_audit"),
+        college_name_ar=ctx.get("college_name_ar"),
+        export_date=ctx.get("export_date"),
+        analysis=ctx.get("analysis"),
     )
+    return send_file(
+        io.BytesIO(raw),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=fname,
+    )
+
+
+def export_course_eval_sections_docx(
+    conn,
+    *,
+    semester: str | None = None,
+    department_id: int | None = None,
+):
+    ctx = build_course_eval_sections_export_context(
+        conn, semester=semester, department_id=department_id
+    )
+    raw = course_eval_sections_docx_bytes(ctx)
+    now = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    fname = f"{ctx['filename_prefix']}_{now}.docx"
+    return send_file(
+        io.BytesIO(raw),
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        as_attachment=True,
+        download_name=fname,
+    )
+
+
+def course_eval_sections_export_bytes(
+    conn,
+    *,
+    semester: str | None = None,
+    department_id: int | None = None,
+    fmt: str = "xlsx",
+) -> tuple[bytes, str, dict[str, Any]]:
+    """بايتات التصدير لرفع الشاهد — fmt: xlsx | docx."""
+    ctx = build_course_eval_sections_export_context(
+        conn, semester=semester, department_id=department_id
+    )
+    sem_slug = (ctx.get("semester") or "report").replace(" ", "_")[:40]
+    export_fmt = (fmt or "xlsx").strip().lower()
+    if export_fmt in ("docx", "word"):
+        raw = course_eval_sections_docx_bytes(ctx)
+        filename = f"course_eval_sections_{sem_slug}.docx"
+        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    else:
+        raw = course_eval_sections_excel_bytes(
+            ctx["sections"],
+            by_course=ctx.get("by_course"),
+            semester=ctx["semester"],
+            department_label=ctx["department_label"],
+            course_eval_policy_ar=ctx.get("course_eval_policy_ar"),
+            missing_audit=ctx.get("missing_audit"),
+            college_name_ar=ctx.get("college_name_ar"),
+            export_date=ctx.get("export_date"),
+            analysis=ctx.get("analysis"),
+        )
+        filename = f"course_eval_sections_{sem_slug}.xlsx"
+        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    report = {
+        "title_ar": ctx.get("title"),
+        "semester": ctx.get("semester"),
+        "department_label": ctx.get("department_label"),
+        "response_count": ctx.get("stats", {}).get("aggregated_count"),
+        "overall_score_percent": ctx.get("stats", {}).get("avg_score_percent"),
+        "_mime": mime,
+    }
+    return raw, filename, report
 
 
 def export_course_eval_section_xlsx(
@@ -2053,6 +2943,326 @@ def _enrich_course_eval_report_for_display(report: dict[str, Any]) -> dict[str, 
     }
 
 
+def build_survey_report_analysis(report: dict[str, Any]) -> dict[str, Any]:
+    """تحليل واستنتاجات آلية لاستبيان واحد (شاهد / معاينة)."""
+    from backend.services.survey_report_charts import (
+        ITEM_CLASS_DISTRIBUTION_LABELS,
+        ITEM_CLASS_BUCKET_ORDER,
+        item_distribution_buckets,
+    )
+
+    title = (report.get("title_ar") or report.get("template_code") or "الاستبيان").strip()
+    questions = report.get("questions") or []
+    aggregated = bool(report.get("aggregated"))
+    score = report.get("overall_score_percent")
+    interpretation = report.get("interpretation_ar") or interpret_overall_score_ar(score, aggregated)
+    dept = report.get("department_label") or report.get("department_name") or "—"
+    sem = report.get("semester") or report.get("cycle_label") or "—"
+    resp_n = int(report.get("response_count") or 0)
+    min_agg = report.get("min_aggregate")
+
+    buckets = item_distribution_buckets(questions)
+    distribution_rows = [
+        {
+            "التصنيف": ITEM_CLASS_DISTRIBUTION_LABELS[key],
+            "العدد": len(bucket),
+            "أمثلة": "؛ ".join(
+                _truncate_item_label(q.get("label_ar") or "") for q in bucket[:3]
+            )
+            or "—",
+        }
+        for key in ITEM_CLASS_BUCKET_ORDER
+        for bucket in [buckets[key]]
+        if bucket
+    ]
+
+    scored = [q for q in questions if q.get("score_percent") is not None]
+    sorted_q = sorted(scored, key=lambda x: float(x["score_percent"]), reverse=True)
+    strongest_items = [
+        {
+            "label_ar": q.get("label_ar"),
+            "score_percent": q.get("score_percent"),
+            "classification_ar": q.get("classification_ar"),
+        }
+        for q in sorted_q[:3]
+    ]
+    weakest_items = [
+        {
+            "label_ar": q.get("label_ar"),
+            "score_percent": q.get("score_percent"),
+            "classification_ar": q.get("classification_ar"),
+        }
+        for q in (list(reversed(sorted_q[-3:])) if sorted_q else [])
+    ]
+
+    narrative: list[str] = [
+        (
+            f"يغطي هذا التقرير استبيان «{title}» للفصل/الدورة «{sem}» ضمن نطاق «{dept}». "
+            f"عدد الإجابات: {resp_n} (الحد الأدنى للتجميع: {min_agg or '—'})."
+        ),
+        (
+            f"النتيجة الإجمالية: {score}% — {interpretation}"
+            if aggregated and score is not None
+            else "لم يكتمل التجميع — لا تُعرض بنود تفصيلية حتى بلوغ الحد الأدنى."
+        ),
+    ]
+    if strongest_items:
+        labels = "، ".join(f"«{q['label_ar']}» ({q['score_percent']}%)" for q in strongest_items)
+        narrative.append(f"أبرز نقاط القوة: {labels}.")
+    if weakest_items:
+        labels = "، ".join(f"«{q['label_ar']}» ({q['score_percent']}%)" for q in weakest_items)
+        narrative.append(f"أبرز محاور التحسين: {labels}.")
+
+    conclusions: list[str] = []
+    if aggregated:
+        conclusions.append("اكتمل التجميع الإحصائي وفق سياسة الخصوصية.")
+    else:
+        conclusions.append("التجميع ناقص — يُعاد التقرير بعد بلوغ الحد الأدنى للإجابات.")
+    if score is not None and score >= 80:
+        conclusions.append("النتيجة الإجمالية إيجابية وتدعم متطلبات ضمان الجودة.")
+    elif score is not None and score >= 70:
+        conclusions.append("النتيجة جيدة — يُنصح بمتابعة البنود الأضعف.")
+    elif score is not None:
+        conclusions.append("النتيجة دون المستوى المطلوب — خطة تحسين فصلية مطلوبة.")
+    if buckets.get("critical"):
+        conclusions.append(f"وُجد {len(buckets['critical'])} بند(اً) بحالة «حرج» — أولوية معالجة.")
+    if not conclusions:
+        conclusions.append("لا تتوفر بيانات كافية لاستنتاجات نهائية.")
+
+    recommendations: list[dict[str, str]] = []
+    for q in weakest_items[:2]:
+        recommendations.append(
+            {
+                "التوصية": f"معالجة بند «{q['label_ar']}» ({q['score_percent']}%) في اجتماع لجنة الجودة.",
+                "المسؤول": "رئيس القسم / لجنة الجودة",
+                "الإطار": "خلال الفصل الحالي",
+            }
+        )
+    for q in buckets.get("critical", [])[:2]:
+        recommendations.append(
+            {
+                "التوصية": f"إجراء تصحيحي عاجل لبند «{q.get('label_ar')}» ({q.get('score_percent')}%).",
+                "المسؤول": "الإدارة المعنية",
+                "الإطار": "خلال 30 يوماً",
+            }
+        )
+    if not recommendations and aggregated:
+        recommendations.append(
+            {
+                "التوصية": f"توثيق ممارسات «{title}» كشاهد اعتماد عند استمرار النتائج الإيجابية.",
+                "المسؤول": "لجنة الجودة",
+                "الإطار": "نهاية الفصل",
+            }
+        )
+    if not recommendations:
+        recommendations.append(
+            {
+                "التوصية": "متابعة التعبئة حتى اكتمال الحد الأدنى ثم إعادة التقييم.",
+                "المسؤول": "رئيس القسم",
+                "الإطار": "أسبوعان",
+            }
+        )
+
+    return {
+        "interpretation_ar": interpretation,
+        "narrative_paragraphs": narrative,
+        "distribution_rows": distribution_rows,
+        "strongest_items": strongest_items,
+        "weakest_items": weakest_items,
+        "conclusions": conclusions,
+        "recommendations": recommendations,
+    }
+
+
+def _truncate_item_label(text: str, max_len: int = 48) -> str:
+    s = str(text or "").strip()
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 1] + "…"
+
+
+def build_combined_survey_analysis(combined: dict[str, Any]) -> dict[str, Any]:
+    """تحليل مقارن للتقرير الموحّد."""
+    from backend.services.survey_report_charts import (
+        ITEM_CLASS_DISTRIBUTION_LABELS,
+        ITEM_CLASS_BUCKET_ORDER,
+    )
+
+    reports = combined.get("reports") or []
+    aggregated = [r for r in reports if r.get("aggregated") and r.get("overall_score_percent") is not None]
+    sem = combined.get("semester") or combined.get("cycle_label") or "—"
+    dept = combined.get("department_label") or "—"
+    total = int(combined.get("total_survey_count") or len(reports))
+    agg_n = int(combined.get("aggregated_survey_count") or len(aggregated))
+
+    buckets: dict[str, list[dict]] = {k: [] for k in ITEM_CLASS_BUCKET_ORDER}
+    for r in aggregated:
+        cls = classify_item_score(float(r["overall_score_percent"]))
+        buckets[cls].append(r)
+
+    distribution_rows = [
+        {
+            "التصنيف": ITEM_CLASS_DISTRIBUTION_LABELS[key],
+            "العدد": len(bucket),
+            "أمثلة": "؛ ".join(
+                _truncate_item_label(r.get("title_ar") or r.get("template_code") or "") for r in bucket[:3]
+            )
+            or "—",
+        }
+        for key in ITEM_CLASS_BUCKET_ORDER
+        for bucket in [buckets[key]]
+        if bucket
+    ]
+
+    sorted_agg = sorted(aggregated, key=lambda x: float(x["overall_score_percent"]), reverse=True)
+    top_surveys = [
+        {
+            "الاستبيان": r.get("title_ar"),
+            "الفئة": r.get("respondent_label"),
+            "النتيجة_%": r.get("overall_score_percent"),
+        }
+        for r in sorted_agg[:3]
+    ]
+    bottom_surveys = [
+        {
+            "الاستبيان": r.get("title_ar"),
+            "الفئة": r.get("respondent_label"),
+            "النتيجة_%": r.get("overall_score_percent"),
+        }
+        for r in sorted(sorted_agg, key=lambda x: float(x["overall_score_percent"]))[:3]
+    ]
+
+    narrative = list(generate_executive_narrative_ar(combined))
+    role_avgs: dict[str, list[float]] = {}
+    for r in aggregated:
+        role = (r.get("respondent_label") or "—").strip()
+        role_avgs.setdefault(role, []).append(float(r["overall_score_percent"]))
+    if role_avgs:
+        parts = [
+            f"«{role}»: {round(sum(v)/len(v), 1)}%"
+            for role, v in sorted(role_avgs.items())
+        ]
+        narrative.append("متوسط النتائج حسب فئة المستجيب: " + "؛ ".join(parts) + ".")
+
+    conclusions: list[str] = []
+    if agg_n >= max(1, total // 2):
+        conclusions.append("تغطية التجميع على مستوى الاستبيانات مقبولة بشكل عام.")
+    elif total:
+        conclusions.append("عدد الاستبيانات المجمّعة دون المطلوب — يُعزّز حث المستجيبين.")
+    if sorted_agg and float(sorted_agg[0]["overall_score_percent"]) >= 80:
+        conclusions.append("هناك استبيانات بأداء ممتاز يمكن توثيقها كشواهد.")
+    if buckets.get("critical") or buckets.get("needs_improvement"):
+        conclusions.append("بعض الاستبيانات تستدعي خطط تحسين — راجع الجدول التفصيلي.")
+    if not conclusions:
+        conclusions.append("لا تتوفر بيانات كافية لاستنتاجات شاملة.")
+
+    recommendations: list[dict[str, str]] = []
+    for r in bottom_surveys[:2]:
+        recommendations.append(
+            {
+                "التوصية": (
+                    f"مراجعة استبيان «{r.get('الاستبيان')}» "
+                    f"({r.get('النتيجة_%')}%) ووضع خطة تحسين."
+                ),
+                "المسؤول": "لجنة الجودة",
+                "الإطار": "خلال الفصل الحالي",
+            }
+        )
+    if not recommendations:
+        recommendations.append(
+            {
+                "التوصية": "مناقشة نتائج الاستبيانات في اجتماع ضمان الجودة الدوري.",
+                "المسؤول": "رئيس القسم",
+                "الإطار": "نهاية الفصل",
+            }
+        )
+
+    return {
+        "narrative_paragraphs": narrative,
+        "distribution_rows": distribution_rows,
+        "top_sections": top_surveys,
+        "bottom_sections": bottom_surveys,
+        "conclusions": conclusions,
+        "recommendations": recommendations,
+    }
+
+
+def enrich_survey_export_context(ctx: dict[str, Any], *, for_pdf: bool = False) -> dict[str, Any]:
+    """إثراء سياق التصدير بالتحليل والرسوم."""
+    import logging
+
+    from backend.services.survey_report_charts import (
+        build_chart_data_for_combined,
+        build_chart_data_for_survey,
+        build_chart_images_for_combined,
+        build_chart_images_for_survey,
+    )
+
+    log = logging.getLogger(__name__)
+
+    ctx["pdf_arabic_css"] = pdf_arabic_extra_css(for_pdf=False)
+    ctx["pdf_arabic_css_print"] = pdf_arabic_extra_css(for_pdf=True)
+    ctx.setdefault("college_name_ar", COLLEGE_NAME_AR)
+    ctx.setdefault("export_date", datetime.datetime.now().strftime("%Y-%m-%d"))
+
+    if ctx.get("report"):
+        report_obj = ctx["report"]
+        if not ctx.get("analysis") and not report_obj.get("has_segment_detail"):
+            ctx["analysis"] = build_survey_report_analysis(report_obj)
+        if ctx.get("analysis"):
+            ctx["chart_data"] = build_chart_data_for_survey(report_obj, ctx.get("analysis"))
+            if for_pdf:
+                try:
+                    ctx["chart_images"] = build_chart_images_for_survey(report_obj, ctx.get("analysis"))
+                except Exception:
+                    log.exception("survey chart_images (single) skipped")
+                    ctx["chart_images"] = {}
+    elif ctx.get("reports") is not None:
+        if not ctx.get("analysis"):
+            ctx["analysis"] = build_combined_survey_analysis(ctx)
+        ctx["chart_data"] = build_chart_data_for_combined(ctx, ctx.get("analysis"))
+        if for_pdf:
+            try:
+                ctx["chart_images"] = build_chart_images_for_combined(ctx, ctx.get("analysis"))
+            except Exception:
+                log.exception("survey chart_images (combined) skipped")
+                ctx["chart_images"] = {}
+    return ctx
+
+
+def survey_excel_bytes_from_frames(
+    frames: list[tuple[str, pd.DataFrame]],
+    *,
+    chart_data: dict[str, Any] | None = None,
+    rtl: bool = True,
+) -> bytes:
+    """بايتات Excel مع تنسيق عربي وورقة رسوم اختيارية."""
+    from backend.services.utilities import _sanitize_excel_sheet_name
+    from backend.services.survey_report_charts import add_chart_sheet_to_workbook
+
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        workbook = writer.book
+        formats = excel_arabic_workbook_formats(workbook) if rtl else {}
+        used_names: set[str] = set()
+        for sheet_name, df in frames:
+            safe_name = _sanitize_excel_sheet_name(sheet_name, used_names)
+            data = df if isinstance(df, pd.DataFrame) else pd.DataFrame(df)
+            data.to_excel(writer, index=False, sheet_name=safe_name)
+            if rtl and formats:
+                ws = writer.sheets[safe_name]
+                write_excel_sheet_rtl(
+                    ws,
+                    data,
+                    formats=formats,
+                    cover_sheet=safe_name in ("الغلاف", "اعتماد_القسم", "ملخص"),
+                )
+        if chart_data and chart_data.get("has_data"):
+            add_chart_sheet_to_workbook(workbook, chart_data)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def generate_executive_narrative_ar(combined: dict[str, Any]) -> list[str]:
     """فقرات تفسيرية آلية للملخص التنفيذي في PDF."""
     paragraphs: list[str] = []
@@ -2123,7 +3333,8 @@ def prepare_combined_pdf_context(
         )
     if combined.get("course_eval"):
         combined["course_eval"] = _enrich_course_eval_report_for_display(combined["course_eval"])
-    return {
+    combined["analysis"] = build_combined_survey_analysis(combined)
+    ctx = {
         **combined,
         "executive_summary": _executive_summary_rows(
             combined.get("reports") or [], combined.get("course_eval")
@@ -2135,7 +3346,8 @@ def prepare_combined_pdf_context(
             combined.get("reports") or [], combined.get("course_eval")
         ),
         "metadata_rows": _metadata_rows(combined),
-        "narrative_paragraphs": generate_executive_narrative_ar(
+        "narrative_paragraphs": (combined.get("analysis") or {}).get("narrative_paragraphs")
+        or generate_executive_narrative_ar(
             {
                 **combined,
                 "accreditation_rows": _accreditation_map_rows(
@@ -2145,6 +3357,7 @@ def prepare_combined_pdf_context(
         ),
         "title": "تقرير الاستبيانات الموحّد — ضمان الجودة والاعتماد",
     }
+    return enrich_survey_export_context(ctx, for_pdf=False)
 
 
 def prepare_single_survey_pdf_context(
@@ -2168,7 +3381,7 @@ def prepare_single_survey_pdf_context(
     else:
         return None
     sem_slug = (report.get("semester") or "report").replace(" ", "_")[:40]
-    return {
+    ctx = {
         "report": report,
         "title": f"تقرير {report.get('title_ar') or code}",
         "metadata_rows": [
@@ -2191,3 +3404,132 @@ def prepare_single_survey_pdf_context(
         ],
         "filename_prefix": f"survey_{code}_{sem_slug}",
     }
+    return enrich_survey_export_context(ctx, for_pdf=False)
+
+
+def prepare_course_eval_section_pdf_context(
+    conn,
+    section_id: int,
+    *,
+    semester: str | None = None,
+    department_id: int | None = None,
+) -> dict[str, Any] | None:
+    """سياق معاينة/PDF لتقييم شعبة واحدة."""
+    sem = (semester or "").strip() or term_label_from_conn(conn)
+    report = build_course_eval_section_report(
+        conn,
+        int(section_id),
+        semester=sem,
+        department_id=department_id,
+    )
+    if not report:
+        return None
+    report.setdefault(
+        "department_label",
+        report.get("department_name") or _department_label(conn, department_id),
+    )
+    report = _enrich_course_eval_report_for_display(report)
+    sid = int(report.get("section_id") or section_id)
+    sem_slug = sem.replace(" ", "_")[:40]
+    scope_bits = [
+        f"المقرر: {report.get('course_name') or '—'}",
+        f"الشعبة: {sid}",
+        f"الأستاذ: {report.get('instructor_name') or '—'}",
+    ]
+    if report.get("group_code_label"):
+        scope_bits.append(f"المجموعة: {report.get('group_code_label')}")
+    report["scope_note_ar"] = " — ".join(scope_bits)
+    ctx = {
+        "report": report,
+        "title": f"تقرير {report.get('title_ar') or 'تقييم المقرر والأستاذ'}",
+        "metadata_rows": [
+            {"البند": "الفصل الدراسي", "القيمة": report.get("semester")},
+            {"البند": "المقرر", "القيمة": report.get("course_name")},
+            {"البند": "الشعبة", "القيمة": sid},
+            {"البند": "الأستاذ", "القيمة": report.get("instructor_name")},
+            {"البند": "القسم", "القيمة": report.get("department_name") or report.get("department_label")},
+            {"البند": "مسجّلون (تقدير)", "القيمة": report.get("enrolled_count")},
+            {"البند": "عدد التقييمات", "القيمة": report.get("response_count")},
+            {"البند": "نسبة الاستجابة %", "القيمة": report.get("response_rate_percent")},
+            {"البند": "الحد الأدنى للتجميع", "القيمة": report.get("min_aggregate")},
+            {
+                "البند": "حالة التجميع",
+                "القيمة": "مكتمل" if report.get("aggregated") else "ناقص — لا تُعرض تفاصيل البنود",
+            },
+            {"البند": "النتيجة الإجمالية %", "القيمة": report.get("overall_score_percent")},
+            {"البند": "حالة الامتثال", "القيمة": report.get("compliance_status_ar")},
+            {
+                "البند": "الخصوصية",
+                "القيمة": "لا تُعرض إجابات فردية — التجميع بعد بلوغ نسبة المسجّلين فقط.",
+            },
+        ],
+        "filename_prefix": f"course_eval_section_{sid}_{sem_slug}",
+        "preview_banner_title": "معاينة تقييم الشعبة",
+    }
+    return enrich_survey_export_context(ctx, for_pdf=False)
+
+
+def prepare_course_eval_by_course_pdf_context(
+    conn,
+    course_name: str,
+    instructor_id: int,
+    *,
+    semester: str | None = None,
+    department_id: int | None = None,
+) -> dict[str, Any] | None:
+    """سياق معاينة/PDF لتجميع مقرر + أستاذ عبر شعب متعددة."""
+    sem = (semester or "").strip() or term_label_from_conn(conn)
+    cname = (course_name or "").strip()
+    iid = int(instructor_id or 0)
+    if not cname or iid <= 0:
+        return None
+    report = build_course_eval_by_course_report(
+        conn,
+        cname,
+        iid,
+        semester=sem,
+        department_id=department_id,
+    )
+    if not report:
+        return None
+    report.setdefault(
+        "department_label",
+        report.get("department_name") or _department_label(conn, department_id),
+    )
+    report = _enrich_course_eval_report_for_display(report)
+    section_ids = report.get("section_ids") or []
+    sections_txt = "، ".join(str(x) for x in section_ids) if section_ids else "—"
+    sem_slug = sem.replace(" ", "_")[:40]
+    safe_course = cname.replace(" ", "_")[:30]
+    report["scope_note_ar"] = (
+        f"المقرر: {cname} — الأستاذ: {report.get('instructor_name') or '—'} — الشعب: {sections_txt}"
+    )
+    ctx = {
+        "report": report,
+        "title": f"تقرير {report.get('title_ar') or 'تقييم المقرر والأستاذ'}",
+        "metadata_rows": [
+            {"البند": "الفصل الدراسي", "القيمة": report.get("semester")},
+            {"البند": "المقرر", "القيمة": report.get("course_name")},
+            {"البند": "الأستاذ", "القيمة": report.get("instructor_name")},
+            {"البند": "عدد الشعب", "القيمة": report.get("section_count")},
+            {"البند": "أرقام الشعب", "القيمة": sections_txt},
+            {"البند": "القسم", "القيمة": report.get("department_name") or report.get("department_label")},
+            {"البند": "مسجّلون (تقدير)", "القيمة": report.get("enrolled_count")},
+            {"البند": "عدد التقييمات", "القيمة": report.get("response_count")},
+            {"البند": "نسبة الاستجابة %", "القيمة": report.get("response_rate_percent")},
+            {"البند": "الحد الأدنى للتجميع", "القيمة": report.get("min_aggregate")},
+            {
+                "البند": "حالة التجميع",
+                "القيمة": "مكتمل" if report.get("aggregated") else "ناقص — لا تُعرض تفاصيل البنود",
+            },
+            {"البند": "النتيجة الإجمالية %", "القيمة": report.get("overall_score_percent")},
+            {"البند": "حالة الامتثال", "القيمة": report.get("compliance_status_ar")},
+            {
+                "البند": "الخصوصية",
+                "القيمة": "لا تُعرض إجابات فردية — التجميع بعد بلوغ نسبة المسجّلين فقط.",
+            },
+        ],
+        "filename_prefix": f"course_eval_{safe_course}_inst{iid}_{sem_slug}",
+        "preview_banner_title": "معاينة تقييم المقرر + الأستاذ",
+    }
+    return enrich_survey_export_context(ctx, for_pdf=False)

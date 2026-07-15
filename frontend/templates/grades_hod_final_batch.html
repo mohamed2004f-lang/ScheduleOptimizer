@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>حزمة الدرجات النهائية — القسم</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100">
+    <div class="page-header d-flex justify-content-between flex-wrap gap-2">
+      <div>
+        <h1 class="page-title">حزمة الدرجات النهائية للقسم</h1>
+        <p class="page-subtitle">تجميع واعتماد مقررات القسم ثم الإرسال لعميد الكلية</p>
+      </div>
+      <a href="/course_delivery_hod_page" class="btn btn-outline-secondary btn-sm">لوحة اعتماد القسم</a>
+    </div>
+
+    <div id="loadMsg" class="text-muted py-3">جاري التحميل…</div>
+    <div id="mainPanel" class="d-none">
+      <div class="card mb-3">
+        <div class="card-body">
+          <div class="d-flex justify-content-between flex-wrap gap-2 mb-2">
+            <div>
+              <div class="text-muted small">الفصل</div>
+              <div class="fw-semibold" id="semesterLabel">—</div>
+            </div>
+            <div class="text-end">
+              <div class="text-muted small">نسبة الإنجاز</div>
+              <div class="display-6 text-primary fw-bold" id="pctLabel">0%</div>
+            </div>
+          </div>
+          <div class="progress mb-2" style="height: 12px;">
+            <div class="progress-bar" id="progressBar" style="width: 0%"></div>
+          </div>
+          <div class="small text-muted" id="countsLabel">—</div>
+          <div class="mt-2 small" id="batchStatus"></div>
+        </div>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-header fw-semibold">مقررات القسم (نهائي)</div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>المقرر</th>
+                <th>الأستاذ</th>
+                <th>المرحلة</th>
+                <th>الحالة</th>
+                <th>جزئي منشور</th>
+                <th>جاهز للحزمة</th>
+              </tr>
+            </thead>
+            <tbody id="draftsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-body">
+          <label class="form-label small">ملاحظة للعميد (اختياري)</label>
+          <textarea id="hodNote" class="form-control form-control-sm mb-2" rows="2"></textarea>
+          <button type="button" class="btn btn-primary" id="btnSubmitDean" disabled>إرسال الحزمة لعميد الكلية</button>
+          <div id="actionFeedback" class="small mt-2"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+  <script>
+    function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+    const readinessAr = { ready: 'جاهز', submitted: 'مُرسل', in_progress: 'قيد الإدخال', needs_hod: 'يحتاج اعتماد', other: '—' };
+    const batchStatusAr = {
+      collecting: 'جمع الدرجات',
+      submitted_to_dean: 'لدى العميد',
+      returned_to_hod: 'مُعاد للقسم',
+      published: 'منشور للطلبة'
+    };
+
+    async function loadSummary() {
+      const r = await fetch('/grades/hod/final_batch', { credentials: 'include' });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) {
+        document.getElementById('loadMsg').textContent = (j && j.message) || 'تعذر التحميل';
+        return;
+      }
+      document.getElementById('loadMsg').classList.add('d-none');
+      document.getElementById('mainPanel').classList.remove('d-none');
+      const pct = Number(j.completion_percent || 0);
+      document.getElementById('semesterLabel').textContent = j.semester || '—';
+      document.getElementById('pctLabel').textContent = pct + '%';
+      document.getElementById('progressBar').style.width = pct + '%';
+      document.getElementById('countsLabel').textContent =
+        `جاهز: ${j.ready_courses || 0} / ${j.total_courses || 0} مقرر`;
+      const b = j.batch || {};
+      document.getElementById('batchStatus').textContent = b.status
+        ? ('حالة الحزمة: ' + (batchStatusAr[b.status] || b.status))
+        : 'لم تُرسَل حزمة بعد';
+      const tbody = document.getElementById('draftsBody');
+      const drafts = j.drafts || [];
+      if (!drafts.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-muted text-center py-3">لا توجد مسودات نهائية للقسم.</td></tr>';
+      } else {
+        tbody.innerHTML = drafts.map(d => `
+          <tr>
+            <td>${esc(d.course_name)}</td>
+            <td>${esc(d.instructor_name || '')}</td>
+            <td>${esc(d.draft_phase || 'combined')}</td>
+            <td>${esc(d.status || '')}</td>
+            <td>${d.partial_published_at ? '✓' : '—'}</td>
+            <td>${d.hod_ready ? '<span class="badge bg-success">نعم</span>' : '<span class="badge bg-secondary">لا</span>'}</td>
+          </tr>`).join('');
+      }
+      const btn = document.getElementById('btnSubmitDean');
+      btn.disabled = !j.can_submit_to_dean;
+    }
+
+    document.getElementById('btnSubmitDean').addEventListener('click', async () => {
+      const fb = document.getElementById('actionFeedback');
+      fb.className = 'small text-muted';
+      fb.textContent = 'جاري الإرسال…';
+      const r = await fetch('/grades/hod/final_batch/submit', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hod_note: document.getElementById('hodNote').value || '' })
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) {
+        fb.className = 'small text-danger';
+        fb.textContent = (j && j.message) || 'فشل الإرسال';
+        return;
+      }
+      fb.className = 'small text-success';
+      fb.textContent = 'تم إرسال الحزمة لعميد الكلية.';
+      loadSummary();
+    });
+
+    loadSummary();
+  </script>
+</body>
+</html>

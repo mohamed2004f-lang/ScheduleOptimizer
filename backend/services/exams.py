@@ -4,6 +4,7 @@ from backend.core import department_scope_policy as dept_scope_policy
 from backend.core.department_scope_policy import resolve_effective_department_scope_id
 
 from backend.services.coverage_insights import (
+    classify_registration_exam_gaps,
     normalize_coverage_course_key,
     registered_distinct_course_names,
     registration_course_student_counts,
@@ -100,9 +101,17 @@ def _effective_department_scope_id(conn) -> int | None:
 
 
 def _course_in_scope(conn, course_name: str) -> bool:
+    """
+    مقرر ضمن نطاق محرّر الجدول:
+    - بلا نطاق قسم → الكل
+    - مملوك للقسم، أو عليه تسجيل نشط ضمن نطاق القسم، أو في الكتالوج المشترك/العام المرتبط بالقسم
+    """
     dep = _effective_department_scope_id(conn)
     if dep is None:
         return True
+    cname = (course_name or "").strip()
+    if not cname:
+        return False
     cur = conn.cursor()
     row = cur.execute(
         """
@@ -112,9 +121,74 @@ def _course_in_scope(conn, course_name: str) -> bool:
           AND COALESCE(owning_department_id,-1) = ?
         LIMIT 1
         """,
-        ((course_name or "").strip(), int(dep)),
+        (cname, int(dep)),
     ).fetchone()
-    return bool(row)
+    if row:
+        return True
+    if dept_scope_policy.course_is_college_shared_catalog(conn, cname, department_id=int(dep)):
+        return True
+    if dept_scope_policy.course_is_college_general(conn, cname):
+        actor_u = (session.get("user") or session.get("username") or "").strip()
+        registered = registered_distinct_course_names(cur, conn, actor_username=actor_u)
+        reg_keys = {_norm_exam_course_key(n) for n in registered if _norm_exam_course_key(n)}
+        return _norm_exam_course_key(cname) in reg_keys
+    actor_u = (session.get("user") or session.get("username") or "").strip()
+    registered = registered_distinct_course_names(cur, conn, actor_username=actor_u)
+    reg_keys = {_norm_exam_course_key(n) for n in registered if _norm_exam_course_key(n)}
+    return _norm_exam_course_key(cname) in reg_keys
+
+
+def _dept_visible_exam_course_keys(conn, cur, *, dep_id: int) -> set[str]:
+    """مفاتيح مقررات يظهر امتحانها لرئيس القسم: ملكية القسم + مقررات عليها تسجيل في النطاق."""
+    owned: set[str] = set()
+    try:
+        rows = cur.execute(
+            """
+            SELECT course_name FROM courses
+            WHERE COALESCE(owning_department_id, -1) = ?
+            """,
+            (int(dep_id),),
+        ).fetchall()
+        for r in rows or []:
+            k = _norm_exam_course_key(r[0] if not hasattr(r, "keys") else r["course_name"])
+            if k:
+                owned.add(k)
+    except Exception:
+        pass
+    actor_u = (session.get("user") or session.get("username") or "").strip()
+    registered = registered_distinct_course_names(cur, conn, actor_username=actor_u)
+    reg_keys = {_norm_exam_course_key(n) for n in registered if _norm_exam_course_key(n)}
+    return owned | reg_keys
+
+
+def _fetch_scoped_exam_rows(conn, cur, exam_type: str, *, dep_id: int | None):
+    """صفوف امتحانات للنوع؛ عند نطاق القسم تشمل الملكية + مقررات التسجيل في القسم."""
+    if dep_id is None:
+        return cur.execute(
+            """
+            SELECT id AS exam_id, COALESCE(course_name,'') AS course_name,
+                   COALESCE(exam_date,'') AS exam_date
+            FROM exams WHERE exam_type = ?
+            ORDER BY exam_date, course_name, id
+            """,
+            (exam_type,),
+        ).fetchall()
+    visible = _dept_visible_exam_course_keys(conn, cur, dep_id=int(dep_id))
+    rows = cur.execute(
+        """
+        SELECT id AS exam_id, COALESCE(course_name,'') AS course_name,
+               COALESCE(exam_date,'') AS exam_date
+        FROM exams WHERE exam_type = ?
+        ORDER BY exam_date, course_name, id
+        """,
+        (exam_type,),
+    ).fetchall()
+    out = []
+    for r in rows or []:
+        cname = r[1] if not hasattr(r, "keys") else r["course_name"]
+        if _norm_exam_course_key(cname) in visible:
+            out.append(r)
+    return out
 
 
 def _exam_has_any_rows(conn, exam_type: str) -> bool:
@@ -168,7 +242,13 @@ def _empty_schedule_coverage_payload(exam_type: str, *, coverage_available: bool
         "duplicate_courses": [],
         "missing_from_exams": [],
         "extras_in_exams_not_in_schedule": [],
-        "registration_baseline": {"missing_in_exam": [], "extra_in_exam": []},
+        "registration_baseline": {
+            "missing_in_exam": [],
+            "missing_required": [],
+            "missing_optional_shared": [],
+            "missing_exempt": [],
+            "extra_in_exam": [],
+        },
         "counts": {},
     }
 
@@ -655,29 +735,25 @@ def _exam_dicts_for_export_or_results(conn, exam_type: str) -> list[dict]:
     """صفوف جدول exams حسب نطاق القسم (يتوافق مع list_exam_rows)."""
     cur = conn.cursor()
     dep = _effective_department_scope_id(conn)
-    if dep is None:
-        cur.execute(
-            "SELECT * FROM exams WHERE exam_type = ? ORDER BY exam_date, exam_time, id",
-            (exam_type,),
-        )
-    else:
-        cur.execute(
-            """
-            SELECT e.* FROM exams e
-            INNER JOIN courses c ON lower(trim(c.course_name)) = lower(trim(e.course_name))
-            WHERE e.exam_type = ? AND COALESCE(c.owning_department_id,-1) = ?
-            ORDER BY e.exam_date, e.exam_time, e.id
-            """,
-            (exam_type, int(dep)),
-        )
+    cur.execute(
+        "SELECT * FROM exams WHERE exam_type = ? ORDER BY exam_date, exam_time, id",
+        (exam_type,),
+    )
     rows = cur.fetchall()
     cols = [d[0] for d in (cur.description or [])]
+    visible: set[str] | None = None
+    if dep is not None:
+        visible = _dept_visible_exam_course_keys(conn, cur, dep_id=int(dep))
     out: list[dict] = []
     for r in rows or []:
         if hasattr(r, "keys"):
-            out.append(dict(r))
+            item = dict(r)
         else:
-            out.append(dict(zip(cols, r)))
+            item = dict(zip(cols, r))
+        if visible is not None:
+            if _norm_exam_course_key(item.get("course_name") or "") not in visible:
+                continue
+        out.append(item)
     return out
 
 
@@ -720,33 +796,17 @@ def exam_schedule_coverage(exam_type):
             registered_names = registered_distinct_course_names(cur, conn, actor_username=actor_u)
             reg_keys = {_norm_exam_course_key(n) for n in registered_names if _norm_exam_course_key(n)}
 
-            if not dept_scoped_user:
-                rows = cur.execute(
-                    """
-                    SELECT id AS exam_id, COALESCE(course_name,'') AS course_name, COALESCE(exam_date,'') AS exam_date
-                    FROM exams WHERE exam_type = ? ORDER BY exam_date, course_name, id
-                    """,
-                    (exam_type,),
-                ).fetchall()
-            else:
-                rows = cur.execute(
-                    """
-                    SELECT e.id AS exam_id,
-                           COALESCE(e.course_name,'') AS course_name,
-                           COALESCE(e.exam_date,'') AS exam_date
-                    FROM exams e
-                    JOIN courses c ON lower(trim(c.course_name)) = lower(trim(e.course_name))
-                    WHERE e.exam_type = ?
-                      AND COALESCE(c.owning_department_id,-1) = ?
-                    ORDER BY e.exam_date, e.course_name, e.id
-                    """,
-                    (exam_type, int(dep)),
-                ).fetchall()
+            rows = _fetch_scoped_exam_rows(
+                conn, cur, exam_type, dep_id=int(dep) if dept_scoped_user else None
+            )
 
             by_key: dict[str, list[dict]] = {}
             exam_keys: set[str] = set()
             for r in rows:
-                cid, cname, ed = int(r[0]), r[1] or "", r[2] or ""
+                if hasattr(r, "keys"):
+                    cid, cname, ed = int(r["exam_id"]), r["course_name"] or "", r["exam_date"] or ""
+                else:
+                    cid, cname, ed = int(r[0]), r[1] or "", r[2] or ""
                 k = _norm_exam_course_key(cname)
                 if not k:
                     continue
@@ -792,6 +852,14 @@ def exam_schedule_coverage(exam_type):
                 for n in registered_names
                 if _norm_exam_course_key(n) and _norm_exam_course_key(n) not in exam_keys
             )
+            classified = classify_registration_exam_gaps(
+                conn,
+                missing_from_exams_vs_registrations,
+                department_id=int(dep) if dept_scoped_user else None,
+            )
+            missing_required = classified.get("required") or []
+            missing_optional = classified.get("optional_shared") or []
+            missing_exempt = classified.get("exempt") or []
             extras_in_exams_vs_registrations = sorted(
                 {
                     v[0].get("course_name") or k
@@ -828,7 +896,10 @@ def exam_schedule_coverage(exam_type):
                     "missing_from_exams": missing_from_exams,
                     "extras_in_exams_not_in_schedule": extras_in_exams,
                     "registration_baseline": {
-                        "missing_in_exam": missing_from_exams_vs_registrations,
+                        "missing_in_exam": missing_required,
+                        "missing_required": missing_required,
+                        "missing_optional_shared": missing_optional,
+                        "missing_exempt": missing_exempt,
                         "extra_in_exam": extras_in_exams_vs_registrations,
                     },
                     "counts": {
@@ -836,6 +907,9 @@ def exam_schedule_coverage(exam_type):
                         "registrations_distinct": len(reg_keys),
                         "exam_distinct_courses": len(exam_keys),
                         "exam_rows": sum(len(v) for v in by_key.values()),
+                        "required_missing": len(missing_required),
+                        "optional_shared_missing": len(missing_optional),
+                        "exempt_missing": len(missing_exempt),
                     },
                 }
             )
@@ -876,18 +950,22 @@ def list_exam_rows(exam_type):
                 "SELECT id AS exam_id, course_name, exam_date, exam_time, room, instructor FROM exams WHERE exam_type=? ORDER BY exam_date, exam_time",
                 (exam_type,),
             ).fetchall()
-        else:
-            rows = cur.execute(
-                """
-                SELECT e.id AS exam_id, e.course_name, e.exam_date, e.exam_time, e.room, e.instructor
-                FROM exams e
-                JOIN courses c ON lower(trim(c.course_name)) = lower(trim(e.course_name))
-                WHERE e.exam_type = ? AND COALESCE(c.owning_department_id,-1) = ?
-                ORDER BY e.exam_date, e.exam_time
-                """,
-                (exam_type, int(dep)),
-            ).fetchall()
-        return jsonify([dict(r) for r in rows])
+            return jsonify([dict(r) for r in rows])
+        visible = _dept_visible_exam_course_keys(conn, cur, dep_id=int(dep))
+        rows = cur.execute(
+            """
+            SELECT id AS exam_id, course_name, exam_date, exam_time, room, instructor
+            FROM exams WHERE exam_type=?
+            ORDER BY exam_date, exam_time
+            """,
+            (exam_type,),
+        ).fetchall()
+        out = []
+        for r in rows or []:
+            item = dict(r)
+            if _norm_exam_course_key(item.get("course_name") or "") in visible:
+                out.append(item)
+        return jsonify(out)
 
 @exams_bp.route('/<exam_type>/check_conflicts', methods=['POST'])
 @login_required
@@ -1013,6 +1091,15 @@ def add_exam_row(exam_type):
     with get_connection() as conn:
         if not _course_in_scope(conn, course_name):
             return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        try:
+            from backend.core.department_scope_policy import resolve_effective_department_scope_id
+            from backend.services.term_closure import TermClosedError, assert_term_writable
+
+            actor = (session.get("user") or session.get("username") or "").strip()
+            dept_id = resolve_effective_department_scope_id(conn, actor)
+            assert_term_writable(conn, stage="exams", department_id=dept_id)
+        except TermClosedError as exc:
+            return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
         cur = conn.cursor()
         cur.execute("INSERT INTO exams (exam_type, exam_id, course_name, exam_date, exam_time, room, instructor) VALUES (?,?,?,?,?,?,?)",
                     (exam_type, None, course_name, exam_date, exam_time, room, instructor))
@@ -1044,6 +1131,15 @@ def delete_exam_row(exam_type):
     if not exam_id:
         return jsonify({"status":"error","message":"exam_id required"}), 400
     with get_connection() as conn:
+        try:
+            from backend.core.department_scope_policy import resolve_effective_department_scope_id
+            from backend.services.term_closure import TermClosedError, assert_term_writable
+
+            actor = (session.get("user") or session.get("username") or "").strip()
+            dept_id = resolve_effective_department_scope_id(conn, actor)
+            assert_term_writable(conn, stage="exams", department_id=dept_id)
+        except TermClosedError as exc:
+            return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
         cur = conn.cursor()
         row_c = cur.execute("SELECT course_name FROM exams WHERE id = ? AND exam_type = ? LIMIT 1", (exam_id, exam_type)).fetchone()
         if row_c and not _course_in_scope(conn, row_c[0]):
@@ -1506,6 +1602,15 @@ def update_exam_row(exam_type):
     params = list(fields.values()) + [exam_id, exam_type]
     q = f"UPDATE exams SET {sets} WHERE id = ? AND exam_type = ?"
     with get_connection() as conn:
+        try:
+            from backend.core.department_scope_policy import resolve_effective_department_scope_id
+            from backend.services.term_closure import TermClosedError, assert_term_writable
+
+            actor = (session.get("user") or session.get("username") or "").strip()
+            dept_id = resolve_effective_department_scope_id(conn, actor)
+            assert_term_writable(conn, stage="exams", department_id=dept_id)
+        except TermClosedError as exc:
+            return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
         cur = conn.cursor()
         cur.execute(q, params)
         conn.commit()

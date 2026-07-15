@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>تقارير جودة المقررات</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">تقارير جودة المقررات</h1>
+        <p class="page-subtitle">الفصل: {{ semester }} — معاينة وطباعة شواهد تنفيذ المقرر</p>
+      </div>
+      <div class="d-flex gap-2 flex-wrap">
+        <a class="btn btn-info btn-sm text-white"
+           href="{{ package_preview_url }}?semester={{ semester|urlencode }}"
+           target="_blank"
+           title="معاينة في المتصفح — للطباعة أو حفظ PDF بجودة عربية أفضل">
+          <i class="fa-solid fa-display"></i> معاينة الحزمة / طباعة
+        </a>
+        <a class="btn btn-outline-danger btn-sm"
+           href="{{ package_pdf_url }}?semester={{ semester|urlencode }}"
+           title="PDF — للطباعة والأرشفة">
+          <i class="fa-solid fa-file-pdf"></i> PDF إجمالي
+        </a>
+      </div>
+    </div>
+
+    <div class="row g-2 mb-3">
+      <div class="col-6 col-md-3"><div class="card"><div class="card-body py-2 text-center"><div class="fs-4 fw-bold">{{ summary.groups_total }}</div><div class="small">مجموعات</div></div></div></div>
+      <div class="col-6 col-md-3"><div class="card border-success"><div class="card-body py-2 text-center"><div class="fs-4 fw-bold">{{ summary.submitted }}</div><div class="small">بتقارير مُرسلة</div></div></div></div>
+      <div class="col-6 col-md-3"><div class="card border-warning"><div class="card-body py-2 text-center"><div class="fs-4 fw-bold">{{ summary.low_completion }}</div><div class="small">نسبة منخفضة</div></div></div></div>
+      <div class="col-6 col-md-3"><div class="card border-danger"><div class="card-body py-2 text-center"><div class="fs-4 fw-bold">{{ summary.missing_books }}</div><div class="small">نقص كتب</div></div></div></div>
+    </div>
+
+    <form class="row g-2 align-items-end mb-3" method="get">
+      <input type="hidden" name="semester" value="{{ semester }}">
+      <div class="col-auto">
+        <label class="form-label small mb-0">تصفية</label>
+        <select name="status" class="form-select form-select-sm">
+          <option value="" {% if not status_filter %}selected{% endif %}>الكل</option>
+          <option value="submitted" {% if status_filter=='submitted' %}selected{% endif %}>مُرسل</option>
+          <option value="unsubmitted" {% if status_filter=='unsubmitted' %}selected{% endif %}>غير مُرسل</option>
+          <option value="low" {% if status_filter=='low' %}selected{% endif %}>نسبة منخفضة</option>
+          <option value="missing_books" {% if status_filter=='missing_books' %}selected{% endif %}>نقص كتب</option>
+        </select>
+      </div>
+      <div class="col-auto"><button class="btn btn-sm btn-outline-secondary" type="submit">تطبيق</button></div>
+    </form>
+
+    <div class="card mb-4">
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr>
+              {% if college_wide %}<th>القسم</th>{% endif %}
+              <th>المقرر</th><th>الأستاذ</th><th>نسبة</th><th>فجوات</th><th>كتب</th>
+              <th>جزئي</th><th>نهائي</th><th>معاينة / تصدير</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+            <tr>
+              {% if college_wide %}<td>{{ row.department_id if row.department_id is not none else '—' }}</td>{% endif %}
+              <td>{{ row.course_name }}{% if row.group_code %} <small class="text-muted">({{ row.group_code }})</small>{% endif %}</td>
+              <td>{{ row.instructor_name }}</td>
+              <td>{% if row.overall_pct is not none %}{{ row.overall_pct }}%{% else %}—{% endif %}</td>
+              <td>{{ row.incomplete_count }}</td>
+              <td>{% if row.books_ok %}✓{% else %}{{ row.book_reference_count }}/{{ min_book_references }}{% endif %}</td>
+              <td class="small">{{ row.partial_status_ar }}</td>
+              <td class="small">{{ row.final_status_ar }}</td>
+              <td class="text-nowrap">
+                <a class="btn btn-sm btn-outline-info"
+                   href="{{ row.preview_url }}?semester={{ semester|urlencode }}"
+                   target="_blank"
+                   title="معاينة / طباعة تقرير المقرر">
+                  <i class="fa-solid fa-display"></i> معاينة
+                </a>
+                <a class="btn btn-sm btn-outline-danger"
+                   href="{{ row.pdf_url }}?semester={{ semester|urlencode }}"
+                   title="PDF — للطباعة والأرشفة">
+                  <i class="fa-solid fa-file-pdf"></i> PDF
+                </a>
+                {% if can_warn %}
+                <button type="button" class="btn btn-sm btn-outline-warning btn-warn" data-tgid="{{ row.teaching_group_id }}">تنبيه</button>
+                {% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="9" class="text-muted small p-3">لا مقررات مطابقة.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <p class="small text-muted">الشاهد في الاعتماد: <code>course_delivery_quality_report</code> — يُقترح من المساعد الذكي ويُربط يدوياً بعد المراجعة.</p>
+  </main>
+  <script>
+    document.querySelectorAll('.btn-warn').forEach(btn => {
+      btn.onclick = async () => {
+        const message = prompt('نص التنبيه (اختياري):') || '';
+        const r = await fetch('/course_delivery/hod/warn_instructor', {
+          method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ teaching_group_id: Number(btn.getAttribute('data-tgid')), message })
+        });
+        alert(r.ok ? 'تم إرسال التنبيه' : 'فشل الإرسال');
+      };
+    });
+  </script>
+</body>
+</html>

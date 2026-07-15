@@ -1,5 +1,5 @@
 """
-حاسبة مسار الطالب — منجز / متبقي حسب نطاق المتطلب وخطة البرامج (155 شاملة 36).
+حاسبة مسار الطالب — منجز / متبقي حسب نطاق المتطلب وخطة البرامج (وحدات التخرج شاملة الاتجاه العام).
 """
 
 from __future__ import annotations
@@ -288,7 +288,7 @@ def _empty_scope_bucket() -> dict[str, Any]:
 
 def compute_pathway_progress(cur, student_id: str) -> dict[str, Any]:
     """
-    يحسب منجز/متبقي للطالب مقابل خطة MECH (+ برنامج الشعبة إن وُجد).
+    يحسب منجز/متبقي للطالب مقابل خطة القسم (+ برنامج الشعبة إن وُجد).
     """
     student = _load_student_row(cur, student_id)
     if not student:
@@ -418,7 +418,10 @@ def compute_pathway_progress(cur, student_id: str) -> dict[str, Any]:
             "graduation_total": grad_target,
             "college_general": college_target,
             "transfer_to_department_min": transfer_min,
-            "note_ar": "وحدات التخرج 155 شاملة اتجاه عام 36 (ليست 155+36).",
+            "note_ar": (
+                f"وحدات التخرج {grad_target} شاملة اتجاه عام {college_target} "
+                f"(ليست {grad_target}+{college_target})."
+            ),
         },
         "by_scope": by_scope,
         "summary_pre_track": {

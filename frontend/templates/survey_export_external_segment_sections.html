@@ -1,0 +1,57 @@
+{# تقارير تفصيلية منفصلة لكل قسم / برنامج / قسم توظيف — بدون خلط #}
+{% set root_report = report %}
+{% macro render_profile_block(seg) %}
+  {% if seg.profile_breakdown or seg.profile_open_texts %}
+  {% set profile_breakdown = seg.profile_breakdown %}
+  {% set profile_open_texts = seg.profile_open_texts %}
+  {% include "survey_export_alumni_profile_section.html" %}
+  {% endif %}
+{% endmacro %}
+
+{% macro render_segment_block(seg, heading_prefix) %}
+  {% if seg.aggregated and seg.detail_report %}
+  <div class="page-break"></div>
+  <h2>{{ heading_prefix }}: {{ seg.segment_label }}</h2>
+  <p class="meta">عدد الردود في هذه الشريحة: {{ seg.response_count }} — نتيجة البنود: {% if seg.overall_score_percent is not none %}{{ seg.overall_score_percent }}%{% else %}—{% endif %}</p>
+  {% set report = seg.detail_report %}
+  {% set analysis = seg.analysis %}
+  {% include "survey_export_analysis_section.html" %}
+  {{ render_profile_block(seg) }}
+  {% if seg.chart_data and seg.chart_data.has_data and not for_pdf %}
+  {% set chart_data = seg.chart_data %}
+  {% set chart_id_prefix = seg.segment_key or 'segment' %}
+  {% include "survey_export_charts_section.html" %}
+  {% endif %}
+  {% set suppress_item_detail = false %}
+  {% include "survey_export_report_section.html" %}
+  {% elif seg.profile_breakdown or seg.profile_open_texts %}
+  <div class="page-break"></div>
+  <h2>{{ heading_prefix }}: {{ seg.segment_label }}</h2>
+  <p class="meta">عدد الردود: {{ seg.response_count }} — تجميع البنود (Likert) ناقص (&lt; الحد الأدنى). فيما يلي بيانات الواقع المهني والتوصيات لهذه الشريحة فقط.</p>
+  {{ render_profile_block(seg) }}
+  {% endif %}
+{% endmacro %}
+
+{% if root_report.department_segments %}
+<h2 class="mt-4">تقارير الأقسام (منفصلة)</h2>
+<p class="meta">كل قسم أدناه له تحليله وبنوده و«الواقع المهني» و«التوصيات ومستقبل البرنامج» الخاصة به — لا تُمزج مع أقسام أخرى.</p>
+{% for seg in root_report.department_segments %}
+  {{ render_segment_block(seg, 'تقرير القسم') }}
+{% endfor %}
+{% endif %}
+
+{% if root_report.program_segments %}
+<h2 class="mt-4">تقارير البرامج — قسم + مسار/شعبة (منفصلة)</h2>
+{% for seg in root_report.program_segments %}
+  {{ render_segment_block(seg, 'تقرير البرنامج') }}
+{% endfor %}
+{% endif %}
+
+{% if root_report.hire_department_segments %}
+<h2 class="mt-4">استشارة القطاع — تقارير أقسام التوظيف (منفصلة)</h2>
+{% for seg in root_report.hire_department_segments %}
+  {{ render_segment_block(seg, 'قسم التوظيف') }}
+{% endfor %}
+{% endif %}
+
+{% set report = root_report %}

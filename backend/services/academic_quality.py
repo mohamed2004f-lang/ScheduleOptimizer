@@ -540,6 +540,24 @@ from backend.services.institutional_accreditation import (  # noqa: E402
 )
 
 from backend.services.survey_platform_routes import register_survey_platform_routes  # noqa: E402
+from backend.services.course_report_routes import register_course_report_routes  # noqa: E402
+from backend.services.department_archive_routes import (  # noqa: E402
+    register_department_archive_routes,
+)
+from backend.services.quality_assistant_routes import (  # noqa: E402
+    register_quality_assistant_routes,
+)
+from backend.services.quality_knowledge_routes import (  # noqa: E402
+    register_quality_knowledge_routes,
+)
+from backend.services.term_closure_routes import (  # noqa: E402
+    register_term_closure_routes,
+)
 
 register_survey_platform_routes(academic_quality_bp)
+register_course_report_routes(academic_quality_bp)
 register_institutional_accreditation_routes(academic_quality_bp)
+register_department_archive_routes(academic_quality_bp)
+register_quality_assistant_routes(academic_quality_bp)
+register_quality_knowledge_routes(academic_quality_bp)
+register_term_closure_routes(academic_quality_bp)

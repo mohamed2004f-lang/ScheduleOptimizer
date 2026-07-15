@@ -265,8 +265,8 @@
             </div>
           </div>
           <div class="col-md-4">
-            <label class="form-label">ملاحظات</label>
-            <input id="gradeNote" class="form-control" placeholder="مثال: فصل عملى / استدراك">
+            <label class="form-label">سبب التعديل <span id="gradeNoteRequiredMark" class="text-danger d-none">*</span></label>
+            <input id="gradeNote" class="form-control" placeholder="سبب التصحيح بعد النشر (مطلوب لرئيس القسم)">
           </div>
         </div>
 
@@ -291,12 +291,12 @@
       </div>
     </div>
 
-    <!-- نافذة تعديل درجة/رمز مقرر موجودة -->
+    <!-- نافذة تعديل درجة/رمز مقرر موجودة (تصحيح بعد النشر لرئيس القسم) -->
     <div class="modal fade" id="editGradeModal" tabindex="-1" aria-hidden="true">
       <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
           <div class="modal-header">
-            <h6 class="modal-title">تعديل الدرجة</h6>
+            <h6 class="modal-title" id="egModalTitle">تصحيح درجة بعد النشر</h6>
             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
           </div>
           <div class="modal-body">
@@ -317,11 +317,15 @@
               <label class="form-label">الدرجة الجديدة</label>
               <input id="egGradeInput" type="number" min="0" max="100" class="form-control" placeholder="أدخل رقم الدرجة أو اتركه فارغاً" />
             </div>
-            <div class="small small-muted">سيُسجل ذلك في سجل التدقيق.</div>
+            <div class="mb-2">
+              <label class="form-label">سبب التصحيح <span id="egReasonRequiredMark" class="text-danger d-none">*</span></label>
+              <textarea id="egReasonInput" class="form-control" rows="2" placeholder="مثال: خطأ رقمي بعد الاعتماد / تصحيح إداري"></textarea>
+              <div class="form-text small" id="egReasonHint">موصى به للأدمن الرئيسي — إلزامي لرئيس القسم. يُسجَّل مع هوية المعدّل.</div>
+            </div>
           </div>
           <div class="modal-footer">
             <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">إلغاء</button>
-            <button class="btn btn-primary btn-sm" id="egSaveBtn">حفظ</button>
+            <button class="btn btn-primary btn-sm" id="egSaveBtn">حفظ التصحيح</button>
           </div>
         </div>
       </div>
@@ -367,6 +371,18 @@ let EDIT_ROWS = []; // temp rows to save
 let selectedStudent = "";
 let CURRENT_ROLE = null;
 let CAN_MANAGE_TRANSCRIPT = false;
+let REQUIRE_TRANSCRIPT_REASON = false;
+
+function promptCorrectionReason(defaultMsg){
+  const reason = window.prompt(defaultMsg || 'سبب التصحيح بعد النشر (٥ أحرف على الأقل):', '');
+  if (reason === null) return null;
+  const text = String(reason || '').trim();
+  if (REQUIRE_TRANSCRIPT_REASON && text.length < 5){
+    setMsg('سبب التصحيح مطلوب (٥ أحرف على الأقل).', 'warning');
+    return null;
+  }
+  return text;
+}
 
 // بيانات أولية من السيرفر (لضمان ظهور السجل حتى لو تعطل fetch)
 const INITIAL_STUDENTS = {{ (students or [])|tojson }};
@@ -586,7 +602,7 @@ function renderTranscript(data){
                   data-course="${escape(c.course_name)}"
                   data-code="${escape(c.course_code||'')}"
                   data-grade="${(c.grade===null||c.grade===undefined)?'':c.grade}">
-            تعديل
+            تصحيح
           </button>
           <button class="btn btn-sm btn-outline-danger btn-delete-course ms-1"
                   data-sem="${escape(sem)}"
@@ -703,7 +719,9 @@ function renderTranscript(data){
       const sem = ev.currentTarget.dataset.sem;
       if(!selectedStudent){ setMsg('اختر طالباً أولاً','warning'); return; }
       if(!confirm(`هل أنت متأكد من حذف كل درجات الفصل "${sem}" لهذا الطالب؟ هذه العملية نهائية.`)) return;
-      const payload = { student_id: selectedStudent, semester: sem, changed_by: 'ui-delete' };
+      const reason = promptCorrectionReason('سبب حذف درجات الفصل:');
+      if (reason === null) return;
+      const payload = { student_id: selectedStudent, semester: sem, reason };
       const r = await fetchJSON('/grades/delete/semester', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
       if(r.ok){ setMsg((r.json && r.json.message) ? r.json.message : 'تم حذف الفصل', 'success'); loadTranscript(selectedStudent); } else { setMsg((r.json && r.json.message) ? r.json.message : 'فشل حذف الفصل', 'danger'); }
     });
@@ -714,7 +732,9 @@ function renderTranscript(data){
         const course = ev.currentTarget.dataset.course;
         if(!selectedStudent){ setMsg('اختر طالباً أولاً','warning'); return; }
         if(!confirm(`هل أنت متأكد من حذف سجل المادة "${course}" في الفصل "${sem}"؟`)) return;
-        const payload = { student_id: selectedStudent, semester: sem, course_name: course, changed_by: 'ui-delete' };
+        const reason = promptCorrectionReason('سبب حذف سجل المقرر:');
+        if (reason === null) return;
+        const payload = { student_id: selectedStudent, semester: sem, course_name: course, reason };
         const r = await fetchJSON('/grades/delete/course', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
         if(r.ok){ setMsg((r.json && r.json.message) ? r.json.message : 'تم حذف السجل', 'success'); loadTranscript(selectedStudent); } else { setMsg((r.json && r.json.message) ? r.json.message : 'فشل حذف السجل', 'danger'); }
       });
@@ -757,6 +777,7 @@ function onInlineEditClick(e){
   }
   const egGradeInput = document.getElementById('egGradeInput'); if(egGradeInput) egGradeInput.value = currentGrade;
   const egCodeInput = document.getElementById('egCourseCodeInput'); if(egCodeInput) egCodeInput.value = currentCode;
+  const egReasonInput = document.getElementById('egReasonInput'); if(egReasonInput) egReasonInput.value = '';
   const egCourseSelect = document.getElementById('egCourseSelect');
   if(egCourseSelect){
     egCourseSelect.innerHTML = courseInStoredList
@@ -804,16 +825,21 @@ if(egSaveBtn) egSaveBtn.addEventListener('click', async ()=>{
   const val = (document.getElementById('egGradeInput')||{}).value || '';
   const grade = val===''? null : Number(val);
   const codeVal = (document.getElementById('egCourseCodeInput')||{}).value || '';
-  const payload = { student_id: student, semester: egSemester, course_name: egCourse, grade, course_code: codeVal, changed_by: 'admin' };
+  const reason = String((document.getElementById('egReasonInput')||{}).value || '').trim();
+  if (REQUIRE_TRANSCRIPT_REASON && reason.length < 5){
+    setMsg('سبب التصحيح مطلوب (٥ أحرف على الأقل) لرئيس القسم.', 'warning');
+    return;
+  }
+  const payload = { student_id: student, semester: egSemester, course_name: egCourse, grade, course_code: codeVal, reason };
   if(selectedCourse && selectedCourse !== egCourse) payload.new_course_name = selectedCourse;
   const r = await fetchJSON('/grades/update', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
   if(r.ok){
     const changedName = selectedCourse && selectedCourse !== egCourse;
-    setMsg(changedName ? '✅ تم تعديل الدرجة واسم المقرر (والرمز/الوحدات من القائمة).' : '✅ تم تعديل الدرجة/رمز المقرر','success');
+    setMsg(changedName ? '✅ تم تصحيح الدرجة واسم المقرر.' : '✅ تم تصحيح الدرجة بعد النشر.','success');
     if(editModal) editModal.hide();
     loadTranscript(student);
   } else {
-    setMsg('فشل التعديل: '+(r.json && r.json.message ? r.json.message : r.status), 'danger');
+    setMsg('فشل التصحيح: '+(r.json && r.json.message ? r.json.message : r.status), 'danger');
   }
 });
 
@@ -961,7 +987,7 @@ if (btnDownloadSemesterTemplate) {
 }
 
 /* save grades (batch) */
-const btnSaveAll = document.getElementById('btnSaveGrades'); if(btnSaveAll) btnSaveAll.addEventListener('click', async ()=>{ const student = (document.getElementById('studentSelect')||{}).value; if(!student){ setMsg('اختر طالباً أولاً','warning'); return; } const sem = (document.getElementById('gradeEditorCard')||{}).style && document.getElementById('gradeEditorCard').style.display==='block' ? (document.getElementById('gradeSemesterInput')||{}).value.trim() : ''; if(!sem){ setMsg('أدخل اسم الفصل في محرر الدرجات (مثال: خريف 25-26) أو افتح المحرر ثم حاول الحفظ','warning'); showEditor(); return; } if(EDIT_ROWS.length===0){ setMsg('أضف مقرراً واحداً على الأقل قبل الحفظ','warning'); return; } const grades = EDIT_ROWS.map(r=>({course_name:r.course_name, course_code:r.course_code||'', units: Number(r.units)||0, grade: r.grade})); const btn = btnSaveAll; btn.disabled=true; setMsg('جاري حفظ الدرجات...', 'info'); const resp = await fetch('/save_grades', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({student_id:student, semester:sem, grades})}); const j = await resp.json().catch(()=>null); btn.disabled=false; if(resp.ok){ setMsg('✅ تم حفظ الدرجات', 'success'); hideEditor(); loadTranscript(student); } else { setMsg('فشل الحفظ: '+(j&&j.message?j.message:resp.statusText),'danger'); } });
+const btnSaveAll = document.getElementById('btnSaveGrades'); if(btnSaveAll) btnSaveAll.addEventListener('click', async ()=>{ const student = (document.getElementById('studentSelect')||{}).value; if(!student){ setMsg('اختر طالباً أولاً','warning'); return; } const sem = (document.getElementById('gradeEditorCard')||{}).style && document.getElementById('gradeEditorCard').style.display==='block' ? (document.getElementById('gradeSemesterInput')||{}).value.trim() : ''; if(!sem){ setMsg('أدخل اسم الفصل في محرر الدرجات (مثال: خريف 25-26) أو افتح المحرر ثم حاول الحفظ','warning'); showEditor(); return; } if(EDIT_ROWS.length===0){ setMsg('أضف مقرراً واحداً على الأقل قبل الحفظ','warning'); return; } const reason = String((document.getElementById('gradeNote')||{}).value || '').trim(); if(REQUIRE_TRANSCRIPT_REASON && reason.length < 5){ setMsg('سبب التعديل مطلوب (٥ أحرف على الأقل) لرئيس القسم.','warning'); return; } const grades = EDIT_ROWS.map(r=>({course_name:r.course_name, course_code:r.course_code||'', units: Number(r.units)||0, grade: r.grade})); const btn = btnSaveAll; btn.disabled=true; setMsg('جاري حفظ الدرجات...', 'info'); const resp = await fetch('/save_grades', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({student_id:student, semester:sem, grades, reason})}); const j = await resp.json().catch(()=>null); btn.disabled=false; if(resp.ok){ setMsg('✅ تم حفظ الدرجات', 'success'); hideEditor(); loadTranscript(student); } else { setMsg('فشل الحفظ: '+(j&&j.message?j.message:resp.statusText),'danger'); } });
 
 // زر حفظ داخل نموذج إدخال الفصل اليدوي يستدعي نفس منطق btnSaveGrades العلوي
 const btnSaveInline = document.getElementById('btnSaveGradesInline');
@@ -1032,12 +1058,15 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
       CAN_MANAGE_TRANSCRIPT = (_caps && _caps.v >= 1)
         ? !!_caps.can_manage_transcript_admin
         : ['admin', 'admin_main', 'head_of_department'].includes(CURRENT_ROLE || '');
+      REQUIRE_TRANSCRIPT_REASON = CAN_MANAGE_TRANSCRIPT && CURRENT_ROLE === 'head_of_department';
     } else {
       CAN_MANAGE_TRANSCRIPT = ['admin', 'admin_main', 'head_of_department'].includes(CURRENT_ROLE || '');
+      REQUIRE_TRANSCRIPT_REASON = CAN_MANAGE_TRANSCRIPT && CURRENT_ROLE === 'head_of_department';
     }
   } catch(e){
     CURRENT_ROLE = null;
     CAN_MANAGE_TRANSCRIPT = ['admin', 'admin_main', 'head_of_department'].includes(CURRENT_ROLE || '');
+    REQUIRE_TRANSCRIPT_REASON = false;
   }
 
   // إخفاء أدوات الإدخال/الاستيراد لغير الإداريين (عرض كشف فقط)
@@ -1048,6 +1077,13 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
     if (importCard) importCard.style.display = 'none';
     const gradeEditorCard = document.getElementById('gradeEditorCard');
     if (gradeEditorCard) gradeEditorCard.style.display = 'none';
+  } else if (REQUIRE_TRANSCRIPT_REASON) {
+    const egReq = document.getElementById('egReasonRequiredMark');
+    if (egReq) egReq.classList.remove('d-none');
+    const noteReq = document.getElementById('gradeNoteRequiredMark');
+    if (noteReq) noteReq.classList.remove('d-none');
+    const egHint = document.getElementById('egReasonHint');
+    if (egHint) egHint.textContent = 'مطلوب لرئيس القسم — يُسجَّل مع هوية المعدّل في التدقيق.';
   }
 
   // الطالب فقط: حجب اختيار الطلبة/الخطة وإجباره على سجله

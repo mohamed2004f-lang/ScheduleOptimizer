@@ -272,6 +272,9 @@ app.register_blueprint(department_policies_bp)
 from backend.services.pathway_regulations import register_pathway_regulation_routes
 
 register_pathway_regulation_routes(college_catalog_bp)
+from backend.services.college_shared_catalog_routes import register_shared_catalog_routes
+
+register_shared_catalog_routes(college_catalog_bp)
 app.register_blueprint(college_catalog_bp)
 app.register_blueprint(performance_bp, url_prefix="/performance")
 app.register_blueprint(students_api_bp)
@@ -1062,6 +1065,20 @@ def attendance_export_page():
         default_term_weeks=get_attendance_term_weeks(),
     )
 
+@app.route("/grades_hod_final_batch")
+@login_required
+@role_required("head_of_department", "admin_main", "admin")
+def grades_hod_final_batch_page():
+    return render_template("grades_hod_final_batch.html", active_page="grade_drafts")
+
+
+@app.route("/grades_dean_final_batches")
+@login_required
+@role_required("admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
+def grades_dean_final_batches_page():
+    return render_template("grades_dean_final_batches.html", active_page="grade_drafts")
+
+
 @app.route("/academic_calendar_page")
 @login_required
 def academic_calendar_page():
@@ -1080,6 +1097,13 @@ def academic_rules_page():
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def college_catalog_page():
     return render_template("college_catalog.html")
+
+
+@app.route("/college_shared_catalog_page")
+@login_required
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+def college_shared_catalog_page():
+    return render_template("college_shared_catalog.html")
 
 
 @app.route("/course_equivalences_page")
@@ -1321,10 +1345,18 @@ def course_delivery_page():
 
 @app.route("/course_delivery_hod_page")
 @login_required
-@role_required("head_of_department")
+@role_required("head_of_department", "admin_main", "admin", "system_admin")
 def course_delivery_hod_page():
-    """لوحة اعتماد رئيس القسم الموحّدة (مفردات + تقارير + مسودات)."""
+    """لوحة اعتماد رئيس القسم الموحّدة (مفردات + تقارير + مسودات + أقفال الدرجات)."""
     return render_template("course_delivery_hod.html", active_page="grade_drafts")
+
+
+@app.route("/course_quality_college_page")
+@login_required
+@role_required("college_dean", "academic_vice_dean", "admin_main", "admin", "system_admin")
+def course_quality_college_page():
+    """تحويل إلى فهرس تقارير جودة المقررات (معاينة/طباعة)."""
+    return redirect(url_for("academic_quality.course_reports_index"))
 
 
 @app.route("/faculty_scorecards_page")

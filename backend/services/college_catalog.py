@@ -304,8 +304,9 @@ def pathway_meta():
             "college_pathway_cohort_from_join_year": cohort_year,
             "college_general_program_code": COLLEGE_GENERAL_PROGRAM_CODE,
             "operating_mode_note_ar": (
-                "خطة التخرج 155 وحدة شاملة 36 اتجاه عام. للدفعات الجديدة: عيّن في اللائحة "
-                "«دفعات مسار الكلية» ثم حرّر خطة PROG_U1. الطلاب الحاليون يبقون dept_only."
+                "وحدات التخرج تختلف حسب القسم (شاملة اتجاه عام 36 — ليست +36). "
+                "عرّف بنود كل قسم في تبويب لائحة المسار ثم زامِن البرامج. "
+                "150/155 انتقالي لميكانيكا فقط (سجل الطالب)."
             ),
         }
     ), 200
@@ -525,7 +526,12 @@ def department_program_tracks_ensure():
     """إنشاء/تحديث قوالب برامج الشعب لقسم."""
     b = _body()
     dept_code = (b.get("department_code") or "MECH").strip().upper()
-    grad = _i(b.get("min_total_units"), 155) or 155
+    from backend.core.program_tracks import graduation_units_for_department_code
+
+    grad = _i(b.get("min_total_units"))
+    if grad is None:
+        grad = graduation_units_for_department_code(dept_code)
+    grad = int(grad or 0) or graduation_units_for_department_code(dept_code)
     with get_connection() as conn:
         scope_dep = _catalog_scope_department_id(conn)
         if scope_dep is not None:
@@ -1035,7 +1041,8 @@ def course_master_implementation_meta():
                 "تقرير الجرد الانتقالي (زر أدناه) لمعرفة ما يُحذف لاحقاً.",
             ],
             "phase_b_steps": [
-                "للمقررات المشتركة بين الأقسام: حالة «مشترك بين أقسام» ثم «ربط لبرنامج» من نافذة الاستخدام.",
+                "المقررات المشتركة بين الأقسام (GS / رموز متعددة / subset): أدِرها من «سجل المقررات المشتركة» — تُزامَن تلقائياً إلى هنا.",
+                "هذا القسم (course_master) للعرض والتدقيق والمحتوى القسمي والانتقالي فقط — لا إنشاء يدوي للمشترك.",
                 "لا تربط برامج جديدة بمحتوى «انتقالي».",
                 "بعد انتهاء الدفعة القديمة: حذف غير المستخدم فقط.",
             ],
@@ -1655,15 +1662,28 @@ def list_program_courses():
     with get_connection() as conn:
         if not _program_belongs_to_scope(conn, int(program_id)):
             return jsonify({"status": "error", "message": "FORBIDDEN_PROGRAM_SCOPE"}), 403
+        try:
+            from backend.core.college_shared_catalog import ensure_college_shared_catalog_schema
+
+            ensure_college_shared_catalog_schema(conn)
+        except Exception:
+            pass
         cur = conn.cursor()
         rows = _rows(
             cur,
             """
             SELECT pc.*, cm.title_ar AS master_title_ar,
                    COALESCE(pc.requirement_scope, 'dept_common') AS requirement_scope,
-                   COALESCE(pc.college_general_component, '') AS college_general_component
+                   COALESCE(pc.college_general_component, '') AS college_general_component,
+                   CASE WHEN csd.id IS NOT NULL THEN 1 ELSE 0 END AS from_shared_catalog,
+                   csc.share_type AS shared_catalog_share_type,
+                   csc.canonical_course_name AS shared_catalog_name
             FROM program_courses pc
             INNER JOIN course_master cm ON cm.id = pc.course_master_id
+            LEFT JOIN college_shared_catalog_depts csd
+              ON csd.program_course_id = pc.id AND COALESCE(csd.is_active, 1) = 1
+            LEFT JOIN college_shared_catalog csc
+              ON csc.id = csd.catalog_id AND COALESCE(csc.is_active, 1) = 1
             WHERE pc.program_id = ?
             ORDER BY pc.level_no, pc.course_code
             """,

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>تقارير جودة المقررات — الكلية</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">تقارير جودة المقررات — كل الأقسام</h1>
+        <p class="page-subtitle" id="pageSub">اطلاع الوكيل والعميد على نسب الإنجاز والفجوات والمراجع</p>
+      </div>
+      <a href="/academic_quality/surveys" class="btn btn-outline-secondary btn-sm">مركز الاستبيانات</a>
+    </div>
+
+    <div class="row g-2 mb-3" id="sumCards">
+      <div class="col-md-3 col-6"><div class="card"><div class="card-body py-2 text-center"><div class="fs-4 fw-bold" id="sumGroups">—</div><div class="small">مجموعات تدريس</div></div></div></div>
+      <div class="col-md-3 col-6"><div class="card"><div class="card-body py-2 text-center"><div class="fs-4 fw-bold" id="sumDepts">—</div><div class="small">أقسام</div></div></div></div>
+      <div class="col-md-3 col-6"><div class="card border-warning"><div class="card-body py-2 text-center"><div class="fs-4 fw-bold" id="sumLow">—</div><div class="small">نسبة منخفضة</div></div></div></div>
+      <div class="col-md-3 col-6"><div class="card border-danger"><div class="card-body py-2 text-center"><div class="fs-4 fw-bold" id="sumBooks">—</div><div class="small">نقص كتب (&lt;2)</div></div></div></div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header fw-semibold">ملخص حسب القسم</div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>القسم</th><th>مجموعات</th><th>متوسط النسبة</th><th>منخفضة</th><th>نقص كتب</th><th>تقارير جزئي</th><th>تقارير نهائي</th></tr></thead>
+          <tbody id="deptBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header fw-semibold">تفاصيل المقررات</div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>القسم</th><th>المقرر</th><th>الأستاذ</th><th>نسبة</th><th>فجوات</th><th>كتب</th><th>جزئي</th><th>نهائي</th><th></th></tr></thead>
+          <tbody id="rowsBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+  <script>
+    function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+    (async function () {
+      const r = await fetch('/course_delivery/college/reports_overview', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        document.getElementById('pageSub').textContent = j.message || 'تعذر التحميل';
+        return;
+      }
+      document.getElementById('pageSub').textContent = 'الفصل: ' + (j.semester || '');
+      const s = j.summary || {};
+      document.getElementById('sumGroups').textContent = s.groups_total ?? 0;
+      document.getElementById('sumDepts').textContent = s.departments ?? 0;
+      document.getElementById('sumLow').textContent = s.low_completion ?? 0;
+      document.getElementById('sumBooks').textContent = s.missing_books ?? 0;
+      document.getElementById('deptBody').innerHTML = (j.by_department || []).map(d =>
+        '<tr><td>' + esc(d.department_id != null ? ('#' + d.department_id) : '—') + '</td>' +
+        '<td>' + (d.groups || 0) + '</td>' +
+        '<td>' + (d.avg_overall_pct != null ? d.avg_overall_pct + '%' : '—') + '</td>' +
+        '<td>' + (d.low_completion || 0) + '</td>' +
+        '<td>' + (d.missing_books || 0) + '</td>' +
+        '<td>' + (d.partial_submitted || 0) + '</td>' +
+        '<td>' + (d.final_submitted || 0) + '</td></tr>'
+      ).join('') || '<tr><td colspan="7" class="text-muted small">لا بيانات</td></tr>';
+      document.getElementById('rowsBody').innerHTML = (j.rows || []).map(row =>
+        '<tr><td>' + esc(row.department_id != null ? row.department_id : '—') + '</td>' +
+        '<td>' + esc(row.course_name) + '</td>' +
+        '<td>' + esc(row.instructor_name) + '</td>' +
+        '<td>' + (row.overall_pct != null ? row.overall_pct + '%' : '—') + '</td>' +
+        '<td>' + (row.incomplete_count || 0) + '</td>' +
+        '<td>' + (row.books_ok ? '✓' : ((row.book_reference_count || 0) + '/2')) + '</td>' +
+        '<td class="small">' + esc(row.partial_status) + '</td>' +
+        '<td class="small">' + esc(row.final_status) + '</td>' +
+        '<td><a class="btn btn-sm btn-outline-primary" href="' + esc(row.survey_url || '#') + '">عرض</a></td></tr>'
+      ).join('') || '<tr><td colspan="9" class="text-muted small">لا مقررات</td></tr>';
+    })();
+  </script>
+</body>
+</html>

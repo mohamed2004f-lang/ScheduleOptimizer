@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>دليل أرشفة القسم</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal mt-4">
+    {% set qa_crumb_mid_href = '/academic_quality/archive' %}
+    {% set qa_crumb_mid_label = 'أرشيف القسم' %}
+    {% set qa_crumb_title = 'دليل الأرشفة' %}
+    {% include 'partials/quality_breadcrumb.html' %}
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+      <div>
+        <h1 class="page-title h4 mb-1"><i class="fa-solid fa-book text-primary"></i> دليل أرشفة القسم</h1>
+        <p class="text-muted small mb-0">قواعد التسمية، أنواع السجلات، قوالب جاهزة، وسياسة الربط اليدوي بالاعتماد.</p>
+      </div>
+      <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/archive">العودة للأرشيف</a>
+    </div>
+
+    {% for sec in catalog.guide_sections %}
+    <div class="card mb-3 border-0 border-start border-primary border-4 shadow-sm">
+      <div class="card-body">
+        <h2 class="h6">{{ sec.title_ar }}</h2>
+        <p class="mb-0 small">{{ sec.body_ar }}</p>
+      </div>
+    </div>
+    {% endfor %}
+
+    <h2 class="h5 mt-4">السجلات الخمسة</h2>
+    <div class="table-responsive mb-4">
+      <table class="table table-sm table-bordered align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>السجل</th>
+            <th>أمثلة</th>
+            <th>مثال تسمية</th>
+            <th>قالب</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in record_types %}
+          <tr>
+            <td><strong>{{ t.title_ar }}</strong></td>
+            <td class="small">{{ t.examples_ar }}</td>
+            <td class="small font-monospace" dir="ltr">{{ catalog.naming_examples.get(t.code, '') }}</td>
+            <td>
+              <a class="btn btn-outline-primary btn-sm"
+                 href="/academic_quality/api/archive/templates/{{ t.code }}">تنزيل قالب نصي</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="alert alert-light border small">
+      <strong>الصيغة العامة للتسمية:</strong>
+      <code dir="ltr">{{ catalog.naming_pattern_ar }}</code>
+    </div>
+
+    <div class="alert alert-warning small">
+      <strong>تذكير:</strong> ربط الأرشيف بمؤشرات QAA يبقى يدوياً بعد مراجعة الاقتراح. المساعد لا يعتمد الامتثال تلقائياً.
+    </div>
+  </main>
+</body>
+</html>

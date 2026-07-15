@@ -11,7 +11,7 @@ from backend.services.accreditation_evidence_matrix import (
 
 
 def test_evidence_types_seeded(db_conn):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     ensure_evidence_binding_schema(db_conn)
     types = list_evidence_types(db_conn)
     assert len(types) >= 15
@@ -21,7 +21,7 @@ def test_evidence_types_seeded(db_conn):
 
 
 def test_evidence_matrix_qaa_manual_rule_only(db_conn):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     ensure_evidence_binding_schema(db_conn)
     cur = db_conn.cursor()
     ind = cur.execute(
@@ -59,7 +59,7 @@ def test_evidence_matrix_qaa_manual_rule_only(db_conn):
 
 
 def test_evidence_matrix_internal_catalog(db_conn):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     ensure_evidence_binding_schema(db_conn)
     cur = db_conn.cursor()
     ind = cur.execute(
@@ -94,7 +94,7 @@ def test_evidence_matrix_internal_catalog(db_conn):
 
 
 def test_save_evidence_rule(db_conn):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     ensure_evidence_binding_schema(db_conn)
     cur = db_conn.cursor()
     ind = cur.execute(
@@ -123,7 +123,7 @@ def test_save_evidence_rule(db_conn):
 
 
 def test_evidence_matrix_api(app, db_conn, auth_client):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     r = auth_client.get(
         "/academic_quality/api/accreditation/evidence/matrix?semester=api-ev-mx&catalog_version=QAA-2023.4-INST"
     )
@@ -182,7 +182,7 @@ def test_evidence_matrix_api(app, db_conn, auth_client):
 
 
 def test_catalog_editor_forbidden_for_hod(app, db_conn, client):
-    ensure_accreditation_catalog(db_conn)
+    ensure_accreditation_catalog(db_conn, seed_internal=True)
     ensure_evidence_binding_schema(db_conn)
     from backend.core.auth import hash_password
 

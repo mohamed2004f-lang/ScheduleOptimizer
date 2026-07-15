@@ -4,8 +4,40 @@
   <meta charset="utf-8">
   <title>{{ title }}</title>
   {% include "survey_export_pdf_styles.html" %}
+  <style>
+    {% if for_pdf %}
+    {{ pdf_arabic_css_print|safe }}
+    {% else %}
+    {{ pdf_arabic_css|safe }}
+    {% endif %}
+    .analysis-box { background: #f0f6fc; border-right: 4px solid #0d6efd; padding: 10px 12px; margin: 12px 0 16px; }
+    .analysis-panel { border: 1px solid #c8d6e5; background: #f8fafc; padding: 10px 12px; margin: 10px 0 14px; }
+    .narrative-block { margin: 0 0 8px 0; line-height: 1.55; }
+    ol.conclusions { padding-right: 22px; }
+    table.tbl-rec td:nth-child(1) { width: 52%; }
+    .chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 16px 0 24px; }
+    .chart-box { border: 1px solid #dee2e6; border-radius: 8px; padding: 12px; height: 300px; position: relative; }
+    .chart-box canvas { width: 100% !important; height: calc(100% - 28px) !important; }
+    .chart-static-item { margin-bottom: 16px; page-break-inside: avoid; }
+    {% if for_pdf %}
+    .open-text-named { display: none !important; }
+    .open-text-anon { display: block !important; }
+    .open-text-quotes { padding-right: 22px; margin: 8px 0 16px; }
+    .open-text-quotes li { margin-bottom: 10px; }
+    .open-text-quotes blockquote {
+      margin: 0; padding: 6px 10px; border-right: 3px solid #0d6efd; line-height: 1.5;
+    }
+    {% else %}
+    body { max-width: 1100px; margin: 0 auto; padding: 20px 24px 40px; }
+    {% endif %}
+  </style>
 </head>
-<body>
+<body class="preview-names-off">
+  {% if not for_pdf %}
+  {% set preview_banner_title = 'معاينة التقرير الموحّد' %}
+  {% include "survey_export_preview_controls.html" %}
+  {% endif %}
+
   <h1>{{ title }}</h1>
   <p class="meta">
     {% if is_external_report %}
@@ -15,16 +47,19 @@
     الفصل الدراسي: <strong>{{ semester }}</strong> —
     النطاق: <strong>{{ department_label }}</strong> —
     {% endif %}
-    تاريخ التصدير: <strong>{{ generated_at }}</strong>
+    تاريخ التصدير: <strong>{{ export_date or generated_at }}</strong>
   </p>
 
-  {% if narrative_paragraphs %}
+  {% if narrative_paragraphs and not analysis %}
   <div class="narrative">
     {% for p in narrative_paragraphs %}
     <p>{{ p }}</p>
     {% endfor %}
   </div>
   {% endif %}
+
+  {% include "survey_export_analysis_section.html" %}
+  {% include "survey_export_charts_section.html" %}
 
   <h2>ملخص تنفيذي</h2>
   <table>
@@ -119,7 +154,15 @@
   <div class="page-break"></div>
   <h2>تفاصيل الاستبيانات</h2>
   {% for report in reports %}
+    {% if report.scope_note_ar %}
+    <div class="analysis-box mb-3">
+      <p class="mb-0"><strong>{{ report.title_ar }}:</strong> {{ report.scope_note_ar }}</p>
+    </div>
+    {% endif %}
+    {% set suppress_item_detail = report.has_segment_detail %}
     {% include "survey_export_report_section.html" %}
+    {% include "survey_export_segment_comparison.html" %}
+    {% include "survey_export_external_segment_sections.html" %}
   {% endfor %}
 
   {% if course_eval %}
@@ -167,9 +210,10 @@
     </tbody>
   </table>
 
-  <p class="footer-note">أُنشئ من نظام ScheduleOptimizer — ضمان الجودة والاعتماد. لا تُعرض إجابات فردية في هذا التقرير.</p>
-  {% if not for_pdf %}
-  <button class="btn btn-primary no-print" onclick="window.print()" style="margin-top:12px;padding:8px 16px;">طباعة</button>
-  {% endif %}
+  <p class="footer-note">
+    أُنشئ من نظام ScheduleOptimizer — ضمان الجودة والاعتماد.
+    <span class="open-text-named">وضع المراجعة الداخلية قد يعرض أسماء المستجيبين في النصوص الحرة.</span>
+    <span class="open-text-anon">هذا العرض يخفي الأسماء في النصوص الحرة (مناسب لشواهد الاعتماد).</span>
+  </p>
 </body>
 </html>

@@ -1,0 +1,144 @@
+{# رسوم بيانية — Chart.js للويب / PNG للـ PDF #}
+{# chart_id_prefix: اختياري لتمييز عدة رسوم في نفس الصفحة (شرائح الأقسام) #}
+{% set _cid = (chart_id_prefix|default('main'))|replace(':', '_')|replace(' ', '_') %}
+{% if chart_data and chart_data.has_data %}
+<section class="charts-section" data-chart-prefix="{{ _cid }}">
+  <h2>الرسوم البيانية</h2>
+  {% if for_pdf and chart_images %}
+  <div class="chart-static-grid">
+    {% if chart_images.distribution %}
+    <div class="chart-static-item">
+      <img src="data:image/png;base64,{{ chart_images.distribution }}" alt="توزيع التصنيف" style="max-width:100%;height:auto;">
+    </div>
+    {% endif %}
+    {% if chart_images.items_bar %}
+    <div class="chart-static-item">
+      <img src="data:image/png;base64,{{ chart_images.items_bar }}" alt="نسب البنود" style="max-width:100%;height:auto;">
+    </div>
+    {% endif %}
+    {% if chart_images.surveys_bar %}
+    <div class="chart-static-item">
+      <img src="data:image/png;base64,{{ chart_images.surveys_bar }}" alt="نتائج الاستبيانات" style="max-width:100%;height:auto;">
+    </div>
+    {% endif %}
+  </div>
+  {% elif not for_pdf %}
+  <div class="chart-grid">
+    {% if chart_data.distribution and chart_data.distribution.values %}
+    <div class="chart-box">
+      <h3>توزيع التصنيف</h3>
+      <canvas id="chartDistribution_{{ _cid }}" height="220"></canvas>
+    </div>
+    {% endif %}
+    {% if chart_data.items and chart_data.items.values %}
+    <div class="chart-box">
+      <h3>نسب البنود</h3>
+      <canvas id="chartItems_{{ _cid }}" height="280"></canvas>
+    </div>
+    {% endif %}
+    {% if chart_data.surveys and chart_data.surveys.values %}
+    <div class="chart-box">
+      <h3>نتائج الاستبيانات</h3>
+      <canvas id="chartSurveys_{{ _cid }}" height="260"></canvas>
+    </div>
+    {% endif %}
+    {% if chart_data.roles and chart_data.roles.values %}
+    <div class="chart-box">
+      <h3>متوسط حسب فئة المستجيب</h3>
+      <canvas id="chartRoles_{{ _cid }}" height="220"></canvas>
+    </div>
+    {% endif %}
+  </div>
+  {% if not chartjs_loaded %}
+  <script src="/static/vendor/chartjs/chart.umd.min.js"></script>
+  {% set chartjs_loaded = true %}
+  {% endif %}
+  <script>
+  (function () {
+    function paint() {
+      if (typeof Chart === 'undefined') {
+        console.error('Chart.js غير محمّل');
+        return;
+      }
+      var chartData = {{ chart_data|tojson }};
+      var prefix = {{ _cid|tojson }};
+      if (!chartData || !chartData.has_data) return;
+      var commonOpts = {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', rtl: true } }
+      };
+      function byId(suffix) {
+        return document.getElementById(suffix + '_' + prefix);
+      }
+      if (chartData.distribution && chartData.distribution.values && chartData.distribution.values.length) {
+        var el = byId('chartDistribution');
+        if (el) new Chart(el, {
+          type: 'doughnut',
+          data: {
+            labels: chartData.distribution.labels,
+            datasets: [{ data: chartData.distribution.values, backgroundColor: chartData.distribution.colors || [] }]
+          },
+          options: commonOpts
+        });
+      }
+      if (chartData.items && chartData.items.values && chartData.items.values.length) {
+        var el2 = byId('chartItems');
+        if (el2) new Chart(el2, {
+          type: 'bar',
+          data: {
+            labels: chartData.items.labels,
+            datasets: [{ label: 'النسبة %', data: chartData.items.values, backgroundColor: '#0d6efd' }]
+          },
+          options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: { x: { min: 0, max: 100 } },
+            plugins: { legend: { display: false } }
+          }
+        });
+      }
+      if (chartData.surveys && chartData.surveys.values && chartData.surveys.values.length) {
+        var el3 = byId('chartSurveys');
+        if (el3) new Chart(el3, {
+          type: 'bar',
+          data: {
+            labels: chartData.surveys.labels,
+            datasets: [{ label: 'النسبة %', data: chartData.surveys.values, backgroundColor: '#198754' }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: { y: { min: 0, max: 100 } },
+            plugins: { legend: { display: false } }
+          }
+        });
+      }
+      if (chartData.roles && chartData.roles.values && chartData.roles.values.length) {
+        var el4 = byId('chartRoles');
+        if (el4) new Chart(el4, {
+          type: 'bar',
+          data: {
+            labels: chartData.roles.labels,
+            datasets: [{ label: 'متوسط %', data: chartData.roles.values, backgroundColor: '#6f42c1' }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: { y: { min: 0, max: 100 } },
+            plugins: { legend: { display: false } }
+          }
+        });
+      }
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', paint);
+    } else {
+      paint();
+    }
+  })();
+  </script>
+  {% endif %}
+</section>
+{% endif %}

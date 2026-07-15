@@ -11,7 +11,7 @@ LIFECYCLE_TRANSITIONAL = "transitional"
 LIFECYCLE_SHARED = "shared"
 
 LIFECYCLE_LABELS_AR = {
-    LIFECYCLE_STANDARD: "معياري (155)",
+    LIFECYCLE_STANDARD: "معياري (خطة القسم)",
     LIFECYCLE_TRANSITIONAL: "انتقالي (قديم)",
     LIFECYCLE_SHARED: "مشترك بين أقسام",
 }

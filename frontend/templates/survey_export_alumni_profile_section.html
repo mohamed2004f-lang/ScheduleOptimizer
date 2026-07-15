@@ -1,0 +1,144 @@
+{# أولاً — الواقع المهني + خامساً — التوصيات ومستقبل البرنامج #}
+{% set pb = profile_breakdown if profile_breakdown is defined else {} %}
+{% set ot = profile_open_texts if profile_open_texts is defined else {} %}
+
+{% macro open_text_block(title, rows) %}
+  {% if rows %}
+  <h4>{{ title }}</h4>
+  {# تنسيق 1: مع الأسماء — جدول مراجعة داخلية #}
+  <div class="open-text-named">
+    <table class="open-text-table">
+      <thead><tr><th style="width:28%">الاسم</th><th>النص</th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td class="col-name">{{ r['الاسم'] if r['الاسم'] and r['الاسم'] != '—' else 'بدون اسم' }}</td>
+          <td>{{ r.get('النص_المعروض') or r['النص'] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {# تنسيق 2: بدون أسماء — قائمة مرقّمة لشواهد الاعتماد #}
+  <div class="open-text-anon">
+    <ol class="open-text-quotes">
+      {% for r in rows %}
+      <li>
+        <blockquote>{{ r.get('النص_المعروض') or r['النص'] }}</blockquote>
+      </li>
+      {% endfor %}
+    </ol>
+  </div>
+  {% endif %}
+{% endmacro %}
+
+{% if pb or ot %}
+<section class="alumni-profile-sections">
+  <h3>أولاً — معلومات الخريج والواقع المهني</h3>
+  {% if pb.get('by_graduation_year') %}
+  <h4>توزيع سنة التخرج</h4>
+  <table>
+    <thead><tr><th>سنة التخرج</th><th>عدد الردود</th></tr></thead>
+    <tbody>
+      {% for r in pb.by_graduation_year %}
+      <tr><td>{{ r['سنة_التخرج'] }}</td><td>{{ r['عدد_الردود'] }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if pb.get('by_track') %}
+  <h4>المسار / الشعبة</h4>
+  <table>
+    <thead><tr><th>المسار</th><th>عدد الردود</th></tr></thead>
+    <tbody>
+      {% for r in pb.by_track %}
+      <tr><td>{{ r['الشعبة_أو_المسار'] }}</td><td>{{ r['عدد_الردود'] }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if pb.get('by_employment_status') %}
+  <h4>الحالة المهنية</h4>
+  <table>
+    <thead><tr><th>الحالة</th><th>عدد الردود</th></tr></thead>
+    <tbody>
+      {% for r in pb.by_employment_status %}
+      <tr><td>{{ r['الحالة_المهنية'] }}</td><td>{{ r['عدد_الردود'] }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if pb.get('by_engineering_qualification') %}
+  <h4>هل تتطلب الوظيفة مؤهلاً هندسياً؟</h4>
+  <table>
+    <thead><tr><th>الإجابة</th><th>عدد الردود</th></tr></thead>
+    <tbody>
+      {% for r in pb.by_engineering_qualification %}
+      <tr><td>{{ r['مؤهل_هندسي_مطلوب'] }}</td><td>{{ r['عدد_الردود'] }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if pb.get('by_job_rejection') %}
+  <h4>هل واجه رفضاً عند التقديم على وظائف؟</h4>
+  <table>
+    <thead><tr><th>الإجابة</th><th>عدد الردود</th></tr></thead>
+    <tbody>
+      {% for r in pb.by_job_rejection %}
+      <tr><td>{{ r['واجه_رفضاً_وظيفياً'] }}</td><td>{{ r['عدد_الردود'] }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {{ open_text_block('أسباب الرفض الوظيفي (نصوص حرة)', ot.get('job_rejection_reasons')) }}
+
+  <h3>خامساً — التوصيات ومستقبل البرنامج</h3>
+  {% if pb.get('by_recommend_enrollment') %}
+  <h4>هل تنصح بالالتحاق بهذا التخصص؟</h4>
+  <table>
+    <thead><tr><th>الإجابة</th><th>عدد الردود</th></tr></thead>
+    <tbody>
+      {% for r in pb.by_recommend_enrollment %}
+      <tr><td>{{ r['ينصح_بالالتحاق'] }}</td><td>{{ r['عدد_الردود'] }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {{ open_text_block('أسباب النصح / عدم النصح', ot.get('recommend_reasons')) }}
+
+  {% if pb.get('by_program_freeze_support') %}
+  <h4>هل تؤيد تجميد البرنامج؟</h4>
+  <table>
+    <thead><tr><th>الإجابة</th><th>عدد الردود</th></tr></thead>
+    <tbody>
+      {% for r in pb.by_program_freeze_support %}
+      <tr><td>{{ r['يؤيد_التجميد'] }}</td><td>{{ r['عدد_الردود'] }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if pb.get('by_program_development_choice') %}
+  <h4>مقترح تطوير البرنامج (عند تأييد التجميد)</h4>
+  <table>
+    <thead><tr><th>المقترح</th><th>عدد الردود</th></tr></thead>
+    <tbody>
+      {% for r in pb.by_program_development_choice %}
+      <tr><td>{{ r['مقترح_تطوير_البرنامج'] }}</td><td>{{ r['عدد_الردود'] }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {{ open_text_block('أبرز صعوبة عند بدء العمل', ot.get('adaptation_difficulties')) }}
+  {{ open_text_block('مهارة تقنية/برمجية تمنّى التركيز عليها أكثر', ot.get('missing_skills')) }}
+  {{ open_text_block('تقنيات/أدوات يتطلبها العمل ولم يغطّها البرنامج', ot.get('missing_technologies')) }}
+  {{ open_text_block('توصيات مفتوحة لتوظيف الخريجين', ot.get('open_comments')) }}
+</section>
+{% endif %}

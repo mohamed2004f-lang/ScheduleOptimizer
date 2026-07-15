@@ -11,18 +11,24 @@ from flask import jsonify, render_template, request, send_file, session
 
 from backend.core.accreditation_catalog import (
     ACCREDITATION_MAP_SCOPES,
-    CATALOG_VERSION,
     CATALOG_VERSION_LABELS,
     COMPLIANCE_STATUS_LABELS,
     DOMAIN_LABELS,
     QAA_AXIS_OPTIONS,
+    QAA_INST_CATALOG_VERSION,
     SOURCE_TYPE_LABELS,
     catalog_scope_label,
     ensure_accreditation_catalog,
-    list_active_catalog_versions,
+    list_operational_catalog_versions,
     map_scope_meta,
     resolve_catalog_version,
     resolve_map_catalog_scope,
+)
+from backend.core.accreditation_program_scope import (
+    ensure_accreditation_program_columns,
+    has_accreditation_program_id_column,
+    list_accreditation_programs,
+    resolve_accreditation_org_scope,
 )
 from backend.core.accreditation_evidence_types import (
     EVIDENCE_CATEGORY_LABELS,
@@ -57,18 +63,34 @@ def _rows(cur, sql: str, params=()) -> list[dict[str, Any]]:
 
 
 def _assessment_map(
-    cur, semester: str, department_id: int | None
+    cur,
+    semester: str,
+    department_id: int | None,
+    *,
+    program_id: int | None = None,
+    use_program_id: bool = False,
 ) -> dict[int, dict[str, Any]]:
-    dept_clause = "department_id IS NULL" if department_id is None else "department_id = ?"
     params: list[Any] = [semester]
-    if department_id is not None:
+    if use_program_id and program_id is not None:
+        clause = "program_id = ?"
+        params.append(int(program_id))
+    elif use_program_id and program_id is None and department_id is None:
+        clause = "program_id IS NULL AND department_id IS NULL"
+    elif department_id is None:
+        clause = "department_id IS NULL"
+    else:
+        clause = "department_id = ?"
         params.append(int(department_id))
+        if use_program_id and program_id is not None:
+            # صفوف قديمة بلا program_id أو المطابقة الجديدة
+            clause = "(department_id = ? AND (program_id IS NULL OR program_id = ?))"
+            params = [semester, int(department_id), int(program_id)]
     rows = _rows(
         cur,
         f"""
         SELECT id, indicator_id, score_percent, compliance_status, notes, updated_at, updated_by
         FROM accreditation_assessments
-        WHERE semester = ? AND {dept_clause}
+        WHERE semester = ? AND {clause}
         """,
         tuple(params),
     )
@@ -104,16 +126,26 @@ def build_compliance_map(
     *,
     semester: str | None = None,
     department_id: int | None = None,
+    program_id: int | None = None,
     ensure_seed: bool = True,
     catalog_version: str | None = None,
+    org_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     _ensure_accreditation_tables(conn)
+    ensure_accreditation_program_columns(conn)
     if ensure_seed:
         ensure_accreditation_catalog(conn)
     cur = conn.cursor()
     cat_ver = resolve_catalog_version(conn, catalog_version)
     sem = (semester or term_label_from_conn(conn)).strip()
-    assessments = _assessment_map(cur, sem, department_id)
+    use_pid = has_accreditation_program_id_column(conn)
+    assessments = _assessment_map(
+        cur,
+        sem,
+        department_id,
+        program_id=program_id,
+        use_program_id=use_pid and program_id is not None,
+    )
     from backend.services.accreditation_evidence import evidence_counts_by_indicator
 
     ev_counts = evidence_counts_by_indicator(conn, sem, department_id)
@@ -255,12 +287,25 @@ def build_compliance_map(
         else 0.0
     )
 
+    org = org_scope or {}
+    scope_label = catalog_scope_label(
+        cat_ver,
+        department_id,
+        program_name_ar=org.get("program_name_ar") or org.get("department_name_ar"),
+        org_label_ar=org.get("label_ar"),
+    )
+
     return {
         "status": "ok",
         "catalog_version": cat_ver,
         "semester": sem,
         "department_id": department_id,
-        "scope_label_ar": catalog_scope_label(cat_ver, department_id),
+        "program_id": program_id if program_id is not None else org.get("program_id"),
+        "program_code": org.get("program_code"),
+        "program_name_ar": org.get("program_name_ar"),
+        "org_level": org.get("org_level"),
+        "map_scope_key": org.get("map_scope_key"),
+        "scope_label_ar": scope_label,
         "catalog_version_label_ar": CATALOG_VERSION_LABELS.get(cat_ver, cat_ver),
         "domains": domains_out,
         "summary": {**summary, "documented_progress_percent": progress_pct},
@@ -271,6 +316,62 @@ def _dept_scope(conn):
     from backend.services.academic_quality import _resolve_department_scope
 
     return _resolve_department_scope(conn)
+
+
+def _request_int_arg(name: str) -> int | None:
+    raw = (request.args.get(name) or "").strip()
+    if not raw or raw.lower() in ("null", "none", "all"):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_map_org_scope(
+    conn,
+    *,
+    scope_key: str,
+    payload: dict | None = None,
+) -> dict[str, Any]:
+    """مؤسسي = كلية؛ برامجي = برنامج الأساس للقسم (مع دعم اختيار صريح)."""
+    ensure_accreditation_program_columns(conn)
+    scoped_dept = _dept_scope(conn)
+    payload = payload or {}
+    req_dept = payload.get("department_id")
+    req_prog = payload.get("program_id")
+    if req_dept is None:
+        req_dept = _request_int_arg("department_id")
+    if req_prog is None:
+        req_prog = _request_int_arg("program_id")
+    if isinstance(req_dept, str) and req_dept.strip().isdigit():
+        req_dept = int(req_dept)
+    if isinstance(req_prog, str) and req_prog.strip().isdigit():
+        req_prog = int(req_prog)
+
+    if scoped_dept is not None:
+        # رئيس قسم: لا يتجاوز قسمه
+        dept_id = int(scoped_dept)
+        prog_id = int(req_prog) if req_prog is not None else None
+        if prog_id is not None:
+            org = resolve_accreditation_org_scope(
+                conn, map_scope_key=scope_key, department_id=dept_id, program_id=prog_id
+            )
+            if org.get("department_id") != dept_id:
+                org = resolve_accreditation_org_scope(
+                    conn, map_scope_key=scope_key, department_id=dept_id
+                )
+            return org
+        return resolve_accreditation_org_scope(
+            conn, map_scope_key=scope_key, department_id=dept_id
+        )
+
+    return resolve_accreditation_org_scope(
+        conn,
+        map_scope_key=scope_key,
+        department_id=int(req_dept) if req_dept is not None else None,
+        program_id=int(req_prog) if req_prog is not None else None,
+    )
 
 
 def _resolve_binding_department(conn, payload: dict) -> int | None:
@@ -311,11 +412,11 @@ def register_institutional_accreditation_routes(bp) -> None:
         checklist: list = []
         manual_bundle: dict = {"sections": MANUAL_SECTIONS, "values": {}}
         improvement_plans: list = []
-        catalog_versions: list[str] = [CATALOG_VERSION]
+        catalog_versions: list[str] = [QAA_INST_CATALOG_VERSION]
         data: dict = {
             "status": "error",
             "message": "تعذر تحميل الخريطة",
-            "catalog_version": CATALOG_VERSION,
+            "catalog_version": QAA_INST_CATALOG_VERSION,
             "semester": semester or "",
             "scope_label_ar": "",
             "domains": [],
@@ -332,29 +433,37 @@ def register_institutional_accreditation_routes(bp) -> None:
 
         active_scope_key = "inst"
         page_title_ar = "خريطة امتثال — اعتماد مؤسسي"
+        programs_available: list = []
+        org_scope: dict = {}
         try:
             with get_connection() as conn:
-                dept_id = _dept_scope(conn)
                 if not semester:
                     semester = term_label_from_conn(conn)
-                catalog_versions = list_active_catalog_versions(conn)
+                catalog_versions = list_operational_catalog_versions(conn)
                 resolved_catalog, active_scope_key = resolve_map_catalog_scope(
                     conn,
                     scope=scope_param,
                     catalog_version=catalog_param,
                 )
+                org_scope = _resolve_map_org_scope(conn, scope_key=active_scope_key)
                 data = build_compliance_map(
                     conn,
                     semester=semester,
-                    department_id=dept_id,
+                    department_id=org_scope.get("department_id"),
+                    program_id=org_scope.get("program_id"),
                     catalog_version=resolved_catalog,
+                    org_scope=org_scope,
                 )
                 page_title_ar = map_scope_meta(active_scope_key).get(
                     "page_title_ar", page_title_ar
                 )
-                checklist = build_checklist_status(conn, semester, dept_id)
-                manual_bundle = get_manual_inputs(conn, semester, dept_id)
-                improvement_plans = list_improvement_plans(conn, semester, dept_id)
+                dept_for_aux = org_scope.get("department_id")
+                checklist = build_checklist_status(conn, semester, dept_for_aux)
+                manual_bundle = get_manual_inputs(conn, semester, dept_for_aux)
+                improvement_plans = list_improvement_plans(conn, semester, dept_for_aux)
+                programs_available = [
+                    p for p in list_accreditation_programs(conn) if p.get("scope_ready")
+                ]
         except Exception:
             import logging
 
@@ -389,6 +498,8 @@ def register_institutional_accreditation_routes(bp) -> None:
             map_scopes=ACCREDITATION_MAP_SCOPES,
             active_scope_key=active_scope_key,
             page_title_ar=page_title_ar,
+            programs_available=programs_available,
+            org_scope=org_scope,
             page_error=None if data.get("status") == "ok" else (data.get("message") or "خطأ في التحميل"),
         )
 
@@ -400,26 +511,32 @@ def register_institutional_accreditation_routes(bp) -> None:
         catalog_param = (request.args.get("catalog_version") or "").strip() or None
         ensure = (request.args.get("ensure") or "1").strip() != "0"
         with get_connection() as conn:
-            dept_id = _dept_scope(conn)
-            resolved_catalog, _scope_key = resolve_map_catalog_scope(
+            resolved_catalog, scope_key = resolve_map_catalog_scope(
                 conn,
                 scope=scope_param,
                 catalog_version=catalog_param,
             )
+            org_scope = _resolve_map_org_scope(conn, scope_key=scope_key)
             data = build_compliance_map(
                 conn,
                 semester=semester,
-                department_id=dept_id,
+                department_id=org_scope.get("department_id"),
+                program_id=org_scope.get("program_id"),
                 ensure_seed=ensure,
                 catalog_version=resolved_catalog,
+                org_scope=org_scope,
             )
+            data["programs_available"] = [
+                p for p in list_accreditation_programs(conn) if p.get("scope_ready")
+            ]
+            data["org_scope"] = org_scope
         return jsonify(data), 200
 
     @bp.route("/api/accreditation/catalog_versions", methods=["GET"])
     @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def accreditation_catalog_versions():
         with get_connection() as conn:
-            versions = list_active_catalog_versions(conn)
+            versions = list_operational_catalog_versions(conn)
             active = resolve_catalog_version(conn)
         return jsonify(
             {
@@ -469,7 +586,20 @@ def register_institutional_accreditation_routes(bp) -> None:
             codes = None
         actor = (session.get("user") or "").strip()
         with get_connection() as conn:
-            dept_id = _dept_scope(conn)
+            scope_param = (data.get("scope") or "").strip() or None
+            catalog_param = (data.get("catalog_version") or "").strip() or None
+            _cat, scope_key = resolve_map_catalog_scope(
+                conn, scope=scope_param, catalog_version=catalog_param
+            )
+            org_scope = _resolve_map_org_scope(
+                conn,
+                scope_key=scope_key,
+                payload={
+                    "department_id": data.get("department_id"),
+                    "program_id": data.get("program_id"),
+                },
+            )
+            dept_id = org_scope.get("department_id")
             sem = (data.get("semester") or "").strip() or term_label_from_conn(conn)
             result = apply_auto_assessments(
                 conn,
@@ -478,7 +608,9 @@ def register_institutional_accreditation_routes(bp) -> None:
                 actor=actor or "system:auto",
                 only_not_started=bool(only_ns),
                 indicator_codes=codes,
+                catalog_version=_cat,
             )
+            result["org_scope"] = org_scope
         return jsonify(result), 200
 
     @bp.route("/api/accreditation/compute_auto/preview", methods=["GET"])
@@ -528,44 +660,107 @@ def register_institutional_accreditation_routes(bp) -> None:
         now = datetime.datetime.utcnow().isoformat()
 
         with get_connection() as conn:
-            dept_id = _dept_scope(conn)
+            ensure_accreditation_program_columns(conn)
+            scope_param = (data.get("scope") or "").strip() or None
+            catalog_param = (data.get("catalog_version") or "").strip() or None
+            _cat, scope_key = resolve_map_catalog_scope(
+                conn, scope=scope_param, catalog_version=catalog_param
+            )
+            org_scope = _resolve_map_org_scope(
+                conn,
+                scope_key=scope_key,
+                payload={
+                    "department_id": data.get("department_id"),
+                    "program_id": data.get("program_id"),
+                },
+            )
+            dept_id = org_scope.get("department_id")
+            prog_id = org_scope.get("program_id")
+            use_pid = has_accreditation_program_id_column(conn)
             sem = (data.get("semester") or "").strip() or term_label_from_conn(conn)
             cur = conn.cursor()
             if dept_id is None:
-                cur.execute(
-                    """
-                    DELETE FROM accreditation_assessments
-                    WHERE semester = ? AND indicator_id = ? AND department_id IS NULL
-                    """,
-                    (sem, int(indicator_id)),
-                )
-                cur.execute(
-                    """
-                    INSERT INTO accreditation_assessments
-                    (semester, department_id, indicator_id, score_percent, compliance_status,
-                     notes, updated_at, updated_by)
-                    VALUES (?, NULL, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (sem, int(indicator_id), score, status, notes, now, actor),
-                )
+                if use_pid:
+                    cur.execute(
+                        """
+                        DELETE FROM accreditation_assessments
+                        WHERE semester = ? AND indicator_id = ?
+                          AND department_id IS NULL AND program_id IS NULL
+                        """,
+                        (sem, int(indicator_id)),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO accreditation_assessments
+                        (semester, department_id, program_id, indicator_id, score_percent,
+                         compliance_status, notes, updated_at, updated_by)
+                        VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (sem, int(indicator_id), score, status, notes, now, actor),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        DELETE FROM accreditation_assessments
+                        WHERE semester = ? AND indicator_id = ? AND department_id IS NULL
+                        """,
+                        (sem, int(indicator_id)),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO accreditation_assessments
+                        (semester, department_id, indicator_id, score_percent, compliance_status,
+                         notes, updated_at, updated_by)
+                        VALUES (?, NULL, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (sem, int(indicator_id), score, status, notes, now, actor),
+                    )
             else:
-                cur.execute(
-                    """
-                    INSERT INTO accreditation_assessments
-                    (semester, department_id, indicator_id, score_percent, compliance_status,
-                     notes, updated_at, updated_by)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (semester, department_id, indicator_id) DO UPDATE SET
-                        score_percent = excluded.score_percent,
-                        compliance_status = excluded.compliance_status,
-                        notes = excluded.notes,
-                        updated_at = excluded.updated_at,
-                        updated_by = excluded.updated_by
-                    """,
-                    (sem, int(dept_id), int(indicator_id), score, status, notes, now, actor),
-                )
+                if use_pid:
+                    cur.execute(
+                        """
+                        INSERT INTO accreditation_assessments
+                        (semester, department_id, program_id, indicator_id, score_percent,
+                         compliance_status, notes, updated_at, updated_by)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (semester, department_id, indicator_id) DO UPDATE SET
+                            program_id = excluded.program_id,
+                            score_percent = excluded.score_percent,
+                            compliance_status = excluded.compliance_status,
+                            notes = excluded.notes,
+                            updated_at = excluded.updated_at,
+                            updated_by = excluded.updated_by
+                        """,
+                        (
+                            sem,
+                            int(dept_id),
+                            int(prog_id) if prog_id is not None else None,
+                            int(indicator_id),
+                            score,
+                            status,
+                            notes,
+                            now,
+                            actor,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO accreditation_assessments
+                        (semester, department_id, indicator_id, score_percent, compliance_status,
+                         notes, updated_at, updated_by)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (semester, department_id, indicator_id) DO UPDATE SET
+                            score_percent = excluded.score_percent,
+                            compliance_status = excluded.compliance_status,
+                            notes = excluded.notes,
+                            updated_at = excluded.updated_at,
+                            updated_by = excluded.updated_by
+                        """,
+                        (sem, int(dept_id), int(indicator_id), score, status, notes, now, actor),
+                    )
             conn.commit()
-        return jsonify({"status": "ok"}), 200
+        return jsonify({"status": "ok", "org_scope": org_scope}), 200
 
     @bp.route("/api/accreditation/evidence/types", methods=["GET"])
     @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")

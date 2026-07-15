@@ -45,6 +45,88 @@
   display: none !important;
 }
 
+/* شريط التنقل — وضع موسع: شبكة سطرين (حتى 7 أيقونات في السطر) */
+.app-navbar.nav-staff-expanded .navbar-collapse,
+.app-navbar.nav-staff-expanded #mainNav {
+  width: 100% !important;
+  flex-basis: 100% !important;
+  max-width: 100% !important;
+}
+
+.app-navbar.nav-staff-expanded .navbar-collapse .navbar-nav,
+.app-navbar.nav-staff-expanded #mainNav .navbar-nav {
+  display: grid !important;
+  grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+  grid-auto-flow: row !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  gap: 2px 4px !important;
+  padding: 4px 0 8px !important;
+  margin: 0 !important;
+  flex-direction: unset !important;
+  flex-wrap: unset !important;
+}
+
+.app-navbar.nav-staff-expanded .navbar-nav > .nav-item {
+  display: flex !important;
+  justify-content: center;
+  align-items: stretch;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0 !important;
+}
+
+/* عناصر مخفية لا تستهلك خلية الشبكة */
+.app-navbar.nav-staff-expanded .navbar-nav > .nav-item[style*="display: none"],
+.app-navbar.nav-staff-expanded .navbar-nav > .nav-item[style*="display:none"],
+.app-navbar.nav-staff-expanded .navbar-nav > .nav-item.d-none {
+  display: none !important;
+}
+
+.app-navbar.nav-staff-expanded .navbar-nav > .nav-item > .nav-link {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  text-align: center !important;
+  /* ~14px: أوضح من 0.72rem دون كسر شبكة 7 أعمدة */
+  font-size: 0.875rem !important;
+  font-weight: 700 !important;
+  line-height: 1.2 !important;
+  padding: 8px 4px !important;
+  min-height: 64px;
+  width: 100% !important;
+  max-width: 100%;
+  position: relative;
+  white-space: normal !important;
+  margin: 2px 0 !important;
+}
+
+.app-navbar.nav-staff-expanded .nav-link .fa-solid,
+.app-navbar.nav-staff-expanded .nav-link .fa-regular {
+  font-size: 1.35rem;
+  margin: 0 0 5px 0 !important;
+  display: block !important;
+}
+
+.app-navbar.nav-staff-expanded .nav-link.dropdown-toggle::after {
+  margin: 2px 0 0 0 !important;
+}
+
+.app-navbar.nav-staff-expanded .nav-link .badge {
+  position: absolute;
+  top: 2px;
+  inset-inline-end: 4px;
+  font-size: 0.65rem;
+}
+
+@media (max-width: 991.98px) {
+  .app-navbar.nav-staff-expanded .navbar-collapse .navbar-nav,
+  .app-navbar.nav-staff-expanded #mainNav .navbar-nav {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+}
+
 #navStaffCompactMoreMenu {
   max-height: min(70vh, 28rem);
   overflow-y: auto;
@@ -57,10 +139,52 @@
   color: var(--bs-secondary-color, #6c757d);
 }
 
+/* قوائم طويلة (الجودة / السجل / المزيد): شريط تمرير عمودي */
+#qualityAccreditationMenuList,
+#academicRecordsMenuList,
+#navStaffCompactMoreMenu {
+  max-height: min(70vh, 32rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+#qualityAccreditationMenuList {
+  min-width: 17rem;
+}
+
 #navDensityToggleWrap .btn.active {
   font-weight: 700;
 }
 
 .app-topbar #navDensityToggleWrap:not(.d-none) {
   display: inline-flex !important;
+}
+
+/* تسميات: كاملة افتراضياً / قصيرة في الموسع — !important لمنع تجاوز Bootstrap */
+.app-navbar .nav-label-short {
+  display: none !important;
+}
+.app-navbar .nav-label-full {
+  display: inline !important;
+}
+.app-navbar.nav-staff-expanded .nav-label-full {
+  display: none !important;
+}
+.app-navbar.nav-staff-expanded .nav-label-short {
+  display: inline !important;
+}
+.app-navbar.nav-staff-compact .nav-label-short {
+  display: none !important;
+}
+.app-navbar.nav-staff-compact .nav-label-full {
+  display: inline !important;
+}
+
+/* breadcrumb جودة موحّد */
+.so-quality-breadcrumb {
+  margin-bottom: 0.5rem;
+}
+.so-quality-breadcrumb .breadcrumb {
+  margin-bottom: 0;
 }

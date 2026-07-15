@@ -9,7 +9,10 @@ from typing import Any
 
 from backend.database.database import is_postgresql
 
-CATALOG_VERSION = "2026.1"
+CATALOG_VERSION = "2026.1"  # أرشيف فقط — ليس طبقة تشغيل يومية
+INTERNAL_CATALOG_VERSION = CATALOG_VERSION
+QAA_INST_CATALOG_VERSION = "QAA-2023.4-INST"
+QAA_PROG_UG_CATALOG_VERSION = "QAA-2023.4-PROG-UG"
 
 DOMAIN_LABELS = {
     "vision_strategy": "الرؤية والرسالة والتخطيط",
@@ -26,38 +29,43 @@ DOMAIN_LABELS = {
 }
 
 CATALOG_VERSION_LABELS = {
-    CATALOG_VERSION: "كتالوج مختصر (داخلي)",
-    "QAA-2023.4-INST": "معايير المركز — اعتماد مؤسسي (إصدار 4، 2023)",
-    "QAA-2023.4-PROG-UG": "معايير المركز — اعتماد برامجي بكالوريوس (إصدار 4، 2023)",
+    CATALOG_VERSION: "كتالوج داخلي (أرشيف — متوقف)",
+    QAA_INST_CATALOG_VERSION: "معايير المركز — اعتماد مؤسسي (إصدار 4، 2023)",
+    QAA_PROG_UG_CATALOG_VERSION: "معايير المركز — اعتماد برامجي بكالوريوس (إصدار 4، 2023)",
 }
 
-# تبويبات خريطة الامتثال — مؤسسي / برامجي / داخلي
+# تبويبات التشغيل اليومية — مؤسسي + برامجي فقط (الخيار ب)
 ACCREDITATION_MAP_SCOPES: list[dict[str, str]] = [
     {
         "key": "inst",
-        "catalog_version": "QAA-2023.4-INST",
+        "catalog_version": QAA_INST_CATALOG_VERSION,
         "title_ar": "اعتماد مؤسسي",
         "page_title_ar": "خريطة امتثال — اعتماد مؤسسي",
         "nav_label_ar": "امتثال مؤسسي",
         "indicator_hint_ar": "202 مؤشر",
+        "org_level": "college",
     },
     {
         "key": "prog",
-        "catalog_version": "QAA-2023.4-PROG-UG",
+        "catalog_version": QAA_PROG_UG_CATALOG_VERSION,
         "title_ar": "اعتماد برامجي — بكالوريوس",
         "page_title_ar": "خريطة امتثال — اعتماد برامجي",
         "nav_label_ar": "امتثال برامجي",
         "indicator_hint_ar": "139 مؤشر",
-    },
-    {
-        "key": "internal",
-        "catalog_version": CATALOG_VERSION,
-        "title_ar": "كتالوج داخلي (تجريبي)",
-        "page_title_ar": "خريطة امتثال — كتالوج داخلي",
-        "nav_label_ar": "امتثال (داخلي)",
-        "indicator_hint_ar": "15 مؤشر",
+        "org_level": "program",
     },
 ]
+
+# محفوظ للقراءة الصريحة فقط (لا يظهر في التبويبات)
+INTERNAL_MAP_SCOPE: dict[str, str] = {
+    "key": "internal",
+    "catalog_version": INTERNAL_CATALOG_VERSION,
+    "title_ar": "كتالوج داخلي (أرشيف)",
+    "page_title_ar": "خريطة امتثال — كتالوج داخلي (أرشيف)",
+    "nav_label_ar": "امتثال (أرشيف)",
+    "indicator_hint_ar": "15 مؤشر",
+    "org_level": "archive",
+}
 
 
 def resolve_map_catalog_scope(
@@ -72,36 +80,58 @@ def resolve_map_catalog_scope(
         for item in ACCREDITATION_MAP_SCOPES:
             if item["catalog_version"] == explicit:
                 return explicit, item["key"]
+        if explicit == INTERNAL_MAP_SCOPE["catalog_version"]:
+            return explicit, "internal"
         return explicit, "custom"
     sk = (scope or "").strip().lower()
     for item in ACCREDITATION_MAP_SCOPES:
         if item["key"] == sk:
             return item["catalog_version"], item["key"]
-    return "QAA-2023.4-INST", "inst"
+    if sk == "internal":
+        return INTERNAL_MAP_SCOPE["catalog_version"], "internal"
+    return QAA_INST_CATALOG_VERSION, "inst"
 
 
 def map_scope_meta(scope_key: str) -> dict[str, str]:
     for item in ACCREDITATION_MAP_SCOPES:
         if item["key"] == scope_key:
             return dict(item)
+    if scope_key == "internal":
+        return dict(INTERNAL_MAP_SCOPE)
     return dict(ACCREDITATION_MAP_SCOPES[0])
 
 
-def catalog_scope_label(catalog_version: str, department_id: int | None = None) -> str:
+def catalog_scope_label(
+    catalog_version: str,
+    department_id: int | None = None,
+    *,
+    program_name_ar: str | None = None,
+    org_label_ar: str | None = None,
+) -> str:
     """وصف نطاق الكتالوج للواجهة."""
+    if org_label_ar:
+        ver_label = CATALOG_VERSION_LABELS.get(catalog_version, catalog_version)
+        return f"{ver_label} · {org_label_ar}"
     ver_label = CATALOG_VERSION_LABELS.get(catalog_version, catalog_version)
     if catalog_version.startswith("QAA-2023.4-PROG"):
-        scope = "برنامجي (برنامج أكاديمي)"
+        if program_name_ar:
+            scope = f"برنامجي ({program_name_ar})"
+        elif department_id is not None:
+            scope = f"برنامجي (قسم #{department_id})"
+        else:
+            scope = "برنامجي (برنامج أكاديمي)"
     elif catalog_version.startswith("QAA-2023.4-INST"):
-        scope = "مؤسسي (كلية)"
+        scope = "مؤسسي (كلية — جميع الأقسام)"
+    elif catalog_version == INTERNAL_CATALOG_VERSION:
+        scope = "أرشيف داخلي"
     else:
         scope = "مؤسسي (كلية)" if department_id is None else f"قسم #{department_id}"
     return f"{ver_label} · {scope}"
 
 SOURCE_TYPE_LABELS = {
-    "auto": "آلي من النظام",
+    "auto": "حساب من النظام",
     "manual": "إدخال يدوي",
-    "hybrid": "مختلط (آلي + مراجعة)",
+    "hybrid": "مختلط (حساب من النظام + مراجعة)",
     "document": "وثيقة / دليل",
     "qaa_center": "مركز ضمان الجودة الليبي",
 }
@@ -317,14 +347,14 @@ def _row_id(row: Any) -> int | None:
 
 
 def list_active_catalog_versions(conn) -> list[str]:
-    """إصدارات الكتالوج النشطة (للقائمة المنسدلة)."""
-    cur = conn.cursor()
+    """إصدارات موجودة في القاعدة (قد تشمل الأرشيف الداخلي)."""
     try:
+        cur = conn.cursor()
         rows = cur.execute(
             """
             SELECT DISTINCT catalog_version FROM accreditation_standards
             WHERE COALESCE(is_active, 1) = 1
-            ORDER BY catalog_version DESC
+            ORDER BY catalog_version
             """
         ).fetchall()
         out = []
@@ -340,15 +370,30 @@ def list_active_catalog_versions(conn) -> list[str]:
                 out.append(str(v).strip())
         return out
     except Exception:
-        return [CATALOG_VERSION]
+        return [QAA_INST_CATALOG_VERSION]
+
+
+def list_operational_catalog_versions(conn) -> list[str]:
+    """إصدارات التشغيل فقط — بدون الكتالوج الداخلي 2026.1."""
+    preferred = (QAA_INST_CATALOG_VERSION, QAA_PROG_UG_CATALOG_VERSION)
+    active = list_active_catalog_versions(conn)
+    out = [v for v in preferred if v in active]
+    for v in active:
+        if v == INTERNAL_CATALOG_VERSION:
+            continue
+        if v not in out:
+            out.append(v)
+    if not out:
+        out = list(preferred)
+    return out
 
 
 def resolve_catalog_version(conn, explicit: str | None = None) -> str:
-    """إصدار الكتالوج النشط — صريح، أو معايير المركز المؤسسية إن وُجدت، وإلا الافتراضي الداخلي."""
+    """إصدار الكتالوج النشط — صريح، أو مؤسسي QAA، ثم برامجي، دون تفضيل الأرشيف الداخلي."""
     if (explicit or "").strip():
         return explicit.strip()
     cur = conn.cursor()
-    for preferred in ("QAA-2023.4-INST", CATALOG_VERSION):
+    for preferred in (QAA_INST_CATALOG_VERSION, QAA_PROG_UG_CATALOG_VERSION):
         row = cur.execute(
             """
             SELECT 1 FROM accreditation_standards
@@ -363,20 +408,22 @@ def resolve_catalog_version(conn, explicit: str | None = None) -> str:
         """
         SELECT catalog_version FROM accreditation_standards
         WHERE COALESCE(is_active, 1) = 1
+          AND catalog_version <> ?
         ORDER BY catalog_version DESC
         LIMIT 1
-        """
+        """,
+        (INTERNAL_CATALOG_VERSION,),
     ).fetchone()
     if row:
         try:
             return str(row[0] if not hasattr(row, "keys") else row["catalog_version"])
         except (KeyError, TypeError, IndexError):
             pass
-    return CATALOG_VERSION
+    return QAA_INST_CATALOG_VERSION
 
 
-def ensure_accreditation_catalog(conn) -> dict[str, int]:
-    """إدراج المعايير والمؤشرات الافتراضية إن لم تكن موجودة."""
+def seed_internal_accreditation_catalog(conn) -> dict[str, int]:
+    """بذر أرشيفي لكتالوج 2026.1 — للاختبارات أو الاسترجاع الصريح فقط."""
     cur = conn.cursor()
     standards_upserted = 0
     indicators_upserted = 0
@@ -459,6 +506,30 @@ def ensure_accreditation_catalog(conn) -> dict[str, int]:
         indicators_upserted += 1
 
     conn.commit()
+    return {
+        "catalog_version": CATALOG_VERSION,
+        "standards": standards_upserted,
+        "indicators": indicators_upserted,
+    }
+
+
+def ensure_accreditation_catalog(
+    conn,
+    *,
+    seed_internal: bool = False,
+) -> dict[str, int]:
+    """
+    يضمن كتالوجات التشغيل (QAA مؤسسي + برامجي).
+    الخيار ب: لا يُبذر الكتالوج الداخلي افتراضياً (بياناته تبقى إن وُجدت).
+    """
+    internal_stats: dict[str, int] = {
+        "catalog_version": CATALOG_VERSION,
+        "standards": 0,
+        "indicators": 0,
+    }
+    if seed_internal:
+        internal_stats = seed_internal_accreditation_catalog(conn)
+
     qaa_stats: dict[str, int] = {}
     try:
         from backend.core.qaa_catalog_seed import ensure_qaa_catalog
@@ -470,8 +541,9 @@ def ensure_accreditation_catalog(conn) -> dict[str, int]:
         logging.getLogger(__name__).exception("ensure_qaa_catalog failed")
 
     return {
-        "catalog_version": CATALOG_VERSION,
-        "standards": standards_upserted,
-        "indicators": indicators_upserted,
+        "catalog_version": QAA_INST_CATALOG_VERSION,
+        "standards": int(internal_stats.get("standards") or 0),
+        "indicators": int(internal_stats.get("indicators") or 0),
+        "internal_seeded": bool(seed_internal),
         "qaa_catalog": qaa_stats,
     }

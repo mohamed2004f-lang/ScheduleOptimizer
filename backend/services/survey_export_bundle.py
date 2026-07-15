@@ -173,7 +173,10 @@ def build_external_survey_bundle_zip(
         meta["files"].append("package.xlsx")
 
         if include_pdf and render_template:
+            from backend.services.survey_analytics import enrich_survey_export_context
+
             ctx = prepare_external_combined_pdf_context(conn, cycle_label=cycle)
+            ctx = enrich_survey_export_context(ctx, for_pdf=True)
             html = render_template("survey_export_package.html", for_pdf=True, **ctx)
             pdf_raw, pdf_err = pdf_bytes_from_html(html)
             if pdf_raw:
@@ -193,8 +196,11 @@ def build_external_survey_bundle_zip(
             meta["files"].append(zip_path)
 
             if include_pdf and render_template:
+                from backend.services.survey_analytics import enrich_survey_export_context
+
                 ctx = prepare_external_single_pdf_context(conn, code, cycle_label=cycle)
                 if ctx:
+                    ctx = enrich_survey_export_context(ctx, for_pdf=True)
                     html = render_template("survey_export_single.html", for_pdf=True, **ctx)
                     pdf_raw, pdf_err = pdf_bytes_from_html(html)
                     pdf_path = f"reports/{_safe_zip_name(code)}.pdf"

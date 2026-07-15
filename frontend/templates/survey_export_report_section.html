@@ -22,7 +22,7 @@
   <p class="interpret">{{ report.interpretation_ar }}</p>
   {% endif %}
 
-  {% if report.aggregated and report.questions %}
+  {% if report.aggregated and report.questions and not (suppress_item_detail|default(false) or report.suppress_college_item_detail) %}
   <h3>تفصيل البنود</h3>
   <table>
     <thead>
@@ -68,7 +68,7 @@
   </table>
   {% endif %}
 
-  {% if report.recommendations %}
+  {% if report.recommendations and not (suppress_item_detail|default(false) or report.suppress_college_item_detail) %}
   <h3>توصيات آلية</h3>
   <ul class="rec-list">
     {% for rec in report.recommendations %}
