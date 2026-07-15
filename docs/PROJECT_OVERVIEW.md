@@ -66,8 +66,9 @@ ScheduleOptimizer is an academic operations platform for managing student data, 
 <!-- AUTO_LATEST_CHANGES_START -->
 ## Latest Changes (Auto)
 
-_Last generated: 2026-07-15 16:40_
+_Last generated: 2026-07-15 16:51_
 
+- `7297962` (2026-07-15): إضافة تقارير جودة المقررات (معاينة/PDF) مع توصيات آلية، وتوسيع الجودة والاعتماد والمساعد والتصديرات.
 - `c9e6917` (2026-07-09): إصلاح إرسال استبيان الخريج: تجاوز CSRF لمسار الدعوة العامة وإرسال الرمز من الصفحة.
 - `c12a765` (2026-07-03): & c:/Users/BARCODE/ScheduleOptimizer/.venv/Scripts/Activate.ps1
 - `218ffb6` (2026-07-03): & c:/Users/BARCODE/ScheduleOptimizer/.venv/Scripts/Activate.ps1
@@ -77,6 +78,5 @@ _Last generated: 2026-07-15 16:40_
 - `4dca27a` (2026-07-02): توسيع استبيان الخريج لمراجعة البرنامج الأكاديمي مع بيانات مهنية اختيارية وترقية تلقائية للبنود.
 - `ad538e0` (2026-07-02): & c:/Users/BARCODE/ScheduleOptimizer/.venv/Scripts/Activate.ps1
 - `adf6684` (2026-06-26): & c:/Users/BARCODE/ScheduleOptimizer/.venv/Scripts/Activate.ps1
-- `861070a` (2026-06-23): & c:/Users/BARCODE/ScheduleOptimizer/.venv/Scripts/Activate.ps1
 
 <!-- AUTO_LATEST_CHANGES_END -->
