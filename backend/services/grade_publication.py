@@ -71,8 +71,7 @@ def ensure_grade_publication_schema(conn) -> None:
                 pass
 
     if not table_exists(conn, "department_final_grade_batches"):
-        cur.execute(
-            """
+        batch_sql = """
             CREATE TABLE IF NOT EXISTS department_final_grade_batches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 department_id INTEGER NOT NULL,
@@ -92,10 +91,13 @@ def ensure_grade_publication_schema(conn) -> None:
                 UNIQUE (department_id, semester)
             )
             """
-        )
+        if is_postgresql():
+            batch_sql = batch_sql.replace(
+                "INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY", 1
+            )
+        cur.execute(batch_sql)
     if not table_exists(conn, "student_published_grades"):
-        cur.execute(
-            """
+        published_sql = """
             CREATE TABLE IF NOT EXISTS student_published_grades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 student_id TEXT NOT NULL,
@@ -115,7 +117,11 @@ def ensure_grade_publication_schema(conn) -> None:
                 UNIQUE (student_id, semester, course_name, visibility)
             )
             """
-        )
+        if is_postgresql():
+            published_sql = published_sql.replace(
+                "INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY", 1
+            )
+        cur.execute(published_sql)
     try:
         conn.commit()
     except Exception:
