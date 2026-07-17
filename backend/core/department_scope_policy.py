@@ -77,6 +77,18 @@ def resolve_users_list_scope(conn, actor_username: str | None) -> tuple[UsersLis
         return ("none", None)
 
     role = _normalize_role((session.get("user_role") or "").strip())
+    # جلسة بلا دور مع اسم مستخدم صريح: الرجوع لجدول users (اختبارات/سكربتات)
+    if not role:
+        un = (actor_username or "").strip()
+        if un:
+            cur = conn.cursor()
+            row = cur.execute(
+                "SELECT role FROM users WHERE lower(username) = lower(?) LIMIT 1",
+                (un,),
+            ).fetchone()
+            if row:
+                raw_role = row["role"] if hasattr(row, "keys") else row[0]
+                role = _normalize_role(str(raw_role or "").strip())
     if role in _SCOPE_SESSION_ROLES:
         if role == "staff" and session_role_profile_scope_mode() == "department":
             hid = head_home_department_id(conn, actor_username)
@@ -469,6 +481,73 @@ def derive_users_department_id_for_storage(
         return None
 
     return None
+
+
+def department_exists(conn, department_id: int) -> bool:
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT id FROM departments WHERE id = ? LIMIT 1",
+        (int(department_id),),
+    ).fetchone()
+    return bool(row)
+
+
+def resolve_hod_managed_department_id(
+    conn,
+    *,
+    role: str,
+    instructor_id: int | None,
+    explicit_department_id: int | None,
+    actor_username: str | None,
+    actor_is_privileged: bool,
+) -> tuple[int | None, str | None]:
+    """قسم الحوكمة لدور رئيس القسم (users.department_id) منفصل عن قسم الأستاذ الوظيفي.
+
+    - المسؤولون/العمادة: يمكنهم اختيار أي قسم (مثل GENERAL لاتجاه عام).
+    - رئيس قسم: يقتصر على قسمه فقط.
+    - إن لم يُمرَّر قسم صراحة: يُشتق من قسم الأستاذ (توافق خلفي).
+    """
+    role_n = _normalize_role((role or "").strip())
+    if role_n != "head_of_department":
+        return (
+            derive_users_department_id_for_storage(
+                conn, role=role, student_id=None, instructor_id=instructor_id
+            ),
+            None,
+        )
+
+    explicit: int | None = None
+    if explicit_department_id not in (None, ""):
+        try:
+            explicit = int(explicit_department_id)
+        except (TypeError, ValueError):
+            return (None, "department_id غير صالح")
+        if not department_exists(conn, explicit):
+            return (None, f"القسم غير موجود: {explicit}")
+
+    actor_home = head_home_department_id(conn, actor_username)
+
+    if not actor_is_privileged:
+        # رئيس قسم يعدّل ضمن نطاقه فقط
+        forced = actor_home
+        if forced is None:
+            forced = derive_users_department_id_for_storage(
+                conn, role=role_n, student_id=None, instructor_id=instructor_id
+            )
+        if explicit is not None and forced is not None and int(explicit) != int(forced):
+            return (None, "لا يمكن لرئيس القسم تعيين رئاسة قسم خارج نطاقه.")
+        return (forced if forced is not None else explicit, None)
+
+    if explicit is not None:
+        return (explicit, None)
+
+    # توافق خلفي: بدون اختيار صريح ← قسم الأستاذ الوظيفي
+    return (
+        derive_users_department_id_for_storage(
+            conn, role=role_n, student_id=None, instructor_id=instructor_id
+        ),
+        None,
+    )
 
 
 def target_username_allowed_for_actor(conn, actor_username: str | None, target_username: str) -> bool:
@@ -1248,6 +1327,146 @@ def assert_course_in_actor_scope(
     if not course_in_actor_scope(conn, course_name, actor_username):
         label = (course_name or "").strip() or "—"
         raise ValueError(f"المقرر «{label}» خارج نطاق قسمك.")
+
+
+def actor_manages_college_general_scope(
+    conn,
+    actor_username: str | None = None,
+) -> bool:
+    """هل نطاق الفاعل هو قسم الاتجاه العام (GENERAL)؟"""
+    dep = resolve_effective_department_scope_id(conn, _actor_username(actor_username))
+    gen_id = resolve_college_general_department_id(conn)
+    if dep is None or gen_id is None:
+        return False
+    try:
+        return int(dep) == int(gen_id)
+    except (TypeError, ValueError):
+        return False
+
+
+def _course_owning_department_id(conn, course_name: str) -> int | None:
+    cname = (course_name or "").strip()
+    if not cname:
+        return None
+    from backend.database.database import fetch_table_columns
+
+    cols = fetch_table_columns(conn, "courses")
+    if "owning_department_id" not in cols:
+        return None
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT owning_department_id FROM courses
+        WHERE lower(trim(course_name)) = lower(trim(?))
+        LIMIT 1
+        """,
+        (cname,),
+    ).fetchone()
+    if not row:
+        return None
+    raw = row["owning_department_id"] if hasattr(row, "keys") else row[0]
+    if raw in (None, ""):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def course_writable_by_actor(
+    conn,
+    course_name: str,
+    actor_username: str | None = None,
+) -> bool:
+    """
+    صلاحية *تعديل/حذف* المقرر (أضيق من العرض).
+
+    - أدمن / عميد / وكيلة: الكل (بما فيها المشتركة).
+    - نطاق كلية بلا قسم: الكل.
+    - رئيس الاتجاه العام (GENERAL): مقررات الاتجاه العام المملوكة لـ GENERAL فقط —
+      بدون مقررات السجل المشترك.
+    - رئيس تخصص: مقررات قسمه فقط — دون العامة/المشتركة (عرض فقط).
+    """
+    actor = _actor_username(actor_username)
+    try:
+        from flask import session
+        from backend.core.auth import _normalize_role
+
+        role = _normalize_role((session.get("user_role") or "").strip())
+        if role in ("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean"):
+            return True
+    except Exception:
+        pass
+
+    dep = resolve_effective_department_scope_id(conn, actor)
+    if dep is None:
+        return True
+    cname = (course_name or "").strip()
+    if not cname:
+        return False
+    gen_id = resolve_college_general_department_id(conn)
+    owning = _course_owning_department_id(conn, cname)
+    is_general_course = course_is_college_general(conn, cname)
+    is_shared = course_is_college_shared_catalog(conn, cname)
+
+    if actor_manages_college_general_scope(conn, actor):
+        # المقررات المشتركة: للكلية فقط (عميد/وكيلة/أدمن)
+        if is_shared:
+            return False
+        if is_general_course:
+            return True
+        if owning is None:
+            return True
+        if gen_id is not None and owning == int(gen_id):
+            return True
+        return False
+
+    # رئيس تخصص / نطاق قسم آخر: لا تعديل للعامة/المشتركة
+    if is_general_course or is_shared:
+        return False
+    if gen_id is not None and owning is not None and owning == int(gen_id):
+        return False
+    if owning is not None:
+        return owning == int(dep)
+    # بلا مالك: السماح فقط إن كان ظاهراً في نطاق القسم عبر الجدول
+    return course_in_actor_scope(conn, cname, actor)
+
+
+def assert_course_writable_by_actor(
+    conn,
+    course_name: str,
+    actor_username: str | None = None,
+) -> None:
+    if not course_writable_by_actor(conn, course_name, actor_username):
+        label = (course_name or "").strip() or "—"
+        raise ValueError(
+            f"لا يمكن تعديل المقرر «{label}» من نطاق قسمك "
+            "(مقرر مشترك يُدار من العميد/الوكيلة/الإدارة، أو خارج قسمك)."
+        )
+
+
+def can_manage_college_shared_catalog(
+    conn,
+    actor_username: str | None = None,
+    *,
+    user_role: str | None = None,
+) -> bool:
+    """كتابة سجل المقررات المشتركة: أدمن رئيسي / عميد / وكيلة فقط."""
+    role = (user_role or "").strip()
+    if not role:
+        try:
+            from flask import session
+
+            role = (session.get("user_role") or "").strip()
+        except Exception:
+            role = ""
+    return role in (
+        "admin",
+        "admin_main",
+        "system_admin",
+        "college_dean",
+        "academic_vice_dean",
+    )
 
 
 def student_in_actor_scope(

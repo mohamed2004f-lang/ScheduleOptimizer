@@ -123,8 +123,8 @@
     </div>
   </main>
   <script>
-    const IS_ADMIN = {{ 'true' if session.get('user_role') in ('admin','admin_main','system_admin','college_dean') else 'false' }};
-    const IS_VIEW_ONLY = {{ 'true' if session.get('user_role') in ('head_of_department','academic_vice_dean') else 'false' }};
+    const IS_ADMIN = {{ 'true' if can_manage_college_shared_catalog else 'false' }};
+    const IS_VIEW_ONLY = {{ 'false' if can_manage_college_shared_catalog else 'true' }};
     let ITEMS = [];
     let DEPS = [];
 
@@ -277,7 +277,7 @@
 
     if (IS_ADMIN) document.getElementById('adminTools').classList.remove('d-none');
     if (IS_VIEW_ONLY && !IS_ADMIN) {
-      showMsg('عرض فقط — الإضافة والتعديل والاستيراد من صلاحية عميد الكلية أو admin_main.', 'text-muted');
+      showMsg('عرض فقط — الإضافة والتعديل والاستيراد من صلاحية الأدمن الرئيسي أو عميد الكلية أو وكيلة الشؤون العلمية.', 'text-muted');
     }
     load();
   </script>

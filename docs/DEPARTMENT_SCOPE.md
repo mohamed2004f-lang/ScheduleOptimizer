@@ -9,8 +9,14 @@
 3. **لا** يُسمح بتصدير/استيراد بيانات قسم آخر «بالخطأ».
 4. **مقررات الاتجاه العام** (`college_general` / قسم `GENERAL`) تظهر لجميع الأقسام ولا تُربط بقسم تخصص عند الاستيراد.
 5. **المقررات المشتركة** (سجل `college_shared_catalog`) — موحّدة GS أو برموز مختلفة أو subset؛ إدارة من `/college_shared_catalog_page`.
-6. **استيراد Excel:** إن وُجد نفس `course_code` لمقرر باسم آخر (مثل `GS 201`) يُتجاهل الصف ويُعاد في `ignored` دون إيقاف بقية الاستيراد.
-7. **توجيه التقارير والاستبيانات** — `resolve_course_responsible_department_id`: قسم **عرض المقرر** (جدول/مجموعة تدريس) وليس قسم منزل الأستاذ.
+   - **كتابة السجل:** أدمن رئيسي / عميد / وكيلة الشؤون العلمية فقط.
+   - رؤساء الأقسام (بما فيها الاتجاه العام): عرض فقط.
+6. **تعديل مقررات التشغيل** (`/courses/update|delete` والمتطلبات) أضيق من العرض:
+   - رئيس GENERAL: مقررات الاتجاه العام المملوكة لـ GENERAL فقط (بدون المشتركة).
+   - رئيس تخصص: مقررات قسمه فقط (لا يعدّل العامة/المشتركة).
+   - عميد / وكيلة / أدمن: الكل.
+7. **استيراد Excel:** إن وُجد نفس `course_code` لمقرر باسم آخر (مثل `GS 201`) يُتجاهل الصف ويُعاد في `ignored` دون إيقاف بقية الاستيراد.
+8. **توجيه التقارير والاستبيانات** — `resolve_course_responsible_department_id`: قسم **عرض المقرر** (جدول/مجموعة تدريس) وليس قسم منزل الأستاذ.
 
 ## الدوال المركزية
 
@@ -26,7 +32,10 @@
 | `courses_department_scope_filter` | فلترة قائمة/تصدير (قسمي + GENERAL + NULL) |
 | `resolve_import_owning_department_id` | ملكية الاستيراد |
 | `courses_export_sql_and_params` | تصدير المقررات |
-| `course_in_actor_scope` / `assert_course_in_actor_scope` | تحقق مقرر |
+| `course_in_actor_scope` / `assert_course_in_actor_scope` | تحقق مقرر (عرض) |
+| `course_writable_by_actor` / `assert_course_writable_by_actor` | تحقق مقرر (تعديل/حذف) |
+| `actor_manages_college_general_scope` | هل الفاعل = رئيس الاتجاه العام؟ |
+| `can_manage_college_shared_catalog` | كتابة سجل المقررات المشتركة |
 | `student_in_actor_scope` / `assert_student_in_actor_scope` | تحقق طالب |
 | `resolve_import_department_binding` | ربط تلقائي بعد استيراد Excel |
 | `resolve_registration_course_scope_sql` | تقارير التسجيل |
@@ -74,5 +83,5 @@ docker compose exec web python scripts/seed_college_shared_catalog.py
 ## الاختبارات
 
 ```bash
-pytest tests/test_courses_import_excel.py tests/test_department_scope_import_export.py tests/test_college_shared_catalog.py -q
+pytest tests/test_courses_import_excel.py tests/test_department_scope_import_export.py tests/test_college_shared_catalog.py tests/test_general_hod_course_manage.py -q
 ```

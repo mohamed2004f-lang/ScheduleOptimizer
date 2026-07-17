@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import io
 
-from flask import jsonify, request, send_file
+from flask import jsonify, request, send_file, session
 
 from backend.core.auth import login_required, role_required
 from backend.core.college_shared_catalog import (
@@ -18,9 +18,17 @@ from backend.core.college_shared_catalog import (
     set_catalog_active,
     sync_catalog_entry,
 )
+from backend.core.department_scope_policy import can_manage_college_shared_catalog
 from backend.services.utilities import get_connection
 
 _ADMIN_FULL = ("admin", "admin_main", "system_admin", "college_dean")
+_SHARED_WRITE = (
+    "admin",
+    "admin_main",
+    "system_admin",
+    "college_dean",
+    "academic_vice_dean",
+)
 _PLAN_VIEW = (
     "admin",
     "admin_main",
@@ -29,6 +37,25 @@ _PLAN_VIEW = (
     "academic_vice_dean",
     "head_of_department",
 )
+
+
+def _forbid_shared_catalog_write(conn):
+    actor = (session.get("user") or session.get("username") or "").strip()
+    role = (session.get("user_role") or "").strip()
+    if not can_manage_college_shared_catalog(conn, actor, user_role=role):
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": (
+                        "تعديل سجل المقررات المشتركة مسموح للأدمن الرئيسي "
+                        "أو عميد الكلية أو وكيلة الشؤون العلمية فقط."
+                    ),
+                }
+            ),
+            403,
+        )
+    return None
 
 
 def register_shared_catalog_routes(bp) -> None:
@@ -78,11 +105,14 @@ def register_shared_catalog_routes(bp) -> None:
 
     @bp.route("/shared_catalog/save", methods=["POST"])
     @login_required
-    @role_required(*_ADMIN_FULL)
+    @role_required(*_SHARED_WRITE)
     def shared_catalog_save():
         body = request.get_json(force=True, silent=True) or {}
         try:
             with get_connection() as conn:
+                denied = _forbid_shared_catalog_write(conn)
+                if denied:
+                    return denied
                 result = save_catalog_entry(conn, body)
                 conn.commit()
                 try:
@@ -97,10 +127,13 @@ def register_shared_catalog_routes(bp) -> None:
 
     @bp.route("/shared_catalog/sync/<int:catalog_id>", methods=["POST"])
     @login_required
-    @role_required(*_ADMIN_FULL)
+    @role_required(*_SHARED_WRITE)
     def shared_catalog_sync(catalog_id: int):
         try:
             with get_connection() as conn:
+                denied = _forbid_shared_catalog_write(conn)
+                if denied:
+                    return denied
                 sync_result = sync_catalog_entry(conn, int(catalog_id))
                 conn.commit()
             return jsonify({"status": "ok", "sync": sync_result}), 200
@@ -109,7 +142,7 @@ def register_shared_catalog_routes(bp) -> None:
 
     @bp.route("/shared_catalog/set_active", methods=["POST"])
     @login_required
-    @role_required(*_ADMIN_FULL)
+    @role_required(*_SHARED_WRITE)
     def shared_catalog_set_active():
         body = request.get_json(force=True, silent=True) or {}
         try:
@@ -119,6 +152,9 @@ def register_shared_catalog_routes(bp) -> None:
             return jsonify({"status": "error", "message": "id مطلوب"}), 400
         try:
             with get_connection() as conn:
+                denied = _forbid_shared_catalog_write(conn)
+                if denied:
+                    return denied
                 set_catalog_active(conn, cid, active=active)
                 conn.commit()
             return jsonify({"status": "ok"}), 200
@@ -127,7 +163,7 @@ def register_shared_catalog_routes(bp) -> None:
 
     @bp.route("/shared_catalog/delete", methods=["POST"])
     @login_required
-    @role_required(*_ADMIN_FULL)
+    @role_required(*_SHARED_WRITE)
     def shared_catalog_delete():
         body = request.get_json(force=True, silent=True) or {}
         try:
@@ -137,6 +173,9 @@ def register_shared_catalog_routes(bp) -> None:
             return jsonify({"status": "error", "message": "id مطلوب"}), 400
         try:
             with get_connection() as conn:
+                denied = _forbid_shared_catalog_write(conn)
+                if denied:
+                    return denied
                 delete_catalog_entry(conn, cid, force=force)
                 conn.commit()
             return jsonify({"status": "ok", "deleted": True}), 200
@@ -147,8 +186,12 @@ def register_shared_catalog_routes(bp) -> None:
 
     @bp.route("/shared_catalog/import/template", methods=["GET"])
     @login_required
-    @role_required(*_ADMIN_FULL)
+    @role_required(*_SHARED_WRITE)
     def shared_catalog_import_template():
+        with get_connection() as conn:
+            denied = _forbid_shared_catalog_write(conn)
+            if denied:
+                return denied
         data = build_import_template_bytes()
         return send_file(
             io.BytesIO(data),
@@ -159,13 +202,16 @@ def register_shared_catalog_routes(bp) -> None:
 
     @bp.route("/shared_catalog/import/excel", methods=["POST"])
     @login_required
-    @role_required(*_ADMIN_FULL)
+    @role_required(*_SHARED_WRITE)
     def shared_catalog_import_excel():
         f = request.files.get("file")
         if not f:
             return jsonify({"status": "error", "message": "file required"}), 400
         try:
             with get_connection() as conn:
+                denied = _forbid_shared_catalog_write(conn)
+                if denied:
+                    return denied
                 result = import_catalog_workbook(conn, f)
                 conn.commit()
                 try:

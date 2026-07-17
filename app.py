@@ -1103,7 +1103,28 @@ def college_catalog_page():
 @login_required
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def college_shared_catalog_page():
-    return render_template("college_shared_catalog.html")
+    can_manage = False
+    try:
+        from backend.core.department_scope_policy import can_manage_college_shared_catalog
+        from backend.services.utilities import get_connection as _gc
+
+        uname = (session.get("user") or session.get("username") or "").strip()
+        role = (session.get("user_role") or "").strip()
+        with _gc() as conn:
+            can_manage = bool(
+                can_manage_college_shared_catalog(conn, uname, user_role=role)
+            )
+    except Exception:
+        can_manage = session.get("user_role") in (
+            "admin",
+            "admin_main",
+            "system_admin",
+            "college_dean",
+        )
+    return render_template(
+        "college_shared_catalog.html",
+        can_manage_college_shared_catalog=can_manage,
+    )
 
 
 @app.route("/course_equivalences_page")

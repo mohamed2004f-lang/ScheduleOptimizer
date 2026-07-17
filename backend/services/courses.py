@@ -10,6 +10,7 @@ from backend.core.auth import (
     students_registry_view_only,
 )
 from backend.core.department_scope_policy import (
+    assert_course_writable_by_actor,
     courses_department_scope_filter,
     courses_export_sql_and_params,
     course_is_college_general,
@@ -39,6 +40,15 @@ def _is_instructor_or_supervisor_view_only() -> bool:
 def _effective_department_scope_id(conn) -> int | None:
     uname = (session.get("user") or session.get("username") or "").strip()
     return resolve_effective_department_scope_id(conn, uname)
+
+
+def _actor_username() -> str:
+    return (session.get("user") or session.get("username") or "").strip()
+
+
+def _forbid_course_write(conn, course_name: str):
+    """يرفع ValueError إن لم يُسمح بتعديل المقرر؛ يُحوَّل إلى 403 في المسارات."""
+    assert_course_writable_by_actor(conn, course_name, _actor_username())
 
 
 def _courses_export_dataframe(conn) -> pd.DataFrame:
@@ -394,6 +404,10 @@ def update_course():
 
     with get_connection() as conn:
         cur = conn.cursor()
+        try:
+            _forbid_course_write(conn, old_name)
+        except ValueError as e:
+            return jsonify({"status": "error", "message": str(e)}), 403
         # منع تكرار الاسم الجديد (باستثناء نفس المقرر)
         row = cur.execute(
             """
@@ -547,6 +561,10 @@ def delete_course():
         return jsonify({"status": "error", "message": "course_name مطلوب"}), 400
     with get_connection() as conn:
         cur = conn.cursor()
+        try:
+            _forbid_course_write(conn, cname)
+        except ValueError as e:
+            return jsonify({"status": "error", "message": str(e)}), 403
         # تحقق ارتباطات أكاديمية - لا نحذف صلباً عند وجود آثار
         links = {}
         for tbl in ("grades", "registrations", "schedule", "enrollment_plan_items", "exams", "prereqs"):
@@ -708,6 +726,12 @@ def add_prereq():
                     errors.append({"course":course,"required":req,"reason":"المقرر لا يمكن أن يكون متطلباً لنفسه"})
                     continue
 
+                try:
+                    _forbid_course_write(conn, real_course)
+                except ValueError as e:
+                    errors.append({"course": real_course, "required": real_req, "reason": str(e)})
+                    continue
+
                 cur.execute(
                     "INSERT INTO prereqs (course_name, required_course_name) VALUES (?,?) ON CONFLICT (course_name, required_course_name) DO NOTHING",
                     (real_course, real_req),
@@ -740,6 +764,10 @@ def delete_prereq():
         return jsonify({"status": "error", "message": "course_name و required_course_name مطلوبة"}), 400
     with get_connection() as conn:
         cur = conn.cursor()
+        try:
+            _forbid_course_write(conn, course)
+        except ValueError as e:
+            return jsonify({"status": "error", "message": str(e)}), 403
         cur.execute("DELETE FROM prereqs WHERE course_name = ? AND required_course_name = ?", (course, req))
         conn.commit()
     return jsonify({"status": "ok", "message": "تم حذف المتطلب"}), 200

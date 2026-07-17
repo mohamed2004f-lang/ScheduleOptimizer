@@ -66,8 +66,9 @@ ScheduleOptimizer is an academic operations platform for managing student data, 
 <!-- AUTO_LATEST_CHANGES_START -->
 ## Latest Changes (Auto)
 
-_Last generated: 2026-07-15 18:05_
+_Last generated: 2026-07-17 02:15_
 
+- `5b142ad` (2026-07-15): إصلاح إنشاء جداول نشر الدرجات على PostgreSQL عند اعتماد رئيس القسم.
 - `490944b` (2026-07-15): إضافة رفع يومي آمن إلى GitHub عبر سكربت ومهمة مجدولة الساعة 23:00.
 - `7297962` (2026-07-15): إضافة تقارير جودة المقررات (معاينة/PDF) مع توصيات آلية، وتوسيع الجودة والاعتماد والمساعد والتصديرات.
 - `c9e6917` (2026-07-09): إصلاح إرسال استبيان الخريج: تجاوز CSRF لمسار الدعوة العامة وإرسال الرمز من الصفحة.
@@ -77,6 +78,5 @@ _Last generated: 2026-07-15 18:05_
 - `5baed0c` (2026-07-02): & c:/Users/BARCODE/ScheduleOptimizer/.venv/Scripts/Activate.ps1
 - `e7d1245` (2026-07-02): توحيد نطاق القسم عبر الخدمات وإصلاح ثبات بنود الاستبيانات بعد التعديل اليدوي.
 - `4dca27a` (2026-07-02): توسيع استبيان الخريج لمراجعة البرنامج الأكاديمي مع بيانات مهنية اختيارية وترقية تلقائية للبنود.
-- `ad538e0` (2026-07-02): & c:/Users/BARCODE/ScheduleOptimizer/.venv/Scripts/Activate.ps1
 
 <!-- AUTO_LATEST_CHANGES_END -->

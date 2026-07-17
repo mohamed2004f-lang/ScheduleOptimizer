@@ -92,6 +92,13 @@
             <input id="instructorIdInput" list="instructorIdOptions" class="form-control form-control-sm" title="نفس السجل في «أعضاء هيئة التدريس» حتى يعمل وضع الأستاذ و«مقرراتي»">
             <datalist id="instructorIdOptions"></datalist>
           </div>
+          <div class="col-md-4 d-none" id="managedDeptWrap">
+            <label class="form-label">القسم الذي يرأسه <span class="text-danger">*</span></label>
+            <select id="managedDepartmentSelect" class="form-select form-select-sm">
+              <option value="">— اختر القسم —</option>
+            </select>
+            <div class="form-text small">مثال: الاتجاه العام — مستقل عن قسم الأستاذ الوظيفي.</div>
+          </div>
           <div class="col-md-4">
             <button id="btnSaveUser" class="btn btn-primary btn-sm mt-3">حفظ المستخدم</button>
           </div>
@@ -111,11 +118,12 @@
           </div>
         </div>
         <div id="headDeptRoleHint" class="alert alert-light border small mt-2 d-none" role="note">
-          <div class="fw-semibold mb-1">رئيس قسم: ربط دور «الأستاذ» و«المشرف الأكاديمي»</div>
-          <p class="mb-2 small">الدور في النظام <strong>واحد</strong> (<code>head_of_department</code>)، ولا يُنشَأ حساب أستاذ منفصل. لربط صلاحيات التدريس والإشراف:</p>
+          <div class="fw-semibold mb-1">رئيس قسم: القسم الذي يرأسه + ربط الأستاذ</div>
+          <p class="mb-2 small">الدور في النظام <strong>واحد</strong> (<code>head_of_department</code>). يمكن تكليف أستاذ من قسم (مثل الكهرباء) لرئاسة قسم آخر (مثل الاتجاه العام):</p>
           <ul class="mb-0 ps-3 small">
-            <li><strong>رقم عضو هيئة التدريس (إلزامي):</strong> اختر الرقم المطابق لنفس الشخص في جدول «أعضاء هيئة التدريس». عندها يستطيع بعد الدخول التبديل إلى <strong>وضع الأستاذ</strong> (مقرراتي) من الشريط العلوي.</li>
-            <li><strong>مشرف أكاديمي (اختياري):</strong> يفعّل صلاحيات الإشراف الأكاديمي في النظام (مثل مراجعة الإشراف). بعد الدخول يمكن أيضاً التبديل إلى <strong>وضع المشرف الأكاديمي</strong> من نفس الشريط (رئيس قسم / أستاذ / مشرف).</li>
+            <li><strong>القسم الذي يرأسه (إلزامي):</strong> يحدد نطاق لوحة الاعتماد والحوكمة — وليس بالضرورة قسمه الوظيفي.</li>
+            <li><strong>رقم عضو هيئة التدريس (إلزامي):</strong> هويته في هيئة التدريس؛ يبقى تابعاً لقسمه الأصلي ويستطيع التبديل لوضع الأستاذ.</li>
+            <li><strong>مشرف أكاديمي (اختياري):</strong> صلاحيات الإشراف؛ التبديل من الشريط العلوي بعد الدخول.</li>
           </ul>
         </div>
         <div id="userMsg" class="mt-2"></div>
@@ -144,6 +152,14 @@
               <option value="student">طالب</option>
               <option value="instructor">عضو هيئة تدريس</option>
               <option value="head_of_department">رئيس قسم</option>
+            </select>
+          </div>
+        </div>
+        <div class="row g-2 align-items-end mt-2 d-none" id="linkManagedDeptWrap">
+          <div class="col-md-6">
+            <label class="form-label">القسم الذي يرأسه (لرئيس القسم)</label>
+            <select id="linkManagedDepartmentSelect" class="form-select form-select-sm">
+              <option value="">— اختر القسم —</option>
             </select>
           </div>
         </div>
@@ -390,7 +406,12 @@
       }
       const line2 = document.createElement('div');
       line2.className = 'text-muted small';
-      line2.textContent = 'الرقم الدراسي: ' + (u.student_id || '—') + ' — رقم المدرّس: ' + (u.instructor_id != null && u.instructor_id !== '' ? u.instructor_id : '—');
+      const deptLabel = (u.department_id != null && u.department_id !== '')
+        ? (DEPT_NAME_BY_ID[String(u.department_id)] || ('#' + u.department_id))
+        : '—';
+      line2.textContent = 'الرقم الدراسي: ' + (u.student_id || '—')
+        + ' — رقم المدرّس: ' + (u.instructor_id != null && u.instructor_id !== '' ? u.instructor_id : '—')
+        + (u.role === 'head_of_department' ? (' — يرأس: ' + deptLabel) : '');
       left.appendChild(line1);
       left.appendChild(line2);
       const right = document.createElement('div');
@@ -475,6 +496,17 @@
         document.getElementById('instructorIdInput').value = u.instructor_id != null && u.instructor_id !== '' ? String(u.instructor_id) : '';
         document.getElementById('isSupervisor').checked = !!u.is_supervisor;
         document.getElementById('isActive').checked = !(u.is_active === 0 || u.is_active === false);
+        const mdSel = document.getElementById('managedDepartmentSelect');
+        if(mdSel){
+          const did = u.department_id != null && u.department_id !== '' ? String(u.department_id) : '';
+          if(did && !Array.from(mdSel.options).some(o => o.value === did)){
+            const opt = document.createElement('option');
+            opt.value = did;
+            opt.textContent = DEPT_NAME_BY_ID[did] || ('قسم #' + did);
+            mdSel.appendChild(opt);
+          }
+          mdSel.value = did;
+        }
         syncSupervisorAvailability();
         syncRoleHeadHints();
         const card = document.getElementById('directUserCard');
@@ -636,10 +668,20 @@
           return;
         }
       }
+      if(role === 'head_of_department'){
+        const md = (document.getElementById('managedDepartmentSelect')?.value || '').trim();
+        if(!md){
+          setUserMsg('warning', 'حدد «القسم الذي يرأسه» (مثل الاتجاه العام أو الميكانيكا).');
+          return;
+        }
+      }
       const body = {username, role};
       if(password) body.password = password;
       if(studentId) body.student_id = studentId;
       if(instructorId) body.instructor_id = instructorId;
+      if(role === 'head_of_department'){
+        body.department_id = Number(document.getElementById('managedDepartmentSelect').value);
+      }
       body.is_supervisor = isSupervisor;
       body.is_active = isActive;
       const rpCode = (document.getElementById('roleProfileSelect')?.value || '').trim();
@@ -806,9 +848,47 @@
       if(hint) hint.classList.toggle('d-none', role !== 'head_of_department');
       const leadHint = document.getElementById('collegeLeadRoleHint');
       if(leadHint) leadHint.classList.toggle('d-none', role !== 'college_dean' && role !== 'academic_vice_dean');
+      const wrap = document.getElementById('managedDeptWrap');
+      if(wrap) wrap.classList.toggle('d-none', role !== 'head_of_department');
+      syncInviteManagedDept();
+    }
+
+    function syncInviteManagedDept(){
+      const role = document.getElementById('linkRole')?.value || '';
+      const wrap = document.getElementById('linkManagedDeptWrap');
+      if(wrap) wrap.classList.toggle('d-none', role !== 'head_of_department');
     }
 
     let CURRENT_ROLE = null;
+    let DEPT_NAME_BY_ID = {};
+
+    async function loadDepartmentsForHod(){
+      const sels = [
+        document.getElementById('managedDepartmentSelect'),
+        document.getElementById('linkManagedDepartmentSelect')
+      ].filter(Boolean);
+      if(!sels.length) return;
+      const res = await fetchJSON('/college/catalog/departments');
+      const items = (res.ok && res.json && Array.isArray(res.json.items)) ? res.json.items : [];
+      DEPT_NAME_BY_ID = {};
+      const opts = ['<option value="">— اختر القسم —</option>'];
+      items.forEach((d)=>{
+        const id = d.id != null ? String(d.id) : '';
+        if(!id) return;
+        const code = (d.code || '').trim();
+        const name = (d.name_ar || d.name_en || code || ('#' + id)).trim();
+        DEPT_NAME_BY_ID[id] = code ? (name + ' (' + code + ')') : name;
+        const active = !(d.is_active === 0 || d.is_active === false);
+        if(!active && code.toUpperCase() !== 'GENERAL') return;
+        opts.push('<option value="' + id + '">' + DEPT_NAME_BY_ID[id] + '</option>');
+      });
+      const html = opts.join('');
+      sels.forEach((sel)=>{
+        const prev = sel.value;
+        sel.innerHTML = html;
+        if(prev && Array.from(sel.options).some(o => o.value === prev)) sel.value = prev;
+      });
+    }
 
     async function loadValidDirectLinkOptions(){
       const studentList = document.getElementById('studentIdOptions');
@@ -1026,6 +1106,7 @@
         if(t === 'instructor' && r === 'student'){
           document.getElementById('linkRole').value = 'instructor';
         }
+        syncInviteManagedDept();
       });
       const roleEl = document.getElementById('roleSelect');
       if(roleEl){
@@ -1034,12 +1115,14 @@
           syncRoleHeadHints();
         });
       }
+      await loadDepartmentsForHod();
       await loadUsers();
       await loadValidDirectLinkOptions();
       await loadLinkedEntities();
       await suggestLinked();
       syncSupervisorAvailability();
       syncRoleHeadHints();
+      syncInviteManagedDept();
       applyPermissions();
       await loadRoleProfiles();
       await loadUsersValidationReport();
@@ -1239,11 +1322,22 @@
         setInviteMsg('warning','اختر اسماً من القائمة.');
         return;
       }
+      if(role === 'head_of_department'){
+        const md = (document.getElementById('linkManagedDepartmentSelect')?.value || '').trim();
+        if(!md){
+          setInviteMsg('warning','حدد «القسم الذي يرأسه» قبل إنشاء حساب رئيس القسم.');
+          return;
+        }
+      }
       setInviteMsg('info','جاري التنفيذ...');
+      const body = {type, id, role, username};
+      if(role === 'head_of_department'){
+        body.department_id = Number(document.getElementById('linkManagedDepartmentSelect').value);
+      }
       const r = await fetchJSON('/users/invite', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({type, id, role, username})
+        body: JSON.stringify(body)
       });
       if(r.ok){
         const j = r.json || {};

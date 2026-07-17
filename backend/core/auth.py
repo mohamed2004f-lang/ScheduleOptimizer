@@ -476,6 +476,20 @@ def students_registry_view_only() -> bool:
     return False
 
 
+def _hod_manages_college_general_scope() -> bool:
+    """رئيس القسم بنطاق الاتجاه العام (GENERAL) — لإدارة المقررات المشتركة."""
+    if get_connection is None:
+        return False
+    try:
+        from backend.core.department_scope_policy import actor_manages_college_general_scope
+
+        uname = (session.get("user") or session.get("username") or "").strip()
+        with get_connection() as conn:
+            return bool(actor_manages_college_general_scope(conn, uname))
+    except Exception:
+        return False
+
+
 def compute_capabilities(
     user_role: str | None,
     is_supervisor_val: int | None,
@@ -554,6 +568,7 @@ def compute_capabilities(
             "nav_users_admin": False,
             "nav_college_catalog": False,
             "nav_college_shared_catalog": True,
+            "can_manage_college_shared_catalog": False,
             "nav_supervision": False,
             "nav_academic_rules": False,
             "nav_course_registration_report": staff_planning,
@@ -633,6 +648,8 @@ def compute_capabilities(
             "academic_vice_dean",
             "head_of_department",
         ),
+        "can_manage_college_shared_catalog": role
+        in ("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean"),
         "nav_supervision": role in ("admin", "admin_main", "system_admin", "college_dean"),
         "nav_academic_rules": role in ("admin", "admin_main", "system_admin", "college_dean"),
         "nav_course_registration_report": staff_planning,

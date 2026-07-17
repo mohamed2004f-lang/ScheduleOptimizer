@@ -15,6 +15,7 @@ from backend.repositories import instructors_repo, students_repo, users_repo
 from backend.core.department_scope_policy import (
     assert_actor_may_manage_user_links,
     derive_users_department_id_for_storage,
+    resolve_hod_managed_department_id,
     resolve_users_list_scope,
     target_username_allowed_for_actor,
 )
@@ -282,12 +283,31 @@ def invite_user():
         )
         if not ok_inv:
             return jsonify({"status": "error", "message": msg_inv}), 403
-        dept_store = derive_users_department_id_for_storage(
-            conn,
-            role=role,
-            student_id=student_id,
-            instructor_id=instructor_id,
-        )
+        explicit_dept = None
+        raw_dept = data.get("department_id")
+        if raw_dept not in (None, ""):
+            try:
+                explicit_dept = int(raw_dept)
+            except (TypeError, ValueError):
+                return jsonify({"status": "error", "message": "department_id غير صالح"}), 400
+        if role == "head_of_department":
+            dept_store, dept_err = resolve_hod_managed_department_id(
+                conn,
+                role=role,
+                instructor_id=instructor_id,
+                explicit_department_id=explicit_dept,
+                actor_username=_current_actor(),
+                actor_is_privileged=True,
+            )
+            if dept_err:
+                return jsonify({"status": "error", "message": dept_err}), 400
+        else:
+            dept_store = derive_users_department_id_for_storage(
+                conn,
+                role=role,
+                student_id=student_id,
+                instructor_id=instructor_id,
+            )
         pw_hash = hash_password(secrets.token_urlsafe(24))
         try:
             existing = cur.execute(
@@ -835,12 +855,19 @@ def add_user():
     is_active = int(bool(data.get("is_active", True)))
     role_profile_code = (data.get("role_profile_code") or "").strip() or None
     display_title_ar = (data.get("display_title_ar") or "").strip() or None
+    managed_department_id = data.get("department_id")
     instructor_id = None
     if instructor_id_raw not in (None, ""):
         try:
             instructor_id = int(instructor_id_raw)
         except (TypeError, ValueError):
             instructor_id = None
+    explicit_dept: int | None = None
+    if managed_department_id not in (None, ""):
+        try:
+            explicit_dept = int(managed_department_id)
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "department_id غير صالح"}), 400
 
     if not username:
         return (
@@ -926,12 +953,24 @@ def add_user():
                 return jsonify(
                     {"status": "error", "message": "لا يمكن تعديل هذا المستخدم خارج نطاق القسم الحالي."}
                 ), 403
-            dept_store = derive_users_department_id_for_storage(
-                conn,
-                role=role,
-                student_id=student_id,
-                instructor_id=instructor_id,
-            )
+            if role == "head_of_department":
+                dept_store, dept_err = resolve_hod_managed_department_id(
+                    conn,
+                    role=role,
+                    instructor_id=instructor_id,
+                    explicit_department_id=explicit_dept,
+                    actor_username=actor,
+                    actor_is_privileged=privileged,
+                )
+                if dept_err:
+                    return jsonify({"status": "error", "message": dept_err}), 400
+            else:
+                dept_store = derive_users_department_id_for_storage(
+                    conn,
+                    role=role,
+                    student_id=student_id,
+                    instructor_id=instructor_id,
+                )
             role_profile_id = None
             if role_profile_code:
                 from backend.core.permissions import get_profile_by_code

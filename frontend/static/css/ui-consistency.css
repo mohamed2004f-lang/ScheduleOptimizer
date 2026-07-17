@@ -40,9 +40,12 @@
   border: 1px solid #f1aeb5;
 }
 
-/* شريط التنقل — وضع مدمج للإدارة */
-.app-navbar.nav-staff-compact [data-nav-tier="secondary"] {
-  display: none !important;
+.app-navbar.nav-staff-compact .navbar-collapse .navbar-nav,
+.app-navbar.nav-staff-compact #mainNav .navbar-nav {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  width: 100% !important;
+  align-items: center;
 }
 
 /* شريط التنقل — وضع موسع: شبكة سطرين (حتى 7 أيقونات في السطر) */

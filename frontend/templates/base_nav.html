@@ -87,7 +87,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/css/theme-mechanical-engineering.css">
-<link rel="stylesheet" href="/static/css/ui-consistency.css?v=20260715c">
+<link rel="stylesheet" href="/static/css/ui-consistency.css?v=20260716a">
 <style id="navLabelCritical">
   /* منع تكرار التسميات قبل/بدون تحميل ورقة الأنماط */
   .app-navbar .nav-label-short { display: none !important; }
@@ -1705,7 +1705,6 @@
           { wrapId: 'navAcademicRecordsMenuWrap', header: 'السجل الأكاديمي' },
           { wrapId: 'navCatalogWrap', header: 'المقررات' },
           { wrapId: 'navFacultySupervisionWrap', header: 'الأساتذة والإشراف' },
-          { wrapId: 'navQualityAccreditationWrap', header: 'ضمان الجودة والاعتماد' },
           { wrapId: 'navAdminSettingsWrap', header: 'إعدادات القسم' },
         ],
         college_dean: [
@@ -1747,7 +1746,28 @@
           'navAcademicRecordsMenuWrap', 'navCatalogWrap', 'navQualityAccreditationWrap',
         ],
       };
-      const QUALITY_PRIMARY_ROLES = new Set(['admin_main', 'college_dean', 'academic_vice_dean']);
+      const QUALITY_PRIMARY_ROLES = new Set([
+        'admin_main', 'college_dean', 'academic_vice_dean', 'head_of_department',
+      ]);
+      // ترتيب الشريط المدمج (primary فقط) — الجودة ظاهرة مثل القيادات؛ اعتماد القسم لرئيس القسم فقط
+      const COMPACT_PRIMARY_ORDER = {
+        admin_main: [
+          'navDashboardWrap', 'navStudentAffairsWrap', 'navPlanningMenuWrap',
+          'navQualityAccreditationWrap', 'navStaffCompactMoreWrap',
+        ],
+        college_dean: [
+          'navDashboardWrap', 'navStudentAffairsWrap', 'navPlanningMenuWrap',
+          'navQualityAccreditationWrap', 'navStaffCompactMoreWrap',
+        ],
+        academic_vice_dean: [
+          'navDashboardWrap', 'navStudentAffairsWrap', 'navPlanningMenuWrap',
+          'navQualityAccreditationWrap', 'navStaffCompactMoreWrap',
+        ],
+        head_of_department: [
+          'navDashboardWrap', 'navHodCourseDeliveryWrap', 'navStudentAffairsWrap',
+          'navPlanningMenuWrap', 'navQualityAccreditationWrap', 'navStaffCompactMoreWrap',
+        ],
+      };
       const STAFF_NAV_ORDER_RESET_IDS = [
         'navDashboardWrap', 'navHodCourseDeliveryWrap', 'navStudentAffairsWrap',
         'navPlanningMenuWrap', 'navAcademicRecordsMenuWrap', 'navCatalogWrap',
@@ -1816,6 +1836,16 @@
           if (id === 'navAdminSettingsWrap' && roleKey === 'academic_vice_dean') {
             el.style.display = 'none';
           }
+        });
+      }
+      function applyCompactNavOrder(roleKey) {
+        resetExpandedNavOrder();
+        if (!roleKey) return;
+        const order = COMPACT_PRIMARY_ORDER[roleKey];
+        if (!order) return;
+        order.forEach((wrapId, idx) => {
+          const el = document.getElementById(wrapId);
+          if (el) el.style.order = String(idx + 1);
         });
       }
       function reorderMenuByIds(menuId, orderedIds) {
@@ -1967,7 +1997,7 @@
         resetExpandedNavOrder();
         if (compact) {
           revealStaffNavSecondaryList(secondaryList);
-          // الجودة primary لبعض الأدوار: يجب إظهارها خارج «المزيد»
+          // الجودة primary للقيادات + رئيس القسم: ظاهرة خارج «المزيد»
           if (QUALITY_PRIMARY_ROLES.has(roleKey)) {
             revealStaffSecondaryWrap('navQualityAccreditationWrap');
           }
@@ -1976,6 +2006,7 @@
             navBar.classList.add('nav-staff-compact');
             moreWrap.classList.remove('d-none');
             moreWrap.style.removeProperty('display');
+            applyCompactNavOrder(roleKey);
           } else {
             navBar.classList.remove('nav-staff-compact');
             moreWrap.classList.add('d-none');
@@ -1995,7 +2026,7 @@
           moreWrap.classList.add('d-none');
           moreWrap.style.display = 'none';
           revealStaffNavSecondaryList(secondaryList);
-          if (QUALITY_PRIMARY_ROLES.has(roleKey) || roleKey === 'head_of_department') {
+          if (QUALITY_PRIMARY_ROLES.has(roleKey)) {
             revealStaffSecondaryWrap('navQualityAccreditationWrap');
           }
           if (isStaffOpsNav && !useInstructorMore && !isStudentUi) {
@@ -2016,7 +2047,7 @@
         revealStaffNavSecondaryList(getStaffNavSecondary());
         const rk0 = getExpandedNavRoleKey();
         applyQualityNavTier(rk0);
-        if (QUALITY_PRIMARY_ROLES.has(rk0) || rk0 === 'head_of_department') {
+        if (QUALITY_PRIMARY_ROLES.has(rk0)) {
           revealStaffSecondaryWrap('navQualityAccreditationWrap');
         }
       }
