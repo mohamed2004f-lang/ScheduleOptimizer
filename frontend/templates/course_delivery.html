@@ -10,29 +10,44 @@
 <body>
   {% include "base_nav.html" %}
   <main class="container-main container-1100 theme-formal">
-    <div class="page-header">
+    <div class="page-header d-flex justify-content-between align-items-start flex-wrap gap-2">
       <div>
         <h1 class="page-title">تقرير مقرر دراسي (جودة)</h1>
-        <p class="page-subtitle" id="pageSub">مفردات معتمدة + نسب إنجاز + مراجع + تقويم</p>
+        <p class="page-subtitle" id="pageSub">من صفحة المقرر + نسب إنجاز + إضافات خارج المقرر + توصيات</p>
       </div>
-      <a href="/my_courses" class="btn btn-outline-secondary btn-sm">← مقرراتي</a>
+      <div class="d-flex gap-2 flex-wrap">
+        <a id="linkCoursePage" class="btn btn-outline-success btn-sm" href="/course_page">صفحة المقرر</a>
+        <a href="/my_courses" class="btn btn-outline-secondary btn-sm">← مقرراتي</a>
+      </div>
     </div>
 
     <div id="loadMsg" class="text-muted small">جاري التحميل…</div>
 
     <div id="mainPanel" class="d-none">
-      <div class="alert alert-light border small mb-3">
-        المفردات تُخزَّن على مستوى <strong>المقرر</strong> بعد اعتماد رئيس القسم وتُعاد لأي أستاذ لاحق.
-        فتح إدخال الدرجات قرار منفصل لرئيس القسم — لا يعتمد على نسبة الإنجاز.
+      <div class="alert alert-light border small mb-3" id="sourceAlert">
+        المصدر: <strong>صفحة المقرر</strong> (أهداف · مخرجات · مفردات · طرق التقييم · مراجع).
+        هنا تدخل نسب الإنجاز، والمفردات خارج المقرر مع السبب، وتوصياتك.
+      </div>
+      <div id="blockersAlert" class="alert alert-warning small d-none"></div>
+
+      <div class="card mb-3" id="catalogViewCard">
+        <div class="card-header fw-semibold">0 — من صفحة المقرر (عرض)</div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-4"><h6 class="small fw-semibold">الأهداف</h6><div id="cpObjectives" class="small text-muted">—</div></div>
+            <div class="col-md-4"><h6 class="small fw-semibold">المخرجات</h6><div id="cpOutcomes" class="small text-muted">—</div></div>
+            <div class="col-md-4"><h6 class="small fw-semibold">المفردات الرسمية</h6><div id="cpTopics" class="small text-muted">—</div></div>
+          </div>
+        </div>
       </div>
 
-      <div class="card mb-3">
-        <div class="card-header fw-semibold">1 — قائمة مفردات المقرر (مخزون معتمد)</div>
+      <div class="card mb-3" id="baselineCard">
+        <div class="card-header fw-semibold">1 — قائمة مفردات المقرر</div>
         <div class="card-body">
-          <p class="small text-muted mb-1">إن وُجدت قائمة معتمدة تظهر هنا جاهزة. لاقتراح تعديل أرسل نسخة جديدة لرئيس القسم.</p>
+          <p class="small text-muted mb-1" id="baselineHint">تُعرض من صفحة المقرر بعد الحفظ النهائي. التعديل من صفحة المقرر فقط.</p>
           <p id="baselineStatus" class="small fw-semibold"></p>
           <div id="topicsEditor"></div>
-          <div class="d-flex gap-2 flex-wrap mt-2">
+          <div class="d-flex gap-2 flex-wrap mt-2" id="baselineEditBtns">
             <button type="button" class="btn btn-sm btn-outline-primary" id="btnAddTopic">+ مفرد</button>
             <button type="button" class="btn btn-sm btn-primary" id="btnSaveBaseline">حفظ المفردات</button>
             <button type="button" class="btn btn-sm btn-success" id="btnSubmitBaseline">إرسال للاعتماد</button>
@@ -46,7 +61,7 @@
       </ul>
 
       <div class="card mb-3">
-        <div class="card-header fw-semibold">2 — نسب إنجاز المفردات</div>
+        <div class="card-header fw-semibold">2 — نسب إنجاز المفردات الرسمية</div>
         <div class="card-body">
           <p class="small">النسبة الكلية = متوسط نسب المفردات. أي مفردة أقل من <strong>50%</strong> تُعدّ غير منجزة وتحتاج سبباً.</p>
           <p id="overallLine" class="fw-semibold"></p>
@@ -59,28 +74,31 @@
       </div>
 
       <div class="card mb-3">
-        <div class="card-header fw-semibold">3 — مفردات من خارج المقرر</div>
+        <div class="card-header fw-semibold">3 — مفردات ليست ضمن المقرر</div>
         <div class="card-body">
-          <p class="small text-muted">أضف ما دُرّس خارج القائمة الرسمية مع بيان لماذا هو مهم.</p>
+          <p class="small text-muted">ما دُرّس خارج القائمة الرسمية — <strong>العنوان + سبب الإضافة إلزامي</strong>.</p>
           <div id="extraTopicsEditor"></div>
           <button type="button" class="btn btn-sm btn-outline-secondary" id="btnAddExtra">+ إضافة</button>
         </div>
       </div>
 
       <div class="card mb-3" id="qualityExtraCard">
-        <div class="card-header fw-semibold">4 — المراجع وطرق التقييم والملاحظات والتوصيات</div>
+        <div class="card-header fw-semibold">4 — التقييم (من الصفحة) · المراجع · التوصيات</div>
         <div class="card-body">
-          <p class="small" id="booksHint">يُفضَّل كتابان رسميّان على الأقل (إلزامي عند إرسال التقرير النهائي) — لكل كتاب: عنوان + تاريخ إصدار.</p>
-          <h6 class="fw-semibold small">المراجع</h6>
+          <h6 class="fw-semibold small">طرق التقييم <span class="badge bg-secondary">من صفحة المقرر — للعرض</span></h6>
+          <div id="methodsEditor" class="mb-3"></div>
+          <p class="small text-muted" id="methodsHint">لتغيير الطرق أو الأوزان افتح صفحة المقرر.</p>
+          <h6 class="fw-semibold small">المراجع <span class="badge bg-info text-dark">لقطة قابلة للتأكيد/التعديل</span></h6>
+          <p class="small" id="booksHint">يُفضَّل كتابان رسميّان على الأقل (إلزامي عند إرسال التقرير النهائي).</p>
           <div id="refsEditor"></div>
-          <button type="button" class="btn btn-sm btn-outline-secondary mb-3" id="btnAddRef">+ مرجع</button>
-          <h6 class="fw-semibold small">طرق التقييم المختارة</h6>
-          <div id="methodsEditor"></div>
-          <button type="button" class="btn btn-sm btn-outline-secondary mb-3" id="btnAddMethod">+ طريقة</button>
+          <div class="d-flex gap-2 flex-wrap mb-3">
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="btnAddRef">+ مرجع</button>
+            <button type="button" class="btn btn-sm btn-outline-primary" id="btnRefreshRefs">حدّث من صفحة المقرر</button>
+          </div>
           <label class="form-label small">ملاحظات الأستاذ</label>
           <textarea id="instructorComments" class="form-control form-control-sm mb-2" rows="2" placeholder="ملاحظات عامة حول التنفيذ أو الظروف"></textarea>
-          <label class="form-label small">توصيات التحسين</label>
-          <textarea id="instructorRecommendations" class="form-control form-control-sm" rows="2" placeholder="توصيات للفصل القادم / لجنة البرنامج / الاعتماد"></textarea>
+          <label class="form-label small">توصيات الأستاذ <span class="text-danger" id="recRequiredMark"></span></label>
+          <textarea id="instructorRecommendations" class="form-control form-control-sm" rows="3" placeholder="توصيات للفصل القادم / لجنة البرنامج / تحديث المفردات أو التقييم"></textarea>
         </div>
       </div>
 
@@ -109,9 +127,37 @@
     const tgid = Number(params.get('teaching_group_id') || '0');
     const courseParam = (params.get('course_name') || '').trim();
     const phaseParam = (params.get('phase') || '').trim();
-    let state = { courseName: courseParam, tgid, baseline: null, phase: phaseParam === 'final' ? 'final' : 'partial', report: null, policy: {} };
+    let state = { courseName: courseParam, tgid, baseline: null, phase: phaseParam === 'final' ? 'final' : 'partial', report: null, policy: {}, coursePage: null };
 
     function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+
+    function listHtml(items, field) {
+      if (!items || !items.length) return '<span class="text-muted">لا بيانات في صفحة المقرر</span>';
+      return '<ol class="mb-0 pe-3">' + items.map(it => {
+        if (field === 'topics') return '<li>' + esc(it.topic_title || it.title || '') + '</li>';
+        if (field === 'outcomes') return '<li>' + (it.code ? '<strong>' + esc(it.code) + '</strong>: ' : '') + esc(it.title || it.title_ar || '') + '</li>';
+        return '<li>' + esc(it.title || it.objective || '') + '</li>';
+      }).join('') + '</ol>';
+    }
+
+    function applyCoursePage(page) {
+      state.coursePage = page || null;
+      const link = document.getElementById('linkCoursePage');
+      if (link && page && page.course_page_url) link.href = page.course_page_url;
+      document.getElementById('cpObjectives').innerHTML = listHtml(page && page.objectives, 'objectives');
+      document.getElementById('cpOutcomes').innerHTML = listHtml(page && page.outcomes, 'outcomes');
+      document.getElementById('cpTopics').innerHTML = listHtml(page && page.topics, 'topics');
+      const ba = document.getElementById('blockersAlert');
+      if (page && page.blockers && page.blockers.length) {
+        ba.classList.remove('d-none');
+        ba.innerHTML = 'أكمل صفحة المقرر أولاً: <ul class="mb-1">' +
+          page.blockers.map(b => '<li>' + esc(b) + '</li>').join('') +
+          '</ul><a href="' + esc(page.course_page_url || '/course_page') + '">فتح صفحة المقرر</a>';
+      } else {
+        ba.classList.add('d-none');
+      }
+      document.getElementById('recRequiredMark').textContent = state.phase === 'final' ? '(إلزامي للنهائي)' : '';
+    }
 
     async function loadCourseName() {
       if (state.courseName || !tgid) return;
@@ -123,7 +169,7 @@
 
     function baselineStatusAr(st) {
       const m = {
-        approved: 'معتمدة من رئيس القسم (مخزون المقرر)',
+        approved: 'معتمدة (من صفحة المقرر / رئيس القسم)',
         pending_hod: 'بانتظار اعتماد رئيس القسم',
         draft: 'مسودة — لم تُرسل بعد',
         superseded: 'نسخة قديمة',
@@ -132,23 +178,28 @@
       return m[st] || st || '—';
     }
 
+    function fromCoursePageLocked() {
+      return !!(state.coursePage && state.coursePage.topics_locked);
+    }
+
     function renderTopicsEditor() {
       const el = document.getElementById('topicsEditor');
       const topics = (state.baseline && state.baseline.topics) ? state.baseline.topics : [{ topic_title: '' }];
       const st = (state.baseline && state.baseline.status) || 'none';
       document.getElementById('baselineStatus').textContent = 'حالة قائمة المفردات: ' + baselineStatusAr(st) +
         (state.baseline ? (' — إصدار ' + (state.baseline.version || 1)) : '');
-      const locked = st === 'approved' || st === 'pending_hod';
-      document.getElementById('btnAddTopic').classList.toggle('d-none', locked);
-      document.getElementById('btnSaveBaseline').classList.toggle('d-none', locked);
-      document.getElementById('btnSubmitBaseline').classList.toggle('d-none', locked);
+      const locked = st === 'approved' || st === 'pending_hod' || fromCoursePageLocked();
+      document.getElementById('baselineEditBtns').classList.toggle('d-none', locked || fromCoursePageLocked());
+      document.getElementById('baselineHint').textContent = fromCoursePageLocked()
+        ? 'المفردات مثبتة من صفحة المقرر — عدّلها من هناك إن لزم (رئيس القسم بعد القفل).'
+        : 'إن لم تُكمل صفحة المقرر يمكن إدخال مسودة هنا وإرسالها للاعتماد.';
       el.innerHTML = topics.map((t, i) =>
         '<div class="input-group input-group-sm mb-1 topic-row">' +
         '<span class="input-group-text">' + (i + 1) + '</span>' +
         '<input class="form-control topic-title" value="' + esc(t.topic_title) + '" ' + (locked ? 'disabled' : '') + '>' +
         (locked ? '' : '<button type="button" class="btn btn-outline-danger btn-del-topic">×</button>') +
         '</div>'
-      ).join('');
+      ).join('') || '<span class="text-muted small">لا مفردات — أكمل صفحة المقرر.</span>';
       el.querySelectorAll('.btn-del-topic').forEach(btn => {
         btn.onclick = () => { btn.closest('.topic-row').remove(); };
       });
@@ -260,16 +311,24 @@
 
     function renderMethods() {
       const el = document.getElementById('methodsEditor');
-      const rows = (state.report && state.report.assessment_methods) || [];
-      const data = rows.length ? rows : [{ method_label: '', weight_pct: '', notes: '' }];
-      el.innerHTML = data.map(m =>
-        '<div class="row g-1 mb-1 method-row">' +
-        '<div class="col-md-5"><input class="form-control form-control-sm method-label" placeholder="طريقة التقييم" value="' + esc(m.method_label||'') + '"></div>' +
-        '<div class="col-md-2"><input type="number" class="form-control form-control-sm method-weight" placeholder="وزن %" value="' + (m.weight_pct != null ? m.weight_pct : '') + '"></div>' +
-        '<div class="col-md-4"><input class="form-control form-control-sm method-notes" placeholder="ملاحظات" value="' + esc(m.notes||'') + '"></div>' +
-        '<div class="col-md-1"><button type="button" class="btn btn-sm btn-outline-danger btn-del-method">×</button></div></div>'
-      ).join('');
-      el.querySelectorAll('.btn-del-method').forEach(btn => { btn.onclick = () => btn.closest('.method-row').remove(); });
+      const rows = (state.report && state.report.assessment_methods) ||
+        (state.coursePage && state.coursePage.assessment_methods) || [];
+      if (!rows.length) {
+        el.innerHTML = '<div class="alert alert-warning small mb-0">لم تُكمل طرق التقييم (مجموع 100%) — <a href="' +
+          esc((state.coursePage && state.coursePage.course_page_url) || '/course_page') + '">صفحة المقرر</a></div>';
+        return;
+      }
+      let html = '<table class="table table-sm mb-0"><thead><tr><th>التصنيف / البند</th><th>الوزن %</th></tr></thead><tbody>';
+      rows.forEach(m => {
+        html += '<tr><td><strong>' + esc(m.method_label || '') + '</strong></td><td>' +
+          (m.weight_pct != null ? esc(m.weight_pct) : '—') + '</td></tr>';
+        (m.children || []).forEach(ch => {
+          html += '<tr class="table-light"><td class="ps-4 small">— ' + esc(ch.method_label || '') +
+            '</td><td class="small">' + (ch.weight_pct != null ? esc(ch.weight_pct) : '—') + '</td></tr>';
+        });
+      });
+      html += '</tbody></table>';
+      el.innerHTML = html;
     }
 
     function collectExtras() {
@@ -288,12 +347,9 @@
       })).filter(x => x.title.trim());
     }
     function collectMethods() {
-      return Array.from(document.querySelectorAll('.method-row')).map((row, i) => ({
-        sort_order: i,
-        method_label: row.querySelector('.method-label')?.value || '',
-        weight_pct: row.querySelector('.method-weight')?.value === '' ? null : Number(row.querySelector('.method-weight').value),
-        notes: row.querySelector('.method-notes')?.value || ''
-      })).filter(x => x.method_label.trim());
+      // مصدر الحقيقة: صفحة المقرر — لا جمع من حقول قابلة للتحرير
+      return (state.coursePage && state.coursePage.assessment_methods) ||
+        (state.report && state.report.assessment_methods) || [];
     }
 
     function updateOverall() {
@@ -311,9 +367,11 @@
       const r = await fetch('/course_delivery/report?teaching_group_id=' + tgid + '&phase=' + state.phase, { credentials: 'include' });
       const j = await r.json().catch(() => ({}));
       state.report = j.report;
-      if (j.baseline && j.baseline.status === 'approved') state.baseline = j.baseline;
+      if (j.course_page) applyCoursePage(j.course_page);
+      if (j.baseline && (j.baseline.status === 'approved' || (j.baseline.topics || []).length)) state.baseline = j.baseline;
       if (j.partial_min_pct != null) state.policy.partial_min_pct = j.partial_min_pct;
       if (j.final_min_pct != null) state.policy.final_min_pct = j.final_min_pct;
+      renderTopicsEditor();
       renderReportEditor();
       const gs = await fetch('/course_delivery/gate_status?teaching_group_id=' + tgid + '&phase=' + state.phase, { credentials: 'include' });
       const gj = await gs.json().catch(() => ({}));
@@ -347,10 +405,17 @@
       state.report.references = collectRefs().concat([{ ref_type: 'book', title: '', publication_date: '', url_or_isbn: '' }]);
       renderRefs();
     };
-    document.getElementById('btnAddMethod').onclick = () => {
-      state.report = state.report || {};
-      state.report.assessment_methods = collectMethods().concat([{ method_label: '', weight_pct: '', notes: '' }]);
-      renderMethods();
+    document.getElementById('btnRefreshRefs').onclick = async () => {
+      if (!tgid) return;
+      const r = await fetch('/course_delivery/report?teaching_group_id=' + tgid + '&phase=' + state.phase + '&refresh_refs=1', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (j.course_page) applyCoursePage(j.course_page);
+      if (j.report) {
+        state.report = state.report || {};
+        state.report.references = j.report.references || (j.course_page && j.course_page.references_parsed) || [];
+        renderRefs();
+      }
+      alert('تم تحديث المراجع من صفحة المقرر');
     };
 
     document.getElementById('btnSaveBaseline').onclick = async () => {

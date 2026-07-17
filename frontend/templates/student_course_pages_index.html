@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>مقرراتي الدراسية</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+{% include "base_nav.html" %}
+<main class="container-main container-1100 theme-formal">
+  <div class="page-header">
+    <h1 class="page-title">مقرراتي الدراسية</h1>
+    <p class="page-subtitle">صفحات المقررات المسجّل بها — أهداف ومفردات ومواد</p>
+  </div>
+  <div id="list" class="list-group">
+    <div class="text-muted small p-2">جاري التحميل…</div>
+  </div>
+</main>
+<script>
+(async function(){
+  const r = await fetch('/course_pages/student/my_courses', {credentials:'include'});
+  const j = await r.json();
+  const box = document.getElementById('list');
+  if (!r.ok) {
+    box.innerHTML = '<div class="text-danger small">'+(j.message||'تعذر التحميل')+'</div>';
+    return;
+  }
+  if (!j.items || !j.items.length) {
+    box.innerHTML = '<div class="text-muted small">لا مقررات مسجّلة.</div>';
+    return;
+  }
+  function esc(s){ return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  box.innerHTML = j.items.map(it =>
+    '<a class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" href="'+esc(it.page_url)+'">' +
+    '<span><strong>'+esc(it.course_name)+'</strong></span>' +
+    '<span class="small text-muted">' +
+    (it.has_topics?'مفردات ':'') + (it.has_objectives?'أهداف ':'') + (it.has_outcomes?'مخرجات':'') +
+    '</span></a>'
+  ).join('');
+})();
+</script>
+</body>
+</html>

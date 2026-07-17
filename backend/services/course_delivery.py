@@ -438,7 +438,19 @@ def _replace_report_references(conn, report_id: int, references: list[dict]) -> 
 def _replace_assessment_methods(conn, report_id: int, methods: list[dict]) -> None:
     cur = conn.cursor()
     cur.execute("DELETE FROM course_delivery_assessment_methods WHERE report_id=?", (int(report_id),))
-    for i, m in enumerate(methods or []):
+    flat: list[dict] = []
+    for m in methods or []:
+        flat.append(m)
+        for ch in m.get("children") or []:
+            flat.append(
+                {
+                    "method_label": "— " + (ch.get("method_label") or ""),
+                    "weight_pct": ch.get("weight_pct"),
+                    "notes": ch.get("notes") or "",
+                    "sort_order": ch.get("sort_order"),
+                }
+            )
+    for i, m in enumerate(flat):
         label = (m.get("method_label") or m.get("label") or "").strip()
         if not label:
             continue
@@ -463,7 +475,7 @@ def _replace_assessment_methods(conn, report_id: int, methods: list[dict]) -> No
         )
 
 
-def validate_quality_report_for_submit(rep: dict, *, require_books: bool = True, require_assessments: bool = True) -> str | None:
+def validate_quality_report_for_submit(rep: dict, *, require_books: bool = True, require_assessments: bool = True, require_recommendations: bool = False) -> str | None:
     """يعيد رسالة خطأ عربية أو None إن جاز الإرسال."""
     items = rep.get("items") or []
     incomplete = list_incomplete_topics(items)
@@ -484,7 +496,10 @@ def validate_quality_report_for_submit(rep: dict, *, require_books: bool = True,
     if require_assessments:
         methods = rep.get("assessment_methods") or []
         if not methods:
-            return "اختر طريقة تقييم واحدة على الأقل لهذا المقرر"
+            return "اختر طرق التقييم من صفحة المقرر أولاً"
+    if require_recommendations:
+        if len((rep.get("instructor_recommendations") or "").strip()) < 10:
+            return "أدخل توصيات الأستاذ للتقرير النهائي (10 أحرف على الأقل)"
     return None
 
 
@@ -2018,23 +2033,77 @@ def api_baseline_review(baseline_id: int):
 def api_report_get():
     tgid = request.args.get("teaching_group_id", type=int)
     phase = (request.args.get("phase") or PHASE_PARTIAL).strip()
+    refresh_refs = request.args.get("refresh_refs") == "1"
     if not tgid:
         return jsonify({"status": "error", "message": "teaching_group_id مطلوب"}), 400
     with get_connection() as conn:
-        sem = _current_semester_label(conn)
-        rep = get_delivery_report(conn, tgid, sem, phase)
-        baseline = None
-        if rep:
-            baseline = get_baseline_with_topics(conn, int(rep["baseline_id"]))
-        else:
-            from backend.services import teaching_groups as tg
+        from backend.services import teaching_groups as tg
+        from backend.services.course_pages import delivery_source_bundle
 
-            g = tg.get_teaching_group(conn, tgid)
-            if g:
-                baseline = get_active_baseline(conn, g.get("course_name") or "")
-    return jsonify({"status": "ok", "report": rep, "baseline": baseline, "semester": sem,
-                    "incomplete_threshold": INCOMPLETE_PCT_THRESHOLD,
-                    "min_book_references": MIN_BOOK_REFERENCES}), 200
+        sem = _current_semester_label(conn)
+        g = tg.get_teaching_group(conn, tgid)
+        cn = (g.get("course_name") or "").strip() if g else ""
+        iid = session.get("instructor_id")
+        try:
+            iid_i = int(iid) if iid else None
+        except (TypeError, ValueError):
+            iid_i = None
+        page = delivery_source_bundle(
+            conn,
+            course_name=cn,
+            teaching_group_id=tgid,
+            instructor_id=iid_i or (int(g["instructor_id"]) if g and g.get("instructor_id") else None),
+            semester=sem,
+        )
+        # أعد جلب baseline بعد مزامنة محتملة من صفحة المقرر
+        baseline = get_active_baseline(conn, cn) if cn else None
+        rep = get_delivery_report(conn, tgid, sem, phase)
+        if rep:
+            bl2 = get_baseline_with_topics(conn, int(rep["baseline_id"]))
+            if bl2:
+                baseline = bl2
+            # إن لم تُحفظ طرق تقييم بعد — املأ من صفحة المقرر للعرض
+            if not (rep.get("assessment_methods") or []) and page.get("assessment_methods"):
+                rep = dict(rep)
+                rep["assessment_methods"] = list(page["assessment_methods"])
+                rep["assessment_from_course_page"] = True
+            if refresh_refs or not (rep.get("references") or []):
+                if page.get("references_parsed"):
+                    rep = dict(rep)
+                    rep["references"] = list(page["references_parsed"])
+                    rep["references_from_course_page"] = True
+        else:
+            # مسودة افتراضية للعرض قبل أول حفظ
+            rep = {
+                "id": None,
+                "status": "draft",
+                "items": [],
+                "extra_topics": [],
+                "references": list(page.get("references_parsed") or []),
+                "assessment_methods": list(page.get("assessment_methods") or []),
+                "instructor_comments": "",
+                "instructor_recommendations": "",
+                "assessment_from_course_page": True,
+                "references_from_course_page": True,
+            }
+        policy = get_gate_policy(
+            conn,
+            int(g.get("department_id") or 0) or None if g else None,
+            sem,
+        )
+    return jsonify(
+        {
+            "status": "ok",
+            "report": rep,
+            "baseline": baseline,
+            "semester": sem,
+            "course_page": page,
+            "incomplete_threshold": INCOMPLETE_PCT_THRESHOLD,
+            "min_book_references": MIN_BOOK_REFERENCES,
+            "partial_min_pct": policy["partial_min_pct"],
+            "final_min_pct": policy["final_min_pct"],
+        }
+    ), 200
 
 
 @course_delivery_bp.route("/report", methods=["POST"])
@@ -2046,7 +2115,6 @@ def api_report_save():
     items = data.get("items") or []
     extra_topics = data.get("extra_topics") or []
     references = data.get("references") or []
-    assessment_methods = data.get("assessment_methods") or []
     instructor_comments = (data.get("instructor_comments") or "").strip()
     instructor_recommendations = (data.get("instructor_recommendations") or "").strip()
     if not tgid:
@@ -2054,15 +2122,55 @@ def api_report_save():
     instructor_id = session.get("instructor_id")
     with get_connection() as conn:
         from backend.services import teaching_groups as tg
+        from backend.services.course_pages import delivery_source_bundle
 
         g = tg.get_teaching_group(conn, tgid)
         if not g:
             return jsonify({"status": "error", "message": "مجموعة تدريس غير موجودة"}), 404
         if int(g.get("instructor_id") or 0) != int(instructor_id or 0) and not _is_hod_or_admin():
             return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
-        baseline = get_active_baseline(conn, g.get("course_name") or "")
+        cn = g.get("course_name") or ""
+        try:
+            iid_i = int(instructor_id) if instructor_id else int(g.get("instructor_id") or 0)
+        except (TypeError, ValueError):
+            iid_i = int(g.get("instructor_id") or 0) or None
+        page = delivery_source_bundle(
+            conn,
+            course_name=cn,
+            teaching_group_id=tgid,
+            instructor_id=iid_i,
+            semester=_current_semester_label(conn),
+        )
+        if not page.get("ready_for_report"):
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "؛ ".join(page.get("blockers") or ["أكمل صفحة المقرر أولاً"]),
+                    "course_page": page,
+                }
+            ), 400
+        baseline = get_active_baseline(conn, cn)
         if not baseline:
-            return jsonify({"status": "error", "message": "لا توجد قائمة مفردات معتمدة للمقرر"}), 400
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "لا توجد قائمة مفردات معتمدة — احفظ مفردات صفحة المقرر نهائياً",
+                    "course_page": page,
+                }
+            ), 400
+        # طرق التقييم دائماً من صفحة المقرر (مصدر الحقيقة)
+        assessment_methods = list(page.get("assessment_methods") or [])
+        if not assessment_methods:
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "اختر طرق التقييم من صفحة المقرر أولاً",
+                    "course_page": page,
+                }
+            ), 400
+        # إن لم تُرسل مراجع، استخدم لقطة الصفحة
+        if not references and page.get("references_parsed"):
+            references = list(page["references_parsed"])
         sem = _current_semester_label(conn)
         dept_id = int(g.get("department_id") or 0) or None
         policy = get_gate_policy(conn, dept_id, sem)
@@ -2101,10 +2209,11 @@ def api_report_save():
         cur.execute(
             """
             UPDATE course_delivery_reports
-            SET overall_pct=?, instructor_comments=?, instructor_recommendations=?, updated_at=?
+            SET overall_pct=?, instructor_comments=?, instructor_recommendations=?, updated_at=?,
+                baseline_id=?
             WHERE id=?
             """,
-            (overall, instructor_comments, instructor_recommendations, now, rid),
+            (overall, instructor_comments, instructor_recommendations, now, int(baseline["id"]), rid),
         )
         cur.execute("DELETE FROM course_delivery_report_items WHERE report_id=?", (rid,))
         for it in items:
@@ -2119,15 +2228,22 @@ def api_report_save():
                 """,
                 (rid, tid, pct, (it.get("incomplete_reason") or "").strip()),
             )
-        # مفردات خارج المقرر: مسموح في الجزئي والنهائي
         cur.execute("DELETE FROM course_delivery_extra_topics WHERE report_id=?", (rid,))
         for ex in extra_topics:
             title = (ex.get("title") or "").strip()
             if not title:
                 continue
+            reason = (ex.get("reason") or "").strip()
+            if not reason:
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": f"برّر سبب إضافة المفردة خارج المقرر: «{title}»",
+                    }
+                ), 400
             cur.execute(
                 "INSERT INTO course_delivery_extra_topics (report_id, title, reason) VALUES (?, ?, ?)",
-                (rid, title, (ex.get("reason") or "").strip()),
+                (rid, title, reason),
             )
         _replace_report_references(conn, rid, references)
         _replace_assessment_methods(conn, rid, assessment_methods)
@@ -2137,6 +2253,7 @@ def api_report_save():
         "status": "ok",
         "report": rep,
         "overall_pct": overall,
+        "course_page": page,
         "incomplete_threshold": INCOMPLETE_PCT_THRESHOLD,
         "min_book_references": MIN_BOOK_REFERENCES,
         "partial_min_pct": policy["partial_min_pct"],
@@ -2172,7 +2289,8 @@ def api_report_submit(report_id: int):
         err = validate_quality_report_for_submit(
             rep,
             require_books=require_books,
-            require_assessments=require_books,
+            require_assessments=True,
+            require_recommendations=(phase == PHASE_FINAL),
         )
         if err:
             return jsonify({"status": "error", "message": err}), 400

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>مقرر مسجّل</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+{% include "base_nav.html" %}
+<main class="container-main container-1100 theme-formal">
+  <div class="page-header d-flex justify-content-between align-items-start flex-wrap gap-2">
+    <div>
+      <h1 class="page-title" id="courseTitle">المقرر</h1>
+      <p class="page-subtitle">نظرة المقرر · التقييم · المواد · الإعلانات</p>
+    </div>
+    <a class="btn btn-outline-secondary btn-sm" href="/my_course_pages">مقرراتي الدراسية</a>
+  </div>
+  <div id="loadMsg" class="text-muted small">جاري التحميل…</div>
+  <div id="mainPanel" class="d-none">
+    <ul class="nav nav-tabs mb-3" id="stTabs">
+      <li class="nav-item"><button class="nav-link active" data-tab="overview" type="button">نظرة عامة</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="assess" type="button">التقويم والمراجع</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="materials" type="button">المواد والمحاضرات</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="anns" type="button">الإعلانات</button></li>
+    </ul>
+    <div id="tab-overview">
+      <div class="row g-3">
+        <div class="col-md-4"><div class="card h-100"><div class="card-header fw-semibold">الأهداف</div><div class="card-body small" id="objBox"></div></div></div>
+        <div class="col-md-4"><div class="card h-100"><div class="card-header fw-semibold">المخرجات</div><div class="card-body small" id="outBox"></div></div></div>
+        <div class="col-md-4"><div class="card h-100"><div class="card-header fw-semibold">المفردات</div><div class="card-body small" id="topBox"></div></div></div>
+      </div>
+    </div>
+    <div id="tab-assess" class="d-none">
+      <div class="row g-3">
+        <div class="col-md-6"><div class="card"><div class="card-header fw-semibold">طرق التقييم</div><div class="card-body" id="assessBox"></div></div></div>
+        <div class="col-md-6"><div class="card"><div class="card-header fw-semibold">المراجع</div><div class="card-body" id="refsBox" style="white-space:pre-wrap"></div></div></div>
+      </div>
+    </div>
+    <div id="tab-materials" class="d-none">
+      <div id="matBox" class="list-group"></div>
+    </div>
+    <div id="tab-anns" class="d-none">
+      <div id="annBox" class="list-group"></div>
+    </div>
+  </div>
+</main>
+<script>
+(function(){
+  const params = new URLSearchParams(location.search);
+  const courseName = params.get('course_name') || '';
+  const tgid = params.get('teaching_group_id') || '';
+  function esc(s){ return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function listHtml(items, field){
+    if (!items || !items.length) return '<span class="text-muted">لا بيانات</span>';
+    return '<ol class="mb-0 pe-3">' + items.map(it => {
+      if (field === 'topics') return '<li>'+esc(it.topic_title||it.title||'')+'</li>';
+      if (field === 'outcomes') return '<li>'+(it.code?'<strong>'+esc(it.code)+'</strong>: ':'')+esc(it.title||it.title_ar||'')+'</li>';
+      return '<li>'+esc(it.title||it.objective||'')+'</li>';
+    }).join('') + '</ol>';
+  }
+  async function load(){
+    if (!courseName) {
+      document.getElementById('loadMsg').textContent = 'حدّد المقرر';
+      return;
+    }
+    const q = new URLSearchParams({course_name: courseName});
+    if (tgid) q.set('teaching_group_id', tgid);
+    const r = await fetch('/course_pages/student/course?' + q.toString(), {credentials:'include'});
+    const j = await r.json();
+    if (!r.ok) {
+      document.getElementById('loadMsg').textContent = j.message || 'تعذر التحميل';
+      return;
+    }
+    document.getElementById('loadMsg').classList.add('d-none');
+    document.getElementById('mainPanel').classList.remove('d-none');
+    document.getElementById('courseTitle').textContent = courseName;
+    const cat = j.catalog || {};
+    document.getElementById('objBox').innerHTML = listHtml(cat.objectives, 'objectives');
+    document.getElementById('outBox').innerHTML = listHtml(cat.outcomes, 'outcomes');
+    document.getElementById('topBox').innerHTML = listHtml(cat.topics, 'topics');
+    const sec = j.section || {};
+    const methods = j.assessment_methods || [];
+    if (methods.length) {
+      document.getElementById('assessBox').innerHTML = '<ul class="mb-0 pe-3">' + methods.map(m => {
+        let li = '<li><strong>'+esc(m.method_label)+'</strong>' +
+          (m.weight_pct != null ? ' — '+esc(m.weight_pct)+'%' : '') + '</li>';
+        if (m.children && m.children.length) {
+          li += '<ul class="small text-muted">' + m.children.map(ch =>
+            '<li>'+esc(ch.method_label)+(ch.weight_pct != null ? ' — '+esc(ch.weight_pct)+'%' : '')+'</li>'
+          ).join('') + '</ul>';
+        }
+        return li;
+      }).join('') + '</ul>';
+    } else {
+      document.getElementById('assessBox').textContent = sec.assessment_text || cat.assessment_template || '—';
+    }
+    document.getElementById('refsBox').textContent = sec.references_text || cat.references_template || '—';
+    const typeLabel = {
+      lecture_recorded:'محاضرة مسجّلة', lecture_live:'محاضرة مباشرة',
+      notes:'ملاحظة', past_exam:'امتحان سابق', reference:'مرجع', other:'أخرى'
+    };
+    const mats = j.materials || [];
+    document.getElementById('matBox').innerHTML = mats.length ? mats.map(m => {
+      let act = '';
+      if (m.material_type === 'lecture_live' && m.external_url) {
+        act = '<a class="btn btn-sm btn-success" href="'+esc(m.external_url)+'" target="_blank" rel="noopener">انضمام</a>';
+        if (m.meeting_passcode) act += ' <span class="small text-muted">رمز: '+esc(m.meeting_passcode)+'</span>';
+      } else {
+        if (m.external_url) act += '<a class="btn btn-sm btn-outline-primary" href="'+esc(m.external_url)+'" target="_blank" rel="noopener">فتح</a> ';
+        if (m.file_url) act += '<a class="btn btn-sm btn-outline-secondary" href="'+esc(m.file_url)+'">تحميل</a>';
+      }
+      return '<div class="list-group-item d-flex justify-content-between align-items-start flex-wrap gap-2">' +
+        '<div><strong>'+esc(m.display_title)+'</strong> <span class="badge bg-light text-dark">'+(typeLabel[m.material_type]||'')+'</span>' +
+        (m.week_no ? ' <span class="badge bg-info text-dark">أسبوع '+m.week_no+'</span>' : '') +
+        (m.live_starts_at ? '<div class="small text-muted">'+esc(m.live_starts_at)+'</div>' : '') +
+        '</div><div>'+act+'</div></div>';
+    }).join('') : '<div class="text-muted small">لا مواد منشورة.</div>';
+    const anns = j.announcements || [];
+    document.getElementById('annBox').innerHTML = anns.length ? anns.map(a =>
+      '<div class="list-group-item"><strong>'+esc(a.title||'إعلان')+'</strong><div class="small" style="white-space:pre-wrap">'+esc(a.body)+'</div><div class="small text-muted">'+esc(a.created_at||'')+'</div></div>'
+    ).join('') : '<div class="text-muted small">لا إعلانات.</div>';
+  }
+  document.querySelectorAll('#stTabs [data-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#stTabs .nav-link').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      ['overview','assess','materials','anns'].forEach(t => {
+        document.getElementById('tab-'+t).classList.toggle('d-none', t !== btn.getAttribute('data-tab'));
+      });
+    });
+  });
+  load();
+})();
+</script>
+</body>
+</html>

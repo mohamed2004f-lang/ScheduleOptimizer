@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>مكتبي</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+{% include "base_nav.html" %}
+<main class="container-main container-1100 theme-formal">
+  <div class="page-header d-flex justify-content-between align-items-start flex-wrap gap-2">
+    <div>
+      <h1 class="page-title">مكتبي</h1>
+      <p class="page-subtitle">ملفاتك الشخصية — انشر منها لمقرراتك المكلّف بها</p>
+    </div>
+    <a class="btn btn-outline-secondary btn-sm" href="/my_courses">← مقرراتي</a>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header fw-semibold">رفع ملف</div>
+        <div class="card-body">
+          <input type="file" id="fileInput" class="form-control form-control-sm mb-2">
+          <input id="upTitle" class="form-control form-control-sm mb-2" placeholder="العنوان">
+          <div class="row g-2">
+            <div class="col-6">
+              <select id="upType" class="form-select form-select-sm">
+                <option value="lecture_recorded">محاضرة</option>
+                <option value="notes">ملاحظة</option>
+                <option value="past_exam">امتحان سابق</option>
+                <option value="reference">مرجع</option>
+                <option value="other">أخرى</option>
+              </select>
+            </div>
+            <div class="col-6"><input id="upFolder" class="form-control form-control-sm" placeholder="مجلد (اختياري)"></div>
+          </div>
+          <input id="upTags" class="form-control form-control-sm mt-2" placeholder="وسوم مفصولة بفاصلة">
+          <button type="button" class="btn btn-sm btn-primary mt-2" id="btnUpload">رفع</button>
+          <p class="small text-muted mb-0 mt-1">الحد الأقصى 100MB — PDF/Office/صور/MP4</p>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header fw-semibold">إضافة رابط</div>
+        <div class="card-body">
+          <input id="linkUrl" class="form-control form-control-sm mb-2" placeholder="https://…">
+          <input id="linkTitle" class="form-control form-control-sm mb-2" placeholder="العنوان">
+          <select id="linkType" class="form-select form-select-sm mb-2">
+            <option value="lecture_recorded">محاضرة مسجّلة</option>
+            <option value="reference">مرجع</option>
+            <option value="other">أخرى</option>
+          </select>
+          <button type="button" class="btn btn-sm btn-outline-primary" id="btnLink">حفظ الرابط</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="d-flex gap-2 mb-2 flex-wrap">
+    <input id="searchQ" class="form-control form-control-sm" style="max-width:220px" placeholder="بحث…">
+    <select id="folderFilter" class="form-select form-select-sm" style="max-width:180px"><option value="">كل المجلدات</option></select>
+    <button type="button" class="btn btn-sm btn-outline-secondary" id="btnReload">تحديث</button>
+  </div>
+  <div id="libList" class="list-group"></div>
+  <div id="toast" class="alert d-none mt-3"></div>
+</main>
+<script>
+(function(){
+  function toast(msg, ok){
+    const el = document.getElementById('toast');
+    el.className = 'alert mt-3 alert-' + (ok ? 'success' : 'danger');
+    el.textContent = msg;
+    el.classList.remove('d-none');
+    setTimeout(() => el.classList.add('d-none'), 4000);
+  }
+  function csrfToken(){
+    const m = document.querySelector('meta[name="csrf-token"]');
+    return m ? m.getAttribute('content') : '';
+  }
+  function esc(s){ return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  async function load(){
+    const q = new URLSearchParams();
+    const s = document.getElementById('searchQ').value.trim();
+    const f = document.getElementById('folderFilter').value;
+    if (s) q.set('q', s);
+    if (f) q.set('folder', f);
+    const r = await fetch('/course_pages/library?' + q.toString(), {credentials:'include'});
+    const j = await r.json();
+    const box = document.getElementById('libList');
+    const sel = document.getElementById('folderFilter');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">كل المجلدات</option>' + (j.folders||[]).map(x => '<option value="'+esc(x)+'">'+esc(x)+'</option>').join('');
+    sel.value = cur;
+    if (!j.items || !j.items.length) {
+      box.innerHTML = '<div class="text-muted small p-2">لا ملفات بعد.</div>';
+      return;
+    }
+    box.innerHTML = j.items.map(it => {
+      let links = '';
+      if (it.download_url) links += '<a class="btn btn-sm btn-outline-secondary" href="'+it.download_url+'">تحميل</a> ';
+      if (it.external_url) links += '<a class="btn btn-sm btn-outline-primary" href="'+esc(it.external_url)+'" target="_blank" rel="noopener">رابط</a> ';
+      links += '<button type="button" class="btn btn-sm btn-outline-danger lib-arch" data-id="'+it.id+'">أرشفة</button>';
+      return '<div class="list-group-item d-flex justify-content-between align-items-start flex-wrap gap-2">' +
+        '<div><span class="badge bg-dark me-1">#'+it.id+'</span><strong>'+esc(it.title)+'</strong> '+
+        '<span class="badge bg-light text-dark">'+esc(it.file_type)+'</span> '+
+        (it.folder ? '<span class="badge bg-info text-dark">'+esc(it.folder)+'</span> ' : '') +
+        ((it.tags||[]).length ? '<div class="small text-muted">'+esc((it.tags||[]).join(', '))+'</div>' : '') +
+        '<div class="small text-muted">انسخ المعرّف <code>'+it.id+'</code> عند النشر من صفحة المقرر</div></div>' +
+        '<div class="d-flex gap-1">'+links+'</div></div>';
+    }).join('');
+    box.querySelectorAll('.lib-arch').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('أرشفة هذا الملف؟')) return;
+        const r2 = await fetch('/course_pages/library/' + btn.getAttribute('data-id'), {
+          method:'DELETE', credentials:'include',
+          headers: {'X-CSRFToken': csrfToken()}
+        });
+        const j2 = await r2.json();
+        toast(j2.message || (r2.ok ? 'تمت الأرشفة' : 'فشل'), r2.ok);
+        load();
+      });
+    });
+  }
+
+  document.getElementById('btnUpload').addEventListener('click', async () => {
+    const f = document.getElementById('fileInput').files[0];
+    if (!f) return toast('اختر ملفاً', false);
+    const fd = new FormData();
+    fd.append('file', f);
+    fd.append('title', document.getElementById('upTitle').value || f.name);
+    fd.append('file_type', document.getElementById('upType').value);
+    fd.append('folder', document.getElementById('upFolder').value);
+    const tags = document.getElementById('upTags').value.split(',').map(s => s.trim()).filter(Boolean);
+    fd.append('tags', JSON.stringify(tags));
+    const r = await fetch('/course_pages/library/upload', {
+      method:'POST', credentials:'include',
+      headers: {'X-CSRFToken': csrfToken()},
+      body: fd
+    });
+    const j = await r.json();
+    if (!r.ok) return toast(j.message || 'فشل الرفع', false);
+    toast('تم الرفع — المعرّف #' + j.id, true);
+    document.getElementById('fileInput').value = '';
+    load();
+  });
+
+  document.getElementById('btnLink').addEventListener('click', async () => {
+    const r = await fetch('/course_pages/library/link', {
+      method:'POST', credentials:'include',
+      headers: {'Content-Type':'application/json', 'X-CSRFToken': csrfToken()},
+      body: JSON.stringify({
+        url: document.getElementById('linkUrl').value.trim(),
+        title: document.getElementById('linkTitle').value.trim(),
+        file_type: document.getElementById('linkType').value
+      })
+    });
+    const j = await r.json();
+    if (!r.ok) return toast(j.message || 'فشل', false);
+    toast('تم الحفظ — #' + j.id, true);
+    load();
+  });
+
+  document.getElementById('btnReload').addEventListener('click', load);
+  document.getElementById('searchQ').addEventListener('change', load);
+  document.getElementById('folderFilter').addEventListener('change', load);
+  load();
+})();
+</script>
+</body>
+</html>

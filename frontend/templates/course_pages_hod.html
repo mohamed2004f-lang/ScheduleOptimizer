@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>صفحات المقررات — رئيس القسم</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+{% include "base_nav.html" %}
+<main class="container-main container-1100 theme-formal">
+  <div class="page-header d-flex justify-content-between align-items-start flex-wrap gap-2">
+    <div>
+      <h1 class="page-title">صفحات المقررات</h1>
+      <p class="page-subtitle">اكتمال الأهداف والمخرجات والمفردات · طلبات التعديل</p>
+    </div>
+    <a class="btn btn-outline-secondary btn-sm" href="/course_delivery_hod_page">← اعتماد التنفيذ</a>
+  </div>
+  <div id="loadMsg" class="text-muted small">جاري التحميل…</div>
+
+  <div class="card mb-3 d-none" id="reqCard">
+    <div class="card-header fw-semibold">طلبات تعديل معلّقة <span class="badge bg-warning text-dark" id="reqCount">0</span></div>
+    <div class="card-body" id="reqBox"></div>
+  </div>
+
+  <div class="card d-none" id="boardCard">
+    <div class="card-header fw-semibold">مقررات القسم</div>
+    <div class="table-responsive">
+      <table class="table table-sm align-middle mb-0">
+        <thead><tr><th>المقرر</th><th>الأهداف</th><th>المخرجات</th><th>المفردات</th><th>الاكتمال</th><th></th></tr></thead>
+        <tbody id="boardBody"></tbody>
+      </table>
+    </div>
+  </div>
+  <div id="toast" class="alert d-none mt-3"></div>
+</main>
+<script>
+(function(){
+  function toast(msg, ok){
+    const el = document.getElementById('toast');
+    el.className = 'alert mt-3 alert-' + (ok ? 'success' : 'danger');
+    el.textContent = msg;
+    el.classList.remove('d-none');
+    setTimeout(() => el.classList.add('d-none'), 4000);
+  }
+  function csrfHeaders(){
+    const m = document.querySelector('meta[name="csrf-token"]');
+    const t = m ? m.getAttribute('content') : '';
+    const h = {'Content-Type':'application/json'};
+    if (t) h['X-CSRFToken'] = t;
+    return h;
+  }
+  function esc(s){ return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function stBadge(st){
+    if (st === 'locked') return '<span class="badge bg-success">مثبت</span>';
+    if (st === 'draft') return '<span class="badge bg-warning text-dark">مسودة</span>';
+    return '<span class="badge bg-secondary">فارغ</span>';
+  }
+  async function load(){
+    const r = await fetch('/course_pages/hod/board', {credentials:'include'});
+    const j = await r.json();
+    if (!r.ok) {
+      document.getElementById('loadMsg').textContent = j.message || 'تعذر التحميل';
+      return;
+    }
+    document.getElementById('loadMsg').classList.add('d-none');
+    document.getElementById('boardCard').classList.remove('d-none');
+    const reqs = j.change_requests || [];
+    if (reqs.length) {
+      document.getElementById('reqCard').classList.remove('d-none');
+      document.getElementById('reqCount').textContent = String(reqs.length);
+      document.getElementById('reqBox').innerHTML = reqs.map(rq =>
+        '<div class="border rounded p-2 mb-2">' +
+        '<div class="d-flex justify-content-between flex-wrap gap-2">' +
+        '<div><strong>'+esc(rq.course_name)+'</strong> — حقل <code>'+esc(rq.field_name)+'</code>' +
+        '<div class="small text-muted">من: '+esc(rq.requested_by||'')+' · '+esc(rq.note||'')+'</div></div>' +
+        '<div class="d-flex gap-1">' +
+        '<button type="button" class="btn btn-sm btn-success req-act" data-id="'+rq.id+'" data-act="approve">اعتماد</button>' +
+        '<button type="button" class="btn btn-sm btn-outline-danger req-act" data-id="'+rq.id+'" data-act="reject">رفض</button>' +
+        '</div></div></div>'
+      ).join('');
+      document.querySelectorAll('.req-act').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const note = prompt('ملاحظة (اختياري):') || '';
+          const r2 = await fetch('/course_pages/hod/change_requests/' + btn.getAttribute('data-id') + '/review', {
+            method:'POST', credentials:'include', headers: csrfHeaders(),
+            body: JSON.stringify({action: btn.getAttribute('data-act'), review_note: note})
+          });
+          const j2 = await r2.json();
+          toast(j2.message || (r2.ok ? 'تم' : 'فشل'), r2.ok);
+          if (r2.ok) load();
+        });
+      });
+    }
+    const body = document.getElementById('boardBody');
+    body.innerHTML = (j.courses || []).map(c => {
+      const fs = c.field_status || {};
+      return '<tr>' +
+        '<td>'+esc(c.course_name)+'</td>' +
+        '<td>'+stBadge(fs.objectives)+'</td>' +
+        '<td>'+stBadge(fs.outcomes)+'</td>' +
+        '<td>'+stBadge(fs.topics)+'</td>' +
+        '<td><div class="progress" style="height:6px;min-width:80px"><div class="progress-bar" style="width:'+c.completeness+'%"></div></div> '+c.completeness+'%</td>' +
+        '<td><a class="btn btn-sm btn-outline-primary" href="/course_page?course_name='+encodeURIComponent(c.course_name)+'">فتح</a></td>' +
+        '</tr>';
+    }).join('') || '<tr><td colspan="6" class="text-muted">لا مقررات.</td></tr>';
+  }
+  load();
+})();
+</script>
+</body>
+</html>

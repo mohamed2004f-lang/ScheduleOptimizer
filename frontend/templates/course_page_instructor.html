@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>صفحة المقرر</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+{% include "base_nav.html" %}
+<main class="container-main container-1100 theme-formal">
+  <div class="page-header d-flex justify-content-between align-items-start flex-wrap gap-2">
+    <div>
+      <h1 class="page-title">صفحة المقرر</h1>
+      <p class="page-subtitle" id="pageSub">أهداف · مخرجات · مفردات · تقييم · مراجع · مواد</p>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-outline-primary btn-sm" href="/instructor_library">مكتبي</a>
+      <a class="btn btn-outline-secondary btn-sm" href="/my_courses">← مقرراتي</a>
+    </div>
+  </div>
+  <div id="loadMsg" class="text-muted small">جاري التحميل…</div>
+  <div id="mainPanel" class="d-none">
+    <ul class="nav nav-tabs mb-3" id="cpTabs">
+      <li class="nav-item"><button class="nav-link active" data-tab="overview" type="button">نظرة المقرر</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="assess" type="button">التقييم والمراجع</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="materials" type="button">المواد والمحاضرات</button></li>
+    </ul>
+
+    <div id="tab-overview">
+      <div class="alert alert-light border small">المفردات والأهداف والمخرجات تُقفل بعد أول حفظ نهائي — بعدها يعدّلها رئيس القسم فقط.</div>
+      <div class="row g-3">
+        <div class="col-md-4">
+          <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <strong>أهداف المقرر</strong>
+              <span class="badge" id="stObjectives">—</span>
+            </div>
+            <div class="card-body">
+              <div id="listObjectives" class="small mb-2"></div>
+              <textarea id="editObjectives" class="form-control form-control-sm mb-2" rows="4" placeholder="هدف في كل سطر"></textarea>
+              <div class="d-flex gap-1 flex-wrap">
+                <button type="button" class="btn btn-sm btn-outline-primary" data-save="objectives" data-finalize="0">حفظ مسودة</button>
+                <button type="button" class="btn btn-sm btn-success" data-save="objectives" data-finalize="1">حفظ نهائي (قفل)</button>
+                <button type="button" class="btn btn-sm btn-outline-warning d-none" id="reqObjectives">طلب تعديل</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <strong>مخرجات المقرر</strong>
+              <span class="badge" id="stOutcomes">—</span>
+            </div>
+            <div class="card-body">
+              <div id="listOutcomes" class="small mb-2"></div>
+              <textarea id="editOutcomes" class="form-control form-control-sm mb-2" rows="4" placeholder="CLO1: … (سطر لكل مخرج)"></textarea>
+              <div class="d-flex gap-1 flex-wrap">
+                <button type="button" class="btn btn-sm btn-outline-primary" data-save="outcomes" data-finalize="0">حفظ مسودة</button>
+                <button type="button" class="btn btn-sm btn-success" data-save="outcomes" data-finalize="1">حفظ نهائي (قفل)</button>
+                <button type="button" class="btn btn-sm btn-outline-warning d-none" id="reqOutcomes">طلب تعديل</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <strong>مفردات المقرر</strong>
+              <span class="badge" id="stTopics">—</span>
+            </div>
+            <div class="card-body">
+              <div id="listTopics" class="small mb-2"></div>
+              <textarea id="editTopics" class="form-control form-control-sm mb-2" rows="4" placeholder="مفرد في كل سطر"></textarea>
+              <div class="d-flex gap-1 flex-wrap">
+                <button type="button" class="btn btn-sm btn-outline-primary" data-save="topics" data-finalize="0">حفظ مسودة</button>
+                <button type="button" class="btn btn-sm btn-success" data-save="topics" data-finalize="1">حفظ نهائي (قفل)</button>
+                <button type="button" class="btn btn-sm btn-outline-warning d-none" id="reqTopics">طلب تعديل</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-assess" class="d-none">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <div class="card">
+            <div class="card-header fw-semibold">طرق التقييم (المجموع = 100%)</div>
+            <div class="card-body">
+              <p class="small text-muted mb-2">أربع تصنيفات: جزئي · عملي · نهائي · أعمال المقرر (ببنودها).</p>
+              <div id="assessCatalog" class="mb-2"></div>
+              <p class="small fw-semibold" id="assessWeightSum"></p>
+              <button type="button" class="btn btn-sm btn-primary" id="btnSaveAssess">حفظ طرق التقييم</button>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="card">
+            <div class="card-header fw-semibold">المراجع (نسخة الشعبة)</div>
+            <div class="card-body">
+              <textarea id="referencesText" class="form-control" rows="10" placeholder="مرجع في كل سطر — يُنسخ لتقرير المقرر عند الفتح"></textarea>
+              <button type="button" class="btn btn-sm btn-primary mt-2" id="btnSaveRefs">حفظ المراجع</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-materials" class="d-none">
+      <div class="card mb-3">
+        <div class="card-header fw-semibold">نشر مادة / محاضرة</div>
+        <div class="card-body">
+          <div class="row g-2 align-items-end">
+            <div class="col-md-3">
+              <label class="form-label small">النوع</label>
+              <select id="matType" class="form-select form-select-sm">
+                <option value="notes">ملاحظة</option>
+                <option value="lecture_recorded">محاضرة مسجّلة</option>
+                <option value="lecture_live">محاضرة مباشرة</option>
+                <option value="past_exam">امتحان سابق</option>
+                <option value="reference">مرجع</option>
+                <option value="other">أخرى</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">من مكتبي (معرّف)</label>
+              <input id="matLibId" class="form-control form-control-sm" type="number" placeholder="id من مكتبي">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">أو رابط خارجي</label>
+              <input id="matUrl" class="form-control form-control-sm" placeholder="https://…">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small">العنوان</label>
+              <input id="matTitle" class="form-control form-control-sm" placeholder="عنوان العرض">
+            </div>
+            <div class="col-md-2">
+              <label class="form-label small">أسبوع</label>
+              <input id="matWeek" class="form-control form-control-sm" type="number" min="1">
+            </div>
+            <div class="col-md-3 live-only d-none">
+              <label class="form-label small">بداية المباشرة</label>
+              <input id="matStart" class="form-control form-control-sm" type="datetime-local">
+            </div>
+            <div class="col-md-3 live-only d-none">
+              <label class="form-label small">نهاية</label>
+              <input id="matEnd" class="form-control form-control-sm" type="datetime-local">
+            </div>
+            <div class="col-md-2 live-only d-none">
+              <label class="form-label small">منصة</label>
+              <select id="matPlatform" class="form-select form-select-sm">
+                <option value="zoom">Zoom</option>
+                <option value="teams">Teams</option>
+                <option value="meet">Meet</option>
+                <option value="other">أخرى</option>
+              </select>
+            </div>
+            <div class="col-md-2 live-only d-none">
+              <label class="form-label small">كلمة مرور</label>
+              <input id="matPass" class="form-control form-control-sm">
+            </div>
+            <div class="col-md-4">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="matNotify" checked>
+                <label class="form-check-label small" for="matNotify">إشعار الطلبة</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="matAnn">
+                <label class="form-check-label small" for="matAnn">إنشاء إعلان (للمباشرة)</label>
+              </div>
+            </div>
+            <div class="col-md-2">
+              <button type="button" class="btn btn-sm btn-primary w-100" id="btnPublish">نشر</button>
+            </div>
+          </div>
+          <p class="small text-muted mt-2 mb-0">افتح <a href="/instructor_library" target="_blank">مكتبي</a> لرفع الملفات ثم انسخ معرّف الملف هنا.</p>
+        </div>
+      </div>
+      <div id="matList" class="list-group"></div>
+    </div>
+  </div>
+  <div id="toast" class="alert d-none mt-3"></div>
+</main>
+<script>
+(function(){
+  const params = new URLSearchParams(location.search);
+  const courseName = params.get('course_name') || '';
+  const tgid = params.get('teaching_group_id') || '';
+  const sectionId = params.get('section_id') || '';
+  const state = { catalog: null, section: null, assessmentSchema: null, assessmentPlan: null };
+
+  function toast(msg, ok){
+    const el = document.getElementById('toast');
+    el.className = 'alert mt-3 alert-' + (ok ? 'success' : 'danger');
+    el.textContent = msg;
+    el.classList.remove('d-none');
+    setTimeout(() => el.classList.add('d-none'), 4000);
+  }
+  function csrfHeaders(){
+    const m = document.querySelector('meta[name="csrf-token"]');
+    const t = m ? m.getAttribute('content') : '';
+    const h = {'Content-Type':'application/json'};
+    if (t) h['X-CSRFToken'] = t;
+    return h;
+  }
+  function statusBadge(st){
+    if (st === 'locked') return {cls:'bg-success', label:'مثبت'};
+    if (st === 'draft') return {cls:'bg-warning text-dark', label:'مسودة'};
+    return {cls:'bg-secondary', label:'فارغ'};
+  }
+  function linesToItems(text, field){
+    return (text || '').split('\n').map(s => s.trim()).filter(Boolean).map((line, i) => {
+      if (field === 'topics') return {topic_title: line, sort_order: i+1};
+      if (field === 'outcomes') {
+        const m = line.match(/^([^:：]+)[:：]\s*(.*)$/);
+        if (m) return {code: m[1].trim(), title: m[2].trim() || m[1].trim()};
+        return {code: 'CLO'+(i+1), title: line};
+      }
+      return {title: line};
+    });
+  }
+  function itemsToLines(items, field){
+    return (items || []).map(it => {
+      if (field === 'topics') return it.topic_title || it.title || '';
+      if (field === 'outcomes') return (it.code ? (it.code + ': ') : '') + (it.title || it.title_ar || '');
+      return it.title || it.objective || '';
+    }).filter(Boolean).join('\n');
+  }
+  function renderList(elId, items, field){
+    const el = document.getElementById(elId);
+    if (!items || !items.length) { el.innerHTML = '<span class="text-muted">لا محتوى بعد</span>'; return; }
+    el.innerHTML = '<ol class="mb-0 pe-3">' + items.map(it => {
+      let t = '';
+      if (field === 'topics') t = it.topic_title || it.title || '';
+      else if (field === 'outcomes') t = (it.code ? '<strong>'+esc(it.code)+'</strong>: ' : '') + esc(it.title || it.title_ar || '');
+      else t = esc(it.title || it.objective || '');
+      return '<li>' + t + '</li>';
+    }).join('') + '</ol>';
+  }
+  function esc(s){ return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  function applyCatalog(cat){
+    state.catalog = cat;
+    document.getElementById('pageSub').textContent = courseName;
+    ['objectives','outcomes','topics'].forEach(f => {
+      const st = (cat.field_status || {})[f] || 'empty';
+      const b = statusBadge(st);
+      const badge = document.getElementById('st' + f[0].toUpperCase() + f.slice(1));
+      badge.className = 'badge ' + b.cls;
+      badge.textContent = b.label;
+      const can = !!(cat.can_edit || {})[f];
+      const ta = document.getElementById('edit' + f[0].toUpperCase() + f.slice(1));
+      ta.value = itemsToLines(cat[f], f);
+      ta.disabled = !can;
+      document.querySelectorAll('[data-save="'+f+'"]').forEach(btn => { btn.disabled = !can; btn.classList.toggle('d-none', !can); });
+      const req = document.getElementById('req' + f[0].toUpperCase() + f.slice(1));
+      if (req) {
+        req.classList.toggle('d-none', st !== 'locked' || can);
+        req.onclick = () => sendChangeRequest(f);
+      }
+      renderList('list' + f[0].toUpperCase() + f.slice(1), cat[f], f);
+    });
+  }
+
+  async function load(){
+    if (!courseName) {
+      document.getElementById('loadMsg').textContent = 'حدّد course_name في الرابط';
+      return;
+    }
+    const q = new URLSearchParams({course_name: courseName});
+    if (tgid) q.set('teaching_group_id', tgid);
+    if (sectionId) q.set('section_id', sectionId);
+    const r = await fetch('/course_pages/section?' + q.toString(), {credentials:'include'});
+    const j = await r.json();
+    if (!r.ok || j.status !== 'ok') {
+      document.getElementById('loadMsg').textContent = j.message || 'تعذر التحميل';
+      return;
+    }
+    document.getElementById('loadMsg').classList.add('d-none');
+    document.getElementById('mainPanel').classList.remove('d-none');
+    applyCatalog(j.catalog);
+    state.section = j.section || {};
+    state.assessmentSchema = j.assessment_schema || null;
+    state.assessmentPlan = j.assessment_plan || emptyPlan();
+    document.getElementById('referencesText').value = state.section.references_text || '';
+    renderAssessmentPicker();
+    await loadMaterials();
+  }
+
+  function emptyPlan() {
+    return {
+      midterm: 0, practical: 0, final: 0,
+      coursework: {
+        quiz: 0, assignment: 0, report: 0, participation: 0,
+        presentation: 0, worksheet: 0, other: 0, other_label: ''
+      }
+    };
+  }
+
+  function renderAssessmentPicker() {
+    const box = document.getElementById('assessCatalog');
+    const schema = state.assessmentSchema || {
+      main: [
+        {code:'midterm', label_ar:'اختبار جزئي'},
+        {code:'practical', label_ar:'اختبار عملي'},
+        {code:'final', label_ar:'اختبار نهائي'}
+      ],
+      coursework: [
+        {code:'quiz', label_ar:'اختبارات قصيرة'},
+        {code:'assignment', label_ar:'واجبات'},
+        {code:'report', label_ar:'تقرير'},
+        {code:'participation', label_ar:'مشاركة'},
+        {code:'presentation', label_ar:'عرض تقديمي'},
+        {code:'worksheet', label_ar:'ورقة عمل'},
+        {code:'other', label_ar:'أخرى'}
+      ]
+    };
+    const plan = state.assessmentPlan || emptyPlan();
+    let html = '<div class="mb-3"><strong class="small d-block mb-2">التصنيفات الرئيسية</strong>';
+    (schema.main || []).forEach(m => {
+      html += '<div class="row g-2 align-items-center mb-1">' +
+        '<div class="col-7"><label class="form-label small mb-0">' + esc(m.label_ar) + '</label></div>' +
+        '<div class="col-5"><div class="input-group input-group-sm">' +
+        '<input type="number" class="form-control assess-main" data-code="'+esc(m.code)+'" min="0" max="100" step="1" value="'+(plan[m.code]||0)+'">' +
+        '<span class="input-group-text">%</span></div></div></div>';
+    });
+    html += '</div><div class="border rounded p-2 bg-light"><strong class="small d-block mb-2">أعمال المقرر <span class="text-muted" id="cwSumBadge"></span></strong>';
+    (schema.coursework || []).forEach(m => {
+      const cw = plan.coursework || {};
+      html += '<div class="row g-2 align-items-center mb-1">' +
+        '<div class="col-7"><label class="form-label small mb-0">' + esc(m.label_ar) + '</label></div>' +
+        '<div class="col-5"><div class="input-group input-group-sm">' +
+        '<input type="number" class="form-control assess-cw" data-code="'+esc(m.code)+'" min="0" max="100" step="1" value="'+(cw[m.code]||0)+'">' +
+        '<span class="input-group-text">%</span></div></div></div>';
+      if (m.code === 'other') {
+        html += '<div class="mb-2"><input class="form-control form-control-sm" id="assessOtherLabel" placeholder="وصف بند أخرى (إلزامي إن وُجد وزن)" value="'+esc(cw.other_label||'')+'"></div>';
+      }
+    });
+    html += '</div>';
+    box.innerHTML = html;
+    box.querySelectorAll('.assess-main, .assess-cw').forEach(inp => inp.addEventListener('input', updateWeightSum));
+    const ol = document.getElementById('assessOtherLabel');
+    if (ol) ol.addEventListener('input', updateWeightSum);
+    updateWeightSum();
+  }
+
+  function collectPlan() {
+    const plan = emptyPlan();
+    document.querySelectorAll('.assess-main').forEach(inp => {
+      plan[inp.getAttribute('data-code')] = Number(inp.value || 0);
+    });
+    document.querySelectorAll('.assess-cw').forEach(inp => {
+      plan.coursework[inp.getAttribute('data-code')] = Number(inp.value || 0);
+    });
+    const ol = document.getElementById('assessOtherLabel');
+    plan.coursework.other_label = ol ? ol.value.trim() : '';
+    return plan;
+  }
+
+  function updateWeightSum() {
+    const plan = collectPlan();
+    let main = 0;
+    ['midterm','practical','final'].forEach(k => { main += Number(plan[k] || 0); });
+    let cw = 0;
+    Object.keys(plan.coursework || {}).forEach(k => {
+      if (k === 'other_label') return;
+      cw += Number(plan.coursework[k] || 0);
+    });
+    const total = Math.round((main + cw) * 100) / 100;
+    const badge = document.getElementById('cwSumBadge');
+    if (badge) badge.textContent = '(مجموع الأعمال: ' + cw + '%)';
+    const el = document.getElementById('assessWeightSum');
+    const ok = Math.abs(total - 100) < 0.01;
+    el.textContent = 'المجموع الكلي: ' + total + '%' + (ok ? ' ✓' : ' — يجب أن يساوي 100%');
+    el.className = 'small fw-semibold ' + (ok ? 'text-success' : (total > 100 ? 'text-danger' : 'text-warning'));
+  }
+
+  async function saveAssessments() {
+    const plan = collectPlan();
+    const r = await fetch('/course_pages/section/assessments', {
+      method:'PUT', credentials:'include', headers: csrfHeaders(),
+      body: JSON.stringify({
+        course_name: courseName,
+        teaching_group_id: tgid || null,
+        section_id: sectionId || null,
+        assessment_plan: plan
+      })
+    });
+    const j = await r.json();
+    if (!r.ok) return toast(j.message || 'فشل', false);
+    state.assessmentPlan = j.assessment_plan || plan;
+    updateWeightSum();
+    toast('تم حفظ طرق التقييم (المجموع 100%)', true);
+  }
+
+  async function saveField(field, finalize){
+    const ta = document.getElementById('edit' + field[0].toUpperCase() + field.slice(1));
+    const items = linesToItems(ta.value, field);
+    const r = await fetch('/course_pages/catalog/' + field, {
+      method:'PUT', credentials:'include', headers: csrfHeaders(),
+      body: JSON.stringify({course_name: courseName, items, finalize: !!Number(finalize)})
+    });
+    const j = await r.json();
+    if (!r.ok || j.status !== 'ok') return toast(j.message || 'فشل الحفظ', false);
+    applyCatalog(j.catalog);
+    toast(finalize ? 'تم الحفظ والقفل' : 'تم حفظ المسودة', true);
+  }
+
+  async function sendChangeRequest(field){
+    const proposed = prompt('اكتب المحتوى المقترح (سطر لكل بند):');
+    if (proposed === null) return;
+    const note = prompt('ملاحظة لرئيس القسم (اختياري):') || '';
+    const items = linesToItems(proposed, field);
+    if (!items.length) return toast('لا محتوى مقترح', false);
+    const r = await fetch('/course_pages/catalog/change_request', {
+      method:'POST', credentials:'include', headers: csrfHeaders(),
+      body: JSON.stringify({course_name: courseName, field, items, note})
+    });
+    const j = await r.json();
+    toast(j.message || (r.ok ? 'تم الإرسال' : 'فشل'), r.ok);
+  }
+
+  async function saveSection(kind){
+    const body = {
+      course_name: courseName,
+      teaching_group_id: tgid || null,
+      section_id: sectionId || null
+    };
+    if (kind === 'refs') body.references_text = document.getElementById('referencesText').value;
+    const r = await fetch('/course_pages/section', {
+      method:'PUT', credentials:'include', headers: csrfHeaders(), body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    toast(j.message || (r.ok ? 'تم الحفظ' : 'فشل'), r.ok);
+  }
+
+  async function loadMaterials(){
+    const q = new URLSearchParams({course_name: courseName});
+    if (tgid) q.set('teaching_group_id', tgid);
+    const r = await fetch('/course_pages/materials?' + q.toString(), {credentials:'include'});
+    const j = await r.json();
+    const box = document.getElementById('matList');
+    if (!r.ok || !j.items || !j.items.length) {
+      box.innerHTML = '<div class="text-muted small">لا مواد منشورة بعد.</div>';
+      return;
+    }
+    const typeLabel = {
+      lecture_recorded:'محاضرة مسجّلة', lecture_live:'محاضرة مباشرة',
+      notes:'ملاحظة', past_exam:'امتحان سابق', reference:'مرجع', other:'أخرى'
+    };
+    box.innerHTML = j.items.map(m => {
+      const pub = m.is_published;
+      let actions = '';
+      if (m.external_url) actions += '<a class="btn btn-sm btn-outline-primary" href="'+esc(m.external_url)+'" target="_blank" rel="noopener">فتح</a> ';
+      if (m.file_url) actions += '<a class="btn btn-sm btn-outline-secondary" href="'+esc(m.file_url)+'">تحميل</a> ';
+      actions += '<button type="button" class="btn btn-sm btn-outline-'+(pub?'warning':'success')+' mat-toggle" data-id="'+m.id+'" data-pub="'+(pub?0:1)+'">'+(pub?'إخفاء':'نشر')+'</button>';
+      return '<div class="list-group-item d-flex justify-content-between align-items-start flex-wrap gap-2">' +
+        '<div><strong>'+esc(m.display_title)+'</strong> '+
+        '<span class="badge bg-light text-dark">'+(typeLabel[m.material_type]||m.material_type)+'</span> '+
+        (m.week_no ? '<span class="badge bg-info text-dark">أسبوع '+m.week_no+'</span> ' : '') +
+        (pub ? '<span class="badge bg-success">منشور</span>' : '<span class="badge bg-secondary">مخفي</span>') +
+        (m.live_starts_at ? '<div class="small text-muted">مباشر: '+esc(m.live_starts_at)+'</div>' : '') +
+        '</div><div class="d-flex gap-1 flex-wrap">'+actions+'</div></div>';
+    }).join('');
+    box.querySelectorAll('.mat-toggle').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-id');
+        const pub = Number(btn.getAttribute('data-pub'));
+        const r2 = await fetch('/course_pages/materials/' + id, {
+          method:'PUT', credentials:'include', headers: csrfHeaders(),
+          body: JSON.stringify({is_published: !!pub})
+        });
+        const j2 = await r2.json();
+        if (!r2.ok) return toast(j2.message || 'فشل', false);
+        loadMaterials();
+      });
+    });
+  }
+
+  document.getElementById('matType').addEventListener('change', () => {
+    const live = document.getElementById('matType').value === 'lecture_live';
+    document.querySelectorAll('.live-only').forEach(el => el.classList.toggle('d-none', !live));
+  });
+
+  document.getElementById('btnPublish').addEventListener('click', async () => {
+    const body = {
+      course_name: courseName,
+      teaching_group_id: tgid || null,
+      section_id: sectionId || null,
+      material_type: document.getElementById('matType').value,
+      library_file_id: document.getElementById('matLibId').value || null,
+      external_url: document.getElementById('matUrl').value.trim(),
+      meeting_url: document.getElementById('matUrl').value.trim(),
+      display_title: document.getElementById('matTitle').value.trim(),
+      week_no: document.getElementById('matWeek').value || null,
+      live_starts_at: document.getElementById('matStart').value || null,
+      live_ends_at: document.getElementById('matEnd').value || null,
+      platform: document.getElementById('matPlatform').value,
+      meeting_passcode: document.getElementById('matPass').value,
+      notify_students: document.getElementById('matNotify').checked,
+      create_announcement: document.getElementById('matAnn').checked
+    };
+    const r = await fetch('/course_pages/materials/publish', {
+      method:'POST', credentials:'include', headers: csrfHeaders(), body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    if (!r.ok) return toast(j.message || 'فشل النشر', false);
+    toast('تم النشر', true);
+    loadMaterials();
+  });
+
+  document.querySelectorAll('[data-save]').forEach(btn => {
+    btn.addEventListener('click', () => saveField(btn.getAttribute('data-save'), btn.getAttribute('data-finalize')));
+  });
+  document.getElementById('btnSaveAssess').addEventListener('click', () => saveAssessments());
+  document.getElementById('btnSaveRefs').addEventListener('click', () => saveSection('refs'));
+
+  document.querySelectorAll('#cpTabs [data-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#cpTabs .nav-link').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      ['overview','assess','materials'].forEach(t => {
+        document.getElementById('tab-'+t).classList.toggle('d-none', t !== btn.getAttribute('data-tab'));
+      });
+    });
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

@@ -316,6 +316,7 @@
             <li><a class="dropdown-item" id="navInsMySchedule" href="/my_schedule">جدولي</a></li>
             <li><a class="dropdown-item" id="navInsMyExams" href="/my_exams">امتحاناتي</a></li>
             <li><a class="dropdown-item" id="navInsMyAttendance" href="/my_attendance">حضور مقرراتي</a></li>
+            <li><a class="dropdown-item" id="navInsLibrary" href="/instructor_library">مكتبي</a></li>
             <li><a class="dropdown-item" id="navInsSupervisor" href="/supervisor_dashboard" style="display:none;">لوحة الإشراف</a></li>
             <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item" id="navInsSchedule" href="/schedule_form">الجدول الدراسي</a></li>
@@ -349,6 +350,7 @@
             <li><a class="dropdown-item" id="navStudentExams" href="/my_exams">امتحاناتي</a></li>
             <li><a class="dropdown-item" id="navStudentTranscript" href="/my_transcript">كشف الدرجات</a></li>
             <li><a class="dropdown-item" id="navStudentAnnouncements" href="/my_announcements">إعلانات المقررات</a></li>
+            <li><a class="dropdown-item" id="navStudentCoursePages" href="/my_course_pages">صفحات المقررات</a></li>
             <li><a class="dropdown-item" id="navStudentRequests" href="/my_requests">طلبات الإضافة/الإسقاط</a></li>
             <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item" id="navStudentIdentity" href="/academic_quality/student/identity">هويتي الأكاديمية</a></li>
@@ -395,6 +397,7 @@
             <li><a class="dropdown-item" id="navHodFinalBatch" href="/grades_hod_final_batch" style="display:none;">حزمة الدرجات النهائية</a></li>
             <li><a class="dropdown-item" id="navGradeDrafts" href="/grade_drafts" style="display:none;">مسودات الدرجات</a></li>
             <li><a class="dropdown-item" id="navHodCourseDelivery" href="/course_delivery_hod_page" style="display:none;">لوحة اعتماد رئيس القسم</a></li>
+            <li><a class="dropdown-item" id="navHodCoursePages" href="/course_pages_hod" style="display:none;">صفحات المقررات</a></li>
             <li><a class="dropdown-item" id="navTranscript" href="/transcript_page">كشف الدرجات</a></li>
             <li><hr class="dropdown-divider" id="navAcademicRecordsGradesDivider"></li>
             <li><a class="dropdown-item" id="navPerformance" href="/performance_report">تقرير الأداء</a></li>
@@ -468,6 +471,7 @@
             <li><hr class="dropdown-divider" id="navFacultyQualityDivider" style="display:none;"></li>
             <li><a class="dropdown-item" id="navCourseClosureReports" href="/course_closure_reports_page" style="display:none;">تقارير إقفال المقررات</a></li>
             <li><a class="dropdown-item" id="navHodCourseDeliveryFaculty" href="/course_delivery_hod_page" style="display:none;">لوحة اعتماد رئيس القسم</a></li>
+            <li><a class="dropdown-item" id="navHodCoursePagesFaculty" href="/course_pages_hod" style="display:none;">صفحات المقررات</a></li>
             <li><a class="dropdown-item" id="navFacultyScorecards" href="/faculty_scorecards_page" style="display:none;">مؤشرات إنجاز الشعب</a></li>
             <li><a class="dropdown-item" id="navFacultyFinalDossier" href="/faculty_final_dossier_page" style="display:none;">الملف النهائي الموحّد</a></li>
           </ul>
@@ -1018,8 +1022,12 @@
       const showHodCourseDelivery = hodHeadModeNav;
       const elHodCourseDelivery = document.getElementById('navHodCourseDelivery');
       if (elHodCourseDelivery) elHodCourseDelivery.style.display = showHodCourseDelivery ? '' : 'none';
+      const elHodCoursePages = document.getElementById('navHodCoursePages');
+      if (elHodCoursePages) elHodCoursePages.style.display = showHodCourseDelivery ? '' : 'none';
       const elHodCourseDeliveryFaculty = document.getElementById('navHodCourseDeliveryFaculty');
       if (elHodCourseDeliveryFaculty) elHodCourseDeliveryFaculty.style.display = showHodCourseDelivery ? '' : 'none';
+      const elHodCoursePagesFaculty = document.getElementById('navHodCoursePagesFaculty');
+      if (elHodCoursePagesFaculty) elHodCoursePagesFaculty.style.display = showHodCourseDelivery ? '' : 'none';
       const elHodFinalBatch = document.getElementById('navHodFinalBatch');
       if (elHodFinalBatch) elHodFinalBatch.style.display = showHodCourseDelivery ? '' : 'none';
       const showDeanFinalBatches = role === 'college_dean' || role === 'academic_vice_dean' || role === 'admin_main' || role === 'admin' || role === 'system_admin';

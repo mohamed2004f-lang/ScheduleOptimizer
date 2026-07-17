@@ -13,6 +13,7 @@ from backend.services.student_portal import student_portal_bp
 from backend.services.courses import courses_bp
 from backend.services.grades import grades_bp
 from backend.services.course_delivery import course_delivery_bp
+from backend.services.course_pages import course_pages_bp
 from backend.services.schedule import schedule_bp
 from backend.services.exams import exams_bp
 from backend.services.admin import admin_bp
@@ -254,6 +255,7 @@ app.register_blueprint(student_portal_bp, url_prefix="/students")
 app.register_blueprint(courses_bp, url_prefix="/courses")
 app.register_blueprint(grades_bp, url_prefix="/grades")
 app.register_blueprint(course_delivery_bp, url_prefix="/course_delivery")
+app.register_blueprint(course_pages_bp, url_prefix="/course_pages")
 app.register_blueprint(schedule_bp, url_prefix="/schedule")
 app.register_blueprint(exams_bp, url_prefix="/exams")
 app.register_blueprint(admin_bp, url_prefix="/admin")
@@ -1362,6 +1364,48 @@ def course_delivery_page():
             return redirect(url_for("supervisor_dashboard_page"))
         return redirect(url_for("transcript_page"))
     return render_template("course_delivery.html", active_page="my_courses")
+
+
+@app.route("/course_page")
+@login_required
+def course_page_view():
+    """صفحة المقرر (أهداف/مخرجات/مفردات/مواد) — أستاذ أو رئيس قسم."""
+    role = (session.get("user_role") or "").strip()
+    if role == "student":
+        return redirect(url_for("my_course_page"))
+    if role in ("instructor", "head_of_department") or role in _COLLEGE_LEADERSHIP:
+        return render_template("course_page_instructor.html", active_page="my_courses")
+    return redirect(url_for("transcript_page"))
+
+
+@app.route("/instructor_library")
+@login_required
+@role_required("instructor", "head_of_department")
+def instructor_library_page():
+    if not _instructor_portal_ui_allowed() and (session.get("user_role") or "") != "head_of_department":
+        return redirect(url_for("transcript_page"))
+    return render_template("instructor_library.html", active_page="instructor_library")
+
+
+@app.route("/my_course_page")
+@login_required
+@role_required("student")
+def my_course_page():
+    return render_template("course_page_student.html", active_page="student_course_page")
+
+
+@app.route("/my_course_pages")
+@login_required
+@role_required("student")
+def my_course_pages_index():
+    return render_template("student_course_pages_index.html", active_page="student_course_pages")
+
+
+@app.route("/course_pages_hod")
+@login_required
+@role_required("head_of_department", "admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
+def course_pages_hod_page():
+    return render_template("course_pages_hod.html", active_page="course_pages_hod")
 
 
 @app.route("/course_delivery_hod_page")
