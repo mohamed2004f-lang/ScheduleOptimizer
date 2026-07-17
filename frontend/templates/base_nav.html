@@ -18,7 +18,22 @@
   .nav-shell-student #navDensityToggleWrap,
   .nav-shell-student #navMyCoursesWrap,
   .nav-shell-student #navInstructorMoreWrap,
-  .nav-shell-student #navInstructorGradeDraftsWrap {
+  .nav-shell-student #navInstructorGradeDraftsWrap,
+  .nav-shell-student #navInsLibraryWrap,
+  .nav-shell-student #navInsQualityHubWrap,
+  .nav-shell-student #navInsIloCatalogWrap,
+  .nav-shell-student #navInstructorRowBreak,
+  .nav-shell-student #navInsMyScheduleWrap,
+  .nav-shell-student #navInsMyExamsWrap,
+  .nav-shell-student #navInsMyAttendanceWrap,
+  .nav-shell-student #navInsScheduleWrap,
+  .nav-shell-student #navInsCalendarWrap,
+  .nav-shell-student #navInsMidtermsWrap,
+  .nav-shell-student #navInsFinalsWrap,
+  .nav-shell-student #navInsAttendanceWrap,
+  .nav-shell-student #navInsSupervisorWrap,
+  .nav-shell-student #navInsQualityAssistantWrap,
+  .nav-shell-student #navInsStudentLoWrap {
     display: none !important;
     pointer-events: none !important;
   }
@@ -29,7 +44,7 @@
 <script>document.documentElement.classList.add('nav-shell-student-pending');</script>
 {% elif nis %}
 <style id="navShellInstructorCritical">
-  html.nav-shell-instructor-pending .app-navbar .navbar-nav > .nav-item:not(#navMyCoursesWrap):not(#navInstructorMoreWrap):not(#navInstructorGradeDraftsWrap),
+  html.nav-shell-instructor-pending .app-navbar .navbar-nav > .nav-item:not(#navMyCoursesWrap):not(#navInstructorGradeDraftsWrap):not(#navInsLibraryWrap):not(#navInsQualityHubWrap):not(#navInsIloCatalogWrap):not(#navInstructorRowBreak):not(#navInsMyScheduleWrap):not(#navInsMyExamsWrap):not(#navInsMyAttendanceWrap):not(#navInsScheduleWrap):not(#navInsCalendarWrap):not(#navInsMidtermsWrap):not(#navInsFinalsWrap):not(#navInsAttendanceWrap):not(#navInsSupervisorWrap):not(#navInsQualityAssistantWrap):not(#navInsStudentLoWrap),
   .nav-shell-instructor #navDashboardWrap,
   .nav-shell-instructor #navStudentAffairsWrap,
   .nav-shell-instructor #navAcademicRecordsMenuWrap,
@@ -44,13 +59,49 @@
   .nav-shell-instructor #navHodCourseDeliveryWrap,
   .nav-shell-instructor #navStudentPortalWrap,
   .nav-shell-instructor #navStudentRegistrationsWrap,
-  .nav-shell-instructor #navStudentMoreWrap {
+  .nav-shell-instructor #navStudentMoreWrap,
+  .nav-shell-instructor #navInstructorMoreWrap {
     display: none !important;
     pointer-events: none !important;
   }
+  .nav-shell-instructor #mainNav > .navbar-nav {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    align-items: center;
+    width: 100%;
+    row-gap: 0.15rem;
+  }
+  .nav-shell-instructor .instructor-nav-break {
+    flex-basis: 100% !important;
+    width: 100% !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    border: 0 !important;
+    list-style: none !important;
+  }
   .nav-shell-instructor #navMyCoursesWrap,
-  .nav-shell-instructor #navInstructorMoreWrap,
-  .nav-shell-instructor #navInstructorGradeDraftsWrap { display: list-item !important; }
+  .nav-shell-instructor #navInstructorGradeDraftsWrap,
+  .nav-shell-instructor #navInsLibraryWrap,
+  .nav-shell-instructor #navInsQualityHubWrap,
+  .nav-shell-instructor #navInsIloCatalogWrap,
+  .nav-shell-instructor #navInstructorRowBreak,
+  .nav-shell-instructor #navInsMyScheduleWrap,
+  .nav-shell-instructor #navInsMyExamsWrap,
+  .nav-shell-instructor #navInsMyAttendanceWrap,
+  .nav-shell-instructor #navInsScheduleWrap,
+  .nav-shell-instructor #navInsCalendarWrap,
+  .nav-shell-instructor #navInsMidtermsWrap,
+  .nav-shell-instructor #navInsFinalsWrap,
+  .nav-shell-instructor #navInsAttendanceWrap {
+    display: list-item !important;
+  }
+  .nav-shell-instructor .navbar-nav > .nav-item > .nav-link {
+    padding-top: 0.35rem;
+    padding-bottom: 0.35rem;
+    white-space: nowrap;
+  }
 </style>
 <script>document.documentElement.classList.add('nav-shell-instructor-pending');</script>
 {% elif nsss %}
@@ -69,6 +120,21 @@
   .nav-shell-supervisor #navMyCoursesWrap,
   .nav-shell-supervisor #navInstructorMoreWrap,
   .nav-shell-supervisor #navInstructorGradeDraftsWrap,
+  .nav-shell-supervisor #navInsLibraryWrap,
+  .nav-shell-supervisor #navInsQualityHubWrap,
+  .nav-shell-supervisor #navInsIloCatalogWrap,
+  .nav-shell-supervisor #navInstructorRowBreak,
+  .nav-shell-supervisor #navInsMyScheduleWrap,
+  .nav-shell-supervisor #navInsMyExamsWrap,
+  .nav-shell-supervisor #navInsMyAttendanceWrap,
+  .nav-shell-supervisor #navInsScheduleWrap,
+  .nav-shell-supervisor #navInsCalendarWrap,
+  .nav-shell-supervisor #navInsMidtermsWrap,
+  .nav-shell-supervisor #navInsFinalsWrap,
+  .nav-shell-supervisor #navInsAttendanceWrap,
+  .nav-shell-supervisor #navInsSupervisorWrap,
+  .nav-shell-supervisor #navInsQualityAssistantWrap,
+  .nav-shell-supervisor #navInsStudentLoWrap,
   .nav-shell-supervisor #navHodCourseDeliveryWrap,
   .nav-shell-supervisor #navStudentPortalWrap,
   .nav-shell-supervisor #navStudentRegistrationsWrap,
@@ -296,40 +362,92 @@
             <li><a class="dropdown-item" id="navSupSurveysFull" href="/academic_quality/surveys">صفحة التعبئة الكاملة</a></li>
           </ul>
         </li>
-        <li class="nav-item" id="navInstructorGradeDraftsWrap" style="display:none;">
+        <li class="nav-item" id="navInstructorGradeDraftsWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
           <a class="nav-link" id="navInstructorGradeDrafts" href="/grade_drafts">
             <i class="fa-solid fa-file-pen ms-1"></i> مسودات الدرجات
           </a>
         </li>
+        <!-- شريط الأستاذ الموسّع — سطر 1: تشغيل المقرر -->
+        <li class="nav-item" id="navInsLibraryWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
+          <a class="nav-link" id="navInsLibrary" href="/instructor_library">
+            <i class="fa-solid fa-folder-open ms-1"></i> مكتبي
+          </a>
+        </li>
+        <li class="nav-item" id="navInsQualityHubWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
+          <a class="nav-link" id="navInsQualityHub" href="/academic_quality/instructor/quality-hub">
+            <i class="fa-solid fa-shield-halved ms-1"></i> ضمان الجودة
+          </a>
+        </li>
+        <li class="nav-item" id="navInsIloCatalogWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
+          <a class="nav-link" id="navInsIloCatalog" href="/academic_quality/ilo/outcomes-map">
+            <i class="fa-solid fa-diagram-project ms-1"></i> أهداف ومخرجات البرنامج
+          </a>
+        </li>
+        <li class="nav-item instructor-nav-break" id="navInstructorRowBreak" style="display:{% if nis %}list-item{% else %}none{% endif %};" aria-hidden="true"></li>
+        <!-- سطر 2: جداول ومتابعة -->
+        <li class="nav-item" id="navInsMyScheduleWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
+          <a class="nav-link" id="navInsMySchedule" href="/my_schedule">
+            <i class="fa-solid fa-calendar-week ms-1"></i> جدولي
+          </a>
+        </li>
+        <li class="nav-item" id="navInsMyExamsWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
+          <a class="nav-link" id="navInsMyExams" href="/my_exams">
+            <i class="fa-solid fa-file-circle-check ms-1"></i> امتحاناتي
+          </a>
+        </li>
+        <li class="nav-item" id="navInsMyAttendanceWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
+          <a class="nav-link" id="navInsMyAttendance" href="/my_attendance">
+            <i class="fa-solid fa-user-check ms-1"></i> حضور مقرراتي
+          </a>
+        </li>
+        <li class="nav-item" id="navInsScheduleWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
+          <a class="nav-link" id="navInsSchedule" href="/schedule_form">
+            <i class="fa-solid fa-table ms-1"></i> الجدول الدراسي
+          </a>
+        </li>
+        <li class="nav-item" id="navInsCalendarWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
+          <a class="nav-link" id="navInsCalendar" href="/academic_calendar_page">
+            <i class="fa-regular fa-calendar ms-1"></i> التقويم
+          </a>
+        </li>
+        <li class="nav-item" id="navInsMidtermsWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
+          <a class="nav-link" id="navInsMidterms" href="/exams/midterms">
+            <i class="fa-solid fa-pen ms-1"></i> امتحانات جزئية
+          </a>
+        </li>
+        <li class="nav-item" id="navInsFinalsWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
+          <a class="nav-link" id="navInsFinals" href="/exams/finals">
+            <i class="fa-solid fa-graduation-cap ms-1"></i> امتحانات نهائية
+          </a>
+        </li>
+        <li class="nav-item" id="navInsAttendanceWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
+          <a class="nav-link" id="navInsAttendance" href="/attendance_export">
+            <i class="fa-solid fa-clipboard-user ms-1"></i> الحضور والغياب
+          </a>
+        </li>
+        <li class="nav-item" id="navInsSupervisorWrap" style="display:none;">
+          <a class="nav-link" id="navInsSupervisor" href="/supervisor_dashboard">
+            <i class="fa-solid fa-user-tie ms-1"></i> لوحة الإشراف
+          </a>
+        </li>
+        <li class="nav-item" id="navInsQualityAssistantWrap" style="display:none;">
+          <a class="nav-link" id="navInsQualityAssistant" href="/academic_quality/assistant?mode=instructor">
+            <i class="fa-solid fa-robot ms-1"></i> المساعد الذكي
+          </a>
+        </li>
+        <li class="nav-item" id="navInsStudentLoWrap" style="display:none;">
+          <a class="nav-link" id="navInsStudentLo" href="/academic_quality/ilo/student/learning-outcomes">
+            <i class="fa-solid fa-chart-line ms-1"></i> مخرجاتي التعليمية
+          </a>
+        </li>
+        <!-- توافق خلفي: قائمة المزيد مخفية دائماً في وضع الأستاذ -->
+        <li class="nav-item dropdown d-none" id="navInstructorMoreWrap" style="display:none !important;" aria-hidden="true"></li>
         <li class="nav-item" id="navHodCourseDeliveryWrap" style="display:none;" data-nav-tier="primary">
           <a class="nav-link" id="navHodCourseDeliveryTop" href="/course_delivery_hod_page">
             <i class="fa-solid fa-clipboard-check ms-1"></i>
             <span class="nav-label-full">لوحة اعتماد رئيس القسم</span><span class="nav-label-short">اعتماد القسم</span>
             <span class="badge rounded-pill bg-danger ms-1 d-none" id="navHodCourseDeliveryBadge">0</span>
           </a>
-        </li>
-        <li class="nav-item dropdown" id="navInstructorMoreWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
-          <a class="nav-link dropdown-toggle" href="#" id="instructorMoreMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-            <i class="fa-solid fa-ellipsis ms-1"></i> المزيد
-          </a>
-          <ul class="dropdown-menu" aria-labelledby="instructorMoreMenu">
-            <li><a class="dropdown-item" id="navInsMySchedule" href="/my_schedule">جدولي</a></li>
-            <li><a class="dropdown-item" id="navInsMyExams" href="/my_exams">امتحاناتي</a></li>
-            <li><a class="dropdown-item" id="navInsMyAttendance" href="/my_attendance">حضور مقرراتي</a></li>
-            <li><a class="dropdown-item" id="navInsLibrary" href="/instructor_library">مكتبي</a></li>
-            <li><a class="dropdown-item" id="navInsSupervisor" href="/supervisor_dashboard" style="display:none;">لوحة الإشراف</a></li>
-            <li><hr class="dropdown-divider"></li>
-            <li><a class="dropdown-item" id="navInsSchedule" href="/schedule_form">الجدول الدراسي</a></li>
-            <li><a class="dropdown-item" id="navInsCalendar" href="/academic_calendar_page">التقويم الأكاديمي</a></li>
-            <li><a class="dropdown-item" id="navInsMidterms" href="/exams/midterms">امتحانات جزئية</a></li>
-            <li><a class="dropdown-item" id="navInsFinals" href="/exams/finals">امتحانات نهائية</a></li>
-            <li><a class="dropdown-item" id="navInsAttendance" href="/attendance_export">الحضور والغياب</a></li>
-            <li><hr class="dropdown-divider"></li>
-            <li><a class="dropdown-item" id="navInsQualityHub" href="/academic_quality/instructor/quality-hub">ضمان الجودة</a></li>
-            <li><a class="dropdown-item" id="navInsQualityAssistant" href="/academic_quality/assistant?mode=instructor" style="display:none;">المساعد الذكي للجودة</a></li>
-            <li><a class="dropdown-item" id="navInsIloCatalog" href="/academic_quality/ilo/catalog">كتالوج المخرجات</a></li>
-            <li><a class="dropdown-item" id="navInsStudentLo" href="/academic_quality/ilo/student/learning-outcomes" style="display:none;">مخرجاتي التعليمية</a></li>
-          </ul>
         </li>
         <li class="nav-item" id="navStudentPortalWrap" style="display:{% if nss %}list-item{% else %}none{% endif %};">
           <a class="nav-link" id="navStudentPortal" href="/my_portal">
@@ -608,6 +726,22 @@
 
   // التحقق من حالة تسجيل الدخول وتطبيق الشريط — DOMContentLoaded (وليس load) لتجنب وميض القائمة
   async function runNavAuthCheck() {
+    const INSTRUCTOR_FLAT_WRAP_IDS = [
+      'navInsLibraryWrap', 'navInsQualityHubWrap', 'navInsIloCatalogWrap', 'navInstructorRowBreak',
+      'navInsMyScheduleWrap', 'navInsMyExamsWrap', 'navInsMyAttendanceWrap',
+      'navInsScheduleWrap', 'navInsCalendarWrap', 'navInsMidtermsWrap', 'navInsFinalsWrap',
+      'navInsAttendanceWrap', 'navInsSupervisorWrap', 'navInsQualityAssistantWrap', 'navInsStudentLoWrap',
+    ];
+
+    function hideInstructorFlatNav() {
+      INSTRUCTOR_FLAT_WRAP_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.style.display = 'none'; el.classList.add('d-none'); }
+      });
+      const more = document.getElementById('navInstructorMoreWrap');
+      if (more) { more.style.display = 'none'; more.classList.add('d-none'); }
+    }
+
     function hideStudentNavShell() {
       ['navStudentPortalWrap', 'navStudentRegistrationsWrap', 'navStudentMoreWrap'].forEach(id => {
         const el = document.getElementById(id);
@@ -621,7 +755,7 @@
         'navPlanningMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
         'navAdminSettingsWrap', 'navQualityAccreditationWrap', 'navStaffCompactMoreWrap',
         'navDensityToggleWrap', 'navMyCoursesWrap', 'navInstructorMoreWrap', 'navInstructorGradeDraftsWrap',
-      ];
+      ].concat(INSTRUCTOR_FLAT_WRAP_IDS);
       hideIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) { el.style.display = 'none'; el.classList.add('d-none'); }
@@ -644,13 +778,20 @@
         'navPlanningMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
         'navAdminSettingsWrap', 'navQualityAccreditationWrap', 'navStaffCompactMoreWrap',
         'navDensityToggleWrap', 'navSupervisorPortalWrap', 'navSupervisorSurveysWrap', 'navSupervisorMoreWrap',
-        'navHodCourseDeliveryWrap',
+        'navHodCourseDeliveryWrap', 'navInstructorMoreWrap',
       ];
       hideIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) { el.style.display = 'none'; el.classList.add('d-none'); }
       });
-      ['navMyCoursesWrap', 'navInstructorMoreWrap', 'navInstructorGradeDraftsWrap'].forEach(id => {
+      const showIds = [
+        'navMyCoursesWrap', 'navInstructorGradeDraftsWrap',
+        'navInsLibraryWrap', 'navInsQualityHubWrap', 'navInsIloCatalogWrap', 'navInstructorRowBreak',
+        'navInsMyScheduleWrap', 'navInsMyExamsWrap', 'navInsMyAttendanceWrap',
+        'navInsScheduleWrap', 'navInsCalendarWrap', 'navInsMidtermsWrap', 'navInsFinalsWrap',
+        'navInsAttendanceWrap',
+      ];
+      showIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) { el.style.display = ''; el.classList.remove('d-none'); }
       });
@@ -663,6 +804,7 @@
 
     function enforceSupervisorNavShell() {
       hideStudentNavShell();
+      hideInstructorFlatNav();
       const hideIds = [
         'navDashboardWrap', 'navStudentAffairsWrap', 'navAcademicRecordsMenuWrap',
         'navPlanningMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
@@ -1079,11 +1221,14 @@
       const elQualityKnowledge = document.getElementById('navQualityKnowledge');
       if (elQualityKnowledge) elQualityKnowledge.style.display = showQualityAssistant && showQualityDash ? '' : 'none';
       const elInsQualityAssistant = document.getElementById('navInsQualityAssistant');
-      if (elInsQualityAssistant) {
-        const showInsQA = (caps && caps.v >= 1)
-          ? (!!caps.nav_quality_assistant && !!caps.nav_instructor_quality_hub)
-          : false;
-        elInsQualityAssistant.style.display = showInsQA ? '' : 'none';
+      const wrapInsQualityAssistant = document.getElementById('navInsQualityAssistantWrap');
+      const showInsQA = (caps && caps.v >= 1)
+        ? (!!caps.nav_quality_assistant && !!caps.nav_instructor_quality_hub)
+        : false;
+      if (elInsQualityAssistant) elInsQualityAssistant.style.display = showInsQA ? '' : 'none';
+      if (wrapInsQualityAssistant && !useInstructorMore) {
+        wrapInsQualityAssistant.style.display = 'none';
+        wrapInsQualityAssistant.classList.add('d-none');
       }
       const elSurveysHub = document.getElementById('navSurveysHub');
       if (elSurveysHub) elSurveysHub.style.display = showSurveysHub ? '' : 'none';
@@ -1196,17 +1341,65 @@
       const wrapInsGd = document.getElementById('navInstructorGradeDraftsWrap');
       const wrapInsMore = document.getElementById('navInstructorMoreWrap');
       if (wrapInsGd) wrapInsGd.style.display = useInstructorMore ? '' : 'none';
-      if (wrapInsMore) wrapInsMore.style.display = useInstructorMore ? '' : 'none';
-      const elInsSup = document.getElementById('navInsSupervisor');
-      if (elInsSup) elInsSup.style.display = 'none';
+      if (wrapInsMore) { wrapInsMore.style.display = 'none'; wrapInsMore.classList.add('d-none'); }
+      const instructorAlwaysFlat = [
+        'navInsLibraryWrap', 'navInsQualityHubWrap', 'navInsIloCatalogWrap', 'navInstructorRowBreak',
+        'navInsMyScheduleWrap', 'navInsMyExamsWrap', 'navInsMyAttendanceWrap',
+        'navInsScheduleWrap', 'navInsCalendarWrap', 'navInsMidtermsWrap', 'navInsFinalsWrap',
+        'navInsAttendanceWrap',
+      ];
+      instructorAlwaysFlat.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (useInstructorMore) {
+          el.style.display = '';
+          el.classList.remove('d-none');
+        } else {
+          el.style.display = 'none';
+          el.classList.add('d-none');
+        }
+      });
+      // إشراف / مساعد ذكي / مخرجات تعليمية — شرطي داخل شريط الأستاذ
+      const showInsSupervisorLink = useInstructorMore && dualInstructorSupervisor && inInstructorPortal;
+      const showInsStudentLo = useInstructorMore && !!showStudentLo && role !== 'student';
+      function applyInstructorConditionalExtras() {
+        if (!useInstructorMore) return;
+        const wrapInsSup = document.getElementById('navInsSupervisorWrap');
+        const elInsSup = document.getElementById('navInsSupervisor');
+        if (elInsSup) elInsSup.style.display = showInsSupervisorLink ? '' : 'none';
+        if (wrapInsSup) {
+          if (showInsSupervisorLink) { wrapInsSup.style.display = ''; wrapInsSup.classList.remove('d-none'); }
+          else { wrapInsSup.style.display = 'none'; wrapInsSup.classList.add('d-none'); }
+        }
+        const wrapInsQA = document.getElementById('navInsQualityAssistantWrap');
+        if (wrapInsQA) {
+          if (showInsQA) { wrapInsQA.style.display = ''; wrapInsQA.classList.remove('d-none'); }
+          else { wrapInsQA.style.display = 'none'; wrapInsQA.classList.add('d-none'); }
+        }
+        const wrapInsStudentLo = document.getElementById('navInsStudentLoWrap');
+        const elInsStudentLo = document.getElementById('navInsStudentLo');
+        if (elInsStudentLo) elInsStudentLo.style.display = showInsStudentLo ? '' : 'none';
+        if (wrapInsStudentLo) {
+          if (showInsStudentLo) { wrapInsStudentLo.style.display = ''; wrapInsStudentLo.classList.remove('d-none'); }
+          else { wrapInsStudentLo.style.display = 'none'; wrapInsStudentLo.classList.add('d-none'); }
+        }
+      }
+      applyInstructorConditionalExtras();
       if (useInstructorMore) {
         ['navPlanningMenuWrap', 'navAcademicRecordsMenuWrap', 'navStudentAffairsWrap'].forEach(id => {
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
         });
         const elInsIlo = document.getElementById('navInsIloCatalog');
-        if (elInsIlo) elInsIlo.style.display = (showIloCatalog || role === 'instructor') ? '' : 'none';
+        const wrapIlo = document.getElementById('navInsIloCatalogWrap');
+        const showIlo = (showIloCatalog || role === 'instructor');
+        if (elInsIlo) elInsIlo.style.display = showIlo ? '' : 'none';
+        if (wrapIlo) {
+          if (showIlo) { wrapIlo.style.display = ''; wrapIlo.classList.remove('d-none'); }
+          else { wrapIlo.style.display = 'none'; wrapIlo.classList.add('d-none'); }
+        }
         enforceInstructorNavShell();
+        applyInstructorConditionalExtras();
       } else if (!isStudentUi) {
         hideStudentNavShell();
       }
@@ -1220,6 +1413,7 @@
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
         });
+        hideInstructorFlatNav();
         const wrapQuality = document.getElementById('navQualityAccreditationWrap');
         if (wrapQuality) {
           wrapQuality.classList.add('d-none');
@@ -1270,9 +1464,11 @@
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
         });
+        hideInstructorFlatNav();
         [
           'navInsMySchedule', 'navInsMyExams', 'navInsMyAttendance',
           'navInsSupervisor', 'navInsQualityHub', 'navInsQualityAssistant', 'navInsIloCatalog', 'navInsStudentLo',
+          'navInsLibrary', 'navInsSchedule', 'navInsCalendar', 'navInsMidterms', 'navInsFinals', 'navInsAttendance',
         ].forEach(id => {
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
@@ -1684,7 +1880,10 @@
       });
 
       if (isStudentUi) enforceStudentNavShell();
-      else if (useInstructorMore) enforceInstructorNavShell();
+      else if (useInstructorMore) {
+        enforceInstructorNavShell();
+        applyInstructorConditionalExtras();
+      }
       else if (showSupervisorPortalMenu && inSupervisorPortal) enforceSupervisorNavShell();
 
       // منع إعادة إظهار قوائم الأستاذ بعد الحلقة أعلاه (خلل سابق)
@@ -1693,12 +1892,14 @@
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
         });
+        hideInstructorFlatNav();
       }
       if (isStaffOpsNav) {
         ['navMyCoursesWrap', 'navSupervisorPortalWrap', 'navInstructorMoreWrap', 'navInstructorGradeDraftsWrap'].forEach(id => {
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
         });
+        hideInstructorFlatNav();
       }
 
       // وضع الشريط المدمج / الموسع (إدارة ورئيس قسم / عميد / وكيلة)
@@ -2082,7 +2283,10 @@
         }
       }
       if (isStudentUi) enforceStudentNavShell();
-      else if (useInstructorMore) enforceInstructorNavShell();
+      else if (useInstructorMore) {
+        enforceInstructorNavShell();
+        applyInstructorConditionalExtras();
+      }
       else if (showSupervisorPortalMenu && inSupervisorPortal) enforceSupervisorNavShell();
       else hideStudentNavShell();
 
@@ -2098,6 +2302,13 @@
         ['/my_schedule','navInsMySchedule'],
         ['/my_exams','navInsMyExams'],
         ['/my_attendance','navInsMyAttendance'],
+        ['/instructor_library','navInsLibrary'],
+        ['/schedule_form','navInsSchedule'],
+        ['/academic_calendar_page','navInsCalendar'],
+        ['/exams/midterms','navInsMidterms'],
+        ['/exams/finals','navInsFinals'],
+        ['/attendance_export','navInsAttendance'],
+        ['/supervisor_dashboard','navInsSupervisor'],
         ['/grade_drafts','navInstructorGradeDrafts'],
         ['/grade_drafts','navGradeDrafts'],
         ['/course_delivery_hod_page','navHodCourseDeliveryTop'],
@@ -2146,6 +2357,9 @@
         ['/academic_quality/instructor/quality-hub','navInsQualityHub'],
         ['/academic_quality/assistant?mode=instructor','navInsQualityAssistant'],
         ['/academic_quality/surveys/fill','navInsQualityHub'],
+        ['/academic_quality/ilo/outcomes-map','navInsIloCatalog'],
+        ['/academic_quality/ilo/catalog','navInsIloCatalog'],
+        ['/academic_quality/ilo/student/learning-outcomes','navInsStudentLo'],
         ['/academic_quality/surveys/results','navSurveysResults'],
         ['/academic_quality/course_reports','navCourseQualityCollege'],
         ['/course_quality_college_page','navCourseQualityCollege'],
@@ -2254,7 +2468,7 @@
       };
       if (typeof window.cleanupUiBlockers === 'function') window.cleanupUiBlockers();
       if (typeof window.initNavDropdowns === 'function') window.initNavDropdowns();
-      document.documentElement.classList.remove('nav-shell-student-pending', 'nav-shell-instructor-pending');
+      document.documentElement.classList.remove('nav-shell-student-pending', 'nav-shell-instructor-pending', 'nav-shell-supervisor-pending');
 
       // Fallback: قوائم منسدلة يدوياً فقط إذا Bootstrap غير متاح
       try {

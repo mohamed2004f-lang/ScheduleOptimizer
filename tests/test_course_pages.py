@@ -145,3 +145,52 @@ def test_hod_can_edit_locked(conn, monkeypatch):
     )
     assert updated["objectives"][0]["title"] == "جديد من الرئيس"
     assert updated["field_status"]["objectives"] == STATUS_LOCKED
+
+
+def test_course_page_readiness_snapshot(conn):
+    from backend.services.course_pages import course_page_readiness_snapshot
+
+    snap = course_page_readiness_snapshot(
+        conn,
+        course_name="مقرر اختبار",
+        instructor_id=9,
+        section_id=1,
+    )
+    assert snap["ready"] is False
+    assert snap["assessment_ok"] is False
+    assert snap["materials_published"] == 0
+    assert snap["pct"] == 0
+    assert any("أهداف" in b or "مفردات" in b or "تقييم" in b for b in snap["blockers"])
+    assert "course_page" in snap["course_page_url"]
+
+
+def test_outcome_links_and_weekly_normalize(conn, monkeypatch):
+    from backend.services.course_pages import (
+        _normalize_outcome_links,
+        _normalize_weeks,
+        ensure_course_pages_schema,
+        save_weekly_plan,
+        get_weekly_plan_bundle,
+    )
+
+    monkeypatch.setattr("backend.services.course_pages._username", lambda: "tester")
+    ensure_course_pages_schema(conn)
+    links = _normalize_outcome_links(
+        [{"clo_code": "CLO1", "objective_indexes": [0, 0, 1], "plo_ids": ["3"]}],
+        [{"code": "CLO1"}, {"code": "CLO2"}],
+    )
+    assert links[0]["objective_indexes"] == [0, 1]
+    assert links[0]["plo_ids"] == [3]
+    assert any(x["clo_code"] == "CLO2" for x in links)
+    weeks = _normalize_weeks([{"week_no": 2, "week_topic": "باب 1", "lecture_status": "done", "linked_clo": "CLO1"}])
+    assert weeks[0]["lecture_status"] == "done"
+    bundle = save_weekly_plan(
+        conn,
+        course_name="مقرر خطة",
+        instructor_id=5,
+        weeks=weeks,
+        semester="خريف 1446",
+    )
+    assert bundle["my_plan"] and len(bundle["my_plan"]["weeks"]) == 1
+    again = get_weekly_plan_bundle(conn, course_name="مقرر خطة", instructor_id=5, semester="خريف 1446")
+    assert again["my_plan"]["weeks"][0]["week_topic"] == "باب 1"

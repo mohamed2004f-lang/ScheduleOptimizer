@@ -193,6 +193,21 @@ def ensure_course_pages_schema(conn) -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS course_weekly_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            course_name TEXT NOT NULL,
+            semester TEXT DEFAULT '',
+            instructor_id INTEGER NOT NULL,
+            weeks_json TEXT DEFAULT '[]',
+            source_plan_id INTEGER,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_by TEXT DEFAULT '',
+            UNIQUE (course_name, semester, instructor_id)
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS course_content_change_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             catalog_page_id INTEGER NOT NULL,
@@ -283,6 +298,29 @@ def ensure_course_pages_schema(conn) -> None:
                     "ALTER TABLE course_section_pages ADD COLUMN assessment_plan_json TEXT DEFAULT ''"
                 )
             conn.commit()
+    except Exception:
+        pass
+    try:
+        cols = {c.lower() for c in (fetch_table_columns(conn, "course_catalog_pages") or [])}
+        if "outcome_links_json" not in cols:
+            cur = conn.cursor()
+            if is_postgresql():
+                cur.execute(
+                    "ALTER TABLE course_catalog_pages ADD COLUMN IF NOT EXISTS outcome_links_json TEXT DEFAULT '[]'"
+                )
+            else:
+                cur.execute(
+                    "ALTER TABLE course_catalog_pages ADD COLUMN outcome_links_json TEXT DEFAULT '[]'"
+                )
+            conn.commit()
+    except Exception:
+        pass
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cwp_course ON course_weekly_plans(course_name, semester)"
+        )
+        conn.commit()
     except Exception:
         pass
     _seed_assessment_catalog(conn)
@@ -557,6 +595,357 @@ def delivery_source_bundle(
     }
 
 
+def _fetch_catalog_row(conn, course_name: str) -> dict | None:
+    """قراءة كتالوج المقرر دون إنشاء سجل جديد."""
+    cn = _normalize_course(course_name)
+    if not cn:
+        return None
+    ensure_course_pages_schema(conn)
+    row = conn.cursor().execute(
+        """
+        SELECT * FROM course_catalog_pages
+        WHERE lower(trim(course_name)) = lower(trim(?))
+        LIMIT 1
+        """,
+        (cn,),
+    ).fetchone()
+    return _serialize_catalog(_row_dict(row)) if row else None
+
+
+def _fetch_section_page_row(
+    conn,
+    *,
+    course_name: str,
+    instructor_id: int,
+    teaching_group_id: int | None = None,
+    section_id: int | None = None,
+    semester: str | None = None,
+) -> dict | None:
+    """قراءة صفحة الشعبة دون إنشاء سجل جديد."""
+    cn = _normalize_course(course_name)
+    if not cn or not instructor_id:
+        return None
+    ensure_course_pages_schema(conn)
+    cur = conn.cursor()
+    sem = (semester or "").strip() or _current_semester_label(conn)
+    if teaching_group_id:
+        row = cur.execute(
+            """
+            SELECT * FROM course_section_pages
+            WHERE instructor_id=? AND teaching_group_id=?
+              AND lower(trim(course_name))=lower(trim(?))
+            ORDER BY updated_at DESC LIMIT 1
+            """,
+            (int(instructor_id), int(teaching_group_id), cn),
+        ).fetchone()
+        if row:
+            return _row_dict(row)
+    if section_id:
+        row = cur.execute(
+            """
+            SELECT * FROM course_section_pages
+            WHERE instructor_id=? AND section_id=?
+              AND lower(trim(course_name))=lower(trim(?))
+            ORDER BY updated_at DESC LIMIT 1
+            """,
+            (int(instructor_id), int(section_id), cn),
+        ).fetchone()
+        if row:
+            return _row_dict(row)
+    row = cur.execute(
+        """
+        SELECT * FROM course_section_pages
+        WHERE instructor_id=? AND lower(trim(course_name))=lower(trim(?))
+          AND (semester=? OR COALESCE(semester,'')='')
+        ORDER BY updated_at DESC LIMIT 1
+        """,
+        (int(instructor_id), cn, sem),
+    ).fetchone()
+    return _row_dict(row) if row else None
+
+
+def count_published_materials(
+    conn,
+    *,
+    instructor_id: int,
+    course_name: str,
+    teaching_group_id: int | None = None,
+    section_id: int | None = None,
+) -> int:
+    ensure_course_pages_schema(conn)
+    cn = _normalize_course(course_name)
+    cur = conn.cursor()
+    if teaching_group_id:
+        row = cur.execute(
+            """
+            SELECT COUNT(*) FROM course_published_materials
+            WHERE instructor_id=? AND teaching_group_id=?
+              AND COALESCE(is_published,1)=1
+            """,
+            (int(instructor_id), int(teaching_group_id)),
+        ).fetchone()
+        return int(row[0] or 0) if row else 0
+    if section_id:
+        row = cur.execute(
+            """
+            SELECT COUNT(*) FROM course_published_materials
+            WHERE instructor_id=? AND section_id=?
+              AND COALESCE(is_published,1)=1
+            """,
+            (int(instructor_id), int(section_id)),
+        ).fetchone()
+        return int(row[0] or 0) if row else 0
+    if cn:
+        row = cur.execute(
+            """
+            SELECT COUNT(*) FROM course_published_materials
+            WHERE instructor_id=? AND lower(trim(course_name))=lower(trim(?))
+              AND COALESCE(is_published,1)=1
+            """,
+            (int(instructor_id), cn),
+        ).fetchone()
+        return int(row[0] or 0) if row else 0
+    return 0
+
+
+def count_instructor_library_files(conn, instructor_id: int) -> int:
+    ensure_course_pages_schema(conn)
+    row = conn.cursor().execute(
+        """
+        SELECT COUNT(*) FROM instructor_library_files
+        WHERE instructor_id=? AND COALESCE(is_archived,0)=0
+        """,
+        (int(instructor_id),),
+    ).fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def course_page_readiness_snapshot(
+    conn,
+    *,
+    course_name: str,
+    instructor_id: int,
+    teaching_group_id: int | None = None,
+    section_id: int | None = None,
+    semester: str | None = None,
+) -> dict:
+    """ملخص جاهزية صفحة المقرر لشعبة/مجموعة تدريس (قراءة فقط)."""
+    from backend.services.assessment_plan import assessment_plan_total, normalize_assessment_plan
+    from urllib.parse import urlencode
+
+    cn = _normalize_course(course_name)
+    catalog = _fetch_catalog_row(conn, cn) or {}
+    fs = catalog.get("field_status") or {
+        "objectives": STATUS_EMPTY,
+        "outcomes": STATUS_EMPTY,
+        "topics": STATUS_EMPTY,
+    }
+    section = _fetch_section_page_row(
+        conn,
+        course_name=cn,
+        instructor_id=int(instructor_id),
+        teaching_group_id=teaching_group_id,
+        section_id=section_id,
+        semester=semester,
+    )
+    plan = normalize_assessment_plan((section or {}).get("assessment_plan_json"))
+    total = assessment_plan_total(plan)
+    assessment_ok = abs(total - 100.0) <= 0.01
+    materials_n = count_published_materials(
+        conn,
+        instructor_id=int(instructor_id),
+        course_name=cn,
+        teaching_group_id=teaching_group_id,
+        section_id=section_id,
+    )
+    obj_st = (fs.get("objectives") or STATUS_EMPTY)
+    out_st = (fs.get("outcomes") or STATUS_EMPTY)
+    top_st = (fs.get("topics") or STATUS_EMPTY)
+    syllabus_locked = all(s == STATUS_LOCKED for s in (obj_st, out_st, top_st))
+    topics_locked = top_st == STATUS_LOCKED and bool(catalog.get("topics"))
+    score = 0
+    if obj_st == STATUS_LOCKED:
+        score += 25
+    elif obj_st == STATUS_DRAFT:
+        score += 10
+    if out_st == STATUS_LOCKED:
+        score += 25
+    elif out_st == STATUS_DRAFT:
+        score += 10
+    if top_st == STATUS_LOCKED:
+        score += 25
+    elif top_st == STATUS_DRAFT:
+        score += 10
+    if assessment_ok:
+        score += 25
+    elif total > 0:
+        score += 10
+
+    blockers: list[str] = []
+    if obj_st != STATUS_LOCKED:
+        blockers.append("احفظ نهائياً أهداف المقرر")
+    if out_st != STATUS_LOCKED:
+        blockers.append("احفظ نهائياً مخرجات المقرر")
+    if top_st != STATUS_LOCKED:
+        blockers.append("احفظ نهائياً مفردات المقرر")
+    if not assessment_ok:
+        blockers.append("أكمل خطة التقييم إلى 100%")
+    if materials_n <= 0:
+        blockers.append("انشر مادة واحدة على الأقل للطلاب")
+
+    q = {"course_name": cn}
+    if teaching_group_id:
+        q["teaching_group_id"] = int(teaching_group_id)
+    if section_id:
+        q["section_id"] = int(section_id)
+    url = "/course_page?" + urlencode({k: v for k, v in q.items() if v})
+
+    ready_core = syllabus_locked and assessment_ok
+    return {
+        "course_name": cn,
+        "objectives_status": obj_st,
+        "outcomes_status": out_st,
+        "topics_status": top_st,
+        "field_status": fs,
+        "syllabus_locked": syllabus_locked,
+        "topics_locked": topics_locked,
+        "assessment_total": total,
+        "assessment_ok": assessment_ok,
+        "materials_published": materials_n,
+        "has_materials": materials_n > 0,
+        "ready": ready_core and materials_n > 0,
+        "ready_core": ready_core,
+        "ready_for_report": topics_locked and assessment_ok,
+        "pct": min(100, score),
+        "blockers": blockers,
+        "course_page_url": url,
+        "page_exists": bool(catalog) or bool(section),
+    }
+
+
+def enrich_rows_course_page_readiness(
+    conn,
+    rows: list[dict],
+    *,
+    instructor_id: int,
+    semester: str | None = None,
+) -> None:
+    """إرفاق course_page_readiness بكل صف مقرراتي."""
+    if not rows or not instructor_id:
+        return
+    try:
+        ensure_course_pages_schema(conn)
+    except Exception:
+        return
+    for row in rows:
+        try:
+            tgid = int(row.get("teaching_group_id") or 0) or None
+        except (TypeError, ValueError):
+            tgid = None
+        try:
+            sid = int(row.get("section_id") or 0) or None
+        except (TypeError, ValueError):
+            sid = None
+        try:
+            row["course_page_readiness"] = course_page_readiness_snapshot(
+                conn,
+                course_name=(row.get("course_name") or "").strip(),
+                instructor_id=int(instructor_id),
+                teaching_group_id=tgid,
+                section_id=sid,
+                semester=semester or (row.get("semester") or "").strip() or None,
+            )
+        except Exception:
+            row["course_page_readiness"] = {
+                "ready": False,
+                "ready_core": False,
+                "pct": 0,
+                "blockers": ["تعذر قراءة جاهزية صفحة المقرر"],
+                "course_page_url": "/course_page",
+                "materials_published": 0,
+                "has_materials": False,
+                "assessment_ok": False,
+                "syllabus_locked": False,
+            }
+
+
+def course_page_portal_extras(
+    conn,
+    rows: list[dict],
+    *,
+    instructor_id: int,
+    semester: str | None = None,
+) -> dict:
+    """إحصاءات + مهام جاهزية صفحة المقرر لملخص البوابة."""
+    enrich_rows_course_page_readiness(conn, rows, instructor_id=instructor_id, semester=semester)
+    ready_n = 0
+    total = len(rows or [])
+    action_items: list[dict] = []
+    seen: set[str] = set()
+    for row in rows or []:
+        rd = row.get("course_page_readiness") or {}
+        if rd.get("ready"):
+            ready_n += 1
+        cn = (row.get("course_name") or "").strip()
+        sid = row.get("section_id")
+        tgid = row.get("teaching_group_id")
+        key = f"{(cn or '').lower()}:{tgid or sid or ''}"
+        if key in seen:
+            continue
+        seen.add(key)
+        href = rd.get("course_page_url") or "/course_page"
+        if not rd.get("page_exists") or not rd.get("syllabus_locked"):
+            action_items.append(
+                {
+                    "type": "course_page_incomplete",
+                    "section_id": sid,
+                    "teaching_group_id": tgid,
+                    "course": cn,
+                    "tab": "sections",
+                    "focus": "course_page",
+                    "href": href,
+                    "message": f"صفحة المقرر غير مكتملة: {cn}",
+                }
+            )
+        elif not rd.get("assessment_ok"):
+            action_items.append(
+                {
+                    "type": "assessment_plan_incomplete",
+                    "section_id": sid,
+                    "teaching_group_id": tgid,
+                    "course": cn,
+                    "tab": "sections",
+                    "focus": "course_page",
+                    "href": href,
+                    "message": f"خطة التقييم ليست 100٪: {cn}",
+                }
+            )
+        elif not rd.get("has_materials"):
+            action_items.append(
+                {
+                    "type": "materials_missing",
+                    "section_id": sid,
+                    "teaching_group_id": tgid,
+                    "course": cn,
+                    "tab": "sections",
+                    "focus": "course_page",
+                    "href": href,
+                    "message": f"لا مواد منشورة للطلاب: {cn}",
+                }
+            )
+    try:
+        lib_n = count_instructor_library_files(conn, int(instructor_id))
+    except Exception:
+        lib_n = 0
+    return {
+        "course_pages_ready": ready_n,
+        "course_pages_total": total,
+        "library_files_count": lib_n,
+        "action_items": action_items,
+        "rows": rows,
+    }
+
+
 def _current_semester_label(conn) -> str:
     tname, tyear = get_current_term(conn=conn)
     return f"{(tname or '').strip()} {(tyear or '').strip()}".strip()
@@ -740,7 +1129,8 @@ def _serialize_catalog(d: dict) -> dict:
     out["objectives"] = _json_list(d.get("objectives_json"))
     out["outcomes"] = _json_list(d.get("outcomes_json"))
     out["topics"] = _json_list(d.get("topics_json"))
-    for k in ("objectives_json", "outcomes_json", "topics_json"):
+    out["outcome_links"] = _json_list(d.get("outcome_links_json"))
+    for k in ("objectives_json", "outcomes_json", "topics_json", "outcome_links_json"):
         out.pop(k, None)
     # permissions hints
     out["field_status"] = {
@@ -1172,6 +1562,419 @@ def api_catalog_templates():
         return jsonify({"status": "ok", "catalog": _get_or_create_catalog(conn, course_name)})
 
 
+def _normalize_outcome_links(raw: Any, outcomes: list | None = None) -> list[dict]:
+    """قائمة روابط CLO → أهداف المقرر + PLO البرنامج."""
+    items = _json_list(raw) if not isinstance(raw, list) else raw
+    out: list[dict] = []
+    seen: set[str] = set()
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        code = str(it.get("clo_code") or it.get("code") or "").strip()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        obj_idx = []
+        for x in it.get("objective_indexes") or it.get("objectives") or []:
+            try:
+                obj_idx.append(int(x))
+            except (TypeError, ValueError):
+                pass
+        plo_ids = []
+        for x in it.get("plo_ids") or []:
+            try:
+                plo_ids.append(int(x))
+            except (TypeError, ValueError):
+                pass
+        out.append(
+            {
+                "clo_code": code,
+                "objective_indexes": sorted(set(obj_idx)),
+                "plo_ids": sorted(set(plo_ids)),
+            }
+        )
+    # تأكد من وجود صف لكل مخرج محفوظ
+    for o in outcomes or []:
+        if not isinstance(o, dict):
+            continue
+        code = str(o.get("code") or "").strip()
+        if code and code not in seen:
+            seen.add(code)
+            out.append({"clo_code": code, "objective_indexes": [], "plo_ids": []})
+    return out
+
+
+def _program_context_for_instructor(conn, instructor_id: int | None = None) -> dict:
+    """برامج القسم + أهداف/مخرجات للاختيار والقراءة."""
+    from backend.services.learning_outcomes import _resolve_instructor_department, _rows_to_dicts
+
+    cur = conn.cursor()
+    dep_id = None
+    try:
+        dep_id = _resolve_instructor_department(conn)
+    except Exception:
+        dep_id = None
+    programs = []
+    if dep_id is not None:
+        rows = cur.execute(
+            """
+            SELECT id, code, name_ar FROM programs
+            WHERE department_id = ? AND COALESCE(is_active,1)=1
+            ORDER BY code
+            """,
+            (int(dep_id),),
+        ).fetchall()
+        programs = _rows_to_dicts(cur, rows)
+    elif instructor_id:
+        # احتياط: كل البرامج النشطة إن لم يُعرف القسم
+        try:
+            rows = cur.execute(
+                """
+                SELECT id, code, name_ar FROM programs
+                WHERE COALESCE(is_active,1)=1 ORDER BY code LIMIT 20
+                """
+            ).fetchall()
+            programs = _rows_to_dicts(cur, rows)
+        except Exception:
+            programs = []
+    plos = []
+    goals = []
+    program_id = int(programs[0]["id"]) if programs else None
+    if program_id:
+        try:
+            from backend.core.plo_schema import ensure_plo_enhancement_schema
+
+            ensure_plo_enhancement_schema(conn)
+        except Exception:
+            pass
+        try:
+            rows = cur.execute(
+                """
+                SELECT id, code, title_ar, COALESCE(domain,'') AS domain
+                FROM program_learning_outcomes
+                WHERE program_id = ? AND COALESCE(is_active,1)=1
+                ORDER BY sort_order, code
+                """,
+                (program_id,),
+            ).fetchall()
+            plos = _rows_to_dicts(cur, rows)
+        except Exception:
+            plos = []
+        try:
+            rows = cur.execute(
+                """
+                SELECT id, code, title_ar
+                FROM program_goals
+                WHERE program_id = ? AND COALESCE(is_active,1)=1
+                ORDER BY sort_order, code
+                """,
+                (program_id,),
+            ).fetchall()
+            goals = _rows_to_dicts(cur, rows)
+        except Exception:
+            goals = []
+    return {
+        "department_id": dep_id,
+        "programs": programs,
+        "program_id": program_id,
+        "program_goals": goals,
+        "program_outcomes": plos,
+    }
+
+
+def _normalize_weeks(raw: Any) -> list[dict]:
+    items = _json_list(raw) if not isinstance(raw, list) else raw
+    out = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        try:
+            week_no = int(it.get("week_no") or 0)
+        except (TypeError, ValueError):
+            continue
+        if week_no < 1 or week_no > 52:
+            continue
+        status = str(it.get("lecture_status") or it.get("status") or "planned").strip() or "planned"
+        if status not in ("planned", "done", "postponed", "compensated"):
+            status = "planned"
+        out.append(
+            {
+                "week_no": week_no,
+                "week_topic": str(it.get("week_topic") or it.get("topic") or "").strip(),
+                "lecture_status": status,
+                "linked_clo": str(it.get("linked_clo") or "").strip(),
+                "topic_index": it.get("topic_index"),
+            }
+        )
+    out.sort(key=lambda x: x["week_no"])
+    return out
+
+
+def _instructor_display_name(conn, instructor_id: int) -> str:
+    cur = conn.cursor()
+    for sql in (
+        "SELECT name FROM instructors WHERE id = ? LIMIT 1",
+        "SELECT full_name FROM instructors WHERE id = ? LIMIT 1",
+    ):
+        try:
+            row = cur.execute(sql, (int(instructor_id),)).fetchone()
+            if row and row[0]:
+                return str(row[0]).strip()
+        except Exception:
+            continue
+    return f"أستاذ #{instructor_id}"
+
+
+def get_weekly_plan_bundle(
+    conn,
+    *,
+    course_name: str,
+    instructor_id: int,
+    semester: str | None = None,
+) -> dict:
+    ensure_course_pages_schema(conn)
+    cn = _normalize_course(course_name)
+    sem = (semester or "").strip() or _current_semester_label(conn)
+    cur = conn.cursor()
+    mine = cur.execute(
+        """
+        SELECT id, weeks_json, source_plan_id, updated_at, updated_by, instructor_id
+        FROM course_weekly_plans
+        WHERE lower(trim(course_name))=lower(trim(?)) AND semester=? AND instructor_id=?
+          AND COALESCE(is_active,1)=1
+        LIMIT 1
+        """,
+        (cn, sem, int(instructor_id)),
+    ).fetchone()
+    my_plan = None
+    if mine:
+        d = _row_dict(mine)
+        my_plan = {
+            "id": int(d["id"]),
+            "weeks": _normalize_weeks(d.get("weeks_json")),
+            "source_plan_id": d.get("source_plan_id"),
+            "updated_at": d.get("updated_at") or "",
+            "updated_by": d.get("updated_by") or "",
+            "instructor_id": int(d["instructor_id"]),
+            "instructor_name": _instructor_display_name(conn, int(d["instructor_id"])),
+        }
+    peers = []
+    rows = cur.execute(
+        """
+        SELECT id, weeks_json, updated_at, updated_by, instructor_id
+        FROM course_weekly_plans
+        WHERE lower(trim(course_name))=lower(trim(?)) AND semester=?
+          AND instructor_id <> ? AND COALESCE(is_active,1)=1
+        ORDER BY updated_at DESC
+        LIMIT 10
+        """,
+        (cn, sem, int(instructor_id)),
+    ).fetchall()
+    for r in rows or []:
+        d = _row_dict(r)
+        weeks = _normalize_weeks(d.get("weeks_json"))
+        if not weeks:
+            continue
+        peers.append(
+            {
+                "id": int(d["id"]),
+                "weeks": weeks,
+                "weeks_count": len(weeks),
+                "updated_at": d.get("updated_at") or "",
+                "updated_by": d.get("updated_by") or "",
+                "instructor_id": int(d["instructor_id"]),
+                "instructor_name": _instructor_display_name(conn, int(d["instructor_id"])),
+            }
+        )
+    return {"my_plan": my_plan, "peer_plans": peers, "semester": sem, "course_name": cn}
+
+
+def save_weekly_plan(
+    conn,
+    *,
+    course_name: str,
+    instructor_id: int,
+    weeks: list,
+    semester: str | None = None,
+    source_plan_id: int | None = None,
+    section_id: int | None = None,
+) -> dict:
+    ensure_course_pages_schema(conn)
+    cn = _normalize_course(course_name)
+    sem = (semester or "").strip() or _current_semester_label(conn)
+    weeks_n = _normalize_weeks(weeks)
+    cur = conn.cursor()
+    now = _now_iso()
+    by = _username()
+    existing = cur.execute(
+        """
+        SELECT id FROM course_weekly_plans
+        WHERE lower(trim(course_name))=lower(trim(?)) AND semester=? AND instructor_id=?
+        LIMIT 1
+        """,
+        (cn, sem, int(instructor_id)),
+    ).fetchone()
+    if existing:
+        pid = int(existing[0] if not hasattr(existing, "keys") else existing["id"])
+        cur.execute(
+            """
+            UPDATE course_weekly_plans
+            SET weeks_json=?, source_plan_id=?, is_active=1, updated_at=?, updated_by=?
+            WHERE id=?
+            """,
+            (_dumps(weeks_n), source_plan_id, now, by, pid),
+        )
+    else:
+        cur.execute(
+            """
+            INSERT INTO course_weekly_plans
+                (course_name, semester, instructor_id, weeks_json, source_plan_id, is_active, created_at, updated_at, updated_by)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+            """,
+            (cn, sem, int(instructor_id), _dumps(weeks_n), source_plan_id, now, now, by),
+        )
+    # مزامنة مع faculty_course_plans لعرض مقرراتي إن وُجدت شعبة
+    if section_id:
+        try:
+            for w in weeks_n:
+                cur.execute(
+                    """
+                    INSERT INTO faculty_course_plans
+                        (section_id, instructor_id, week_no, week_topic, lecture_status, resources_text, linked_clo, updated_at, updated_by)
+                    VALUES (?, ?, ?, ?, ?, '', ?, ?, ?)
+                    ON CONFLICT (section_id, instructor_id, week_no)
+                    DO UPDATE SET week_topic = EXCLUDED.week_topic,
+                                  lecture_status = EXCLUDED.lecture_status,
+                                  linked_clo = EXCLUDED.linked_clo,
+                                  updated_at = EXCLUDED.updated_at,
+                                  updated_by = EXCLUDED.updated_by
+                    """,
+                    (
+                        int(section_id),
+                        int(instructor_id),
+                        int(w["week_no"]),
+                        w.get("week_topic") or "",
+                        w.get("lecture_status") or "planned",
+                        w.get("linked_clo") or "",
+                        now,
+                        by,
+                    ),
+                )
+        except Exception:
+            pass
+    conn.commit()
+    return get_weekly_plan_bundle(conn, course_name=cn, instructor_id=int(instructor_id), semester=sem)
+
+
+@course_pages_bp.route("/catalog/outcome_links", methods=["PUT"])
+@login_required
+@role_required("instructor", "head_of_department")
+def api_outcome_links_save():
+    data = request.get_json(silent=True) or {}
+    course_name = _normalize_course(data.get("course_name") or "")
+    if not course_name:
+        return jsonify({"status": "error", "message": "course_name مطلوب"}), 400
+    iid = _session_instructor_id()
+    with get_connection() as conn:
+        if not _is_hod_or_admin():
+            if not iid or not _instructor_assigned_to_course(conn, iid, course_name):
+                return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        catalog = _get_or_create_catalog(conn, course_name)
+        links = _normalize_outcome_links(data.get("links") or data.get("outcome_links"), catalog.get("outcomes"))
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE course_catalog_pages
+            SET outcome_links_json=?, updated_at=?, updated_by=?
+            WHERE id=?
+            """,
+            (_dumps(links), _now_iso(), _username(), int(catalog["id"])),
+        )
+        conn.commit()
+        updated = _get_or_create_catalog(conn, course_name)
+        return jsonify({"status": "ok", "catalog": updated, "outcome_links": updated.get("outcome_links") or []})
+
+
+@course_pages_bp.route("/weekly_plan", methods=["GET"])
+@login_required
+@role_required("instructor", "head_of_department")
+def api_weekly_plan_get():
+    course_name = _normalize_course(request.args.get("course_name") or "")
+    semester = (request.args.get("semester") or "").strip()
+    iid = _session_instructor_id()
+    if not course_name or not iid:
+        return jsonify({"status": "error", "message": "بيانات ناقصة"}), 400
+    with get_connection() as conn:
+        if not _instructor_assigned_to_course(conn, iid, course_name) and not _is_hod_or_admin():
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        bundle = get_weekly_plan_bundle(conn, course_name=course_name, instructor_id=iid, semester=semester or None)
+        return jsonify({"status": "ok", **bundle})
+
+
+@course_pages_bp.route("/weekly_plan", methods=["PUT"])
+@login_required
+@role_required("instructor", "head_of_department")
+def api_weekly_plan_save():
+    data = request.get_json(silent=True) or {}
+    course_name = _normalize_course(data.get("course_name") or "")
+    semester = (data.get("semester") or "").strip()
+    iid = _session_instructor_id()
+    if not course_name or not iid:
+        return jsonify({"status": "error", "message": "بيانات ناقصة"}), 400
+    with get_connection() as conn:
+        if not _instructor_assigned_to_course(conn, iid, course_name) and not _is_hod_or_admin():
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        bundle = save_weekly_plan(
+            conn,
+            course_name=course_name,
+            instructor_id=iid,
+            weeks=data.get("weeks") or [],
+            semester=semester or None,
+            source_plan_id=data.get("source_plan_id"),
+            section_id=int(data["section_id"]) if data.get("section_id") else None,
+        )
+        return jsonify({"status": "ok", **bundle})
+
+
+@course_pages_bp.route("/weekly_plan/adopt", methods=["POST"])
+@login_required
+@role_required("instructor", "head_of_department")
+def api_weekly_plan_adopt():
+    data = request.get_json(silent=True) or {}
+    course_name = _normalize_course(data.get("course_name") or "")
+    try:
+        source_id = int(data.get("source_plan_id") or data.get("plan_id") or 0)
+    except (TypeError, ValueError):
+        source_id = 0
+    iid = _session_instructor_id()
+    if not course_name or not iid or not source_id:
+        return jsonify({"status": "error", "message": "بيانات ناقصة"}), 400
+    with get_connection() as conn:
+        if not _instructor_assigned_to_course(conn, iid, course_name) and not _is_hod_or_admin():
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        ensure_course_pages_schema(conn)
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT * FROM course_weekly_plans WHERE id=? LIMIT 1",
+            (source_id,),
+        ).fetchone()
+        if not row:
+            return jsonify({"status": "error", "message": "الخطة غير موجودة"}), 404
+        src = _row_dict(row)
+        if _normalize_course(src.get("course_name") or "") != course_name:
+            return jsonify({"status": "error", "message": "الخطة ليست لنفس المقرر"}), 400
+        bundle = save_weekly_plan(
+            conn,
+            course_name=course_name,
+            instructor_id=iid,
+            weeks=_normalize_weeks(src.get("weeks_json")),
+            semester=(src.get("semester") or "").strip() or None,
+            source_plan_id=source_id,
+            section_id=int(data["section_id"]) if data.get("section_id") else None,
+        )
+        return jsonify({"status": "ok", "adopted_from": source_id, **bundle})
+
+
 @course_pages_bp.route("/catalog/change_request", methods=["POST"])
 @login_required
 @role_required("instructor", "head_of_department")
@@ -1281,6 +2084,22 @@ def api_section_get():
             )
         from backend.services.assessment_plan import assessment_schema_payload
 
+        catalog["outcome_links"] = _normalize_outcome_links(
+            catalog.get("outcome_links"), catalog.get("outcomes")
+        )
+        program_ctx = _program_context_for_instructor(conn, iid)
+        weekly = None
+        if iid:
+            try:
+                weekly = get_weekly_plan_bundle(
+                    conn,
+                    course_name=course_name,
+                    instructor_id=iid,
+                    semester=semester or None,
+                )
+            except Exception:
+                weekly = {"my_plan": None, "peer_plans": [], "semester": semester or ""}
+
         return jsonify(
             {
                 "status": "ok",
@@ -1291,6 +2110,8 @@ def api_section_get():
                 "assessment_plan": assessment_plan,
                 "assessment_selections": assessments,
                 "assessment_methods": assessments,
+                "program_context": program_ctx,
+                "weekly_plan": weekly,
             }
         )
 

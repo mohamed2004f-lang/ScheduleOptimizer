@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime
 
-from flask import Blueprint, Response, jsonify, render_template, request, session
+from flask import Blueprint, Response, jsonify, redirect, render_template, request, session
 
 from backend.core.auth import (
     login_required,
@@ -250,6 +250,10 @@ def _courses_table_exists(conn) -> bool:
 @login_required
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor")
 def ilo_catalog_page():
+    role = _normalize_role((session.get("user_role") or "").strip())
+    # الأستاذ/المشرف: توجيه للعرض التعريفي بدل محرر الكتالوج
+    if role in ("instructor", "supervisor") and not _can_edit_ilo_quick():
+        return redirect("/academic_quality/ilo/outcomes-map")
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
         can_edit = _can_edit_ilo(conn)
@@ -263,6 +267,137 @@ def ilo_catalog_page():
         coverage_labels=COVERAGE_LABELS_AR,
         can_edit=can_edit,
     )
+
+
+def _can_edit_ilo_quick() -> bool:
+    role = _normalize_role((session.get("user_role") or "").strip())
+    return role in ("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+
+
+@learning_outcomes_bp.route("/outcomes-map")
+@login_required
+def outcomes_map_page():
+    return render_template("outcomes_map.html")
+
+
+@learning_outcomes_bp.route("/api/outcomes-map", methods=["GET"])
+@login_required
+def api_outcomes_map():
+    """عرض تعريفي: أهداف/مخرجات الكلية ثم البرنامج التابع للمستخدم."""
+    with get_connection() as conn:
+        try:
+            from backend.core.plo_schema import ensure_plo_enhancement_schema
+            from backend.core.plo_glo import glo_list
+            from backend.core.college_identity_schema import ensure_college_identity_schema
+
+            ensure_plo_enhancement_schema(conn)
+            try:
+                ensure_college_identity_schema(conn)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        cur = conn.cursor()
+        college_goals = []
+        try:
+            rows = cur.execute(
+                """
+                SELECT code, title_ar FROM college_strategic_goals
+                WHERE COALESCE(is_active,1)=1
+                ORDER BY sort_order, code
+                """
+            ).fetchall()
+            college_goals = _rows_to_dicts(cur, rows)
+        except Exception:
+            college_goals = []
+        try:
+            college_outcomes = glo_list(conn, active_only=True) or []
+        except Exception:
+            college_outcomes = []
+        college_name = "الكلية"
+        try:
+            row = cur.execute(
+                "SELECT COALESCE(name_ar, name, '') FROM colleges ORDER BY id LIMIT 1"
+            ).fetchone()
+            if row and row[0]:
+                college_name = str(row[0])
+        except Exception:
+            pass
+
+        program = {"id": None, "code": "", "name_ar": "", "goals": [], "outcomes": []}
+        allowed = _scope_program_ids(conn)
+        program_id = None
+        if allowed is None:
+            row = cur.execute(
+                "SELECT id, code, name_ar FROM programs WHERE COALESCE(is_active,1)=1 ORDER BY code LIMIT 1"
+            ).fetchone()
+            if row:
+                program_id = int(row[0] if not hasattr(row, "keys") else row["id"])
+                program["code"] = (row[1] if not hasattr(row, "keys") else row["code"]) or ""
+                program["name_ar"] = (row[2] if not hasattr(row, "keys") else row["name_ar"]) or ""
+        elif allowed:
+            ph = ",".join("?" * len(allowed))
+            row = cur.execute(
+                f"""
+                SELECT id, code, name_ar FROM programs
+                WHERE id IN ({ph}) AND COALESCE(is_active,1)=1
+                ORDER BY code LIMIT 1
+                """,
+                tuple(allowed),
+            ).fetchone()
+            if row:
+                program_id = int(row[0] if not hasattr(row, "keys") else row["id"])
+                program["code"] = (row[1] if not hasattr(row, "keys") else row["code"]) or ""
+                program["name_ar"] = (row[2] if not hasattr(row, "keys") else row["name_ar"]) or ""
+        program["id"] = program_id
+        if program_id:
+            try:
+                rows = cur.execute(
+                    """
+                    SELECT code, title_ar FROM program_goals
+                    WHERE program_id=? AND COALESCE(is_active,1)=1
+                    ORDER BY sort_order, code
+                    """,
+                    (program_id,),
+                ).fetchall()
+                program["goals"] = _rows_to_dicts(cur, rows)
+            except Exception:
+                program["goals"] = []
+            try:
+                rows = cur.execute(
+                    f"""
+                    SELECT {PLO_SELECT} FROM program_learning_outcomes
+                    WHERE program_id=? AND COALESCE(is_active,1)=1
+                    ORDER BY sort_order, code
+                    """,
+                    (program_id,),
+                ).fetchall()
+                program["outcomes"] = _rows_to_dicts(cur, rows)
+            except Exception:
+                try:
+                    rows = cur.execute(
+                        """
+                        SELECT id, code, title_ar FROM program_learning_outcomes
+                        WHERE program_id=? AND COALESCE(is_active,1)=1
+                        ORDER BY sort_order, code
+                        """,
+                        (program_id,),
+                    ).fetchall()
+                    program["outcomes"] = _rows_to_dicts(cur, rows)
+                except Exception:
+                    program["outcomes"] = []
+
+        return jsonify(
+            {
+                "status": "ok",
+                "college": {
+                    "name_ar": college_name,
+                    "goals": college_goals,
+                    "outcomes": college_outcomes,
+                },
+                "program": program,
+            }
+        )
 
 
 @learning_outcomes_bp.route("/api/outcome-domains", methods=["GET"])

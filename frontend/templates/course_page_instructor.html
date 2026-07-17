@@ -13,7 +13,7 @@
   <div class="page-header d-flex justify-content-between align-items-start flex-wrap gap-2">
     <div>
       <h1 class="page-title">صفحة المقرر</h1>
-      <p class="page-subtitle" id="pageSub">أهداف · مخرجات · مفردات · تقييم · مراجع · مواد</p>
+      <p class="page-subtitle" id="pageSub">أهداف · مخرجات · ربط · مفردات · خطة أسبوعية · تقييم · مواد</p>
     </div>
     <div class="d-flex gap-2 flex-wrap">
       <a class="btn btn-outline-primary btn-sm" href="/instructor_library">مكتبي</a>
@@ -24,6 +24,8 @@
   <div id="mainPanel" class="d-none">
     <ul class="nav nav-tabs mb-3" id="cpTabs">
       <li class="nav-item"><button class="nav-link active" data-tab="overview" type="button">نظرة المقرر</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="links" type="button">ربط المخرجات</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="weekly" type="button">الخطة الأسبوعية</button></li>
       <li class="nav-item"><button class="nav-link" data-tab="assess" type="button">التقييم والمراجع</button></li>
       <li class="nav-item"><button class="nav-link" data-tab="materials" type="button">المواد والمحاضرات</button></li>
     </ul>
@@ -81,6 +83,44 @@
               </div>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-links" class="d-none">
+      <div class="card">
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <span>ربط مخرجات المقرر (CLO) بالأهداف ومخرجات البرنامج</span>
+          <button type="button" class="btn btn-sm btn-primary" id="btnSaveLinks">حفظ الربط</button>
+        </div>
+        <div class="card-body">
+          <p class="small text-muted" id="linksHint">احفظ المخرجات والأهداف أولاً في تبويب نظرة المقرر، ثم اربط كل CLO هنا.</p>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle" id="linksTable">
+              <thead><tr><th>المخرج (CLO)</th><th>أهداف المقرر</th><th>مخرجات البرنامج (PLO)</th></tr></thead>
+              <tbody id="linksBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-weekly" class="d-none">
+      <div id="peerPlansBox" class="alert alert-info small d-none mb-3"></div>
+      <div class="card">
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <span>الخطة الأسبوعية للمقرر</span>
+          <button type="button" class="btn btn-sm btn-primary" id="btnSaveWeekly">حفظ خطتي</button>
+        </div>
+        <div class="card-body">
+          <p class="small text-muted mb-2">اختر الموضوع من مفردات المقرر، واربط اختيارياً بمخرج CLO.</p>
+          <div class="table-responsive mb-2">
+            <table class="table table-sm align-middle">
+              <thead><tr><th style="width:4.5rem">أسبوع</th><th>الموضوع</th><th style="width:7rem">الحالة</th><th style="width:8rem">CLO</th><th style="width:3rem"></th></tr></thead>
+              <tbody id="weeklyBody"></tbody>
+            </table>
+          </div>
+          <button type="button" class="btn btn-sm btn-outline-success" id="btnAddWeek">+ أسبوع</button>
         </div>
       </div>
     </div>
@@ -191,7 +231,10 @@
   const courseName = params.get('course_name') || '';
   const tgid = params.get('teaching_group_id') || '';
   const sectionId = params.get('section_id') || '';
-  const state = { catalog: null, section: null, assessmentSchema: null, assessmentPlan: null };
+  const state = {
+    catalog: null, section: null, assessmentSchema: null, assessmentPlan: null,
+    programContext: null, weekly: null, weeksDraft: []
+  };
 
   function toast(msg, ok){
     const el = document.getElementById('toast');
@@ -264,6 +307,189 @@
       }
       renderList('list' + f[0].toUpperCase() + f.slice(1), cat[f], f);
     });
+    renderOutcomeLinks();
+    renderWeeklyUI();
+  }
+
+  function renderOutcomeLinks() {
+    const body = document.getElementById('linksBody');
+    const hint = document.getElementById('linksHint');
+    const cat = state.catalog || {};
+    const outcomes = cat.outcomes || [];
+    const objectives = cat.objectives || [];
+    const plos = (state.programContext && state.programContext.program_outcomes) || [];
+    const linksMap = {};
+    (cat.outcome_links || []).forEach(l => { linksMap[l.clo_code] = l; });
+    if (!outcomes.length) {
+      body.innerHTML = '<tr><td colspan="3" class="text-muted">لا مخرجات بعد — احفظها في نظرة المقرر أولاً.</td></tr>';
+      if (hint) hint.textContent = 'احفظ المخرجات أولاً ثم ارجع هنا للربط.';
+      return;
+    }
+    if (hint) {
+      const prog = (state.programContext && state.programContext.programs && state.programContext.programs[0]);
+      hint.textContent = prog
+        ? ('برنامج الربط: ' + (prog.name_ar || prog.code) + ' — اختر أهداف المقرر وPLO لكل مخرج.')
+        : 'اختر أهداف المقرر ومخرجات البرنامج المرتبطة بكل CLO.';
+    }
+    body.innerHTML = outcomes.map((o, oi) => {
+      const code = o.code || ('CLO' + (oi + 1));
+      const link = linksMap[code] || { objective_indexes: [], plo_ids: [] };
+      const objChecks = objectives.map((obj, idx) => {
+        const checked = (link.objective_indexes || []).indexOf(idx) >= 0 ? ' checked' : '';
+        const label = obj.title || obj.objective || ('هدف ' + (idx + 1));
+        return '<label class="d-block small mb-1"><input type="checkbox" class="form-check-input ms-1 link-obj" data-clo="'+esc(code)+'" data-idx="'+idx+'"'+checked+'> '+esc(label)+'</label>';
+      }).join('') || '<span class="text-muted small">لا أهداف بعد</span>';
+      const ploChecks = plos.map(p => {
+        const checked = (link.plo_ids || []).indexOf(Number(p.id)) >= 0 ? ' checked' : '';
+        return '<label class="d-block small mb-1"><input type="checkbox" class="form-check-input ms-1 link-plo" data-clo="'+esc(code)+'" data-pid="'+p.id+'"'+checked+'> <strong>'+esc(p.code||'')+'</strong> '+esc(p.title_ar||'')+'</label>';
+      }).join('') || '<span class="text-muted small">لا مخرجات برنامج في النطاق</span>';
+      return '<tr data-clo="'+esc(code)+'"><td><strong>'+esc(code)+'</strong><div class="small text-muted">'+esc(o.title||o.title_ar||'')+'</div></td><td>'+objChecks+'</td><td>'+ploChecks+'</td></tr>';
+    }).join('');
+  }
+
+  function collectOutcomeLinks() {
+    const cat = state.catalog || {};
+    const outcomes = cat.outcomes || [];
+    return outcomes.map((o, oi) => {
+      const code = o.code || ('CLO' + (oi + 1));
+      const objective_indexes = [];
+      document.querySelectorAll('.link-obj[data-clo="'+code+'"]').forEach(cb => {
+        if (cb.checked) objective_indexes.push(Number(cb.getAttribute('data-idx')));
+      });
+      const plo_ids = [];
+      document.querySelectorAll('.link-plo[data-clo="'+code+'"]').forEach(cb => {
+        if (cb.checked) plo_ids.push(Number(cb.getAttribute('data-pid')));
+      });
+      return { clo_code: code, objective_indexes, plo_ids };
+    });
+  }
+
+  async function saveOutcomeLinks() {
+    const r = await fetch('/course_pages/catalog/outcome_links', {
+      method: 'PUT', credentials: 'include', headers: csrfHeaders(),
+      body: JSON.stringify({ course_name: courseName, links: collectOutcomeLinks() })
+    });
+    const j = await r.json();
+    if (!r.ok) return toast(j.message || 'فشل حفظ الربط', false);
+    if (j.catalog) applyCatalog(j.catalog);
+    toast('تم حفظ الربط', true);
+  }
+
+  function renderPeerPlans() {
+    const box = document.getElementById('peerPlansBox');
+    const peers = (state.weekly && state.weekly.peer_plans) || [];
+    if (!peers.length) { box.classList.add('d-none'); box.innerHTML = ''; return; }
+    box.classList.remove('d-none');
+    box.innerHTML = '<strong>خطط محفوظة من أساتذة آخرين لنفس المقرر:</strong><ul class="mb-2 mt-1">' +
+      peers.map(p => '<li class="mb-1">'+esc(p.instructor_name||'')+' — '+p.weeks_count+' أسابيع'+
+        ' <button type="button" class="btn btn-sm btn-outline-primary py-0 peer-view" data-id="'+p.id+'">عرض</button> '+
+        ' <button type="button" class="btn btn-sm btn-success py-0 peer-adopt" data-id="'+p.id+'">اعتماد</button> '+
+        ' <button type="button" class="btn btn-sm btn-outline-secondary py-0 peer-copy" data-id="'+p.id+'">نسخ للتعديل</button></li>').join('') +
+      '</ul>';
+    box.querySelectorAll('.peer-view').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const p = peers.find(x => String(x.id) === btn.getAttribute('data-id'));
+        if (!p) return;
+        alert((p.weeks || []).map(w => 'أسبوع '+w.week_no+': '+(w.week_topic||'')+' ['+w.lecture_status+']').join('\n') || 'فارغة');
+      });
+    });
+    box.querySelectorAll('.peer-adopt').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const r = await fetch('/course_pages/weekly_plan/adopt', {
+          method: 'POST', credentials: 'include', headers: csrfHeaders(),
+      body: JSON.stringify({ course_name: courseName, source_plan_id: Number(btn.getAttribute('data-id')), section_id: sectionId || null })
+        });
+        const j = await r.json();
+        if (!r.ok) return toast(j.message || 'فشل الاعتماد', false);
+        state.weekly = j;
+        state.weeksDraft = ((j.my_plan && j.my_plan.weeks) || []).map(w => ({...w}));
+        renderWeeklyUI();
+        toast('تم اعتماد الخطة', true);
+      });
+    });
+    box.querySelectorAll('.peer-copy').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const p = peers.find(x => String(x.id) === btn.getAttribute('data-id'));
+        if (!p) return;
+        state.weeksDraft = (p.weeks || []).map(w => ({...w}));
+        renderWeeklyUI();
+        toast('تم نسخ الخطة — عدّل ثم احفظ', true);
+      });
+    });
+  }
+
+  function renderWeeklyUI() {
+    renderPeerPlans();
+    const body = document.getElementById('weeklyBody');
+    const topics = (state.catalog && state.catalog.topics) || [];
+    const outcomes = (state.catalog && state.catalog.outcomes) || [];
+    if (!state.weeksDraft.length) {
+      body.innerHTML = '<tr><td colspan="5" class="text-muted small">لا أسابيع بعد — أضف أسبوعاً أو اعتمد خطة سابقة.</td></tr>';
+      return;
+    }
+    const topicOpts = topics.map((t, i) => {
+      const title = t.topic_title || t.title || ('مفرد '+(i+1));
+      return { i, title };
+    });
+    const cloOpts = outcomes.map((o, i) => o.code || ('CLO'+(i+1)));
+    body.innerHTML = state.weeksDraft.map((w, idx) => {
+      const topicSelect = '<select class="form-select form-select-sm wk-topic" data-idx="'+idx+'">'+
+        '<option value="">— اختر من المفردات —</option>' +
+        topicOpts.map(t => '<option value="'+esc(t.title)+'"'+(w.week_topic===t.title?' selected':'')+'>'+esc(t.title)+'</option>').join('') +
+        (w.week_topic && !topicOpts.some(t => t.title===w.week_topic) ? '<option value="'+esc(w.week_topic)+'" selected>'+esc(w.week_topic)+'</option>' : '') +
+        '</select>';
+      const cloSelect = '<select class="form-select form-select-sm wk-clo" data-idx="'+idx+'">'+
+        '<option value="">—</option>' +
+        cloOpts.map(c => '<option value="'+esc(c)+'"'+(w.linked_clo===c?' selected':'')+'>'+esc(c)+'</option>').join('') +
+        '</select>';
+      return '<tr>' +
+        '<td><input type="number" class="form-control form-control-sm wk-no" data-idx="'+idx+'" min="1" max="52" value="'+(w.week_no||(idx+1))+'"></td>' +
+        '<td>'+topicSelect+'</td>' +
+        '<td><select class="form-select form-select-sm wk-st" data-idx="'+idx+'">'+
+        ['planned','done','postponed','compensated'].map(s => {
+          const labels = {planned:'مخطط',done:'تم',postponed:'مؤجل',compensated:'تعويضي'};
+          return '<option value="'+s+'"'+(w.lecture_status===s?' selected':'')+'>'+labels[s]+'</option>';
+        }).join('') +
+        '</select></td>' +
+        '<td>'+cloSelect+'</td>' +
+        '<td><button type="button" class="btn btn-sm btn-outline-danger py-0 wk-del" data-idx="'+idx+'">×</button></td></tr>';
+    }).join('');
+    body.querySelectorAll('.wk-del').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.weeksDraft.splice(Number(btn.getAttribute('data-idx')), 1);
+        renderWeeklyUI();
+      });
+    });
+  }
+
+  function collectWeeksDraft() {
+    const rows = [];
+    document.querySelectorAll('#weeklyBody tr').forEach(tr => {
+      const no = tr.querySelector('.wk-no');
+      if (!no) return;
+      const idx = Number(no.getAttribute('data-idx'));
+      rows.push({
+        week_no: Number(no.value || (idx + 1)),
+        week_topic: (tr.querySelector('.wk-topic') || {}).value || '',
+        lecture_status: (tr.querySelector('.wk-st') || {}).value || 'planned',
+        linked_clo: (tr.querySelector('.wk-clo') || {}).value || ''
+      });
+    });
+    return rows;
+  }
+
+  async function saveWeekly() {
+    const weeks = collectWeeksDraft();
+    const r = await fetch('/course_pages/weekly_plan', {
+      method: 'PUT', credentials: 'include', headers: csrfHeaders(),
+      body: JSON.stringify({ course_name: courseName, weeks, section_id: sectionId || null })
+    });
+    const j = await r.json();
+    if (!r.ok) return toast(j.message || 'فشل حفظ الخطة', false);
+    state.weekly = j;
+    state.weeksDraft = ((j.my_plan && j.my_plan.weeks) || weeks).map(w => ({...w}));
+    renderWeeklyUI();
+    toast('تم حفظ الخطة الأسبوعية', true);
   }
 
   async function load(){
@@ -282,6 +508,9 @@
     }
     document.getElementById('loadMsg').classList.add('d-none');
     document.getElementById('mainPanel').classList.remove('d-none');
+    state.programContext = j.program_context || {};
+    state.weekly = j.weekly_plan || { my_plan: null, peer_plans: [] };
+    state.weeksDraft = ((state.weekly.my_plan && state.weekly.my_plan.weeks) || []).map(w => ({...w}));
     applyCatalog(j.catalog);
     state.section = j.section || {};
     state.assessmentSchema = j.assessment_schema || null;
@@ -518,14 +747,24 @@
   });
   document.getElementById('btnSaveAssess').addEventListener('click', () => saveAssessments());
   document.getElementById('btnSaveRefs').addEventListener('click', () => saveSection('refs'));
+  document.getElementById('btnSaveLinks').addEventListener('click', () => saveOutcomeLinks());
+  document.getElementById('btnSaveWeekly').addEventListener('click', () => saveWeekly());
+  document.getElementById('btnAddWeek').addEventListener('click', () => {
+    const next = (state.weeksDraft.reduce((m, w) => Math.max(m, Number(w.week_no) || 0), 0) || 0) + 1;
+    state.weeksDraft.push({ week_no: next, week_topic: '', lecture_status: 'planned', linked_clo: '' });
+    renderWeeklyUI();
+  });
 
   document.querySelectorAll('#cpTabs [data-tab]').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('#cpTabs .nav-link').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      ['overview','assess','materials'].forEach(t => {
-        document.getElementById('tab-'+t).classList.toggle('d-none', t !== btn.getAttribute('data-tab'));
+      ['overview','links','weekly','assess','materials'].forEach(t => {
+        const el = document.getElementById('tab-'+t);
+        if (el) el.classList.toggle('d-none', t !== btn.getAttribute('data-tab'));
       });
+      if (btn.getAttribute('data-tab') === 'links') renderOutcomeLinks();
+      if (btn.getAttribute('data-tab') === 'weekly') renderWeeklyUI();
     });
   });
 

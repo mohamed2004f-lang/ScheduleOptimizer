@@ -213,7 +213,7 @@ def build_instructor_quality_context(
         },
         "links": {
             "surveys_fill": "/academic_quality/surveys",
-            "ilo_catalog": "/academic_quality/ilo/catalog",
+            "ilo_catalog": "/academic_quality/ilo/outcomes-map",
             "glossary": "/academic_quality/glossary",
             "my_courses": "/my_courses",
         },

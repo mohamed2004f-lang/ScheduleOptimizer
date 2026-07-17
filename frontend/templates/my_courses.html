@@ -60,6 +60,15 @@
     .dept-row-mine{background:rgba(13,110,253,.06)!important;}
     [data-bs-theme="dark"] .hub-tile{background:#212529;border-color:#373b3e;color:#dee2e6;}
     [data-bs-theme="dark"] .dept-row-mine{background:rgba(13,110,253,.15)!important;}
+    .readiness-card{border:1px solid #dee2e6;border-radius:.5rem;padding:.75rem .9rem;background:#f8fafc;margin-bottom:1rem;}
+    .readiness-card.ready{border-color:#198754;background:rgba(25,135,84,.06);}
+    .readiness-card .rd-chip{display:inline-flex;align-items:center;gap:.25rem;padding:.2rem .55rem;border-radius:1rem;font-size:.72rem;font-weight:600;border:1px solid transparent;}
+    .readiness-card .rd-chip.ok{background:#d1e7dd;border-color:#198754;color:#0f5132;}
+    .readiness-card .rd-chip.warn{background:#fff3cd;border-color:#ffc107;color:#664d03;}
+    .readiness-card .rd-chip.bad{background:#f8d7da;border-color:#dc3545;color:#842029;}
+    .readiness-card .rd-chip.muted{background:#e9ecef;border-color:#adb5bd;color:#6c757d;}
+    [data-bs-theme="dark"] .readiness-card{background:#212529;border-color:#373b3e;}
+    [data-bs-theme="dark"] .readiness-card.ready{background:rgba(25,135,84,.12);border-color:#198754;}
   </style>
 </head>
 <body>
@@ -68,7 +77,7 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">مقرراتي</h1>
-        <p class="page-subtitle">المقررات والشعب المكلَّف بها في الجدول الدراسي (كما يحددها رئيس القسم أو الإدارة)</p>
+        <p class="page-subtitle">لوحة تشغيل الشعب: المتابعة اليومية والمسودات والإعلانات. محتوى المقرر والنشر للطلاب عبر «صفحة المقرر».</p>
         <p class="small text-muted mb-0 d-none" id="termContextLine"></p>
       </div>
       <div class="d-flex gap-2 flex-wrap align-items-center">
@@ -96,7 +105,7 @@
 
     <!-- شريط الإحصائيات السريعة -->
     <div class="row g-2 mb-3" id="statsBar" style="display:none;">
-      <div class="col-6 col-md-3">
+      <div class="col-6 col-md">
         <div class="card stat-card text-center border-primary">
           <div class="card-body py-2">
             <div class="fs-4 fw-bold text-primary" id="statSections">0</div>
@@ -104,7 +113,7 @@
           </div>
         </div>
       </div>
-      <div class="col-6 col-md-3">
+      <div class="col-6 col-md">
         <div class="card stat-card text-center border-success">
           <div class="card-body py-2">
             <div class="fs-4 fw-bold text-success" id="statStudents">0</div>
@@ -112,7 +121,7 @@
           </div>
         </div>
       </div>
-      <div class="col-6 col-md-3">
+      <div class="col-6 col-md">
         <div class="card stat-card text-center border-info">
           <div class="card-body py-2">
             <div class="fs-4 fw-bold text-info" id="statCloAvg">—</div>
@@ -120,11 +129,19 @@
           </div>
         </div>
       </div>
-      <div class="col-6 col-md-3">
+      <div class="col-6 col-md">
         <div class="card stat-card text-center border-warning">
           <div class="card-body py-2">
             <div class="fs-4 fw-bold text-warning" id="statAxes">0/0</div>
             <div class="small text-muted">بنود متابعة مكتملة</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-md">
+        <div class="card stat-card text-center border-secondary">
+          <div class="card-body py-2">
+            <div class="fs-4 fw-bold text-secondary" id="statCoursePages">0/0</div>
+            <div class="small text-muted">صفحات مقررات جاهزة</div>
           </div>
         </div>
       </div>
@@ -168,7 +185,7 @@
 
       <!-- تبويب: مجموعات التدريس -->
       <div class="tab-pane fade show active" id="tabSections" role="tabpanel">
-        <span data-hint="التوثيق عبر «تقرير تنفيذ المقرر». إعداد المقرر وتنفيذ المحتوى والدرجات تُحدَّث تلقائياً؛ التواصل والأنشطة الإضافية فقط يمكن تغيير حالتها بالنقر." data-hint-id="mc_sections" data-hint-icon="💡" data-for-role="instructor"></span>
+        <span data-hint="إعداد المحتوى والنشر عبر «صفحة المقرر». هنا: متابعة يومية، مسودات، إعلانات، وخطة أسبوعية." data-hint-id="mc_sections" data-hint-icon="💡" data-for-role="instructor"></span>
         <div id="loadState" class="text-muted small">جاري التحميل…</div>
         <div id="emptyState" class="d-none alert alert-secondary mb-0">
           لا توجد صفوف جدول مرتبطة باسمك في دليل هيئة التدريس، أو لم يُسند إليك مقرر بعد.
@@ -468,18 +485,16 @@
       const links = document.getElementById('hubLinks');
       const deptLbl = document.getElementById('hubDeptLabel');
       const tiles = [
+        { href: '/instructor_library', icon: '📁', label: 'مكتبي', badge: d.library_files_count || 0 },
         { href: '/grade_drafts', icon: '📝', label: 'مسودات الدرجات', badge: d.grade_drafts_draft || 0 },
-        { href: '/my_schedule', icon: '📅', label: 'جدولي', badge: 0 },
-        { href: '/my_exams', icon: '📋', label: 'امتحاناتي', badge: 0 },
-        { href: '/my_attendance', icon: '✓', label: 'حضوري', badge: 0 },
-        { href: '/academic_quality/surveys', icon: '📊', label: 'استبيانات الأستاذ (٣)', badge: 0 },
+        { href: '/academic_quality/instructor/quality-hub', icon: '🛡️', label: 'ضمان الجودة', badge: 0 },
         { href: '#tabDeptSchedule', icon: '🏫', label: 'جدول القسم', badge: 0, tab: true },
       ];
       links.innerHTML = tiles.map(t => {
         const badge = t.badge > 0 ? '<span class="badge bg-danger hub-badge">' + t.badge + '</span>' : '';
         const cls = t.tab ? 'hub-tile hub-open-tab' : 'hub-tile';
         const extra = t.tab ? ' data-tab="#tabDeptSchedule"' : '';
-        return '<div class="col-4 col-md-2"><a class="' + cls + '" href="' + t.href + '"' + extra + '>' + badge +
+        return '<div class="col-6 col-md-3"><a class="' + cls + '" href="' + t.href + '"' + extra + '>' + badge +
           '<span class="hub-icon">' + t.icon + '</span><span class="small fw-semibold">' + esc(t.label) + '</span></a></div>';
       }).join('');
       hub.classList.remove('d-none');
@@ -506,6 +521,10 @@
         document.getElementById('statStudents').textContent = d.students_count || 0;
         document.getElementById('statCloAvg').textContent = d.clo_avg != null ? d.clo_avg + '%' : '—';
         document.getElementById('statAxes').textContent = d.axes_done + '/' + d.axes_total;
+        const cpReady = document.getElementById('statCoursePages');
+        if (cpReady) {
+          cpReady.textContent = (d.course_pages_ready || 0) + '/' + (d.course_pages_total || d.sections_count || 0);
+        }
       }
       renderHubLinks(d);
       renderTimelineFromTerm(d.term_name, d.term_year);
@@ -514,7 +533,15 @@
       if (items.length) {
         actionCard.classList.remove('d-none');
         document.getElementById('actionCount').textContent = items.length;
-        const icons = { clo_missing: '⚠️', closure_pending: '📋', axes_pending: '📊', grade_draft_missing: '📝' };
+        const icons = {
+          clo_missing: '⚠️',
+          closure_pending: '📋',
+          axes_pending: '📊',
+          grade_draft_missing: '📝',
+          course_page_incomplete: '📘',
+          assessment_plan_incomplete: '💯',
+          materials_missing: '📤',
+        };
         document.getElementById('actionItemsList').innerHTML = items.map((a, i) =>
           '<div class="d-flex align-items-center gap-2 py-1 border-bottom action-item-link" role="button" tabindex="0" data-action-idx="' + i + '">' +
           '<span>' + (icons[a.type] || '⚠') + '</span>' +
@@ -533,6 +560,10 @@
 
     function openActionItem(item) {
       if (!item) return;
+      if (item.href && (item.focus === 'course_page' || String(item.href).indexOf('/course_page') === 0 || String(item.href).indexOf('/course_delivery') === 0)) {
+        window.location.href = item.href;
+        return;
+      }
       const tab = item.tab || 'sections';
       const tabMap = { sections: '#tabSections', reports: '#tabReports', outcomes: '#tabOutcomes', plans: '#tabPlans' };
       const href = tabMap[tab] || '#tabSections';
@@ -546,7 +577,10 @@
             collapse.scrollIntoView({ behavior: 'smooth', block: 'start' });
           }
           const focus = (item.focus || '').trim();
-          if (focus === 'clo') {
+          if (focus === 'course_page') {
+            const url = item.href || coursePageUrlFromRow(G_ROWS.find(r => r.section_id == item.section_id) || { course_name: item.course, section_id: item.section_id, teaching_group_id: item.teaching_group_id });
+            if (url) window.location.href = url;
+          } else if (focus === 'clo') {
             const btn = document.querySelector('.mc-show-clos[data-section="' + item.section_id + '"]');
             if (btn) btn.click();
           } else if (focus === 'grades') {
@@ -559,6 +593,8 @@
         }, 200);
       } else if (item.type === 'grade_draft_missing') {
         window.location.href = '/grade_drafts';
+      } else if (item.href) {
+        window.location.href = item.href;
       }
     }
 
@@ -581,6 +617,83 @@
     function teachingGroupLabel(r) {
       if (!r) return '';
       return r.display_label || r.group_code_label || '';
+    }
+
+    function coursePageUrlFromRow(r) {
+      if (!r) return '/course_page';
+      const rd = r.course_page_readiness || {};
+      if (rd.course_page_url) return rd.course_page_url;
+      const cn = encodeURIComponent(r.course_name || '');
+      let url = '/course_page?course_name=' + cn;
+      if (r.teaching_group_id) url += '&teaching_group_id=' + encodeURIComponent(r.teaching_group_id);
+      if (r.section_id) url += '&section_id=' + encodeURIComponent(r.section_id);
+      return url;
+    }
+
+    function statusChipClass(st) {
+      if (st === 'locked') return 'ok';
+      if (st === 'draft') return 'warn';
+      return 'bad';
+    }
+
+    function statusChipLabel(st) {
+      if (st === 'locked') return 'مقفل';
+      if (st === 'draft') return 'مسودة';
+      return 'فارغ';
+    }
+
+    function readinessBadge(rd) {
+      if (!rd) return '<span class="badge bg-secondary section-badge">صفحة المقرر</span>';
+      if (rd.ready) return '<span class="badge bg-success section-badge" title="صفحة المقرر جاهزة">جاهز</span>';
+      if (rd.ready_core) return '<span class="badge bg-info text-dark section-badge" title="محتوى مكتمل — بانتظار نشر مواد">محتوى ✓</span>';
+      const pct = Number(rd.pct || 0);
+      if (pct >= 50) return '<span class="badge bg-warning text-dark section-badge">جاهزية ' + pct + '%</span>';
+      return '<span class="badge bg-danger section-badge">جاهزية ' + pct + '%</span>';
+    }
+
+    function materialsBadge(rd) {
+      if (!rd) return '';
+      const n = Number(rd.materials_published || 0);
+      if (n > 0) return '<span class="badge bg-success section-badge" title="مواد منشورة للطلاب">منشور ×' + n + '</span>';
+      return '<span class="badge bg-light text-dark section-badge">بلا نشر</span>';
+    }
+
+    function renderReadinessCard(r) {
+      const rd = r.course_page_readiness || {};
+      const url = coursePageUrlFromRow(r);
+      const readyClass = rd.ready ? ' ready' : '';
+      const blockers = (rd.blockers || []).slice(0, 3);
+      const chip = (label, st, okFlag) => {
+        const cls = okFlag === true ? 'ok' : (okFlag === false ? 'bad' : statusChipClass(st));
+        const txt = okFlag === true ? '✓' : (okFlag === false ? '—' : statusChipLabel(st));
+        return '<span class="rd-chip ' + cls + '">' + esc(label) + ': ' + esc(txt) + '</span>';
+      };
+      return (
+        '<div class="readiness-card' + readyClass + '">' +
+        '<div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-2">' +
+        '<div><strong class="small">جاهزية صفحة المقرر</strong>' +
+        '<div class="small text-muted">المحتوى والنشر للطلاب — التشغيل اليومي أدناه</div></div>' +
+        '<span class="badge bg-' + (rd.ready ? 'success' : 'secondary') + '">' + (Number(rd.pct || 0)) + '%</span>' +
+        '</div>' +
+        '<div class="d-flex flex-wrap gap-1 mb-2">' +
+        chip('أهداف', rd.objectives_status) +
+        chip('مخرجات', rd.outcomes_status) +
+        chip('مفردات', rd.topics_status) +
+        '<span class="rd-chip ' + (rd.assessment_ok ? 'ok' : (Number(rd.assessment_total || 0) > 0 ? 'warn' : 'bad')) + '">تقييم: ' +
+          (rd.assessment_ok ? '100%' : (Number(rd.assessment_total || 0) + '%')) + '</span>' +
+        '<span class="rd-chip ' + (rd.has_materials ? 'ok' : 'bad') + '">نشر: ' +
+          (rd.has_materials ? ('×' + Number(rd.materials_published || 0)) : 'لا') + '</span>' +
+        '</div>' +
+        (blockers.length
+          ? ('<ul class="small text-muted mb-2 ps-3">' + blockers.map(b => '<li>' + esc(b) + '</li>').join('') + '</ul>')
+          : '<div class="small text-success mb-2">المقرر جاهز للتدريس والنشر والتقرير.</div>') +
+        '<div class="d-flex flex-wrap gap-1">' +
+        '<a class="btn btn-sm btn-success" href="' + url + '">افتح صفحة المقرر</a>' +
+        (r.teaching_group_id
+          ? ('<a class="btn btn-sm btn-outline-info" href="/course_delivery_page?teaching_group_id=' + r.teaching_group_id + '">تقرير المقرر</a>')
+          : '') +
+        '</div></div>'
+      );
     }
 
     function gradeDraftUrl(r, draft) {
@@ -729,6 +842,8 @@
             '<span class="d-flex gap-1 flex-wrap">' +
             (r.student_count != null ? '<span class="badge bg-success section-badge" title="مسجّلون">' + r.student_count + ' طالب</span>' : '') +
             draftStatusBadge(draft) +
+            readinessBadge(r.course_page_readiness) +
+            materialsBadge(r.course_page_readiness) +
             '<span class="badge bg-primary section-badge">' + esc(r.semester) + '</span>' +
             '<span class="badge bg-' + (planPct >= 80 ? 'success' : planPct >= 40 ? 'warning text-dark' : 'secondary') + ' section-badge">خطة: ' + planPct + '%</span>' +
             '<span class="badge bg-' + (prog.done === prog.total && prog.total > 0 ? 'success' : 'warning text-dark') + ' section-badge">متابعة: ' + prog.done + '/' + prog.total + '</span>' +
@@ -759,14 +874,12 @@
       const draft = draftForSection(r);
       const gdHref = gradeDraftUrl(r, draft);
       const gdLabel = draft ? (draft.status === 'Draft' || draft.status === 'Rejected' ? 'متابعة المسودة' : 'عرض المسودة') : 'بدء مسودة';
+      const cpUrl = coursePageUrlFromRow(r);
       const links =
+        '<a class="btn btn-sm btn-success py-0 mb-1" href="' + cpUrl + '">صفحة المقرر</a> ' +
         '<a class="btn btn-sm btn-outline-primary py-0 mb-1" href="' + gdHref + '">' + gdLabel + '</a> ' +
-        '<a class="btn btn-sm btn-outline-success py-0 mb-1" href="/course_page?course_name=' + encodeURIComponent(cn) +
-          (r.teaching_group_id ? ('&teaching_group_id=' + r.teaching_group_id) : '') +
-          (sid ? ('&section_id=' + sid) : '') + '">صفحة المقرر</a> ' +
         (r.teaching_group_id ? ('<a class="btn btn-sm btn-outline-info py-0 mb-1" href="/course_delivery_page?teaching_group_id=' + r.teaching_group_id + '">تقرير المقرر</a> ') : '') +
-        '<a class="btn btn-sm btn-outline-secondary py-0 mb-1" href="/my_exams">امتحاناتي</a> ' +
-        '<button type="button" class="btn btn-sm btn-outline-info py-0 mb-1 mc-show-clos" data-section="' + sid + '" data-course="' + esc(cn) + '">مخرجات المقرر</button>';
+        '<button type="button" class="btn btn-sm btn-outline-secondary py-0 mb-1 mc-show-clos" data-section="' + sid + '" data-course="' + esc(cn) + '">مخرجات المقرر</button>';
 
       const axes = r.axes || {};
       const prog = progressCounts(r);
@@ -782,6 +895,7 @@
         renderAxisChecklist(axes, sid, r.axes_meta || {}) + '</div></div>';
 
       return (
+        renderReadinessCard(r) +
         followupHtml +
         '<div class="row g-3">' +
         '<div class="col-md-4">' +
@@ -789,40 +903,42 @@
         '<div class="mt-2"><strong class="small">إعلانات</strong>' + renderAnnouncements(sid, adminData) + '</div>' +
         '</div>' +
         '<div class="col-md-8">' +
-        '<strong class="small">الخطة الأسبوعية</strong>' +
-        renderWeeklyPlan(sid, adminData) +
+        '<strong class="small">الخطة الأسبوعية — ' + esc(cn) + '</strong>' +
+        renderWeeklyPlan(sid, adminData, r) +
         '</div></div>' +
         '<hr class="my-2">' +
         '<div class="row g-3">' +
-        '<div class="col-md-6">' +
-        '<strong class="small">تقييم PLO</strong><div class="mc-ilo-list small" data-section="' + sid + '"><span class="text-muted">جاري التحميل…</span></div>' +
-        '<button type="button" class="btn btn-sm btn-outline-success mt-1 mc-save-ilo" data-section="' + sid + '">حفظ PLO</button></div>' +
-        '<div class="col-md-6">' +
-        '<strong class="small">تقييم CLO</strong><div class="mc-clo-computed small text-info mb-1" data-section="' + sid + '"></div>' +
+        '<div class="col-md-12">' +
+        '<strong class="small">تقييم CLO (نسب التحقق)</strong>' +
+        '<div class="mc-clo-computed small text-info mb-1" data-section="' + sid + '"></div>' +
         '<div class="mc-clo-list small" data-section="' + sid + '"><span class="text-muted">جاري التحميل…</span></div>' +
         '<button type="button" class="btn btn-sm btn-outline-success mt-1 mc-save-clo" data-section="' + sid + '">حفظ CLO</button> ' +
-        '<a class="btn btn-sm btn-link" href="/grade_drafts">بنود التقييم</a></div></div>'
+        '<a class="btn btn-sm btn-link" href="' + cpUrl + '">تعريف المخرجات في صفحة المقرر</a> ' +
+        '<a class="btn btn-sm btn-link" href="/grade_drafts">بنود التقييم</a>' +
+        '<p class="small text-muted mt-2 mb-0">مخرجات البرنامج للتعريف: <a href="/academic_quality/ilo/outcomes-map">أهداف ومخرجات الكلية والبرنامج</a></p>' +
+        '</div></div>'
       );
     }
 
-    function renderWeeklyPlan(sid, adminData) {
+    function renderWeeklyPlan(sid, adminData, row) {
       const rows = adminData.weekly_plan || [];
-      if (!rows.length) return '<div class="small text-muted mt-1">لا خطة محفوظة بعد.</div>' + weekInputHtml(sid);
+      const cpUrl = coursePageUrlFromRow(row || { section_id: sid });
+      const editCta = '<div class="small mt-2"><a class="btn btn-sm btn-outline-primary" href="' + cpUrl + '#weekly">عدّل الخطة في صفحة المقرر</a></div>';
+      if (!rows.length) {
+        return '<div class="small text-muted mt-1">لا خطة محفوظة بعد. أدخل الخطة من صفحة المقرر (من المفردات أو باعتماد خطة أستاذ سابق).</div>' + editCta;
+      }
       const done = rows.filter(p => p.lecture_status === 'done').length;
       const pct = Math.round((done / rows.length) * 100);
       let html = '<div class="progress mt-1" style="height:6px;" title="' + done + '/' + rows.length + '">' +
         '<div class="progress-bar bg-success" style="width:' + pct + '%"></div></div>' +
         '<div class="small text-muted mb-1">' + done + ' منجز / ' + rows.length + ' أسبوع</div>';
-      html += '<div class="mc-week-list" data-section="' + sid + '">';
+      html += '<div class="table-responsive"><table class="table table-sm small mb-0"><thead><tr><th>أسبوع</th><th>الموضوع</th><th>الحالة</th><th>CLO</th></tr></thead><tbody>';
       rows.forEach(p => {
-        html += '<div class="week-item mb-1 d-flex justify-content-between align-items-center" draggable="true" data-section="' + sid + '" data-week="' + p.week_no + '">' +
-          '<span class="small">أسبوع ' + esc(p.week_no) + ': ' + esc(p.week_topic) + ' <span class="badge bg-' +
-          (p.lecture_status === 'done' ? 'success' : p.lecture_status === 'planned' ? 'primary' : 'warning text-dark') + ' section-badge">' + esc(p.lecture_status) + '</span>' +
-          (p.linked_clo ? ' <span class="badge bg-info text-dark section-badge">' + esc(p.linked_clo) + '</span>' : '') +
-          '</span><button type="button" class="btn btn-sm btn-outline-danger py-0 mc-delete-week" data-section="' + sid + '" data-week="' + p.week_no + '">×</button></div>';
+        html += '<tr><td>' + esc(p.week_no) + '</td><td>' + esc(p.week_topic) + '</td><td>' +
+          '<span class="badge bg-' + (p.lecture_status === 'done' ? 'success' : p.lecture_status === 'planned' ? 'primary' : 'warning text-dark') + ' section-badge">' + esc(p.lecture_status) + '</span></td><td>' +
+          esc(p.linked_clo || '—') + '</td></tr>';
       });
-      html += '</div>';
-      html += weekInputHtml(sid);
+      html += '</tbody></table></div>' + editCta;
       return html;
     }
 
@@ -1061,7 +1177,11 @@
         const r = await fetch('/academic_quality/ilo/api/sections/' + sid + '/clo-assessments', { credentials: 'include' });
         const j = await r.json().catch(() => ({}));
         const items = j.clos || [];
-        if (!items.length) { box.innerHTML = '<span class="text-muted">لا CLO معرّفة.</span>'; return; }
+        if (!items.length) {
+          const row = G_ROWS.find(r => r.section_id == sid) || {};
+          box.innerHTML = '<div class="alert alert-light border small mb-0">لا CLO معرّفة بعد. عرّف مخرجات المقرر في <a href="' + coursePageUrlFromRow(row) + '">صفحة المقرر</a>.</div>';
+          return;
+        }
         // Auto-compute from assessment items
         try {
           const rI = await fetch('/academic_quality/ilo/api/sections/' + sid + '/assessment-items', { credentials: 'include' });

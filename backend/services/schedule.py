@@ -3097,6 +3097,15 @@ def _enrich_rows_delivery_summary(
                 semester=semester or (row.get("semester") or "").strip(),
                 instructor_id=int(instructor_id),
             )
+    if instructor_id:
+        try:
+            from backend.services.course_pages import enrich_rows_course_page_readiness
+
+            enrich_rows_course_page_readiness(
+                conn, rows, instructor_id=int(instructor_id), semester=semester
+            )
+        except Exception as exc:
+            logger.warning("course page readiness enrich unavailable: %s", exc)
 
 
 def _count_visible_axes_done(axis_map: dict, section_ids: list[int]) -> tuple[int, int]:
@@ -3370,6 +3379,9 @@ def instructor_portal_summary():
         "sections_without_draft": 0,
         "grade_drafts_by_section": {},
         "instructor_name": inst_name,
+        "course_pages_ready": 0,
+        "course_pages_total": 0,
+        "library_files_count": 0,
     }
     if not inst_name or not instructor_id:
         return jsonify(base)
@@ -3419,6 +3431,41 @@ def instructor_portal_summary():
             except Exception:
                 pass
         action_items = list(delivery_items)
+        # جاهزية صفحة المقرر — من مجموعات التدريس إن وُجدت، وإلا من صفوف الجدول
+        portal_rows: list[dict] = []
+        try:
+            if term_label and tg_svc.semester_has_teaching_groups(conn, term_label):
+                tg_rows = tg_svc.list_instructor_assigned_groups(conn, iid, term_label) or []
+                for item in tg_rows:
+                    portal_rows.append(
+                        {
+                            "section_id": int(item.get("section_id") or 0) or None,
+                            "teaching_group_id": int(item.get("teaching_group_id") or 0) or None,
+                            "course_name": item.get("course_name"),
+                            "semester": item.get("semester") or term_label,
+                        }
+                    )
+            if not portal_rows:
+                for item in _group_assigned_tuples_by_course(tuples):
+                    portal_rows.append(
+                        {
+                            "section_id": int(item.get("section_id") or 0) or None,
+                            "teaching_group_id": None,
+                            "course_name": item.get("course_name"),
+                            "semester": item.get("semester") or term_label,
+                        }
+                    )
+            from backend.services.course_pages import course_page_portal_extras
+
+            cp_extras = course_page_portal_extras(
+                conn, portal_rows, instructor_id=iid, semester=term_label
+            )
+            action_items = list(cp_extras.get("action_items") or []) + action_items
+            base["course_pages_ready"] = int(cp_extras.get("course_pages_ready") or 0)
+            base["course_pages_total"] = int(cp_extras.get("course_pages_total") or 0)
+            base["library_files_count"] = int(cp_extras.get("library_files_count") or 0)
+        except Exception as exc:
+            logger.warning("course page portal extras failed: %s", exc)
         for t in tuples:
             sid, cn = t[0], t[1]
             try:

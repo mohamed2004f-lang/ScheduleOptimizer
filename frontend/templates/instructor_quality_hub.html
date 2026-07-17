@@ -130,7 +130,7 @@
         }
         const links=j.links||{};
         document.getElementById('quickLinks').innerHTML=[
-          ['كتالوج المخرجات',links.ilo_catalog],['دليل المصطلحات',links.glossary],['مقرراتي',links.my_courses]
+          ['أهداف ومخرجات البرنامج',links.ilo_catalog || '/academic_quality/ilo/outcomes-map'],['دليل المصطلحات',links.glossary],['مقرراتي',links.my_courses]
         ].filter(x=>x[1]).map(x=>'<a class="btn btn-sm btn-outline-primary" href="'+x[1]+'">'+x[0]+'</a>').join('');
         document.getElementById('mainWrap').classList.remove('d-none');
       }catch(e){document.getElementById('loadState').textContent='تعذر التحميل.';}
