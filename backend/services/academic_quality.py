@@ -6,7 +6,7 @@ import datetime
 
 from flask import Blueprint, jsonify, render_template, request, session
 
-from backend.core.auth import login_required, role_required, current_supervisor_effective
+from backend.core.auth import login_required, role_required, current_supervisor_effective, can_manage_survey_invites
 from backend.core.department_scope_policy import resolve_effective_department_scope_id
 from backend.services.utilities import get_connection, pdf_response_from_html
 from backend.core.survey_platform import RESPONDENT_ROLE_LABELS
@@ -38,9 +38,15 @@ def _quality_scope_label(conn, department_id: int | None) -> str:
     if department_id is None:
         return "نطاق الكلية (مؤسسي)"
     cur = conn.cursor()
+    # Postgres: departments لها name_ar / name_en / code — بدون عمود name
     row = cur.execute(
         """
-        SELECT COALESCE(NULLIF(TRIM(name_ar), ''), NULLIF(TRIM(name), ''), code, '')
+        SELECT COALESCE(
+            NULLIF(TRIM(name_ar), ''),
+            NULLIF(TRIM(COALESCE(name_en, '')), ''),
+            NULLIF(TRIM(code), ''),
+            ''
+        )
         FROM departments WHERE id = ? LIMIT 1
         """,
         (int(department_id),),
@@ -89,8 +95,20 @@ def quality_dashboard():
                 semester=semester or None,
                 department_id=dept_id,
             )
-            critical = list_critical_courses(conn, metrics["semester"], dept_id)
-            scope_label = _quality_scope_label(conn, dept_id)
+            try:
+                critical = list_critical_courses(conn, metrics["semester"], dept_id)
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).exception("list_critical_courses failed")
+                critical = []
+            try:
+                scope_label = _quality_scope_label(conn, dept_id)
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).exception("_quality_scope_label failed")
+                scope_label = f"قسم: #{dept_id}" if dept_id is not None else "نطاق الكلية (مؤسسي)"
             sm = metrics.get("survey_metrics") or {}
             for code, label_ar in SURVEY_METRIC_LABELS.items():
                 item = sm.get(code) or {}
@@ -137,6 +155,52 @@ def quality_dashboard():
                 "evaluation_count": 0,
                 "survey_metrics": {},
             }
+    quality_map = None
+    try:
+        from backend.core.auth import SESSION_ACTIVE_MODE, _normalize_role, is_college_quality_lead_session
+        from backend.core.permissions import resolve_capabilities_for_user
+        from backend.core.quality_guide_packs import guide_audience_payload
+
+        role = _normalize_role((session.get("user_role") or "").strip())
+        am = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower() or None
+        try:
+            isv = int(session.get("is_supervisor") or 0)
+        except (TypeError, ValueError):
+            isv = 0
+        with get_connection() as conn:
+            caps_map = resolve_capabilities_for_user(
+                role=role,
+                is_supervisor_val=isv,
+                active_mode=am,
+                username=(session.get("user") or "").strip(),
+                is_system_account=int(session.get("is_system_account") or 0),
+                conn=conn,
+            )
+            did = _resolve_department_scope(conn)
+            dlabel = None
+            if did is not None:
+                try:
+                    dlabel = _quality_scope_label(conn, did)
+                    if dlabel.startswith("قسم: "):
+                        dlabel = dlabel[5:]
+                except Exception:
+                    dlabel = None
+            quality_map = guide_audience_payload(
+                role=role,
+                active_mode=am,
+                caps=caps_map,
+                is_college_quality_lead=is_college_quality_lead_session(),
+                is_dept_quality_coordinator=int(session.get("is_dept_quality_coordinator") or 0) == 1,
+                department_label=dlabel,
+                department_id=did,
+                dept_scope_locked=(role == "head_of_department" and did is not None),
+            )
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception("quality map payload failed")
+        quality_map = None
+
     return render_template(
         "academic_quality_dashboard.html",
         metrics=metrics,
@@ -145,7 +209,62 @@ def quality_dashboard():
         survey_cards=survey_cards,
         external_survey_cards=external_survey_cards,
         page_error=page_error,
+        can_manage_survey_invites=can_manage_survey_invites(),
+        quality_guide_map=quality_map,
     )
+
+
+@academic_quality_bp.route("/api/guide/audience")
+@login_required
+def quality_guide_audience_api():
+    """جمهور الدليل + خريطة الجودة الشخصية حسب الدور والوضع والصلاحيات."""
+    from backend.core.auth import (
+        SESSION_ACTIVE_MODE,
+        _normalize_role,
+        is_college_quality_lead_session,
+    )
+    from backend.core.permissions import resolve_capabilities_for_user
+    from backend.core.quality_guide_packs import guide_audience_payload
+
+    role = _normalize_role((session.get("user_role") or "").strip())
+    am = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower() or None
+    try:
+        isv = int(session.get("is_supervisor") or 0)
+    except (TypeError, ValueError):
+        isv = 0
+    dept_id = None
+    dept_label = None
+    locked = False
+    caps: dict = {}
+    with get_connection() as conn:
+        caps = resolve_capabilities_for_user(
+            role=role,
+            is_supervisor_val=isv,
+            active_mode=am,
+            username=(session.get("user") or "").strip(),
+            is_system_account=int(session.get("is_system_account") or 0),
+            conn=conn,
+        )
+        dept_id = _resolve_department_scope(conn)
+        locked = role == "head_of_department" and dept_id is not None
+        if dept_id is not None:
+            try:
+                dept_label = _quality_scope_label(conn, dept_id)
+                if dept_label.startswith("قسم: "):
+                    dept_label = dept_label[5:]
+            except Exception:
+                dept_label = f"#{dept_id}"
+    payload = guide_audience_payload(
+        role=role,
+        active_mode=am,
+        caps=caps,
+        is_college_quality_lead=is_college_quality_lead_session(),
+        is_dept_quality_coordinator=int(session.get("is_dept_quality_coordinator") or 0) == 1,
+        department_label=dept_label,
+        department_id=dept_id,
+        dept_scope_locked=locked,
+    )
+    return jsonify({"status": "ok", **payload})
 
 
 @academic_quality_bp.route("/api/metrics")

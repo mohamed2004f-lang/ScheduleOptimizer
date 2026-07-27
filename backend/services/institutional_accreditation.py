@@ -39,6 +39,7 @@ from backend.core.auth import (
     accreditation_evidence_binder_required,
     can_bind_accreditation_evidence,
     can_edit_accreditation_catalog,
+    can_manage_survey_invites,
     role_required,
 )
 from backend.services.quality_metrics import term_label_from_conn
@@ -492,6 +493,7 @@ def register_institutional_accreditation_routes(bp) -> None:
             is_admin_main=user_role in ("admin", "admin_main"),
             can_edit_accreditation_catalog=can_edit_accreditation_catalog(user_role),
             can_bind_accreditation_sources=can_bind_accreditation_evidence(user_role),
+            can_manage_survey_invites=can_manage_survey_invites(user_role),
             show_evidence_matrix_tab=show_evidence_matrix_tab,
             link_mode_labels=LINK_MODE_LABELS,
             evidence_category_labels=EVIDENCE_CATEGORY_LABELS,

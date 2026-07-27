@@ -354,6 +354,7 @@
             <i class="fa-solid fa-ellipsis ms-1"></i> المزيد
           </a>
           <ul class="dropdown-menu" aria-labelledby="supervisorMoreMenu">
+            <li><a class="dropdown-item" id="navSupCollegeStory" href="/academic_quality/ilo/outcomes-map">هوية الكلية وبرنامجك</a></li>
             <li><a class="dropdown-item" id="navSupQualityReport" href="/supervisor_quality_report_page">تقرير الإرشاد (كمي)</a></li>
             <li><a class="dropdown-item" id="navSupTranscript" href="/transcript_page">كشف درجات طالب</a></li>
             <li><a class="dropdown-item" id="navSupPerformance" href="/performance_report">تقرير الأداء</a></li>
@@ -380,7 +381,7 @@
         </li>
         <li class="nav-item" id="navInsIloCatalogWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
           <a class="nav-link" id="navInsIloCatalog" href="/academic_quality/ilo/outcomes-map">
-            <i class="fa-solid fa-diagram-project ms-1"></i> أهداف ومخرجات البرنامج
+            <i class="fa-solid fa-diagram-project ms-1"></i> هوية الكلية وبرنامجك
           </a>
         </li>
         <li class="nav-item instructor-nav-break" id="navInstructorRowBreak" style="display:{% if nis %}list-item{% else %}none{% endif %};" aria-hidden="true"></li>
@@ -896,8 +897,15 @@
       const activeModeNav = (data.active_mode != null && data.active_mode !== '')
         ? String(data.active_mode).toLowerCase()
         : defaultActiveModeForRole();
+      // بوابة المشرف: دور المشرف أو أي دور قيادي/أستاذ في وضع المشرف
+      const inSupervisorPortal = role === 'supervisor'
+        || (activeModeNav === 'supervisor' && (
+          dualInstructorSupervisor
+          || role === 'instructor'
+          || role === 'head_of_department'
+          || isCollegeLeadNav
+        ));
       const inInstructorPortal = !dualInstructorSupervisor || activeModeNav !== 'supervisor';
-      const inSupervisorPortal = role === 'supervisor' || (dualInstructorSupervisor && activeModeNav === 'supervisor');
       let isSupervisor = inSupervisorPortal;
       const isStudentUi = (caps && caps.v >= 1) ? !!caps.is_student : (role === 'student');
       if (caps && caps.v >= 1) {
@@ -978,7 +986,9 @@
       const showInstructorPortalMenu = (caps && caps.v >= 1)
         ? !!caps.nav_instructor_portal_menu
         : instructorSlimNav;
-      const useInstructorMore = showInstructorPortalMenu && instructorSlimNav;
+      // أولوية وضع الأستاذ النشط حتى لو أعاد بروفايل الصلاحيات تفعيل شريط الإدارة
+      const useInstructorMore = isInstructorPortalMode()
+        || (showInstructorPortalMenu && instructorSlimNav);
       const inTeachingPortalNav = (caps && caps.v >= 1)
         ? (!!caps.is_instructor_or_supervisor_nav
           || (role === 'staff' && !caps.nav_staff_operations_menu))
@@ -1246,7 +1256,10 @@
       const elSurveysTrends = document.getElementById('navSurveysTrends');
       if (elSurveysTrends) elSurveysTrends.style.display = showSurveysResults ? '' : 'none';
       const elSurveysInvites = document.getElementById('navSurveysInvites');
-      if (elSurveysInvites) elSurveysInvites.style.display = showSurveysResults ? '' : 'none';
+      const showSurveysInvites = (caps && caps.v >= 1)
+        ? !!(caps.nav_surveys_invites || caps.can_manage_survey_invites)
+        : (role === 'admin_main' || role === 'system_admin' || role === 'college_dean');
+      if (elSurveysInvites) elSurveysInvites.style.display = showSurveysInvites ? '' : 'none';
       const elCollegeProf = document.getElementById('navCollegeProfile');
       if (elCollegeProf) elCollegeProf.style.display = showCollegeProfile ? '' : 'none';
       const elProgramsPortal = document.getElementById('navProgramsPortal');
@@ -1318,16 +1331,19 @@
         }
       }
 
-      const isStaffOpsNav = (caps && caps.v >= 1)
+      const supervisorSlimNav = inSupervisorPortal && (
+        !!showSupervisorPortal || !!showSupervisorPortalMenu
+        || isSupervisorPortalModeNav() || role === 'supervisor'
+      ) && (
+        dualInstructorSupervisor || role === 'supervisor' || role === 'instructor'
+        || role === 'head_of_department' || isCollegeLeadNav
+      );
+      // وضع المشرف لا يشارك شريط الإدارة حتى لو أعاد البروفايل تفعيل nav_staff_operations_menu
+      const isStaffOpsNav = !inSupervisorPortal && !supervisorSlimNav && !isSupervisorPortalModeNav() && ((caps && caps.v >= 1)
         ? !!caps.nav_staff_operations_menu
         : (['admin', 'admin_main', 'system_admin'].includes(role || '')
           || (role === 'head_of_department' && (activeModeNav === 'head' || activeModeNav === 'hod' || activeModeNav === 'department_head' || activeModeNav === ''))
-          || isLeadershipOpsMode());
-      const supervisorSlimNav = !!showSupervisorPortal && inSupervisorPortal && (
-        dualInstructorSupervisor || role === 'supervisor'
-        || (role === 'head_of_department' && activeModeNav === 'supervisor')
-        || (isCollegeLeadNav && activeModeNav === 'supervisor')
-      );
+          || isLeadershipOpsMode()));
       let showTranscriptNav = true;
       let saAttendanceOnly = false;
       if (caps && caps.v >= 1) {
@@ -1419,29 +1435,34 @@
           wrapQuality.classList.add('d-none');
           wrapQuality.style.display = 'none';
         }
-        if (showSupervisorPortalMenu) {
+        if (showSupervisorPortalMenu || supervisorSlimNav) {
           ['navSupervisorPortalWrap', 'navSupervisorSurveysWrap', 'navSupervisorMoreWrap'].forEach(id => {
             const el = document.getElementById(id);
             if (el) { el.style.removeProperty('display'); el.classList.remove('d-none'); }
           });
           enforceSupervisorNavShell();
-          fetch('/supervisors/quality_context', { credentials: 'include', cache: 'no-store' })
-            .then(r => r.json().catch(() => ({})))
-            .then(j => {
-              const pc = Number((j.surveys && j.surveys.pending_count) || 0);
-              const badge = document.getElementById('navSupervisorSurveysBadge');
-              if (!badge) return;
-              if (pc > 0) {
-                badge.textContent = String(pc);
-                badge.classList.remove('d-none');
-              } else {
-                badge.classList.add('d-none');
-              }
-            })
-            .catch(() => {});
+          if (showSupervisorPortalMenu || showSupervisorPortal) {
+            fetch('/supervisors/quality_context', { credentials: 'include', cache: 'no-store' })
+              .then(r => r.json().catch(() => ({})))
+              .then(j => {
+                const pc = Number((j.surveys && j.surveys.pending_count) || 0);
+                const badge = document.getElementById('navSupervisorSurveysBadge');
+                if (!badge) return;
+                if (pc > 0) {
+                  badge.textContent = String(pc);
+                  badge.classList.remove('d-none');
+                } else {
+                  badge.classList.add('d-none');
+                }
+              })
+              .catch(() => {});
+          }
         }
         const wrapAR = document.getElementById('navAcademicRecordsMenuWrap');
-        if (wrapAR) wrapAR.style.removeProperty('display');
+        if (wrapAR) {
+          wrapAR.style.display = 'none';
+          wrapAR.classList.add('d-none');
+        }
         [
           'navGradeDrafts', 'navHodCourseDelivery', 'navElectivesReport',
           'navRegistrationChangesReport', 'navFailedCoursesReport',
@@ -1456,7 +1477,7 @@
         const elPerfSup = document.getElementById('navPerformance');
         if (elPerfSup) elPerfSup.style.display = '';
       }
-      if (isStaffOpsNav) {
+      if (isStaffOpsNav && !useInstructorMore && !supervisorSlimNav && !inSupervisorPortal) {
         [
           'navMyCoursesWrap', 'navSupervisorPortalWrap',
           'navInstructorGradeDraftsWrap', 'navInstructorMoreWrap',
@@ -1489,7 +1510,6 @@
           wrapDashboard.style.display = showDashboardNav ? '' : 'none';
         }
       }
-
       const elTranscript = document.getElementById('navTranscript');
       if (elTranscript && !supervisorSlimNav) elTranscript.style.display = showTranscriptNav ? '' : 'none';
       if (saAttendanceOnly) {
@@ -1797,8 +1817,9 @@
       if (isStudentUi) showQualityMenu = false;
       if (useInstructorMore) showQualityMenu = false;
       if (showSupervisorPortalMenu && inSupervisorPortal) showQualityMenu = false;
+      if (isSupervisorPortalModeNav() || role === 'supervisor') showQualityMenu = false;
       // trends + invites تستخدم نفس صلاحية نتائج الاستبيانات
-      if (!showQualityMenu) {
+      if (!showQualityMenu && !useInstructorMore && !inSupervisorPortal && role !== 'supervisor' && !isSupervisorPortalModeNav()) {
         const amQ = (data.active_mode || '').trim().toLowerCase();
         const hodHeadMode = role === 'head_of_department'
           && (amQ === '' || amQ === 'head' || amQ === 'hod' || amQ === 'department_head');
@@ -1866,6 +1887,19 @@
         skipAutoShow.add('navStudentPortalWrap');
         skipAutoShow.add('navStudentRegistrationsWrap');
       }
+      if (supervisorSlimNav || inSupervisorPortal) {
+        skipAutoShow.add('navStudentAffairsWrap');
+        skipAutoShow.add('navAcademicRecordsMenuWrap');
+        skipAutoShow.add('navPlanningMenuWrap');
+        skipAutoShow.add('navCatalogWrap');
+        skipAutoShow.add('navFacultySupervisionWrap');
+        skipAutoShow.add('navAdminSettingsWrap');
+        skipAutoShow.add('navQualityAccreditationWrap');
+        skipAutoShow.add('navHodCourseDeliveryWrap');
+        skipAutoShow.add('navDashboardWrap');
+        skipAutoShow.add('navStaffCompactMoreWrap');
+        skipAutoShow.add('navDensityToggleWrap');
+      }
       document.querySelectorAll('.nav-item.dropdown').forEach(dd => {
         if (skipAutoShow.has(dd.id)) return;
         const items = dd.querySelectorAll('.dropdown-item');
@@ -1873,7 +1907,7 @@
         const hasVisible = Array.from(items).some(it => it.style.display !== 'none');
         if (!hasVisible) {
           dd.style.display = 'none';
-        } else if (!skipAutoShow.has(dd.id) && !isStudentUi && !useInstructorMore) {
+        } else if (!skipAutoShow.has(dd.id) && !isStudentUi && !useInstructorMore && !supervisorSlimNav && !inSupervisorPortal) {
           dd.style.removeProperty('display');
           dd.classList.remove('d-none');
         }
@@ -1884,7 +1918,7 @@
         enforceInstructorNavShell();
         applyInstructorConditionalExtras();
       }
-      else if (showSupervisorPortalMenu && inSupervisorPortal) enforceSupervisorNavShell();
+      else if (supervisorSlimNav || (showSupervisorPortalMenu && inSupervisorPortal)) enforceSupervisorNavShell();
 
       // منع إعادة إظهار قوائم الأستاذ بعد الحلقة أعلاه (خلل سابق)
       if (!useInstructorMore) {
@@ -1894,7 +1928,8 @@
         });
         hideInstructorFlatNav();
       }
-      if (isStaffOpsNav) {
+      // لا تخفِ بوابة المشرف عند شريط الإدارة — وضعان متنافيان
+      if (isStaffOpsNav && !useInstructorMore && !supervisorSlimNav && !inSupervisorPortal) {
         ['navMyCoursesWrap', 'navSupervisorPortalWrap', 'navInstructorMoreWrap', 'navInstructorGradeDraftsWrap'].forEach(id => {
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
@@ -2287,7 +2322,7 @@
         enforceInstructorNavShell();
         applyInstructorConditionalExtras();
       }
-      else if (showSupervisorPortalMenu && inSupervisorPortal) enforceSupervisorNavShell();
+      else if (supervisorSlimNav || (showSupervisorPortalMenu && inSupervisorPortal)) enforceSupervisorNavShell();
       else hideStudentNavShell();
 
       // تفعيل الرابط الحالي (Active state) حسب المسار

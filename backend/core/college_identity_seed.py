@@ -124,8 +124,11 @@ DEFAULT_KPIS: tuple[dict[str, Any], ...] = (
 
 
 def seed_college_identity_defaults(conn) -> dict[str, int]:
+    from backend.core.college_identity_schema import is_college_identity_seed_locked
+
     cur = conn.cursor()
-    stats = {"identity": 0, "goals": 0, "links": 0, "kpis": 0}
+    stats = {"identity": 0, "goals": 0, "links": 0, "kpis": 0, "skipped_locked": 0}
+    seed_locked = is_college_identity_seed_locked(conn)
     try:
         n = cur.execute("SELECT COUNT(*) FROM college_identity").fetchone()
         cnt = int(n[0] if not hasattr(n, "keys") else list(n.values())[0])
@@ -149,6 +152,16 @@ def seed_college_identity_defaults(conn) -> dict[str, int]:
             ),
         )
         stats["identity"] = 1
+    if seed_locked:
+        stats["skipped_locked"] = 1
+        try:
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        return stats
     try:
         gcnt = cur.execute("SELECT COUNT(*) FROM college_strategic_goals").fetchone()
         g_n = int(gcnt[0] if not hasattr(gcnt, "keys") else list(gcnt.values())[0])

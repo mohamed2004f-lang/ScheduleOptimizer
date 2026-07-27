@@ -779,38 +779,104 @@ window.PAGE_GUIDE_CATALOG = {
   },
 
   "college_profile": {
-    roles: ["admin_main", "head_of_department"],
-    title: "هوية الكلية",
+    roles: ["admin_main", "system_admin", "college_dean"],
+    title: "ورشة تحرير هوية الكلية",
     steps: [
       {
-        title: "🏛️ هوية الكلية — الأساس الاستراتيجي",
-        body: "<p>هذه الصفحة هي <strong>حجر الأساس</strong> لنظام الجودة بالكامل. تحتوي على:</p><table><tr><td><strong>الرسالة</strong></td><td>لماذا وُجدت الكلية وما تقدمه</td></tr><tr><td><strong>الرؤية</strong></td><td>أين تريد أن تصل خلال 5-10 سنوات</td></tr><tr><td><strong>القيم</strong></td><td>المبادئ التي توجه العمل</td></tr></table><p>هذه العناصر الثلاثة هي المرجع الذي تُبنى عليه الأهداف والمخرجات.</p>",
-        forRoles: ["admin_main"]
+        title: "ورشة التحرير — للعميد والأدمن",
+        body: "<p>هذه الصفحة <strong>ورشة تحرير</strong> لهوية الكلية (رسالة، رؤية، قيم، شجرة الأهداف، KPI).</p><ul><li>التحرير: عميد الكلية + الأدمن الرئيسي</li><li>التعليقات: وكيل / رؤساء أقسام / رئيس جودة الكلية</li><li>الأساتذة والمشرفون يقرؤون القصة التعريفية من <strong>هوية الكلية وبرنامجك</strong> وليس من هنا</li></ul>",
+        forRoles: ["admin_main", "system_admin", "college_dean"],
+        forCaps: ["can_edit_college_identity", "nav_college_profile"]
       },
       {
-        title: "🎯 الأهداف الاستراتيجية (IG1-IG8)",
-        body: "<p>الأهداف الاستراتيجية هي <strong>ترجمة الرسالة</strong> إلى أهداف قابلة للقياس:</p><ul><li><strong>IG1</strong> — جودة التعليم والتعلم</li><li><strong>IG2</strong> — البحث العلمي والابتكار</li><li><strong>IG3</strong> — خدمة المجتمع والشراكات</li><li><strong>IG4</strong> — بيئة تعليمية متميزة</li><li><strong>IG5</strong> — تطوير أعضاء هيئة التدريس</li><li><strong>IG6</strong> — القيادة والحوكمة</li><li><strong>IG7</strong> — التنمية المستدامة</li><li><strong>IG8</strong> — التحول الرقمي</li></ul><p>كل IG له مؤشرات أداء (KPI) لقياس مدى تحققه.</p>",
-        forRoles: ["admin_main"]
+        title: "الأهداف الاستراتيجية وKPI",
+        body: "<p>شجرة الأهداف كاملة هنا للتحرير. القصة التعريفية تعرض الجذور فقط (IG1–IG8) للطلبة والأساتذة. KPI تبقى في الورشة ولا تُعرض في قصة الأستاذ/الطالب.</p>",
+        forRoles: ["admin_main", "system_admin", "college_dean"]
+      }
+    ]
+  },
+
+  "college_identity_story": {
+    roles: ["admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "instructor", "supervisor", "student"],
+    title: "هوية الكلية وبرنامجك",
+    steps: [
+      {
+        title: "قصة تعريفية للقراءة",
+        body: "<p>هذه الصفحة تعرض <strong>قصة الكلية</strong> (رؤية، رسالة، قيم، أهداف جذرية) و<strong>برنامجك</strong> إن وُجد — للقراءة والتعليق حسب صلاحيتك.</p><p>تحرير النصوص المركزية يتم من ورشة هوية الكلية للعميد/الأدمن فقط.</p>"
       },
       {
-        title: "🎓 مخرجات التخرج (GLO)",
-        body: "<p>مخرجات التخرج هي <strong>ما يجب أن يكتسبه كل خريج</strong> من الكلية بغض النظر عن برنامجه:</p><ul><li>مصنفة في <strong>7 مجالات</strong> (معرفة، مهارات تقنية، مهارات عامة، قيم...)</li><li>كل GLO يتفرع منه عدة PLO في كل برنامج</li><li>الأساتذة يقيسون CLO التي تغذي PLO التي تغذي GLO</li></ul><p>هذا الهرم يضمن أن كل نشاط تعليمي يُسهم في تحقيق رؤية الكلية.</p>",
-        forRoles: ["admin_main"]
+        title: "ماذا يفعل الأستاذ والمشرف؟",
+        body: "<p>استخدم هذه الصفحة لفهم إطار الجودة ثم ارجع لبوابة جودة الأستاذ أو استبيانات المشرف. لا تظهر هنا مؤشرات KPI التشغيلية.</p>",
+        forRoles: ["instructor", "supervisor", "head_of_department"],
+        forModes: ["instructor", "supervisor"]
+      }
+    ]
+  },
+
+  "instructor_quality_hub": {
+    roles: ["instructor", "head_of_department", "college_dean", "academic_vice_dean"],
+    title: "بوابة جودة الأستاذ",
+    steps: [
+      {
+        title: "بوابتك بدون قائمة إدارية",
+        body: "<p>في وضع الأستاذ تظهر روابط جودة مخصصة: تعبئة، قصة الهوية، كتالوج المخرجات — <strong>بدون</strong> قائمة «ضمان الجودة والاعتماد» الإدارية.</p>",
+        forModes: ["instructor"]
       },
       {
-        title: "📏 مؤشرات الأداء (KPI)",
-        body: "<p>لكل هدف استراتيجي (IG) عدة مؤشرات KPI:</p><ul><li><strong>القيمة المستهدفة</strong> — الرقم المطلوب تحقيقه</li><li><strong>القيمة الحالية</strong> — الواقع الفعلي (يُحدّث دورياً)</li><li><strong>الوحدة</strong> — نسبة مئوية، عدد، معدل...</li></ul><p>مثال: \"نسبة رضا الطلاب عن التعليم ≥ 80%\"</p><p>KPIs تساعد المتابعة الداخلية ويمكن توثيقها كشواهد في خريطة QAA بعد <strong>ربط يدوي</strong>.</p>",
-        forRoles: ["admin_main"]
+        title: "ابدأ من هنا",
+        body: "<ol><li>اقرأ هوية الكلية وبرنامجك</li><li>أكمل الاستبيانات المطلوبة</li><li>اربط CLO بمقرراتك عند الحاجة</li></ol>"
+      }
+    ]
+  },
+
+  "supervisor_quality_slim": {
+    roles: ["supervisor", "instructor", "head_of_department", "college_dean", "academic_vice_dean"],
+    title: "جودة وضع المشرف",
+    steps: [
+      {
+        title: "شريط نحيف للإشراف",
+        body: "<p>وضع المشرف يعرض: لوحة الإشراف + تعبئة استبيانات دورية + المزيد (هوية الكلية للقراءة). لا تُعرض قائمة الجودة الإدارية.</p>",
+        forModes: ["supervisor"]
       },
       {
-        title: "🏢 هوية الكلية — لماذا تهمك كرئيس قسم؟",
-        body: "<p>هذه الصفحة تُعرّفك على الإطار الذي يجب أن يعمل ضمنه برنامجك:</p><ul><li><strong>الأهداف الاستراتيجية (IG)</strong> — ستربط برنامجك بها في صفحة البرنامج</li><li><strong>مخرجات التخرج (GLO)</strong> — ستبني عليها PLO لبرنامجك</li><li><strong>مؤشرات الأداء (KPI)</strong> — ستُقاس عليها فعالية قسمك</li></ul><p>افهم هذه الصفحة جيداً قبل إعداد ملف برنامجك.</p>",
-        forRoles: ["head_of_department"]
+        title: "الاستبيانات في وضع المشرف",
+        body: "<p>أكملت الاستبيانات المطلوبة لدورك كمشرف من رابط التعبئة. النتائج المجمّعة والدعوات الخارجية ليست جزءاً من هذا الوضع.</p>",
+        forModes: ["supervisor"]
+      }
+    ]
+  },
+
+  "survey_invites": {
+    roles: ["admin_main", "system_admin", "college_dean"],
+    title: "دعوات الاستبيانات الخارجية",
+    steps: [
+      {
+        title: "إنشاء الروابط",
+        body: "<p>هذه الصفحة لإنشاء روابط حملات الخريجين وجهات العمل. متاحة <strong>لعميد الكلية والأدمن الرئيسي</strong> فقط.</p>",
+        forCaps: ["can_manage_survey_invites"]
       },
       {
-        title: "🔗 كيف تتصل هوية الكلية ببرنامجك؟",
-        body: "<p>العلاقة هرمية ومباشرة:</p><div style=\"text-align:center;line-height:2.2\"><strong>رسالة الكلية</strong><br>⬇️ <em>تُترجم إلى</em><br><strong>أهداف IG</strong> ⟵ تربط بها <strong>أهداف برنامجك PG</strong><br>⬇️ <em>تُترجم إلى</em><br><strong>مخرجات GLO</strong> ⟵ تربط بها <strong>مخرجات برنامجك PLO</strong><br>⬇️ <em>تُوثَّق شواهدها في</em><br><strong>أرشيف القسم + خريطة PROG/INST</strong> (يدوي)</div><p>في <strong>صفحة البرنامج</strong> ستجد مصفوفات بصرية توضح هذا الربط.<br>في <strong>كتالوج المخرجات</strong> ستُدير PLO وتربطها بـ GLO.</p>",
-        forRoles: ["head_of_department"]
+        title: "النتائج منفصلة",
+        body: "<p>عرض النتائج الخارجية ومتابعة الأقسام من <strong>نتائج الاستبيانات</strong>. رؤساء الأقسام يرون قسمهم فقط.</p>",
+        forCaps: ["can_manage_survey_invites"]
+      }
+    ]
+  },
+
+  "survey_results": {
+    roles: ["admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "admin"],
+    title: "نتائج الاستبيانات",
+    steps: [
+      {
+        title: "داخلي وخارجي",
+        body: "<p>تبويب داخلي للفصل الحالي، وتبويب خارجي لدورات الدعوات. إنشاء الروابط منفصل ومقصور على العميد/الأدمن الرئيسي.</p>",
+        forCaps: ["nav_surveys_results"]
+      },
+      {
+        title: "النتائج حسب القسم",
+        body: "<p><strong>رئيس القسم:</strong> يرى نتائج قسمه فقط.<br><strong>العميد/الوكيل/الأدمن/رئيس جودة الكلية:</strong> يمكنهم اختيار قسم أو عرض كل الكلية.</p>",
+        forCaps: ["nav_surveys_results"],
+        forFlags: ["is_college_quality_lead"]
       }
     ]
   },
@@ -895,7 +961,7 @@ window.PAGE_GUIDE_CATALOG = {
       },
       {
         title: "إنشاء وضبط القوالب",
-        body: "<p>من إدارة الاستبيانات:</p><ol><li>راجع القوالب الجاهزة أو أضف بنوداً</li><li>حدد الفئة المستهدفة وفترة التفعيل</li><li>تابع التغطية والدعوات الخارجية عند الحاجة</li></ol><p>استخدم <strong>نتائج الاستبيانات</strong> للتجميع والتصدير والإغلاق الفصلي.</p>"
+        body: "<p>من إدارة الاستبيانات:</p><ol><li>راجع القوالب الجاهزة أو أضف بنوداً</li><li>حدد الفئة المستهدفة وفترة التفعيل</li><li><strong>الدعوات الخارجية</strong> تُنشأ فقط من العميد/الأدمن الرئيسي — باقي الأدوار تعرض النتائج حسب القسم</li></ol><p>استخدم <strong>نتائج الاستبيانات</strong> للتجميع والتصدير والإغلاق الفصلي.</p>"
       },
       {
         title: "النتائج والتصدير",
@@ -909,22 +975,29 @@ window.PAGE_GUIDE_CATALOG = {
   },
 
   "survey_hub": {
-    roles: ["student", "instructor"],
+    roles: ["student", "instructor", "supervisor", "head_of_department", "college_dean", "academic_vice_dean", "staff"],
     title: "الاستبيانات",
     steps: [
       {
-        title: "📋 الاستبيانات المتاحة",
-        body: "<p>هذه الصفحة تعرض جميع الاستبيانات المطلوب منك تعبئتها:</p><ul><li>استبيانات <strong>نشطة</strong> (يمكنك تعبئتها الآن)</li><li>استبيانات <strong>مكتملة</strong> (عبّأتها سابقاً)</li><li>استبيانات <strong>منتهية</strong> (انتهت مدتها)</li></ul>"
+        title: "الاستبيانات المتاحة",
+        body: "<p>تعرض هذه الصفحة الاستبيانات حسب <strong>وضعك الحالي</strong> من شريط الأدوار (طالب / أستاذ / مشرف…).</p>"
       },
       {
-        title: "✍️ كيف تعبّئ استبياناً؟",
-        body: "<ol><li>اضغط على الاستبيان النشط</li><li>أجب على جميع الأسئلة (بعضها إجباري)</li><li>اضغط <strong>إرسال</strong></li></ol><p>الإجابات <strong>مجهولة</strong> — لا يمكن لأحد معرفة هويتك.</p><p>تقييمك يُسهم في تحسين جودة التعليم والمقررات.</p>",
+        title: "كيف تعبّئ استبياناً؟",
+        body: "<ol><li>اضغط على الاستبيان النشط</li><li>أجب على الأسئلة</li><li>أرسل</li></ol><p>للتقييم الطلابي: الإجابات مجهولة الهوية حيث ينطبق ذلك.</p>",
         forRoles: ["student"]
       },
       {
-        title: "👨‍🏫 أهمية المشاركة",
-        body: "<p>بصفتك أستاذاً، استبيانات التقييم الذاتي تساعدك في:</p><ul><li>معرفة نقاط القوة والضعف من منظورك</li><li>مقارنة تقييمك الذاتي بتقييم الطلاب</li><li>إعداد خطة تطوير مهني</li></ul><p>نتائج استبيانات الطلاب تظهر في <strong>بطاقة أدائك</strong>.</p>",
-        forRoles: ["instructor"]
+        title: "وضع الأستاذ",
+        body: "<p>أكمل استبياناتك التدريسية من هنا أو من بوابة جودة الأستاذ. النتائج المجمّعة ليست جزءاً من وضع الأستاذ.</p>",
+        forRoles: ["instructor"],
+        forModes: ["instructor"]
+      },
+      {
+        title: "وضع المشرف",
+        body: "<p>في وضع المشرف تُعرض استبيانات الإشراف فقط. لا تحتاج قائمة ضمان الجودة الإدارية.</p>",
+        forRoles: ["instructor", "supervisor", "head_of_department"],
+        forModes: ["supervisor"]
       }
     ]
   },

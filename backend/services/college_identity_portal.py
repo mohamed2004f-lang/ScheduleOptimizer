@@ -9,16 +9,20 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from flask import Blueprint, jsonify, render_template, request, session
+from flask import Blueprint, jsonify, redirect, render_template, request, session
 
 from backend.core.auth import (
     SESSION_ACTIVE_MODE,
     get_admin_department_scope_id,
+    is_college_quality_lead_session,
     login_required,
     role_required,
     _normalize_role,
 )
-from backend.core.college_identity_schema import ensure_college_identity_schema
+from backend.core.college_identity_schema import (
+    ensure_college_identity_schema,
+    set_college_identity_seed_locked,
+)
 from backend.core.plo_schema import ensure_plo_enhancement_schema
 from backend.database.database import fetch_table_columns, table_exists
 from backend.core.department_scope_policy import head_home_department_id, resolve_users_list_scope
@@ -79,8 +83,40 @@ def _session_role() -> str:
 
 
 def _can_edit_college() -> bool:
+    """تحرير هوية الكلية/الأهداف/GLO/KPI: العميد وadmin_main فقط."""
     r = _session_role()
-    return r in ("admin_main", "college_dean", "academic_vice_dean", "system_admin")
+    return r in ("admin_main", "college_dean")
+
+
+def _can_comment_college() -> bool:
+    """تعليق بدون تعديل: وكيل · رئيس جودة الكلية · رؤساء الأقسام."""
+    if _can_edit_college():
+        return False
+    r = _session_role()
+    if r in ("academic_vice_dean", "head_of_department"):
+        return True
+    if is_college_quality_lead_session():
+        return True
+    return False
+
+
+def _can_view_college_kpi() -> bool:
+    """KPI تشغيلية للمحررين والمعلّقين — ليست للأستاذ/الطالب."""
+    if _can_edit_college():
+        return True
+    r = _session_role()
+    if r in ("academic_vice_dean", "head_of_department", "system_admin"):
+        return True
+    if is_college_quality_lead_session():
+        return True
+    return False
+
+
+def _can_access_college_workshop() -> bool:
+    if _can_edit_college() or _can_comment_college():
+        return True
+    r = _session_role()
+    return r in ("system_admin", "admin")
 
 
 def _can_edit_program_goals() -> bool:
@@ -316,6 +352,172 @@ def college_profile_payload(conn, *, department_id: int | None = None) -> dict[s
     }
 
 
+def build_college_story_payload(
+    conn,
+    *,
+    include_kpi: bool = False,
+    program_id: int | None = None,
+    goals_roots_only: bool = True,
+) -> dict[str, Any]:
+    """عرض تعريفي موحّد: هوية الكلية + برنامج المستخدم (بدون أدوات تشغيل).
+
+    goals_roots_only=True (الافتراضي): أهداف الكلية الرئيسية فقط دون الفروع —
+    أنسب للقصة التعريفية؛ الورشة تستخدم college_profile_payload للشجرة كاملة.
+    """
+    ensure_plo_enhancement_schema(conn)
+    ensure_college_identity_schema(conn)
+    cur = conn.cursor()
+    identity = _active_identity(cur)
+    goals_flat = []
+    for root in _strategic_goals_tree(cur):
+        goals_flat.append(
+            {
+                "code": root.get("code") or "",
+                "title_ar": root.get("title_ar") or "",
+                "description": root.get("description") or "",
+            }
+        )
+        if goals_roots_only:
+            continue
+        for ch in root.get("children") or []:
+            goals_flat.append(
+                {
+                    "code": ch.get("code") or "",
+                    "title_ar": ch.get("title_ar") or "",
+                    "description": ch.get("description") or "",
+                }
+            )
+    try:
+        glos = glo_list_from_db(conn, active_only=True) or []
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        glos = []
+    college_name = "كلية الهندسة"
+    try:
+        from backend.database.database import table_exists, conn_is_postgresql
+
+        if table_exists(conn, "colleges"):
+            row = cur.execute(
+                "SELECT COALESCE(name_ar, '') FROM colleges ORDER BY id LIMIT 1"
+            ).fetchone()
+            if row and row[0]:
+                college_name = str(row[0]).strip() or college_name
+        elif conn_is_postgresql(conn):
+            # لا يوجد جدول colleges — لا تفشل المعاملة
+            pass
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    values = []
+    for v in identity.get("values") or []:
+        if isinstance(v, dict) and (v.get("title_ar") or "").strip():
+            values.append(
+                {
+                    "code": (v.get("code") or "").strip(),
+                    "title_ar": (v.get("title_ar") or "").strip(),
+                    "description": (v.get("description") or "").strip(),
+                }
+            )
+    college = {
+        "name_ar": college_name,
+        "intro_ar": (identity.get("intro_ar") or "").strip(),
+        "vision_ar": (identity.get("vision_ar") or "").strip(),
+        "mission_ar": (identity.get("mission_ar") or "").strip(),
+        "strategic_plan_summary_ar": (
+            identity.get("strategic_plan_summary_ar") or identity.get("intro_ar") or ""
+        ).strip(),
+        "values": values,
+        "goals": goals_flat,
+        "outcomes": [
+            {
+                "code": g.get("code") or "",
+                "title_ar": g.get("title_ar") or "",
+                "domain": g.get("domain") or "",
+            }
+            for g in glos
+        ],
+    }
+    if include_kpi:
+        try:
+            kpis_all = cur.execute(
+                "SELECT * FROM goal_kpi ORDER BY goal_code, sort_order"
+            ).fetchall()
+            kpis = [_row_dict(r) for r in kpis_all or []]
+            for k in kpis:
+                if (k.get("data_source") or "") == "system" and k.get("actual_value") is None:
+                    computed = _compute_system_kpi(conn, k)
+                    if computed is not None:
+                        k["computed_value"] = computed
+            college["kpis"] = kpis
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            college["kpis"] = []
+
+    program = {"id": None, "code": "", "name_ar": "", "goals": [], "outcomes": []}
+    pid = int(program_id) if program_id else None
+    if pid:
+        try:
+            prow = cur.execute(
+                """
+                SELECT id, code, COALESCE(name_ar,'') AS name_ar
+                FROM programs WHERE id = ? AND COALESCE(is_active,1)=1
+                """,
+                (pid,),
+            ).fetchone()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            prow = None
+        if prow:
+            program["id"] = int(prow[0] if not hasattr(prow, "keys") else prow["id"])
+            program["code"] = (prow[1] if not hasattr(prow, "keys") else prow["code"]) or ""
+            program["name_ar"] = (prow[2] if not hasattr(prow, "keys") else prow["name_ar"]) or ""
+            try:
+                grows = cur.execute(
+                    """
+                    SELECT code, title_ar FROM program_goals
+                    WHERE program_id=? AND COALESCE(is_active,1)=1
+                    ORDER BY sort_order, code
+                    """,
+                    (pid,),
+                ).fetchall()
+                program["goals"] = [_row_dict(g) for g in grows or []]
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                program["goals"] = []
+            try:
+                orows = cur.execute(
+                    """
+                    SELECT code, title_ar, COALESCE(domain,'') AS domain
+                    FROM program_learning_outcomes
+                    WHERE program_id=? AND COALESCE(is_active,1)=1
+                    ORDER BY sort_order, code
+                    """,
+                    (pid,),
+                ).fetchall()
+                program["outcomes"] = [_row_dict(o) for o in orows or []]
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                program["outcomes"] = []
+    return {"college": college, "program": program}
+
+
 def program_profile_payload(conn, program_id: int) -> dict[str, Any]:
     ensure_plo_enhancement_schema(conn)
     ensure_college_identity_schema(conn)
@@ -422,11 +624,16 @@ def program_profile_payload(conn, program_id: int) -> dict[str, Any]:
 @login_required
 def college_profile_page():
     role = _session_role()
+    if role in ("instructor", "supervisor", "student"):
+        return redirect("/academic_quality/ilo/outcomes-map")
     return render_template(
         "college_profile.html",
         active_page="college_profile",
         can_edit=_can_edit_college(),
-        can_edit_kpi=_can_edit_college() or role == "staff",
+        can_edit_kpi=_can_edit_college(),
+        can_comment=_can_comment_college(),
+        can_view_kpi=_can_view_college_kpi(),
+        show_workshop_subtitle=(role == "admin_main"),
         is_student=role == "student",
         domain_labels=DOMAIN_LABELS_AR,
         domain_order=list(DOMAIN_ORDER),
@@ -470,11 +677,24 @@ def api_college_profile():
         elif role in ("admin", "admin_main"):
             dep_id = get_admin_department_scope_id()
         data = college_profile_payload(conn, department_id=dep_id)
+        if not _can_view_college_kpi():
+            data["kpis"] = []
+        open_comments = 0
+        try:
+            crow = conn.cursor().execute(
+                "SELECT COUNT(*) FROM college_identity_comments WHERE status = 'open'"
+            ).fetchone()
+            open_comments = int(crow[0] if not hasattr(crow, "keys") else list(crow.values())[0])
+        except Exception:
+            open_comments = 0
     can_edit = _can_edit_college()
     return jsonify({
         "status": "ok",
         "can_edit": can_edit,
-        "can_edit_kpi": can_edit or role == "staff",
+        "can_edit_kpi": can_edit,
+        "can_comment": _can_comment_college(),
+        "can_view_kpi": _can_view_college_kpi(),
+        "open_comments_count": open_comments,
         **data,
     })
 
@@ -515,6 +735,8 @@ def _save_identity_version(
 @college_portal_bp.route("/api/college/values", methods=["PUT"])
 @login_required
 def api_update_college_values():
+    if not _can_edit_college():
+        return jsonify({"status": "error", "message": "غير مصرح — صلاحية العميد فقط"}), 403
     data = request.get_json(force=True) or {}
     values = data.get("values")
     if not isinstance(values, list):
@@ -877,6 +1099,8 @@ def api_toggle_ig_glo():
 def api_college_kpis():
     if request.method == "POST" and not _can_edit_college():
         return jsonify({"status": "error", "message": "غير مصرح — صلاحية العميد فقط"}), 403
+    if request.method == "GET" and not _can_view_college_kpi():
+        return jsonify({"status": "error", "message": "غير مصرح بعرض المؤشرات"}), 403
     with get_connection() as conn:
         ensure_plo_enhancement_schema(conn)
         cur = conn.cursor()
@@ -1226,3 +1450,148 @@ def export_college_strategic_pdf():
         for_pdf=True,
     )
     return pdf_response_from_html(html, filename_prefix="college_strategic_report")
+
+
+_COMMENT_STATUSES = frozenset({"open", "accepted", "rejected", "closed_after_edit"})
+_COMMENT_TARGET_TYPES = frozenset({"identity_field", "goal", "glo", "kpi"})
+
+
+@college_portal_bp.route("/api/college/comments", methods=["GET", "POST"])
+@login_required
+def api_college_identity_comments():
+    if request.method == "POST":
+        if not (_can_comment_college() or _can_edit_college()):
+            return jsonify({"status": "error", "message": "غير مصرح بالتعليق"}), 403
+        data = request.get_json(force=True) or {}
+        target_type = (data.get("target_type") or "").strip()
+        target_key = (data.get("target_key") or "").strip()
+        body_ar = (data.get("body_ar") or "").strip()
+        if target_type not in _COMMENT_TARGET_TYPES:
+            return jsonify({"status": "error", "message": "نوع البند غير صالح"}), 400
+        if not body_ar:
+            return jsonify({"status": "error", "message": "نص التعليق مطلوب"}), 400
+        with get_connection() as conn:
+            ensure_college_identity_schema(conn)
+            cur = conn.cursor()
+            now = datetime.datetime.now(datetime.UTC).isoformat()
+            cur.execute(
+                """
+                INSERT INTO college_identity_comments (
+                    target_type, target_key, body_ar, author_username, author_role,
+                    status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)
+                """,
+                (
+                    target_type,
+                    target_key,
+                    body_ar,
+                    (session.get("username") or "").strip(),
+                    _session_role(),
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            cid = int(cur.lastrowid or 0)
+        return jsonify({"status": "ok", "id": cid})
+
+    if not (_can_edit_college() or _can_comment_college() or _can_access_college_workshop()):
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    status_f = (request.args.get("status") or "").strip()
+    with get_connection() as conn:
+        ensure_college_identity_schema(conn)
+        cur = conn.cursor()
+        if status_f and status_f in _COMMENT_STATUSES:
+            rows = cur.execute(
+                """
+                SELECT * FROM college_identity_comments
+                WHERE status = ?
+                ORDER BY created_at DESC
+                LIMIT 200
+                """,
+                (status_f,),
+            ).fetchall()
+        else:
+            rows = cur.execute(
+                """
+                SELECT * FROM college_identity_comments
+                ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, created_at DESC
+                LIMIT 200
+                """
+            ).fetchall()
+    return jsonify({"status": "ok", "items": [_row_dict(r) for r in rows or []]})
+
+
+@college_portal_bp.route("/api/college/comments/<int:comment_id>", methods=["PUT"])
+@login_required
+def api_update_college_identity_comment(comment_id: int):
+    if not _can_edit_college():
+        return jsonify({"status": "error", "message": "مراجعة التعليقات للعميد فقط"}), 403
+    data = request.get_json(force=True) or {}
+    status = (data.get("status") or "").strip()
+    if status not in _COMMENT_STATUSES:
+        return jsonify({"status": "error", "message": "حالة غير صالحة"}), 400
+    reply = (data.get("dean_reply_ar") or "").strip()
+    with get_connection() as conn:
+        ensure_college_identity_schema(conn)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE college_identity_comments
+            SET status = ?, dean_reply_ar = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (status, reply, datetime.datetime.now(datetime.UTC).isoformat(), int(comment_id)),
+        )
+        conn.commit()
+    return jsonify({"status": "ok"})
+
+
+@college_portal_bp.route("/api/college/purge-operational", methods=["POST"])
+@login_required
+def api_purge_college_operational():
+    """تعطيل أهداف الكلية ومخرجات GLO المرتبطة وحذف KPI — مع قفل إعادة الزرع."""
+    if not _can_edit_college():
+        return jsonify({"status": "error", "message": "غير مصرح"}), 403
+    data = request.get_json(force=True) or {}
+    if not data.get("confirm"):
+        return jsonify({"status": "error", "message": "يلزم confirm=true"}), 400
+    with get_connection() as conn:
+        ensure_college_identity_schema(conn)
+        cur = conn.cursor()
+        goals_n = cur.execute(
+            "UPDATE college_strategic_goals SET is_active = 0 WHERE COALESCE(is_active,1)=1"
+        ).rowcount
+        try:
+            cur.execute("DELETE FROM college_goal_glo_links")
+        except Exception:
+            pass
+        try:
+            kpi_n = cur.execute("DELETE FROM goal_kpi").rowcount
+        except Exception:
+            kpi_n = 0
+        glo_n = 0
+        try:
+            glo_n = cur.execute(
+                "UPDATE college_graduate_outcomes SET is_active = 0 WHERE COALESCE(is_active,1)=1"
+            ).rowcount
+        except Exception:
+            glo_n = 0
+        set_college_identity_seed_locked(conn, True)
+        conn.commit()
+        locked = True
+        try:
+            from backend.core.college_identity_schema import is_college_identity_seed_locked
+
+            locked = is_college_identity_seed_locked(conn)
+        except Exception:
+            locked = True
+    return jsonify(
+        {
+            "status": "ok",
+            "goals_deactivated": int(goals_n or 0),
+            "kpis_deleted": int(kpi_n or 0),
+            "glos_deactivated": int(glo_n or 0),
+            "seed_locked": bool(locked),
+        }
+    )

@@ -75,6 +75,58 @@ def fetch_external_response_rows(
     return out
 
 
+def filter_external_rows_by_department(
+    template_code: str,
+    response_rows: list[dict[str, Any]],
+    department_id: int | None,
+) -> list[dict[str, Any]]:
+    """تصفية ردود الدعوة الخارجية بحسب قسم الخريج أو أقسام التوظيف."""
+    if department_id is None:
+        return list(response_rows or [])
+    from backend.services.survey_external_segments import (
+        _filter_alumni_department,
+        _filter_employer_hire_department,
+    )
+
+    code = (template_code or "").strip()
+    dept_id = int(department_id)
+    if code == "alumni":
+        return _filter_alumni_department(response_rows, dept_id)
+    if code == "employer_strategic":
+        return _filter_employer_hire_department(response_rows, dept_id)
+    out: list[dict[str, Any]] = []
+    for r in response_rows or []:
+        p = r.get("profile") or {}
+        try:
+            if int(p.get("department_id") or 0) == dept_id:
+                out.append(r)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def aggregate_external_template_scoped(
+    conn,
+    template_code: str,
+    *,
+    cycle_label: str,
+    department_id: int | None = None,
+) -> dict[str, Any]:
+    """تجميع استبيان خارجي على مستوى الكلية أو قسم واحد."""
+    code = (template_code or "").strip()
+    cycle = (cycle_label or "").strip()
+    if department_id is None:
+        return aggregate_template(conn, code, semester=cycle, department_id=None)
+    from backend.services.survey_external_segments import aggregate_external_from_rows
+
+    rows = filter_external_rows_by_department(
+        code,
+        fetch_external_response_rows(conn, code, cycle),
+        int(department_id),
+    )
+    return aggregate_external_from_rows(conn, code, rows)
+
+
 def _yes_no_ar(value: str) -> str:
     return {"yes": "نعم", "no": "لا"}.get((value or "").strip().lower(), "")
 
@@ -451,17 +503,28 @@ def build_external_survey_report(
     template_code: str,
     *,
     cycle_label: str,
+    department_id: int | None = None,
 ) -> dict[str, Any]:
-    """تقرير تحليلي لاستبيان خارجي (دورة دعوة)."""
+    """تقرير تحليلي لاستبيان خارجي (دورة دعوة)، اختياريًا حسب القسم."""
     code = (template_code or "").strip()
     cycle = (cycle_label or "").strip()
-    agg = aggregate_template(conn, code, semester=cycle, department_id=None)
+    scoped_dept = int(department_id) if department_id is not None else None
+    response_rows = filter_external_rows_by_department(
+        code,
+        fetch_external_response_rows(conn, code, cycle),
+        scoped_dept,
+    )
+    if scoped_dept is not None:
+        from backend.services.survey_external_segments import aggregate_external_from_rows
+
+        agg = aggregate_external_from_rows(conn, code, response_rows)
+    else:
+        agg = aggregate_template(conn, code, semester=cycle, department_id=None)
     tpl = get_template_by_code(conn, code) or {}
     questions = _enrich_questions(agg.get("questions") or [])
     weakest, strongest = _weakest_strongest(questions)
     score = agg.get("overall_score_percent")
     compliance = classify_compliance_status(score if agg.get("aggregated") else None)
-    response_rows = fetch_external_response_rows(conn, code, cycle)
     open_comments = [
         (r.get("comments") or "").strip()
         for r in response_rows
@@ -474,14 +537,24 @@ def build_external_survey_report(
     else:
         profile_breakdown = {}
 
+    dept_label = "الكلية — مستجيبون خارجيون"
+    if scoped_dept is not None:
+        cur = conn.cursor()
+        drow = cur.execute(
+            "SELECT COALESCE(name_ar, code, ?) FROM departments WHERE id = ? LIMIT 1",
+            (f"قسم #{scoped_dept}", int(scoped_dept)),
+        ).fetchone()
+        if drow and drow[0]:
+            dept_label = str(drow[0])
+
     report = {
         **agg,
         "template_code": code,
         "semester": cycle,
         "cycle_label": cycle,
         "report_kind": "external",
-        "department_id": None,
-        "department_label": "الكلية — مستجيبون خارجيون",
+        "department_id": scoped_dept,
+        "department_label": dept_label,
         "respondent_role": tpl.get("respondent_role"),
         "respondent_label": RESPONDENT_ROLE_LABELS.get(
             (tpl.get("respondent_role") or "").strip(), "—"
@@ -492,10 +565,10 @@ def build_external_survey_report(
         "compliance_status": compliance,
         "compliance_status_ar": COMPLIANCE_STATUS_LABELS_AR.get(compliance, compliance),
         "accreditation_links": accreditation_links_for(
-            code, conn, semester=cycle, department_id=None
+            code, conn, semester=cycle, department_id=scoped_dept
         ),
         "primary_accreditation": _primary_accreditation_label(
-            conn, code, semester=cycle, department_id=None
+            conn, code, semester=cycle, department_id=scoped_dept
         ),
         "recommendations": generate_recommendations(questions, agg.get("title_ar") or code),
         "profile_breakdown": profile_breakdown,
@@ -506,8 +579,17 @@ def build_external_survey_report(
     }
     from backend.services.survey_external_segments import attach_external_segment_bundle
 
-    report = attach_external_segment_bundle(conn, report, response_rows)
-    report = enrich_external_report_segments(report, response_rows)
+    # عند تصفية قسم واحد لا نعيد بناء كل شرائح الكلية
+    if scoped_dept is None:
+        report = attach_external_segment_bundle(conn, report, response_rows)
+        report = enrich_external_report_segments(report, response_rows)
+    else:
+        report["department_segments"] = []
+        report["program_segments"] = []
+        report["hire_department_segments"] = []
+        report["department_comparison"] = []
+        report["program_comparison"] = []
+        report["hire_department_comparison"] = []
     if code == "alumni":
         try:
             report["raw_response_rows"] = build_alumni_raw_export_rows(conn, response_rows)
@@ -616,6 +698,7 @@ def build_combined_external_report(
     *,
     cycle_label: str,
     template_codes: list[str] | None = None,
+    department_id: int | None = None,
 ) -> dict[str, Any]:
     cycle = (cycle_label or "").strip()
     codes = template_codes or sorted(EXTERNAL_SURVEY_CODES)
@@ -625,7 +708,11 @@ def build_combined_external_report(
             continue
         if not get_template_by_code(conn, code):
             continue
-        reports.append(build_external_survey_report(conn, code, cycle_label=cycle))
+        reports.append(
+            build_external_survey_report(
+                conn, code, cycle_label=cycle, department_id=department_id
+            )
+        )
     aggregated_count = sum(1 for r in reports if r.get("aggregated"))
     scored = [
         r for r in reports
@@ -633,12 +720,21 @@ def build_combined_external_report(
     ]
     top3 = sorted(scored, key=lambda x: float(x["overall_score_percent"]), reverse=True)[:3]
     bottom3 = sorted(scored, key=lambda x: float(x["overall_score_percent"]))[:3]
+    dept_label = "استبيانات خارجية (دعوات)"
+    if department_id is not None:
+        cur = conn.cursor()
+        drow = cur.execute(
+            "SELECT COALESCE(name_ar, code, ?) FROM departments WHERE id = ? LIMIT 1",
+            (f"قسم #{department_id}", int(department_id)),
+        ).fetchone()
+        if drow and drow[0]:
+            dept_label = str(drow[0])
     return {
         "semester": cycle,
         "cycle_label": cycle,
         "report_kind": "external",
-        "department_id": None,
-        "department_label": "استبيانات خارجية (دعوات)",
+        "department_id": int(department_id) if department_id is not None else None,
+        "department_label": dept_label,
         "generated_at": datetime.datetime.utcnow().isoformat(timespec="seconds"),
         "reports": reports,
         "course_eval": None,
@@ -840,14 +936,16 @@ def external_single_survey_excel_frames(report: dict[str, Any]) -> list[tuple[st
     return frames
 
 
-def export_external_package_xlsx(conn, *, cycle_label: str):
+def export_external_package_xlsx(conn, *, cycle_label: str, department_id: int | None = None):
     from backend.services.survey_analytics import (
         build_combined_survey_analysis,
         survey_excel_bytes_from_frames,
     )
     from backend.services.survey_report_charts import build_chart_data_for_combined
 
-    combined = build_combined_external_report(conn, cycle_label=cycle_label)
+    combined = build_combined_external_report(
+        conn, cycle_label=cycle_label, department_id=department_id
+    )
     combined["analysis"] = build_combined_survey_analysis(combined)
     chart_data = build_chart_data_for_combined(combined, combined["analysis"])
     slug = (cycle_label or "external").replace(" ", "_")[:40]
@@ -864,13 +962,17 @@ def export_external_package_xlsx(conn, *, cycle_label: str):
     )
 
 
-def prepare_external_combined_pdf_context(conn, *, cycle_label: str) -> dict[str, Any]:
+def prepare_external_combined_pdf_context(
+    conn, *, cycle_label: str, department_id: int | None = None
+) -> dict[str, Any]:
     from backend.services.survey_analytics import (
         build_combined_survey_analysis,
         enrich_survey_export_context,
     )
 
-    combined = build_combined_external_report(conn, cycle_label=cycle_label)
+    combined = build_combined_external_report(
+        conn, cycle_label=cycle_label, department_id=department_id
+    )
     for r in combined.get("reports") or []:
         if not r.get("interpretation_ar"):
             r["interpretation_ar"] = interpret_overall_score_ar(
@@ -888,6 +990,7 @@ def prepare_external_combined_pdf_context(conn, *, cycle_label: str) -> dict[str
         + [
             {"البند": "نوع_التقرير", "القيمة": "استبيانات خارجية"},
             {"البند": "الدورة", "القيمة": cycle_label},
+            {"البند": "النطاق", "القيمة": combined.get("department_label")},
         ],
         "narrative_paragraphs": (combined.get("analysis") or {}).get("narrative_paragraphs")
         or [
@@ -905,6 +1008,7 @@ def prepare_external_single_pdf_context(
     template_code: str,
     *,
     cycle_label: str,
+    department_id: int | None = None,
 ) -> dict[str, Any] | None:
     from backend.services.survey_analytics import (
         build_survey_report_analysis,
@@ -914,7 +1018,9 @@ def prepare_external_single_pdf_context(
     code = (template_code or "").strip()
     if code not in EXTERNAL_SURVEY_CODES:
         return None
-    report = build_external_survey_report(conn, code, cycle_label=cycle_label)
+    report = build_external_survey_report(
+        conn, code, cycle_label=cycle_label, department_id=department_id
+    )
     if report.get("has_segment_detail"):
         report["analysis"] = None
     else:
@@ -927,6 +1033,7 @@ def prepare_external_single_pdf_context(
         "metadata_rows": [
             {"البند": "الدورة", "القيمة": cycle_label},
             {"البند": "نوع_التقرير", "القيمة": "خارجي (دعوة)"},
+            {"البند": "النطاق", "القيمة": report.get("department_label")},
             {"البند": "فئة_المستجيب", "القيمة": report.get("respondent_label")},
             {"البند": "عدد_الإجابات", "القيمة": report.get("response_count")},
             {"البند": "النتيجة_%", "القيمة": report.get("overall_score_percent")},
@@ -940,22 +1047,31 @@ def build_external_export_bytes(
     template_code: str,
     *,
     cycle_label: str,
+    department_id: int | None = None,
 ) -> tuple[bytes, str, dict[str, Any]]:
     from backend.services.survey_analytics import (
         build_survey_report_analysis,
         survey_excel_bytes_from_frames,
     )
-    from backend.services.survey_report_charts import build_chart_data_for_survey
 
-    report = build_external_survey_report(conn, template_code, cycle_label=cycle_label)
-    report["analysis"] = build_survey_report_analysis(report)
-    chart_data = build_chart_data_for_survey(report, report["analysis"])
+    code = (template_code or "").strip()
+    report = build_external_survey_report(
+        conn, code, cycle_label=cycle_label, department_id=department_id
+    )
+    if not report.get("has_segment_detail"):
+        report["analysis"] = build_survey_report_analysis(report)
+    chart_data = None
+    try:
+        from backend.services.survey_analytics import survey_chart_payload_from_report
+
+        chart_data = survey_chart_payload_from_report(report)
+    except Exception:
+        chart_data = None
     raw = survey_excel_bytes_from_frames(
         external_single_survey_excel_frames(report), chart_data=chart_data
     )
-    slug = (cycle_label or "report").replace(" ", "_")[:40]
-    filename = f"survey_{template_code}_{slug}.xlsx"
-    return raw, filename, report
+    fname = f"survey_external_{code}_{(cycle_label or 'cycle').replace(' ', '_')[:30]}.xlsx"
+    return raw, fname, report
 
 
 def survey_external_metrics_summary(conn) -> dict[str, Any]:

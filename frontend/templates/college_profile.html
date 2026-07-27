@@ -20,10 +20,17 @@
     <div class="page-header d-flex justify-content-between flex-wrap gap-2">
       <div>
         <h1 class="page-title">هوية الكلية</h1>
-        <p class="page-subtitle">إدارة الرسالة والرؤية والقيم وأهداف IG ومخرجات GLO — <span class="text-muted">admin_main</span></p>
+        {% if show_workshop_subtitle %}
+        <p class="page-subtitle">ورشة التحرير والاعتماد — العميد وadmin_main فقط · باقي الأدوار يعلّقون أو يقرؤون القصة التعريفية</p>
+        {% elif can_comment %}
+        <p class="page-subtitle">قراءة واقتراح ملاحظات للعميد — التعديل للعميد وadmin_main فقط</p>
+        {% else %}
+        <p class="page-subtitle">عرض معتمد لهوية الكلية والأهداف والمخرجات</p>
+        {% endif %}
       </div>
       <div class="d-flex flex-wrap gap-2 align-items-center">
         <button class="btn btn-outline-info btn-sm" onclick="PageGuide.open()">❓ دليل الاستخدام</button>
+        <a href="/academic_quality/ilo/outcomes-map" class="btn btn-outline-secondary btn-sm">القصة التعريفية</a>
         <a href="/academic_quality/programs" class="btn btn-outline-primary btn-sm">برامج الكلية</a>
         <a href="/academic_quality/accreditation/map?scope=inst" class="btn btn-outline-primary btn-sm">امتثال مؤسسي</a>
         <a href="/academic_quality/archive" class="btn btn-outline-secondary btn-sm">أرشيف القسم</a>
@@ -43,6 +50,7 @@
         <li class="nav-item"><button class="nav-link" data-tab="glo"><span data-term="glo">مخرجات تعلم الخريج</span></button></li>
         <li class="nav-item"><button class="nav-link" data-tab="matrix">مصفوفة الأهداف والمخرجات</button></li>
         <li class="nav-item"><button class="nav-link" data-tab="kpi"><span data-term="kpi">مؤشرات قياس الأداء</span></button></li>
+        <li class="nav-item"><button class="nav-link" data-tab="comments">الملاحظات <span class="badge text-bg-warning d-none" id="commentsBadge">0</span></button></li>
       </ul>
       <div id="paneIntro" class="tab-pane-c"></div>
       <div id="paneIdentity" class="tab-pane-c d-none"></div>
@@ -51,6 +59,7 @@
       <div id="paneGlo" class="tab-pane-c d-none"></div>
       <div id="paneMatrix" class="tab-pane-c d-none"></div>
       <div id="paneKpi" class="tab-pane-c d-none"></div>
+      <div id="paneComments" class="tab-pane-c d-none"></div>
     </div>
   </main>
 
@@ -238,14 +247,37 @@
     </div>
   </div>
 
+  <!-- تعليق على بند -->
+  <div class="modal fade" id="commentModal" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">إضافة ملاحظة للعميد</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+          <input type="hidden" id="commentTargetType" value="">
+          <input type="hidden" id="commentTargetKey" value="">
+          <p class="small text-muted" id="commentTargetLabel"></p>
+          <label class="form-label small">الملاحظة</label>
+          <textarea class="form-control" id="commentBody" rows="4" maxlength="2000"></textarea>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-primary" id="btnSaveComment">إرسال</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     let CAN_EDIT = false;
     let CAN_EDIT_KPI = false;
+    let CAN_COMMENT = false;
+    let CAN_VIEW_KPI = false;
     const DOMAIN_LABELS = {{ domain_labels|tojson }};
     const DOMAIN_ORDER = {{ domain_order|tojson }};
     let profileData = null;
     let editMode = false;
     let valuesDraft = [];
+    let commentsCache = [];
 
     function esc(s) {
       const d = document.createElement('div');
@@ -259,14 +291,19 @@
     function editBar(html) {
       return editOn() ? '<div class="college-edit-bar flex-wrap gap-2 mb-2">' + html + '</div>' : '';
     }
+    function commentBtn(type, key, label) {
+      if (!CAN_COMMENT) return '';
+      return ' <button type="button" class="btn btn-sm btn-outline-warning btn-add-comment" data-type="' + esc(type) + '" data-key="' + esc(key || '') + '" data-label="' + esc(label || '') + '">ملاحظة</button>';
+    }
 
     function showTab(name) {
       document.querySelectorAll('#collegeTabs .nav-link').forEach(b => {
         b.classList.toggle('active', b.dataset.tab === name);
       });
       document.querySelectorAll('.tab-pane-c').forEach(p => p.classList.add('d-none'));
-      const map = { intro: 'paneIntro', identity: 'paneIdentity', values: 'paneValues', goals: 'paneGoals', glo: 'paneGlo', matrix: 'paneMatrix', kpi: 'paneKpi' };
+      const map = { intro: 'paneIntro', identity: 'paneIdentity', values: 'paneValues', goals: 'paneGoals', glo: 'paneGlo', matrix: 'paneMatrix', kpi: 'paneKpi', comments: 'paneComments' };
       document.getElementById(map[name])?.classList.remove('d-none');
+      if (name === 'comments') loadComments();
     }
 
     function fillDomainSelect(sel, val) {
@@ -290,21 +327,31 @@
       const id = profileData.identity || {};
       valuesDraft = JSON.parse(JSON.stringify(id.values || []));
       const st = profileData.stats || {};
+      const kpiTab = document.querySelector('#collegeTabs [data-tab="kpi"]')?.closest('.nav-item');
+      if (kpiTab) kpiTab.classList.toggle('d-none', !CAN_VIEW_KPI);
       document.getElementById('paneIntro').innerHTML =
         editBar('<button type="button" class="btn btn-sm btn-primary btn-edit-identity">تعديل المقدمة والرسالة والرؤية</button>') +
+        commentBtn('identity_field', 'intro_ar', 'المقدمة') +
         '<div class="card"><div class="card-body"><p>' + esc(id.intro_ar || '—') + '</p>' +
         '<p class="small text-muted mb-0">ساري من: ' + esc(id.effective_from || '—') + ' | برامج: ' + esc(st.programs_count) + '</p></div></div>';
       document.getElementById('paneIdentity').innerHTML =
         editBar('<button type="button" class="btn btn-sm btn-primary btn-edit-identity">تعديل</button>') +
-        '<div class="card mb-3"><div class="card-header fw-semibold">الرسالة</div><div class="card-body">' + esc(id.mission_ar) + '</div></div>' +
-        '<div class="card mb-3"><div class="card-header fw-semibold">الرؤية</div><div class="card-body">' + esc(id.vision_ar) + '</div></div>' +
-        '<div class="card"><div class="card-header fw-semibold">ملخص الخطة الاستراتيجية</div><div class="card-body">' + esc(id.strategic_plan_summary_ar || '—') + '</div></div>';
+        '<div class="card mb-3"><div class="card-header fw-semibold d-flex justify-content-between">الرسالة' + commentBtn('identity_field', 'mission_ar', 'الرسالة') + '</div><div class="card-body">' + esc(id.mission_ar) + '</div></div>' +
+        '<div class="card mb-3"><div class="card-header fw-semibold d-flex justify-content-between">الرؤية' + commentBtn('identity_field', 'vision_ar', 'الرؤية') + '</div><div class="card-body">' + esc(id.vision_ar) + '</div></div>' +
+        '<div class="card"><div class="card-header fw-semibold d-flex justify-content-between">ملخص الخطة الاستراتيجية' + commentBtn('identity_field', 'strategic_plan_summary_ar', 'الخطة') + '</div><div class="card-body">' + esc(id.strategic_plan_summary_ar || '—') + '</div></div>';
       renderValues();
       renderGoals();
       renderGlos();
       renderMatrix();
-      renderKpis();
+      if (CAN_VIEW_KPI) renderKpis();
+      renderCommentsPane();
       bindEditButtons();
+      const badge = document.getElementById('commentsBadge');
+      const n = Number(profileData.open_comments_count || 0);
+      if (badge) {
+        badge.textContent = String(n);
+        badge.classList.toggle('d-none', !(CAN_EDIT && n > 0));
+      }
     }
 
     function renderValues() {
@@ -334,14 +381,14 @@
       let ghtml = bar;
       tree.forEach(ig => {
         ghtml += '<div class="card mb-2"><div class="card-header py-2 d-flex justify-content-between align-items-center">' +
-          '<span><strong>' + esc(ig.code) + '</strong> — ' + esc(ig.title_ar) + '</span>';
+          '<span><strong>' + esc(ig.code) + '</strong> — ' + esc(ig.title_ar) + commentBtn('goal', ig.code, ig.code) + '</span>';
         if (editOn()) {
           ghtml += '<span><button type="button" class="btn btn-sm btn-outline-primary btn-edit-ig" data-code="' + esc(ig.code) + '">تعديل</button> ' +
             '<button type="button" class="btn btn-sm btn-outline-danger btn-del-ig" data-code="' + esc(ig.code) + '">حذف</button></span>';
         }
         ghtml += '</div><ul class="list-group list-group-flush">';
         (ig.children || []).forEach(ch => {
-          ghtml += '<li class="list-group-item small d-flex justify-content-between"><span>' + esc(ch.code) + ': ' + esc(ch.title_ar) + '</span>';
+          ghtml += '<li class="list-group-item small d-flex justify-content-between"><span>' + esc(ch.code) + ': ' + esc(ch.title_ar) + commentBtn('goal', ch.code, ch.code) + '</span>';
           if (editOn()) {
             ghtml += '<span><button type="button" class="btn btn-sm btn-link py-0 btn-edit-ig" data-code="' + esc(ch.code) + '">تعديل</button> ' +
               '<button type="button" class="btn btn-sm btn-link py-0 text-danger btn-del-ig" data-code="' + esc(ch.code) + '">حذف</button></span>';
@@ -472,6 +519,72 @@
         });
         loadProfile();
       });
+      document.querySelectorAll('.btn-add-comment').forEach(b => {
+        b.onclick = () => openCommentModal(b.dataset.type, b.dataset.key, b.dataset.label);
+      });
+    }
+
+    function openCommentModal(type, key, label) {
+      document.getElementById('commentTargetType').value = type || '';
+      document.getElementById('commentTargetKey').value = key || '';
+      document.getElementById('commentTargetLabel').textContent = 'البند: ' + (label || key || type || '');
+      document.getElementById('commentBody').value = '';
+      bootstrap.Modal.getOrCreateInstance(document.getElementById('commentModal')).show();
+    }
+
+    async function loadComments() {
+      const r = await fetch('/academic_quality/api/college/comments', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      commentsCache = (j.items || []);
+      renderCommentsPane();
+    }
+
+    function renderCommentsPane() {
+      const pane = document.getElementById('paneComments');
+      if (!pane) return;
+      let html = '';
+      if (CAN_COMMENT) {
+        html += '<div class="mb-3">' +
+          commentBtn('identity_field', 'general', 'ملاحظة عامة') +
+          '<span class="small text-muted ms-2">أضف ملاحظات على البنود من التبويبات، أو ملاحظة عامة هنا.</span></div>';
+      }
+      if (!commentsCache.length) {
+        html += '<p class="text-muted small mb-0">لا ملاحظات حتى الآن.</p>';
+        pane.innerHTML = html;
+        return;
+      }
+      html += '<div class="list-group">';
+      commentsCache.forEach(c => {
+        html += '<div class="list-group-item">' +
+          '<div class="d-flex justify-content-between gap-2 flex-wrap"><div><span class="badge text-bg-secondary">' + esc(c.target_type) + '</span> ' +
+          '<code>' + esc(c.target_key || '—') + '</code></div>' +
+          '<span class="badge ' + (c.status === 'open' ? 'text-bg-warning' : 'text-bg-secondary') + '">' + esc(c.status) + '</span></div>' +
+          '<p class="mb-1 mt-2">' + esc(c.body_ar) + '</p>' +
+          '<div class="small text-muted">' + esc(c.author_username) + ' · ' + esc(c.author_role) + '</div>';
+        if (c.dean_reply_ar) html += '<div class="small mt-1 border-top pt-1"><strong>رد العميد:</strong> ' + esc(c.dean_reply_ar) + '</div>';
+        if (CAN_EDIT && c.status === 'open') {
+          html += '<div class="mt-2 d-flex flex-wrap gap-1">' +
+            '<button type="button" class="btn btn-sm btn-success btn-c-status" data-id="' + c.id + '" data-status="accepted">قبول</button>' +
+            '<button type="button" class="btn btn-sm btn-outline-danger btn-c-status" data-id="' + c.id + '" data-status="rejected">رفض</button>' +
+            '<button type="button" class="btn btn-sm btn-outline-secondary btn-c-status" data-id="' + c.id + '" data-status="closed_after_edit">إغلاق بعد تعديل</button></div>';
+        }
+        html += '</div>';
+      });
+      html += '</div>';
+      pane.innerHTML = html;
+      pane.querySelectorAll('.btn-c-status').forEach(b => {
+        b.onclick = async () => {
+          const reply = prompt('رد اختياري للعميد:') || '';
+          const r = await fetch('/academic_quality/api/college/comments/' + b.dataset.id, {
+            method: 'PUT', credentials: 'include', headers: hdr(),
+            body: JSON.stringify({ status: b.dataset.status, dean_reply_ar: reply }),
+          });
+          if (r.ok) loadComments(); else alert('فشل تحديث الحالة');
+        };
+      });
+      pane.querySelectorAll('.btn-add-comment').forEach(b => {
+        b.onclick = () => openCommentModal(b.dataset.type, b.dataset.key, b.dataset.label);
+      });
     }
 
     function openIdentityModal() {
@@ -556,12 +669,15 @@
       profileData = j;
       CAN_EDIT = !!j.can_edit;
       CAN_EDIT_KPI = !!j.can_edit_kpi;
+      CAN_COMMENT = !!j.can_comment;
+      CAN_VIEW_KPI = !!j.can_view_kpi;
       if (CAN_EDIT) {
         document.getElementById('btnToggleEditMode')?.classList.remove('d-none');
       }
       document.getElementById('loadState').classList.add('d-none');
       document.getElementById('mainWrap').classList.remove('d-none');
       renderAll();
+      if (CAN_EDIT || CAN_COMMENT) loadComments();
     }
 
     document.getElementById('btnToggleEditMode')?.addEventListener('click', () => {
@@ -696,6 +812,23 @@
       if (!r.ok) { const j = await r.json().catch(() => ({})); alert(j.message || 'فشل'); return; }
       loadProfile();
     }
+
+    document.getElementById('btnSaveComment')?.addEventListener('click', async () => {
+      const body = {
+        target_type: document.getElementById('commentTargetType').value,
+        target_key: document.getElementById('commentTargetKey').value,
+        body_ar: document.getElementById('commentBody').value.trim(),
+      };
+      if (!body.body_ar) { alert('نص الملاحظة مطلوب'); return; }
+      const r = await fetch('/academic_quality/api/college/comments', {
+        method: 'POST', credentials: 'include', headers: hdr(), body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(j.message || 'فشل'); return; }
+      bootstrap.Modal.getInstance(document.getElementById('commentModal'))?.hide();
+      loadComments();
+      loadProfile();
+    });
 
     document.querySelectorAll('#collegeTabs .nav-link').forEach(btn => {
       btn.addEventListener('click', () => showTab(btn.dataset.tab));

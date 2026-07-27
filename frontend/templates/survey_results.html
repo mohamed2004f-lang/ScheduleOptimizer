@@ -22,12 +22,12 @@
       </div>
       <div class="d-flex gap-2 flex-wrap align-items-center">
         {% if results_view == 'external' %}
-        <a class="btn btn-info btn-sm text-white" href="/academic_quality/surveys/export/external/package?cycle={{ external_cycle|urlencode }}" target="_blank"
+        <a class="btn btn-info btn-sm text-white" href="/academic_quality/surveys/export/external/package?cycle={{ external_cycle|urlencode }}{{ external_department_qs or '' }}" target="_blank"
            title="معاينة التقرير الموحّد">
           <i class="fa-solid fa-display"></i> معاينة موحّدة
         </a>
         {% if external_cycle %}
-        <a class="btn btn-success btn-sm" href="/academic_quality/surveys/export/external/package.xlsx?cycle={{ external_cycle|urlencode }}">
+        <a class="btn btn-success btn-sm" href="/academic_quality/surveys/export/external/package.xlsx?cycle={{ external_cycle|urlencode }}{{ external_department_qs or '' }}">
           <i class="fa-solid fa-file-excel"></i> تصدير الدورة (Excel)
         </a>
         {% endif %}
@@ -36,24 +36,26 @@
             المزيد
           </button>
           <ul class="dropdown-menu dropdown-menu-end" style="max-height:22rem;overflow:auto;">
+            {% if can_manage_survey_invites %}
             <li><a class="dropdown-item" href="/academic_quality/surveys/invites"><i class="fa-solid fa-link me-1"></i> دعوات خارجية</a></li>
+            {% endif %}
             {% if external_cycle %}
-            <li><a class="dropdown-item" href="/academic_quality/surveys/export/external/package.pdf?cycle={{ external_cycle|urlencode }}"><i class="fa-solid fa-file-pdf me-1"></i> تقرير PDF موحّد</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/external/package.pdf?cycle={{ external_cycle|urlencode }}{{ external_department_qs or '' }}"><i class="fa-solid fa-file-pdf me-1"></i> تقرير PDF موحّد</a></li>
             <li><a class="dropdown-item" href="/academic_quality/surveys/export/external/bundle.zip?cycle={{ external_cycle|urlencode }}"><i class="fa-solid fa-file-zipper me-1"></i> حزمة ZIP</a></li>
             <li><hr class="dropdown-divider"></li>
             <li><h6 class="dropdown-header">Excel — استبيان واحد</h6></li>
             {% for agg in external_aggregates %}
-            <li><a class="dropdown-item" href="/academic_quality/surveys/export/external/{{ agg.template_code }}.xlsx?cycle={{ external_cycle|urlencode }}">{{ agg.title_ar }}</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/external/{{ agg.template_code }}.xlsx?cycle={{ external_cycle|urlencode }}{{ external_department_qs or '' }}">{{ agg.title_ar }}</a></li>
             {% endfor %}
             <li><hr class="dropdown-divider"></li>
             <li><h6 class="dropdown-header">PDF — استبيان واحد</h6></li>
             {% for agg in external_aggregates %}
-            <li><a class="dropdown-item" href="/academic_quality/surveys/export/external/{{ agg.template_code }}.pdf?cycle={{ external_cycle|urlencode }}">{{ agg.title_ar }}</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/external/{{ agg.template_code }}.pdf?cycle={{ external_cycle|urlencode }}{{ external_department_qs or '' }}">{{ agg.title_ar }}</a></li>
             {% endfor %}
             <li><hr class="dropdown-divider"></li>
             <li><h6 class="dropdown-header">معاينة — استبيان واحد</h6></li>
             {% for agg in external_aggregates %}
-            <li><a class="dropdown-item" href="/academic_quality/surveys/export/external/{{ agg.template_code }}?cycle={{ external_cycle|urlencode }}" target="_blank">{{ agg.title_ar }}</a></li>
+            <li><a class="dropdown-item" href="/academic_quality/surveys/export/external/{{ agg.template_code }}?cycle={{ external_cycle|urlencode }}{{ external_department_qs or '' }}" target="_blank">{{ agg.title_ar }}</a></li>
             {% endfor %}
             <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item" href="/academic_quality/accreditation/map?cycle={{ external_cycle|urlencode }}"><i class="fa-solid fa-map me-1"></i> خريطة الامتثال</a></li>
@@ -104,7 +106,9 @@
             <li><a class="dropdown-item" href="/academic_quality/archive"><i class="fa-solid fa-folder-open me-1"></i> أرشيف القسم</a></li>
             <li><a class="dropdown-item" href="/academic_quality/surveys/completion?semester={{ semester|urlencode }}"><i class="fa-solid fa-clipboard-check me-1"></i> تغطية التعبئة</a></li>
             <li><a class="dropdown-item" href="/academic_quality/surveys/trends"><i class="fa-solid fa-chart-line me-1"></i> مقارنة الفصول</a></li>
+            {% if can_manage_survey_invites %}
             <li><a class="dropdown-item" href="/academic_quality/surveys/invites"><i class="fa-solid fa-link me-1"></i> دعوات خارجية</a></li>
+            {% endif %}
             <li><a class="dropdown-item" href="/academic_quality/term_closure"><i class="fa-solid fa-lock me-1"></i> إغلاق الفصل (موحّد)</a></li>
             <li><a class="dropdown-item" href="/academic_quality/dashboard">لوحة الجودة</a></li>
             <li><a class="dropdown-item" href="/academic_quality/glossary">المصطلحات</a></li>
@@ -121,7 +125,7 @@
       </li>
       <li class="nav-item">
         <a class="nav-link {% if results_view == 'external' %}active{% endif %}"
-           href="/academic_quality/surveys/results?view=external{% if external_cycle %}&cycle={{ external_cycle|urlencode }}{% endif %}">خريجون وقطاع (دورات)</a>
+           href="/academic_quality/surveys/results?view=external{% if external_cycle %}&cycle={{ external_cycle|urlencode }}{% endif %}{% if external_department_id %}&department_id={{ external_department_id }}{% endif %}">خريجون وقطاع (دورات)</a>
       </li>
     </ul>
 
@@ -131,7 +135,7 @@
       <div class="card-body">
         <form method="get" class="row g-2 align-items-end mb-3">
           <input type="hidden" name="view" value="external">
-          <div class="col-md-6">
+          <div class="col-md-4">
             <label class="form-label small">دورة الحملة</label>
             <select class="form-select form-select-sm" name="cycle" onchange="this.form.submit()">
               {% for c in external_cycles %}
@@ -141,10 +145,31 @@
               {% endfor %}
             </select>
           </div>
-          <div class="col-md-6">
+          <div class="col-md-4">
+            <label class="form-label small">القسم</label>
+            {% if can_pick_external_department %}
+            <select class="form-select form-select-sm" name="department_id" onchange="this.form.submit()">
+              <option value="">كل الكلية</option>
+              {% for d in external_departments %}
+              <option value="{{ d.id }}" {% if external_department_id and d.id == external_department_id %}selected{% endif %}>{{ d.label }}</option>
+              {% endfor %}
+            </select>
+            {% else %}
+            <input type="hidden" name="department_id" value="{{ external_department_id or '' }}">
+            <div class="form-control form-control-sm bg-light">{{ external_department_label or 'قسمك فقط' }}</div>
+            {% endif %}
+          </div>
+          <div class="col-md-4">
+            {% if can_manage_survey_invites %}
             <a href="/academic_quality/surveys/invites" class="btn btn-sm btn-primary">إنشاء دعوة جديدة</a>
+            {% endif %}
           </div>
         </form>
+        {% if external_department_label %}
+        <p class="small text-muted mb-2">النطاق الحالي: <strong>{{ external_department_label }}</strong></p>
+        {% elif can_pick_external_department %}
+        <p class="small text-muted mb-2">النطاق الحالي: <strong>كل الكلية</strong> — اختر قسماً لعرض نتائجه منفرداً.</p>
+        {% endif %}
         {% if external_cycle %}
         {% if cycle_closure %}
         <div class="alert alert-success border-start border-success border-4 mb-3">
@@ -161,7 +186,7 @@
           {% endif %}
           <a class="btn btn-sm btn-outline-primary" href="/academic_quality/surveys/trends#externalTrends">مقارنة مع دورات أخرى</a>
         </div>
-        {% else %}
+        {% elif can_close_external_cycle %}
         <div class="alert alert-warning border-start border-warning border-4 mb-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
           <div class="small">
             <strong>إغلاق الدورة وحفظ لقطة</strong> — يُجمّد أرقام هذه الحملة للمقارنة عبر السنوات ويحفظ أرشيف Excel.
@@ -200,9 +225,9 @@
           {% endif %}
           {% if external_cycle %}
           <div class="d-flex gap-2 flex-wrap">
-            <a class="btn btn-sm btn-outline-info" href="/academic_quality/surveys/export/external/{{ agg.template_code }}?cycle={{ external_cycle|urlencode }}" target="_blank">معاينة</a>
-            <a class="btn btn-sm btn-outline-success" href="/academic_quality/surveys/export/external/{{ agg.template_code }}.xlsx?cycle={{ external_cycle|urlencode }}">Excel</a>
-            <a class="btn btn-sm btn-outline-danger" href="/academic_quality/surveys/export/external/{{ agg.template_code }}.pdf?cycle={{ external_cycle|urlencode }}">PDF</a>
+            <a class="btn btn-sm btn-outline-info" href="/academic_quality/surveys/export/external/{{ agg.template_code }}?cycle={{ external_cycle|urlencode }}{{ external_department_qs or '' }}" target="_blank">معاينة</a>
+            <a class="btn btn-sm btn-outline-success" href="/academic_quality/surveys/export/external/{{ agg.template_code }}.xlsx?cycle={{ external_cycle|urlencode }}{{ external_department_qs or '' }}">Excel</a>
+            <a class="btn btn-sm btn-outline-danger" href="/academic_quality/surveys/export/external/{{ agg.template_code }}.pdf?cycle={{ external_cycle|urlencode }}{{ external_department_qs or '' }}">PDF</a>
             <a class="btn btn-sm btn-outline-secondary"
                href="/academic_quality/accreditation/map?cycle={{ external_cycle|urlencode }}"
                title="افتح خريطة الامتثال واربط هذا الاستبيان يدوياً بالمؤشر المناسب">
@@ -212,7 +237,13 @@
           {% endif %}
         </div>
         {% else %}
-        <p class="text-muted mb-0">أنشئ دعوة من <a href="/academic_quality/surveys/invites">صفحة الدعوات</a> وشارك الرابط مع الخريجين أو جهات العمل.</p>
+        <p class="text-muted mb-0">
+          {% if can_manage_survey_invites %}
+          أنشئ دعوة من <a href="/academic_quality/surveys/invites">صفحة الدعوات</a> وشارك الرابط مع الخريجين أو جهات العمل.
+          {% else %}
+          لا توجد نتائج خارجية معروضة لهذا النطاق بعد — انتظر اكتمال دورة الدعوة أو اختر نطاقاً آخر إن وُجد.
+          {% endif %}
+        </p>
         {% endfor %}
       </div>
     </div>

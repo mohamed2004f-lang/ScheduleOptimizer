@@ -460,8 +460,8 @@ def inject_ui_context():
             elif role_n in _COLLEGE_LEADERSHIP:
                 dep_id = get_admin_department_scope_id()
             elif role_n == "head_of_department":
-                if active_mode in ("", "head", "hod", "department_head"):
-                    dep_id = _resolve_actor_department_id(conn)
+                # في كل أوضاع رئيس القسم اربط النطاق بقسمه المنزلي
+                dep_id = _resolve_actor_department_id(conn)
             elif role_n in ("instructor", "supervisor"):
                 dep_id = _resolve_actor_department_id(conn)
 

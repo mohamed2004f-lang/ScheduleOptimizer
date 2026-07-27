@@ -469,7 +469,9 @@
                 <a class="btn btn-outline-primary btn-sm" href="/academic_quality/surveys?semester={{ map_data.semester|urlencode }}">تعبئة الاستبيانات (دوري)</a>
                 <a class="btn btn-outline-primary btn-sm" href="/academic_quality/surveys/results?semester={{ map_data.semester|urlencode }}">نتائج الاستبيانات (مجمّعة)</a>
                 <a class="btn btn-outline-info btn-sm" href="/academic_quality/surveys/results?view=external">نتائج خارجية (دورات)</a>
+                {% if can_manage_survey_invites is defined and can_manage_survey_invites %}
                 <a class="btn btn-outline-info btn-sm" href="/academic_quality/surveys/invites">دعوات خارجية</a>
+                {% endif %}
                 <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/survey_admin">إعداد بنود الاستبيانات</a>
                 <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/dashboard">لوحة الجودة الأكاديمية</a>
                 <a class="btn btn-outline-info btn-sm" href="/academic_quality/glossary">دليل المصطلحات</a>

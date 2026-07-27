@@ -21,6 +21,46 @@
     {% if page_error %}
     <div class="alert alert-danger">{{ page_error }}</div>
     {% endif %}
+
+    {% if quality_guide_map and quality_guide_map.packs %}
+    <div class="card border-0 shadow-sm mb-4">
+      <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
+          <div>
+            <h3 class="h6 mb-1"><i class="fa-solid fa-map me-1 text-primary"></i> دليلك في الجودة</h3>
+            <p class="small text-muted mb-0">
+              ما يظهر لك حسب دورك
+              {% if quality_guide_map.active_mode %}ووضعك الحالي ({{ quality_guide_map.active_mode }}){% endif %}
+              {% if quality_guide_map.department_label %}— نطاق: <strong>{{ quality_guide_map.department_label }}</strong>{% endif %}.
+            </p>
+          </div>
+          <span class="badge {% if quality_guide_map.is_primary_quality_audience %}bg-primary{% else %}bg-secondary{% endif %}">
+            {% if quality_guide_map.is_primary_quality_audience %}دور رئيسي للجودة{% else %}مسار مساند{% endif %}
+          </span>
+        </div>
+        {% if quality_guide_map.primary_packs %}
+        <div class="small text-muted mb-1">مسارات رئيسية</div>
+        <div class="d-flex flex-wrap gap-2 mb-2">
+          {% for p in quality_guide_map.primary_packs %}
+          <a class="btn btn-sm btn-outline-primary" href="{{ p.href }}"
+             {% if p.page_guide_key %}onclick="if(window.PageGuide){PageGuide.openKey('{{ p.page_guide_key }}');}"{% endif %}>
+            {{ p.title_ar }}
+          </a>
+          {% endfor %}
+        </div>
+        {% endif %}
+        {% if quality_guide_map.supporting_packs %}
+        <div class="small text-muted mb-1">مسارات مساندة</div>
+        <div class="d-flex flex-wrap gap-2">
+          {% for p in quality_guide_map.supporting_packs %}
+          <a class="btn btn-sm btn-outline-secondary" href="{{ p.href }}">{{ p.title_ar }}</a>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
     <div id="dashToast" class="toast align-items-center text-bg-success border-0 position-fixed bottom-0 start-50 translate-middle-x mb-3" role="alert">
       <div class="d-flex"><div class="toast-body" id="dashToastBody"></div>
         <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
@@ -354,7 +394,9 @@
         </div>
         <div class="mt-2">
           <a href="/academic_quality/surveys/results?view=external" class="btn btn-outline-info btn-sm">نتائج الدورات الخارجية</a>
+          {% if can_manage_survey_invites is defined and can_manage_survey_invites %}
           <a href="/academic_quality/surveys/invites" class="btn btn-outline-secondary btn-sm">إدارة الدعوات</a>
+          {% endif %}
         </div>
         {% endif %}
       </div>

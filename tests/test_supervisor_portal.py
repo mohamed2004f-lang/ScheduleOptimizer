@@ -27,6 +27,25 @@ def test_hod_supervisor_mode_portal_caps():
     assert caps.get("nav_supervisor_quality_fill_only") is True
     assert caps.get("nav_academic_quality_dashboard") is False
     assert caps.get("nav_instructor_portal_menu") is False
+    assert caps.get("nav_staff_operations_menu") is False
+
+
+def test_hod_supervisor_mode_survives_profile_resolve():
+    """دمج بروفايل القيادة لا يعيد قائمة الجودة/الإدارة في وضع المشرف."""
+    from backend.core.permissions import resolve_capabilities_for_user
+
+    caps = resolve_capabilities_for_user(
+        role="head_of_department",
+        is_supervisor_val=1,
+        active_mode="supervisor",
+        role_profile_code="head_of_department",
+    )
+    assert caps.get("nav_supervisor_portal_menu") is True
+    assert caps.get("nav_staff_operations_menu") is False
+    assert caps.get("nav_academic_quality_dashboard") is False
+    assert caps.get("nav_surveys_results") is False
+    assert caps.get("nav_admin_settings") is False
+    assert caps.get("is_instructor_or_supervisor_nav") is True
 
 
 def test_college_dean_supervisor_mode_portal_caps():

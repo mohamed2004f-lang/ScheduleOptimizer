@@ -88,6 +88,44 @@ PROGRAM_IG_ALIGNMENT_PG = (
     """,
 )
 
+COMMENTS_SQLITE = (
+    "college_identity_comments",
+    """
+    CREATE TABLE IF NOT EXISTS college_identity_comments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        target_type TEXT NOT NULL,
+        target_key TEXT NOT NULL DEFAULT '',
+        body_ar TEXT NOT NULL,
+        author_username TEXT NOT NULL DEFAULT '',
+        author_role TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'open',
+        dean_reply_ar TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+)
+
+COMMENTS_PG = (
+    "college_identity_comments",
+    """
+    CREATE TABLE IF NOT EXISTS college_identity_comments (
+        id BIGSERIAL PRIMARY KEY,
+        target_type TEXT NOT NULL,
+        target_key TEXT NOT NULL DEFAULT '',
+        body_ar TEXT NOT NULL,
+        author_username TEXT NOT NULL DEFAULT '',
+        author_role TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'open',
+        dean_reply_ar TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+)
+
+SEED_LOCK_SETTING_KEY = "college_identity_seed_locked"
+
 COLLEGE_TABLES_SQLITE: tuple[tuple[str, str], ...] = (
     (
         "college_identity",
@@ -326,6 +364,18 @@ def ensure_college_identity_schema(conn) -> None:
         cur.execute(dept_goals_tbl[1])
     except Exception as e:
         logger.debug("department_goals: %s", e)
+    comments_tbl = COMMENTS_PG if pg else COMMENTS_SQLITE
+    try:
+        cur.execute(comments_tbl[1])
+    except Exception as e:
+        logger.debug("college_identity_comments: %s", e)
+    try:
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cic_status ON college_identity_comments(status, created_at)"
+        )
+    except Exception:
+        if pg:
+            _pg_recover_transaction(conn)
     if pg:
         for col, typ in DEPARTMENT_PROFILE_COLUMNS:
             try:
@@ -349,3 +399,60 @@ def ensure_college_identity_schema(conn) -> None:
     except Exception as e:
         logger.debug("college identity seed skipped: %s", e)
     _commit_schema_step(conn, "seed")
+
+
+def is_college_identity_seed_locked(conn) -> bool:
+    """بعد تنظيف مقصود، لا تُعاد بذرة الأهداف/المؤشرات تلقائياً."""
+    try:
+        cur = conn.cursor()
+        row = None
+        try:
+            row = cur.execute(
+                "SELECT COALESCE(value_json,'') FROM app_settings WHERE key = ? LIMIT 1",
+                (SEED_LOCK_SETTING_KEY,),
+            ).fetchone()
+        except Exception:
+            try:
+                row = cur.execute(
+                    "SELECT COALESCE(value,'') FROM system_settings WHERE key = ? LIMIT 1",
+                    (SEED_LOCK_SETTING_KEY,),
+                ).fetchone()
+            except Exception:
+                return False
+        if not row:
+            return False
+        try:
+            raw = str(row[0] or "").strip().lower()
+        except Exception:
+            raw = str(list(row)[0] if row else "").strip().lower()
+        return raw in ("1", "true", '"true"', "'true'")
+    except Exception:
+        return False
+
+
+def set_college_identity_seed_locked(conn, locked: bool = True) -> bool:
+    """يُرجع True إذا تم حفظ القفل فعلياً."""
+    cur = conn.cursor()
+    val = "true" if locked else "false"
+    try:
+        cur.execute("DELETE FROM app_settings WHERE key = ?", (SEED_LOCK_SETTING_KEY,))
+        cur.execute(
+            """
+            INSERT INTO app_settings (key, value_json, updated_at, updated_by)
+            VALUES (?, ?, datetime('now'), ?)
+            """,
+            (SEED_LOCK_SETTING_KEY, val, "college_identity"),
+        )
+        return True
+    except Exception as e1:
+        logger.debug("app_settings seed lock failed: %s", e1)
+        try:
+            cur.execute("DELETE FROM system_settings WHERE key = ?", (SEED_LOCK_SETTING_KEY,))
+            cur.execute(
+                "INSERT INTO system_settings (key, value) VALUES (?, ?)",
+                (SEED_LOCK_SETTING_KEY, val),
+            )
+            return True
+        except Exception as e2:
+            logger.warning("set seed lock failed: %s / %s", e1, e2)
+            return False

@@ -242,12 +242,14 @@ SYSTEM_USAGE_TOPICS: list[dict[str, Any]] = [
 
 def match_system_usage_topic(query: str = "") -> dict[str, Any] | None:
     """مطابقة سؤال المستخدم بموضوع مساعدة استخدام المنظومة."""
+    from backend.core.quality_guide_packs import system_usage_topics_with_guide_keys
+
     q = (query or "").strip().lower()
     if not q:
         return None
     best: dict[str, Any] | None = None
     best_score = 0
-    for topic in SYSTEM_USAGE_TOPICS:
+    for topic in system_usage_topics_with_guide_keys():
         score = 0
         for kw in topic.get("keywords") or ():
             k = str(kw).lower()
@@ -263,13 +265,17 @@ def match_system_usage_topic(query: str = "") -> dict[str, Any] | None:
 
 
 def list_system_usage_topics() -> list[dict[str, Any]]:
+    from backend.core.quality_guide_packs import system_usage_topics_with_guide_keys
+
     return [
         {
             "code": t["code"],
             "label_ar": t["label_ar"],
             "links": list(t.get("links") or []),
+            "page_guide_key": t.get("page_guide_key"),
+            "steps_ar": list(t.get("steps_ar") or []),
         }
-        for t in SYSTEM_USAGE_TOPICS
+        for t in system_usage_topics_with_guide_keys()
     ]
 
 # كيف يناقش كل دور المساعد (نص إرشادي للواجهة)

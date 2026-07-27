@@ -7,7 +7,6 @@
   <link rel="stylesheet" href="/static/vendor/fontawesome/css/all.min.css">
   <link rel="stylesheet" href="/static/styles.css">
   <style>
-    .iq-identity-card .accordion-button { font-size: .95rem; }
     .iq-survey-item { border-right: 3px solid var(--bs-warning); }
     .iq-survey-item.done { border-right-color: var(--bs-success); }
   </style>
@@ -18,7 +17,7 @@
     <div class="page-header d-flex justify-content-between flex-wrap gap-2 align-items-start">
       <div>
         <h1 class="page-title">ضمان الجودة</h1>
-        <p class="page-subtitle mb-1">هويتي كعضو هيئة تدريس — رؤية الكلية والقسم واستبيانات الجودة</p>
+        <p class="page-subtitle mb-1">استبياناتك وروابط الهوية التعليمية — دون تكرار النصوص هنا</p>
         <p class="text-muted small mb-0" id="ctxLine"></p>
       </div>
       <div class="d-flex flex-wrap gap-2 align-items-center">
@@ -30,7 +29,11 @@
     <div id="loadState" class="text-muted py-3">جاري التحميل…</div>
 
     <div id="mainWrap" class="d-none">
-      <div id="identityWrap"></div>
+      <div class="alert alert-light border mb-3" id="identityWrap">
+        <div class="fw-semibold mb-1">هوية الكلية وبرنامجك</div>
+        <p class="small text-muted mb-2">اعرض الرؤية والرسالة والأهداف والمخرجات من الصفحة التعريفية الموحّدة.</p>
+        <a class="btn btn-sm btn-primary" id="storyLink" href="/academic_quality/ilo/outcomes-map">عرض هوية الكلية وبرنامجك</a>
+      </div>
 
       <div class="card mt-4 border-primary border-opacity-25">
         <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2 bg-primary bg-opacity-10">
@@ -54,40 +57,12 @@
   </main>
   <script>
     function esc(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;');}
-    function identityCard(title, mission, vision, goals, note){
-      let h='<div class="card mb-3 iq-identity-card"><div class="card-header fw-semibold">'+esc(title)+'</div><div class="card-body">';
-      if(note&&!mission&&!vision&&(!goals||!goals.length)) h+='<p class="text-muted small mb-0">'+esc(note)+'</p>';
-      else {
-        if(vision) h+='<p><strong>الرؤية:</strong> '+esc(vision)+'</p>';
-        if(mission) h+='<p><strong>الرسالة:</strong> '+esc(mission)+'</p>';
-        if(goals&&goals.length){
-          const uid='acc_'+Math.random().toString(36).slice(2,8);
-          h+='<div class="accordion accordion-flush" id="'+uid+'">';
-          goals.forEach((g,i)=>{
-            const t=g.title_ar||g.title||'هدف';
-            const d=g.description_ar||g.description||'';
-            h+='<div class="accordion-item"><h2 class="accordion-header"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#'+uid+'_'+i+'">'+esc(t)+'</button></h2><div id="'+uid+'_'+i+'" class="accordion-collapse collapse" data-bs-parent="#'+uid+'"><div class="accordion-body small">'+esc(d)+'</div></div></div>';
-          });
-          h+='</div>';
-        }
-      }
-      return h+'</div></div>';
-    }
-    function flattenCollegeGoals(goals){
-      const out=[];
-      (goals||[]).forEach(g=>{
-        out.push({title_ar:g.title_ar,description_ar:g.description_ar});
-        (g.children||[]).forEach(ch=>out.push({title_ar:ch.title_ar,description_ar:ch.description_ar}));
-      });
-      return out;
-    }
     function renderSurveys(j){
       const box=document.getElementById('surveysList');
       const pending=j.surveys?.pending||[];
-      const sem=j.term_label||'';
-      document.getElementById('semLabel').textContent=sem;
-      const hs=j.surveys?.hub_status;
-      const hsBox=document.getElementById('hubStatusBox');
+      const sem=j.semester||'';
+      document.getElementById('semLabel').textContent=sem||'—';
+      const hs=j.hub_status, hsBox=document.getElementById('hubStatusBox');
       if(hs&&hs.show&&hs.messages&&hs.messages.length){
         hsBox.className='alert alert-'+(hs.level||'info')+' border-start border-4 small mb-3';
         hsBox.innerHTML='<strong>'+esc(hs.title||'ملخص')+'</strong><ul class="mb-0 mt-1 ps-3">'+hs.messages.map(m=>'<li>'+esc(m)+'</li>').join('')+'</ul>';
@@ -113,11 +88,6 @@
         if(j.status!=='ok'){document.getElementById('loadState').textContent=j.message||'تعذر التحميل.';return;}
         document.getElementById('loadState').classList.add('d-none');
         document.getElementById('ctxLine').textContent=(j.instructor_name||'')+(j.department_name?' · '+j.department_name:'');
-        const c=j.college||{}, d=j.department;
-        let html='';
-        html+=identityCard('🏛 الكلية', c.mission_ar, c.vision_ar, flattenCollegeGoals(c.strategic_goals), '');
-        if(d) html+=identityCard('🏫 قسمي — '+(d.name_ar||''), d.mission_ar, d.vision_ar, d.goals||[], d.has_profile?'':'لم تُنشر هوية القسم بعد.');
-        document.getElementById('identityWrap').innerHTML=html;
         renderSurveys(j);
         const pc=j.surveys?.pending_count||0;
         if(pc>0){
@@ -129,8 +99,10 @@
           sb.classList.remove('d-none');
         }
         const links=j.links||{};
+        const story=links.ilo_catalog || '/academic_quality/ilo/outcomes-map';
+        document.getElementById('storyLink').href=story;
         document.getElementById('quickLinks').innerHTML=[
-          ['أهداف ومخرجات البرنامج',links.ilo_catalog || '/academic_quality/ilo/outcomes-map'],['دليل المصطلحات',links.glossary],['مقرراتي',links.my_courses]
+          ['هوية الكلية وبرنامجك',story],['دليل المصطلحات',links.glossary],['مقرراتي',links.my_courses]
         ].filter(x=>x[1]).map(x=>'<a class="btn btn-sm btn-outline-primary" href="'+x[1]+'">'+x[0]+'</a>').join('');
         document.getElementById('mainWrap').classList.remove('d-none');
       }catch(e){document.getElementById('loadState').textContent='تعذر التحميل.';}

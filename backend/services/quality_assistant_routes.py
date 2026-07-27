@@ -109,7 +109,14 @@ def register_quality_assistant_routes(bp) -> None:
             ensure_quality_assistant_tables(conn)
             semester = (request.args.get("semester") or term_label_from_conn(conn)).strip()
             dept_id = _parse_dept_id(conn)
-            departments = _departments(conn)
+            all_departments = _departments(conn)
+            scoped = _dept_scope(conn)
+            dept_scope_locked = scoped is not None
+            if dept_scope_locked:
+                departments = [d for d in all_departments if int(d["id"]) == int(scoped)]
+                dept_id = int(scoped)
+            else:
+                departments = all_departments
             if dept_id is None and departments and role in (
                 "admin_main",
                 "system_admin",
@@ -119,8 +126,21 @@ def register_quality_assistant_routes(bp) -> None:
             ):
                 dept_id = departments[0]["id"]
             elif dept_id is None and departments and role in ("head_of_department", "instructor"):
-                scoped = _dept_scope(conn)
-                dept_id = int(scoped) if scoped is not None else departments[0]["id"]
+                # للأستاذ: قسمه من الحساب إن وُجد، وإلا لا نفرض أول قسم بالكلية
+                if role == "instructor":
+                    try:
+                        iid = int(session.get("instructor_id") or 0)
+                    except (TypeError, ValueError):
+                        iid = 0
+                    if iid:
+                        row = conn.cursor().execute(
+                            "SELECT department_id FROM instructors WHERE id = ? LIMIT 1",
+                            (iid,),
+                        ).fetchone()
+                        if row and row[0] is not None:
+                            dept_id = int(row[0])
+                if dept_id is None and scoped is not None:
+                    dept_id = int(scoped)
             boot = assistant_bootstrap_payload(
                 role=role,
                 is_college_quality_lead=cq,
@@ -149,6 +169,7 @@ def register_quality_assistant_routes(bp) -> None:
             selected_department_id=dept_id,
             semester=semester,
             user_role=role,
+            dept_scope_locked=dept_scope_locked,
             page_error=None,
         )
 

@@ -592,6 +592,8 @@ def compute_capabilities(
             # - active_mode=supervisor => respondent_role=supervisor
             "nav_surveys_hub": hod_mode in ("head", "instructor", "supervisor"),
             "nav_surveys_results": staff_quality,
+            "nav_surveys_invites": False,
+            "can_manage_survey_invites": False,
             "nav_term_closure": staff_quality,
             "is_supervisor_effective": bool(is_supervisor_effective),
             "is_instructor_or_supervisor_nav": inst_sup_nav,
@@ -678,6 +680,8 @@ def compute_capabilities(
         # طالب / أستاذ / مشرف / موظف
         "nav_surveys_hub": role in ("student", "instructor", "supervisor", "staff"),
         "nav_surveys_results": staff_quality,
+        "nav_surveys_invites": role in ("admin_main", "system_admin", "college_dean"),
+        "can_manage_survey_invites": role in ("admin_main", "system_admin", "college_dean"),
         "nav_term_closure": staff_quality,
         "nav_dashboard": role != "student",
         "nav_admin_settings": role in ("admin", "admin_main", "system_admin", "college_dean"),
@@ -703,6 +707,9 @@ def compute_capabilities(
         "can_transfer_student_department": role in ("admin", "admin_main", "college_dean", "academic_vice_dean", "system_admin"),
         "can_rename_student_id": role in ("admin", "admin_main", "college_dean", "academic_vice_dean", "system_admin"),
     }
+    if role == "college_dean":
+        base_caps["nav_surveys_invites"] = True
+        base_caps["can_manage_survey_invites"] = True
     if sup_portal:
         from backend.core.permissions import apply_supervisor_portal_caps
         apply_supervisor_portal_caps(base_caps)
@@ -1271,6 +1278,37 @@ def is_college_quality_lead_session() -> bool:
         return int(session.get("is_college_quality_lead") or 0) == 1
     except (TypeError, ValueError):
         return False
+
+
+SURVEY_INVITE_MANAGE_ROLES = frozenset({"admin_main", "system_admin", "college_dean"})
+SURVEY_RESULTS_VIEW_ROLES = frozenset(
+    {
+        "admin",
+        "admin_main",
+        "system_admin",
+        "college_dean",
+        "academic_vice_dean",
+        "head_of_department",
+    }
+)
+
+
+def can_manage_survey_invites(user_role: str | None = None) -> bool:
+    """إنشاء/إدارة روابط الاستبيانات الخارجية — عميد + أدمن رئيسي/نظام فقط."""
+    if is_system_admin_session():
+        return True
+    role = _normalize_role((user_role or session.get("user_role") or "").strip())
+    return role in SURVEY_INVITE_MANAGE_ROLES
+
+
+def can_view_survey_results(user_role: str | None = None) -> bool:
+    """عرض نتائج الاستبيانات — قيادة الكلية/القسم + رئيس ضمان الجودة بالكلية."""
+    role = _normalize_role((user_role or session.get("user_role") or "").strip())
+    if role in SURVEY_RESULTS_VIEW_ROLES:
+        return True
+    if role in SURVEY_INVITE_MANAGE_ROLES:
+        return True
+    return is_college_quality_lead_session()
 
 
 def is_system_admin_session() -> bool:
@@ -1848,6 +1886,8 @@ def init_auth(app):
             'active_mode': active_mode_val if is_authenticated else None,
             'student_id': student_id_val if is_authenticated else None,
             'instructor_id': instructor_id_val if is_authenticated else None,
+            'is_college_quality_lead': int(session.get('is_college_quality_lead') or 0) if is_authenticated else 0,
+            'is_dept_quality_coordinator': int(session.get('is_dept_quality_coordinator') or 0) if is_authenticated else 0,
             'capabilities': caps,
             'admin_department_scope': admin_dept_scope,
         })

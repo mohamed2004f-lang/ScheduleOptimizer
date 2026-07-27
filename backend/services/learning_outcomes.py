@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import logging
 
 from flask import Blueprint, Response, jsonify, redirect, render_template, request, session
 
@@ -77,6 +78,7 @@ from backend.services.outcome_assessment import (
 )
 
 learning_outcomes_bp = Blueprint("learning_outcomes", __name__)
+logger = logging.getLogger(__name__)
 
 GOAL_SELECT = """
     id, program_id, code, title_ar, COALESCE(title_en,'') AS title_en,
@@ -283,11 +285,30 @@ def outcomes_map_page():
 @learning_outcomes_bp.route("/api/outcomes-map", methods=["GET"])
 @login_required
 def api_outcomes_map():
-    """عرض تعريفي: أهداف/مخرجات الكلية ثم البرنامج التابع للمستخدم."""
+    """عرض تعريفي موحّد: هوية الكلية ثم البرنامج التابع للمستخدم — بدون KPI للأستاذ/الطالب."""
+    try:
+        from backend.services.college_identity_portal import build_college_story_payload
+    except Exception as e:
+        logger.exception("outcomes-map import failed: %s", e)
+        return jsonify(
+            {
+                "status": "ok",
+                "college": {
+                    "name_ar": "الكلية",
+                    "vision_ar": "",
+                    "mission_ar": "",
+                    "goals": [],
+                    "outcomes": [],
+                    "values": [],
+                },
+                "program": {"id": None, "code": "", "name_ar": "", "goals": [], "outcomes": []},
+                "can_view_kpi": False,
+            }
+        )
+
     with get_connection() as conn:
         try:
             from backend.core.plo_schema import ensure_plo_enhancement_schema
-            from backend.core.plo_glo import glo_list
             from backend.core.college_identity_schema import ensure_college_identity_schema
 
             ensure_plo_enhancement_schema(conn)
@@ -297,105 +318,55 @@ def api_outcomes_map():
                 pass
         except Exception:
             pass
-        cur = conn.cursor()
-        college_goals = []
-        try:
-            rows = cur.execute(
-                """
-                SELECT code, title_ar FROM college_strategic_goals
-                WHERE COALESCE(is_active,1)=1
-                ORDER BY sort_order, code
-                """
-            ).fetchall()
-            college_goals = _rows_to_dicts(cur, rows)
-        except Exception:
-            college_goals = []
-        try:
-            college_outcomes = glo_list(conn, active_only=True) or []
-        except Exception:
-            college_outcomes = []
-        college_name = "الكلية"
-        try:
-            row = cur.execute(
-                "SELECT COALESCE(name_ar, name, '') FROM colleges ORDER BY id LIMIT 1"
-            ).fetchone()
-            if row and row[0]:
-                college_name = str(row[0])
-        except Exception:
-            pass
 
-        program = {"id": None, "code": "", "name_ar": "", "goals": [], "outcomes": []}
-        allowed = _scope_program_ids(conn)
         program_id = None
-        if allowed is None:
-            row = cur.execute(
-                "SELECT id, code, name_ar FROM programs WHERE COALESCE(is_active,1)=1 ORDER BY code LIMIT 1"
-            ).fetchone()
-            if row:
-                program_id = int(row[0] if not hasattr(row, "keys") else row["id"])
-                program["code"] = (row[1] if not hasattr(row, "keys") else row["code"]) or ""
-                program["name_ar"] = (row[2] if not hasattr(row, "keys") else row["name_ar"]) or ""
-        elif allowed:
-            ph = ",".join("?" * len(allowed))
-            row = cur.execute(
-                f"""
-                SELECT id, code, name_ar FROM programs
-                WHERE id IN ({ph}) AND COALESCE(is_active,1)=1
-                ORDER BY code LIMIT 1
-                """,
-                tuple(allowed),
-            ).fetchone()
-            if row:
-                program_id = int(row[0] if not hasattr(row, "keys") else row["id"])
-                program["code"] = (row[1] if not hasattr(row, "keys") else row["code"]) or ""
-                program["name_ar"] = (row[2] if not hasattr(row, "keys") else row["name_ar"]) or ""
-        program["id"] = program_id
-        if program_id:
-            try:
-                rows = cur.execute(
-                    """
-                    SELECT code, title_ar FROM program_goals
-                    WHERE program_id=? AND COALESCE(is_active,1)=1
-                    ORDER BY sort_order, code
-                    """,
-                    (program_id,),
-                ).fetchall()
-                program["goals"] = _rows_to_dicts(cur, rows)
-            except Exception:
-                program["goals"] = []
-            try:
-                rows = cur.execute(
+        try:
+            allowed = _scope_program_ids(conn)
+            cur = conn.cursor()
+            if allowed is None:
+                row = cur.execute(
+                    "SELECT id FROM programs WHERE COALESCE(is_active,1)=1 ORDER BY code LIMIT 1"
+                ).fetchone()
+                if row:
+                    program_id = int(row[0] if not hasattr(row, "keys") else row["id"])
+            elif allowed:
+                ph = ",".join("?" * len(allowed))
+                row = cur.execute(
                     f"""
-                    SELECT {PLO_SELECT} FROM program_learning_outcomes
-                    WHERE program_id=? AND COALESCE(is_active,1)=1
-                    ORDER BY sort_order, code
+                    SELECT id FROM programs
+                    WHERE id IN ({ph}) AND COALESCE(is_active,1)=1
+                    ORDER BY code LIMIT 1
                     """,
-                    (program_id,),
-                ).fetchall()
-                program["outcomes"] = _rows_to_dicts(cur, rows)
-            except Exception:
-                try:
-                    rows = cur.execute(
-                        """
-                        SELECT id, code, title_ar FROM program_learning_outcomes
-                        WHERE program_id=? AND COALESCE(is_active,1)=1
-                        ORDER BY sort_order, code
-                        """,
-                        (program_id,),
-                    ).fetchall()
-                    program["outcomes"] = _rows_to_dicts(cur, rows)
-                except Exception:
-                    program["outcomes"] = []
+                    tuple(allowed),
+                ).fetchone()
+                if row:
+                    program_id = int(row[0] if not hasattr(row, "keys") else row["id"])
+        except Exception:
+            logger.exception("outcomes-map program scope failed")
+            program_id = None
 
+        try:
+            story = build_college_story_payload(
+                conn, include_kpi=False, program_id=program_id
+            )
+        except Exception:
+            logger.exception("outcomes-map story payload failed")
+            story = {
+                "college": {
+                    "name_ar": "الكلية",
+                    "vision_ar": "",
+                    "mission_ar": "",
+                    "goals": [],
+                    "outcomes": [],
+                    "values": [],
+                },
+                "program": {"id": None, "code": "", "name_ar": "", "goals": [], "outcomes": []},
+            }
         return jsonify(
             {
                 "status": "ok",
-                "college": {
-                    "name_ar": college_name,
-                    "goals": college_goals,
-                    "outcomes": college_outcomes,
-                },
-                "program": program,
+                "can_view_kpi": False,
+                **story,
             }
         )
 
@@ -2100,7 +2071,7 @@ def export_program_profile_xlsx(program_id: int):
 
 def _can_edit_college_glo() -> bool:
     role = _normalize_role((session.get("user_role") or "").strip())
-    return role in ("admin", "admin_main")
+    return role in ("admin_main", "college_dean")
 
 
 @learning_outcomes_bp.route("/api/glo", methods=["GET", "POST"])

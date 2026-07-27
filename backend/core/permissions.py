@@ -28,6 +28,8 @@ PERMISSION_CATALOG: list[dict[str, Any]] = [
     {"key": "nav_grade_drafts", "group_key": "records", "group_label_ar": "السجل الأكademي", "label_ar": "مسودات الدرجات"},
     {"key": "nav_academic_quality_dashboard", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "لوحة الجودة"},
     {"key": "nav_surveys_results", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "نتائج الاستبيانات"},
+    {"key": "nav_surveys_invites", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "دعوات الاستبيانات الخارجية"},
+    {"key": "can_manage_survey_invites", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "إنشاء وإدارة روابط الدعوات الخارجية"},
     {"key": "nav_term_closure", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "إغلاق الفصل الموحّد"},
     {"key": "nav_evaluation_survey_admin", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "إعداد الاستبيانات"},
     {"key": "can_edit_college_identity", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "تعديل هوية الكلية"},
@@ -64,7 +66,8 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
             "nav_planning_menu",
             "nav_transcript_nav",
             "nav_grade_drafts", "nav_academic_quality_dashboard",
-            "nav_surveys_results", "nav_evaluation_survey_admin",
+            "nav_surveys_results", "nav_surveys_invites", "can_manage_survey_invites",
+            "nav_evaluation_survey_admin",
             "can_edit_college_identity", "can_edit_accreditation_catalog",
             "can_switch_department_scope",
             "can_transfer_student_department",
@@ -144,7 +147,7 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
         "permissions": [
             "nav_dashboard", "nav_student_affairs_menu", "nav_planning_menu",
             "can_manage_schedule_edit", "nav_staff_operations_menu",
-            "nav_academic_quality_dashboard", "nav_grade_drafts",
+            "nav_academic_quality_dashboard", "nav_surveys_results", "nav_grade_drafts",
         ],
     },
     {
@@ -350,6 +353,8 @@ TEACHING_PORTAL_ADMIN_DENY_KEYS: tuple[str, ...] = (
 SUPERVISOR_PORTAL_QUALITY_DENY_KEYS: tuple[str, ...] = (
     "nav_academic_quality_dashboard",
     "nav_surveys_results",
+    "nav_surveys_invites",
+    "can_manage_survey_invites",
     "nav_term_closure",
     "nav_evaluation_survey_admin",
     "nav_college_profile",
@@ -483,6 +488,9 @@ def compute_college_dean_capabilities(
     out["nav_evaluation_survey_admin"] = True
     out["can_edit_accreditation_catalog"] = True
     out["is_supervisor_effective"] = False
+    out["nav_surveys_results"] = True
+    out["nav_surveys_invites"] = True
+    out["can_manage_survey_invites"] = True
     return out
 
 
@@ -551,6 +559,9 @@ def compute_academic_vice_dean_capabilities(
     out["can_edit_accreditation_catalog"] = True
     out["can_switch_department_scope"] = True
     out["is_supervisor_effective"] = False
+    out["nav_surveys_results"] = True
+    out["nav_surveys_invites"] = False
+    out["can_manage_survey_invites"] = False
     return out
 
 
@@ -610,6 +621,62 @@ def resolve_capabilities_for_user(
             deny_overrides=denies,
             profile_meta=profile,
         )
+
+    # لا تسمح لصلاحيات البروفايل القيادية بإلغاء بوابة الأستاذ/المشرف بعد التبديل
+    am = (active_mode or "").strip().lower()
+    if r == "head_of_department" and am == "instructor":
+        caps["nav_staff_operations_menu"] = False
+        caps["nav_admin_settings"] = False
+        caps["is_instructor_or_supervisor_nav"] = True
+        if _session_has_instructor_id():
+            caps["nav_instructor_portal_menu"] = True
+            caps["nav_my_assigned_courses"] = True
+            caps["nav_instructor_quality_hub"] = True
+    elif r == "head_of_department" and am == "supervisor":
+        apply_supervisor_portal_caps(caps)
+        caps["is_instructor_or_supervisor_nav"] = True
+    elif r in ("college_dean", "academic_vice_dean") and am == "instructor":
+        caps["nav_staff_operations_menu"] = False
+        caps["nav_admin_settings"] = False
+        caps["is_instructor_or_supervisor_nav"] = True
+        if _session_has_instructor_id():
+            caps["nav_instructor_portal_menu"] = True
+            caps["nav_my_assigned_courses"] = True
+            caps["nav_instructor_quality_hub"] = True
+    elif r in ("college_dean", "academic_vice_dean") and am == "supervisor":
+        apply_supervisor_portal_caps(caps)
+        caps["is_instructor_or_supervisor_nav"] = True
+    elif r == "instructor" and am == "supervisor":
+        apply_supervisor_portal_caps(caps)
+        caps["is_instructor_or_supervisor_nav"] = True
+    elif r == "instructor" and am != "supervisor":
+        caps["nav_staff_operations_menu"] = False
+        caps["nav_instructor_portal_menu"] = True
+        caps["nav_my_assigned_courses"] = True
+        caps["nav_instructor_quality_hub"] = True
+        caps["is_instructor_or_supervisor_nav"] = True
+
+    # رئيس ضمان الجودة بالكلية — نتائج فقط (بدون إدارة دعوات)
+    try:
+        from backend.core.auth import is_college_quality_lead_session
+
+        if is_college_quality_lead_session():
+            caps["nav_surveys_results"] = True
+            caps["nav_academic_quality_dashboard"] = True
+            caps["nav_surveys_invites"] = False
+            caps["can_manage_survey_invites"] = False
+    except Exception:
+        pass
+
+    # قفل إدارة الدعوات على العميد والأدمن الرئيسي/النظام فقط
+    r_norm = r
+    if r_norm not in ("admin_main", "system_admin", "college_dean"):
+        caps["nav_surveys_invites"] = False
+        caps["can_manage_survey_invites"] = False
+    elif r_norm in ("admin_main", "system_admin", "college_dean"):
+        caps["nav_surveys_invites"] = True
+        caps["can_manage_survey_invites"] = True
+
     return caps
 
 

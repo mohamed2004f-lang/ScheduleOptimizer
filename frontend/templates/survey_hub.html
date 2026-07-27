@@ -39,10 +39,12 @@
         <span class="badge bg-secondary ms-1">حساب: وكيل الشؤون العلمية · وضع المشرف الأكاديمي</span>
         {% endif %}
       </div>
-      {% if show_results_link %}
+      {% if show_external_invites_link %}
       <a href="/academic_quality/surveys/invites" class="btn btn-outline-dark btn-sm">
         <i class="fa-solid fa-link"></i> دعوات خارجية
       </a>
+      {% endif %}
+      {% if show_results_link %}
       <a href="/academic_quality/surveys/results?semester={{ semester|urlencode }}" class="btn btn-outline-secondary btn-sm">
         نتائج مجمّعة (إدارة)
       </a>

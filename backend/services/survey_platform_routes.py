@@ -8,12 +8,15 @@ from urllib.parse import quote
 
 import io
 
-from flask import jsonify, redirect, render_template, request, send_file, session, url_for
+from flask import abort, jsonify, redirect, render_template, request, send_file, session, url_for
 
 from backend.core.auth import (
     SESSION_ACTIVE_MODE,
     _normalize_role,
+    can_manage_survey_invites,
+    can_view_survey_results,
     get_admin_department_scope_id,
+    is_college_quality_lead_session,
     is_supervisor_effective_session,
     login_required,
     role_required,
@@ -89,6 +92,7 @@ from backend.services.survey_export_bundle import (
     build_survey_bundle_zip,
 )
 from backend.services.survey_external_analytics import (
+    aggregate_external_template_scoped,
     build_external_export_bytes,
     export_external_package_xlsx,
     prepare_external_combined_pdf_context,
@@ -192,6 +196,53 @@ def _completion_scope(conn) -> tuple[int | None, bool]:
         requested_department_id=requested,
         session_scope_id=get_admin_department_scope_id(),
     )
+
+
+def _external_results_scope(conn) -> tuple[int | None, bool, list[dict]]:
+    """
+    نطاق نتائج الاستبيانات الخارجية.
+    رئيس القسم: قسمه فقط. العميد/الأدمن/الوكيل/رئيس الجودة: فلتر اختياري لكل الأقسام.
+    """
+    role = _normalize_role((session.get("user_role") or "").strip())
+    raw_dept = (request.args.get("department_id") or "").strip()
+    requested: int | None = None
+    if raw_dept:
+        try:
+            requested = int(raw_dept)
+        except (TypeError, ValueError):
+            requested = None
+
+    if role == "head_of_department":
+        hid = head_home_department_id(conn, (session.get("user") or "").strip())
+        dept = int(hid) if hid is not None else _user_department_id(conn)
+        return dept, False, []
+
+    can_pick = role in (
+        "admin",
+        "admin_main",
+        "system_admin",
+        "college_dean",
+        "academic_vice_dean",
+    ) or is_college_quality_lead_session()
+    departments = list_departments_for_completion(conn) if can_pick else []
+    if not can_pick:
+        return None, False, []
+    if requested is not None:
+        return int(requested), True, departments
+    scoped = get_admin_department_scope_id()
+    if scoped is not None:
+        return int(scoped), True, departments
+    return None, True, departments
+
+
+def _require_survey_results_access():
+    if not can_view_survey_results():
+        abort(403)
+
+
+def _require_survey_invite_manage():
+    if not can_manage_survey_invites():
+        abort(403)
 
 
 def _session_active_mode(role: str) -> str:
@@ -556,7 +607,8 @@ def register_survey_platform_routes(bp) -> None:
             respondent_role=eff,
             respondent_label=respondent_label,
             fill_guide=fill_guide,
-            show_results_link=role in ("admin", "admin_main", "head_of_department"),
+            show_results_link=can_view_survey_results(role),
+            show_external_invites_link=can_manage_survey_invites(role),
             supervisor_effective=supervisor_effective,
             active_mode=active_mode,
             show_instructor_cross=show_instructor_cross,
@@ -784,8 +836,9 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/invites")
     @login_required
-    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    @role_required("admin_main", "system_admin", "college_dean")
     def survey_invites_admin_page():
+        _require_survey_invite_manage()
         template_code = (request.args.get("template") or "").strip()
         with get_connection() as conn:
             tpl_by_code = {t["code"]: t for t in list_templates(conn)}
@@ -809,8 +862,9 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/api/invites", methods=["GET"])
     @login_required
-    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    @role_required("admin_main", "system_admin", "college_dean")
     def survey_invites_list_api():
+        _require_survey_invite_manage()
         template_code = (request.args.get("template") or "").strip() or None
         with get_connection() as conn:
             items = list_survey_invites(conn, template_code=template_code)
@@ -818,8 +872,9 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/api/invites", methods=["POST"])
     @login_required
-    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    @role_required("admin_main", "system_admin", "college_dean")
     def survey_invites_create_api():
+        _require_survey_invite_manage()
         data = request.get_json(force=True) or {}
         try:
             with get_connection() as conn:
@@ -843,13 +898,24 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/results")
     @login_required
-    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    @role_required(
+        "admin",
+        "admin_main",
+        "system_admin",
+        "college_dean",
+        "academic_vice_dean",
+        "head_of_department",
+        "staff",
+    )
     def surveys_results_page():
+        _require_survey_results_access()
         code = (request.args.get("template") or "").strip()
         results_view = (request.args.get("view") or "internal").strip().lower()
+        manage_invites = can_manage_survey_invites()
         with get_connection() as conn:
             sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
             dept_id = _user_department_id(conn)
+            ext_dept_id, can_pick_ext_dept, ext_departments = _external_results_scope(conn)
             templates = list_templates(conn)
             external_cycles = list_external_cycles(conn)
             ext_cycle = (request.args.get("cycle") or "").strip()
@@ -862,12 +928,18 @@ def register_survey_platform_routes(bp) -> None:
                 cycle_sem = ext_cycle or sem
                 for ec in ext_codes:
                     external_aggregates.append(
-                        aggregate_template(conn, ec, semester=cycle_sem, department_id=None)
+                        aggregate_external_template_scoped(
+                            conn, ec, cycle_label=cycle_sem, department_id=ext_dept_id
+                        )
                     )
             elif code:
                 if code in EXTERNAL_SURVEY_CODES:
                     cycle_sem = ext_cycle or sem
-                    aggregates = [aggregate_template(conn, code, semester=cycle_sem, department_id=None)]
+                    aggregates = [
+                        aggregate_external_template_scoped(
+                            conn, code, cycle_label=cycle_sem, department_id=ext_dept_id
+                        )
+                    ]
                 else:
                     aggregates = [aggregate_template(conn, code, semester=sem, department_id=dept_id)]
             else:
@@ -936,10 +1008,10 @@ def register_survey_platform_routes(bp) -> None:
                         "progress_pct": min(100, int((cnt / mn) * 100)) if mn > 0 else 0,
                         "remaining": max(0, mn - cnt),
                         "accreditation_links": accreditation_links_display(
-                            tc, conn, semester=sem, department_id=dept_id, link_cache=ext_link_cache
+                            tc, conn, semester=sem, department_id=ext_dept_id, link_cache=ext_link_cache
                         ),
                         "evidence_indicator_code": primary_evidence_indicator_code(
-                            tc, conn, semester=sem, department_id=dept_id, link_cache=ext_link_cache
+                            tc, conn, semester=sem, department_id=ext_dept_id, link_cache=ext_link_cache
                         ),
                     }
                 )
@@ -992,6 +1064,19 @@ def register_survey_platform_routes(bp) -> None:
             course_eval_missing_audit = build_course_eval_missing_sections_audit(
                 conn, semester=sem, department_id=dept_id
             )
+            ext_dept_label = None
+            if ext_dept_id is not None:
+                for d in ext_departments:
+                    if int(d.get("id") or 0) == int(ext_dept_id):
+                        ext_dept_label = d.get("label")
+                        break
+                if not ext_dept_label:
+                    drow = cur.execute(
+                        "SELECT COALESCE(name_ar, code, ?) FROM departments WHERE id = ? LIMIT 1",
+                        (f"قسم #{ext_dept_id}", int(ext_dept_id)),
+                    ).fetchone()
+                    ext_dept_label = str(drow[0]) if drow and drow[0] else f"قسم #{ext_dept_id}"
+        dept_qs = f"&department_id={ext_dept_id}" if ext_dept_id is not None else ""
         return render_template(
             "survey_results.html",
             aggregates=aggregates,
@@ -1015,6 +1100,13 @@ def register_survey_platform_routes(bp) -> None:
             ),
             course_eval_rate_percent=course_eval_rate_percent,
             course_eval_missing_audit=course_eval_missing_audit,
+            can_manage_survey_invites=manage_invites,
+            can_close_external_cycle=manage_invites,
+            external_department_id=ext_dept_id,
+            external_department_label=ext_dept_label,
+            can_pick_external_department=can_pick_ext_dept,
+            external_departments=ext_departments,
+            external_department_qs=dept_qs,
         )
 
     @bp.route("/surveys/trends")
@@ -1158,8 +1250,9 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/api/close_cycle", methods=["POST"])
     @login_required
-    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    @role_required("admin_main", "system_admin", "college_dean")
     def surveys_close_cycle_api():
+        _require_survey_invite_manage()
         data = request.get_json(force=True) or {}
         cycle = (data.get("cycle_label") or data.get("cycle") or "").strip()
         if not cycle:
@@ -1373,23 +1466,37 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/external/package.xlsx")
     @login_required
-    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    @role_required(
+        "admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean",
+        "head_of_department", "staff",
+    )
     def surveys_export_external_package_xlsx():
+        _require_survey_results_access()
         cycle = (request.args.get("cycle") or "").strip()
         if not cycle:
             return jsonify({"status": "error", "message": "cycle مطلوب"}), 400
         with get_connection() as conn:
-            return export_external_package_xlsx(conn, cycle_label=cycle)
+            ext_dept_id, _, _ = _external_results_scope(conn)
+            return export_external_package_xlsx(
+                conn, cycle_label=cycle, department_id=ext_dept_id
+            )
 
     @bp.route("/surveys/export/external/package.pdf")
     @login_required
-    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    @role_required(
+        "admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean",
+        "head_of_department", "staff",
+    )
     def surveys_export_external_package_pdf():
+        _require_survey_results_access()
         cycle = (request.args.get("cycle") or "").strip()
         if not cycle:
             return jsonify({"status": "error", "message": "cycle مطلوب"}), 400
         with get_connection() as conn:
-            ctx = prepare_external_combined_pdf_context(conn, cycle_label=cycle)
+            ext_dept_id, _, _ = _external_results_scope(conn)
+            ctx = prepare_external_combined_pdf_context(
+                conn, cycle_label=cycle, department_id=ext_dept_id
+            )
             ctx = enrich_survey_export_context(ctx, for_pdf=True)
         html = render_template("survey_export_package.html", for_pdf=True, **ctx)
         cycle_slug = (cycle or "report").replace(" ", "_")[:40]
@@ -1397,19 +1504,30 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/external/package")
     @login_required
-    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    @role_required(
+        "admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean",
+        "head_of_department", "staff",
+    )
     def surveys_export_external_package_html():
+        _require_survey_results_access()
         cycle = (request.args.get("cycle") or "").strip()
         if not cycle:
             return jsonify({"status": "error", "message": "cycle مطلوب"}), 400
         with get_connection() as conn:
-            ctx = prepare_external_combined_pdf_context(conn, cycle_label=cycle)
+            ext_dept_id, _, _ = _external_results_scope(conn)
+            ctx = prepare_external_combined_pdf_context(
+                conn, cycle_label=cycle, department_id=ext_dept_id
+            )
         return render_template("survey_export_package.html", for_pdf=False, **ctx)
 
     @bp.route("/surveys/export/external/bundle.zip")
     @login_required
-    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    @role_required(
+        "admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean",
+        "head_of_department", "staff",
+    )
     def surveys_export_external_bundle_zip():
+        _require_survey_results_access()
         cycle = (request.args.get("cycle") or "").strip()
         if not cycle:
             return jsonify({"status": "error", "message": "cycle مطلوب"}), 400
@@ -1434,8 +1552,12 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/external/<template_code>.xlsx")
     @login_required
-    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    @role_required(
+        "admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean",
+        "head_of_department", "staff",
+    )
     def surveys_export_external_single_xlsx(template_code: str):
+        _require_survey_results_access()
         code = (template_code or "").strip()
         if code not in EXTERNAL_SURVEY_CODES:
             return jsonify({"status": "error", "message": "قالب خارجي غير معروف"}), 404
@@ -1443,8 +1565,9 @@ def register_survey_platform_routes(bp) -> None:
         if not cycle:
             return jsonify({"status": "error", "message": "cycle مطلوب"}), 400
         with get_connection() as conn:
+            ext_dept_id, _, _ = _external_results_scope(conn)
             raw, filename, _report = build_external_export_bytes(
-                conn, code, cycle_label=cycle
+                conn, code, cycle_label=cycle, department_id=ext_dept_id
             )
         return send_file(
             io.BytesIO(raw),
@@ -1455,8 +1578,12 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/external/<template_code>.pdf")
     @login_required
-    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    @role_required(
+        "admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean",
+        "head_of_department", "staff",
+    )
     def surveys_export_external_single_pdf(template_code: str):
+        _require_survey_results_access()
         code = (template_code or "").strip()
         if code not in EXTERNAL_SURVEY_CODES:
             return jsonify({"status": "error", "message": "قالب خارجي غير معروف"}), 404
@@ -1464,7 +1591,10 @@ def register_survey_platform_routes(bp) -> None:
         if not cycle:
             return jsonify({"status": "error", "message": "cycle مطلوب"}), 400
         with get_connection() as conn:
-            ctx = prepare_external_single_pdf_context(conn, code, cycle_label=cycle)
+            ext_dept_id, _, _ = _external_results_scope(conn)
+            ctx = prepare_external_single_pdf_context(
+                conn, code, cycle_label=cycle, department_id=ext_dept_id
+            )
             if not ctx:
                 return jsonify({"status": "error", "message": "قالب الاستبيان غير موجود"}), 404
             ctx = enrich_survey_export_context(ctx, for_pdf=True)
@@ -1473,8 +1603,12 @@ def register_survey_platform_routes(bp) -> None:
 
     @bp.route("/surveys/export/external/<template_code>")
     @login_required
-    @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+    @role_required(
+        "admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean",
+        "head_of_department", "staff",
+    )
     def surveys_export_external_single_html(template_code: str):
+        _require_survey_results_access()
         code = (template_code or "").strip()
         if code not in EXTERNAL_SURVEY_CODES:
             return jsonify({"status": "error", "message": "قالب خارجي غير معروف"}), 404
@@ -1482,7 +1616,10 @@ def register_survey_platform_routes(bp) -> None:
         if not cycle:
             return jsonify({"status": "error", "message": "cycle مطلوب"}), 400
         with get_connection() as conn:
-            ctx = prepare_external_single_pdf_context(conn, code, cycle_label=cycle)
+            ext_dept_id, _, _ = _external_results_scope(conn)
+            ctx = prepare_external_single_pdf_context(
+                conn, code, cycle_label=cycle, department_id=ext_dept_id
+            )
             if not ctx:
                 return jsonify({"status": "error", "message": "قالب الاستبيان غير موجود"}), 404
         return render_template("survey_export_single.html", for_pdf=False, **ctx)

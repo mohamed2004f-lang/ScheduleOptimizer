@@ -56,8 +56,6 @@
       <div class="d-flex flex-wrap gap-2">
         <button type="button" class="btn btn-outline-info btn-sm" onclick="PageGuide.open()">❓ دليل الاستخدام</button>
         <a class="btn btn-outline-primary btn-sm" href="/academic_quality/assistant/knowledge">مكتبة المعرفة</a>
-        <a class="btn btn-outline-success btn-sm" href="/academic_quality/assistant/references.zip" title="بطاقات مراجع Markdown لكل قسم">⬇ مراجع ZIP</a>
-        <a class="btn btn-outline-success btn-sm" href="/academic_quality/assistant/references.json" title="JSON لكل الحزم">⬇ مراجع JSON</a>
         <a class="btn btn-outline-dark btn-sm" href="/academic_quality/assistant/export/committee.docx">ملخص لجنة Word</a>
         <a class="btn btn-outline-dark btn-sm" href="/academic_quality/assistant/export/committee.pdf">ملخص لجنة PDF</a>
         <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/assistant/export/style-pack.zip" title="حزمة أسلوب لوثائقكم المعتمدة — تدريب مستقبلي اختياري">حزمة أسلوب</a>
@@ -88,14 +86,19 @@
       </div>
       <div class="col-md-5">
         <label class="form-label small">القسم / البرنامج</label>
-        <select class="form-select form-select-sm" id="qaDepartment">
+        <select class="form-select form-select-sm" id="qaDepartment" {% if dept_scope_locked %}disabled{% endif %}>
+          {% if not dept_scope_locked %}
           <option value="">— الكلية / بدون قسم —</option>
+          {% endif %}
           {% for d in departments %}
           <option value="{{ d.id }}" {% if selected_department_id == d.id %}selected{% endif %}>
             {{ d.code }} — {{ d.name_ar }}
           </option>
           {% endfor %}
         </select>
+        {% if dept_scope_locked %}
+        <div class="form-text">نطاقك مقفول على قسمك.</div>
+        {% endif %}
       </div>
       <div class="col-md-3 d-flex align-items-end">
         <button type="button" class="btn btn-outline-primary btn-sm w-100" id="btnRefreshCtx">تحديث السياق</button>
@@ -334,7 +337,12 @@
       var items = [];
       if (channel === 'usage') {
         items = usageTopics.map(function (t) {
-          return { code: 'system_help', label_ar: t.label_ar, topicCode: t.code };
+          return {
+            code: 'system_help',
+            label_ar: t.label_ar,
+            topicCode: t.code,
+            page_guide_key: t.page_guide_key || null
+          };
         });
       } else {
         items = (m.intents || []).map(function (it) {
@@ -351,6 +359,9 @@
             $('qaTopic').value = it.topicCode || it.label_ar;
             $('qaNotes').value = '';
             runTopic('system_help', it.label_ar);
+            if (it.page_guide_key && window.PageGuide && typeof window.PageGuide.openKey === 'function') {
+              try { window.PageGuide.openKey(it.page_guide_key); } catch (e) {}
+            }
           } else if (it.code === 'discuss' || it.code === 'system_help') {
             setChannel(it.code === 'system_help' ? 'usage' : 'quality');
           } else {

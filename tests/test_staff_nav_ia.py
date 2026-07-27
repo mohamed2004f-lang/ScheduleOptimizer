@@ -40,6 +40,16 @@ def test_nav_short_labels_present():
     assert "المقررات" in NAV
 
 
+def test_supervisor_nav_shell_keeps_quality_admin_out():
+    assert "enforceSupervisorNavShell" in NAV
+    assert "navQualityAccreditationWrap" in NAV
+    assert "هوية الكلية وبرنامجك" in NAV
+    assert "supervisorSlimNav" in NAV
+    assert "!inSupervisorPortal && !supervisorSlimNav" in NAV or "inSupervisorPortal && !supervisorSlimNav" in NAV or (
+        "وضع المشرف لا يشارك شريط الإدارة" in NAV
+    )
+
+
 def test_nav_role_secondary_and_expanded_order_config():
     assert "STAFF_NAV_SECONDARY_BY_ROLE" in NAV
     assert "QUALITY_PRIMARY_ROLES" in NAV
