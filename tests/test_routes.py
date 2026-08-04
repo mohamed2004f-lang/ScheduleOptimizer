@@ -306,6 +306,9 @@ class TestGradesTranscriptRoute:
         data = resp.get_json()
         assert data is not None
         assert "status" in data or "student_id" in data or "courses" in str(data).lower()
+        assert "academic_status" in data
+        assert isinstance(data["academic_status"], dict)
+        assert "status_label" in data["academic_status"]
 
 
 class TestRegistrationRequestsRoutes:

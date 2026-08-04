@@ -25,6 +25,8 @@
       </div>
       <div class="d-flex flex-wrap gap-2">
         <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/archive/guide">دليل الأرشفة والقوالب</a>
+        <a class="btn btn-outline-info btn-sm" href="/academic_quality/archive/shared">مشارَك معي</a>
+        <a class="btn btn-outline-primary btn-sm" href="/academic_quality/college-archive">أرشيف الكلية</a>
         <a class="btn btn-outline-primary btn-sm" href="/academic_quality/accreditation/map?scope=inst">امتثال مؤسسي</a>
         <a class="btn btn-outline-primary btn-sm" href="/academic_quality/accreditation/map?scope=prog">امتثال برامجي</a>
         <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/surveys/results">نتائج الاستبيانات</a>
@@ -178,6 +180,8 @@
                       {% else %}—{% endif %}
                     </td>
                     <td class="text-nowrap">
+                      <button type="button" class="btn btn-outline-success btn-sm btn-share"
+                        data-id="{{ it.id }}" data-dept="{{ it.department_id }}">مشاركة</button>
                       <button type="button" class="btn btn-outline-primary btn-sm btn-suggest"
                         data-id="{{ it.id }}">ربط اعتماد</button>
                       <button type="button" class="btn btn-outline-danger btn-sm btn-del"
@@ -211,11 +215,58 @@
     </div>
   </div>
 
+  <div class="modal fade" id="shareModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">مشاركة سجل القسم (قراءة فقط)</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="shareItemId">
+          <div class="mb-3">
+            <div class="fw-semibold small mb-2">قيادات الكلية</div>
+            <div class="d-flex flex-wrap gap-3" id="deptShareRoles"></div>
+          </div>
+          <div class="mb-3">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="shareAllInstructors">
+              <label class="form-check-label small" for="shareAllInstructors">كل أعضاء التدريس بهذا القسم</label>
+            </div>
+          </div>
+          <div class="mb-3">
+            <div class="fw-semibold small mb-2">أعضاء محددون</div>
+            <select class="form-select form-select-sm" id="shareUsers" multiple size="6"></select>
+          </div>
+          <p class="small text-muted mb-0" id="shareSummary">سيُتاح لـ 0 مستلم.</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">إلغاء</button>
+          <button type="button" class="btn btn-primary btn-sm" id="shareSaveBtn">حفظ المشاركة</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
   (function () {
     const deptId = {{ department_id | tojson }};
     const semester = {{ semester | tojson }};
     const deptName = {{ (department_name_ar or '') | tojson }};
+
+    const leadership = [
+      { code: 'college_dean', label: 'عميد الكلية' },
+      { code: 'academic_vice_dean', label: 'الوكيل العلمي' },
+      { code: 'college_quality_lead', label: 'رئيس قسم جودة بالكلية' },
+    ];
+    const rolesBox = document.getElementById('deptShareRoles');
+    if (rolesBox) {
+      rolesBox.innerHTML = leadership.map(function (r) {
+        return '<div class="form-check">' +
+          '<input class="form-check-input share-role" type="checkbox" value="' + r.code + '" id="dsr_' + r.code + '">' +
+          '<label class="form-check-label small" for="dsr_' + r.code + '">' + r.label + '</label></div>';
+      }).join('');
+    }
 
     function hdr() {
       const c = document.querySelector('meta[name=csrf-token]')?.content || '';
@@ -238,6 +289,47 @@
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.message || 'فشل المساعد');
       return j;
+    }
+
+    function collectGrants() {
+      const grants = [];
+      document.querySelectorAll('.share-role:checked').forEach(function (el) {
+        grants.push({ target_kind: 'role', target_role: el.value });
+      });
+      if (document.getElementById('shareAllInstructors')?.checked) {
+        grants.push({ target_kind: 'dept_all_instructors', target_department_id: deptId });
+      }
+      const sel = document.getElementById('shareUsers');
+      if (sel) {
+        Array.from(sel.selectedOptions).forEach(function (o) {
+          grants.push({ target_kind: 'user', target_username: o.value });
+        });
+      }
+      return grants;
+    }
+
+    function updateSummary() {
+      const el = document.getElementById('shareSummary');
+      if (el) el.textContent = 'سيُتاح لـ ' + collectGrants().length + ' مستلم.';
+    }
+    document.getElementById('shareModal')?.addEventListener('change', updateSummary);
+
+    async function loadShareUsers() {
+      const sel = document.getElementById('shareUsers');
+      if (!sel) return;
+      const r = await fetch('/academic_quality/api/archive/share-targets?department_id=' + encodeURIComponent(deptId || ''), {
+        credentials: 'include',
+      });
+      const j = await r.json().catch(() => ({}));
+      sel.innerHTML = '';
+      (j.users || []).forEach(function (u) {
+        if (u.role === 'instructor' || u.role === 'staff' || u.role === 'head_of_department') {
+          const o = document.createElement('option');
+          o.value = u.username;
+          o.textContent = (u.full_name || u.username) + ' (' + u.role + ')';
+          sel.appendChild(o);
+        }
+      });
     }
 
     document.getElementById('archiveCreateForm')?.addEventListener('submit', async (e) => {
@@ -305,6 +397,51 @@
     });
 
     const linkModal = () => bootstrap.Modal.getOrCreateInstance(document.getElementById('linkModal'));
+    let shareModal;
+
+    document.querySelectorAll('.btn-share').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        document.getElementById('shareItemId').value = btn.dataset.id;
+        document.querySelectorAll('.share-role').forEach((el) => { el.checked = false; });
+        const allIns = document.getElementById('shareAllInstructors');
+        if (allIns) allIns.checked = false;
+        await loadShareUsers();
+        const r = await fetch('/academic_quality/api/archive/items/' + btn.dataset.id + '/shares', {
+          credentials: 'include',
+        });
+        const j = await r.json().catch(() => ({}));
+        const users = document.getElementById('shareUsers');
+        (j.shares || []).forEach((s) => {
+          if (s.target_kind === 'role') {
+            const el = document.getElementById('dsr_' + s.target_role);
+            if (el) el.checked = true;
+          } else if (s.target_kind === 'dept_all_instructors' && allIns) {
+            allIns.checked = true;
+          } else if (s.target_kind === 'user' && users) {
+            Array.from(users.options).forEach((o) => {
+              if (o.value === s.target_username) o.selected = true;
+            });
+          }
+        });
+        updateSummary();
+        if (!shareModal) shareModal = bootstrap.Modal.getOrCreateInstance(document.getElementById('shareModal'));
+        shareModal.show();
+      });
+    });
+
+    document.getElementById('shareSaveBtn')?.addEventListener('click', async () => {
+      const id = document.getElementById('shareItemId').value;
+      const grants = collectGrants();
+      const r = await fetch('/academic_quality/api/archive/items/' + id + '/shares', {
+        method: 'PUT', credentials: 'include',
+        headers: { ...hdr(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grants }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(j.message || 'فشل حفظ المشاركة'); return; }
+      if (shareModal) shareModal.hide();
+      alert('تم تحديث المشاركة (' + grants.length + ')');
+    });
 
     document.querySelectorAll('.btn-suggest').forEach((btn) => {
       btn.addEventListener('click', async () => {

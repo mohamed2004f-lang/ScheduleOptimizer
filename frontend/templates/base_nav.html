@@ -14,6 +14,7 @@
   .nav-shell-student #navFacultySupervisionWrap,
   .nav-shell-student #navAdminSettingsWrap,
   .nav-shell-student #navQualityAccreditationWrap,
+  .nav-shell-student #navArchivesMenuWrap,
   .nav-shell-student #navStaffCompactMoreWrap,
   .nav-shell-student #navDensityToggleWrap,
   .nav-shell-student #navMyCoursesWrap,
@@ -44,7 +45,7 @@
 <script>document.documentElement.classList.add('nav-shell-student-pending');</script>
 {% elif nis %}
 <style id="navShellInstructorCritical">
-  html.nav-shell-instructor-pending .app-navbar .navbar-nav > .nav-item:not(#navMyCoursesWrap):not(#navInstructorGradeDraftsWrap):not(#navInsLibraryWrap):not(#navInsQualityHubWrap):not(#navInsIloCatalogWrap):not(#navInstructorRowBreak):not(#navInsMyScheduleWrap):not(#navInsMyExamsWrap):not(#navInsMyAttendanceWrap):not(#navInsScheduleWrap):not(#navInsCalendarWrap):not(#navInsMidtermsWrap):not(#navInsFinalsWrap):not(#navInsAttendanceWrap):not(#navInsSupervisorWrap):not(#navInsQualityAssistantWrap):not(#navInsStudentLoWrap),
+  html.nav-shell-instructor-pending .app-navbar .navbar-nav > .nav-item:not(#navMyCoursesWrap):not(#navInstructorGradeDraftsWrap):not(#navInsLibraryWrap):not(#navInsQualityHubWrap):not(#navInsIloCatalogWrap):not(#navInstructorRowBreak):not(#navInsMyScheduleWrap):not(#navInsMyExamsWrap):not(#navInsMyAttendanceWrap):not(#navInsScheduleWrap):not(#navInsCalendarWrap):not(#navInsMidtermsWrap):not(#navInsFinalsWrap):not(#navInsAttendanceWrap):not(#navInsSupervisorWrap):not(#navInsQualityAssistantWrap):not(#navInsStudentLoWrap):not(#navArchivesMenuWrap),
   .nav-shell-instructor #navDashboardWrap,
   .nav-shell-instructor #navStudentAffairsWrap,
   .nav-shell-instructor #navAcademicRecordsMenuWrap,
@@ -97,6 +98,7 @@
   .nav-shell-instructor #navInsAttendanceWrap {
     display: list-item !important;
   }
+  .nav-shell-instructor #navArchivesMenuWrap { display: list-item !important; }
   .nav-shell-instructor .navbar-nav > .nav-item > .nav-link {
     padding-top: 0.35rem;
     padding-bottom: 0.35rem;
@@ -115,6 +117,7 @@
   .nav-shell-supervisor #navFacultySupervisionWrap,
   .nav-shell-supervisor #navAdminSettingsWrap,
   .nav-shell-supervisor #navQualityAccreditationWrap,
+  .nav-shell-supervisor #navArchivesMenuWrap,
   .nav-shell-supervisor #navStaffCompactMoreWrap,
   .nav-shell-supervisor #navDensityToggleWrap,
   .nav-shell-supervisor #navMyCoursesWrap,
@@ -624,11 +627,9 @@
             <li><a class="dropdown-item" id="navTermClosure" href="/academic_quality/term_closure" style="display:none;" data-qa-group="closure">إغلاق الفصل (موحّد)</a></li>
 
             <li><hr class="dropdown-divider qa-nav-group" data-qa-group="accred"></li>
-            <li><h6 class="dropdown-header qa-nav-group" data-qa-group="accred">الاعتماد والأرشيف</h6></li>
+            <li><h6 class="dropdown-header qa-nav-group" data-qa-group="accred">الاعتماد</h6></li>
             <li><a class="dropdown-item" id="navAccreditationMap" href="/academic_quality/accreditation/map?scope=inst" style="display:none;" data-qa-group="accred">امتثال — اعتماد مؤسسي</a></li>
             <li><a class="dropdown-item" id="navAccreditationMapProg" href="/academic_quality/accreditation/map?scope=prog" style="display:none;" data-qa-group="accred">امتثال — اعتماد برامجي</a></li>
-            <li><a class="dropdown-item" id="navDeptArchive" href="/academic_quality/archive" style="display:none;" data-qa-group="accred">أرشيف القسم</a></li>
-            <li><a class="dropdown-item" id="navDeptArchiveGuide" href="/academic_quality/archive/guide" style="display:none;" data-qa-group="accred">دليل الأرشفة</a></li>
 
             <li><hr class="dropdown-divider qa-nav-group" data-qa-group="college"></li>
             <li><h6 class="dropdown-header qa-nav-group" data-qa-group="college">الكلية والمخرجات</h6></li>
@@ -636,6 +637,23 @@
             <li><a class="dropdown-item" id="navProgramsPortal" href="/academic_quality/programs" style="display:none;" data-qa-group="college">برامج الكلية</a></li>
             <li><a class="dropdown-item" id="navIloCatalog" href="/academic_quality/ilo/catalog" style="display:none;" data-qa-group="college">كتالوج مخرجات التعلم</a></li>
             <li><a class="dropdown-item" id="navDepartmentLoDashboard" href="/academic_quality/ilo/department/dashboard" style="display:none;" data-qa-group="college">لوحة مخرجات القسم</a></li>
+          </ul>
+        </li>
+        <li class="nav-item dropdown d-none" id="navArchivesMenuWrap" style="display:none;" data-nav-tier="primary">
+          <a class="nav-link dropdown-toggle" href="#" id="archivesMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="fa-solid fa-box-archive ms-1"></i>
+            <span class="nav-label-full">الأرشيف</span><span class="nav-label-short">أرشيف</span>
+          </a>
+          <ul class="dropdown-menu" aria-labelledby="archivesMenu" id="archivesMenuList">
+            <li><h6 class="dropdown-header">ضمان الجودة</h6></li>
+            <li><a class="dropdown-item" id="navDeptArchive" href="/academic_quality/archive" style="display:none;">أرشيف القسم</a></li>
+            <li><a class="dropdown-item" id="navCollegeArchive" href="/academic_quality/college-archive" style="display:none;">أرشيف الكلية</a></li>
+            <li><a class="dropdown-item" id="navArchiveShared" href="/academic_quality/archive/shared" style="display:none;">مشارَك معي</a></li>
+            <li><a class="dropdown-item" id="navDeptArchiveGuide" href="/academic_quality/archive/guide" style="display:none;">دليل الأرشفة</a></li>
+            <li><hr class="dropdown-divider" id="navArchivesOpsDivider" style="display:none;"></li>
+            <li><h6 class="dropdown-header" id="navArchivesOpsHeader" style="display:none;">نسخ تشغيلية</h6></li>
+            <li><a class="dropdown-item" id="navArchiveScheduleVersions" href="/schedule_versions_page" style="display:none;">أرشيف نسخ الجدول الدراسي</a></li>
+            <li><a class="dropdown-item" id="navArchiveExamScheduleVersions" href="/exam_schedule_versions_page" style="display:none;">أرشيف جداول الامتحانات</a></li>
           </ul>
         </li>
         <li class="nav-item dropdown" id="navAdminSettingsWrap" data-nav-tier="secondary" style="display:none;">
@@ -754,7 +772,7 @@
       const hideIds = [
         'navDashboardWrap', 'navStudentAffairsWrap', 'navAcademicRecordsMenuWrap',
         'navPlanningMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
-        'navAdminSettingsWrap', 'navQualityAccreditationWrap', 'navStaffCompactMoreWrap',
+        'navAdminSettingsWrap', 'navQualityAccreditationWrap', 'navArchivesMenuWrap', 'navStaffCompactMoreWrap',
         'navDensityToggleWrap', 'navMyCoursesWrap', 'navInstructorMoreWrap', 'navInstructorGradeDraftsWrap',
       ].concat(INSTRUCTOR_FLAT_WRAP_IDS);
       hideIds.forEach(id => {
@@ -790,7 +808,7 @@
         'navInsLibraryWrap', 'navInsQualityHubWrap', 'navInsIloCatalogWrap', 'navInstructorRowBreak',
         'navInsMyScheduleWrap', 'navInsMyExamsWrap', 'navInsMyAttendanceWrap',
         'navInsScheduleWrap', 'navInsCalendarWrap', 'navInsMidtermsWrap', 'navInsFinalsWrap',
-        'navInsAttendanceWrap',
+        'navInsAttendanceWrap', 'navArchivesMenuWrap',
       ];
       showIds.forEach(id => {
         const el = document.getElementById(id);
@@ -809,7 +827,7 @@
       const hideIds = [
         'navDashboardWrap', 'navStudentAffairsWrap', 'navAcademicRecordsMenuWrap',
         'navPlanningMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
-        'navAdminSettingsWrap', 'navQualityAccreditationWrap', 'navStaffCompactMoreWrap',
+        'navAdminSettingsWrap', 'navQualityAccreditationWrap', 'navArchivesMenuWrap', 'navStaffCompactMoreWrap',
         'navDensityToggleWrap', 'navMyCoursesWrap', 'navInstructorMoreWrap', 'navInstructorGradeDraftsWrap',
         'navHodCourseDeliveryWrap',
       ];
@@ -1167,6 +1185,15 @@
       if (elScheduleVersions) elScheduleVersions.style.display = showScheduleVersions ? '' : 'none';
       const elExamScheduleVersions = document.getElementById('navExamScheduleVersions');
       if (elExamScheduleVersions) elExamScheduleVersions.style.display = showExamArch ? '' : 'none';
+      const elArchiveScheduleVersions = document.getElementById('navArchiveScheduleVersions');
+      if (elArchiveScheduleVersions) elArchiveScheduleVersions.style.display = showScheduleVersions ? '' : 'none';
+      const elArchiveExamScheduleVersions = document.getElementById('navArchiveExamScheduleVersions');
+      if (elArchiveExamScheduleVersions) elArchiveExamScheduleVersions.style.display = showExamArch ? '' : 'none';
+      const elArchivesOpsDivider = document.getElementById('navArchivesOpsDivider');
+      const elArchivesOpsHeader = document.getElementById('navArchivesOpsHeader');
+      const showArchivesOps = !!(showScheduleVersions || showExamArch);
+      if (elArchivesOpsDivider) elArchivesOpsDivider.style.display = showArchivesOps ? '' : 'none';
+      if (elArchivesOpsHeader) elArchivesOpsHeader.style.display = showArchivesOps ? '' : 'none';
       const elGradeDrafts = document.getElementById('navGradeDrafts');
       if (elGradeDrafts) elGradeDrafts.style.display = showGradeDrafts ? '' : 'none';
       const hodHeadModeNav = role === 'head_of_department'
@@ -1220,9 +1247,17 @@
       const elAccredMapProg = document.getElementById('navAccreditationMapProg');
       if (elAccredMapProg) elAccredMapProg.style.display = showQualityDash ? '' : 'none';
       const elDeptArchive = document.getElementById('navDeptArchive');
-      if (elDeptArchive) elDeptArchive.style.display = showQualityDash ? '' : 'none';
+      if (elDeptArchive) elDeptArchive.style.display = (showQualityDash && !useInstructorMore) ? '' : 'none';
+      const showCollegeArchive = (caps && caps.v >= 1)
+        ? !!caps.nav_college_archive
+        : (role === 'college_dean' || role === 'academic_vice_dean' || role === 'admin_main' || role === 'system_admin' || role === 'admin' || !!auth?.is_college_quality_lead);
+      const elCollegeArchive = document.getElementById('navCollegeArchive');
+      if (elCollegeArchive) elCollegeArchive.style.display = (showCollegeArchive && !useInstructorMore && !(showSupervisorPortalMenu && inSupervisorPortal)) ? '' : 'none';
+      const showArchiveShared = showQualityDash || showCollegeArchive || role === 'instructor' || useInstructorMore;
+      const elArchiveShared = document.getElementById('navArchiveShared');
+      if (elArchiveShared) elArchiveShared.style.display = showArchiveShared ? '' : 'none';
       const elDeptArchiveGuide = document.getElementById('navDeptArchiveGuide');
-      if (elDeptArchiveGuide) elDeptArchiveGuide.style.display = showQualityDash ? '' : 'none';
+      if (elDeptArchiveGuide) elDeptArchiveGuide.style.display = (showQualityDash && !useInstructorMore) ? '' : 'none';
       const showQualityAssistant = (caps && caps.v >= 1)
         ? !!caps.nav_quality_assistant
         : (showQualityDash || !!caps?.nav_instructor_quality_hub);
@@ -1837,6 +1872,32 @@
           wrapQuality.style.display = 'none';
         }
       }
+      // قائمة الأرشيف في الشريط الرئيسي
+      (function applyArchivesMenuVisibility() {
+        const wrapArchives = document.getElementById('navArchivesMenuWrap');
+        if (!wrapArchives) return;
+        if (isStudentUi || (showSupervisorPortalMenu && inSupervisorPortal) || role === 'supervisor' || isSupervisorPortalModeNav()) {
+          wrapArchives.classList.add('d-none');
+          wrapArchives.style.display = 'none';
+          return;
+        }
+        const ids = [
+          'navDeptArchive', 'navCollegeArchive', 'navArchiveShared', 'navDeptArchiveGuide',
+          'navArchiveScheduleVersions', 'navArchiveExamScheduleVersions',
+        ];
+        let any = false;
+        ids.forEach(function (id) {
+          const el = document.getElementById(id);
+          if (el && el.style.display !== 'none') any = true;
+        });
+        if (any) {
+          wrapArchives.classList.remove('d-none');
+          wrapArchives.style.removeProperty('display');
+        } else {
+          wrapArchives.classList.add('d-none');
+          wrapArchives.style.display = 'none';
+        }
+      })();
       // إخفاء عناوين المجموعات الفارغة في قائمة الجودة
       (function hideEmptyQaNavGroups() {
         const groups = ['overview', 'surveys', 'closure', 'accred', 'college'];
@@ -1858,6 +1919,7 @@
       // إخفاء قائمة Dropdown بالكامل إذا صارت كل عناصرها مخفية
       const skipAutoShow = new Set([
         'navQualityAccreditationWrap',
+        'navArchivesMenuWrap',
         'navInstructorMoreWrap',
         'navAdminSettingsWrap',
         'navStaffCompactMoreWrap',
@@ -1874,6 +1936,7 @@
         skipAutoShow.add('navAcademicRecordsMenuWrap');
         skipAutoShow.add('navPlanningMenuWrap');
         skipAutoShow.add('navQualityAccreditationWrap');
+        skipAutoShow.add('navArchivesMenuWrap');
       }
       if (useInstructorMore) {
         skipAutoShow.add('navStudentAffairsWrap');
@@ -1895,6 +1958,7 @@
         skipAutoShow.add('navFacultySupervisionWrap');
         skipAutoShow.add('navAdminSettingsWrap');
         skipAutoShow.add('navQualityAccreditationWrap');
+        skipAutoShow.add('navArchivesMenuWrap');
         skipAutoShow.add('navHodCourseDeliveryWrap');
         skipAutoShow.add('navDashboardWrap');
         skipAutoShow.add('navStaffCompactMoreWrap');
@@ -1967,61 +2031,62 @@
         { wrapId: 'navCatalogWrap', header: 'المقررات' },
         { wrapId: 'navFacultySupervisionWrap', header: 'الأساتذة والإشراف' },
         { wrapId: 'navQualityAccreditationWrap', header: 'ضمان الجودة والاعتماد' },
+        { wrapId: 'navArchivesMenuWrap', header: 'الأرشيف' },
         { wrapId: 'navAdminSettingsWrap', header: 'الإدارة والإعدادات' },
       ];
       const EXPANDED_NAV_ORDER = {
         admin_main: [
           'navDashboardWrap', 'navStudentAffairsWrap', 'navPlanningMenuWrap',
           'navAcademicRecordsMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
-          'navQualityAccreditationWrap', 'navAdminSettingsWrap',
+          'navQualityAccreditationWrap', 'navArchivesMenuWrap', 'navAdminSettingsWrap',
         ],
         head_of_department: [
           'navDashboardWrap', 'navHodCourseDeliveryWrap', 'navStudentAffairsWrap',
           'navPlanningMenuWrap', 'navAcademicRecordsMenuWrap', 'navCatalogWrap',
-          'navQualityAccreditationWrap', 'navFacultySupervisionWrap', 'navAdminSettingsWrap',
+          'navQualityAccreditationWrap', 'navArchivesMenuWrap', 'navFacultySupervisionWrap', 'navAdminSettingsWrap',
         ],
         college_dean: [
           'navDashboardWrap', 'navStudentAffairsWrap', 'navPlanningMenuWrap',
           'navAcademicRecordsMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
-          'navQualityAccreditationWrap', 'navAdminSettingsWrap',
+          'navQualityAccreditationWrap', 'navArchivesMenuWrap', 'navAdminSettingsWrap',
         ],
         academic_vice_dean: [
           'navDashboardWrap', 'navStudentAffairsWrap', 'navPlanningMenuWrap',
-          'navAcademicRecordsMenuWrap', 'navCatalogWrap', 'navQualityAccreditationWrap',
+          'navAcademicRecordsMenuWrap', 'navCatalogWrap', 'navQualityAccreditationWrap', 'navArchivesMenuWrap',
         ],
       };
       const QUALITY_PRIMARY_ROLES = new Set([
         'admin_main', 'college_dean', 'academic_vice_dean', 'head_of_department',
       ]);
-      // ترتيب الشريط المدمج (primary فقط) — الجودة ظاهرة مثل القيادات؛ اعتماد القسم لرئيس القسم فقط
+      // ترتيب الشريط المدمج (primary فقط) — الجودة والأرشيف ظاهران؛ اعتماد القسم لرئيس القسم فقط
       const COMPACT_PRIMARY_ORDER = {
         admin_main: [
           'navDashboardWrap', 'navStudentAffairsWrap', 'navPlanningMenuWrap',
-          'navQualityAccreditationWrap', 'navStaffCompactMoreWrap',
+          'navQualityAccreditationWrap', 'navArchivesMenuWrap', 'navStaffCompactMoreWrap',
         ],
         college_dean: [
           'navDashboardWrap', 'navStudentAffairsWrap', 'navPlanningMenuWrap',
-          'navQualityAccreditationWrap', 'navStaffCompactMoreWrap',
+          'navQualityAccreditationWrap', 'navArchivesMenuWrap', 'navStaffCompactMoreWrap',
         ],
         academic_vice_dean: [
           'navDashboardWrap', 'navStudentAffairsWrap', 'navPlanningMenuWrap',
-          'navQualityAccreditationWrap', 'navStaffCompactMoreWrap',
+          'navQualityAccreditationWrap', 'navArchivesMenuWrap', 'navStaffCompactMoreWrap',
         ],
         head_of_department: [
           'navDashboardWrap', 'navHodCourseDeliveryWrap', 'navStudentAffairsWrap',
-          'navPlanningMenuWrap', 'navQualityAccreditationWrap', 'navStaffCompactMoreWrap',
+          'navPlanningMenuWrap', 'navQualityAccreditationWrap', 'navArchivesMenuWrap', 'navStaffCompactMoreWrap',
         ],
       };
       const STAFF_NAV_ORDER_RESET_IDS = [
         'navDashboardWrap', 'navHodCourseDeliveryWrap', 'navStudentAffairsWrap',
         'navPlanningMenuWrap', 'navAcademicRecordsMenuWrap', 'navCatalogWrap',
-        'navFacultySupervisionWrap', 'navQualityAccreditationWrap',
+        'navFacultySupervisionWrap', 'navQualityAccreditationWrap', 'navArchivesMenuWrap',
         'navAdminSettingsWrap', 'navStaffCompactMoreWrap',
       ];
       const STAFF_NAV_ALL_OPS_WRAP_IDS = [
         'navDashboardWrap', 'navHodCourseDeliveryWrap', 'navStudentAffairsWrap',
         'navPlanningMenuWrap', 'navAcademicRecordsMenuWrap', 'navCatalogWrap',
-        'navFacultySupervisionWrap', 'navQualityAccreditationWrap',
+        'navFacultySupervisionWrap', 'navQualityAccreditationWrap', 'navArchivesMenuWrap',
         'navAdminSettingsWrap', 'navStaffCompactMoreWrap',
       ];
       function getExpandedNavRoleKey() {
@@ -2384,6 +2449,8 @@
         ['/academic_quality/accreditation/map','navAccreditationMap'],
         ['/academic_quality/accreditation/map?scope=prog','navAccreditationMapProg'],
         ['/academic_quality/archive','navDeptArchive'],
+        ['/academic_quality/college-archive','navCollegeArchive'],
+        ['/academic_quality/archive/shared','navArchiveShared'],
         ['/academic_quality/archive/guide','navDeptArchiveGuide'],
         ['/academic_quality/assistant','navQualityAssistant'],
         ['/academic_quality/assistant/knowledge','navQualityKnowledge'],

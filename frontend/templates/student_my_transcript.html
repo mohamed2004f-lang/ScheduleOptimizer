@@ -107,7 +107,23 @@
     }
 
     async function loadTranscript(){
-      if (INITIAL) { renderTranscript(INITIAL); return; }
+      function applyStatus(payload){
+        const noteEl = document.getElementById('academicStatusNote');
+        if (!noteEl) return;
+        const s = (payload && payload.academic_status) ? payload.academic_status : null;
+        if (!s) return;
+        let text = s.status_label || s.label || '';
+        if (s.extra_chance) {
+          const note = s.extra_chance_note || s.extra_note || '';
+          text += (text ? ' — ' : '') + 'فرصة استثنائية سارية' + (note ? ` (${note})` : '');
+        }
+        if (text) noteEl.textContent = 'ملاحظات أكاديمية: ' + text;
+      }
+      if (INITIAL) {
+        renderTranscript(INITIAL);
+        applyStatus(INITIAL);
+        return;
+      }
       if (!STUDENT_ID) {
         document.getElementById('loadState').textContent = 'تعذر تحديد الطالب.';
         return;
@@ -119,13 +135,7 @@
         return;
       }
       renderTranscript(j);
-      try {
-        const st = await fetch('/performance/status/' + encodeURIComponent(STUDENT_ID), { credentials: 'include' });
-        const sj = await st.json().catch(() => null);
-        if (st.ok && sj && sj.status_label) {
-          document.getElementById('academicStatusNote').textContent = 'ملاحظات أكاديمية: ' + sj.status_label;
-        }
-      } catch(e) {}
+      applyStatus(j);
     }
 
     document.getElementById('btnExportExcel')?.addEventListener('click', () => {

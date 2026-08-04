@@ -80,6 +80,11 @@ docker compose exec web python scripts/seed_college_shared_catalog.py
 
 أنواع `share_type`: `unified` | `multi_code` | `subset`
 
+لكل قسم في `multi_code` / `subset`:
+- `plan_course_code` — رمز الخطة
+- `plan_course_name_override` — اسم العرض (اختياري)
+- `units_override` — وحدات القسم (فارغ = وحدات السجل المرجعية)
+
 ## الاختبارات
 
 ```bash

@@ -31,7 +31,7 @@
     <div class="alert alert-info small">
       <strong>أنواع المشاركة:</strong>
       <span class="badge bg-primary">unified</span> نفس الاسم والرمز لكل الأقسام &nbsp;
-      <span class="badge bg-secondary">multi_code</span> محتوى واحد — رمز مختلف لكل قسم &nbsp;
+      <span class="badge bg-secondary">multi_code</span> محتوى واحد — رمز ووحدات اختيارية لكل قسم &nbsp;
       <span class="badge bg-warning text-dark">subset</span> مشترك بين أقسام محددة فقط
     </div>
 
@@ -81,7 +81,7 @@
             <label class="form-label small">نوع المشاركة</label>
             <select class="form-select form-select-sm" id="fShareType">
               <option value="unified">unified — موحّد GS</option>
-              <option value="multi_code">multi_code — رمز لكل قسم</option>
+              <option value="multi_code">multi_code — رمز ووحدات لكل قسم</option>
               <option value="subset">subset — أقسام محددة</option>
             </select>
           </div>
@@ -112,6 +112,7 @@
         </div>
         <div id="deptSection" class="d-none">
           <label class="form-label small fw-bold">أقسام المشاركة (multi_code / subset)</label>
+          <p class="small text-muted mb-1">لكل قسم: رمز الخطة، اسم العرض (اختياري)، ووحدات خاصة (فارغ = وحدات السجل أعلاه).</p>
           <div id="deptRows"></div>
           <button type="button" class="btn btn-sm btn-outline-secondary mt-1" id="btnAddDept">+ قسم</button>
         </div>
@@ -158,22 +159,32 @@
       const wrap = document.createElement('div');
       wrap.className = 'row g-1 mb-1 dept-row';
       const opts = DEPS.map(d => `<option value="${d.id}" ${dep && dep.department_id==d.id?'selected':''}>${esc(d.name_ar)} (${esc(d.code)})</option>`).join('');
+      const uo = (dep && dep.units_override != null && dep.units_override !== '') ? String(dep.units_override) : '';
       wrap.innerHTML = `
-        <div class="col-md-4"><select class="form-select form-select-sm dept-id"><option value="">— قسم —</option>${opts}</select></div>
+        <div class="col-md-3"><select class="form-select form-select-sm dept-id"><option value="">— قسم —</option>${opts}</select></div>
         <div class="col-md-3"><input class="form-control form-control-sm dept-code" placeholder="رمز الخطة" value="${esc(dep&&dep.plan_course_code)}"></div>
-        <div class="col-md-4"><input class="form-control form-control-sm dept-name" placeholder="اسم العرض (اختياري)" value="${esc(dep&&dep.plan_course_name_override)}"></div>
+        <div class="col-md-3"><input class="form-control form-control-sm dept-name" placeholder="اسم العرض (اختياري)" value="${esc(dep&&dep.plan_course_name_override)}"></div>
+        <div class="col-md-2"><input class="form-control form-control-sm dept-units" type="number" min="0" placeholder="وحدات" value="${esc(uo)}" title="فارغ = وحدات السجل المرجعية"></div>
         <div class="col-md-1"><button type="button" class="btn btn-sm btn-outline-danger w-100 btn-rm">×</button></div>`;
       wrap.querySelector('.btn-rm').onclick = () => wrap.remove();
       return wrap;
     }
 
     function collectDepartments(){
-      return [...document.querySelectorAll('.dept-row')].map(row => ({
-        department_id: parseInt(row.querySelector('.dept-id').value, 10),
-        plan_course_code: row.querySelector('.dept-code').value.trim(),
-        plan_course_name_override: row.querySelector('.dept-name').value.trim(),
-        is_active: true
-      })).filter(x => x.department_id > 0);
+      return [...document.querySelectorAll('.dept-row')].map(row => {
+        const uRaw = row.querySelector('.dept-units').value.trim();
+        const item = {
+          department_id: parseInt(row.querySelector('.dept-id').value, 10),
+          plan_course_code: row.querySelector('.dept-code').value.trim(),
+          plan_course_name_override: row.querySelector('.dept-name').value.trim(),
+          is_active: true
+        };
+        if (uRaw !== '') {
+          const n = parseInt(uRaw, 10);
+          if (!Number.isNaN(n)) item.units_override = n;
+        }
+        return item;
+      }).filter(x => x.department_id > 0);
     }
 
     function renderTable(){

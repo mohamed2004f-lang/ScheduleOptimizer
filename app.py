@@ -793,13 +793,13 @@ def my_requests_page():
 @role_required("student")
 def my_transcript_page():
     from backend.services.students import normalize_sid
-    from backend.services.grades import _load_transcript_data
+    from backend.services.grades import _load_transcript_data, attach_academic_status
 
     sid = normalize_sid(session.get("student_id") or session.get("user"))
     initial_transcript = None
     if sid:
         try:
-            initial_transcript = _load_transcript_data(sid)
+            initial_transcript = attach_academic_status(_load_transcript_data(sid))
         except Exception:
             initial_transcript = None
     return render_template(
@@ -1167,7 +1167,7 @@ def transcript_page():
 
     # حل جذري: جهّز قائمة الطلبة + كشف أول طالب (أو المختار) من السيرفر
     from backend.services.utilities import get_connection
-    from backend.services.grades import _load_transcript_data
+    from backend.services.grades import _load_transcript_data, attach_academic_status
     from backend.services.students import _get_allowed_student_ids_for_role, normalize_sid
     from backend.core.department_scope_policy import resolve_scope_sql_for_students_table
 
@@ -1214,7 +1214,7 @@ def transcript_page():
     initial_transcript = None
     if selected:
         try:
-            initial_transcript = _load_transcript_data(selected)
+            initial_transcript = attach_academic_status(_load_transcript_data(selected))
         except Exception:
             initial_transcript = None
 

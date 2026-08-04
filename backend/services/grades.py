@@ -2506,6 +2506,24 @@ def _load_transcript_data(student_id: str):
         except Exception:
             electives_status = {"active": False, "ok": True, "waived": False}
 
+        # وحدات المقررات دفعة واحدة (بدل N+1) لاستكمال الوحدات الناقصة في الدرجات
+        course_units_from_db = {}
+        course_names = {(row["course_name"] or "").strip() for row in grade_rows}
+        course_names.discard("")
+        if course_names:
+            names_list = list(course_names)
+            chunk_size = 400
+            for i in range(0, len(names_list), chunk_size):
+                chunk = names_list[i : i + chunk_size]
+                placeholders = ",".join("?" for _ in chunk)
+                for cr in cur.execute(
+                    f"SELECT course_name, COALESCE(units, 0) AS u FROM courses WHERE course_name IN ({placeholders})",
+                    tuple(chunk),
+                ).fetchall():
+                    u = int(cr["u"] or 0)
+                    if u > 0:
+                        course_units_from_db[cr["course_name"]] = u
+
     transcript: OrderedDict = OrderedDict()
     gpa_by_semester = defaultdict(list)
     best_map = {}
@@ -2547,19 +2565,6 @@ def _load_transcript_data(student_id: str):
             if total_units_sem
             else 0.0
         )
-
-    # استكمال الوحدات من جدول المقررات إذا كانت مسجلة 0 أو فارغة في الدرجات
-    course_units_from_db = {}
-    if best_map:
-        with get_connection() as conn2:
-            cur2 = conn2.cursor()
-            for course_name in best_map.keys():
-                row = cur2.execute(
-                    "SELECT COALESCE(units, 0) AS u FROM courses WHERE course_name = ?",
-                    (course_name,),
-                ).fetchone()
-                if row and (row["u"] or 0) > 0:
-                    course_units_from_db[course_name] = int(row["u"])
 
     # الوحدات المنجزة لكل فصل دراسي (مقررات ناجحة فقط، درجة >= حد النجاح)
     semester_completed_units = {}
@@ -3542,7 +3547,8 @@ def get_transcript(student_id):
                 current_semester=current_sem,
             )
             data["term_grade_details"] = student_term_grade_details(conn, student_id, current_sem)
-    return jsonify({
+    academic_status = _academic_status_payload_from_transcript(student_id, data)
+    payload = {
         "student_id": data["student_id"],
         "student_name": data.get("student_name", ""),
         "graduation_plan": data.get("graduation_plan", ""),
@@ -3556,7 +3562,79 @@ def get_transcript(student_id):
         "ordered_semesters": data.get("ordered_semesters", []),
         "completed_units_breakdown": data.get("completed_units_breakdown", []),
         "electives_status": data.get("electives_status", {}),
-    })
+        "academic_status": academic_status,
+    }
+    if user_role == "student" and data.get("term_grade_details") is not None:
+        payload["term_grade_details"] = data.get("term_grade_details")
+    return jsonify(payload)
+
+
+def attach_academic_status(data: dict | None) -> dict | None:
+    """إرفاق academic_status على بيانات كشف جاهزة (SSR / API)."""
+    if not data:
+        return data
+    sid = (data.get("student_id") or "").strip()
+    if not sid:
+        return data
+    try:
+        data["academic_status"] = _academic_status_payload_from_transcript(sid, data)
+    except Exception:
+        data.setdefault("academic_status", {})
+    return data
+
+
+def _academic_status_payload_from_transcript(student_id: str, data: dict) -> dict:
+    """
+    حالة أكاديمية موجزة بنفس شكل /performance/status دون إعادة حساب الكشف.
+    """
+    from backend.services.performance import (
+        _compute_status,
+        _override_status_by_enrollment,
+    )
+
+    ordered = data.get("ordered_semesters", []) or []
+    sem_gpas = data.get("semester_gpas", {}) or {}
+    cumulative_gpa = data.get("cumulative_gpa", 0.0)
+    completed_units = int(data.get("completed_units") or 0)
+    status = _compute_status(ordered, sem_gpas, cumulative_gpa)
+
+    enrollment_status = "active"
+    has_extra = False
+    extra_note = ""
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cols = fetch_table_columns(conn, "students")
+            if "enrollment_status" in cols:
+                row = cur.execute(
+                    "SELECT COALESCE(enrollment_status,'active') FROM students WHERE student_id = ?",
+                    (student_id,),
+                ).fetchone()
+                enrollment_status = row[0] if row else "active"
+            status = _override_status_by_enrollment(enrollment_status, status)
+            exc_row = cur.execute(
+                """
+                SELECT id, type, note, is_active
+                FROM student_exceptions
+                WHERE student_id = ? AND type = 'extra_chance'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (student_id,),
+            ).fetchone()
+            has_extra = bool(exc_row and exc_row[3])
+            extra_note = exc_row[2] if exc_row else ""
+    except Exception:
+        pass
+
+    return {
+        "status_code": status.get("code"),
+        "status_label": status.get("label") or "",
+        "cumulative_gpa": cumulative_gpa,
+        "completed_units": completed_units,
+        "extra_chance": has_extra,
+        "extra_chance_note": extra_note or "",
+    }
 
 
 def _compute_academic_status(student_id: str, data: dict):

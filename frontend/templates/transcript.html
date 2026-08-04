@@ -451,6 +451,29 @@ async function loadCourses(){
 }
 
 /* load transcript */
+function applyAcademicStatusNote(payload){
+  const noteEl = document.getElementById('academicStatusNote');
+  if (!noteEl) return;
+  const s = (payload && payload.academic_status) ? payload.academic_status : payload;
+  if (!s) { noteEl.textContent = ''; return; }
+  let text = s.status_label || s.label || '';
+  if (s.extra_chance) {
+    const note = s.extra_chance_note || s.extra_note || '';
+    text += (text ? ' — ' : '') + 'فرصة استثنائية سارية' + (note ? ` (${note})` : '');
+  }
+  noteEl.textContent = text ? ('ملاحظات أكاديمية: ' + text) : '';
+}
+
+function showCachedTranscript(data, studentId){
+  if (!data || !data.transcript) return false;
+  selectedStudent = studentId || data.student_id || selectedStudent;
+  CURRENT_TRANSCRIPT = data;
+  renderTranscript(data);
+  applyAcademicStatusNote(data);
+  if (selectedStudent) loadWeeklySchedule(selectedStudent);
+  return true;
+}
+
 async function loadTranscript(studentId){
   if(!studentId){ setMsg('اختر طالباً أولاً','warning'); return; }
   selectedStudent = studentId;
@@ -471,21 +494,7 @@ async function loadTranscript(studentId){
   }
   CURRENT_TRANSCRIPT = r.json;
   renderTranscript(CURRENT_TRANSCRIPT);
-  // تحديث ملاحظة الحالة الأكاديمية (إنذارات/فرص استثنائية)
-  try {
-    const st = await fetchJSON('/performance/status/' + encodeURIComponent(studentId));
-    const noteEl = document.getElementById('academicStatusNote');
-    if (st.ok && st.json && noteEl) {
-      const s = st.json;
-      let text = s.status_label || '';
-      if (s.extra_chance) {
-        text += (text ? ' — ' : '') + 'فرصة استثنائية سارية' + (s.extra_chance_note ? ` (${s.extra_chance_note})` : '');
-      }
-      noteEl.textContent = text ? ('ملاحظات أكاديمية: ' + text) : '';
-    }
-  } catch (e) {
-    console.error('performance status load error', e);
-  }
+  applyAcademicStatusNote(CURRENT_TRANSCRIPT);
   loadWeeklySchedule(studentId);
 }
 
@@ -1132,25 +1141,23 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
     try { preferred = localStorage.getItem('transcript_selected_student') || ''; } catch(e) {}
   }
   const canPick = (id) => Array.isArray(STUDENTS) && STUDENTS.some(s=>s.student_id===id);
-  // لو عندنا Transcript جاهز من السيرفر (initial_transcript) استخدمه فوراً
-  try{
-    if (INITIAL_TRANSCRIPT && INITIAL_TRANSCRIPT.transcript){
-      CURRENT_TRANSCRIPT = INITIAL_TRANSCRIPT;
-      renderTranscript(INITIAL_TRANSCRIPT);
-      const sel0 = document.getElementById('studentSelect');
-      if (sel0 && sel0.value) loadWeeklySchedule(sel0.value);
-    }
-  }catch(e){}
+  const initialSid = (INITIAL_TRANSCRIPT && INITIAL_TRANSCRIPT.student_id) ? String(INITIAL_TRANSCRIPT.student_id) : '';
 
-  if (preferred && canPick(preferred) && sel) {
-    sel.value = preferred;
+  const pickStudent = (sid) => {
+    if (sel) sel.value = sid;
     syncImportFields();
-    loadTranscript(preferred);
+    // لا تعِد جلب الكشف إن كانت بيانات SSR لنفس الطالب جاهزة
+    if (initialSid && sid === initialSid && INITIAL_TRANSCRIPT && INITIAL_TRANSCRIPT.transcript) {
+      showCachedTranscript(INITIAL_TRANSCRIPT, sid);
+      return;
+    }
+    loadTranscript(sid);
+  };
+
+  if (preferred && canPick(preferred)) {
+    pickStudent(preferred);
   } else if (STUDENTS.length>0){
-    const firstId = STUDENTS[0].student_id;
-    if(sel) sel.value = firstId;
-    syncImportFields();
-    loadTranscript(firstId);
+    pickStudent(STUDENTS[0].student_id);
   } else {
     syncImportFields();
   }

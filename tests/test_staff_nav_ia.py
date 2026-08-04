@@ -102,7 +102,17 @@ def test_quality_breadcrumb_partial():
     assert "qa_crumb_hub" in BC
 
 
-def test_key_quality_pages_include_breadcrumb():
+def test_archives_top_level_nav_menu():
+    nav = (ROOT / "frontend" / "templates" / "base_nav.html").read_text(encoding="utf-8")
+    assert 'id="navArchivesMenuWrap"' in nav
+    assert ">الأرشيف<" in nav or "الأرشيف</span>" in nav
+    assert 'id="navDeptArchive"' in nav
+    assert 'id="navCollegeArchive"' in nav
+    assert 'id="navArchiveShared"' in nav
+    # لا تكرار داخل قائمة الجودة
+    quality_chunk = nav.split('id="qualityAccreditationMenuList"')[1].split('id="archivesMenuList"')[0]
+    assert "navDeptArchive" not in quality_chunk
+    assert "الاعتماد</h6>" in quality_chunk or ">الاعتماد<" in quality_chunk
     pages = [
         "term_closure.html",
         "survey_results.html",

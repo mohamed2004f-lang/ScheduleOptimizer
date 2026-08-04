@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>أرشيف الكلية — ضمان الجودة</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal mt-4">
+    {% set qa_crumb_title = 'أرشيف الكلية' %}
+    {% include 'partials/quality_breadcrumb.html' %}
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+      <div>
+        <h1 class="page-title h4 mb-1"><i class="fa-solid fa-building-columns text-primary"></i> أرشيف الكلية</h1>
+        <p class="text-muted small mb-0">
+          خزائن خاصة للعميد والوكيل ورئيس قسم جودة بالكلية + سجل مشترك — المشاركة قراءة فقط.
+        </p>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/archive">أرشيف القسم</a>
+        <a class="btn btn-outline-info btn-sm" href="/academic_quality/archive/shared">مشارَك معي</a>
+        <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/dashboard">لوحة الجودة</a>
+      </div>
+    </div>
+
+    <ul class="nav nav-tabs mb-3">
+      {% for c in cabinets %}
+      <li class="nav-item">
+        <a class="nav-link {% if view != 'shared_with_me' and cabinet == c.code %}active{% endif %}"
+           href="/academic_quality/college-archive?cabinet={{ c.code }}&semester={{ semester }}">
+          {{ c.title_ar }}
+          {% if c.can_write %}<span class="badge bg-primary-subtle text-primary border ms-1">كتابة</span>{% endif %}
+        </a>
+      </li>
+      {% endfor %}
+      <li class="nav-item">
+        <a class="nav-link {% if view == 'shared_with_me' %}active{% endif %}"
+           href="/academic_quality/college-archive?view=shared_with_me&semester={{ semester }}">مشارَك معي</a>
+      </li>
+    </ul>
+
+    <form class="row g-2 align-items-end mb-3" method="get" action="/academic_quality/college-archive">
+      {% if view == 'shared_with_me' %}
+      <input type="hidden" name="view" value="shared_with_me">
+      {% else %}
+      <input type="hidden" name="cabinet" value="{{ cabinet }}">
+      {% endif %}
+      <div class="col-md-3">
+        <label class="form-label small">الفصل</label>
+        <input class="form-control form-control-sm" name="semester" value="{{ semester }}">
+      </div>
+      <div class="col-md-2">
+        <button class="btn btn-primary btn-sm w-100" type="submit">عرض</button>
+      </div>
+    </form>
+
+    <div class="row g-3">
+      {% if can_write and view != 'shared_with_me' %}
+      <div class="col-lg-5">
+        <div class="card shadow-sm">
+          <div class="card-header bg-white"><strong>إضافة سجل — {{ cabinets|selectattr('code','equalto',cabinet)|map(attribute='title_ar')|first }}</strong></div>
+          <div class="card-body">
+            <form id="collegeArchiveCreate" enctype="multipart/form-data">
+              <input type="hidden" name="cabinet" value="{{ cabinet }}">
+              <input type="hidden" name="semester" value="{{ semester }}">
+              <div class="mb-2">
+                <label class="form-label small">النوع</label>
+                <select class="form-select form-select-sm" name="record_type" required>
+                  {% for t in record_types %}
+                  <option value="{{ t.code }}">{{ t.title_ar }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small">العنوان</label>
+                <input class="form-control form-control-sm" name="title_ar" required>
+              </div>
+              <div class="row g-2">
+                <div class="col-6">
+                  <label class="form-label small">التاريخ</label>
+                  <input type="date" class="form-control form-control-sm" name="doc_date">
+                </div>
+                <div class="col-6">
+                  <label class="form-label small">الرقم المرجعي</label>
+                  <input class="form-control form-control-sm" name="ref_number">
+                </div>
+              </div>
+              <div class="mb-2 mt-2">
+                <label class="form-label small">الجهة</label>
+                <input class="form-control form-control-sm" name="party_ar">
+              </div>
+              <div class="mb-2">
+                <label class="form-label small">ملاحظات</label>
+                <textarea class="form-control form-control-sm" name="body_text" rows="2"></textarea>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small">مرفق</label>
+                <input type="file" class="form-control form-control-sm" name="file">
+              </div>
+              <button type="submit" class="btn btn-primary btn-sm">حفظ</button>
+            </form>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="{% if can_write and view != 'shared_with_me' %}col-lg-7{% else %}col-12{% endif %}">
+        <div class="card shadow-sm">
+          <div class="card-header bg-white d-flex justify-content-between">
+            <strong>
+              {% if view == 'shared_with_me' %}مشارَك معي من خزائن أخرى{% else %}سجلات الخزينة{% endif %}
+            </strong>
+            <span class="badge bg-light text-dark border">{{ items|length }}</span>
+          </div>
+          <div class="card-body p-0">
+            <div class="table-responsive">
+              <table class="table table-sm table-hover mb-0 align-middle">
+                <thead class="table-light">
+                  <tr>
+                    <th>النوع</th>
+                    <th>العنوان</th>
+                    <th>الخزينة</th>
+                    <th>ملف</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for it in items %}
+                  <tr>
+                    <td class="small">{{ it.record_type_label_ar }}</td>
+                    <td>
+                      <div class="fw-semibold small">{{ it.title_ar }}</div>
+                      <div class="text-muted" style="font-size:0.75rem;">{{ it.ref_number or '—' }} · {{ it.doc_date or '' }}</div>
+                    </td>
+                    <td class="small">{{ it.cabinet_title_ar or it.cabinet_code }}</td>
+                    <td class="small">
+                      {% if it.has_file %}
+                      <a href="/academic_quality/api/college-archive/file/{{ it.id }}">تنزيل</a>
+                      {% else %}—{% endif %}
+                    </td>
+                    <td class="text-nowrap">
+                      {% if can_write and view != 'shared_with_me' %}
+                      <button type="button" class="btn btn-outline-success btn-sm btn-share" data-id="{{ it.id }}">مشاركة</button>
+                      <button type="button" class="btn btn-outline-danger btn-sm btn-del" data-id="{{ it.id }}">حذف</button>
+                      {% elif it.shared_with_me %}
+                      <span class="badge bg-info-subtle text-info border">قراءة</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                  {% else %}
+                  <tr><td colspan="5" class="text-center text-muted py-4">لا سجلات بعد.</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div class="modal fade" id="shareModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">مشاركة البند (قراءة فقط)</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="shareItemId">
+          <div class="mb-3">
+            <div class="fw-semibold small mb-2">قيادات</div>
+            <div class="d-flex flex-wrap gap-3" id="shareRoles"></div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small">رؤساء أقسام (اختر قسماً لتقييد المشاركة اختياريًا)</label>
+            <select class="form-select form-select-sm" id="shareHodDept">
+              <option value="">كل رؤساء الأقسام بهذا الدور</option>
+              {% for d in departments %}
+              <option value="{{ d.id }}">{{ d.name_ar }} ({{ d.code }})</option>
+              {% endfor %}
+            </select>
+            <div class="form-check mt-2">
+              <input class="form-check-input" type="checkbox" id="shareHodRole">
+              <label class="form-check-label small" for="shareHodRole">مشاركة مع رئيس/رؤساء القسم</label>
+            </div>
+          </div>
+          <div class="mb-3">
+            <div class="fw-semibold small mb-2">مستخدمون محددون</div>
+            <select class="form-select form-select-sm" id="shareUsers" multiple size="6">
+              {% for u in instructors %}
+              <option value="{{ u.username }}">{{ u.full_name }} ({{ u.role }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          <p class="small text-muted mb-0" id="shareSummary">سيُتاح لـ 0 مستلم.</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">إلغاء</button>
+          <button type="button" class="btn btn-primary btn-sm" id="shareSaveBtn">حفظ المشاركة</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+  <script>
+  (function () {
+    const leadership = [
+      { code: 'college_dean', label: 'عميد الكلية' },
+      { code: 'academic_vice_dean', label: 'الوكيل العلمي' },
+      { code: 'college_quality_lead', label: 'رئيس قسم جودة بالكلية' },
+    ];
+    const box = document.getElementById('shareRoles');
+    if (box) {
+      box.innerHTML = leadership.map(function (r) {
+        return '<div class="form-check">' +
+          '<input class="form-check-input share-role" type="checkbox" value="' + r.code + '" id="sr_' + r.code + '">' +
+          '<label class="form-check-label small" for="sr_' + r.code + '">' + r.label + '</label></div>';
+      }).join('');
+    }
+
+    function hdr() {
+      const c = document.querySelector('meta[name=csrf-token]')?.content || '';
+      const h = {};
+      if (c) h['X-CSRFToken'] = c;
+      return h;
+    }
+
+    function collectGrants() {
+      const grants = [];
+      document.querySelectorAll('.share-role:checked').forEach(function (el) {
+        grants.push({ target_kind: 'role', target_role: el.value });
+      });
+      if (document.getElementById('shareHodRole')?.checked) {
+        const dept = document.getElementById('shareHodDept')?.value || null;
+        grants.push({
+          target_kind: 'role',
+          target_role: 'head_of_department',
+          target_department_id: dept || null,
+        });
+      }
+      const sel = document.getElementById('shareUsers');
+      if (sel) {
+        Array.from(sel.selectedOptions).forEach(function (o) {
+          grants.push({ target_kind: 'user', target_username: o.value });
+        });
+      }
+      return grants;
+    }
+
+    function updateSummary() {
+      const n = collectGrants().length;
+      const el = document.getElementById('shareSummary');
+      if (el) el.textContent = 'سيُتاح لـ ' + n + ' مستلم.';
+    }
+    document.getElementById('shareModal')?.addEventListener('change', updateSummary);
+
+    document.getElementById('collegeArchiveCreate')?.addEventListener('submit', async function (e) {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const r = await fetch('/academic_quality/api/college-archive/items', {
+        method: 'POST', credentials: 'include', headers: hdr(), body: fd,
+      });
+      const j = await r.json().catch(function () { return {}; });
+      if (!r.ok) { alert(j.message || 'فشل الحفظ'); return; }
+      location.reload();
+    });
+
+    document.querySelectorAll('.btn-del').forEach(function (btn) {
+      btn.addEventListener('click', async function () {
+        if (!confirm('حذف السجل؟')) return;
+        const id = btn.getAttribute('data-id');
+        const r = await fetch('/academic_quality/api/college-archive/items/' + id, {
+          method: 'DELETE', credentials: 'include', headers: hdr(),
+        });
+        const j = await r.json().catch(function () { return {}; });
+        if (!r.ok) { alert(j.message || 'فشل الحذف'); return; }
+        location.reload();
+      });
+    });
+
+    let shareModal;
+    document.querySelectorAll('.btn-share').forEach(function (btn) {
+      btn.addEventListener('click', async function () {
+        const id = btn.getAttribute('data-id');
+        document.getElementById('shareItemId').value = id;
+        document.querySelectorAll('.share-role').forEach(function (el) { el.checked = false; });
+        const hod = document.getElementById('shareHodRole');
+        if (hod) hod.checked = false;
+        const users = document.getElementById('shareUsers');
+        if (users) Array.from(users.options).forEach(function (o) { o.selected = false; });
+        const r = await fetch('/academic_quality/api/college-archive/items/' + id + '/shares', {
+          credentials: 'include',
+        });
+        const j = await r.json().catch(function () { return {}; });
+        (j.shares || []).forEach(function (s) {
+          if (s.target_kind === 'role' && s.target_role === 'head_of_department') {
+            if (hod) hod.checked = true;
+            if (s.target_department_id && document.getElementById('shareHodDept')) {
+              document.getElementById('shareHodDept').value = String(s.target_department_id);
+            }
+          } else if (s.target_kind === 'role') {
+            const el = document.getElementById('sr_' + s.target_role);
+            if (el) el.checked = true;
+          } else if (s.target_kind === 'user' && users) {
+            Array.from(users.options).forEach(function (o) {
+              if (o.value === s.target_username) o.selected = true;
+            });
+          }
+        });
+        updateSummary();
+        if (!shareModal) shareModal = new bootstrap.Modal(document.getElementById('shareModal'));
+        shareModal.show();
+      });
+    });
+
+    document.getElementById('shareSaveBtn')?.addEventListener('click', async function () {
+      const id = document.getElementById('shareItemId').value;
+      const grants = collectGrants();
+      const r = await fetch('/academic_quality/api/college-archive/items/' + id + '/shares', {
+        method: 'PUT', credentials: 'include',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, hdr()),
+        body: JSON.stringify({ grants: grants }),
+      });
+      const j = await r.json().catch(function () { return {}; });
+      if (!r.ok) { alert(j.message || 'فشل حفظ المشاركة'); return; }
+      if (shareModal) shareModal.hide();
+      alert('تم تحديث المشاركة (' + grants.length + ')');
+    });
+  })();
+  </script>
+</body>
+</html>

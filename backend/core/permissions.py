@@ -27,6 +27,7 @@ PERMISSION_CATALOG: list[dict[str, Any]] = [
     {"key": "can_manage_transcript_admin", "group_key": "records", "group_label_ar": "السجل الأكademي", "label_ar": "إدارة الكشوف"},
     {"key": "nav_grade_drafts", "group_key": "records", "group_label_ar": "السجل الأكademي", "label_ar": "مسودات الدرجات"},
     {"key": "nav_academic_quality_dashboard", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "لوحة الجودة"},
+    {"key": "nav_college_archive", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "أرشيف الكلية"},
     {"key": "nav_surveys_results", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "نتائج الاستبيانات"},
     {"key": "nav_surveys_invites", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "دعوات الاستبيانات الخارجية"},
     {"key": "can_manage_survey_invites", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "إنشاء وإدارة روابط الدعوات الخارجية"},
@@ -66,6 +67,7 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
             "nav_planning_menu",
             "nav_transcript_nav",
             "nav_grade_drafts", "nav_academic_quality_dashboard",
+            "nav_college_archive",
             "nav_surveys_results", "nav_surveys_invites", "can_manage_survey_invites",
             "nav_evaluation_survey_admin",
             "can_edit_college_identity", "can_edit_accreditation_catalog",
@@ -87,6 +89,7 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
             "nav_planning_menu",
             "nav_transcript_nav",
             "nav_grade_drafts", "nav_academic_quality_dashboard",
+            "nav_college_archive",
             "nav_surveys_results", "nav_evaluation_survey_admin",
             "can_edit_accreditation_catalog",
             "can_switch_department_scope",
@@ -491,6 +494,7 @@ def compute_college_dean_capabilities(
     out["nav_surveys_results"] = True
     out["nav_surveys_invites"] = True
     out["can_manage_survey_invites"] = True
+    out["nav_college_archive"] = True
     return out
 
 
@@ -562,6 +566,7 @@ def compute_academic_vice_dean_capabilities(
     out["nav_surveys_results"] = True
     out["nav_surveys_invites"] = False
     out["can_manage_survey_invites"] = False
+    out["nav_college_archive"] = True
     return out
 
 
@@ -663,6 +668,7 @@ def resolve_capabilities_for_user(
         if is_college_quality_lead_session():
             caps["nav_surveys_results"] = True
             caps["nav_academic_quality_dashboard"] = True
+            caps["nav_college_archive"] = True
             caps["nav_surveys_invites"] = False
             caps["can_manage_survey_invites"] = False
     except Exception:

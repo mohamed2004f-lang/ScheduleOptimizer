@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>مشارَك معي — الأرشيف</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal mt-4">
+    {% set qa_crumb_title = 'مشارَك معي' %}
+    {% include 'partials/quality_breadcrumb.html' %}
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+      <div>
+        <h1 class="page-title h4 mb-1"><i class="fa-solid fa-share-nodes text-primary"></i> مشارَك معي</h1>
+        <p class="text-muted small mb-0">بنود أُرسلت إليك للقراءة والتنزيل فقط — من أرشيف الكلية أو القسم.</p>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        {% if can_open_college %}
+        <a class="btn btn-outline-primary btn-sm" href="/academic_quality/college-archive">أرشيف الكلية</a>
+        {% endif %}
+        <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/archive">أرشيف القسم</a>
+      </div>
+    </div>
+
+    <div class="card shadow-sm mb-3">
+      <div class="card-header bg-white"><strong>من أرشيف الكلية</strong>
+        <span class="badge bg-light text-dark border">{{ college_items|length }}</span>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <thead class="table-light"><tr><th>النوع</th><th>العنوان</th><th>الخزينة</th><th>ملف</th></tr></thead>
+          <tbody>
+            {% for it in college_items %}
+            <tr>
+              <td class="small">{{ it.record_type_label_ar }}</td>
+              <td class="small fw-semibold">{{ it.title_ar }}</td>
+              <td class="small">{{ it.cabinet_title_ar }}</td>
+              <td class="small">
+                {% if it.has_file %}<a href="/academic_quality/api/college-archive/file/{{ it.id }}">تنزيل</a>{% else %}—{% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="text-center text-muted py-3">لا مشاركات كلية بعد.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card shadow-sm">
+      <div class="card-header bg-white"><strong>من أرشيف القسم</strong>
+        <span class="badge bg-light text-dark border">{{ dept_items|length }}</span>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <thead class="table-light"><tr><th>النوع</th><th>العنوان</th><th>القسم</th><th>ملف</th></tr></thead>
+          <tbody>
+            {% for it in dept_items %}
+            <tr>
+              <td class="small">{{ it.record_type_label_ar }}</td>
+              <td class="small fw-semibold">{{ it.title_ar }}</td>
+              <td class="small">#{{ it.department_id }}</td>
+              <td class="small">
+                {% if it.has_file %}<a href="/academic_quality/api/archive/file/{{ it.id }}">تنزيل</a>{% else %}—{% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="text-center text-muted py-3">لا مشاركات قسم بعد.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

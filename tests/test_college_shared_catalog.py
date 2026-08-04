@@ -129,3 +129,100 @@ class TestCollegeSharedCatalog:
             assert lst.status_code == 200
             keys = {x.get("canonical_course_name") for x in (lst.get_json() or {}).get("items") or []}
             assert name in keys
+
+    def test_multi_code_per_department_units_override(self, db_conn):
+        """رمز ووحدات مختلفة لكل قسم تُزامَن إلى program_courses."""
+        uid = uuid.uuid4().hex[:8]
+        cur = db_conn.cursor()
+        cur.execute(
+            "INSERT OR IGNORE INTO departments (code, name_ar, name_en, is_active) "
+            "VALUES ('GENERAL', 'عام', 'Gen', 1)"
+        )
+        mcode = f"MU{uid}"[:12].upper()
+        ccode = f"CU{uid}"[:12].upper()
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (mcode, "ميكانيك", "Mech"),
+        )
+        mech_id = int(cur.execute("SELECT id FROM departments WHERE code=?", (mcode,)).fetchone()[0])
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (ccode, "مدني", "Civ"),
+        )
+        civil_id = int(cur.execute("SELECT id FROM departments WHERE code=?", (ccode,)).fetchone()[0])
+        cur.execute(
+            """
+            INSERT INTO programs (department_id, code, name_ar, name_en, is_active)
+            VALUES (?, 'PROG_MAJOR', 'رئيسي ميكانيك', 'Mech Major', 1)
+            """,
+            (mech_id,),
+        )
+        cur.execute(
+            """
+            INSERT INTO programs (department_id, code, name_ar, name_en, is_active)
+            VALUES (?, 'PROG_MAJOR', 'رئيسي مدني', 'Civ Major', 1)
+            """,
+            (civil_id,),
+        )
+        db_conn.commit()
+        from backend.core.college_shared_catalog import save_catalog_entry
+
+        shared_name = f"SharedUnits-{uid}"
+        result = save_catalog_entry(
+            db_conn,
+            {
+                "catalog_key": f"mu_{uid}",
+                "share_type": "multi_code",
+                "canonical_course_name": shared_name,
+                "canonical_course_code": f"SH{uid[:3]}",
+                "units": 3,
+                "requirement_scope": "pre_track",
+                "departments": [
+                    {
+                        "department_id": mech_id,
+                        "plan_course_code": f"ME {uid[:3]}",
+                        "units_override": 3,
+                    },
+                    {
+                        "department_id": civil_id,
+                        "plan_course_code": f"CE {uid[:3]}",
+                        "units_override": 4,
+                    },
+                ],
+            },
+        )
+        db_conn.commit()
+        entry = result["entry"]
+        deps = {int(d["department_id"]): d for d in entry["departments"]}
+        assert deps[mech_id]["units_override"] == 3
+        assert deps[civil_id]["units_override"] == 4
+
+        mech_pc = cur.execute(
+            """
+            SELECT pc.units_override, pc.course_code
+            FROM program_courses pc
+            INNER JOIN programs p ON p.id = pc.program_id
+            WHERE p.department_id = ? AND pc.course_code = ?
+            LIMIT 1
+            """,
+            (mech_id, f"ME {uid[:3]}"),
+        ).fetchone()
+        civil_pc = cur.execute(
+            """
+            SELECT pc.units_override, pc.course_code
+            FROM program_courses pc
+            INNER JOIN programs p ON p.id = pc.program_id
+            WHERE p.department_id = ? AND pc.course_code = ?
+            LIMIT 1
+            """,
+            (civil_id, f"CE {uid[:3]}"),
+        ).fetchone()
+        assert mech_pc is not None
+        assert civil_pc is not None
+        assert int(mech_pc[0] if not hasattr(mech_pc, "keys") else mech_pc["units_override"]) == 3
+        assert int(civil_pc[0] if not hasattr(civil_pc, "keys") else civil_pc["units_override"]) == 4
+        # المقرر التشغيلي يبقى بوحدات السجل المرجعية
+        op = cur.execute(
+            "SELECT units FROM courses WHERE course_name = ?", (shared_name,)
+        ).fetchone()
+        assert int(op[0] if not hasattr(op, "keys") else op["units"]) == 3

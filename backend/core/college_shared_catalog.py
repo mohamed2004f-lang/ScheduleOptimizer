@@ -57,6 +57,7 @@ def ensure_college_shared_catalog_schema(conn) -> None:
                 department_id BIGINT NOT NULL,
                 plan_course_code TEXT NOT NULL DEFAULT '',
                 plan_course_name_override TEXT NOT NULL DEFAULT '',
+                units_override INTEGER,
                 program_course_id BIGINT,
                 is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
                 UNIQUE (catalog_id, department_id),
@@ -67,6 +68,13 @@ def ensure_college_shared_catalog_schema(conn) -> None:
             )
             """
         )
+        try:
+            cur.execute(
+                "ALTER TABLE college_shared_catalog_depts "
+                "ADD COLUMN IF NOT EXISTS units_override INTEGER"
+            )
+        except Exception:
+            pass
     else:
         cur.execute(
             """
@@ -94,6 +102,7 @@ def ensure_college_shared_catalog_schema(conn) -> None:
                 department_id INTEGER NOT NULL,
                 plan_course_code TEXT NOT NULL DEFAULT '',
                 plan_course_name_override TEXT NOT NULL DEFAULT '',
+                units_override INTEGER,
                 program_course_id INTEGER,
                 is_active INTEGER NOT NULL DEFAULT 1,
                 UNIQUE (catalog_id, department_id),
@@ -102,6 +111,39 @@ def ensure_college_shared_catalog_schema(conn) -> None:
             )
             """
         )
+        cols = fetch_table_columns(conn, "college_shared_catalog_depts")
+        if "units_override" not in cols:
+            try:
+                cur.execute(
+                    "ALTER TABLE college_shared_catalog_depts ADD COLUMN units_override INTEGER"
+                )
+            except Exception:
+                pass
+
+
+def _parse_units_override(raw) -> int | None:
+    """وحدات خاصة بالقسم؛ None = استخدام وحدات السجل المرجعية."""
+    if raw is None:
+        return None
+    if isinstance(raw, str) and not raw.strip():
+        return None
+    try:
+        import math
+
+        if isinstance(raw, float) and math.isnan(raw):
+            return None
+    except Exception:
+        pass
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def _effective_dept_units(entry_units: int, units_override: int | None) -> int:
+    if units_override is None:
+        return max(0, int(entry_units or 0))
+    return max(0, int(units_override))
 
 
 def _row_id(row) -> int | None:
@@ -197,7 +239,8 @@ def list_catalog_entries(conn, *, include_inactive: bool = False) -> list[dict[s
     dept_rows = cur.execute(
         f"""
         SELECT d.catalog_id, d.department_id, d.plan_course_code, d.plan_course_name_override,
-               d.program_course_id, d.is_active, dep.code AS department_code, dep.name_ar AS department_name
+               d.units_override, d.program_course_id, d.is_active,
+               dep.code AS department_code, dep.name_ar AS department_name
         FROM college_shared_catalog_depts d
         INNER JOIN departments dep ON dep.id = d.department_id
         WHERE d.catalog_id IN ({ph})
@@ -209,6 +252,7 @@ def list_catalog_entries(conn, *, include_inactive: bool = False) -> list[dict[s
     for r in dept_rows:
         if hasattr(r, "keys"):
             cid = int(r["catalog_id"])
+            uo = r["units_override"] if "units_override" in r.keys() else None
             by_cat.setdefault(cid, []).append(
                 {
                     "department_id": int(r["department_id"]),
@@ -216,6 +260,7 @@ def list_catalog_entries(conn, *, include_inactive: bool = False) -> list[dict[s
                     "department_name": r["department_name"] or "",
                     "plan_course_code": r["plan_course_code"] or "",
                     "plan_course_name_override": r["plan_course_name_override"] or "",
+                    "units_override": _parse_units_override(uo),
                     "program_course_id": r["program_course_id"],
                     "is_active": bool(int(r["is_active"] or 0)),
                 }
@@ -227,10 +272,11 @@ def list_catalog_entries(conn, *, include_inactive: bool = False) -> list[dict[s
                     "department_id": int(r[1]),
                     "plan_course_code": r[2] or "",
                     "plan_course_name_override": r[3] or "",
-                    "program_course_id": r[4],
-                    "is_active": bool(int(r[5] or 0)),
-                    "department_code": r[6] or "",
-                    "department_name": r[7] or "",
+                    "units_override": _parse_units_override(r[4]),
+                    "program_course_id": r[5],
+                    "is_active": bool(int(r[6] or 0)),
+                    "department_code": r[7] or "",
+                    "department_name": r[8] or "",
                 }
             )
     for item in items:
@@ -271,15 +317,18 @@ def _normalize_departments_payload(
             if raw and did not in active_ids and active_ids:
                 continue
             override = ""
+            uo = None
             for x in raw:
                 if int(x.get("department_id") or -1) == did:
                     override = (x.get("plan_course_name_override") or "").strip()
+                    uo = _parse_units_override(x.get("units_override"))
                     break
             out.append(
                 {
                     "department_id": did,
                     "plan_course_code": code,
                     "plan_course_name_override": override,
+                    "units_override": uo,
                     "is_active": 1,
                 }
             )
@@ -301,6 +350,7 @@ def _normalize_departments_payload(
                 "department_id": int(did),
                 "plan_course_code": pcode,
                 "plan_course_name_override": (x.get("plan_course_name_override") or "").strip(),
+                "units_override": _parse_units_override(x.get("units_override")),
                 "is_active": 1 if x.get("is_active", True) else 0,
             }
         )
@@ -489,6 +539,7 @@ def sync_catalog_entry(conn, catalog_id: int) -> dict[str, Any]:
         pcode = (dep.get("plan_course_code") or ccode or "").strip()
         if not pcode:
             continue
+        dep_units = _effective_dept_units(units, _parse_units_override(dep.get("units_override")))
         pcid = _upsert_program_course(
             cur,
             program_id=int(prog_id),
@@ -496,7 +547,7 @@ def sync_catalog_entry(conn, catalog_id: int) -> dict[str, Any]:
             plan_code=pcode,
             name_override=(dep.get("plan_course_name_override") or "").strip(),
             req_scope=req_scope,
-            units=units,
+            units=dep_units,
         )
         cur.execute(
             """
@@ -587,14 +638,16 @@ def save_catalog_entry(conn, payload: dict[str, Any]) -> dict[str, Any]:
         cur.execute(
             """
             INSERT INTO college_shared_catalog_depts
-            (catalog_id, department_id, plan_course_code, plan_course_name_override, is_active)
-            VALUES (?, ?, ?, ?, ?)
+            (catalog_id, department_id, plan_course_code, plan_course_name_override,
+             units_override, is_active)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 int(catalog_id),
                 int(dep["department_id"]),
                 dep["plan_course_code"],
                 dep.get("plan_course_name_override") or "",
+                dep.get("units_override"),
                 int(dep.get("is_active") or 1),
             ),
         )
@@ -681,12 +734,14 @@ def build_import_template_bytes() -> bytes:
                 "department_code": "MECH",
                 "plan_course_code": "ME 205",
                 "plan_name_override": "",
+                "units_override": 3,
             },
             {
                 "catalog_key": "mech_eng_ii",
                 "department_code": "CIVIL",
                 "plan_course_code": "CE 205",
                 "plan_name_override": "",
+                "units_override": 4,
             },
         ]
     )
@@ -747,6 +802,9 @@ def import_catalog_workbook(conn, file_obj) -> dict[str, Any]:
                     "department_id": did,
                     "plan_course_code": _col(row, "plan_course_code", "course_code"),
                     "plan_course_name_override": _col(row, "plan_name_override", "name_override"),
+                    "units_override": _parse_units_override(
+                        row.get("units_override") if "units_override" in row.index else None
+                    ),
                     "is_active": True,
                 }
             )

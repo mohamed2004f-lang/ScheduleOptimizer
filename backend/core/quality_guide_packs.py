@@ -217,6 +217,25 @@ QUALITY_CONTENT_PACKS: list[dict[str, Any]] = [
         "audience_kind": "primary",
     },
     {
+        "id": "college_archive",
+        "tier": "primary",
+        "title_ar": "أرشيف الكلية",
+        "summary_ar": "خزائن العميد والوكيل ورئيس قسم جودة بالكلية + السجل المشترك والمشاركة.",
+        "href": "/academic_quality/college-archive",
+        "page_guide_key": "college_archive",
+        "roles": (
+            "admin_main",
+            "system_admin",
+            "college_dean",
+            "academic_vice_dean",
+        ),
+        "also_flags": ("is_college_quality_lead",),
+        "active_modes": (),
+        "required_any_caps": ("nav_college_archive",),
+        "deny_caps": (),
+        "audience_kind": "primary",
+    },
+    {
         "id": "quality_assistant",
         "tier": "supporting",
         "title_ar": "المساعد الذكي",
@@ -425,6 +444,7 @@ def system_usage_topics_with_guide_keys() -> list[dict[str, Any]]:
         "quality_dashboard": "academic_quality_dashboard",
         "accreditation_map": "accreditation_map",
         "department_archive": "department_archive",
+        "college_archive": "college_archive",
         "surveys": "survey_hub",
         "outcomes_clo": "ilo_catalog",
     }

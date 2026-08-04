@@ -204,16 +204,54 @@ def register_department_archive_routes(bp) -> None:
         return jsonify({"status": "ok"}), 200
 
     @bp.route("/api/archive/file/<int:item_id>", methods=["GET"])
-    @role_required(*roles)
+    @role_required(
+        "admin",
+        "admin_main",
+        "system_admin",
+        "college_dean",
+        "academic_vice_dean",
+        "head_of_department",
+        "instructor",
+        "staff",
+    )
     def archive_file_download(item_id: int):
         import os
+
+        from backend.core.auth import is_college_quality_lead_session
+        from backend.services.archive_shares import SOURCE_DEPT, user_can_read_shared_item
 
         with get_connection() as conn:
             item = get_archive_item(conn, item_id)
             if not item:
                 return jsonify({"status": "error", "message": "غير موجود"}), 404
             scoped = _dept_scope(conn)
-            if scoped is not None and int(item["department_id"]) != int(scoped):
+            role = (session.get("user_role") or "").strip()
+            allowed = False
+            if scoped is None or int(item["department_id"]) == int(scoped):
+                # مالكو أرشيف القسم / قيادة
+                from backend.core.auth import _normalize_role
+
+                nr = _normalize_role(role)
+                if nr in (
+                    "admin",
+                    "admin_main",
+                    "system_admin",
+                    "college_dean",
+                    "academic_vice_dean",
+                    "head_of_department",
+                ):
+                    allowed = True
+            if not allowed:
+                allowed = user_can_read_shared_item(
+                    conn,
+                    source=SOURCE_DEPT,
+                    item_id=int(item_id),
+                    username=_actor(),
+                    user_role=role,
+                    is_college_quality_lead=is_college_quality_lead_session(),
+                    home_department_id=scoped,
+                )
+            if not allowed:
                 return jsonify({"status": "error", "message": "خارج نطاق قسمك"}), 403
             path = (item.get("stored_path") or "").strip()
             if not path or not os.path.isfile(path):
