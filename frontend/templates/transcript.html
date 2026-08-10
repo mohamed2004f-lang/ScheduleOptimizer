@@ -160,11 +160,11 @@
                   تصدير وطباعة
                 </button>
                 <ul class="dropdown-menu dropdown-menu-end" id="exportPrintDropdown" aria-labelledby="btnExportPrintMenu">
-                  <li><button type="button" class="dropdown-item" id="btnExportExcel">تصدير Excel</button></li>
+                  <li><button type="button" class="dropdown-item" id="btnPreviewPrint">معاينة / طباعة</button></li>
                   <li><button type="button" class="dropdown-item" id="btnExportPdf">تصدير PDF رسمي</button></li>
-                  <li><button type="button" class="dropdown-item" id="btnExportText">تصدير ملف نصي</button></li>
                   <li><hr class="dropdown-divider"></li>
-                  <li><button type="button" class="dropdown-item" id="btnPrint">طباعة الصفحة</button></li>
+                  <li><button type="button" class="dropdown-item" id="btnExportExcel">تصدير Excel</button></li>
+                  <li><button type="button" class="dropdown-item" id="btnExportText">تصدير ملف نصي</button></li>
                 </ul>
               </div>
             </div>
@@ -1004,10 +1004,20 @@ if (btnSaveInline && btnSaveAll) {
   btnSaveInline.addEventListener('click', ()=> btnSaveAll.click());
 }
 
-/* export Excel / PDF / Text */
+/* export Excel / PDF / Text + معاينة رسمية */
 function currentSemesterFilter(){
   const el = document.getElementById('semesterFilter');
   return el ? (el.value || '') : '';
+}
+const btnPreviewPrint = document.getElementById('btnPreviewPrint');
+if(btnPreviewPrint){
+  btnPreviewPrint.addEventListener('click', ()=>{
+    if(!selectedStudent){ setMsg('اختر طالباً أولاً قبل المعاينة','warning'); return; }
+    const sem = currentSemesterFilter();
+    let url = `/grades/export/${encodeURIComponent(selectedStudent)}/preview`;
+    if(sem){ url += `?semester=${encodeURIComponent(sem)}`; }
+    window.open(url, '_blank');
+  });
 }
 const btnExportExcel = document.getElementById('btnExportExcel');
 if(btnExportExcel){
@@ -1043,9 +1053,6 @@ if(btnExportText){
 // زر تصدير ملخّص Excel (يمكن إضافته مستقبلاً في الواجهة إذا رغبت)
 // مثال للاستخدام من الكونسول أو من زر جديد:
 // window.open(`/grades/export/<sid>?format=excel&mode=summary`, '_blank');
-
-/* print */
-const btnPrint = document.getElementById('btnPrint'); if(btnPrint) btnPrint.addEventListener('click', ()=>{ window.print(); });
 
 /* filters and startup */
 const btnReload = document.getElementById('btnReload'); if(btnReload) btnReload.addEventListener('click', ()=> loadTranscript((document.getElementById('studentSelect')||{}).value));

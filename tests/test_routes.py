@@ -311,6 +311,36 @@ class TestGradesTranscriptRoute:
         assert "status_label" in data["academic_status"]
 
 
+class TestTranscriptExportPreview:
+    """معاينة كشف الدرجات بأسلوب تقارير الاستبيان."""
+
+    def test_preview_requires_auth(self, app):
+        with app.test_client() as c:
+            resp = c.get(
+                "/grades/export/S001/preview",
+                headers={"Accept": "application/json"},
+            )
+            assert resp.status_code in (401, 302)
+
+    def test_preview_admin_html_has_controls(self, auth_client):
+        resp = auth_client.get("/grades/export/S001/preview")
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert "معاينة كشف الدرجات" in html
+        assert "طباعة / حفظ PDF" in html
+        assert "preview-banner" in html
+        assert "/grades/export/S001?format=pdf" in html or "format=pdf" in html
+
+    def test_student_preview_own_ok(self, student_auth_client):
+        resp = student_auth_client.get("/grades/export/S001/preview")
+        assert resp.status_code == 200
+        assert "معاينة كشف الدرجات" in resp.get_data(as_text=True)
+
+    def test_student_preview_other_forbidden(self, student_auth_client):
+        resp = student_auth_client.get("/grades/export/OTHER999/preview")
+        assert resp.status_code == 403
+
+
 class TestRegistrationRequestsRoutes:
     """تكامل أساسي لطلبات الإضافة/الإسقاط."""
 

@@ -2,13 +2,25 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8" />
-  <title>كشف درجات الطالب</title>
+  <title>كشف درجات الطالب{% if student_id %} — {{ student_id }}{% endif %}</title>
   <style>
+    {% if for_pdf %}
+    {{ pdf_arabic_css_print|safe }}
+    {% else %}
+    {{ pdf_arabic_css|safe }}
+    {% endif %}
     body {
-      font-family: "Cairo", "Tahoma", sans-serif;
+      font-family: {% if for_pdf %}Tahoma, Arial, sans-serif{% else %}"Cairo", "Tahoma", sans-serif{% endif %};
       font-size: 12pt;
       color: #111827;
-      margin: 20px;
+      {% if for_pdf %}
+      margin: 0;
+      {% else %}
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 20px 24px 40px;
+      background: #fff;
+      {% endif %}
     }
     .header {
       text-align: center;
@@ -82,9 +94,19 @@
       padding-top: 4px;
       text-align: center;
     }
+    @media print {
+      body { padding: 0; max-width: none; }
+      .no-print { display: none !important; }
+    }
   </style>
 </head>
 <body>
+  {% if not for_pdf %}
+  {% set preview_banner_title = preview_banner_title|default('معاينة كشف الدرجات') %}
+  {% set preview_hide_names_toggle = true %}
+  {% include "survey_export_preview_controls.html" %}
+  {% endif %}
+
   <div class="header">
     <div class="university">جامعة درنة</div>
     <div>كلية الهندسة</div>
@@ -154,9 +176,9 @@
   {% if academic_status %}
   <div class="gpa-box" style="margin-top: 10px;">
     <strong>ملاحظات أكاديمية:</strong>
-    {{ academic_status.label or '' }}
+    {{ academic_status.label or academic_status.status_label or '' }}
     {% if academic_status.extra_chance %}
-      — فرصة استثنائية{% if academic_status.extra_note %} ({{ academic_status.extra_note }}){% endif %}
+      — فرصة استثنائية{% if academic_status.extra_note or academic_status.extra_chance_note %} ({{ academic_status.extra_note or academic_status.extra_chance_note }}){% endif %}
     {% endif %}
   </div>
   {% endif %}
@@ -175,4 +197,3 @@
   </div>
 </body>
 </html>
-

@@ -24,9 +24,10 @@
         <div class="dropdown">
           <button class="btn btn-primary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">تصدير</button>
           <ul class="dropdown-menu dropdown-menu-end">
+            <li><button type="button" class="dropdown-item" id="btnPreviewPrint">معاينة / طباعة</button></li>
+            <li><button type="button" class="dropdown-item" id="btnExportPdf">تنزيل PDF</button></li>
+            <li><hr class="dropdown-divider"></li>
             <li><button type="button" class="dropdown-item" id="btnExportExcel">Excel</button></li>
-            <li><button type="button" class="dropdown-item" id="btnExportPdf">PDF</button></li>
-            <li><button type="button" class="dropdown-item" id="btnPrint">طباعة</button></li>
           </ul>
         </div>
       </div>
@@ -138,13 +139,15 @@
       applyStatus(j);
     }
 
+    document.getElementById('btnPreviewPrint')?.addEventListener('click', () => {
+      if (STUDENT_ID) window.open('/grades/export/' + encodeURIComponent(STUDENT_ID) + '/preview', '_blank');
+    });
     document.getElementById('btnExportExcel')?.addEventListener('click', () => {
       if (STUDENT_ID) window.open('/grades/export/' + encodeURIComponent(STUDENT_ID) + '?format=excel', '_blank');
     });
     document.getElementById('btnExportPdf')?.addEventListener('click', () => {
       if (STUDENT_ID) window.open('/grades/export/' + encodeURIComponent(STUDENT_ID) + '?format=pdf', '_blank');
     });
-    document.getElementById('btnPrint')?.addEventListener('click', () => window.print());
     loadTranscript();
   </script>
   <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>

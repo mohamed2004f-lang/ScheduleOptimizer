@@ -3829,40 +3829,46 @@ def _export_transcript_excel(data, academic_status=None):
     )
 
 
-@grades_bp.route("/export/<student_id>")
-@login_required
-def export_transcript(student_id):
-    fmt = (request.args.get("format") or "excel").lower()
-    mode = (request.args.get("mode") or "detailed").lower()
-    semester_filter = (request.args.get("semester") or "").strip()
-
-    # تقييد التصدير حسب الدور (منع التلاعب عبر استدعاء endpoint مباشرة)
+def _assert_can_export_transcript(student_id: str):
+    """
+    فحص صلاحيات تصدير/معاينة الكشف.
+    يعيد (response, status_code) عند الرفض، أو None عند السماح.
+    """
     user_role = session.get("user_role")
     if user_role == "student":
         sid_session = session.get("student_id") or session.get("user")
         if sid_session != student_id:
-            return jsonify({
-                "status": "error",
-                "message": "لا يمكنك تصدير سجل طالب آخر",
-                "code": "FORBIDDEN"
-            }), 403
+            return (
+                jsonify({
+                    "status": "error",
+                    "message": "لا يمكنك تصدير سجل طالب آخر",
+                    "code": "FORBIDDEN",
+                }),
+                403,
+            )
     with get_connection() as conn:
         if not _student_in_effective_scope(conn, str(student_id or "").strip()):
-            return jsonify({
-                "status": "error",
-                "message": "لا يمكن تصدير هذا السجل: الطالب خارج نطاق قسمك أو نطاق العمل المعتمد.",
-                "code": "FORBIDDEN",
-            }), 403
+            return (
+                jsonify({
+                    "status": "error",
+                    "message": "لا يمكن تصدير هذا السجل: الطالب خارج نطاق قسمك أو نطاق العمل المعتمد.",
+                    "code": "FORBIDDEN",
+                }),
+                403,
+            )
 
     sup_eff = current_supervisor_effective()
     if sup_eff:
         instructor_id = session.get("instructor_id")
         if not instructor_id:
-            return jsonify({
-                "status": "error",
-                "message": "لا يوجد ربط بين حسابك وعضو هيئة تدريس",
-                "code": "FORBIDDEN"
-            }), 403
+            return (
+                jsonify({
+                    "status": "error",
+                    "message": "لا يوجد ربط بين حسابك وعضو هيئة تدريس",
+                    "code": "FORBIDDEN",
+                }),
+                403,
+            )
         with get_connection() as conn:
             cur = conn.cursor()
             row = cur.execute(
@@ -3870,20 +3876,26 @@ def export_transcript(student_id):
                 (student_id, instructor_id),
             ).fetchone()
             if not row:
-                return jsonify({
-                    "status": "error",
-                    "message": "لا يمكنك تصدير سجل طالب غير مُسند إليك",
-                    "code": "FORBIDDEN"
-                }), 403
+                return (
+                    jsonify({
+                        "status": "error",
+                        "message": "لا يمكنك تصدير سجل طالب غير مُسند إليك",
+                        "code": "FORBIDDEN",
+                    }),
+                    403,
+                )
 
-    if user_role == "instructor" and not sup_eff:
+    if user_role == "instructor" and not current_supervisor_effective():
         instructor_id = session.get("instructor_id")
         if not instructor_id:
-            return jsonify({
-                "status": "error",
-                "message": "لا يوجد ربط بين حسابك وعضو هيئة تدريس",
-                "code": "FORBIDDEN"
-            }), 403
+            return (
+                jsonify({
+                    "status": "error",
+                    "message": "لا يوجد ربط بين حسابك وعضو هيئة تدريس",
+                    "code": "FORBIDDEN",
+                }),
+                403,
+            )
         with get_connection() as conn:
             cur = conn.cursor()
             instr_row = cur.execute(
@@ -3891,21 +3903,27 @@ def export_transcript(student_id):
                 (instructor_id,),
             ).fetchone()
             if not instr_row:
-                return jsonify({
-                    "status": "error",
-                    "message": "لا يمكن تحديد المدرّس المرتبط بحسابك",
-                    "code": "FORBIDDEN"
-                }), 403
+                return (
+                    jsonify({
+                        "status": "error",
+                        "message": "لا يمكن تحديد المدرّس المرتبط بحسابك",
+                        "code": "FORBIDDEN",
+                    }),
+                    403,
+                )
             instructor_name = instr_row[0]
 
             term_name, term_year = get_current_term(conn=conn)
             semester_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
             if not semester_label:
-                return jsonify({
-                    "status": "error",
-                    "message": "لا يمكن تحديد الفصل الحالي",
-                    "code": "FORBIDDEN"
-                }), 403
+                return (
+                    jsonify({
+                        "status": "error",
+                        "message": "لا يمكن تحديد الفصل الحالي",
+                        "code": "FORBIDDEN",
+                    }),
+                    403,
+                )
 
             allowed = cur.execute(
                 """
@@ -3920,15 +3938,38 @@ def export_transcript(student_id):
                 (student_id, semester_label, instructor_name),
             ).fetchone()
             if not allowed:
-                return jsonify({
-                    "status": "error",
-                    "message": "لا يمكنك تصدير سجل طالب غير مسند إلى مقرراتك في الفصل الحالي",
-                    "code": "FORBIDDEN"
-                }), 403
+                return (
+                    jsonify({
+                        "status": "error",
+                        "message": "لا يمكنك تصدير سجل طالب غير مسند إلى مقرراتك في الفصل الحالي",
+                        "code": "FORBIDDEN",
+                    }),
+                    403,
+                )
+    return None
 
+
+def _semester_totals_from_transcript(transcript: dict) -> dict:
+    semester_totals = {}
+    for sem, courses in (transcript or {}).items():
+        sem_units = 0
+        sem_points = 0.0
+        for course in courses or []:
+            u = int(course.get("units") or 0)
+            g = course.get("grade")
+            sem_units += u
+            if g is not None:
+                try:
+                    sem_points += float(g) * u
+                except Exception:
+                    pass
+        semester_totals[sem] = {"units": sem_units, "points": sem_points}
+    return semester_totals
+
+
+def _prepare_transcript_export_data(student_id: str, semester_filter: str = ""):
+    """بيانات الكشف الجاهزة للمعاينة/PDF/Excel مع الحالة الأكاديمية."""
     data = _load_transcript_data(student_id)
-
-    # في حال تم تحديد فصل لفلترة التصدير، نقتصر على هذا الفصل فقط
     if semester_filter:
         sem = semester_filter
         original_transcript = data.get("transcript", {})
@@ -3942,6 +3983,80 @@ def export_transcript(student_id):
                 },
             }
     academic_status = _compute_academic_status(student_id, data)
+    semester_totals = _semester_totals_from_transcript(data.get("transcript", {}))
+    return data, academic_status, semester_totals
+
+
+def _transcript_html_context(
+    data: dict,
+    academic_status: dict,
+    semester_totals: dict,
+    *,
+    for_pdf: bool,
+    pdf_download_url: str = "",
+) -> dict:
+    from backend.core.arabic_export import pdf_arabic_extra_css
+
+    return {
+        "for_pdf": for_pdf,
+        "student_id": data["student_id"],
+        "student_name": data.get("student_name", ""),
+        "transcript": data.get("transcript", {}),
+        "ordered_semesters": data.get("ordered_semesters", []),
+        "semester_gpas": data.get("semester_gpas", {}),
+        "cumulative_gpa": data.get("cumulative_gpa", 0.0),
+        "completed_units": data.get("completed_units", 0),
+        "semester_totals": semester_totals,
+        "academic_status": academic_status,
+        "pdf_download_url": pdf_download_url or "",
+        "preview_banner_title": "معاينة كشف الدرجات",
+        "preview_hide_names_toggle": True,
+        "pdf_arabic_css": pdf_arabic_extra_css(for_pdf=False),
+        "pdf_arabic_css_print": pdf_arabic_extra_css(for_pdf=True),
+    }
+
+
+@grades_bp.route("/export/<student_id>/preview")
+@login_required
+def export_transcript_preview(student_id):
+    """معاينة HTML رسمية لكشف الدرجات (طباعة / حفظ PDF) — نفس صلاحيات التصدير."""
+    from flask import render_template, url_for
+
+    denied = _assert_can_export_transcript(student_id)
+    if denied is not None:
+        return denied
+
+    semester_filter = (request.args.get("semester") or "").strip()
+    data, academic_status, semester_totals = _prepare_transcript_export_data(
+        student_id, semester_filter
+    )
+    pdf_kwargs = {"student_id": student_id, "format": "pdf"}
+    if semester_filter:
+        pdf_kwargs["semester"] = semester_filter
+    ctx = _transcript_html_context(
+        data,
+        academic_status,
+        semester_totals,
+        for_pdf=False,
+        pdf_download_url=url_for("grades.export_transcript", **pdf_kwargs),
+    )
+    return render_template("export_transcript.html", **ctx)
+
+
+@grades_bp.route("/export/<student_id>")
+@login_required
+def export_transcript(student_id):
+    fmt = (request.args.get("format") or "excel").lower()
+    mode = (request.args.get("mode") or "detailed").lower()
+    semester_filter = (request.args.get("semester") or "").strip()
+
+    denied = _assert_can_export_transcript(student_id)
+    if denied is not None:
+        return denied
+
+    data, academic_status, semester_totals = _prepare_transcript_export_data(
+        student_id, semester_filter
+    )
 
     if fmt in ("excel", "xlsx"):
         if mode == "summary":
@@ -3958,37 +4073,15 @@ def export_transcript(student_id):
     if fmt in ("text", "txt"):
         return Response(str(data), mimetype="text/plain")
     if fmt in ("pdf",):
-        # استخدام قالب HTML رسمي لكشف الدرجات وتحويله إلى PDF جاهز للطباعة
         from flask import render_template
 
-        # احسب مجاميع وحدات/درجات كل فصل للتقارير
-        semester_totals = {}
-        for sem, courses in data.get("transcript", {}).items():
-            sem_units = 0
-            sem_points = 0.0
-            for course in courses or []:
-                u = int(course.get("units") or 0)
-                g = course.get("grade")
-                sem_units += u
-                if g is not None:
-                    try:
-                        sem_points += float(g) * u
-                    except Exception:
-                        pass
-            semester_totals[sem] = {"units": sem_units, "points": sem_points}
-
-        html = render_template(
-            "export_transcript.html",
-            student_id=data["student_id"],
-            student_name=data.get("student_name", ""),
-            transcript=data.get("transcript", {}),
-            ordered_semesters=data.get("ordered_semesters", []),
-            semester_gpas=data.get("semester_gpas", {}),
-            cumulative_gpa=data.get("cumulative_gpa", 0.0),
-            completed_units=data.get("completed_units", 0),
-            semester_totals=semester_totals,
-            academic_status=academic_status,
+        ctx = _transcript_html_context(
+            data,
+            academic_status,
+            semester_totals,
+            for_pdf=True,
         )
+        html = render_template("export_transcript.html", **ctx)
         return pdf_response_from_html(html, filename_prefix=f"transcript_{student_id}")
     return jsonify({"status": "error", "message": "صيغة تصدير غير مدعومة"}), 400
 
