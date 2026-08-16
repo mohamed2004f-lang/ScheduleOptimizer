@@ -197,6 +197,27 @@ def _actor_username() -> str:
     return (session.get("user") or session.get("username") or "").strip()
 
 
+def _term_guard(conn, operation: str, semester: str, student_id: str | None = None):
+    from backend.services.term_closure import TermClosedError
+    from backend.services.term_engine import (
+        TermOperationError,
+        assert_term_operation_for_request,
+        http_term_blocked,
+    )
+
+    try:
+        assert_term_operation_for_request(
+            conn,
+            operation=operation,
+            semester=semester,
+            actor=_actor_username(),
+            student_id=student_id,
+        )
+        return None
+    except (TermOperationError, TermClosedError) as exc:
+        return http_term_blocked(exc)
+
+
 def _student_in_effective_scope(conn, student_id: str) -> bool:
     mode, dep_id = resolve_users_list_scope(conn, _actor_username())
     if mode == "none":
@@ -823,6 +844,9 @@ def create_or_update_plan():
 
     with get_connection() as conn:
         cur = conn.cursor()
+        blocked = _term_guard(conn, "enrollment_plan_write", semester, student_id)
+        if blocked:
+            return blocked
         if not _student_in_effective_scope(conn, student_id):
             return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         # التحقق من حد الوحدات بناءً على المعدل التراكمي قبل الحفظ
@@ -998,8 +1022,13 @@ def submit_plan(plan_id: int):
             )
         status = row[3]
         student_id = row[1]
+        semester = (row[2] or "").strip()
         if not _student_in_effective_scope(conn, student_id):
             return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+        blocked = _term_guard(conn, "enrollment_plan_write", semester, student_id)
+        if blocked:
+            return blocked
 
         # الطالب لا يمكنه إرسال إلا خطته هو
         user_role = session.get("user_role")
@@ -1156,6 +1185,9 @@ def approve_plan(plan_id: int):
         _, student_id, semester, status = row
         if not _student_in_effective_scope(conn, student_id):
             return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        blocked = _term_guard(conn, "enrollment_plan_approve", semester, student_id)
+        if blocked:
+            return blocked
         if status not in ("Pending", "Draft"):
             return (
                 jsonify(

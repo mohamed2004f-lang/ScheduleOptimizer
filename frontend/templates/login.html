@@ -57,7 +57,7 @@
     </div>
   </div>
 
-  <script>
+  <script nonce="{{ csp_nonce }}">
     (function () {
       const h = window.location.hostname;
       if (window.location.protocol === 'http:' && h !== 'localhost' && h !== '127.0.0.1') {

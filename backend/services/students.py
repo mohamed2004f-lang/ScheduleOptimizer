@@ -3012,6 +3012,12 @@ def _insert_registrations_rows(
                 "INSERT INTO registrations (student_id, course_name) VALUES (?,?)",
                 (student_id, cname),
             )
+        try:
+            from backend.services.term_basket import stamp_registration_semester
+
+            stamp_registration_semester(cur, conn, student_id, cname, semester)
+        except Exception:
+            pass
 
 
 @students_bp.route("/teaching_group_options")
@@ -3035,6 +3041,30 @@ def student_teaching_group_options():
     })
 
 
+def _registration_write_blocked(student_id: str | None = None):
+    """423 موحّد قبل كتابة سلة التسجيلات."""
+    from backend.services.term_closure import TermClosedError
+    from backend.services.term_engine import (
+        OP_REGISTRATION_WRITE,
+        TermOperationError,
+        assert_term_operation_for_request,
+        http_term_blocked,
+    )
+
+    try:
+        with get_connection() as conn:
+            actor = (session.get("user") or session.get("username") or "").strip()
+            assert_term_operation_for_request(
+                conn,
+                operation=OP_REGISTRATION_WRITE,
+                actor=actor,
+                student_id=student_id,
+            )
+    except (TermClosedError, TermOperationError) as exc:
+        return http_term_blocked(exc)
+    return None
+
+
 @students_bp.route("/save_registrations", methods=["POST"])
 @role_required("admin", "head_of_department")
 def save_registrations():
@@ -3043,8 +3073,8 @@ def save_registrations():
     override_reason = (data.get("override_reason") or "").strip()
     prereq_override = bool(data.get("prereq_override"))
     prereq_override_reason = (data.get("prereq_override_reason") or "").strip()
-    role = (session.get("user_role") or "").strip().lower()
-    can_override_prereq = role in ("admin", "admin_main", "head_of_department")
+    role = _normalize_role((session.get("user_role") or "").strip())
+    can_override_prereq = role in ("admin", "admin_main", "system_admin", "head_of_department")
     # توافق خلفي: بعض نسخ الواجهة القديمة لا ترسل مفاتيح prereq_override* وتكتفي بسبب عام.
     # في هذه الحالة، إذا كان الدور مخوّلاً، نستخدم override_reason كتجاوز متطلبات.
     if can_override_prereq and not prereq_override_reason and override_reason:
@@ -3075,16 +3105,9 @@ def save_registrations():
         return jsonify({"status": "error", "message": "courses/registrations يجب أن تكون قائمة"}), 400
     courses = [it["course_name"] for it in reg_items]
 
-    try:
-        from backend.core.department_scope_policy import resolve_effective_department_scope_id
-        from backend.services.term_closure import TermClosedError, assert_term_writable
-
-        with get_connection() as conn:
-            actor = (session.get("user") or session.get("username") or "").strip()
-            dept_id = resolve_effective_department_scope_id(conn, actor)
-            assert_term_writable(conn, stage="registrations", department_id=dept_id)
-    except TermClosedError as exc:
-        return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
+    blocked = _registration_write_blocked(sid)
+    if blocked:
+        return blocked
 
     old_courses = set()
     # منع تسجيل طالب غير فعّال (سحب ملف، موقوف قيده، خريج)
@@ -3165,7 +3188,7 @@ def save_registrations():
                     total_units = sum(int(units_map.get(c, 0) or 0) for c in courses)
                 out_of_range = (total_units < 12) or (total_units > 19)
                 if out_of_range:
-                    if role not in ("admin", "admin_main", "head_of_department"):
+                    if role not in ("admin", "admin_main", "system_admin", "head_of_department"):
                         return jsonify({
                             "status": "error",
                             "code": "UNITS_LIMIT",
@@ -3614,16 +3637,9 @@ def delete_registrations():
     sid = normalize_sid(data.get("student_id"))
     if not sid:
         return jsonify({"status":"error","message":"student_id مطلوب"}), 400
-    try:
-        from backend.core.department_scope_policy import resolve_effective_department_scope_id
-        from backend.services.term_closure import TermClosedError, assert_term_writable
-
-        with get_connection() as conn:
-            actor = (session.get("user") or session.get("username") or "").strip()
-            dept_id = resolve_effective_department_scope_id(conn, actor)
-            assert_term_writable(conn, stage="registrations", department_id=dept_id)
-    except TermClosedError as exc:
-        return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
+    blocked = _registration_write_blocked(sid)
+    if blocked:
+        return blocked
     try:
         with get_connection() as conn:
             cur = conn.cursor()
@@ -3728,15 +3744,9 @@ def import_registrations():
     added = 0
     skipped = 0
     actor = (session.get("user") or session.get("username") or "").strip()
-    try:
-        from backend.core.department_scope_policy import resolve_effective_department_scope_id
-        from backend.services.term_closure import TermClosedError, assert_term_writable
-
-        with get_connection() as conn:
-            dept_id = resolve_effective_department_scope_id(conn, actor)
-            assert_term_writable(conn, stage="registrations", department_id=dept_id)
-    except TermClosedError as exc:
-        return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
+    blocked = _registration_write_blocked()
+    if blocked:
+        return blocked
     with get_connection() as conn:
         cur = conn.cursor()
         cols = fetch_table_columns(conn, "students")
@@ -4018,6 +4028,12 @@ def upload_registration_signature_file():
         return jsonify({"status": "error", "message": "ملف فارغ"}), 400
     if len(raw) > 10 * 1024 * 1024:
         return jsonify({"status": "error", "message": "حجم الملف كبير (الحد 10MB)"}), 400
+    try:
+        from backend.core.security import assert_upload_magic
+
+        assert_upload_magic(raw, filename)
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
 
     sha = hashlib.sha256(raw).hexdigest()
     safe_term = "".join([c for c in term if c.isalnum() or c in (" ", "-", "_")]).strip().replace(" ", "_") or "term"
@@ -4101,10 +4117,16 @@ def download_registration_signature_file(file_id: int):
             if not row:
                 return jsonify({"status": "error", "message": "الملف غير موجود"}), 404
             original_name, stored_path, mime_type = row[0] or "signed_form", row[1] or "", row[2] or ""
-        if not stored_path or not os.path.isfile(stored_path):
+        from backend.core.security import resolve_safe_upload_path
+
+        forms_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "uploads", "registration_forms")
+        )
+        safe = resolve_safe_upload_path(stored_path, allowed_root=forms_dir)
+        if not safe:
             return jsonify({"status": "error", "message": "مسار الملف غير موجود على القرص"}), 404
         return send_file(
-            stored_path,
+            safe,
             mimetype=(mime_type or "application/octet-stream"),
             as_attachment=True,
             download_name=original_name,

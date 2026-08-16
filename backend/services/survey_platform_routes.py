@@ -1295,17 +1295,20 @@ def register_survey_platform_routes(bp) -> None:
     @login_required
     @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
     def surveys_download_archive(filename: str):
-        safe = os.path.basename((filename or "").strip())
-        if not safe or safe != filename:
+        from backend.core.security import resolve_safe_upload_path
+
+        safe_name = os.path.basename((filename or "").strip())
+        if not safe_name or safe_name != filename:
             return jsonify({"status": "error", "message": "اسم ملف غير صالح"}), 400
-        path = os.path.join(survey_archive_dir(), safe)
-        if not os.path.isfile(path):
+        joined = os.path.join(survey_archive_dir(), safe_name)
+        safe = resolve_safe_upload_path(joined, allowed_root=survey_archive_dir())
+        if not safe:
             return jsonify({"status": "error", "message": "الملف غير موجود"}), 404
         return send_file(
-            path,
+            safe,
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             as_attachment=True,
-            download_name=safe,
+            download_name=safe_name,
         )
 
     @bp.route("/surveys/api/register_evidence", methods=["POST"])

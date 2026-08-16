@@ -369,6 +369,9 @@ def create_knowledge_doc(
         ext = os.path.splitext(oname or "doc.bin")[1].lower()
         if ext not in ALLOWED_EXTENSIONS:
             raise ValueError("صيغة غير مسموحة — استخدم: " + ", ".join(sorted(ALLOWED_EXTENSIONS)))
+        from backend.core.security import assert_upload_magic
+
+        assert_upload_magic(raw, oname)
         sha = hashlib.sha256(raw).hexdigest()
         stored_name = f"qk__{sha[:18]}{ext}"
         stored_path = os.path.join(knowledge_upload_dir(), stored_name)
@@ -710,9 +713,12 @@ def export_approved_knowledge_zip(
             if row:
                 sp = row["stored_path"] if hasattr(row, "keys") else row[0]
                 on = row["original_name"] if hasattr(row, "keys") else row[1]
-                if sp and os.path.isfile(sp):
-                    ext = os.path.splitext(on or sp)[1] or ".bin"
-                    zf.write(sp, arcname=f"files/{safe}{ext}")
+                from backend.core.security import resolve_safe_upload_path
+
+                safe_file = resolve_safe_upload_path(sp)
+                if safe_file:
+                    ext = os.path.splitext(on or safe_file.name)[1] or ".bin"
+                    zf.write(str(safe_file), arcname=f"files/{safe}{ext}")
             meta.append(d)
         zf.writestr("manifest.json", json.dumps({"docs": meta, "policy_ar": LIBRARY_POLICY_AR}, ensure_ascii=False, indent=2))
     return buf.getvalue()

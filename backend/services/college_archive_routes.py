@@ -319,8 +319,6 @@ def register_college_archive_routes(bp) -> None:
     @bp.route("/api/college-archive/file/<int:item_id>", methods=["GET"])
     @role_required(*_SHARE_PICKER_ROLES)
     def college_archive_file_download(item_id: int):
-        import os
-
         role = _role()
         cq = _cq()
         with get_connection() as conn:
@@ -336,13 +334,20 @@ def register_college_archive_routes(bp) -> None:
                 home_department_id=_home_dept(conn),
             ):
                 return jsonify({"status": "error", "message": "لا صلاحية"}), 403
-            path = (item.get("stored_path") or "").strip()
-            if not path or not os.path.isfile(path):
+            from backend.core.security import resolve_safe_upload_path
+            from backend.services.college_archive import archive_upload_dir
+
+            cab = str(item.get("cabinet_code") or "")
+            safe = resolve_safe_upload_path(
+                item.get("stored_path"),
+                allowed_root=archive_upload_dir(cab),
+            )
+            if not safe:
                 return jsonify({"status": "error", "message": "لا يوجد ملف"}), 404
             return send_file(
-                path,
+                safe,
                 as_attachment=True,
-                download_name=item.get("original_name") or os.path.basename(path),
+                download_name=item.get("original_name") or safe.name,
             )
 
     @bp.route("/api/college-archive/items/<int:item_id>/shares", methods=["GET", "PUT"])

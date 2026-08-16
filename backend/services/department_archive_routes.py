@@ -215,8 +215,6 @@ def register_department_archive_routes(bp) -> None:
         "staff",
     )
     def archive_file_download(item_id: int):
-        import os
-
         from backend.core.auth import is_college_quality_lead_session
         from backend.services.archive_shares import SOURCE_DEPT, user_can_read_shared_item
 
@@ -253,13 +251,19 @@ def register_department_archive_routes(bp) -> None:
                 )
             if not allowed:
                 return jsonify({"status": "error", "message": "خارج نطاق قسمك"}), 403
-            path = (item.get("stored_path") or "").strip()
-            if not path or not os.path.isfile(path):
+            from backend.core.security import resolve_safe_upload_path
+            from backend.services.department_archive import archive_upload_dir
+
+            safe = resolve_safe_upload_path(
+                item.get("stored_path"),
+                allowed_root=archive_upload_dir(),
+            )
+            if not safe:
                 return jsonify({"status": "error", "message": "لا يوجد ملف"}), 404
             return send_file(
-                path,
+                safe,
                 as_attachment=True,
-                download_name=item.get("original_name") or os.path.basename(path),
+                download_name=item.get("original_name") or safe.name,
             )
 
     @bp.route("/api/archive/checklist", methods=["GET"])

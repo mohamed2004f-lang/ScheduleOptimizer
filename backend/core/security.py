@@ -6,8 +6,9 @@ import os
 import re
 import logging
 from functools import wraps
+from pathlib import Path
 from flask import request, jsonify
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple, Any, Union
 
 logger = logging.getLogger(__name__)
 
@@ -173,32 +174,13 @@ class InputValidator:
 # ============================================
 
 class RateLimiter:
-    """محدد معدل الطلبات البسيط"""
-    
-    def __init__(self):
-        self._requests = {}
-    
+    """محدد معدل الطلبات — Redis إن وُجد، وإلا ذاكرة العملية."""
+
     def is_allowed(self, key: str, max_requests: int = 100, window_seconds: int = 60) -> bool:
-        """
-        التحقق من أن المستخدم لم يتجاوز الحد المسموح
-        """
-        import time
-        current_time = time.time()
-        
-        if key not in self._requests:
-            self._requests[key] = []
-        
-        # إزالة الطلبات القديمة
-        self._requests[key] = [
-            t for t in self._requests[key] 
-            if current_time - t < window_seconds
-        ]
-        
-        if len(self._requests[key]) >= max_requests:
-            return False
-        
-        self._requests[key].append(current_time)
-        return True
+        from backend.core.auth_throttle import increment_window
+
+        count = increment_window(f"ip:{key}", window_seconds)
+        return count <= max_requests
 
 
 # إنشاء instance عام
@@ -241,21 +223,73 @@ def rate_limit(
 # Security Headers
 # ============================================
 
-def _csp_header_value() -> Optional[str]:
-    """
-    سياسة CSP متوافقة مع Bootstrap CDN وخطوط Google والسكربتات المضمّنة في القوالب.
-    تعطيل: ENABLE_CSP=0
-    """
+_SCRIPT_OPEN_RE = re.compile(r"<script(\s[^>]*)?>", re.IGNORECASE)
+
+
+def csp_enabled() -> bool:
     v = (os.environ.get("ENABLE_CSP", "1") or "").strip().lower()
     if v in ("0", "false", "no", "off"):
+        return False
+    return (os.environ.get("FLASK_ENV") or "").strip().lower() == "production"
+
+
+def csp_legacy() -> bool:
+    v = (os.environ.get("ENABLE_CSP_LEGACY") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def inject_script_nonces(html: str, nonce: str) -> str:
+    """أضف nonce لكل وسم <script> يفتقده — يغطي السكربتات المضمّنة في القوالب."""
+    if not html or not nonce:
+        return html
+
+    def _repl(match: re.Match) -> str:
+        attrs = match.group(1) or ""
+        if re.search(r"\bnonce\s*=", attrs, re.I):
+            return match.group(0)
+        return f'<script nonce="{nonce}"{attrs}>'
+
+    return _SCRIPT_OPEN_RE.sub(_repl, html)
+
+
+def _maybe_inject_html_nonces(response, nonce: str) -> None:
+    if getattr(response, "direct_passthrough", False):
+        return
+    ctype = (response.content_type or "").lower()
+    if "html" not in ctype:
+        return
+    try:
+        data = response.get_data(as_text=True)
+        updated = inject_script_nonces(data, nonce)
+        if updated != data:
+            response.set_data(updated)
+    except Exception:
+        logger.exception("CSP nonce injection failed")
+
+
+def _csp_header_value(nonce: Optional[str] = None) -> Optional[str]:
+    """
+    سياسة CSP في الإنتاج. تعطيل: ENABLE_CSP=0
+    الافتراضي: nonce بدون unsafe-inline/unsafe-eval في script-src.
+    style-src يبقى مع unsafe-inline حتى يُجرَد CSS المضمّن في القوالب.
+    ENABLE_CSP_LEGACY=1 يعيد السياسة القديمة إن تعطّلت صفحة.
+    """
+    if not csp_enabled():
         return None
-    if (os.environ.get("FLASK_ENV") or "").strip().lower() != "production":
-        return None
+    if csp_legacy() or not nonce:
+        script = (
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
+            "https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://static.cloudflareinsights.com; "
+        )
+    else:
+        script = (
+            f"script-src 'self' 'nonce-{nonce}' "
+            "https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://static.cloudflareinsights.com; "
+        )
     return (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
-        "https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://static.cloudflareinsights.com; "
-        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; "
+        + script
+        + "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; "  # Bootstrap + أنماط القوالب؛ يُضيَّق بعد جرد القوالب
         "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com data:; "
         "img-src 'self' data: blob:; "
         "connect-src 'self' https://cloudflareinsights.com; "
@@ -265,23 +299,153 @@ def _csp_header_value() -> Optional[str]:
     )
 
 
-def add_security_headers(response):
+def add_security_headers(response, nonce: Optional[str] = None):
     """إضافة رؤوس الأمان للاستجابة"""
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     response.headers['X-XSS-Protection'] = '1; mode=block'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-    csp = _csp_header_value()
+    csp = _csp_header_value(nonce)
     if csp:
         response.headers['Content-Security-Policy'] = csp
+    if (os.environ.get("FLASK_ENV") or "").strip().lower() == "production":
+        proto = ""
+        try:
+            proto = (request.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
+        except Exception:
+            proto = ""
+        if request.is_secure or proto == "https":
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains"
+            )
 
     return response
 
 
 def init_security_headers(app):
-    """تهيئة رؤوس الأمان"""
+    """تهيئة رؤوس الأمان + رمز CSP لكل طلب."""
+    import secrets
+    from flask import g
+
+    @app.before_request
+    def _assign_csp_nonce():
+        g.csp_nonce = secrets.token_urlsafe(16)
+
     @app.after_request
     def apply_security_headers(response):
-        return add_security_headers(response)
-    
+        nonce = getattr(g, "csp_nonce", None)
+        if nonce and csp_enabled() and not csp_legacy():
+            _maybe_inject_html_nonces(response, nonce)
+        return add_security_headers(response, nonce=nonce)
+
     logger.info("Security headers initialized")
+
+
+# ============================================
+# مسارات الرفع — منع الخروج من backend/uploads
+# ============================================
+
+def uploads_root() -> Path:
+    """المجلد الجذر الوحيد المسموح لملفات المستخدم: backend/uploads."""
+    return (Path(__file__).resolve().parent.parent / "uploads").resolve()
+
+
+def _path_is_inside(child: Path, parent: Path) -> bool:
+    """مقارنة مسارات محسومة مع مراعاة اختلاف حالة الأحرف على ويندوز."""
+    child_s = os.path.normcase(str(child))
+    parent_s = os.path.normcase(str(parent))
+    if child_s == parent_s:
+        return True
+    prefix = parent_s if parent_s.endswith(os.sep) else parent_s + os.sep
+    return child_s.startswith(prefix)
+
+
+def resolve_safe_upload_path(
+    stored_path: Optional[Union[str, os.PathLike]] = None,
+    *,
+    allowed_root: Optional[Union[str, os.PathLike]] = None,
+) -> Optional[Path]:
+    """
+    أعد المسار المحسوم فقط إذا كان ملفاً موجوداً داخل ``backend/uploads``.
+
+    إذا مُرّر ``allowed_root`` فيجب أن يكون هو أيضاً داخل مجلد الرفع، ويُقيَّد الملف به.
+    يرفض المسارات الفارغة، والاختراق عبر ``..``، والروابط الرمزية الخارجة عن الجذر.
+    """
+    if stored_path is None:
+        return None
+    raw = str(stored_path).strip()
+    if not raw:
+        return None
+    try:
+        candidate = Path(raw).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not candidate.is_file():
+        return None
+
+    root = uploads_root()
+    if not _path_is_inside(candidate, root):
+        logger.warning("Rejected download path outside uploads: %s", candidate)
+        return None
+
+    if allowed_root is not None:
+        try:
+            extra = Path(allowed_root).resolve()
+        except (OSError, RuntimeError, ValueError):
+            return None
+        if not _path_is_inside(extra, root):
+            logger.warning("Rejected allowed_root outside uploads: %s", extra)
+            return None
+        if not _path_is_inside(candidate, extra):
+            logger.warning("Rejected download path outside allowed_root: %s", candidate)
+            return None
+
+    return candidate
+
+
+# توقيعات الملفات الثنائية — النص (.txt/.md/.json/.csv) يُقبل دون بصمة
+_TEXT_UPLOAD_EXTS = frozenset({".txt", ".md", ".markdown", ".json", ".csv"})
+_OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+_ZIP_MAGIC = b"PK\x03\x04"
+_UPLOAD_MAGICS: dict[str, tuple[bytes, ...]] = {
+    ".pdf": (b"%PDF",),
+    ".png": (b"\x89PNG\r\n\x1a\n",),
+    ".jpg": (b"\xff\xd8\xff",),
+    ".jpeg": (b"\xff\xd8\xff",),
+    ".gif": (b"GIF87a", b"GIF89a"),
+    ".doc": (_OLE_MAGIC,),
+    ".xls": (_OLE_MAGIC,),
+    ".ppt": (_OLE_MAGIC,),
+    ".docx": (_ZIP_MAGIC,),
+    ".xlsx": (_ZIP_MAGIC,),
+    ".pptx": (_ZIP_MAGIC,),
+    ".zip": (_ZIP_MAGIC,),
+}
+
+
+def assert_upload_magic(raw: bytes, filename: str) -> None:
+    """ارفض الملف إن لم يطابق باطنه الامتداد. الصيغ النصية تُستثنى."""
+    ext = os.path.splitext((filename or "").strip())[1].lower()
+    if not raw:
+        raise ValueError("ملف فارغ")
+    if ext in _TEXT_UPLOAD_EXTS:
+        if b"\x00" in raw[:512]:
+            raise ValueError("محتوى الملف لا يطابق الامتداد")
+        return
+    if ext == ".webp":
+        if not (raw.startswith(b"RIFF") and raw[8:12] == b"WEBP"):
+            raise ValueError("محتوى الملف لا يطابق الامتداد")
+        return
+    if ext == ".mp4":
+        if raw[4:8] != b"ftyp":
+            raise ValueError("محتوى الملف لا يطابق الامتداد")
+        return
+    if ext == ".webm":
+        if not raw.startswith(b"\x1a\x45\xdf\xa3"):
+            raise ValueError("محتوى الملف لا يطابق الامتداد")
+        return
+    magics = _UPLOAD_MAGICS.get(ext)
+    if magics is None:
+        return
+    if not any(raw.startswith(sig) for sig in magics):
+        raise ValueError("محتوى الملف لا يطابق الامتداد")

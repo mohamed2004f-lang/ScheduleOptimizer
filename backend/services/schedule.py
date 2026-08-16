@@ -698,68 +698,22 @@ def list_schedule_rows():
             except Exception:
                 scols = []
             scope = _effective_schedule_department_scope_id(conn)
-            dept_where = ""
-            dept_params: tuple = ()
-            if scope is not None and "department_id" in scols:
-                dept_where = " AND s.department_id = ? "
-                dept_params = (scope,)
-            tg_join = ""
-            tg_select = ""
-            reg_join = "LEFT JOIN registrations r ON LOWER(TRIM(s.course_name)) = LOWER(TRIM(r.course_name))"
-            if "teaching_group_id" in scols and table_exists(conn, "teaching_groups"):
-                tg_join = """
-                LEFT JOIN teaching_groups tg ON tg.id = s.teaching_group_id AND tg.is_active = 1
-                LEFT JOIN departments td ON td.id = COALESCE(tg.department_id, s.department_id)
-                LEFT JOIN instructors ti ON ti.id = COALESCE(tg.instructor_id, s.instructor_id)
-                """
-                tg_select = """,
-                    s.teaching_group_id,
-                    s.department_id,
-                    COALESCE(tg.group_code, '—') AS tg_group_code,
-                    COALESCE(td.name_ar, td.code, '') AS tg_department_name,
-                    COALESCE(ti.name, s.instructor, '') AS tg_instructor_name
-                """
-                reg_cols = {c.lower() for c in fetch_table_columns(conn, "registrations")}
-                if "teaching_group_id" in reg_cols:
-                    reg_join = """
-                LEFT JOIN registrations r ON LOWER(TRIM(s.course_name)) = LOWER(TRIM(r.course_name))
-                    AND (
-                        s.teaching_group_id IS NULL
-                        OR r.teaching_group_id = s.teaching_group_id
-                    )
-                    """
-            # استخدام JOIN لتحسين الأداء بدلاً من استعلامات منفصلة في loop
-            group_by_tg = ""
-            if tg_select:
-                group_by_tg = """,
-                    s.teaching_group_id, s.department_id,
-                    tg.group_code, td.name_ar, td.code, ti.name
-                """
-            rows = cur.execute(
-                f"""
-                SELECT 
-                    s.{SCHEDULE_PK_COL} AS section_id, 
-                    s.course_name, 
-                    s.day, 
-                    s.time, 
-                    s.room, 
-                    s.instructor, 
-                    s.semester,
-                    s.instructor_id,
-                    COUNT(DISTINCT r.student_id) AS student_count
-                    {tg_select}
-                FROM schedule s
-                {reg_join}
-                {tg_join}
-                WHERE 1=1 {dept_where}
-                GROUP BY s.{SCHEDULE_PK_COL}, s.course_name, s.day, s.time, s.room, s.instructor, s.semester, s.instructor_id
-                    {group_by_tg}
-                ORDER BY s.{SCHEDULE_PK_COL}
-                """,
-                dept_params,
-            ).fetchall()
-            result = []
+            from backend.repositories.schedule_repo import fetch_schedule_rows_with_student_counts
+
             has_tg = "teaching_group_id" in scols and table_exists(conn, "teaching_groups")
+            reg_has_tg = False
+            if has_tg:
+                reg_cols = {c.lower() for c in fetch_table_columns(conn, "registrations")}
+                reg_has_tg = "teaching_group_id" in reg_cols
+            dept_id = scope if (scope is not None and "department_id" in scols) else None
+            rows = fetch_schedule_rows_with_student_counts(
+                cur,
+                pk_col=SCHEDULE_PK_COL,
+                department_id=dept_id,
+                include_teaching_groups=has_tg,
+                registrations_has_teaching_group=reg_has_tg,
+            )
+            result = []
             for r in rows:
                 item = {
                     'section_id': r[0],
@@ -2747,40 +2701,16 @@ def _assigned_section_rows(cur, instructor_db_id: int, canonical_instructor_name
     - تطابق مباشر على schedule.instructor_id عند تعبئته من الإدارة؛
     - أو مطابقة الاسم النصّي بعد تطبيع الفراغات (الترقية من الجداول القديمة).
     """
+    from backend.repositories.schedule_repo import fetch_assigned_section_rows
+
     _sync_schedule_pk_col(cur.connection)
-    norm = normalize_instructor_name(canonical_instructor_name)
-    q = f"""
-        SELECT s.{SCHEDULE_PK_COL} AS section_id,
-               s.course_name,
-               s.day,
-               s.time,
-               s.room,
-               s.instructor,
-               s.semester,
-               s.instructor_id
-        FROM schedule s
-        WHERE s.instructor_id = ?
-           OR (
-                (s.instructor_id IS NULL OR s.instructor_id = 0)
-                AND TRIM(COALESCE(s.instructor, '')) <> ''
-           )
-        ORDER BY s.semester, s.day, s.time, s.course_name
-    """
-    raw = cur.execute(q, (instructor_db_id,)).fetchall()
-    out = []
-    for r in raw:
-        sid, cn, day, tim, room, inst_txt, sem = r[0], r[1], r[2], r[3], r[4], r[5], r[6]
-        iid_col = r[7] if len(r) > 7 else None
-        try:
-            iid_int = int(iid_col) if iid_col is not None else None
-        except (TypeError, ValueError):
-            iid_int = None
-        if iid_int == instructor_db_id:
-            out.append((sid, cn, day, tim, room, inst_txt, sem))
-            continue
-        if (iid_int is None or iid_int == 0) and normalize_instructor_name(inst_txt) == norm:
-            out.append((sid, cn, day, tim, room, inst_txt, sem))
-    return out
+    return fetch_assigned_section_rows(
+        cur,
+        instructor_db_id,
+        canonical_instructor_name,
+        pk_col=SCHEDULE_PK_COL,
+        normalize_name=normalize_instructor_name,
+    )
 
 
 def _group_assigned_tuples_by_course(tuples: list[tuple]) -> list[dict]:
@@ -2788,40 +2718,9 @@ def _group_assigned_tuples_by_course(tuples: list[tuple]) -> list[dict]:
     دمج صفوف الجدول لنفس المقرر (محاضرات متعددة) في بطاقة واحدة للأستاذ.
     يحفظ أصغر section_id كمعرّف رئيسي ويعرض كل الأوقات في schedule_slots.
     """
-    grouped: dict[str, dict] = {}
-    for t in tuples:
-        sid, cn, day, tim, room, inst_txt, sem = t
-        ck = (cn or "").strip().lower()
-        if not ck:
-            continue
-        slot = {"day": day, "time": tim, "room": room, "section_id": int(sid)}
-        bucket = grouped.get(ck)
-        if not bucket:
-            grouped[ck] = {
-                "section_id": int(sid),
-                "section_ids": [int(sid)],
-                "course_name": (cn or "").strip(),
-                "day": day,
-                "time": tim,
-                "room": room,
-                "instructor": inst_txt,
-                "semester": sem,
-                "schedule_slots": [slot],
-            }
-            continue
-        bucket["section_ids"].append(int(sid))
-        bucket["schedule_slots"].append(slot)
-        bucket["section_id"] = min(bucket["section_ids"])
-        if len(bucket["schedule_slots"]) > 1:
-            bucket["day"] = " — ".join(
-                dict.fromkeys(
-                    f"{s.get('day') or ''} {s.get('time') or ''}".strip()
-                    for s in bucket["schedule_slots"]
-                )
-            )
-            rooms = [str(s.get("room") or "").strip() for s in bucket["schedule_slots"] if s.get("room")]
-            bucket["room"] = " / ".join(dict.fromkeys(r for r in rooms if r)) or room
-    return list(grouped.values())
+    from backend.repositories.schedule_repo import group_assigned_tuples_by_course
+
+    return group_assigned_tuples_by_course(tuples)
 
 
 def _merged_axes_for_sections(
@@ -3213,20 +3112,10 @@ def my_assigned_sections():
         axis_map = _axis_status_map_for_sections(cur, iid, section_ids)
         reg_counts: dict[str, int] = {}
         try:
+            from backend.repositories.schedule_repo import count_students_grouped_by_course
+
             course_names = list({(t[1] or "").strip() for t in tuples if (t[1] or "").strip()})
-            if course_names:
-                ph = ",".join(["?"] * len(course_names))
-                keys = tuple(cn.strip().lower() for cn in course_names)
-                reg_rows = cur.execute(
-                    f"""
-                    SELECT LOWER(TRIM(course_name)) AS ck, COUNT(DISTINCT student_id) AS cnt
-                    FROM registrations
-                    WHERE LOWER(TRIM(course_name)) IN ({ph})
-                    GROUP BY LOWER(TRIM(course_name))
-                    """,
-                    keys,
-                ).fetchall()
-                reg_counts = {r[0]: int(r[1] or 0) for r in reg_rows if r and r[0]}
+            reg_counts = count_students_grouped_by_course(cur, course_names)
         except Exception:
             reg_counts = {}
         out = []
@@ -3310,14 +3199,10 @@ def my_dashboard_summary():
         axes_done, axes_total, delivery_items = _portal_section_metrics(conn, instructor_id=iid, tuples=tuples)
         students_count = 0
         try:
+            from backend.repositories.schedule_repo import count_distinct_students_for_courses
+
             course_names = list({t[1] for t in tuples if t[1]})
-            if course_names:
-                ph = ",".join(["?"] * len(course_names))
-                row = cur.execute(
-                    f"SELECT COUNT(DISTINCT student_id) FROM registrations WHERE LOWER(TRIM(course_name)) IN ({ph})",
-                    tuple(cn.strip().lower() for cn in course_names),
-                ).fetchone()
-                students_count = int(row[0]) if row else 0
+            students_count = count_distinct_students_for_courses(cur, course_names)
         except Exception:
             pass
         clo_avg = None
@@ -3410,12 +3295,9 @@ def instructor_portal_summary():
         course_names = list({(t[1] or "").strip() for t in tuples if (t[1] or "").strip()})
         if course_names:
             try:
-                ph = ",".join(["?"] * len(course_names))
-                row = cur.execute(
-                    f"SELECT COUNT(DISTINCT student_id) FROM registrations WHERE LOWER(TRIM(course_name)) IN ({ph})",
-                    tuple(cn.strip().lower() for cn in course_names),
-                ).fetchone()
-                students_count = int(row[0]) if row else 0
+                from backend.repositories.schedule_repo import count_distinct_students_for_courses
+
+                students_count = count_distinct_students_for_courses(cur, course_names)
             except Exception:
                 pass
         clo_avg = None

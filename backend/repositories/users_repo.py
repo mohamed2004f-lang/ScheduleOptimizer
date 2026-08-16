@@ -187,3 +187,80 @@ def fetch_username_row_ci(conn, username: str):
         "SELECT username FROM users WHERE lower(username) = lower(?) LIMIT 1",
         (username,),
     ).fetchone()
+
+
+def fetch_user_session_row(cur, username: str):
+    """صف الجلسة مع دعم قواعد قبل عمود is_college_quality_lead."""
+    params = (username,)
+    try:
+        return cur.execute(
+            """
+            SELECT role, COALESCE(is_supervisor,0) AS is_supervisor, student_id, instructor_id,
+                   COALESCE(is_college_quality_lead,0) AS is_college_quality_lead
+            FROM users WHERE lower(username) = lower(?)
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+    except Exception:
+        try:
+            cur.connection.rollback()
+        except Exception:
+            pass
+        return cur.execute(
+            """
+            SELECT role, COALESCE(is_supervisor,0) AS is_supervisor, student_id, instructor_id,
+                   0 AS is_college_quality_lead
+            FROM users WHERE lower(username) = lower(?)
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+
+
+def fetch_user_login_row(cur, username: str):
+    """صف تسجيل الدخول مع ترقيات أعمدة اختيارية."""
+    params = (username,)
+    extended = (
+        "SELECT username, password_hash, role, student_id, instructor_id, "
+        "COALESCE(is_active,1) AS is_active, "
+        "COALESCE(is_supervisor,0) AS is_supervisor, "
+        "COALESCE(is_college_quality_lead,0) AS is_college_quality_lead, "
+        "COALESCE(is_system_account,0) AS is_system_account, "
+        "role_profile_id, display_title_ar, "
+        "COALESCE(is_dept_quality_coordinator,0) AS is_dept_quality_coordinator "
+        "FROM users WHERE lower(username) = lower(?)"
+    )
+    try:
+        return cur.execute(extended, params).fetchone()
+    except Exception:
+        try:
+            cur.connection.rollback()
+        except Exception:
+            pass
+    try:
+        return cur.execute(
+            """
+            SELECT username, password_hash, role, student_id, instructor_id,
+                   COALESCE(is_active,1) AS is_active,
+                   COALESCE(is_supervisor,0) AS is_supervisor,
+                   COALESCE(is_college_quality_lead,0) AS is_college_quality_lead
+            FROM users WHERE lower(username) = lower(?)
+            """,
+            params,
+        ).fetchone()
+    except Exception:
+        try:
+            cur.connection.rollback()
+        except Exception:
+            pass
+        return cur.execute(
+            """
+            SELECT username, password_hash, role, student_id, instructor_id,
+                   COALESCE(is_active,1) AS is_active,
+                   COALESCE(is_supervisor,0) AS is_supervisor,
+                   0 AS is_college_quality_lead
+            FROM users WHERE lower(username) = lower(?)
+            """,
+            params,
+        ).fetchone()

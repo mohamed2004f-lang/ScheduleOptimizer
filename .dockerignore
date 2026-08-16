@@ -48,3 +48,6 @@ htmlcov/
 .env
 .env.local
 
+# Uploaded evidence / archives (bind-mounted at runtime)
+backend/uploads
+

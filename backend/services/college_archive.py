@@ -337,6 +337,9 @@ def create_college_archive_item(
         ext = os.path.splitext(oname or "document.bin")[1].lower()
         if ext not in ALLOWED_EXTENSIONS:
             raise ValueError("صيغة غير مسموحة")
+        from backend.core.security import assert_upload_magic
+
+        assert_upload_magic(raw, oname)
         sha = hashlib.sha256(raw).hexdigest()
         safe_sem = re.sub(r"[^\w\-]+", "_", sem)[:40] or "sem"
         stored_name = f"{cab}__{rtype}__{safe_sem}__{sha[:16]}{ext}"

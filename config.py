@@ -3,7 +3,6 @@
 يقرأ الإعدادات من متغيرات البيئة أو ملف .env
 """
 import os
-import secrets
 from pathlib import Path
 
 # تحميل متغيرات البيئة من ملف .env إذا كان موجوداً
@@ -43,15 +42,21 @@ if not ADMIN_PASSWORD:
 # إعدادات Flask
 # ============================================
 SECRET_KEY = os.environ.get('SECRET_KEY')
+_IS_PYTEST = bool(os.environ.get("PYTEST_CURRENT_TEST")) or (
+    os.environ.get("FLASK_ENV") or ""
+).strip().lower() in ("testing", "test")
 if not SECRET_KEY:
-    # توليد مفتاح عشوائي إذا لم يكن موجوداً (للتطوير فقط)
-    SECRET_KEY = secrets.token_hex(32)
-    import warnings
-    warnings.warn(
-        "⚠️ تحذير: لم يتم تعيين SECRET_KEY! تم توليد مفتاح مؤقت. "
-        "في بيئة الإنتاج، يجب تعيين SECRET_KEY ثابت في متغيرات البيئة.",
-        UserWarning
-    )
+    if _IS_PYTEST:
+        SECRET_KEY = "test-secret-key-for-pytest"
+    else:
+        raise RuntimeError(
+            "\n\n"
+            "===== خطأ أمان حرج =====\n"
+            "متغير البيئة SECRET_KEY غير معيَّن!\n"
+            "يجب تعيين SECRET_KEY ثابت في ملف .env قبل التشغيل.\n"
+            "مثال: SECRET_KEY=long-random-hex-or-phrase\n"
+            "============================\n"
+        )
 
 FLASK_ENV = os.environ.get('FLASK_ENV', 'development')
 FLASK_DEBUG = os.environ.get('FLASK_DEBUG', '0') == '1'

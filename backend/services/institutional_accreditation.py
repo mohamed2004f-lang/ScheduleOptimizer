@@ -5,8 +5,6 @@ from __future__ import annotations
 import datetime
 from typing import Any
 
-import os
-
 from flask import jsonify, render_template, request, send_file, session
 
 from backend.core.accreditation_catalog import (
@@ -1051,11 +1049,17 @@ def register_institutional_accreditation_routes(bp) -> None:
             meta = get_evidence_file(conn, evidence_id)
         if not meta:
             return jsonify({"status": "error", "message": "الدليل غير موجود"}), 404
-        path = meta.get("stored_path") or ""
-        if not path or not os.path.isfile(path):
+        from backend.core.security import resolve_safe_upload_path
+        from backend.services.accreditation_evidence import evidence_upload_dir
+
+        safe = resolve_safe_upload_path(
+            meta.get("stored_path"),
+            allowed_root=evidence_upload_dir(),
+        )
+        if not safe:
             return jsonify({"status": "error", "message": "الملف غير موجود على القرص"}), 404
         return send_file(
-            path,
+            safe,
             as_attachment=True,
             download_name=meta.get("original_name") or "evidence",
             mimetype=meta.get("mime_type") or "application/octet-stream",

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>تفعيل التحقق بخطوتين</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+</head>
+<body class="auth-page">
+  <div class="auth-card">
+    <h1 class="auth-title">تفعيل التحقق بخطوتين</h1>
+    <p class="auth-subtitle">امسح الرمز بتطبيق المصادقة، أو انسخ المفتاح وأدخله يدوياً، ثم أكّد بالرمز.</p>
+    <div id="msg" class="mb-3"></div>
+    <div id="mfaQrWrap" class="mfa-qr-wrap" hidden>
+      <div id="mfaQr" class="mfa-qr" aria-hidden="true"></div>
+      <p class="form-text text-center mb-0">Google Authenticator أو تطبيق مشابه</p>
+    </div>
+    <div class="mb-3">
+      <label class="form-label" for="mfaSecret">المفتاح السرّي</label>
+      <div class="mfa-secret-row">
+        <input id="mfaSecret" type="text" class="form-control" readonly autocomplete="off">
+        <button id="btnCopySecret" type="button" class="btn btn-outline-secondary">نسخ</button>
+      </div>
+    </div>
+    <div class="mb-3">
+      <label class="form-label" for="mfaCode">رمز التحقق</label>
+      <input id="mfaCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" class="form-control" placeholder="000000">
+    </div>
+    <button id="btnConfirm" type="button" class="btn btn-primary w-100">تفعيل</button>
+    <div class="mt-3 text-center">
+      <a href="/logout">إلغاء</a>
+    </div>
+  </div>
+  <script src="/static/js/common.js"></script>
+  <script nonce="{{ csp_nonce }}">
+    function setMsg(kind, text){
+      document.getElementById('msg').innerHTML = text ? `<div class="alert alert-${kind} p-2 mb-0">${text}</div>` : '';
+    }
+    async function startSetup(){
+      const r = await fetch('/auth/mfa/setup/start', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+        body: JSON.stringify({})
+      });
+      const j = await r.json().catch(() => null);
+      if(!r.ok || !j || j.status !== 'ok'){
+        setMsg('danger', (j && j.message) || 'تعذر بدء الإعداد');
+        return;
+      }
+      document.getElementById('mfaSecret').value = j.secret || '';
+      const svg = (j.qr_svg || '').trim();
+      const wrap = document.getElementById('mfaQrWrap');
+      const box = document.getElementById('mfaQr');
+      if(svg.indexOf('<svg') === 0){
+        box.innerHTML = svg;
+        wrap.hidden = false;
+      }
+    }
+    async function confirmSetup(){
+      const code = (document.getElementById('mfaCode').value || '').trim();
+      if(code.length < 6){
+        setMsg('warning', 'أدخل رمز التحقق المكوّن من 6 أرقام.');
+        return;
+      }
+      const r = await fetch('/auth/mfa/setup/confirm', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+        body: JSON.stringify({code})
+      });
+      const j = await r.json().catch(() => null);
+      if(r.ok && j && (j.status === 'ok')){
+        window.location.href = '/dashboard?logged_in=1';
+        return;
+      }
+      setMsg('danger', (j && j.message) || 'رمز التحقق غير صحيح');
+    }
+    document.getElementById('btnConfirm').addEventListener('click', confirmSetup);
+    document.getElementById('btnCopySecret').addEventListener('click', async function(){
+      const secret = document.getElementById('mfaSecret').value || '';
+      if(!secret) return;
+      try{
+        await navigator.clipboard.writeText(secret);
+        setMsg('success', 'تم نسخ المفتاح');
+      }catch(e){
+        document.getElementById('mfaSecret').select();
+        setMsg('info', 'انسخ المفتاح من الحقل يدوياً');
+      }
+    });
+    startSetup();
+  </script>
+</body>
+</html>

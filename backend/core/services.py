@@ -918,22 +918,12 @@ class ScheduleService:
             with get_connection() as conn:
                 _sync_schedule_pk_col(conn)
                 cur = conn.cursor()
-                rows = cur.execute(f"""
-                    SELECT 
-                        s.{SCHEDULE_PK_COL} AS section_id,
-                        s.course_name, 
-                        s.day, 
-                        s.time, 
-                        s.room, 
-                        s.instructor, 
-                        s.semester,
-                        s.instructor_id,
-                        COUNT(DISTINCT r.student_id) AS student_count
-                    FROM schedule s
-                    LEFT JOIN registrations r ON LOWER(TRIM(s.course_name)) = LOWER(TRIM(r.course_name))
-                    GROUP BY s.{SCHEDULE_PK_COL}, s.course_name, s.day, s.time, s.room, s.instructor, s.semester, s.instructor_id
-                    ORDER BY s.{SCHEDULE_PK_COL}
-                """).fetchall()
+                from backend.repositories.schedule_repo import fetch_schedule_rows_with_student_counts
+
+                rows = fetch_schedule_rows_with_student_counts(
+                    cur,
+                    pk_col=SCHEDULE_PK_COL,
+                )
                 return [
                     {
                         'section_id': r[0],

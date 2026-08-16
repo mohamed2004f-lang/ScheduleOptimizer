@@ -47,9 +47,13 @@ def fetch_external_response_rows(
     cycle_label: str,
 ) -> list[dict[str, Any]]:
     cur = conn.cursor()
+    from backend.database.database import fetch_table_columns
+
+    cols = {c.lower() for c in fetch_table_columns(conn, "survey_responses")}
+    profile_col = "respondent_profile_json" if "respondent_profile_json" in cols else "''"
     rows = cur.execute(
-        """
-        SELECT id, comments, respondent_profile_json, submitted_at
+        f"""
+        SELECT id, comments, {profile_col} AS respondent_profile_json, submitted_at
         FROM survey_responses
         WHERE template_code = ? AND semester = ? AND status = 'submitted'
         ORDER BY id

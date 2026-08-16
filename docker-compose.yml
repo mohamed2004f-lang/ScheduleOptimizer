@@ -27,6 +27,8 @@ services:
     environment:
       - FLASK_ENV=production
       - FLASK_DEBUG=0
+      - ENABLE_CSP=1
+      - ENABLE_CSP_LEGACY=0
       - ADMIN_USERNAME=${ADMIN_USERNAME:?يجب تعيين ADMIN_USERNAME في ملف .env}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:?يجب تعيين ADMIN_PASSWORD في ملف .env}
       - SECRET_KEY=${SECRET_KEY:?يجب تعيين SECRET_KEY في ملف .env}
@@ -36,6 +38,7 @@ services:
       - BACKUP_MIRROR_ROOT=/app/backups/mirror
       - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-30}
       - PG_DUMP_PATH=/usr/lib/postgresql/17/bin/pg_dump
+      - CACHE_REDIS_URL=${CACHE_REDIS_URL:-redis://redis:6379/0}
     volumes:
       - ./backend/uploads:/app/backend/uploads
       - ./logs:/app/logs
@@ -45,6 +48,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - schedule-network
     healthcheck:
@@ -52,7 +57,19 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 60s
+
+  redis:
+    image: redis:7-alpine
+    container_name: schedule-optimizer-redis
+    restart: unless-stopped
+    networks:
+      - schedule-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
 volumes:
   postgres_data:

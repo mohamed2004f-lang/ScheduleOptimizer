@@ -15,6 +15,33 @@ def _current_user() -> str:
     return session.get("user") or session.get("username") or ""
 
 
+def _add_drop_operation(action: str) -> str:
+    from backend.services.term_engine import OP_ADD_COURSE, OP_DROP_COURSE
+
+    return OP_ADD_COURSE if action == "add" else OP_DROP_COURSE
+
+
+def _term_guard(conn, action: str, semester: str, student_id: str | None = None):
+    from backend.services.term_closure import TermClosedError
+    from backend.services.term_engine import (
+        TermOperationError,
+        assert_term_operation_for_request,
+        http_term_blocked,
+    )
+
+    try:
+        assert_term_operation_for_request(
+            conn,
+            operation=_add_drop_operation(action),
+            semester=semester,
+            actor=_current_user(),
+            student_id=student_id,
+        )
+        return None
+    except (TermOperationError, TermClosedError) as exc:
+        return http_term_blocked(exc)
+
+
 @registration_requests_bp.route("/registration_requests/create", methods=["POST"])
 @login_required
 def create_request():
@@ -42,6 +69,9 @@ def create_request():
     requested_by = _current_user()
 
     with get_connection() as conn:
+        blocked = _term_guard(conn, action, term, student_id)
+        if blocked:
+            return blocked
         cur = conn.cursor()
         if is_postgresql():
             row_new = cur.execute(
@@ -198,7 +228,7 @@ def _execute_registration_change(conn, student_id: str, course_name: str, action
     except Exception:
         total_units = 0
     if total_units and (total_units < 12 or total_units > 19):
-        if role not in ("admin", "admin_main"):
+        if role not in ("admin", "admin_main", "system_admin"):
             raise ValueError(f"UNITS_LIMIT: إجمالي الوحدات ({total_units}) خارج 12-19 ولا يمكن تنفيذه بواسطة {role or 'user'}.")
 
     # Sprint B checks (warn/enforce)
@@ -268,6 +298,12 @@ def _execute_registration_change(conn, student_id: str, course_name: str, action
                 "INSERT INTO registrations (student_id, course_name) VALUES (?,?) ON CONFLICT (student_id, course_name) DO NOTHING",
                 (sid, course_name),
             )
+        try:
+            from backend.services.term_basket import stamp_registration_semester
+
+            stamp_registration_semester(cur, conn, sid, course_name, reg_sem)
+        except Exception:
+            pass
     elif action == "drop":
         if course_name not in current:
             return
@@ -391,6 +427,14 @@ def approve_request():
 
         status = "approved"
         if execute_now:
+            blocked = _term_guard(
+                conn,
+                row["action"] if hasattr(row, "keys") else row[4],
+                row["term"] if hasattr(row, "keys") else row[2],
+                row["student_id"] if hasattr(row, "keys") else row[1],
+            )
+            if blocked:
+                return blocked
             # إذا كانت العملية ستؤدي لتجاوز حد الوحدات، الأدمن فقط يسمح وبشرط ملاحظة
             try:
                 _execute_registration_change(conn, row["student_id"], row["course_name"], row["action"])
@@ -399,7 +443,7 @@ def approve_request():
                 if msg.startswith("UNITS_LIMIT"):
                     # إذا الأدمن: نطلب note كسبب إلزامي
                     role = session.get("user_role") or ""
-                    if role in ("admin", "admin_main"):
+                    if role in ("admin", "admin_main", "system_admin"):
                         if not note:
                             return jsonify({"status": "error", "code": "UNITS_OVERRIDE_REQUIRED", "message": "يتطلب سبب/ملاحظة لاعتماد وتنفيذ طلب يؤدي لتجاوز حد الوحدات."}), 400
                         # نعيد التنفيذ بعد توفر note (التجاوز مسموح للأدمن)

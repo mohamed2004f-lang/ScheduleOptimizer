@@ -62,8 +62,8 @@ def query_all(query, params=(), db_file=DB_FILE):
         return cur.fetchall()
 def ensure_tables():
     """
-    توافق خلفي: إبقاء نفس واجهة الاستدعاء القديمة مع توحيد المصدر.
-    مصدر تعريف المخطط الآن هو backend.database.database فقط.
+    توافق خلفي للصيانة والاختبارات.
+    إقلاع التطبيق لا يستدعي هذه الدالة — المصدر هو Alembic.
     """
     ensure_schema(DB_FILE)
 

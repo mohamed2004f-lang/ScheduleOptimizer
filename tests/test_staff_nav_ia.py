@@ -6,6 +6,11 @@ from backend.core.auth import compute_capabilities
 
 ROOT = Path(__file__).resolve().parents[1]
 NAV = (ROOT / "frontend" / "templates" / "base_nav.html").read_text(encoding="utf-8")
+NAV_JS = (ROOT / "frontend" / "static" / "js" / "nav-auth.js").read_text(encoding="utf-8")
+NAV_SHELL = (ROOT / "frontend" / "static" / "js" / "nav-shell.js").read_text(
+    encoding="utf-8"
+)
+NAV_CODE = NAV + NAV_JS + NAV_SHELL
 BC = (ROOT / "frontend" / "templates" / "partials" / "quality_breadcrumb.html").read_text(
     encoding="utf-8"
 )
@@ -41,31 +46,31 @@ def test_nav_short_labels_present():
 
 
 def test_supervisor_nav_shell_keeps_quality_admin_out():
-    assert "enforceSupervisorNavShell" in NAV
+    assert "enforceSupervisorNavShell" in NAV_JS
     assert "navQualityAccreditationWrap" in NAV
     assert "هوية الكلية وبرنامجك" in NAV
-    assert "supervisorSlimNav" in NAV
-    assert "!inSupervisorPortal && !supervisorSlimNav" in NAV or "inSupervisorPortal && !supervisorSlimNav" in NAV or (
-        "وضع المشرف لا يشارك شريط الإدارة" in NAV
+    assert "supervisorSlimNav" in NAV_JS
+    assert "!inSupervisorPortal && !supervisorSlimNav" in NAV_JS or "inSupervisorPortal && !supervisorSlimNav" in NAV_JS or (
+        "وضع المشرف لا يشارك شريط الإدارة" in NAV_CODE
     )
 
 
 def test_nav_role_secondary_and_expanded_order_config():
-    assert "STAFF_NAV_SECONDARY_BY_ROLE" in NAV
-    assert "QUALITY_PRIMARY_ROLES" in NAV
-    assert "COMPACT_PRIMARY_ORDER" in NAV
-    assert "applyQualityNavTier" in NAV
-    assert "applyRoleDropdownOrders" in NAV
-    assert "applyCompactNavOrder" in NAV
+    assert "STAFF_NAV_SECONDARY_BY_ROLE" in NAV_JS
+    assert "QUALITY_PRIMARY_ROLES" in NAV_JS
+    assert "COMPACT_PRIMARY_ORDER" in NAV_JS
+    assert "applyQualityNavTier" in NAV_JS
+    assert "applyRoleDropdownOrders" in NAV_JS
+    assert "applyCompactNavOrder" in NAV_JS
     assert "nav-staff-expanded" in NAV
     # رئيس القسم: الجودة primary مثل القيادات + اعتماد القسم في الترتيب
-    assert "'head_of_department'" in NAV
+    assert "'head_of_department'" in NAV_CODE
     assert "navHodCourseDeliveryWrap" in NAV
     # الجودة لم تعد ضمن secondary لرئيس القسم (خرجت من «المزيد»)
-    hod_block_start = NAV.find("head_of_department: [")
+    hod_block_start = NAV_JS.find("head_of_department: [")
     assert hod_block_start > 0
     # أول ظهور بعد secondary roles — تحقق من COMPACT و EXPANDED
-    assert "navHodCourseDeliveryWrap" in NAV[hod_block_start : hod_block_start + 2500]
+    assert "navHodCourseDeliveryWrap" in NAV_JS[hod_block_start : hod_block_start + 2500]
 
 
 def test_hod_head_ops_caps_and_quality():

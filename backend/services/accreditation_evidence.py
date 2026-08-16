@@ -203,6 +203,9 @@ def save_file_evidence(
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise ValueError("صيغة غير مسموحة")
+    from backend.core.security import assert_upload_magic
+
+    assert_upload_magic(raw, filename)
 
     sha = hashlib.sha256(raw).hexdigest()
     safe_sem = re.sub(r"[^\w\-]+", "_", semester)[:40] or "sem"

@@ -19,7 +19,9 @@ def init_app_cache(app) -> None:
 
     timeout = int(os.environ.get("CACHE_TIMEOUT", "60"))
     cache_type = (os.environ.get("CACHE_TYPE") or "SimpleCache").strip()
-    redis_url = (os.environ.get("CACHE_REDIS_URL") or "").strip()
+    from backend.core.auth_throttle import redis_url as _redis_url
+
+    redis_url = _redis_url()
 
     app.config.setdefault("CACHE_DEFAULT_TIMEOUT", timeout)
     if redis_url:

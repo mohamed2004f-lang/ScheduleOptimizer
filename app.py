@@ -1,6 +1,6 @@
 from flask import Flask, render_template, redirect, url_for, jsonify, session, request, abort, send_from_directory, make_response
 from flask_wtf.csrf import CSRFProtect, CSRFError
-from backend.database.database import ensure_tables, is_postgresql, close_pool
+from backend.database.database import assert_schema_ready, is_postgresql, close_pool
 from config import DATABASE_URL, FLASK_ENV, FLASK_DEBUG, SHOW_DEV_HINTS
 import atexit
 
@@ -58,7 +58,6 @@ from backend.core.monitoring import init_monitoring
 from backend.core.security import init_security_headers
 
 import os
-import pprint
 import logging
 import importlib
 from pathlib import Path
@@ -182,22 +181,16 @@ csrf.init_app(app)
 tail = DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else "(configured)"
 print("ACTIVE DATABASE:", ("PostgreSQL — " + tail) if is_postgresql() else tail)
 
-# تهيئة الجداول
-ensure_tables()
+# المخطط عبر Alembic فقط (لا CREATE/ALTER عند الإقلاع)
+assert_schema_ready()
 try:
     from backend.services.utilities import get_connection
-    from backend.services.multi_surveys import ensure_survey_platform_tables
+    from backend.services.evaluation_survey import ensure_survey_questions_seeded
 
     with get_connection() as _conn:
-        ensure_survey_platform_tables(_conn)
-        from backend.services.evaluation_survey import ensure_survey_questions_seeded
-
         ensure_survey_questions_seeded(_conn)
-        from backend.core.college_identity_schema import ensure_college_identity_schema
-
-        ensure_college_identity_schema(_conn)
 except Exception as _survey_seed_exc:
-    logging.getLogger(__name__).warning("Survey platform seed skipped: %s", _survey_seed_exc)
+    logging.getLogger(__name__).warning("Survey questions seed skipped: %s", _survey_seed_exc)
 
 try:
     from backend.core.quality_glossary import write_static_glossary_json
@@ -223,16 +216,7 @@ except Exception as _cache_exc:
 # تهيئة نظام المصادقة
 init_auth(app)
 
-# إعفاء تبديل وضع العمل (fetch JSON) من CSRF — يُكمّل csrf.exempt داخل init_auth إن وُجد
-try:
-    _am = app.view_functions.get("auth.set_active_mode")
-    if _am is not None:
-        csrf.exempt(_am)
-    _ads = app.view_functions.get("auth.set_admin_department_scope")
-    if _ads is not None:
-        csrf.exempt(_ads)
-except Exception:
-    pass
+# تبديل وضع العمل ونطاق القسم يستخدمان كوكي الجلسة — يبقيان تحت حماية CSRF (common.js يرسل الرمز).
 
 # تهيئة نظام Monitoring
 init_monitoring(app)
@@ -265,6 +249,9 @@ app.register_blueprint(notifications_bp, url_prefix="/notifications")
 app.register_blueprint(users_bp, url_prefix="/users")
 app.register_blueprint(role_profiles_bp, url_prefix="/role_profiles")
 app.register_blueprint(academic_calendar_bp, url_prefix="/academic_calendar")
+from backend.services.term_ops_routes import term_ops_bp
+
+app.register_blueprint(term_ops_bp)
 app.register_blueprint(academic_rules_bp, url_prefix="/academic_rules")
 app.register_blueprint(instructors_bp, url_prefix="/instructors")
 app.register_blueprint(instructor_portal_bp, url_prefix="/instructors")
@@ -312,19 +299,19 @@ def _startup_verify_critical_symbols() -> None:
 
 _startup_verify_critical_symbols()
 
-# Exempt API blueprints from CSRF (as requested)
+# استبيانات الدعوة الخارجية (خريج/قطاع): رابط الدعوة هو التحقق — لا جلسة دخول
 try:
-    csrf.exempt(students_api_bp)
-    csrf.exempt(instructors_api_bp)
-    # استبيانات الدعوة الخارجية (خريج/قطاع): رابط الدعوة هو التحقق — لا جلسة دخول
     _invite_submit = app.view_functions.get("academic_quality.survey_invite_submit_api")
     if _invite_submit is not None:
         csrf.exempt(_invite_submit)
 except Exception:
     pass
 
-# طباعة خريطة المسارات المسجلة (مؤقت للتحقق)
-pprint.pprint(sorted([r.rule for r in app.url_map.iter_rules()]))
+# خريطة المسارات: تطوير فقط — لا تُطبع في الإنتاج حتى لا تكشف سطح الهجوم في السجلات
+if FLASK_DEBUG or (os.environ.get("PRINT_URL_MAP") or "").strip().lower() in ("1", "true", "yes"):
+    import pprint
+
+    pprint.pprint(sorted([r.rule for r in app.url_map.iter_rules()]))
 
 
 def _is_instructor_or_supervisor_role() -> bool:
@@ -415,6 +402,12 @@ def _resolve_actor_department_id(conn) -> int | None:
         except Exception:
             pass
     return None
+
+
+@app.context_processor
+def inject_csp_nonce():
+    from flask import g
+    return {"csp_nonce": getattr(g, "csp_nonce", "")}
 
 
 @app.context_processor
@@ -637,14 +630,19 @@ def login_page():
 
     if request.args.get("logged_out") == "1":
         perform_logout()
+    elif session.get("mfa_pending"):
+        from backend.core.mfa import SESSION_MFA_SETUP
+        return redirect("/mfa/setup" if session.get(SESSION_MFA_SETUP) else "/mfa/verify")
     elif session.get(SESSION_KEY):
         return redirect("/")
     errors = {
         "MISSING_CREDENTIALS": "اسم المستخدم وكلمة المرور مطلوبان",
         "INVALID_CREDENTIALS": "اسم المستخدم أو كلمة المرور غير صحيحة",
         "ACCOUNT_DISABLED": "تم تعطيل هذا الحساب",
-        "ACCOUNT_LOCKED": "الحساب موقوف مؤقتاً. تواصل مع الإدارة.",
+        "ACCOUNT_LOCKED": "تم تجاوز عدد المحاولات. حاول لاحقاً.",
         "PASSWORD_EXPIRED": "انتهت صلاحية كلمة المرور. يرجى تعيين كلمة جديدة.",
+        "MFA_REQUIRED": "أدخل رمز التحقق من تطبيق المصادقة",
+        "MFA_SETUP_REQUIRED": "يجب تفعيل التحقق بخطوتين لهذا الحساب",
         "SESSION_NOT_SAVED": (
             "تم التحقق من البيانات لكن الجلسة لم تُحفظ في المتصفّح. "
             "امسح cookies للموقع وجرّب من نافذة خاصة عبر https://"
@@ -662,6 +660,39 @@ def login_page():
     if request.cookies.get(LOGIN_PROBE_COOKIE):
         resp.delete_cookie(LOGIN_PROBE_COOKIE, path="/")
     return resp
+
+@app.route("/change_password")
+@login_required
+def change_password_page():
+    """صفحة تغيير كلمة المرور للحساب المسجّل."""
+    return render_template("change_password.html")
+
+
+@app.route("/mfa/verify")
+def mfa_verify_page():
+    from backend.core.auth import SESSION_KEY
+    from backend.core.mfa import SESSION_MFA_PENDING, SESSION_MFA_SETUP
+    if session.get(SESSION_KEY):
+        return redirect("/")
+    if not session.get(SESSION_MFA_PENDING):
+        return redirect("/login")
+    if session.get(SESSION_MFA_SETUP):
+        return redirect("/mfa/setup")
+    return render_template("mfa_verify.html")
+
+
+@app.route("/mfa/setup")
+def mfa_setup_page():
+    from backend.core.auth import SESSION_KEY
+    from backend.core.mfa import SESSION_MFA_PENDING, SESSION_MFA_SETUP, role_requires_mfa
+    pending = bool(session.get(SESSION_MFA_PENDING))
+    if pending and session.get(SESSION_MFA_SETUP):
+        return render_template("mfa_setup.html")
+    if session.get(SESSION_KEY) and role_requires_mfa((session.get("user_role") or "").strip()):
+        return render_template("mfa_setup.html")
+    if pending:
+        return redirect("/mfa/verify")
+    return redirect("/login")
 
 @app.route("/logout", methods=["GET"])
 def logout_page():

@@ -68,6 +68,7 @@ def ensure_survey_invite_schema(conn) -> None:
                 CREATE TABLE IF NOT EXISTS survey_invites (
                     id BIGSERIAL PRIMARY KEY,
                     token TEXT NOT NULL UNIQUE,
+                    token_hash TEXT UNIQUE,
                     template_code TEXT NOT NULL,
                     cycle_label TEXT NOT NULL,
                     invite_kind TEXT NOT NULL DEFAULT 'campaign',
@@ -88,6 +89,7 @@ def ensure_survey_invite_schema(conn) -> None:
                 CREATE TABLE IF NOT EXISTS survey_invites (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     token TEXT NOT NULL UNIQUE,
+                    token_hash TEXT UNIQUE,
                     template_code TEXT NOT NULL,
                     cycle_label TEXT NOT NULL,
                     invite_kind TEXT NOT NULL DEFAULT 'campaign',
@@ -140,6 +142,73 @@ def ensure_survey_invite_schema(conn) -> None:
         conn.commit()
     except Exception:
         pass
+    _ensure_invite_token_hash_column(conn)
+    _backfill_invite_token_hashes(conn)
+
+
+def _ensure_invite_token_hash_column(conn) -> None:
+    if not table_exists(conn, "survey_invites"):
+        return
+    cols = {c.lower() for c in fetch_table_columns(conn, "survey_invites")}
+    if "token_hash" in cols:
+        return
+    cur = conn.cursor()
+    try:
+        if conn_is_postgresql(conn):
+            cur.execute("ALTER TABLE survey_invites ADD COLUMN IF NOT EXISTS token_hash TEXT")
+        else:
+            cur.execute("ALTER TABLE survey_invites ADD COLUMN token_hash TEXT")
+        conn.commit()
+    except Exception as e:
+        logger.debug("survey_invites.token_hash: %s", e)
+
+
+def hash_survey_invite_token(token: str) -> str:
+    return hashlib.sha256((token or "").strip().encode("utf-8")).hexdigest()
+
+
+def _backfill_invite_token_hashes(conn) -> None:
+    if not table_exists(conn, "survey_invites"):
+        return
+    cols = {c.lower() for c in fetch_table_columns(conn, "survey_invites")}
+    if "token_hash" not in cols:
+        return
+    cur = conn.cursor()
+    try:
+        rows = cur.execute(
+            "SELECT id, token FROM survey_invites "
+            "WHERE (token_hash IS NULL OR TRIM(COALESCE(token_hash,'')) = '') "
+            "AND TRIM(COALESCE(token,'')) <> ''"
+        ).fetchall()
+    except Exception:
+        return
+    for row in rows or []:
+        iid = row[0] if not hasattr(row, "keys") else row["id"]
+        raw = row[1] if not hasattr(row, "keys") else row["token"]
+        digest = hash_survey_invite_token(str(raw or ""))
+        if not digest:
+            continue
+        try:
+            cur.execute(
+                "UPDATE survey_invites SET token_hash = ?, token = ? WHERE id = ?",
+                (digest, "h:" + digest, iid),
+            )
+        except Exception:
+            pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _redact_invite_row(d: dict, *, include_token: bool = False) -> dict:
+    out = dict(d or {})
+    out.pop("token_hash", None)
+    if not include_token:
+        raw = (out.get("token") or "").strip()
+        if len(raw) >= 20:
+            out["token"] = ""
+    return out
 
 
 def generate_invite_token() -> str:
@@ -174,56 +243,108 @@ def create_survey_invite(
         max_uses = 1
 
     token = generate_invite_token()
+    token_hash = hash_survey_invite_token(token)
     now = datetime.datetime.utcnow()
     expires_at = (now + datetime.timedelta(days=max(1, int(expires_days)))).isoformat()
     created_at = now.isoformat()
     cur = conn.cursor()
+    cols = {c.lower() for c in fetch_table_columns(conn, "survey_invites")}
+    has_hash = "token_hash" in cols
     if is_postgresql():
-        cur.execute(
-            """
-            INSERT INTO survey_invites (
-                token, template_code, cycle_label, invite_kind, label_ar,
-                expires_at, max_uses, use_count, is_active, created_by, created_at, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?)
-            RETURNING id
-            """,
-            (
-                token,
-                code,
-                cycle,
-                kind,
-                (label_ar or "").strip(),
-                expires_at,
-                int(max_uses),
-                (created_by or "").strip(),
-                created_at,
-                (notes or "").strip(),
-            ),
-        )
+        if has_hash:
+            cur.execute(
+                """
+                INSERT INTO survey_invites (
+                    token, token_hash, template_code, cycle_label, invite_kind, label_ar,
+                    expires_at, max_uses, use_count, is_active, created_by, created_at, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?)
+                RETURNING id
+                """,
+                (
+                    "h:" + token_hash,
+                    token_hash,
+                    code,
+                    cycle,
+                    kind,
+                    (label_ar or "").strip(),
+                    expires_at,
+                    int(max_uses),
+                    (created_by or "").strip(),
+                    created_at,
+                    (notes or "").strip(),
+                ),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO survey_invites (
+                    token, template_code, cycle_label, invite_kind, label_ar,
+                    expires_at, max_uses, use_count, is_active, created_by, created_at, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?)
+                RETURNING id
+                """,
+                (
+                    token,
+                    code,
+                    cycle,
+                    kind,
+                    (label_ar or "").strip(),
+                    expires_at,
+                    int(max_uses),
+                    (created_by or "").strip(),
+                    created_at,
+                    (notes or "").strip(),
+                ),
+            )
         invite_id = int(cur.fetchone()[0])
     else:
-        cur.execute(
-            """
-            INSERT INTO survey_invites (
-                token, template_code, cycle_label, invite_kind, label_ar,
-                expires_at, max_uses, use_count, is_active, created_by, created_at, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?)
-            """,
-            (
-                token,
-                code,
-                cycle,
-                kind,
-                (label_ar or "").strip(),
-                expires_at,
-                int(max_uses),
-                (created_by or "").strip(),
-                created_at,
-                (notes or "").strip(),
-            ),
-        )
+        if has_hash:
+            cur.execute(
+                """
+                INSERT INTO survey_invites (
+                    token, token_hash, template_code, cycle_label, invite_kind, label_ar,
+                    expires_at, max_uses, use_count, is_active, created_by, created_at, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?)
+                """,
+                (
+                    "h:" + token_hash,
+                    token_hash,
+                    code,
+                    cycle,
+                    kind,
+                    (label_ar or "").strip(),
+                    expires_at,
+                    int(max_uses),
+                    (created_by or "").strip(),
+                    created_at,
+                    (notes or "").strip(),
+                ),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO survey_invites (
+                    token, template_code, cycle_label, invite_kind, label_ar,
+                    expires_at, max_uses, use_count, is_active, created_by, created_at, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?)
+                """,
+                (
+                    token,
+                    code,
+                    cycle,
+                    kind,
+                    (label_ar or "").strip(),
+                    expires_at,
+                    int(max_uses),
+                    (created_by or "").strip(),
+                    created_at,
+                    (notes or "").strip(),
+                ),
+            )
         invite_id = int(cur.lastrowid or 0)
-    return get_invite_by_token(conn, token) or {"id": invite_id, "token": token}
+    row = get_invite_by_token(conn, token) or {"id": invite_id}
+    row["token"] = token
+    return _redact_invite_row(row, include_token=True)
 
 
 def list_survey_invites(conn, *, template_code: str | None = None, limit: int = 200) -> list[dict]:
@@ -239,19 +360,46 @@ def list_survey_invites(conn, *, template_code: str | None = None, limit: int = 
     sql += " ORDER BY id DESC LIMIT ?"
     params.append(int(limit))
     rows = cur.execute(sql, tuple(params)).fetchall()
-    return [_row_dict(r) for r in rows or []]
+    return [_redact_invite_row(_row_dict(r)) for r in rows or []]
 
 
 def get_invite_by_token(conn, token: str) -> dict | None:
     ensure_survey_invite_schema(conn)
     if not table_exists(conn, "survey_invites"):
         return None
+    raw = (token or "").strip()
+    if not raw:
+        return None
     cur = conn.cursor()
-    row = cur.execute(
-        "SELECT * FROM survey_invites WHERE token = ? LIMIT 1",
-        ((token or "").strip(),),
-    ).fetchone()
-    return _row_dict(row) if row else None
+    cols = {c.lower() for c in fetch_table_columns(conn, "survey_invites")}
+    row = None
+    if "token_hash" in cols:
+        row = cur.execute(
+            "SELECT * FROM survey_invites WHERE token_hash = ? LIMIT 1",
+            (hash_survey_invite_token(raw),),
+        ).fetchone()
+    if row is None:
+        row = cur.execute(
+            "SELECT * FROM survey_invites WHERE token = ? LIMIT 1",
+            (raw,),
+        ).fetchone()
+        stored_tok = ""
+        if row is not None:
+            stored_tok = str(row["token"] if hasattr(row, "keys") else row[1] or "")
+        if row is not None and "token_hash" in cols and not stored_tok.startswith("h:"):
+            try:
+                iid = row["id"] if hasattr(row, "keys") else row[0]
+                digest = hash_survey_invite_token(raw)
+                cur.execute(
+                    "UPDATE survey_invites SET token_hash = ?, token = ? WHERE id = ?",
+                    (digest, "h:" + digest, iid),
+                )
+                conn.commit()
+            except Exception:
+                pass
+    if not row:
+        return None
+    return _redact_invite_row(_row_dict(row), include_token=False)
 
 
 def validate_invite(conn, token: str) -> dict:
@@ -718,6 +866,7 @@ def _alumni_form_items(questions: list[dict]) -> list[dict[str, Any]]:
 
 def invite_fill_context(conn, token: str) -> dict[str, Any]:
     invite = validate_invite(conn, token)
+    invite["token"] = token
     template_code = (invite.get("template_code") or "").strip()
     template = get_template_by_code(conn, template_code)
     if not template:

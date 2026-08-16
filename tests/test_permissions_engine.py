@@ -115,3 +115,7 @@ def test_resolve_capabilities_system_account_flag():
 
 def test_role_profile_seed_count():
     assert len(ROLE_PROFILE_SEED) == 12
+    codes = {p["code"] for p in ROLE_PROFILE_SEED}
+    assert "instructor" in codes
+    assert "student" in codes
+    assert "head_of_department" in codes

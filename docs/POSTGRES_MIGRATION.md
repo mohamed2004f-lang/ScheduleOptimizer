@@ -1,6 +1,9 @@
 # PostgreSQL — قاعدة البيانات الوحيدة
 
 ScheduleOptimizer يعمل على **PostgreSQL** فقط (`DATABASE_URL` في `.env`).
+المخطط عبر **Alembic** (`alembic upgrade head`) وليس عند إقلاع التطبيق.
+
+## نسخ احتياطي
 
 ## نسخ احتياطي
 

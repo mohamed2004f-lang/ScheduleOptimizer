@@ -1437,6 +1437,9 @@ def _save_upload(file_storage, instructor_id: int) -> dict:
         raise ValueError("ملف فارغ")
     if len(data) > MAX_FILE_BYTES:
         raise ValueError("حجم الملف يتجاوز الحد المسموح (100MB)")
+    from backend.core.security import assert_upload_magic
+
+    assert_upload_magic(data, orig)
     digest = hashlib.sha256(data).hexdigest()[:16]
     stored = f"ins{int(instructor_id)}__{_safe_filename_part(os.path.splitext(orig)[0])}__{digest}{ext}"
     path = os.path.join(library_upload_dir(), stored)
@@ -2461,11 +2464,14 @@ def api_library_file(file_id: int):
         stored = (d.get("storage_path") or "").strip()
         if not stored:
             return jsonify({"status": "error", "message": "لا يوجد ملف"}), 404
-        path = os.path.join(library_upload_dir(), os.path.basename(stored))
-        if not os.path.isfile(path):
+        from backend.core.security import resolve_safe_upload_path
+
+        joined = os.path.join(library_upload_dir(), os.path.basename(stored))
+        safe = resolve_safe_upload_path(joined, allowed_root=library_upload_dir())
+        if not safe:
             return jsonify({"status": "error", "message": "الملف غير موجود على الخادم"}), 404
         return send_file(
-            path,
+            safe,
             as_attachment=True,
             download_name=d.get("original_name") or os.path.basename(stored),
         )
@@ -2801,11 +2807,14 @@ def api_materials_file(mid: int):
         stored = (ld.get("storage_path") or "").strip()
         if not stored:
             return jsonify({"status": "error", "message": "لا يوجد ملف"}), 404
-        path = os.path.join(library_upload_dir(), os.path.basename(stored))
-        if not os.path.isfile(path):
+        from backend.core.security import resolve_safe_upload_path
+
+        joined = os.path.join(library_upload_dir(), os.path.basename(stored))
+        safe = resolve_safe_upload_path(joined, allowed_root=library_upload_dir())
+        if not safe:
             return jsonify({"status": "error", "message": "الملف غير موجود"}), 404
         return send_file(
-            path,
+            safe,
             as_attachment=True,
             download_name=ld.get("original_name") or os.path.basename(stored),
         )

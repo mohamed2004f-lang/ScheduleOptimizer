@@ -173,6 +173,29 @@ class TestAuthFlow:
             data = resp.get_json()
             assert data["authenticated"] is False
 
+    def test_change_password_requires_current(self, auth_client):
+        resp = auth_client.post("/auth/change_password", json={"new_password": "NewP@ssw0rd!"})
+        assert resp.status_code == 400
+        data = resp.get_json() or {}
+        blob = str(data).lower()
+        assert ".env" not in blob
+        assert "config.py" not in blob
+        assert data.get("status") == "error"
+
+    def test_change_password_rejects_wrong_current(self, auth_client):
+        resp = auth_client.post(
+            "/auth/change_password",
+            json={
+                "current_password": "not-the-password",
+                "new_password": "NewP@ssw0rd!",
+                "confirm_password": "NewP@ssw0rd!",
+            },
+        )
+        assert resp.status_code == 400
+        data = resp.get_json() or {}
+        assert "الحالية" in (data.get("message") or "")
+        assert ".env" not in str(data).lower()
+
 
 # ═══════════════════════════════════════════════════════
 # 4. مسارات محمية (بعد تسجيل الدخول)

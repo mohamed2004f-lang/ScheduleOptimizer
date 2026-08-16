@@ -26,6 +26,7 @@
           <div class="col-md-4">
             <label class="form-label">العام الجامعي</label>
             <input id="academicYear" class="form-control form-control-sm" placeholder="مثال: 2025/2026" />
+            <div class="form-text">اكتب العام هكذا: 2026/2027 (شرط مائل). بنود «لمدة أسبوع» لها تاريخ بداية ونهاية.</div>
           </div>
           <div class="col-md-4">
             <label class="form-label">الفصل الدراسي</label>
@@ -52,11 +53,8 @@
               <tr>
                 <th style="width:70px" class="text-center">رقم</th>
                 <th>العنوان حسب الخطة الدراسية</th>
-                <th style="width:200px" class="text-center">
-                  <div>التاريخ</div>
-                  <div class="small text-muted">يُحدد حسب التقويم السنوي</div>
-                  <div class="small text-muted" dir="ltr" style="direction:ltr">DD/MM/YYYY</div>
-                </th>
+                <th style="width:160px" class="text-center">من</th>
+                <th style="width:160px" class="text-center">إلى</th>
               </tr>
             </thead>
             <tbody id="calendarBody"></tbody>
@@ -68,7 +66,32 @@
   </main>
 
   <script>
-    async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok,status:r.status,json:j}; }
+    function csrfToken(){
+      return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+    }
+    function requestHeaders(extra){
+      const h = Object.assign({
+        'Accept': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest'
+      }, extra || {});
+      const t = csrfToken();
+      if (t) h['X-CSRFToken'] = t;
+      return h;
+    }
+    async function fetchJSON(url, opts){
+      opts = opts || {};
+      const headers = requestHeaders(opts.headers || {});
+      const r = await fetch(url, Object.assign({ credentials: 'same-origin' }, opts, { headers }));
+      const j = await r.json().catch(()=>null);
+      return {ok:r.ok,status:r.status,json:j};
+    }
+    function apiErr(r){
+      const j = r.json || {};
+      if (j.error === 'CSRF_FAILED') {
+        return j.message || 'انتهت صلاحية الحماية الأمنية. حدّث الصفحة ثم احفظ مرة أخرى.';
+      }
+      return j.message || j.error || ('فشل الطلب (رمز ' + r.status + ')');
+    }
     function setMsg(kind, text){
       const el = document.getElementById('msg');
       el.innerHTML = text ? `<div class="alert alert-${kind} p-2 mb-0">${text}</div>` : '';
@@ -76,6 +99,10 @@
 
     let CURRENT = { academic_year: null, term: null, items: [] };
     let CURRENT_ROLE = null;
+
+    function canEditCalendar(role){
+      return ['admin','admin_main','system_admin','college_dean','academic_vice_dean'].includes(role || '');
+    }
 
     function guessAcademicYear(){
       const d = new Date();
@@ -86,18 +113,44 @@
       return `${start}/${start + 1}`;
     }
 
+    function dayVal(v){ return String(v || '').substring(0,10); }
+    function needsRange(it){
+      return !!(it && (it.needs_range || /لمدة/.test(it.title || '')));
+    }
+    function durationDays(title){
+      const t = title || '';
+      if (/ثلاثة أيام/.test(t)) return 3;
+      if (/يومين/.test(t)) return 2;
+      if (/أسبوع/.test(t)) return 7;
+      return 0;
+    }
+    function shiftDays(iso, days){
+      if (!iso) return '';
+      const d = new Date(iso + 'T00:00:00');
+      if (Number.isNaN(d.getTime())) return '';
+      d.setDate(d.getDate() + days);
+      return d.toISOString().slice(0,10);
+    }
+
     function render(items){
       const body = document.getElementById('calendarBody');
       body.innerHTML = '';
       (items || []).forEach(it=>{
         const tr = document.createElement('tr');
-        const titleCell = (CURRENT_ROLE === 'admin')
+        tr.dataset.no = String(it.item_no);
+        const titleCell = canEditCalendar(CURRENT_ROLE)
           ? `<input type="text" class="form-control form-control-sm cal-title" data-no="${it.item_no}" value="${(it.title || '').replace(/\"/g,'&quot;')}" />`
           : `<div>${it.title || ''}</div>`;
-        const canEdit = (CURRENT_ROLE === 'admin');
+        const canEdit = canEditCalendar(CURRENT_ROLE);
         const btnDel = canEdit
           ? `<button type="button" class="btn btn-sm ${it.is_custom ? 'btn-outline-danger' : 'btn-outline-warning'} cal-del" data-no="${it.item_no}" data-custom="${it.is_custom ? '1':'0'}">حذف</button>`
           : '';
+        const range = needsRange(it);
+        const startVal = dayVal(it.event_date_start);
+        const endVal = dayVal(it.event_date);
+        const startCell = range
+          ? `<input type="date" class="form-control form-control-sm cal-start" dir="ltr" data-no="${it.item_no}" value="${startVal}" ${canEdit ? '' : 'disabled'} />`
+          : `<span class="text-muted small">موعد</span>`;
         tr.innerHTML = `
           <td class="text-center">${it.item_no}</td>
           <td>
@@ -106,14 +159,24 @@
               ${btnDel}
             </div>
           </td>
+          <td class="text-center">${startCell}</td>
           <td class="text-center">
-            <input type="date" class="form-control form-control-sm cal-date" dir="ltr" lang="en-GB" style="direction:ltr" data-no="${it.item_no}" value="${(it.event_date || '').substring(0,10)}" ${canEdit ? '' : 'disabled'} />
+            <input type="date" class="form-control form-control-sm cal-date" dir="ltr" data-no="${it.item_no}" value="${endVal}" ${canEdit ? '' : 'disabled'} />
           </td>
         `;
         body.appendChild(tr);
       });
 
-      if (CURRENT_ROLE === 'admin') {
+      if (canEditCalendar(CURRENT_ROLE)) {
+        body.querySelectorAll('.cal-date').forEach(inp=>{
+          inp.addEventListener('change', ()=>{
+            const tr = inp.closest('tr');
+            const start = tr && tr.querySelector('.cal-start');
+            const titleInp = tr && tr.querySelector('.cal-title');
+            const days = durationDays(titleInp ? titleInp.value : '');
+            if (start && days && inp.value && !start.value) start.value = shiftDays(inp.value, -(days - 1));
+          });
+        });
         body.querySelectorAll('.cal-del').forEach(btn=>{
           btn.addEventListener('click', ()=>{
             // "حذف" هنا يعني إخفاء العنصر من هذا العام/الفصل (is_deleted=1)
@@ -136,45 +199,60 @@
       if(!year){ setMsg('warning','أدخل العام الجامعي أولاً.'); return; }
       setMsg('info','جاري التحميل...');
       const r = await fetchJSON(`/academic_calendar/items?academic_year=${encodeURIComponent(year)}&term=${encodeURIComponent(term)}`);
-      if(!r.ok){ setMsg('danger', r.json?.message || 'فشل التحميل.'); return; }
+      if(!r.ok){ setMsg('danger', apiErr(r)); return; }
+      if (r.json.academic_year) document.getElementById('academicYear').value = r.json.academic_year;
       CURRENT = { academic_year: r.json.academic_year, term: r.json.term, items: r.json.items || [] };
       render(CURRENT.items);
       document.getElementById('lastUpdated').textContent = '';
-      setMsg('success','تم تحميل الخطة.');
+      const dated = (CURRENT.items || []).filter(x => x.event_date || x.event_date_start).length;
+      const yearShown = r.json.academic_year || year;
+      const label = (term === 'fall' ? 'خريف' : 'ربيع') + ' ' + yearShown;
+      if (!dated) {
+        setMsg('warning', 'تم تحميل ' + label + ' بلا تواريخ. إن كنت حفظت خريفاً آخر فغيّر العام/الفصل ثم اضغط تحميل، أو عيّن الفصل الحالي من لوحة التشغيل.');
+      } else {
+        setMsg('success','تم تحميل ' + label + ' (' + dated + ' تاريخ).');
+      }
     }
 
     async function saveCalendar(){
-      if(CURRENT_ROLE !== 'admin'){
-        setMsg('warning','فقط الأدمن الرئيسي يمكنه حفظ التواريخ.');
+      if(!canEditCalendar(CURRENT_ROLE)){
+        setMsg('warning','صلاحية حفظ التواريخ غير متاحة لهذا الدور.');
         return;
       }
       const year = document.getElementById('academicYear').value.trim();
       const term = document.getElementById('termSelect').value;
       if(!year){ setMsg('warning','أدخل العام الجامعي أولاً.'); return; }
 
-      // اجمع القيم من الجدول (العنوان + التاريخ) مع علامات الحذف
       const rows = Array.from(document.querySelectorAll('#calendarBody tr'));
       const payloadItems = rows.map(tr=>{
-        const no = Number((tr.querySelector('.cal-date')||{}).dataset?.no || 0);
+        const no = Number(tr.dataset.no || (tr.querySelector('.cal-date')||{}).dataset?.no || 0);
         const dateVal = (tr.querySelector('.cal-date')||{}).value || null;
+        const startVal = (tr.querySelector('.cal-start')||{}).value || null;
         const titleInp = tr.querySelector('.cal-title');
         const titleVal = titleInp ? (titleInp.value || '') : '';
-        return { item_no: no, title: titleVal, event_date: dateVal, is_deleted: 0 };
+        return { item_no: no, title: titleVal, event_date: dateVal, event_date_start: startVal, is_deleted: 0 };
       });
-      // أضف العناصر المحذوفة التي تم حذفها من العرض
       (CURRENT.items || []).forEach(it=>{
         if (it && it.is_deleted) payloadItems.push({ item_no: it.item_no, title: it.title || '', event_date: it.event_date || null, is_deleted: 1 });
       });
+      setMsg('info','جاري الحفظ...');
       const r = await fetchJSON('/academic_calendar/items', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ academic_year: year, term, items: payloadItems })
       });
-      if(!r.ok){ setMsg('danger', r.json?.message || 'فشل الحفظ.'); return; }
-      setMsg('success', r.json?.message || 'تم الحفظ.');
+      if(!r.ok){ setMsg('danger', apiErr(r)); return; }
+      const savedYear = r.json?.academic_year || year;
+      const savedTerm = r.json?.term || term;
+      if (r.json?.academic_year) document.getElementById('academicYear').value = r.json.academic_year;
+      const items = Array.isArray(r.json?.items) ? r.json.items : null;
+      if (items) {
+        CURRENT = { academic_year: savedYear, term: savedTerm, items };
+        render(items);
+      }
+      const dated = (items || payloadItems).filter(x => !x.is_deleted && (x.event_date || x.event_date_start)).length;
+      setMsg('success', r.json?.message || ('تم الحفظ' + (dated ? ' (' + dated + ' تاريخ).' : '.')));
       if (r.json?.updated_at) document.getElementById('lastUpdated').textContent = `آخر حفظ: ${r.json.updated_at}`;
-      // إعادة تحميل لضمان التناسق
-      await loadCalendar();
     }
 
     function mapTermNameToCalendar(termName){
@@ -188,6 +266,8 @@
       const y = (termYear || '').trim();
       const m = y.match(/(\d{2})\s*[-–]\s*(\d{2})/);
       if (m) return `20${m[1]}/20${m[2]}`;
+      const m2 = y.match(/(20\d{2})\s*[/\-]\s*(20\d{2})/);
+      if (m2) return `${m2[1]}/${m2[2]}`;
       return guessAcademicYear();
     }
 
@@ -223,12 +303,14 @@
         document.getElementById('academicYear').value = guessAcademicYear();
       }
 
+      await applyCurrentTermDefaults();
+
       document.getElementById('btnLoad').addEventListener('click', loadCalendar);
       document.getElementById('btnSave').addEventListener('click', saveCalendar);
       const btnAdd = document.getElementById('btnAddTitle');
       if (btnAdd) {
         btnAdd.addEventListener('click', ()=>{
-          if (CURRENT_ROLE !== 'admin') return;
+          if (!canEditCalendar(CURRENT_ROLE)) return;
           CURRENT.items = Array.isArray(CURRENT.items) ? CURRENT.items : [];
           CURRENT.items.push({ item_no: 0, title: '', event_date: null, is_custom: true, is_deleted: 0 });
           render(CURRENT.items.filter(x=>!x.is_deleted));
@@ -236,11 +318,10 @@
         });
       }
 
-      if (isStudent) await applyCurrentTermDefaults();
       await loadCalendar();
-      if (CURRENT_ROLE !== 'admin' && !isStudent){
+      if (!canEditCalendar(CURRENT_ROLE) && !isStudent){
         document.getElementById('btnSave').disabled = true;
-        document.getElementById('btnSave').title = 'متاح للأدمن فقط';
+        document.getElementById('btnSave').title = 'متاح لإدارة الكلية';
       }
     });
   </script>

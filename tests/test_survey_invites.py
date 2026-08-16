@@ -18,6 +18,7 @@ from backend.services.survey_invites import (
     invite_fill_context,
     list_external_cycles,
     list_public_departments,
+    list_survey_invites,
     submit_invite_survey,
     validate_invite,
     validate_respondent_profile,
@@ -63,6 +64,18 @@ def test_invite_create_submit_aggregate(db_conn):
     )
     db_conn.commit()
     token = invite["token"]
+    assert token
+    stored = db_conn.execute(
+        "SELECT token, token_hash FROM survey_invites WHERE id = ?",
+        (invite["id"],),
+    ).fetchone()
+    stored_token = stored[0] if not hasattr(stored, "keys") else stored["token"]
+    stored_hash = stored[1] if not hasattr(stored, "keys") else stored["token_hash"]
+    assert token not in str(stored_token or "")
+    assert stored_hash
+    assert token not in str(stored_hash)
+    listed = list_survey_invites(db_conn)
+    assert all(token not in str((row.get("token") or "")) for row in listed)
     validate_invite(db_conn, token)
     ctx = invite_fill_context(db_conn, token)
     assert ctx["template_code"] == "employer_strategic"
@@ -271,44 +284,48 @@ def test_alumni_public_departments_exclude_general_and_other(db_conn):
 
 def test_alumni_invite_submit_http_csrf_enabled(app, db_conn):
     """إرسال استبيان الخريج عبر HTTP يجب أن ينجح حتى مع تفعيل CSRF (مسار معفى + رمز في الصفحة)."""
+    prev = app.config.get("WTF_CSRF_ENABLED")
     app.config["WTF_CSRF_ENABLED"] = True
-    ensure_survey_invite_schema(db_conn)
-    ensure_survey_templates_seeded(db_conn)
-    cur = db_conn.cursor()
-    cur.execute(
-        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES ('CIVIL2', 'مدني', 'CE', 1)"
-    )
-    dept_id = int(cur.lastrowid)
-    invite = create_survey_invite(
-        db_conn,
-        template_code="alumni",
-        cycle_label="csrf-test",
-        invite_kind="campaign",
-        created_by="test",
-    )
-    db_conn.commit()
-    token = invite["token"]
-    qs = list_template_questions(db_conn, int(get_template_by_code(db_conn, "alumni")["id"]))
-    answers = {str(q["id"]): 4 for q in qs}
-    profile = {
-        "graduation_year": 2020,
-        "department_id": dept_id,
-        "employment_status": "postgrad",
-        "recommend_enrollment": "yes",
-        "program_freeze_support": "yes",
-        "program_development_choice": "merge_dept",
-    }
-    with app.test_client() as client:
-        page = client.get(f"/academic_quality/surveys/invite/{token}")
-        assert page.status_code == 200
-        assert b'csrf-token' in page.data
-        r = client.post(
-            f"/academic_quality/surveys/api/invite/{token}/submit",
-            json={"profile": profile, "answers": answers, "comments": ""},
-            headers={"Accept": "application/json"},
+    try:
+        ensure_survey_invite_schema(db_conn)
+        ensure_survey_templates_seeded(db_conn)
+        cur = db_conn.cursor()
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES ('CIVIL2', 'مدني', 'CE', 1)"
         )
-        assert r.status_code == 200, r.get_json()
-        assert (r.get_json() or {}).get("status") == "ok"
+        dept_id = int(cur.lastrowid)
+        invite = create_survey_invite(
+            db_conn,
+            template_code="alumni",
+            cycle_label="csrf-test",
+            invite_kind="campaign",
+            created_by="test",
+        )
+        db_conn.commit()
+        token = invite["token"]
+        qs = list_template_questions(db_conn, int(get_template_by_code(db_conn, "alumni")["id"]))
+        answers = {str(q["id"]): 4 for q in qs}
+        profile = {
+            "graduation_year": 2020,
+            "department_id": dept_id,
+            "employment_status": "postgrad",
+            "recommend_enrollment": "yes",
+            "program_freeze_support": "yes",
+            "program_development_choice": "merge_dept",
+        }
+        with app.test_client() as client:
+            page = client.get(f"/academic_quality/surveys/invite/{token}")
+            assert page.status_code == 200
+            assert b'csrf-token' in page.data
+            r = client.post(
+                f"/academic_quality/surveys/api/invite/{token}/submit",
+                json={"profile": profile, "answers": answers, "comments": ""},
+                headers={"Accept": "application/json"},
+            )
+            assert r.status_code == 200, r.get_json()
+            assert (r.get_json() or {}).get("status") == "ok"
+    finally:
+        app.config["WTF_CSRF_ENABLED"] = prev
 
 
 def _alumni_base_profile(dept_id: int, **extra) -> dict:

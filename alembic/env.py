@@ -10,6 +10,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 # تحميل الإعدادات قبل بناء عنوان الاتصال
+from backend.database.db_config import require_postgres_url
 from config import DATABASE_URL
 
 config = context.config
@@ -23,7 +24,7 @@ target_metadata = None
 
 
 def get_url() -> str:
-    return DATABASE_URL
+    return require_postgres_url(DATABASE_URL)
 
 
 def run_migrations_offline() -> None:

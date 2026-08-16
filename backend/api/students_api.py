@@ -46,14 +46,13 @@ def handle_errors(f):
             return f(*args, **kwargs)
         except APIError as e:
             return jsonify({"success": False, "error": e.message}), e.status_code
-        except Exception as e:
+        except Exception:
             logger.exception("Unexpected error in students API")
             return (
                 jsonify(
                     {
                         "success": False,
                         "error": "Internal server error",
-                        "details": str(e),
                     }
                 ),
                 500,

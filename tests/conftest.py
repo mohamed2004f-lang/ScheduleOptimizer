@@ -26,6 +26,7 @@ os.environ.setdefault("ADMIN_USERNAME", "admin-test")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-pytest")
 # فرض بيئة الاختبار حتى لا تُستبدل بصمت من FLASK_ENV=production في .env أو في البيئة
 os.environ["FLASK_ENV"] = "testing"
+os.environ["MFA_ENFORCE"] = "0"
 
 
 def _use_postgres_repos() -> bool:
@@ -251,7 +252,9 @@ CREATE TABLE IF NOT EXISTS users (
     is_system_account INTEGER NOT NULL DEFAULT 0,
     role_profile_id INTEGER,
     display_title_ar TEXT,
-    is_dept_quality_coordinator INTEGER NOT NULL DEFAULT 0
+    is_dept_quality_coordinator INTEGER NOT NULL DEFAULT 0,
+    totp_secret TEXT,
+    totp_enabled INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS student_exceptions (
@@ -270,6 +273,7 @@ CREATE TABLE IF NOT EXISTS registrations (
     course_name TEXT NOT NULL,
     program_course_id INTEGER,
     teaching_group_id INTEGER,
+    semester TEXT DEFAULT '',
     registered_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (student_id, course_name)
 );
@@ -915,6 +919,101 @@ CREATE TABLE IF NOT EXISTS system_settings (
     value TEXT
 );
 
+CREATE TABLE IF NOT EXISTS academic_calendar (
+    academic_year TEXT NOT NULL,
+    term TEXT NOT NULL,
+    item_no INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    event_date TEXT,
+    is_deleted INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT,
+    PRIMARY KEY (academic_year, term, item_no)
+);
+
+CREATE TABLE IF NOT EXISTS term_master (
+    term_key TEXT PRIMARY KEY,
+    season TEXT NOT NULL CHECK (season IN ('fall', 'spring')),
+    academic_year TEXT NOT NULL,
+    term_name_ar TEXT NOT NULL DEFAULT '',
+    ops_year_label TEXT NOT NULL DEFAULT '',
+    ops_label TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'planned',
+    is_current INTEGER NOT NULL DEFAULT 0 CHECK (is_current IN (0, 1)),
+    created_at TEXT,
+    updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS term_windows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    term_key TEXT NOT NULL,
+    window_key TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'window',
+    label_ar TEXT NOT NULL DEFAULT '',
+    closure_stage TEXT NOT NULL DEFAULT '',
+    starts_at TEXT,
+    ends_at TEXT,
+    status TEXT NOT NULL DEFAULT 'unset',
+    calendar_item_no INTEGER,
+    source TEXT NOT NULL DEFAULT 'calendar',
+    grace_until TEXT,
+    updated_at TEXT,
+    UNIQUE (term_key, window_key)
+);
+
+CREATE TABLE IF NOT EXISTS academic_calendar_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    term_key TEXT NOT NULL,
+    version_no INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('draft', 'published', 'amended')),
+    snapshot_json TEXT NOT NULL DEFAULT '[]',
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT,
+    created_by TEXT NOT NULL DEFAULT '',
+    UNIQUE (term_key, version_no)
+);
+
+CREATE TABLE IF NOT EXISTS term_amendment_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    term_key TEXT NOT NULL,
+    window_key TEXT NOT NULL DEFAULT '',
+    effect TEXT NOT NULL,
+    apply_ops INTEGER NOT NULL DEFAULT 0,
+    old_starts_at TEXT,
+    old_ends_at TEXT,
+    new_starts_at TEXT,
+    new_ends_at TEXT,
+    reason TEXT NOT NULL DEFAULT '',
+    actor TEXT NOT NULL DEFAULT '',
+    created_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS term_registration_archives (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    archived_term TEXT NOT NULL,
+    student_id TEXT NOT NULL,
+    course_name TEXT NOT NULL,
+    program_course_id INTEGER,
+    teaching_group_id INTEGER,
+    semester TEXT DEFAULT '',
+    archived_at TEXT,
+    archived_by TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS term_operation_exceptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id TEXT NOT NULL,
+    term_key TEXT NOT NULL DEFAULT '',
+    operation TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'proposed',
+    reason TEXT NOT NULL DEFAULT '',
+    proposed_by TEXT NOT NULL DEFAULT '',
+    approved_by TEXT NOT NULL DEFAULT '',
+    expires_at TEXT,
+    created_at TEXT,
+    updated_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value_json TEXT,
@@ -1298,10 +1397,21 @@ def _setup_shared_db():
 
     # Monkey-patch get_connection everywhere it is imported.
     import backend.database.database as db_mod
+    import backend.database.db_config as db_cfg
+    import backend.database.connection as db_conn_mod
+    import backend.database.introspection as db_intro
+    import backend.database.schema_guard as db_guard
+
+    _false_pg = lambda: False  # noqa: E731
     db_mod.get_connection = _patched_get_connection
     # Force SQLite mode for all tests, even when DB module read .env earlier.
     db_mod.DATABASE_URL = "sqlite://"
-    db_mod.is_postgresql = lambda: False
+    db_mod.is_postgresql = _false_pg
+    db_cfg.DATABASE_URL = "sqlite://"
+    db_cfg.is_postgresql = _false_pg
+    db_conn_mod.is_postgresql = _false_pg
+    db_intro.is_postgresql = _false_pg
+    db_guard.is_postgresql = _false_pg
 
     # Also patch db_transaction to use our patched get_connection.
     from contextlib import contextmanager as _cm
@@ -1332,6 +1442,9 @@ def _setup_shared_db():
         "backend.services.notifications",
         "backend.services.users",
         "backend.services.academic_calendar",
+        "backend.services.term_ops_routes",
+        "backend.services.term_policy",
+        "backend.services.term_basket",
         "backend.services.academic_rules",
         "backend.services.instructors",
         "backend.services.instructor_portal",
@@ -1345,6 +1458,7 @@ def _setup_shared_db():
         "backend.services.college_catalog",
         "backend.core.monitoring",
         "backend.core.auth",
+        "backend.core.mfa",
         "backend.services.course_delivery",
     ]
     import importlib
@@ -1376,8 +1490,11 @@ def app(_setup_shared_db):
 
     from app import app as flask_app
 
+    os.environ["FLASK_ENV"] = "testing"
+    os.environ["MFA_ENFORCE"] = "0"
     flask_app.config["TESTING"] = True
     flask_app.config["WTF_CSRF_ENABLED"] = False
+    flask_app.config["WTF_CSRF_SSL_STRICT"] = False
     flask_app.config["SERVER_NAME"] = None
 
     yield flask_app
@@ -1433,7 +1550,7 @@ def instructor_auth_client(app):
 
 
 @pytest.fixture()
-def db_conn():
+def db_conn(_setup_shared_db):
     """Direct access to the shared in-memory SQLite connection for unit tests."""
     if _use_postgres_repos():
         pytest.skip("db_conn متاح فقط لمسار SQLite؛ استخدم get_connection() في اختبارات PostgreSQL")

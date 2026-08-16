@@ -51,11 +51,13 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 COPY . .
 
-RUN mkdir -p logs backups backend/database && chmod +x app.py
+RUN mkdir -p logs backups backend/database \
+    && chmod +x app.py scripts/docker_entrypoint.sh \
+    && sed -i 's/\r$//' scripts/docker_entrypoint.sh
 
 EXPOSE 5000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')" || exit 1
 
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--threads", "4", "--timeout", "120", "wsgi:application"]
+ENTRYPOINT ["scripts/docker_entrypoint.sh"]

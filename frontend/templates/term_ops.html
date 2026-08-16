@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>تشغيل الفصل</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-fluid mt-4 px-3" style="max-width:1180px;">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+      <div>
+        <h4 class="mb-1">لوحة تشغيل الفصل</h4>
+        <p class="text-muted small mb-0">التقويم إعلان · النوافذ تشغيل · الأقفال سلطة. تحريك موعد مقفل لا يفتح التسجيل.</p>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <a class="btn btn-sm btn-outline-secondary" href="/academic_calendar_page">التقويم الأكاديمي</a>
+        <a class="btn btn-sm btn-outline-secondary" href="/academic_quality/term_closure">إغلاق المراحل</a>
+        <button type="button" class="btn btn-sm btn-outline-primary" id="btnReload">تحديث</button>
+      </div>
+    </div>
+    <div class="card mb-3">
+      <div class="card-body">
+        <h6 class="mb-2">تعيين الفصل الحالي</h6>
+        <p class="small text-muted mb-2">هذا ما تعرضه اللوحة والتقويم عند التحميل. حفظ تقويم الخريف لا يغيّر الفصل الحالي إن بقي ربيعاً.</p>
+        <div class="row g-2 align-items-end">
+          <div class="col-md-3">
+            <label class="form-label small mb-0" for="opsSetSeason">الفصل</label>
+            <select id="opsSetSeason" class="form-select form-select-sm">
+              <option value="خريف">خريف</option>
+              <option value="ربيع">ربيع</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small mb-0" for="opsSetYear">السنة</label>
+            <input id="opsSetYear" class="form-control form-control-sm" placeholder="26-27" dir="ltr">
+          </div>
+          <div class="col-md-3">
+            <button type="button" class="btn btn-sm btn-primary" id="btnSetCurrentTerm">حفظ الفصل الحالي</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="opsMsg"></div>
+    <div id="opsNotice"></div>
+    <div class="d-flex flex-wrap align-items-end gap-2 mb-3" id="opsStoredWrap" style="display:none;">
+      <div>
+        <label class="form-label small mb-1" for="opsStored">تقويم محفوظ (إن كان غير الفصل الحالي)</label>
+        <select id="opsStored" class="form-select form-select-sm" style="min-width:260px;"></select>
+      </div>
+      <button type="button" class="btn btn-sm btn-outline-primary" id="btnViewStored">عرض نوافذه</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" id="btnViewCurrent">الفصل الحالي</button>
+    </div>
+    <div class="row g-3 mb-3">
+      <div class="col-md-3">
+        <div class="border rounded p-3 h-100 bg-light">
+          <div class="small text-muted">الفصل الحالي</div>
+          <div class="fw-semibold" id="opsTerm">—</div>
+          <div class="small" id="opsMaster">—</div>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="border rounded p-3 h-100 bg-light">
+          <div class="small text-muted">آخر نسخة تقويم</div>
+          <div class="fw-semibold" id="opsVersion">—</div>
+          <div class="small" id="opsVersionMeta"></div>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="border rounded p-3 h-100 bg-light">
+          <div class="small text-muted">سلة التسجيلات الحية</div>
+          <div class="fw-semibold" id="opsBasket">—</div>
+          <div class="small" id="opsPending"></div>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="border rounded p-3 h-100 bg-light">
+          <div class="small text-muted">اكتمال الإغلاق التشغيلي</div>
+          <div class="fw-semibold" id="opsClosure">—</div>
+          <div class="small" id="opsFaculty"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h6 class="mb-2">نوافذ التشغيل</h6>
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>النافذة</th>
+                <th>المرحلة</th>
+                <th>من</th>
+                <th>إلى</th>
+                <th>الحالة</th>
+              </tr>
+            </thead>
+            <tbody id="opsWindows"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h6 class="mb-2">محاكاة تحريك موعد</h6>
+        <p class="small text-muted">يعرض أثر السياسة قبل الحفظ. لن يُفتح تشغيل مرحلة مقفلة.</p>
+        <div class="row g-2 align-items-end">
+          <div class="col-md-4">
+            <label class="form-label small mb-0">بند التقويم</label>
+            <select id="simItem" class="form-select form-select-sm"></select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small mb-0">التاريخ الجديد</label>
+            <input id="simDate" type="date" class="form-control form-control-sm" dir="ltr">
+          </div>
+          <div class="col-md-2">
+            <button type="button" class="btn btn-sm btn-primary w-100" id="btnSim">محاكاة</button>
+          </div>
+        </div>
+        <div id="simOut" class="mt-2 small"></div>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h6 class="mb-2">أرشفة السلة قبل فصل جديد</h6>
+        <p class="small text-muted mb-2">السلة الحية واحدة لكل طالب/مقرر. الانتقال لفصل جديد يتطلب أرشفة أو سلة فارغة. الطلبات المعلّقة لا تُحذف.</p>
+        <div class="d-flex gap-2">
+          <input id="archReason" class="form-control form-control-sm" placeholder="سبب الأرشفة (٥ أحرف على الأقل)">
+          <button type="button" class="btn btn-sm btn-warning" id="btnArchive">أرشفة السلة الحالية</button>
+        </div>
+      </div>
+    </div>
+  </main>
+<script>
+(function(){
+  const elMsg = document.getElementById('opsMsg');
+  let STATE = null;
+  function setMsg(t,k){ elMsg.innerHTML = t ? `<div class="alert alert-${k||'info'} py-2">${t}</div>` : ''; }
+  function csrfToken(){
+    return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+  }
+  function requestHeaders(extra){
+    const h = Object.assign({
+      'Accept': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest'
+    }, extra || {});
+    const t = csrfToken();
+    if (t) h['X-CSRFToken'] = t;
+    return h;
+  }
+  async function fetchJSON(url, opts){
+    opts = opts || {};
+    const headers = requestHeaders(opts.headers || {});
+    const r = await fetch(url, Object.assign({ credentials: 'same-origin' }, opts, { headers }));
+    const j = await r.json().catch(()=>null);
+    return { ok:r.ok, status:r.status, json:j };
+  }
+  function apiErr(r){
+    const j = r.json || {};
+    if (j.error === 'CSRF_FAILED') {
+      return j.message || 'انتهت صلاحية الحماية الأمنية. حدّث الصفحة ثم أعد المحاولة.';
+    }
+    return j.message || j.error || ('فشل الطلب (رمز ' + r.status + ')');
+  }
+  function badge(w){
+    if (w.date_kind === 'not_applicable') return '<span class="badge text-bg-light text-dark">لا ينطبق على هذا الفصل</span>';
+    if (w.date_kind === 'stage_lock' && w.status !== 'scheduled') return '<span class="badge text-bg-light text-dark">يُضبط مع إغلاق المرحلة</span>';
+    if (w.open_now) return '<span class="badge text-bg-success">مفتوحة</span>';
+    if (w.status === 'scheduled') return '<span class="badge text-bg-secondary">مغلقة بالتاريخ</span>';
+    return '<span class="badge text-bg-light text-dark">غير مضبوطة</span>';
+  }
+  function fromCell(w){
+    if (w.date_kind === 'not_applicable') return 'لا ينطبق';
+    if (w.date_kind === 'stage_lock') return 'عند الإغلاق';
+    if ((w.date_kind === 'deadline' || w.date_kind === 'milestone') && !w.starts_at) return 'موعد';
+    return w.starts_at || '—';
+  }
+  function render(){
+    if (!STATE) return;
+    const ct = STATE.current_term || {};
+    document.getElementById('opsTerm').textContent = ct.ops_label || '—';
+    const setSeason = document.getElementById('opsSetSeason');
+    const setYear = document.getElementById('opsSetYear');
+    if (setSeason && (ct.term_name === 'خريف' || ct.term_name === 'ربيع')) setSeason.value = ct.term_name;
+    else if (setSeason && /خريف/.test(ct.term_name||'')) setSeason.value = 'خريف';
+    else if (setSeason && /ربيع/.test(ct.term_name||'')) setSeason.value = 'ربيع';
+    if (setYear && ct.term_year) setYear.value = ct.term_year;
+    const m = STATE.term_master || {};
+    const statusAr = {planned:'مخطط', closed:'مغلق', open:'مفتوح'}[m.status] || m.status;
+    if (m.term_key || m.status) {
+      document.getElementById('opsMaster').textContent =
+        `حالة الفصل: ${statusAr || 'مربوط'}` + (STATE.academic_year ? ` · ${STATE.academic_year}` : '');
+    } else if ((STATE.windows||[]).some(w => w.starts_at || w.ends_at)) {
+      document.getElementById('opsMaster').textContent = 'مربوط من التقويم';
+    } else {
+      document.getElementById('opsMaster').textContent = 'لم يُربط بعد';
+    }
+    const notice = STATE.notice_ar || '';
+    const elN = document.getElementById('opsNotice');
+    elN.innerHTML = notice ? `<div class="alert alert-warning py-2">${notice}</div>` : '';
+    const stored = STATE.stored_calendars || [];
+    const wrap = document.getElementById('opsStoredWrap');
+    const selStored = document.getElementById('opsStored');
+    if (stored.length) {
+      wrap.style.display = '';
+      selStored.innerHTML = stored.map(s =>
+        `<option value="${(s.canonical_year||s.academic_year)}|${s.season||s.term}">${s.label_ar} (${s.dated_items} بند)</option>`
+      ).join('');
+    } else {
+      wrap.style.display = 'none';
+    }
+    const v = STATE.calendar_version;
+    document.getElementById('opsVersion').textContent = v ? `v${v.version_no} · ${v.status}` : 'لا نسخة';
+    document.getElementById('opsVersionMeta').textContent = v ? ((v.reason||'') + (v.created_at? ' · '+v.created_at : '')) : '';
+    const b = STATE.basket || {};
+    document.getElementById('opsBasket').textContent = `${b.students||0} طالب · ${b.rows||0} مقرر`;
+    document.getElementById('opsPending').textContent = `طلبات معلّقة: ${b.pending_requests||0}`;
+    const c = STATE.closure || {};
+    document.getElementById('opsClosure').textContent = c.operational_complete ? 'مكتمل' : 'غير مكتمل';
+    const fl = (c.faculty_cycle_lock || {});
+    document.getElementById('opsFaculty').textContent = fl.locked ? 'قفل دورة التدريس: مفعّل' : 'قفل دورة التدريس: غير مفعّل';
+    const body = document.getElementById('opsWindows');
+    body.innerHTML = '';
+    (STATE.windows || []).forEach(w => {
+      const tr = document.createElement('tr');
+      if (w.open_now) tr.classList.add('table-success');
+      tr.innerHTML = `<td>${w.label_ar}<div class="small text-muted">${w.window_key}</div></td>
+        <td class="small">${w.closure_stage||'—'}</td>
+        <td class="small" dir="ltr">${fromCell(w)}</td>
+        <td class="small" dir="ltr">${w.ends_at||'—'}${w.grace_until? '<div class="text-muted">مهلة: '+w.grace_until+'</div>':''}</td>
+        <td>${badge(w)}</td>`;
+      body.appendChild(tr);
+    });
+    const sel = document.getElementById('simItem');
+    sel.innerHTML = '';
+    (STATE.calendar_items || []).forEach(it => {
+      const o = document.createElement('option');
+      o.value = it.item_no;
+      o.textContent = `${it.item_no}. ${it.title||''}`;
+      sel.appendChild(o);
+    });
+  }
+  async function load(extra){
+    setMsg('جاري التحميل…','info');
+    let url = '/term_ops/dashboard';
+    if (extra && extra.academic_year && extra.term) {
+      url += `?academic_year=${encodeURIComponent(extra.academic_year)}&term=${encodeURIComponent(extra.term)}`;
+    }
+    const r = await fetchJSON(url);
+    if (!r.ok) { setMsg(apiErr(r),'danger'); return; }
+    STATE = r.json;
+    setMsg('','');
+    render();
+  }
+  document.getElementById('btnReload').addEventListener('click', ()=>load());
+  document.getElementById('btnViewStored').addEventListener('click', ()=>{
+    const v = (document.getElementById('opsStored').value||'').split('|');
+    if (v.length < 2) return;
+    load({ academic_year: v[0], term: v[1] });
+  });
+  document.getElementById('btnViewCurrent').addEventListener('click', ()=>load());
+  document.getElementById('btnSetCurrentTerm').addEventListener('click', async ()=>{
+    const term_name = (document.getElementById('opsSetSeason').value||'').trim();
+    const term_year = (document.getElementById('opsSetYear').value||'').trim();
+    if (!term_name || !term_year) { setMsg('اختر الفصل والسنة (مثال: خريف و 26-27)','warning'); return; }
+    async function send(extra){
+      return fetchJSON('/admin/settings/current_term', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ term_name, term_year, ...(extra||{}) })
+      });
+    }
+    let r = await send();
+    if (r.status === 409 && (r.json&&r.json.code) === 'basket_unmigrated') {
+      const reason = prompt('السلة فيها تسجيلات غير مُرحَّلة. اكتب سبب الأرشفة (٥ أحرف) ثم يُعيَّن الفصل الجديد:') || '';
+      if (reason.trim().length < 5) { setMsg('أُلغي التعيين — الأرشفة تحتاج سبباً','warning'); return; }
+      r = await send({ archive_basket: true, archive_reason: reason.trim() });
+    }
+    if (!r.ok) { setMsg(apiErr(r),'danger'); return; }
+    setMsg('تم تعيين الفصل الحالي: ' + term_name + ' ' + term_year,'success');
+    await load();
+  });
+  document.getElementById('btnSim').addEventListener('click', async ()=>{
+    const item_no = Number(document.getElementById('simItem').value||0);
+    const event_date = document.getElementById('simDate').value;
+    if (!item_no || !event_date) { setMsg('اختر بنداً وتاريخاً','warning'); return; }
+    const r = await fetchJSON('/term_ops/preview', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        academic_year: STATE.academic_year,
+        term: STATE.season,
+        item_no, event_date
+      })
+    });
+    const out = document.getElementById('simOut');
+    if (!r.ok) { out.textContent = apiErr(r); return; }
+    const ch = (r.json.changes||[]);
+    if (!ch.length) { out.innerHTML = '<div class="text-muted">لا أثر تشغيلي لهذا التاريخ.</div>'; return; }
+    out.innerHTML = ch.map(c => {
+      const tone = c.effect === 'reject_regression' ? 'danger' : (c.effect === 'calendar_only' ? 'info' : (c.needs_confirm ? 'warning' : 'success'));
+      return `<div class="alert alert-${tone} py-2 mb-1"><strong>${c.label_ar}</strong> — ${c.effect_ar}
+        <div class="small">تشغيل: ${c.apply_ops?'نعم':'لا'} · من ${c.old_ends_at||'—'} إلى ${c.new_ends_at||'—'}</div></div>`;
+    }).join('');
+  });
+  document.getElementById('btnArchive').addEventListener('click', async ()=>{
+    const reason = (document.getElementById('archReason').value||'').trim();
+    if (reason.length < 5) { setMsg('أدخل سبب الأرشفة','warning'); return; }
+    if (!confirm('أرشفة السلة الحية وتفريغها؟ الطلبات المعلّقة تبقى.')) return;
+    const r = await fetchJSON('/term_ops/archive_basket', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ reason })
+    });
+    if (!r.ok) { setMsg(apiErr(r),'danger'); return; }
+    setMsg(`تمت أرشفة ${r.json.archived_rows||0} تسجيلاً`,'success');
+    await load();
+  });
+  load();
+})();
+</script>
+</body>
+</html>

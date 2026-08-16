@@ -33,7 +33,7 @@ python scripts/backfill_teaching_groups.py
 
 | البند | الحالة |
 |--------|--------|
-| `DROP TABLE program_course_sections` | ✅ عند `ensure_tables()` / إعادة تشغيل التطبيق |
+| `DROP TABLE program_course_sections` | ✅ عبر Alembic `0002_pg_parity` (`alembic upgrade head`) |
 | إزالة من `TABLES_SCHEMA` + `conftest` | ✅ |
 
 ## المرحلة 4 — السياسات

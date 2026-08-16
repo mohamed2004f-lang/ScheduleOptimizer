@@ -13,6 +13,15 @@ from .utilities import DB_FILE, get_connection, get_current_term, log_activity
 admin_bp = Blueprint("admin", __name__)
 
 
+def _sync_term_engine_current(conn, name: str, year: str):
+    try:
+        from backend.services.term_engine import sync_current_term_from_settings
+
+        return sync_current_term_from_settings(conn, term_name=name, term_year=year)
+    except Exception:
+        return None
+
+
 @admin_bp.route("/settings/current_term", methods=["GET"])
 @login_required
 def get_current_term_api():
@@ -22,7 +31,13 @@ def get_current_term_api():
 
 
 @admin_bp.route("/settings/current_term", methods=["POST"])
-@role_required("admin")
+@role_required(
+    "admin",
+    "admin_main",
+    "system_admin",
+    "college_dean",
+    "academic_vice_dean",
+)
 def set_current_term():
     """حفظ اسم الفصل الحالي وسنة الفصل في system_settings."""
     data = request.get_json(force=True) or {}
@@ -30,7 +45,27 @@ def set_current_term():
     year = (data.get("term_year") or "").strip()
     if not name:
         return jsonify({"status": "error", "message": "term_name مطلوب"}), 400
+    extra = None
+    archived = None
     with get_connection() as conn:
+        from backend.services.term_basket import BasketSwitchBlocked, assert_current_term_switch_allowed
+
+        try:
+            archived = assert_current_term_switch_allowed(
+                conn,
+                term_name=name,
+                term_year=year,
+                archive=bool(data.get("archive_basket")),
+                actor=(session.get("user") or session.get("username") or "").strip(),
+                reason=(data.get("archive_reason") or data.get("reason") or "").strip(),
+            )
+        except BasketSwitchBlocked as exc:
+            payload = {
+                "status": "error",
+                "message": str(exc),
+            }
+            payload.update(exc.payload)
+            return jsonify(payload), 409
         if is_postgresql():
             # إلغاء أي معاملة معطوبة من طلب سابق، ثم autocommit لكل أمر (يتجنب InFailedSqlTransaction).
             raw = getattr(conn, "_conn", None)
@@ -49,6 +84,7 @@ def set_current_term():
                         "INSERT INTO system_settings (key, value) VALUES (?, ?)",
                         (key, val),
                     )
+                extra = _sync_term_engine_current(conn, name, year)
             finally:
                 if raw is not None:
                     try:
@@ -71,20 +107,24 @@ def set_current_term():
                 """,
                 (year,),
             )
+            extra = _sync_term_engine_current(conn, name, year)
             conn.commit()
     label = f"{name} {year}".strip()
-    return jsonify(
-        {
-            "status": "ok",
-            "message": (
-                "تم حفظ الفصل الحالي. "
-                "الفصول المغلقة سابقاً تبقى مقفلة تحت ملصقها — الفصل الجديد دورة تشغيل مستقلة."
-            ),
-            "term_name": name,
-            "term_year": year,
-            "term_label": label,
-        }
-    )
+    payload = {
+        "status": "ok",
+        "message": (
+            "تم حفظ الفصل الحالي. "
+            "الفصول المغلقة سابقاً تبقى مقفلة تحت ملصقها — الفصل الجديد دورة تشغيل مستقلة."
+        ),
+        "term_name": name,
+        "term_year": year,
+        "term_label": label,
+    }
+    if extra:
+        payload["term_key"] = extra.get("term_key")
+    if archived:
+        payload["basket_archive"] = archived
+    return jsonify(payload)
 
 
 @admin_bp.route("/settings/attendance_term_weeks", methods=["GET"])

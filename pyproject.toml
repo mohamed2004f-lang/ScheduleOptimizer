@@ -7,7 +7,7 @@ src = ["backend"]
 source = ["backend"]
 
 [tool.coverage.report]
-# يطابق الوضع الحالي (~18%)؛ ارفع القيمة تدريجياً (هدف معقول 40+)
-fail_under = 17
+# بوابة الجودة: درجات / رفع / صلاحيات — لا تخفض دون 40
+fail_under = 40
 precision = 0
 omit = ["*/tests/*"]

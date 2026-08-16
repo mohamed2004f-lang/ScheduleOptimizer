@@ -203,15 +203,18 @@ def register_term_closure_routes(bp) -> None:
     @login_required
     @role_required(*_TERM_CLOSURE_ROLES)
     def term_closure_download_archive(filename: str):
-        safe = os.path.basename((filename or "").strip())
-        if not safe or safe != os.path.basename(filename):
+        from backend.core.security import resolve_safe_upload_path
+
+        safe_name = os.path.basename((filename or "").strip())
+        if not safe_name or safe_name != os.path.basename(filename):
             return jsonify({"status": "error", "message": "اسم ملف غير صالح"}), 400
-        path = os.path.join(term_archive_dir(), safe)
-        if not os.path.isfile(path):
+        joined = os.path.join(term_archive_dir(), safe_name)
+        safe = resolve_safe_upload_path(joined, allowed_root=term_archive_dir())
+        if not safe:
             return jsonify({"status": "error", "message": "الملف غير موجود"}), 404
         return send_file(
-            path,
+            safe,
             mimetype="application/zip",
             as_attachment=True,
-            download_name=safe,
+            download_name=safe_name,
         )
