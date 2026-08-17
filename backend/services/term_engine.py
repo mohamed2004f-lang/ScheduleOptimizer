@@ -24,6 +24,20 @@ logger = logging.getLogger("backend.services.term_engine")
 SEASON_FALL = "fall"
 SEASON_SPRING = "spring"
 TERM_STATUS_PLANNED = "planned"
+TERM_STATUS_REGISTRATION = "registration"
+TERM_STATUS_INSTRUCTION = "instruction"
+TERM_STATUS_EXAMS = "exams"
+TERM_STATUS_GRADING = "grading"
+TERM_STATUS_CLOSED = "closed"
+
+TERM_STATUS_LABELS_AR: dict[str, str] = {
+    TERM_STATUS_PLANNED: "مخطط",
+    TERM_STATUS_REGISTRATION: "تسجيل",
+    TERM_STATUS_INSTRUCTION: "دراسة",
+    TERM_STATUS_EXAMS: "امتحان",
+    TERM_STATUS_GRADING: "درجات",
+    TERM_STATUS_CLOSED: "مغلق",
+}
 WINDOW_UNSET = "unset"
 WINDOW_SCHEDULED = "scheduled"
 VERSION_DRAFT = "draft"
@@ -277,6 +291,84 @@ def parse_ops_term(term_name: str | None, term_year: str | None) -> dict[str, st
     }
 
 
+def _collapse_term_ws(s: str | None) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip())
+
+
+def current_term_match_context(conn) -> dict | None:
+    """تسميات الفصل الحالي لمطابقة عمود schedule.semester (خريف 26-27 ≡ خريف 2026/2027)."""
+    from backend.services.utilities import get_current_term
+
+    name, year = get_current_term(conn=conn)
+    parsed = parse_ops_term(name, year)
+    raw = _collapse_term_ws(f"{(name or '').strip()} {(year or '').strip()}")
+    if not parsed:
+        if not raw:
+            return None
+        years = academic_year_aliases(year) if year else []
+        seasons = [str(name or "").strip().lower()] if name else []
+        return {
+            "term_key": "",
+            "ops_label": raw,
+            "raw_label": raw,
+            "labels": {raw.lower()} if raw else set(),
+            "seasons": [s for s in seasons if s],
+            "years": years,
+        }
+    years: list[str] = []
+    for y in (parsed.get("academic_year"), parsed.get("ops_year_label"), year):
+        for alias in academic_year_aliases(y):
+            if alias and alias not in years:
+                years.append(alias)
+    seasons = calendar_term_aliases(parsed.get("season"))
+    labels: set[str] = set()
+    if raw:
+        labels.add(raw.lower())
+    ops = _collapse_term_ws(parsed.get("ops_label") or "")
+    if ops:
+        labels.add(ops.lower())
+    for s in seasons:
+        for y in years:
+            lab = _collapse_term_ws(f"{s} {y}")
+            if lab:
+                labels.add(lab.lower())
+    return {
+        "term_key": parsed["term_key"],
+        "ops_label": parsed["ops_label"],
+        "raw_label": raw or parsed["ops_label"],
+        "labels": labels,
+        "seasons": [str(s).lower() for s in seasons if s],
+        "years": years,
+    }
+
+
+def schedule_semester_matches_term_context(semester: str | None, ctx: dict | None) -> bool:
+    """صف بلا semester لا يُعدّ من الفصل الحالي (لا يلوّث محرر الفصل الجديد)."""
+    if not ctx:
+        return False
+    sem = _collapse_term_ws(semester or "")
+    if not sem:
+        return False
+    low = sem.lower()
+    if low in (ctx.get("labels") or set()):
+        return True
+    season_ok = any(s and s in low for s in (ctx.get("seasons") or []))
+    year_ok = any(y and str(y).lower() in low for y in (ctx.get("years") or []))
+    return bool(season_ok and year_ok)
+
+
+def confirm_term_label_matches(confirm: str | None, ctx: dict | None) -> bool:
+    if not ctx:
+        return False
+    c = _collapse_term_ws(confirm).lower()
+    if not c:
+        return False
+    labels = ctx.get("labels") or set()
+    if c in labels:
+        return True
+    return c == _collapse_term_ws(ctx.get("ops_label") or "").lower()
+
+
 def _parse_date(raw: Any) -> datetime.date | None:
     s = str(raw or "").strip()
     if not s:
@@ -381,8 +473,40 @@ def ensure_term_engine_tables(conn) -> None:
         migrate_spring_new_students_item(conn)
     except Exception:
         logger.exception("spring new-students calendar item shift skipped")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
     try:
         conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+
+def _exec_ddl_safe(conn, sql: str) -> None:
+    """DDL لا يُلغي معاملة فيها بيانات مستخدم (SAVEPOINT على PostgreSQL)."""
+    from backend.database.introspection import conn_is_postgresql
+    from backend.database.pg_convert import sqlite_ddl_to_postgres
+
+    q = sqlite_ddl_to_postgres(sql) if conn_is_postgresql(conn) else sql
+    cur = conn.cursor()
+    if conn_is_postgresql(conn):
+        try:
+            cur.execute("SAVEPOINT so_ddl")
+            cur.execute(q)
+            cur.execute("RELEASE SAVEPOINT so_ddl")
+        except Exception:
+            try:
+                cur.execute("ROLLBACK TO SAVEPOINT so_ddl")
+            except Exception:
+                pass
+            logger.debug("term_engine ddl skipped")
+        return
+    try:
+        cur.execute(q)
     except Exception:
         pass
 
@@ -392,57 +516,59 @@ def _ensure_wave234_schema(conn) -> None:
     from backend.database.database import fetch_table_columns
     from backend.database.schema_ddl import INDEXES, TABLES_SCHEMA
 
-    cur = conn.cursor()
     for name in (
         "term_amendment_log",
         "term_registration_archives",
         "term_operation_exceptions",
+        "term_course_offerings",
+        "term_offering_state",
     ):
-        try:
-            cur.execute(TABLES_SCHEMA[name])
-        except Exception:
-            _rollback_quietly(conn)
+        _exec_ddl_safe(conn, TABLES_SCHEMA[name])
     for idx in INDEXES:
-        if "term_amend_log" in idx or "term_reg_arch" in idx or "term_op_exc" in idx:
-            try:
-                cur.execute(idx)
-            except Exception:
-                _rollback_quietly(conn)
-    try:
-        wcols = fetch_table_columns(conn, "term_windows") or []
-        if "grace_until" not in wcols:
-            _add_column(conn, "term_windows", "grace_until", "TEXT")
-    except Exception:
-        _rollback_quietly(conn)
-    try:
-        rcols = fetch_table_columns(conn, "registrations") or []
-        if "semester" not in rcols:
-            _add_column(conn, "registrations", "semester", "TEXT DEFAULT ''")
-    except Exception:
-        _rollback_quietly(conn)
-    try:
-        acols = fetch_table_columns(conn, "academic_calendar") or []
-        if "event_date_start" not in acols:
-            _add_column(conn, "academic_calendar", "event_date_start", "TEXT")
-    except Exception:
-        _rollback_quietly(conn)
+        if (
+            "term_amend_log" in idx
+            or "term_reg_arch" in idx
+            or "term_op_exc" in idx
+            or "term_offerings_" in idx
+        ):
+            _exec_ddl_safe(conn, idx)
+    from backend.database.introspection import conn_is_postgresql
 
+    def _add_if_missing(table: str, column: str, ddl: str) -> None:
+        try:
+            cols = fetch_table_columns(conn, table) or []
+        except Exception:
+            if conn_is_postgresql(conn):
+                try:
+                    conn.cursor().execute("ROLLBACK TO SAVEPOINT so_ddl")
+                except Exception:
+                    pass
+            return
+        if column in cols:
+            return
+        _exec_ddl_safe(conn, f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
-def _rollback_quietly(conn) -> None:
-    try:
-        conn.rollback()
-    except Exception:
-        pass
+    _add_if_missing("term_windows", "grace_until", "TEXT")
+    _add_if_missing("registrations", "semester", "TEXT DEFAULT ''")
+    _add_if_missing("term_offering_state", "department_id", "INTEGER NOT NULL DEFAULT 0")
+    _exec_ddl_safe(
+        conn,
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_term_offerings_term_course_dept "
+        "ON term_course_offerings(term_key, course_name, department_id)",
+    )
+    _exec_ddl_safe(
+        conn,
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_registrations_student_course_sem "
+        "ON registrations(student_id, course_name, semester)",
+    )
+    if conn_is_postgresql(conn):
+        _exec_ddl_safe(conn, "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS event_date_start TEXT")
+    else:
+        _add_if_missing("academic_calendar", "event_date_start", "TEXT")
 
 
 def _add_column(conn, table: str, column: str, ddl: str) -> None:
-    from backend.database.introspection import conn_is_postgresql
-
-    cur = conn.cursor()
-    if conn_is_postgresql(conn):
-        cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl}")
-    else:
-        cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+    _exec_ddl_safe(conn, f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 _SPRING_TERM_VALUES = ("spring", "ربيع", "فصل الربيع")
@@ -590,6 +716,184 @@ def _row_dict(row) -> dict[str, Any]:
         "is_current": row[7],
         "created_at": row[8],
         "updated_at": row[9],
+    }
+
+
+def set_term_master_status(conn, term_key: str, status: str, *, actor: str = "") -> dict[str, Any]:
+    """تعيين حالة الفصل الرسمية يدوياً."""
+    status = (status or "").strip().lower()
+    allowed = set(TERM_STATUS_LABELS_AR.keys())
+    if status not in allowed:
+        raise ValueError(f"حالة غير معروفة. المسموح: {', '.join(sorted(allowed))}")
+    ensure_term_engine_tables(conn)
+    key = (term_key or "").strip()
+    if not key:
+        raise ValueError("term_key مطلوب")
+    now = _now_iso()
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT term_key FROM term_master WHERE term_key = ? LIMIT 1", (key,)
+    ).fetchone()
+    if not row:
+        raise ValueError("الفصل غير موجود في term_master")
+    cur.execute(
+        "UPDATE term_master SET status = ?, updated_at = ? WHERE term_key = ?",
+        (status, now, key),
+    )
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    out = cur.execute(
+        """
+        SELECT term_key, season, academic_year, term_name_ar, ops_year_label,
+               ops_label, status, is_current, created_at, updated_at
+        FROM term_master WHERE term_key = ? LIMIT 1
+        """,
+        (key,),
+    ).fetchone()
+    data = _row_dict(out)
+    data["status_label_ar"] = TERM_STATUS_LABELS_AR.get(status, status)
+    data["updated_by"] = actor or ""
+    return data
+
+
+def derive_term_lifecycle_status(
+    conn,
+    *,
+    term_key: str,
+    ops_label: str = "",
+    today: datetime.date | None = None,
+) -> str:
+    """يستنتج حالة الفصل من الأقفال والنوافذ دون فرضها إن كان مغلقًا يدويًا."""
+    if not term_key:
+        return TERM_STATUS_PLANNED
+    today = today or datetime.date.today()
+    cur = conn.cursor()
+    if table_exists(conn, "term_master"):
+        row = cur.execute(
+            "SELECT status FROM term_master WHERE term_key = ? LIMIT 1",
+            (term_key,),
+        ).fetchone()
+        if row is not None:
+            current = str(row["status"] if hasattr(row, "keys") else row[0] or "").strip()
+            if current == TERM_STATUS_CLOSED:
+                return TERM_STATUS_CLOSED
+
+    try:
+        from backend.services.term_closure import get_term_closure_status
+
+        closure = get_term_closure_status(
+            conn, semester=ops_label or None, department_id=None
+        )
+        if closure.get("operational_complete"):
+            return TERM_STATUS_CLOSED
+        stages = closure.get("stages") or {}
+        if (stages.get("exams") or {}).get("closed"):
+            return TERM_STATUS_GRADING
+        if (stages.get("schedule") or {}).get("closed") and not (
+            stages.get("exams") or {}
+        ).get("closed"):
+            return TERM_STATUS_EXAMS
+        if (stages.get("registrations") or {}).get("closed"):
+            # بعد إغلاق التسجيلات غالباً دراسة أو امتحان حسب النوافذ
+            pass
+    except Exception:
+        logger.exception("derive lifecycle: closure read failed")
+
+    windows = {}
+    if table_exists(conn, "term_windows"):
+        rows = cur.execute(
+            """
+            SELECT window_key, starts_at, ends_at, status
+            FROM term_windows WHERE term_key = ?
+            """,
+            (term_key,),
+        ).fetchall()
+        for r in rows or []:
+            if hasattr(r, "keys"):
+                windows[str(r["window_key"])] = {
+                    "starts_at": r["starts_at"],
+                    "ends_at": r["ends_at"],
+                    "status": r["status"],
+                }
+            else:
+                windows[str(r[0])] = {
+                    "starts_at": r[1],
+                    "ends_at": r[2],
+                    "status": r[3],
+                }
+
+    def _open(key: str) -> bool:
+        w = windows.get(key) or {}
+        if (w.get("status") or "") != WINDOW_SCHEDULED:
+            return False
+        return window_open_on(w.get("starts_at"), w.get("ends_at"), today)
+
+    def _begun(key: str) -> bool:
+        w = windows.get(key) or {}
+        if (w.get("status") or "") != WINDOW_SCHEDULED:
+            return False
+        start = _parse_date(w.get("starts_at")) or _parse_date(w.get("ends_at"))
+        return start is not None and today >= start
+
+    def _past_end(key: str) -> bool:
+        w = windows.get(key) or {}
+        end = _parse_date(w.get("ends_at"))
+        return end is not None and today > end
+
+    if _open("grade_entry") or _open("grade_appeals") or _begun("results_final"):
+        return TERM_STATUS_GRADING
+    if _open("midterm_exams") or _open("final_exams"):
+        return TERM_STATUS_EXAMS
+    if _begun("instruction_start") and not _past_end("instruction_end"):
+        return TERM_STATUS_INSTRUCTION
+    if _open("registration_renewal") or _open("registration_new") or _open("add_courses"):
+        return TERM_STATUS_REGISTRATION
+    if _past_end("instruction_end") or _begun("final_exams"):
+        return TERM_STATUS_EXAMS
+    return TERM_STATUS_PLANNED
+
+
+def sync_term_master_status(
+    conn,
+    *,
+    term_key: str,
+    ops_label: str = "",
+    today: datetime.date | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    """يحدّث حالة term_master تلقائياً ما لم يكن مغلقاً يدوياً (إلا مع force)."""
+    if not term_key or not table_exists(conn, "term_master"):
+        return {}
+    derived = derive_term_lifecycle_status(
+        conn, term_key=term_key, ops_label=ops_label, today=today
+    )
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT status FROM term_master WHERE term_key = ? LIMIT 1",
+        (term_key,),
+    ).fetchone()
+    if row is None:
+        return {}
+    current = str(row["status"] if hasattr(row, "keys") else row[0] or "").strip()
+    if current == TERM_STATUS_CLOSED and not force and derived != TERM_STATUS_CLOSED:
+        # الإغلاق اليدوي/التشغيلي يبقى حتى يُعاد الفتح صراحة
+        derived = TERM_STATUS_CLOSED
+    if current != derived:
+        cur.execute(
+            "UPDATE term_master SET status = ?, updated_at = ? WHERE term_key = ?",
+            (derived, _now_iso(), term_key),
+        )
+        try:
+            conn.commit()
+        except Exception:
+            pass
+    return {
+        "term_key": term_key,
+        "status": derived,
+        "status_label_ar": TERM_STATUS_LABELS_AR.get(derived, derived),
+        "previous": current,
     }
 
 
@@ -1231,6 +1535,10 @@ OP_ENROLLMENT_PLAN_WRITE = "enrollment_plan_write"
 OP_ENROLLMENT_PLAN_APPROVE = "enrollment_plan_approve"
 OP_ADD_COURSE = "add_course"
 OP_DROP_COURSE = "drop_course"
+OP_SCHEDULE_WRITE = "schedule_write"
+OP_SCHEDULE_PUBLISH = "schedule_publish"
+OP_EXAM_WRITE = "exam_write"
+OP_EXAM_PUBLISH = "exam_publish"
 
 OPERATION_WINDOWS: dict[str, tuple[str, ...]] = {
     OP_REGISTRATION_WRITE: ("registration_renewal", "registration_new"),
@@ -1238,6 +1546,11 @@ OPERATION_WINDOWS: dict[str, tuple[str, ...]] = {
     OP_ENROLLMENT_PLAN_APPROVE: ("registration_renewal", "registration_new"),
     OP_ADD_COURSE: ("add_courses", "registration_renewal", "registration_new"),
     OP_DROP_COURSE: ("drop_courses", "registration_renewal", "registration_new"),
+    # الجدول/الامتحان: قفل المرحلة هو الضابط الأساسي (لا نوافذ تاريخية إلزامية).
+    OP_SCHEDULE_WRITE: (),
+    OP_SCHEDULE_PUBLISH: (),
+    OP_EXAM_WRITE: (),
+    OP_EXAM_PUBLISH: (),
 }
 OPERATION_STAGE: dict[str, str] = {
     OP_REGISTRATION_WRITE: "registrations",
@@ -1245,6 +1558,10 @@ OPERATION_STAGE: dict[str, str] = {
     OP_ENROLLMENT_PLAN_APPROVE: "registrations",
     OP_ADD_COURSE: "registrations",
     OP_DROP_COURSE: "registrations",
+    OP_SCHEDULE_WRITE: "schedule",
+    OP_SCHEDULE_PUBLISH: "schedule",
+    OP_EXAM_WRITE: "exams",
+    OP_EXAM_PUBLISH: "exams",
 }
 OPERATION_LABELS_AR: dict[str, str] = {
     OP_REGISTRATION_WRITE: "التسجيلات",
@@ -1252,11 +1569,14 @@ OPERATION_LABELS_AR: dict[str, str] = {
     OP_ENROLLMENT_PLAN_APPROVE: "اعتماد خطة التسجيل",
     OP_ADD_COURSE: "إضافة مقرر",
     OP_DROP_COURSE: "إسقاط مقرر",
+    OP_SCHEDULE_WRITE: "تعديل الجدول الدراسي",
+    OP_SCHEDULE_PUBLISH: "نشر الجدول الدراسي",
+    OP_EXAM_WRITE: "تعديل جدول الامتحان",
+    OP_EXAM_PUBLISH: "نشر جدول الامتحان",
 }
 
 CODE_TERM_CLOSED = "term_closed"
 CODE_WINDOW_CLOSED = "term_window_closed"
-TERM_STATUS_CLOSED = "closed"
 
 
 class TermOperationError(PermissionError):
@@ -1343,7 +1663,7 @@ def _window_label(window_key: str) -> str:
 
 
 def _load_window_rows(conn, term_key: str, keys: tuple[str, ...]) -> list[dict[str, Any]]:
-    if not term_key or not table_exists(conn, "term_windows"):
+    if not term_key or not keys or not table_exists(conn, "term_windows"):
         return []
     cur = conn.cursor()
     placeholders = ",".join("?" for _ in keys)

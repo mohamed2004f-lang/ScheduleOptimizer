@@ -283,10 +283,28 @@ def _execute_registration_change(conn, student_id: str, course_name: str, action
         except ValueError as ve:
             raise ValueError(f"TEACHING_GROUP_REQUIRED: {ve}") from ve
         reg_cols = {c.lower() for c in fetch_table_columns(conn, "registrations")}
-        if "teaching_group_id" in reg_cols:
+        if "teaching_group_id" in reg_cols and "semester" in reg_cols:
+            cur.execute(
+                "INSERT INTO registrations (student_id, course_name, program_course_id, teaching_group_id, semester) "
+                "VALUES (?,?,?,?,?) ON CONFLICT (student_id, course_name, semester) DO NOTHING",
+                (sid, course_name, int(pcid) if pcid is not None else None, gid, reg_sem or ""),
+            )
+        elif "teaching_group_id" in reg_cols:
             cur.execute(
                 "INSERT INTO registrations (student_id, course_name, program_course_id, teaching_group_id) VALUES (?,?,?,?) ON CONFLICT (student_id, course_name) DO NOTHING",
                 (sid, course_name, int(pcid) if pcid is not None else None, gid),
+            )
+        elif "semester" in reg_cols and pcid is not None:
+            cur.execute(
+                "INSERT INTO registrations (student_id, course_name, program_course_id, semester) VALUES (?,?,?,?) "
+                "ON CONFLICT (student_id, course_name, semester) DO NOTHING",
+                (sid, course_name, int(pcid), reg_sem or ""),
+            )
+        elif "semester" in reg_cols:
+            cur.execute(
+                "INSERT INTO registrations (student_id, course_name, semester) VALUES (?,?,?) "
+                "ON CONFLICT (student_id, course_name, semester) DO NOTHING",
+                (sid, course_name, reg_sem or ""),
             )
         elif pcid is not None:
             cur.execute(

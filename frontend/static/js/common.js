@@ -11,8 +11,11 @@
         const originalFetch = window.fetch.bind(window);
 
         function getToken(){
+            if (window.__CSRF_TOKEN__) return String(window.__CSRF_TOKEN__);
             const meta = document.querySelector('meta[name="csrf-token"]');
-            return meta ? (meta.getAttribute('content') || '') : '';
+            if (meta && meta.getAttribute('content')) return meta.getAttribute('content') || '';
+            const hidden = document.getElementById('csrf_token');
+            return hidden && hidden.value ? hidden.value : '';
         }
 
         function isSameOrigin(url){
@@ -33,9 +36,21 @@
             if (!SAFE_METHODS.has(method) && isSameOrigin(url)) {
                 const token = getToken();
                 const headers = new Headers(cfg.headers || (typeof input !== 'string' && input && input.headers) || {});
-                if (token && !headers.has('X-CSRFToken') && !headers.has('X-CSRF-Token')) {
+                if (token) {
                     headers.set('X-CSRFToken', token);
+                    headers.set('X-CSRF-Token', token);
                 }
+                const ctype = (headers.get('Content-Type') || '').toLowerCase();
+                if (token && ctype.indexOf('application/json') !== -1 && typeof cfg.body === 'string') {
+                    try {
+                        const parsed = JSON.parse(cfg.body);
+                        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && !parsed.csrf_token) {
+                            parsed.csrf_token = token;
+                            cfg.body = JSON.stringify(parsed);
+                        }
+                    } catch (e) { /* body ليس JSON كائناً */ }
+                }
+                if (!cfg.referrerPolicy) cfg.referrerPolicy = 'same-origin';
                 cfg.headers = headers;
             }
             return originalFetch(input, cfg);
@@ -394,8 +409,11 @@ function filterTable(tableId, searchInputId) {
 }
 
 function getCsrfToken() {
+    if (window.__CSRF_TOKEN__) return String(window.__CSRF_TOKEN__);
     const meta = document.querySelector('meta[name="csrf-token"]');
-    return meta ? (meta.getAttribute('content') || '') : '';
+    if (meta && meta.getAttribute('content')) return meta.getAttribute('content') || '';
+    const hidden = document.getElementById('csrf_token');
+    return hidden && hidden.value ? hidden.value : '';
 }
 
 /** رؤوس JSON + CSRF لطلبات fetch الصريحة */

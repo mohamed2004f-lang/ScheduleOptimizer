@@ -44,6 +44,7 @@ from .utilities import (
     touch_schedule_updated_at,
     get_current_term,
     schedule_semester_matches_current_term,
+    clear_schedule_published_at,
 )
 from .students import compute_per_student_conflicts, recompute_conflict_report
 from . import teaching_groups as tg_svc
@@ -223,9 +224,13 @@ def _create_schedule_version(conn, event_type: str, note: str = "", is_published
     ).fetchall()
     items = []
     for r in rows:
+        try:
+            section_id = int(r[0]) if r[0] is not None else 0
+        except (TypeError, ValueError):
+            section_id = 0
         items.append(
             {
-                "section_id": int(r[0]),
+                "section_id": section_id,
                 "course_name": r[1],
                 "day": r[2],
                 "time": r[3],
@@ -678,18 +683,25 @@ def _build_schedule_triple_export_matrix(rows: list, time_slots: list, include_e
 @schedule_bp.route("/rows")
 @login_required
 def list_schedule_rows():
-    try:
-        from backend.core.cache_setup import cache, list_cache_key
-
-        if cache:
-            _ck = list_cache_key("schedule_rows")
-            _hit = cache.get(_ck)
-            if _hit is not None:
-                return _hit
-    except Exception:
-        pass
+    from backend.services.term_engine import (
+        current_term_match_context,
+        schedule_semester_matches_term_context,
+    )
 
     with get_connection() as conn:
+        ctx = current_term_match_context(conn)
+        term_part = (ctx or {}).get("term_key") or (ctx or {}).get("raw_label") or "none"
+        try:
+            from backend.core.cache_setup import cache, list_cache_key
+
+            if cache:
+                _ck = list_cache_key(f"schedule_rows:{term_part}")
+                _hit = cache.get(_ck)
+                if _hit is not None:
+                    return _hit
+        except Exception:
+            pass
+
         _sync_schedule_pk_col(conn)
         cur = conn.cursor()
         try:
@@ -735,13 +747,15 @@ def list_schedule_rows():
                         group_code=str(r[11] or tg_svc.DEFAULT_GROUP_CODE),
                         instructor_name=str(r[13] or r[5] or ""),
                     )
+                if not schedule_semester_matches_term_context(item.get("semester"), ctx):
+                    continue
                 result.append(item)
             resp = jsonify(result)
             try:
                 from backend.core.cache_setup import cache, list_cache_key
 
                 if cache:
-                    cache.set(list_cache_key("schedule_rows"), resp)
+                    cache.set(list_cache_key(f"schedule_rows:{term_part}"), resp)
             except Exception:
                 pass
             return resp
@@ -1417,7 +1431,13 @@ def add_schedule_row():
             return jsonify({"status": "error", "message": f"{k} مطلوب"}), 400
     try:
         from backend.core.services import ScheduleService
-        from backend.services.term_closure import TermClosedError, assert_term_writable
+        from backend.services.term_engine import (
+            OP_SCHEDULE_WRITE,
+            TermOperationError,
+            assert_term_operation,
+            http_term_blocked,
+        )
+        from backend.services.term_closure import TermClosedError
 
         sem = (data.get("semester") or "").strip()
         if not sem:
@@ -1431,11 +1451,14 @@ def add_schedule_row():
         with get_connection() as conn:
             dept_id = _resolve_schedule_row_department_id(conn, data.get("course_name"))
             try:
-                assert_term_writable(
-                    conn, stage="schedule", semester=sem, department_id=dept_id
+                assert_term_operation(
+                    conn,
+                    operation=OP_SCHEDULE_WRITE,
+                    semester=sem,
+                    department_id=dept_id,
                 )
-            except TermClosedError as exc:
-                return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
+            except (TermClosedError, TermOperationError) as exc:
+                return http_term_blocked(exc)
 
         res = ScheduleService.add_schedule_row(
             data.get("course_name"),
@@ -1483,7 +1506,13 @@ def delete_schedule_row():
     section_id = data.get("section_id")
     try:
         from backend.core.services import ScheduleService
-        from backend.services.term_closure import TermClosedError, assert_term_writable
+        from backend.services.term_closure import TermClosedError
+        from backend.services.term_engine import (
+            OP_SCHEDULE_WRITE,
+            TermOperationError,
+            assert_term_operation,
+            http_term_blocked,
+        )
 
         with get_connection() as conn:
             cur = conn.cursor()
@@ -1506,14 +1535,14 @@ def delete_schedule_row():
                 if dept_id is None and cname:
                     dept_id = _resolve_schedule_row_department_id(conn, cname)
             try:
-                assert_term_writable(
+                assert_term_operation(
                     conn,
-                    stage="schedule",
+                    operation=OP_SCHEDULE_WRITE,
                     semester=sem or None,
                     department_id=int(dept_id) if dept_id not in (None, "") else None,
                 )
-            except TermClosedError as exc:
-                return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
+            except (TermClosedError, TermOperationError) as exc:
+                return http_term_blocked(exc)
 
         res = ScheduleService.delete_schedule_row(int(section_id))
         try:
@@ -1544,7 +1573,13 @@ def update_schedule_row():
             fields[k] = data.get(k)
     try:
         from backend.core.services import ScheduleService
-        from backend.services.term_closure import TermClosedError, assert_term_writable
+        from backend.services.term_closure import TermClosedError
+        from backend.services.term_engine import (
+            OP_SCHEDULE_WRITE,
+            TermOperationError,
+            assert_term_operation,
+            http_term_blocked,
+        )
 
         with get_connection() as conn:
             cur = conn.cursor()
@@ -1569,14 +1604,14 @@ def update_schedule_row():
                 if dept_id is None and cname:
                     dept_id = _resolve_schedule_row_department_id(conn, cname)
             try:
-                assert_term_writable(
+                assert_term_operation(
                     conn,
-                    stage="schedule",
+                    operation=OP_SCHEDULE_WRITE,
                     semester=sem or None,
                     department_id=int(dept_id) if dept_id not in (None, "") else None,
                 )
-            except TermClosedError as exc:
-                return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
+            except (TermClosedError, TermOperationError) as exc:
+                return http_term_blocked(exc)
 
         res = ScheduleService.update_schedule_row(int(section_id), **fields)
         try:
@@ -1670,23 +1705,94 @@ def normalize_schedule_times():
 
 
 @schedule_bp.route("/clear_all", methods=["POST"])
+@login_required
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def clear_schedule_all():
-    """مسح كل صفوف الجدول الدراسي (schedule) مع تفريغ الجداول المشتقة."""
+    """تفريغ لوحة الجدول للفصل الحالي فقط بعد نسخة، مع إلغاء اعتماد الجدول الزمني."""
+    data = request.get_json(silent=True) or {}
+    confirm_label = str(data.get("confirm_label") or data.get("confirm") or "").strip()
+    from backend.services.term_engine import (
+        confirm_term_label_matches,
+        current_term_match_context,
+        schedule_semester_matches_term_context,
+    )
+
     deleted = 0
+    ops_label = ""
     with get_connection() as conn:
         try:
             from backend.core.department_scope_policy import resolve_effective_department_scope_id
-            from backend.services.term_closure import TermClosedError, assert_term_writable
+            from backend.services.term_closure import TermClosedError
+            from backend.services.term_engine import (
+                OP_SCHEDULE_WRITE,
+                TermOperationError,
+                assert_term_operation,
+                http_term_blocked,
+            )
 
             actor = (session.get("user") or session.get("username") or "").strip()
             dept_id = resolve_effective_department_scope_id(conn, actor)
-            assert_term_writable(conn, stage="schedule", department_id=dept_id)
-        except TermClosedError as exc:
-            return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
+            assert_term_operation(conn, operation=OP_SCHEDULE_WRITE, department_id=dept_id)
+        except (TermClosedError, TermOperationError) as exc:
+            return http_term_blocked(exc)
+
+        ctx = current_term_match_context(conn)
+        if not ctx:
+            return jsonify({"status": "error", "message": "عيّن الفصل الحالي أولاً."}), 400
+        ops_label = ctx.get("ops_label") or ctx.get("raw_label") or ""
+        if not confirm_term_label_matches(confirm_label, ctx):
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": f"للتأكيد اكتب تسمية الفصل الحالي كما هي: {ops_label}",
+                    "code": "confirm_required",
+                    "ops_label": ops_label,
+                }
+            ), 400
+
+        _sync_schedule_pk_col(conn)
+        try:
+            _create_schedule_version(conn, event_type="clear_current_term", note=f"تفريغ {ops_label}")
+        except Exception:
+            logger.exception("schedule snapshot before clear failed")
+            return jsonify({"status": "error", "message": "تعذر حفظ نسخة قبل التفريغ."}), 500
+
         cur = conn.cursor()
-        cur.execute("DELETE FROM schedule")
-        deleted = int(cur.rowcount or 0)
+        try:
+            scols = fetch_table_columns(conn, "schedule") or []
+        except Exception:
+            scols = []
+        pk = SCHEDULE_PK_COL
+        id_sql = f"COALESCE({pk}, rowid)" if not is_postgresql() else pk
+        has_dept = "department_id" in scols
+        if has_dept:
+            rows = cur.execute(
+                f"SELECT {id_sql}, COALESCE(semester,''), COALESCE(department_id, 0) FROM schedule"
+            ).fetchall()
+        else:
+            rows = cur.execute(
+                f"SELECT {id_sql}, COALESCE(semester,'') FROM schedule"
+            ).fetchall()
+        ids = []
+        for r in rows:
+            sem = r[1]
+            if not schedule_semester_matches_term_context(sem, ctx):
+                continue
+            if dept_id is not None and has_dept:
+                try:
+                    row_dept = int(r[2] or 0)
+                except (TypeError, ValueError):
+                    row_dept = 0
+                if row_dept != int(dept_id):
+                    continue
+            try:
+                ids.append(int(r[0]))
+            except (TypeError, ValueError):
+                continue
+        if ids:
+            ph = ",".join("?" * len(ids))
+            cur.execute(f"DELETE FROM schedule WHERE {id_sql} IN ({ph})", tuple(ids))
+            deleted = int(cur.rowcount or 0)
         try:
             cur.execute("DELETE FROM optimized_schedule")
         except Exception:
@@ -1700,13 +1806,27 @@ def clear_schedule_all():
             touch_schedule_updated_at(conn)
         except Exception:
             pass
+        try:
+            clear_schedule_published_at(conn)
+        except Exception:
+            pass
 
     try:
-        log_activity(action="clear_schedule_all", details=f"deleted_rows={deleted}")
+        from backend.core.cache_setup import invalidate_list_prefix
+
+        invalidate_list_prefix("schedule_rows")
     except Exception:
         pass
 
-    return jsonify({"status": "ok", "deleted_rows": int(deleted)}), 200
+    try:
+        log_activity(
+            action="clear_schedule_current_term",
+            details=f"deleted_rows={deleted}, term={ops_label}",
+        )
+    except Exception:
+        pass
+
+    return jsonify({"status": "ok", "deleted_rows": int(deleted), "ops_label": ops_label}), 200
 
 
 @schedule_bp.route("/time_slots")
@@ -2296,11 +2416,30 @@ def publish_status():
 
 @schedule_bp.route("/publish", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "head_of_department")
 def publish_schedule():
-    """اعتماد/نشر الجدول من الأدمن الرئيسي. بعدها يراه الطالب والمشرف وتُستمد منه المقررات المتاحة في خطط التسجيل."""
+    """اعتماد/نشر الجدول — رئيس القسم أو الأدمن (لا عميد/وكيل)."""
     try:
         with get_connection() as conn:
+            from backend.core.department_scope_policy import resolve_effective_department_scope_id
+            from backend.services.term_closure import TermClosedError
+            from backend.services.term_engine import (
+                OP_SCHEDULE_PUBLISH,
+                TermOperationError,
+                assert_term_operation,
+                http_term_blocked,
+            )
+
+            actor = (session.get("user") or session.get("username") or "").strip()
+            scope = resolve_effective_department_scope_id(conn, actor)
+            try:
+                assert_term_operation(
+                    conn,
+                    operation=OP_SCHEDULE_PUBLISH,
+                    department_id=scope,
+                )
+            except (TermClosedError, TermOperationError) as exc:
+                return http_term_blocked(exc)
             _sync_optimized_schedule_from_current(conn)
             conn.commit()
             published_at = set_schedule_published_at(conn)

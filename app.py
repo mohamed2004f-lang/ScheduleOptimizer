@@ -1,7 +1,7 @@
 from flask import Flask, render_template, redirect, url_for, jsonify, session, request, abort, send_from_directory, make_response
 from flask_wtf.csrf import CSRFProtect, CSRFError
 from backend.database.database import assert_schema_ready, is_postgresql, close_pool
-from config import DATABASE_URL, FLASK_ENV, FLASK_DEBUG, SHOW_DEV_HINTS
+from config import DATABASE_URL, FLASK_ENV, FLASK_DEBUG, SHOW_DEV_HINTS, WTF_CSRF_SSL_STRICT
 import atexit
 
 # أدوار القيادة على مستوى الكلية (صفحات الإدارة — ما عدا الإعدادات التقنية)
@@ -176,6 +176,24 @@ def _disable_grade_drafts_cache(resp):
 app.config.setdefault("WTF_CSRF_HEADERS", ["X-CSRFToken", "X-CSRF-Token"])
 csrf = CSRFProtect()
 csrf.init_app(app)
+app.config["WTF_CSRF_SSL_STRICT"] = WTF_CSRF_SSL_STRICT
+
+_orig_get_csrf_token = csrf._get_csrf_token
+
+
+def _get_csrf_token_with_json():
+    """Flask-WTF 1.2 يقرأ النموذج والترويسة فقط؛ طلبات JSON ترسل csrf_token في الجسم."""
+    token = _orig_get_csrf_token()
+    if token:
+        return token
+    if request.is_json:
+        data = request.get_json(silent=True) or {}
+        if isinstance(data, dict):
+            return data.get("csrf_token") or data.get("csrfToken") or None
+    return None
+
+
+csrf._get_csrf_token = _get_csrf_token_with_json
 
 # عرض اتصال قاعدة البيانات في الكونسول
 tail = DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else "(configured)"
@@ -250,8 +268,10 @@ app.register_blueprint(users_bp, url_prefix="/users")
 app.register_blueprint(role_profiles_bp, url_prefix="/role_profiles")
 app.register_blueprint(academic_calendar_bp, url_prefix="/academic_calendar")
 from backend.services.term_ops_routes import term_ops_bp
+from backend.services.term_offerings import term_offerings_bp
 
 app.register_blueprint(term_ops_bp)
+app.register_blueprint(term_offerings_bp)
 app.register_blueprint(academic_rules_bp, url_prefix="/academic_rules")
 app.register_blueprint(instructors_bp, url_prefix="/instructors")
 app.register_blueprint(instructor_portal_bp, url_prefix="/instructors")

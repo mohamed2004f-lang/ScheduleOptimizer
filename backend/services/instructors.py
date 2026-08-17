@@ -1,11 +1,14 @@
 from flask import Blueprint, request, jsonify, session
 
-from backend.core.auth import admin_required, current_supervisor_effective, login_required, role_required
+from backend.core.auth import current_supervisor_effective, login_required, role_required
 from backend.core.department_scope_policy import (
     actor_can_manage_existing_instructor,
     finalize_instructor_department_id_for_write,
     proposed_department_allowed_for_scope,
+    resolve_scope_sql_for_aliased_student,
     resolve_users_list_scope,
+    sql_student_row_belongs_to_department,
+    student_in_actor_scope,
 )
 from backend.core.feature_flags import is_multi_dept_instructor_enabled
 from backend.database.database import fetch_table_columns
@@ -24,6 +27,13 @@ from .utilities import get_connection
 instructors_bp = Blueprint("instructors", __name__)
 
 _MANAGE_ROLES = ("admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+_ASSIGN_SUPERVISION_ROLES = (
+    "admin_main",
+    "admin",
+    "system_admin",
+    "college_dean",
+    "head_of_department",
+)
 _EXTERNAL_SCOPE_ALLOWED = {"within_college", "outside_college", "outside_university"}
 
 
@@ -586,14 +596,16 @@ def supervised_students():
 
 
 @instructors_bp.route("/available_students")
-@admin_required
+@role_required(*_ASSIGN_SUPERVISION_ROLES)
 def available_students():
     """
-    إرجاع جميع الطلبة مع معلومة إن كان لديهم أي مشرف.
-    يستخدمها الأدمن في شاشة إسناد الطلبة للمشرفين.
+    إرجاع الطلبة المتاحين لإسناد الإشراف، مقيّدين بنطاق قسم المنفّذ.
     """
+    actor = _current_actor_username()
     with get_connection() as conn:
         cur = conn.cursor()
+        scope_sql, scope_params = resolve_scope_sql_for_aliased_student(conn, actor, "s")
+        where_sql = f"WHERE {scope_sql}" if scope_sql else ""
         rows = cur.execute(
             """
             SELECT s.student_id,
@@ -603,8 +615,10 @@ def available_students():
                        WHERE ss.student_id = s.student_id
                    ) THEN 1 ELSE 0 END AS has_supervisor
             FROM students s
-            ORDER BY s.student_id
             """
+            + where_sql
+            + " ORDER BY s.student_id",
+            tuple(scope_params),
         ).fetchall()
         out = []
         for r in rows:
@@ -619,7 +633,7 @@ def available_students():
 
 
 @instructors_bp.route("/assign_students", methods=["POST"])
-@admin_required
+@role_required(*_ASSIGN_SUPERVISION_ROLES)
 def assign_students():
     """
     إسناد مجموعة من الطلبة إلى مشرف معيّن.
@@ -627,12 +641,13 @@ def assign_students():
       - instructor_id (إجباري)
       - student_ids: قائمة أرقام الطلبة (إجباري)
     المنطق:
-      - حذف كل السجلات السابقة لهذا المشرف.
-      - إدخال الإسنادات الجديدة.
+      - للإدارة غير المقيّدة: استبدال كل إسنادات هذا المشرف.
+      - لرئيس القسم: استبدال إسنادات طلبة قسمه فقط دون المساس بطلبة أقسام أخرى.
     """
     data = request.get_json(force=True) or {}
     instructor_id = data.get("instructor_id")
     student_ids = data.get("student_ids") or []
+    actor = _current_actor_username()
 
     try:
         instructor_id = int(instructor_id)
@@ -674,13 +689,33 @@ def assign_students():
                 404,
             )
 
-        # حذف الإسنادات السابقة
-        cur.execute(
-            "DELETE FROM student_supervisor WHERE instructor_id = ?",
-            (instructor_id,),
-        )
+        mode, dep_id = resolve_users_list_scope(conn, actor)
+        if mode == "empty":
+            return jsonify({"status": "error", "message": "لا يوجد قسم مرتبط بحسابك"}), 403
+        if mode == "department" and dep_id is not None:
+            if not instructor_linked_to_department(conn, instructor_id, int(dep_id)):
+                return jsonify({"status": "error", "message": "الأستاذ خارج نطاق قسمك"}), 403
+            for sid in cleaned_ids:
+                if not student_in_actor_scope(conn, sid, actor):
+                    return (
+                        jsonify({"status": "error", "message": f"الطالب {sid} خارج نطاق قسمك"}),
+                        400,
+                    )
+            frag, params = sql_student_row_belongs_to_department(int(dep_id))
+            cur.execute(
+                f"""
+                DELETE FROM student_supervisor
+                WHERE instructor_id = ?
+                  AND student_id IN (SELECT student_id FROM students WHERE {frag})
+                """,
+                (instructor_id, *params),
+            )
+        else:
+            cur.execute(
+                "DELETE FROM student_supervisor WHERE instructor_id = ?",
+                (instructor_id,),
+            )
 
-        # إدخال الإسنادات الجديدة
         for sid in cleaned_ids:
             cur.execute(
                 """

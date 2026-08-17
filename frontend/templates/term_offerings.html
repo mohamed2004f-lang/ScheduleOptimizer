@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <title>عرض مقررات الفصل</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <input type="hidden" id="csrf_token" name="csrf_token" value="{{ csrf_token() }}">
+  <main class="container-fluid mt-4 px-3" style="max-width:1100px;">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+      <div>
+        <h4 class="mb-1">اعتماد عرض المقررات</h4>
+        <p class="text-muted small mb-0">كل قسم يعتمد قائمته. التسجيل = قائمة القسم + قائمة القسم العام المعتمدة. العميد والوكيل يطّلعان دون اعتماد.</p>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <a class="btn btn-sm btn-outline-secondary" href="/term_ops">تشغيل الفصل</a>
+        <a class="btn btn-sm btn-outline-secondary" href="/schedule_form">الجدول الدراسي</a>
+        <button type="button" class="btn btn-sm btn-outline-primary" id="btnReload">تحديث</button>
+      </div>
+    </div>
+    <div id="offMsg"></div>
+    <div class="row g-3 mb-3">
+      <div class="col-md-4">
+        <div class="border rounded p-3 h-100 bg-light">
+          <div class="small text-muted">الفصل الحالي</div>
+          <div class="fw-semibold" id="offTerm">—</div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="border rounded p-3 h-100 bg-light">
+          <div class="small text-muted">حالة العرض</div>
+          <div class="fw-semibold" id="offStatus">—</div>
+          <div class="small" id="offMeta"></div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="border rounded p-3 h-100 bg-light">
+          <div class="small text-muted">مقررات معروضة</div>
+          <div class="fw-semibold" id="offCount">—</div>
+        </div>
+      </div>
+    </div>
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="row g-2 align-items-end mb-3">
+          <div class="col-md-4">
+            <label class="form-label small mb-1" for="offDept">القسم</label>
+            <select id="offDept" class="form-select form-select-sm">
+              <option value="">كل الأقسام</option>
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small mb-1" for="offFilter">بحث</label>
+            <input id="offFilter" class="form-control form-control-sm" placeholder="اسم أو رمز المقرر">
+          </div>
+          <div class="col-md-4 d-flex flex-wrap gap-2 justify-content-md-end">
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="btnSelectAll">تحديد الظاهر</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="btnClearAll">إلغاء الظاهر</button>
+          </div>
+        </div>
+        <div class="d-flex flex-wrap gap-2 mb-3">
+          <button type="button" class="btn btn-sm btn-outline-primary" id="btnCopyPrev">نسخ عرض الفصل السابق</button>
+          <button type="button" class="btn btn-sm btn-primary" id="btnSave">حفظ المسودة</button>
+          <button type="button" class="btn btn-sm btn-success" id="btnPublish">اعتماد العرض</button>
+          <button type="button" class="btn btn-sm btn-outline-danger" id="btnUnpublish" hidden>إلغاء الاعتماد</button>
+        </div>
+        <div id="offList" class="small"></div>
+      </div>
+    </div>
+    <div class="card mb-3" id="cardGeneralRequests" hidden>
+      <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+          <div>
+            <h6 class="mb-1">طلبات الأقسام من مقررات القسم العام</h6>
+            <p class="text-muted small mb-0">قراءة فقط للتنسيق. الاعتماد يبقى بقائمتك أنت.</p>
+          </div>
+          <button type="button" class="btn btn-sm btn-outline-primary" id="btnLoadRequests">تحديث الطلبات</button>
+        </div>
+        <div id="genReqBody" class="small text-muted">—</div>
+      </div>
+    </div>
+    <div class="card mb-3" id="cardOrphans" hidden>
+      <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+          <div>
+            <h6 class="mb-1">تسجيلات متأثرة بمقررات غير معتمدة</h6>
+            <p class="text-muted small mb-0">طلبة سجّلوا مقرراً ثم خرج من القوائم المعتمدة. التنبيه يفتح لهم إسقاط/إضافة محدوداً فقط.</p>
+          </div>
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="btnLoadOrphans">فحص</button>
+            <button type="button" class="btn btn-sm btn-warning" id="btnNotifyOrphans" disabled>تنبيه المتأثرين</button>
+          </div>
+        </div>
+        <div id="orphanBody" class="small text-muted">—</div>
+      </div>
+    </div>
+  </main>
+  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+  <script>
+(function(){
+  const elMsg = document.getElementById('offMsg');
+  let STATE = null;
+  const PAGE_CSRF = {{ csrf_token()|tojson }};
+  function setMsg(t,k){ elMsg.innerHTML = t ? `<div class="alert alert-${k||'info'} py-2">${t}</div>` : ''; }
+  function csrfToken(){
+    return PAGE_CSRF
+      || document.getElementById('csrf_token')?.value
+      || document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
+      || '';
+  }
+  function requestHeaders(extra){
+    const h = Object.assign({
+      'Accept': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest'
+    }, extra || {});
+    const t = csrfToken();
+    if (t) {
+      h['X-CSRFToken'] = t;
+      h['X-CSRF-Token'] = t;
+    }
+    return h;
+  }
+  async function fetchJSON(url, opts){
+    opts = opts || {};
+    const headers = requestHeaders(opts.headers || {});
+    const r = await fetch(url, Object.assign({
+      credentials: 'same-origin',
+      referrerPolicy: 'same-origin'
+    }, opts, { headers }));
+    const j = await r.json().catch(()=>null);
+    return { ok:r.ok, status:r.status, json:j };
+  }
+  function apiErr(r){
+    const j = r.json || {};
+    if (j.error === 'CSRF_FAILED') {
+      return 'انتهت صلاحية الحماية الأمنية. حدّث الصفحة ثم أعد الحفظ أو الاعتماد.';
+    }
+    const msg = j.message || j.error || ('فشل الطلب (رمز ' + r.status + ')');
+    if (j.code && j.code !== 'UNKNOWN_ERROR' && j.code !== 'INTERNAL_ERROR') {
+      return msg;
+    }
+    return msg;
+  }
+  function esc(s){
+    return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function applyTermLabel(label){
+    const t = (label || '').trim();
+    if (t) document.getElementById('offTerm').textContent = t;
+  }
+  function selectedCount(){
+    return document.querySelectorAll('.off-cb:checked').length;
+  }
+  function refreshCount(){
+    document.getElementById('offCount').textContent = String(selectedCount());
+    document.querySelectorAll('.off-group').forEach(g => {
+      const n = g.querySelectorAll('.off-cb:checked').length;
+      const tot = g.querySelectorAll('.off-cb').length;
+      const badge = g.querySelector('.off-group-count');
+      if (badge) badge.textContent = n + ' / ' + tot;
+    });
+  }
+  function visibleRows(){
+    return Array.from(document.querySelectorAll('.off-row')).filter(row => row.style.display !== 'none');
+  }
+  function applyFilter(){
+    const f = (document.getElementById('offFilter').value || '').trim().toLowerCase();
+    const dept = document.getElementById('offDept').value;
+    document.querySelectorAll('.off-group').forEach(g => {
+      const kind = g.dataset.kind || 'department';
+      const id = String(g.dataset.groupKey || g.dataset.deptId || '');
+      let deptOk = true;
+      if (dept === 'college_general') deptOk = kind === 'college_general';
+      else if (dept === 'shared') deptOk = kind === 'shared';
+      else if (dept) deptOk = (id === dept) || kind === 'college_general' || kind === 'shared';
+      let any = false;
+      g.querySelectorAll('.off-row').forEach(row => {
+        const textOk = !f || (row.dataset.search || '').includes(f);
+        const show = deptOk && textOk;
+        row.style.display = show ? '' : 'none';
+        if (show) any = true;
+      });
+      g.style.display = deptOk && any ? '' : 'none';
+    });
+  }
+  function applyBanners(state){
+    const gaps = Array.isArray(state.general_gaps) ? state.general_gaps : [];
+    if (state.catalog_warning) {
+      setMsg(state.catalog_warning, 'warning');
+      return;
+    }
+    if (gaps.length) {
+      setMsg(
+        'بعد اعتماد قائمة القسم العام، هذه المقررات التي حددتها لم يعتمدها الاتجاه العام: '
+        + gaps.map(esc).join('، ')
+        + '.',
+        'warning'
+      );
+      return;
+    }
+    if (state.general_pending) {
+      setMsg('القسم العام لم يعتمد قائمته بعد. ما حددته من مقررات العام يبقى طلباً للتخطيط حتى الاعتماد.', 'info');
+      return;
+    }
+    const note = (state.scope_note || '').trim();
+    setMsg(note, note ? 'info' : 'info');
+    if (!note) setMsg('', 'info');
+  }
+  function selectedNames(){
+    return Array.from(document.querySelectorAll('.off-cb:checked')).map(cb => cb.value);
+  }
+  function fillDeptFilter(groups){
+    const sel = document.getElementById('offDept');
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">كل الأقسام (مع العام والمشترك)</option>';
+    (groups || []).forEach(g => {
+      const kind = g.kind || 'department';
+      const opt = document.createElement('option');
+      if (kind === 'college_general') opt.value = 'college_general';
+      else if (kind === 'shared') opt.value = 'shared';
+      else opt.value = g.key || (g.department_id == null ? 'dept:none' : ('dept:' + g.department_id));
+      opt.textContent = g.department_name || 'قسم';
+      sel.appendChild(opt);
+    });
+    if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+  }
+  function render(state){
+    STATE = state;
+    applyTermLabel(state.ops_label || '');
+    const pub = !!state.published;
+    document.getElementById('offStatus').textContent = pub ? 'معتمد' : 'مسودة';
+    document.getElementById('offMeta').textContent = pub
+      ? ((state.published_by || '') + (state.published_at ? ' — ' + String(state.published_at).slice(0,16) : ''))
+      : 'الطلبة لا يرون مقررات حتى الاعتماد';
+    document.getElementById('btnPublish').disabled = !state.can_publish;
+    document.getElementById('btnPublish').title = state.can_publish
+      ? 'يحفظ التحديد الحالي ثم يعتمد قائمة قسمك للطلبة'
+      : 'الاعتماد من رئيس القسم فقط';
+    document.getElementById('btnUnpublish').disabled = !state.can_publish || !pub;
+    document.getElementById('btnUnpublish').hidden = !pub;
+    document.getElementById('btnSave').disabled = !state.can_edit;
+    applyBanners(state);
+    const prev = state.previous_term;
+    const btnPrev = document.getElementById('btnCopyPrev');
+    btnPrev.disabled = !state.can_edit || !prev;
+    btnPrev.title = prev
+      ? ('نسخ ' + (prev.ops_label || '') + ' (' + (prev.offered_count || 0) + ' مقرر)')
+      : 'لا يوجد عرض سابق';
+    const groups = Array.isArray(state.groups) && state.groups.length
+      ? state.groups
+      : [{ department_id: null, department_name: 'المقررات', courses: state.courses || [] }];
+    fillDeptFilter(groups);
+    const courses = (state.courses || []);
+    if (!courses.length) {
+      document.getElementById('offList').innerHTML = '<p class="text-muted mb-0">لا مقررات في الكتالوج ضمن نطاقك.</p>';
+      document.getElementById('offCount').textContent = '0';
+      return;
+    }
+    let html = '<div class="accordion" id="offAccordion">';
+    groups.forEach((g, i) => {
+      const gid = 'offg' + i;
+      const groupKey = g.key || (g.department_id == null ? 'dept:none' : ('dept:' + g.department_id));
+      const kind = g.kind || 'department';
+      const rows = Array.isArray(g.courses) ? g.courses : [];
+      const offeredN = rows.filter(c => c.offered).length;
+      html += `<div class="accordion-item off-group" data-kind="${esc(kind)}" data-group-key="${esc(groupKey)}" data-dept-id="${esc(groupKey)}">`;
+      html += `<h2 class="accordion-header">`;
+      html += `<button class="accordion-button${i ? ' collapsed' : ''} py-2" type="button" data-bs-toggle="collapse" data-bs-target="#${gid}">`;
+      html += `<span class="me-2">${esc(g.department_name || 'قسم')}</span>`;
+      html += `<span class="badge text-bg-light off-group-count">${offeredN} / ${rows.length}</span>`;
+      html += `</button></h2>`;
+      html += `<div id="${gid}" class="accordion-collapse collapse${i ? '' : ' show'}" data-bs-parent="#offAccordion">`;
+      html += `<div class="accordion-body p-0">`;
+      html += `<div class="px-3 py-2 border-bottom bg-light d-flex justify-content-between align-items-center flex-wrap gap-2">`;
+      html += `<button type="button" class="btn btn-sm btn-outline-secondary off-select-dept">تحديد المجموعة</button>`;
+      html += `<button type="button" class="btn btn-sm btn-outline-secondary off-clear-dept">إلغاء المجموعة</button>`;
+      if (kind === 'college_general' && !state.general_hod) {
+        html += `<span class="small text-muted">تحديدها طلب تخطيط. التسجيل يعتمد قائمة القسم العام بعد اعتمادها.</span>`;
+      } else if (kind === 'shared') {
+        html += `<span class="small text-muted">ضمن قائمة قسمك لتوزيع المجموعات والأعداد.</span>`;
+      }
+      html += `</div>`;
+      html += '<div class="table-responsive"><table class="table table-sm align-middle mb-0"><thead><tr>';
+      html += '<th style="width:2.5rem;"></th><th>المقرر</th><th>الرمز</th><th>وحدات</th></tr></thead><tbody>';
+      rows.forEach(c => {
+        const name = c.course_name || '';
+        const search = (name + ' ' + (c.course_code||'') + ' ' + (c.department_name||'')).toLowerCase();
+        const locked = !!c.locked;
+        const extra = locked ? ' disabled title="عرض فقط"' : '';
+        const gap = kind === 'college_general' && !!c.offered && !!state.general_published && !c.on_general_list && !state.general_hod;
+        const rowClass = gap ? ' table-warning' : '';
+        html += `<tr class="off-row${rowClass}" data-search="${esc(search)}">`;
+        html += `<td><input type="checkbox" class="form-check-input off-cb" value="${esc(name)}"${c.offered ? ' checked' : ''}${extra}></td>`;
+        html += `<td>${esc(name)}${gap ? ' <span class="badge text-bg-warning">لم يعتمده العام</span>' : ''}</td><td dir="ltr">${esc(c.course_code||'')}</td>`;
+        html += `<td>${esc(c.units||0)}</td></tr>`;
+      });
+      html += '</tbody></table></div></div></div></div>';
+    });
+    html += '</div>';
+    document.getElementById('offList').innerHTML = html;
+    document.getElementById('offList').querySelectorAll('.off-cb').forEach(cb => {
+      cb.addEventListener('change', refreshCount);
+    });
+    document.getElementById('offList').querySelectorAll('.off-select-dept').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const g = btn.closest('.off-group');
+        g.querySelectorAll('.off-row').forEach(row => {
+          if (row.style.display === 'none') return;
+          const cb = row.querySelector('.off-cb');
+          if (cb && !cb.disabled) cb.checked = true;
+        });
+        refreshCount();
+      });
+    });
+    document.getElementById('offList').querySelectorAll('.off-clear-dept').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const g = btn.closest('.off-group');
+        g.querySelectorAll('.off-row').forEach(row => {
+          if (row.style.display === 'none') return;
+          const cb = row.querySelector('.off-cb');
+          if (cb && !cb.disabled) cb.checked = false;
+        });
+        refreshCount();
+      });
+    });
+    applyFilter();
+    refreshCount();
+    document.getElementById('cardGeneralRequests').hidden = !state.general_hod;
+    document.getElementById('cardOrphans').hidden = !state.can_publish;
+  }
+  function renderGeneralRequests(j){
+    const rows = Array.isArray(j.rows) ? j.rows : [];
+    const box = document.getElementById('genReqBody');
+    if (!rows.length) {
+      box.innerHTML = '<span class="text-muted">لا توجد طلبات من الأقسام على مقررات القسم العام.</span>';
+      return;
+    }
+    let html = '';
+    if (j.missing_count) {
+      html += '<div class="alert alert-warning py-2">' + j.missing_count
+        + ' طلباً من الأقسام ليس ضمن قائمتك المعتمدة. راجعها أو تواصل مع القسم.</div>';
+    }
+    html += '<div class="table-responsive"><table class="table table-sm align-middle mb-0"><thead><tr>';
+    html += '<th>القسم</th><th>المقرر</th><th>ضمن قائمتك</th></tr></thead><tbody>';
+    rows.forEach(r => {
+      const ok = !!r.on_general_list;
+      html += '<tr class="' + (ok ? '' : 'table-warning') + '">';
+      html += '<td>' + esc(r.department_name || '') + '</td>';
+      html += '<td>' + esc(r.course_name || '') + '</td>';
+      html += '<td>' + (ok ? 'نعم' : 'لا') + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+    box.innerHTML = html;
+  }
+  function renderOrphans(j){
+    const rows = Array.isArray(j.rows) ? j.rows : [];
+    const box = document.getElementById('orphanBody');
+    document.getElementById('btnNotifyOrphans').disabled = !rows.length;
+    if (!rows.length) {
+      box.innerHTML = '<span class="text-muted">لا توجد تسجيلات متأثرة.</span>';
+      return;
+    }
+    let html = '<div class="alert alert-warning py-2">' + (j.students || 0)
+      + ' طالباً مسجَّلون في مقررات لم تعد معتمدة.</div>';
+    html += '<div class="table-responsive"><table class="table table-sm align-middle mb-0"><thead><tr>';
+    html += '<th>الطالب</th><th>الرقم</th><th>المقرر</th><th>السبب</th></tr></thead><tbody>';
+    rows.forEach(r => {
+      const why = r.reason === 'general_not_approved'
+        ? 'خارج قائمة القسم العام'
+        : 'خارج قائمة القسم';
+      html += '<tr><td>' + esc(r.student_name || '') + '</td>';
+      html += '<td dir="ltr">' + esc(r.student_id || '') + '</td>';
+      html += '<td>' + esc(r.course_name || '') + '</td>';
+      html += '<td>' + why + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+    box.innerHTML = html;
+  }
+  async function loadGeneralRequests(){
+    const r = await fetchJSON('/term_offerings/general_requests');
+    if (!r.ok) { document.getElementById('genReqBody').textContent = apiErr(r); return; }
+    renderGeneralRequests(r.json || {});
+  }
+  async function loadOrphans(){
+    const r = await fetchJSON('/term_offerings/orphans');
+    if (!r.ok) { document.getElementById('orphanBody').textContent = apiErr(r); return; }
+    renderOrphans(r.json || {});
+  }
+  async function fillTermFromSettings(){
+    try {
+      const r = await fetchJSON('/admin/settings/current_term');
+      if (!r.ok || !r.json) return;
+      const label = ((r.json.term_name || '') + ' ' + (r.json.term_year || '')).trim();
+      applyTermLabel(label);
+    } catch (e) {}
+  }
+  async function load(){
+    fillTermFromSettings();
+    try {
+      const r = await fetchJSON('/term_offerings/state');
+      const j = r.json || {};
+      if (j.ops_label) applyTermLabel(j.ops_label);
+      if (!r.ok) { setMsg(apiErr(r), 'danger'); return; }
+      render(j);
+      if (j.general_hod) loadGeneralRequests();
+    } catch (e) {
+      setMsg('تعذر الاتصال بالخادم. حدّث الصفحة.', 'danger');
+    }
+  }
+  async function postOffering(url, extra){
+    const payload = Object.assign({ csrf_token: csrfToken() }, extra || {});
+    return fetchJSON(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  }
+  async function saveCurrentSelection(){
+    return postOffering('/term_offerings/save', { course_names: selectedNames() });
+  }
+  document.getElementById('offFilter').addEventListener('input', applyFilter);
+  document.getElementById('offDept').addEventListener('change', applyFilter);
+  document.getElementById('btnSelectAll').addEventListener('click', () => {
+    visibleRows().forEach(row => { const cb = row.querySelector('.off-cb'); if (cb && !cb.disabled) cb.checked = true; });
+    refreshCount();
+  });
+  document.getElementById('btnClearAll').addEventListener('click', () => {
+    visibleRows().forEach(row => { const cb = row.querySelector('.off-cb'); if (cb && !cb.disabled) cb.checked = false; });
+    refreshCount();
+  });
+  document.getElementById('btnReload').addEventListener('click', load);
+  document.getElementById('btnLoadRequests').addEventListener('click', loadGeneralRequests);
+  document.getElementById('btnLoadOrphans').addEventListener('click', loadOrphans);
+  document.getElementById('btnNotifyOrphans').addEventListener('click', async () => {
+    if (!confirm('سيُنبَّه الطلبة المتأثرون ورؤساء أقسامهم، ويُفتح لهم إسقاط/إضافة محدود لمدة ٧ أيام. متابعة؟')) return;
+    const r = await postOffering('/term_offerings/orphans/notify', { days: 7 });
+    if (!r.ok) { setMsg(apiErr(r), 'danger'); return; }
+    const j = r.json || {};
+    setMsg('تم تنبيه ' + (j.notified_students || 0) + ' حساب طالب و' + (j.notified_heads || 0)
+      + ' رئيس قسم، وفُتح استثناء لـ ' + (j.students || 0) + ' طالباً.', 'success');
+    await loadOrphans();
+  });
+  document.getElementById('btnSave').addEventListener('click', async () => {
+    const r = await saveCurrentSelection();
+    if (!r.ok) { setMsg(apiErr(r), 'danger'); return; }
+    const n = (r.json && r.json.saved) || selectedCount();
+    await load();
+    const gaps = (STATE && STATE.general_gaps) || [];
+    if (gaps.length) {
+      setMsg('تم الحفظ. بعد اعتماد القسم العام لم تُعتمد: ' + gaps.join('، ') + '.', 'warning');
+    } else {
+      setMsg('تم حفظ ' + n + ' مقرراً في قائمة قسمك.', 'success');
+    }
+  });
+  document.getElementById('btnCopyPrev').addEventListener('click', async () => {
+    const prev = STATE && STATE.previous_term;
+    const label = prev ? ((prev.ops_label || '') + ' — ' + (prev.offered_count || 0) + ' مقرر') : 'الفصل السابق';
+    const scopeNote = STATE && STATE.department_id != null
+      ? 'يُنسخ قسمك فقط.'
+      : 'سيُستبدل تحديد الكلية الحالي.';
+    if (!confirm('نسخ عرض «' + label + '» إلى هذا الفصل؟ ' + scopeNote)) return;
+    const r = await postOffering('/term_offerings/copy_previous', {});
+    if (!r.ok) { setMsg(apiErr(r), 'danger'); return; }
+    setMsg('تم نسخ العرض السابق كمسودة (' + (r.json && r.json.saved || 0) + ' مقرر). اعتمد عند الجاهزية.', 'success');
+    await load();
+  });
+  document.getElementById('btnPublish').addEventListener('click', async () => {
+    if (!STATE || !STATE.can_publish) {
+      setMsg('الاعتماد من رئيس القسم فقط.', 'warning');
+      return;
+    }
+    if (!selectedCount()) {
+      setMsg('حدّد مقرراً واحداً على الأقل ثم اعتمد.', 'warning');
+      return;
+    }
+    if (!confirm('سيُحفظ التحديد الحالي ثم تُعتمد قائمة قسمك. الطلبة بعدها يسجّلون هذه المقررات مع قائمة القسم العام المعتمدة. هل تريد المتابعة؟')) return;
+    const saved = await saveCurrentSelection();
+    if (!saved.ok) { setMsg(apiErr(saved), 'danger'); return; }
+    const r = await postOffering('/term_offerings/publish', {});
+    if (!r.ok) { setMsg(apiErr(r), 'danger'); return; }
+    setMsg('تم اعتماد عرض المقررات.', 'success');
+    await load();
+  });
+  document.getElementById('btnUnpublish').addEventListener('click', async () => {
+    if (!confirm('إلغاء الاعتماد يخفي المقررات عن خطط التسجيل حتى إعادة الاعتماد.')) return;
+    const r = await postOffering('/term_offerings/unpublish', {});
+    if (!r.ok) { setMsg(apiErr(r), 'danger'); return; }
+    setMsg('أُلغي اعتماد العرض.', 'warning');
+    await load();
+  });
+  load();
+})();
+  </script>
+</body>
+</html>

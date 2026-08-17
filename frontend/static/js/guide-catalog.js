@@ -1170,7 +1170,7 @@ window.PAGE_GUIDE_CATALOG = {
   },
 
   "supervision_form": {
-    roles: ["supervisor", "admin_main"],
+    roles: ["head_of_department", "admin_main", "college_dean"],
     title: "\u0646\u0645\u0648\u0630\u062c \u0627\u0644\u0625\u0634\u0631\u0627\u0641",
     steps: [
       {

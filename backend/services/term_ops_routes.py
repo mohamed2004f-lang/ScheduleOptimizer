@@ -1,4 +1,4 @@
-"""الموجة 4: لوحة تشغيل الفصل — حالة، نوافذ، تقويم، أقفال، محاكاة."""
+"""الموجة 4 + 6–9: لوحة تشغيل الفصل — حالة، نوافذ، استثناءات، إغلاق، محاكاة."""
 from __future__ import annotations
 
 import datetime
@@ -6,12 +6,18 @@ import datetime
 from flask import Blueprint, jsonify, render_template, request, session
 
 from backend.core.auth import _normalize_role, login_required, role_required
+from backend.core.department_scope_policy import resolve_effective_department_scope_id
 from backend.services.term_engine import (
     OP_ADD_COURSE,
+    OP_DROP_COURSE,
+    OPERATION_LABELS_AR,
+    TERM_STATUS_LABELS_AR,
     WINDOW_CATALOG,
     WINDOW_SCHEDULED,
     ensure_term_engine_tables,
     parse_ops_term,
+    set_term_master_status,
+    sync_term_master_status,
     upsert_term_master,
     window_mapped_for_season,
     window_open_on,
@@ -22,6 +28,21 @@ term_ops_bp = Blueprint("term_ops", __name__)
 
 _OPS_ROLES = (
     "admin",
+    "admin_main",
+    "system_admin",
+    "college_dean",
+    "academic_vice_dean",
+    "head_of_department",
+)
+_COLLEGE_ROLES = (
+    "admin",
+    "admin_main",
+    "system_admin",
+    "college_dean",
+    "academic_vice_dean",
+)
+_EXCEPTION_OPS = tuple(OPERATION_LABELS_AR.keys())
+_APPROVE_EXCEPTION_ROLES = (
     "admin_main",
     "system_admin",
     "college_dean",
@@ -185,6 +206,17 @@ def build_ops_dashboard(conn, *, academic_year: str = "", season: str = "") -> d
     closure = get_term_closure_status(
         conn, semester=ops_label or term_label_from_conn(conn), department_id=None
     )
+    if term_key:
+        synced = sync_term_master_status(
+            conn, term_key=term_key, ops_label=ops_label or "", today=today
+        )
+        if synced.get("status"):
+            master["status"] = synced["status"]
+            master["status_label_ar"] = synced.get("status_label_ar") or ""
+        elif master.get("status"):
+            master["status_label_ar"] = TERM_STATUS_LABELS_AR.get(
+                str(master.get("status") or ""), str(master.get("status") or "")
+            )
     basket = live_basket_summary(conn)
     cal_items = []
     if year_n and season_n:
@@ -229,6 +261,21 @@ def build_ops_dashboard(conn, *, academic_year: str = "", season: str = "") -> d
         "viewing_current": viewing_current,
         "notice_ar": notice_ar,
         "hydrate": hydrate,
+        "lifecycle_statuses": [
+            {"value": k, "label_ar": v} for k, v in TERM_STATUS_LABELS_AR.items()
+        ],
+        "exception_operations": [
+            {"value": k, "label_ar": v}
+            for k, v in OPERATION_LABELS_AR.items()
+            if k in (OP_ADD_COURSE, OP_DROP_COURSE)
+        ],
+        "capabilities": {
+            "can_close_stages": True,
+            "can_reopen_stages": _role() in _COLLEGE_ROLES,
+            "can_set_status": _role() in _COLLEGE_ROLES,
+            "can_propose_exception": True,
+            "can_approve_exception": _role() in _APPROVE_EXCEPTION_ROLES,
+        },
     }
 
 
@@ -318,6 +365,213 @@ def term_ops_archive_basket():
     return jsonify(result)
 
 
+@term_ops_bp.route("/term_ops/status", methods=["POST"])
+@login_required
+@role_required(*_COLLEGE_ROLES)
+def term_ops_set_status():
+    """تعيين حالة الفصل الرسمية يدوياً (سلطة كلية)."""
+    data = request.get_json(silent=True) or {}
+    status = (data.get("status") or "").strip()
+    with get_connection() as conn:
+        ensure_term_engine_tables(conn)
+        name, year = get_current_term(conn=conn)
+        parsed = parse_ops_term(name, year) or {}
+        term_key = (data.get("term_key") or parsed.get("term_key") or "").strip()
+        try:
+            result = set_term_master_status(conn, term_key, status, actor=_actor())
+        except ValueError as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 400
+    result["status_ok"] = "ok"
+    return jsonify({"status": "ok", "term_master": result})
+
+
+@term_ops_bp.route("/term_ops/stages/close", methods=["POST"])
+@login_required
+@role_required(*_OPS_ROLES)
+def term_ops_close_stage():
+    """إغلاق مرحلة من لوحة التشغيل (نفس خدمة الإغلاق الموحّد)."""
+    from backend.services.term_closure import ALL_STAGES, close_term_stage
+    from backend.services.quality_metrics import term_label_from_conn
+
+    data = request.get_json(force=True) or {}
+    stage = (data.get("stage") or "").strip().lower()
+    if stage not in ALL_STAGES:
+        return jsonify({"status": "error", "message": f"مرحلة غير معروفة: {stage}"}), 400
+    with get_connection() as conn:
+        scope = resolve_effective_department_scope_id(conn, _actor())
+        sem = (data.get("semester") or "").strip() or term_label_from_conn(conn)
+        try:
+            result = close_term_stage(
+                conn,
+                stage=stage,
+                semester=sem,
+                department_id=scope,
+                actor=_actor(),
+                force=str(data.get("force") or "").lower() in ("1", "true", "yes"),
+                note=(data.get("note") or "").strip(),
+                build_archive=True,
+            )
+            name, year = get_current_term(conn=conn)
+            parsed = parse_ops_term(name, year) or {}
+            if parsed.get("term_key"):
+                sync_term_master_status(
+                    conn,
+                    term_key=parsed["term_key"],
+                    ops_label=parsed.get("ops_label") or sem,
+                )
+        except ValueError as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 400
+    return jsonify(result)
+
+
+@term_ops_bp.route("/term_ops/stages/reopen", methods=["POST"])
+@login_required
+@role_required(*_COLLEGE_ROLES)
+def term_ops_reopen_stage():
+    from backend.services.term_closure import ALL_STAGES, reopen_term_stage
+    from backend.services.quality_metrics import term_label_from_conn
+
+    data = request.get_json(force=True) or {}
+    stage = (data.get("stage") or "").strip().lower()
+    reason = (data.get("reason") or "").strip()
+    if stage not in ALL_STAGES:
+        return jsonify({"status": "error", "message": f"مرحلة غير معروفة: {stage}"}), 400
+    with get_connection() as conn:
+        scope = resolve_effective_department_scope_id(conn, _actor())
+        sem = (data.get("semester") or "").strip() or term_label_from_conn(conn)
+        try:
+            result = reopen_term_stage(
+                conn,
+                stage=stage,
+                semester=sem,
+                department_id=scope,
+                actor=_actor(),
+                reason=reason,
+            )
+            name, year = get_current_term(conn=conn)
+            parsed = parse_ops_term(name, year) or {}
+            if parsed.get("term_key"):
+                sync_term_master_status(
+                    conn,
+                    term_key=parsed["term_key"],
+                    ops_label=parsed.get("ops_label") or sem,
+                    force=True,
+                )
+        except ValueError as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 400
+    return jsonify(result)
+
+
+def _student_department_id(conn, student_id: str):
+    row = conn.cursor().execute(
+        "SELECT department_id FROM students WHERE student_id = ? LIMIT 1",
+        (student_id,),
+    ).fetchone()
+    if not row:
+        return None
+    raw = row["department_id"] if hasattr(row, "keys") else row[0]
+    try:
+        return int(raw) if raw not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _exception_window_open(conn, operation: str, term_key: str) -> bool:
+    """True إن لم تُضبط نوافذ أو ما زالت مفتوحة/بمهلة — وإلا فاتت المهلة."""
+    from backend.services.term_engine import OPERATION_WINDOWS, _grace_still_open, _load_window_rows
+
+    keys = OPERATION_WINDOWS.get(operation) or ()
+    if not keys or not term_key:
+        return True
+    today = datetime.date.today()
+    now_dt = datetime.datetime.now(datetime.timezone.utc)
+    rows = _load_window_rows(conn, term_key, keys)
+    scheduled = [
+        w
+        for w in rows
+        if (w.get("status") == WINDOW_SCHEDULED)
+        and (w.get("starts_at") or w.get("ends_at"))
+    ]
+    if not scheduled:
+        return True
+    for w in scheduled:
+        if window_open_on(w.get("starts_at"), w.get("ends_at"), today):
+            return True
+        if _grace_still_open(w.get("grace_until"), now_dt):
+            return True
+    return False
+
+
+@term_ops_bp.route("/term_ops/exceptions", methods=["GET"])
+@login_required
+@role_required(*_OPS_ROLES, "supervisor")
+def term_ops_list_exceptions():
+    status_f = (request.args.get("status") or "").strip().lower()
+    with get_connection() as conn:
+        ensure_term_engine_tables(conn)
+        name, year = get_current_term(conn=conn)
+        parsed = parse_ops_term(name, year) or {}
+        term_key = (request.args.get("term_key") or parsed.get("term_key") or "").strip()
+        scope = resolve_effective_department_scope_id(conn, _actor())
+        sql = """
+            SELECT e.id, e.student_id, e.term_key, e.operation, e.status, e.reason,
+                   e.proposed_by, e.approved_by, e.expires_at, e.created_at, e.updated_at,
+                   COALESCE(s.student_name, '') AS student_name,
+                   s.department_id
+            FROM term_operation_exceptions e
+            LEFT JOIN students s ON s.student_id = e.student_id
+            WHERE 1=1
+        """
+        params: list = []
+        if term_key:
+            sql += " AND (e.term_key = ? OR e.term_key = '')"
+            params.append(term_key)
+        if status_f in ("proposed", "approved", "rejected"):
+            sql += " AND e.status = ?"
+            params.append(status_f)
+        if scope is not None and _role() == "head_of_department":
+            sql += " AND s.department_id = ?"
+            params.append(int(scope))
+        sql += " ORDER BY e.id DESC LIMIT 200"
+        rows = conn.cursor().execute(sql, tuple(params)).fetchall()
+        items = []
+        for r in rows or []:
+            data = _named_row(
+                r,
+                (
+                    "id",
+                    "student_id",
+                    "term_key",
+                    "operation",
+                    "status",
+                    "reason",
+                    "proposed_by",
+                    "approved_by",
+                    "expires_at",
+                    "created_at",
+                    "updated_at",
+                    "student_name",
+                    "department_id",
+                ),
+            )
+            data["operation_label_ar"] = OPERATION_LABELS_AR.get(
+                str(data.get("operation") or ""), str(data.get("operation") or "")
+            )
+            items.append(data)
+    return jsonify(
+        {
+            "status": "ok",
+            "term_key": term_key,
+            "items": items,
+            "operations": [
+                {"value": k, "label_ar": v}
+                for k, v in OPERATION_LABELS_AR.items()
+                if k in (OP_ADD_COURSE, OP_DROP_COURSE)
+            ],
+        }
+    )
+
+
 @term_ops_bp.route("/term_ops/exceptions", methods=["POST"])
 @login_required
 @role_required(*_OPS_ROLES, "supervisor")
@@ -328,13 +582,31 @@ def term_ops_propose_exception():
     reason = (data.get("reason") or "").strip()
     if not sid or len(reason) < 5:
         return jsonify({"status": "error", "message": "student_id وسبب ≥٥ أحرف مطلوبان"}), 400
-    from backend.services.term_engine import _now_iso, ensure_term_engine_tables
+    if operation not in (OP_ADD_COURSE, OP_DROP_COURSE):
+        return jsonify(
+            {
+                "status": "error",
+                "message": "العملية المسموحة: إضافة أو إسقاط مقرر.",
+            }
+        ), 400
+    from backend.services.term_engine import _now_iso
 
     with get_connection() as conn:
         ensure_term_engine_tables(conn)
         name, year = get_current_term(conn=conn)
         parsed = parse_ops_term(name, year) or {}
         term_key = (data.get("term_key") or parsed.get("term_key") or "").strip()
+        scope = resolve_effective_department_scope_id(conn, _actor())
+        if scope is not None and _role() in ("head_of_department", "supervisor"):
+            sdept = _student_department_id(conn, sid)
+            if sdept is None or int(sdept) != int(scope):
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": "الطالب خارج نطاق قسمك.",
+                        "code": "DEPT_SCOPE",
+                    }
+                ), 403
         now = _now_iso()
         cur = conn.cursor()
         cur.execute(
@@ -353,7 +625,7 @@ def term_ops_propose_exception():
 
 @term_ops_bp.route("/term_ops/exceptions/<int:exc_id>/approve", methods=["POST"])
 @login_required
-@role_required("admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+@role_required(*_APPROVE_EXCEPTION_ROLES)
 def term_ops_approve_exception(exc_id: int):
     data = request.get_json(silent=True) or {}
     days = int(data.get("days") or 7)
@@ -363,12 +635,47 @@ def term_ops_approve_exception(exc_id: int):
         datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=max(days, 1))
     ).replace(microsecond=0).isoformat()
     with get_connection() as conn:
+        ensure_term_engine_tables(conn)
         row = conn.cursor().execute(
-            "SELECT id, status FROM term_operation_exceptions WHERE id = ?",
+            """
+            SELECT e.id, e.status, e.student_id, e.operation, e.term_key, s.department_id
+            FROM term_operation_exceptions e
+            LEFT JOIN students s ON s.student_id = e.student_id
+            WHERE e.id = ?
+            """,
             (exc_id,),
         ).fetchone()
         if not row:
             return jsonify({"status": "error", "message": "الاستثناء غير موجود"}), 404
+        data_row = _named_row(
+            row, ("id", "status", "student_id", "operation", "term_key", "department_id")
+        )
+        if (data_row.get("status") or "") != "proposed":
+            return jsonify({"status": "error", "message": "الاستثناء ليس في حالة اقتراح."}), 409
+        role = _role()
+        scope = resolve_effective_department_scope_id(conn, _actor())
+        college = role in _COLLEGE_ROLES or role in ("admin_main", "system_admin")
+        if role == "head_of_department":
+            if scope is None:
+                return jsonify({"status": "error", "message": "لا نطاق قسم لرئيس القسم."}), 403
+            try:
+                sdept = int(data_row["department_id"]) if data_row.get("department_id") not in (None, "") else None
+            except (TypeError, ValueError):
+                sdept = None
+            if sdept is None or int(sdept) != int(scope):
+                return jsonify({"status": "error", "message": "الطالب خارج نطاق قسمك."}), 403
+            if not _exception_window_open(
+                conn, str(data_row.get("operation") or ""), str(data_row.get("term_key") or "")
+            ):
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": "فاتت مهلة النافذة. اعتماد هذا الاستثناء للعميد أو وكيل الشؤون العلمية.",
+                        "code": "EXCEPTION_LATE_NEEDS_DEAN",
+                    }
+                ), 403
+        elif not college and role not in ("admin_main", "system_admin"):
+            return jsonify({"status": "error", "message": "غير مخوّل بالاعتماد."}), 403
         conn.cursor().execute(
             """
             UPDATE term_operation_exceptions
@@ -378,4 +685,51 @@ def term_ops_approve_exception(exc_id: int):
             (_actor(), expires, _now_iso(), exc_id),
         )
         conn.commit()
-    return jsonify({"status": "ok", "id": exc_id, "expires_at": expires})
+    return jsonify({"status": "ok", "id": exc_id, "expires_at": expires, "state": "approved"})
+
+
+@term_ops_bp.route("/term_ops/exceptions/<int:exc_id>/reject", methods=["POST"])
+@login_required
+@role_required(*_APPROVE_EXCEPTION_ROLES)
+def term_ops_reject_exception(exc_id: int):
+    data = request.get_json(silent=True) or {}
+    note = (data.get("reason") or data.get("note") or "").strip()
+    from backend.services.term_engine import _now_iso
+
+    with get_connection() as conn:
+        ensure_term_engine_tables(conn)
+        row = conn.cursor().execute(
+            """
+            SELECT e.id, e.status, e.student_id, s.department_id
+            FROM term_operation_exceptions e
+            LEFT JOIN students s ON s.student_id = e.student_id
+            WHERE e.id = ?
+            """,
+            (exc_id,),
+        ).fetchone()
+        if not row:
+            return jsonify({"status": "error", "message": "الاستثناء غير موجود"}), 404
+        data_row = _named_row(row, ("id", "status", "student_id", "department_id"))
+        if (data_row.get("status") or "") != "proposed":
+            return jsonify({"status": "error", "message": "الاستثناء ليس في حالة اقتراح."}), 409
+        role = _role()
+        scope = resolve_effective_department_scope_id(conn, _actor())
+        if role == "head_of_department" and scope is not None:
+            try:
+                sdept = int(data_row["department_id"]) if data_row.get("department_id") not in (None, "") else None
+            except (TypeError, ValueError):
+                sdept = None
+            if sdept is None or int(sdept) != int(scope):
+                return jsonify({"status": "error", "message": "الطالب خارج نطاق قسمك."}), 403
+        reason_suffix = f" | رفض: {note}" if note else ""
+        conn.cursor().execute(
+            """
+            UPDATE term_operation_exceptions
+            SET status = 'rejected', approved_by = ?, updated_at = ?,
+                reason = CASE WHEN ? <> '' THEN reason || ? ELSE reason END
+            WHERE id = ?
+            """,
+            (_actor(), _now_iso(), note, reason_suffix, exc_id),
+        )
+        conn.commit()
+    return jsonify({"status": "ok", "id": exc_id, "state": "rejected"})

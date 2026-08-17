@@ -89,7 +89,7 @@
                   توحيد/تحويل الأوقات غير المطابقة
                 </button>
                 <button type="button" class="btn btn-outline-danger btn-sm" id="btnClearSchedule" disabled>
-                  مسح الجدول بالكامل
+                  تفريغ جدول الفصل الحالي
                 </button>
               </div>
             </div>
@@ -637,6 +637,20 @@ async function loadSchedule(){
     el.innerHTML = html;
     renderScheduleMobileCards(currentScheduleData);
     applyScheduleViewMode();
+    try {
+      const subtitle = document.getElementById('schedulePageSubtitle');
+      if (subtitle && IS_ADMIN) {
+        fetch('/admin/settings/current_term', { credentials: 'include' })
+          .then(r => r.json())
+          .then(tj => {
+            const lab = `${(tj && tj.term_name) || ''} ${(tj && tj.term_year) || ''}`.trim();
+            if (lab) {
+              subtitle.textContent = `عرض جدول ${lab} (${currentScheduleData.length} صف). الفصول الأخرى مخفية.`;
+            }
+          })
+          .catch(() => {});
+      }
+    } catch (e) {}
 
     // Attach delete handlers فقط عند إظهار وضع الإدارة
     if (IS_ADMIN && SCHEDULE_SLOT_MANAGE_VISIBLE) {
@@ -1167,15 +1181,42 @@ async function submitNormalizeTimes(){
 }
 
 async function clearScheduleAll(){
-  if(!confirm('سيتم مسح جميع صفوف الجدول الدراسي بشكل نهائي. هل أنت متأكد؟')) return;
-  if(!confirm('تأكيد أخير: هل تريد مسح الجدول بالكامل؟')) return;
-  const resp = await fetch('/schedule/clear_all', { method:'POST', credentials:'include', headers:{'Accept':'application/json'} });
+  let termLabel = '';
+  try {
+    const tr = await fetch('/admin/settings/current_term', { credentials: 'include' });
+    const tj = await tr.json().catch(()=>null);
+    if (tj && tj.term_name) {
+      termLabel = `${tj.term_name || ''} ${tj.term_year || ''}`.trim();
+    }
+  } catch (e) {}
+  if (!termLabel) {
+    showMsg('عيّن الفصل الحالي أولاً قبل تفريغ الجدول.', 'warning');
+    return;
+  }
+  if(!confirm(`سيتم تفريغ لوحة الجدول لـ «${termLabel}» فقط (بعد حفظ نسخة). الفصول الأخرى تبقى.`)) return;
+  const typed = prompt(`للتأكيد اكتب تسمية الفصل كما هي:\n${termLabel}`);
+  if (typed == null) return;
+  if (String(typed).trim() !== termLabel) {
+    showMsg('لم يُطابق النص تسمية الفصل. لم يُفرَّغ الجدول.', 'warning');
+    return;
+  }
+  const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+  const resp = await fetch('/schedule/clear_all', {
+    method:'POST',
+    credentials:'include',
+    headers:{
+      'Accept':'application/json',
+      'Content-Type':'application/json',
+      ...(csrfToken ? {'X-CSRFToken': csrfToken} : {})
+    },
+    body: JSON.stringify({ confirm_label: termLabel })
+  });
   const j = await resp.json().catch(()=>null);
   if(resp.ok && j && j.status === 'ok'){
-    showMsg(`تم مسح الجدول (${j.deleted_rows || 0} صف)`, 'success');
+    showMsg(`فُرّغ جدول ${j.ops_label || termLabel} (${j.deleted_rows || 0} صف)`, 'success');
     await loadSchedule();
   } else {
-    showMsg('فشل مسح الجدول: ' + ((j && j.message) ? j.message : resp.statusText), 'danger');
+    showMsg('فشل تفريغ الجدول: ' + ((j && j.message) ? j.message : resp.statusText), 'danger');
   }
 }
 

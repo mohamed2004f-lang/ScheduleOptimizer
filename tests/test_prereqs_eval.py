@@ -5,7 +5,11 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from backend.services.prereg_helpers import evaluate_prereqs_for_student
+from backend.services.prereg_helpers import (
+    evaluate_prereqs_for_student,
+    format_unmet_prereqs_student_ar,
+    prereq_ack_required,
+)
 
 
 def _mk_db():
@@ -73,10 +77,34 @@ def test_in_progress_registered():
     assert st == "in_progress"
 
 
+def test_student_unmet_text_lists_course_and_prereq():
+    conn, cur = _mk_db()
+    cur.execute("INSERT INTO prereqs VALUES ('B', 'A')")
+    r = evaluate_prereqs_for_student(
+        cur, "S1", ["B"], proposed_courses=["B"], old_registered=set()
+    )
+    text = format_unmet_prereqs_student_ar(r)
+    assert "B" in text
+    assert "A" in text
+    assert prereq_ack_required(r) is True
+
+
+def test_coregister_does_not_require_ack():
+    conn, cur = _mk_db()
+    cur.execute("INSERT INTO prereqs VALUES ('B', 'A')")
+    r = evaluate_prereqs_for_student(
+        cur, "S1", ["A", "B"], proposed_courses=["A", "B"], old_registered=set()
+    )
+    assert prereq_ack_required(r) is False
+    assert format_unmet_prereqs_student_ar(r) == ""
+
+
 if __name__ == "__main__":
     test_missing_prereq_legacy_blocked()
     test_coregister_no_block()
     test_failed_warning_when_not_retaking()
     test_passed_clean()
     test_in_progress_registered()
+    test_student_unmet_text_lists_course_and_prereq()
+    test_coregister_does_not_require_ack()
     print("test_prereqs_eval: ok")

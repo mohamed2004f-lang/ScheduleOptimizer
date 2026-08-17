@@ -596,13 +596,31 @@ def exam_schedule_publish_status(exam_type):
 
 @exams_bp.route("/<exam_type>/publish", methods=["POST"])
 @login_required
-@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+@role_required("admin", "admin_main", "system_admin", "head_of_department")
 def exam_schedule_publish(exam_type):
     if exam_type not in VALID_TYPES:
         return jsonify({"status": "error", "message": "invalid exam type"}), 400
     ver = None
     try:
         with get_connection() as conn:
+            from backend.core.department_scope_policy import resolve_effective_department_scope_id
+            from backend.services.term_closure import TermClosedError
+            from backend.services.term_engine import (
+                OP_EXAM_PUBLISH,
+                TermOperationError,
+                assert_term_operation,
+                http_term_blocked,
+            )
+            from flask import session as _sess
+
+            actor = (_sess.get("user") or _sess.get("username") or "").strip()
+            scope = resolve_effective_department_scope_id(conn, actor)
+            try:
+                assert_term_operation(
+                    conn, operation=OP_EXAM_PUBLISH, department_id=scope
+                )
+            except (TermClosedError, TermOperationError) as exc:
+                return http_term_blocked(exc)
             published_at = set_exam_schedule_published_at(exam_type, conn=conn)
             try:
                 touch_exam_schedule_updated_at(exam_type, conn=conn)
@@ -1093,13 +1111,19 @@ def add_exam_row(exam_type):
             return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         try:
             from backend.core.department_scope_policy import resolve_effective_department_scope_id
-            from backend.services.term_closure import TermClosedError, assert_term_writable
+            from backend.services.term_closure import TermClosedError
+            from backend.services.term_engine import (
+                OP_EXAM_WRITE,
+                TermOperationError,
+                assert_term_operation,
+                http_term_blocked,
+            )
 
             actor = (session.get("user") or session.get("username") or "").strip()
             dept_id = resolve_effective_department_scope_id(conn, actor)
-            assert_term_writable(conn, stage="exams", department_id=dept_id)
-        except TermClosedError as exc:
-            return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
+            assert_term_operation(conn, operation=OP_EXAM_WRITE, department_id=dept_id)
+        except (TermClosedError, TermOperationError) as exc:
+            return http_term_blocked(exc)
         cur = conn.cursor()
         cur.execute("INSERT INTO exams (exam_type, exam_id, course_name, exam_date, exam_time, room, instructor) VALUES (?,?,?,?,?,?,?)",
                     (exam_type, None, course_name, exam_date, exam_time, room, instructor))
@@ -1133,13 +1157,19 @@ def delete_exam_row(exam_type):
     with get_connection() as conn:
         try:
             from backend.core.department_scope_policy import resolve_effective_department_scope_id
-            from backend.services.term_closure import TermClosedError, assert_term_writable
+            from backend.services.term_closure import TermClosedError
+            from backend.services.term_engine import (
+                OP_EXAM_WRITE,
+                TermOperationError,
+                assert_term_operation,
+                http_term_blocked,
+            )
 
             actor = (session.get("user") or session.get("username") or "").strip()
             dept_id = resolve_effective_department_scope_id(conn, actor)
-            assert_term_writable(conn, stage="exams", department_id=dept_id)
-        except TermClosedError as exc:
-            return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
+            assert_term_operation(conn, operation=OP_EXAM_WRITE, department_id=dept_id)
+        except (TermClosedError, TermOperationError) as exc:
+            return http_term_blocked(exc)
         cur = conn.cursor()
         row_c = cur.execute("SELECT course_name FROM exams WHERE id = ? AND exam_type = ? LIMIT 1", (exam_id, exam_type)).fetchone()
         if row_c and not _course_in_scope(conn, row_c[0]):
@@ -1604,13 +1634,19 @@ def update_exam_row(exam_type):
     with get_connection() as conn:
         try:
             from backend.core.department_scope_policy import resolve_effective_department_scope_id
-            from backend.services.term_closure import TermClosedError, assert_term_writable
+            from backend.services.term_closure import TermClosedError
+            from backend.services.term_engine import (
+                OP_EXAM_WRITE,
+                TermOperationError,
+                assert_term_operation,
+                http_term_blocked,
+            )
 
             actor = (session.get("user") or session.get("username") or "").strip()
             dept_id = resolve_effective_department_scope_id(conn, actor)
-            assert_term_writable(conn, stage="exams", department_id=dept_id)
-        except TermClosedError as exc:
-            return jsonify({"status": "error", "message": str(exc), "code": "term_closed"}), 423
+            assert_term_operation(conn, operation=OP_EXAM_WRITE, department_id=dept_id)
+        except (TermClosedError, TermOperationError) as exc:
+            return http_term_blocked(exc)
         cur = conn.cursor()
         cur.execute(q, params)
         conn.commit()

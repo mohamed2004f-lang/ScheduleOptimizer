@@ -274,21 +274,39 @@
       return `<table class="table table-sm table-bordered mb-0"><thead><tr><th>المقرر</th><th>المتطلب</th><th>الحالة</th><th>الدرجة</th><th>الوصف</th></tr></thead><tbody>${rows}</tbody></table>`;
     }
 
+    function unmetPrereqItemsFromValidation(data){
+      const items = [];
+      const courses = data?.courses || {};
+      for (const cname of Object.keys(courses)){
+        const unmet = (courses[cname].requirements || []).filter(r => r.status && r.status !== 'passed' && r.status !== 'in_plan');
+        if (unmet.length){
+          items.push({ course: cname, reqs: unmet.map(r => r.prereq || '').filter(Boolean) });
+        }
+      }
+      return items;
+    }
+
+    function formatUnmetPrereqConfirm(data){
+      return unmetPrereqItemsFromValidation(data).map(it =>
+        '• المقرر «' + it.course + '» يحتاج: ' + it.reqs.map(n => '«' + n + '»').join('، ')
+      ).join('\n');
+    }
+
     function updatePrereqPlanUI(data){
       const ban = document.getElementById('prereqPlanBanner');
       const btn = document.getElementById('btnPrereqDetails');
       if(!ban || !btn) return;
       lastPrereqValidation = data || null;
-      const n = data?.summary?.courses_with_unmet_count ?? 0;
-      if (!data || n === 0){
-        lastPrereqValidation = null;
+      const items = unmetPrereqItemsFromValidation(data);
+      if (!items.length){
         ban.classList.add('d-none');
         btn.classList.add('d-none');
         return;
       }
       ban.classList.remove('d-none');
-      const hb = data.summary?.has_blocking ? ' يتضمّن متطلبات «ناقصة من الكشف» تحتاج قرار مشرف.' : '';
-      ban.innerHTML = `<strong>تنبيه متطلبات:</strong> <strong>${n}</strong> مقرراً في اختيارك به متطلبات غير مكتملة النجاح.${hb} يمكنك حفظ المسودة والإرسال؛ المشرف يقرر القبول أو الرفض.`;
+      const hb = data.summary?.has_blocking ? ' بعض المتطلبات غير موجودة في كشف الدرجات.' : '';
+      const lis = items.map(it => `<li><strong>${escPlain(it.course)}</strong> يحتاج ${it.reqs.map(n => `<em>${escPlain(n)}</em>`).join('، ')}</li>`).join('');
+      ban.innerHTML = `<strong>تنبيه متطلبات:</strong> ${items.length} مقرراً بمتطلبات غير مكتملة.${hb}<ul class="mb-1 mt-2">${lis}</ul><div class="small">يمكنك حفظ المسودة والإرسال مع إقرار؛ المشرف يقرر القبول أو الرفض.</div>`;
       btn.classList.remove('d-none');
     }
 
@@ -704,10 +722,10 @@
           return;
         }
       }
-      const unmetCount = Number(lastPrereqValidation?.summary?.courses_with_unmet_count || 0);
+      const unmetLines = formatUnmetPrereqConfirm(lastPrereqValidation);
       let ackPayload = {};
-      if (unmetCount > 0){
-        const okAck = confirm(`الخطة تحتوي ${unmetCount} مقرراً بمتطلبات غير مكتملة. هل تريد الإرسال مع إقرار بالمخالفة؟`);
+      if (unmetLines){
+        const okAck = confirm(`الخطة تحتوي مقررات بمتطلبات غير مكتملة:\n\n${unmetLines}\n\nهل تريد الإرسال مع إقرار بالمخالفة؟`);
         if (!okAck){
           setPlanMsg('warning','تم إلغاء الإرسال. راجع تفاصيل المتطلبات أولاً.');
           return;
@@ -890,18 +908,17 @@
       const resp = await fetchJSON(`/students/eligible_courses?student_id=${encodeURIComponent(sid)}`);
       const eligible = Array.isArray(resp.json?.eligible) ? resp.json.eligible : [];
       const completed = Array.isArray(resp.json?.completed) ? resp.json.completed : [];
-      const schedulePublished = resp.json?.schedule_published !== false;
+      const offeringsPublished = resp.json?.offerings_published === true;
 
       lastCompletedCourses = completed;
-      lastSchedulePublished = schedulePublished;
+      lastSchedulePublished = offeringsPublished;
 
       const btnImprove = document.getElementById('btnImproveGPA');
       if (btnImprove) {
-        // الزر يظهر دائماً، لكن يتعطل حتى اعتماد الجدول، أو عند عدم وجود مقررات منجزة متاحة
-        if (!schedulePublished) {
+        if (!offeringsPublished) {
           btnImprove.disabled = true;
-          btnImprove.title = 'الجدول الدراسي غير معتمد بعد';
-          setPlanMsg('warning', 'الجدول الدراسي غير معتمد بعد. زر \"تحسين المعدل\" سيتفعّل بعد اعتماد الأدمن الرئيسي للجدول.');
+          btnImprove.title = 'لم يُعتمد عرض مقررات هذا الفصل بعد';
+          setPlanMsg('warning', 'لم يُعتمد عرض مقررات هذا الفصل بعد. لا يمكن اختيار مقررات حتى يعتمد العميد/الأدمن العرض.');
         } else if (!completed.length) {
           btnImprove.disabled = true;
           btnImprove.title = 'لا توجد مقررات منجزة متاحة للتحسين';
@@ -918,16 +935,18 @@
         selCourses.appendChild(opt);
       });
 
-      // عرض ملاحظة عن المقررات المكتملة حتى لا يحاول الطالب تسجيلها
       const completedNames = completed.map(c=>c.course_name).join(', ');
-      if (schedulePublished && completedNames) {
+      if (offeringsPublished && completedNames) {
         setPlanMsg('info', `مقررات مكتملة لن يتم اقتراحها في الخطة: ${completedNames}. لتحسين المعدل استخدم زر "تحسين المعدل".`);
+      }
+      if (offeringsPublished && !eligible.length && !completedNames) {
+        setPlanMsg('info', 'لا مقررات في عرض هذا الفصل.');
       }
     }
 
     function openImproveGPAModal(){
       if (!lastSchedulePublished) {
-        setPlanMsg('warning', 'لا يمكن تحسين المعدل حالياً لأن الجدول الدراسي غير معتمد بعد.');
+        setPlanMsg('warning', 'لا يمكن تحسين المعدل حالياً لأن عرض المقررات غير معتمد بعد.');
         return;
       }
       if (!Array.isArray(lastCompletedCourses) || !lastCompletedCourses.length) {

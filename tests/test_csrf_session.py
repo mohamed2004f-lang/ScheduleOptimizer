@@ -116,3 +116,45 @@ def test_academic_calendar_post_requires_csrf(app):
             assert first["event_date"] == "2065-09-07"
     finally:
         _restore_csrf(app, prev)
+
+
+def test_term_offerings_save_requires_csrf(app):
+    prev = _enable_csrf(app)
+    try:
+        with app.test_client() as c:
+            login = c.post(
+                "/auth/login",
+                json={"username": "admin-test", "password": "TestP@ssw0rd!"},
+            )
+            assert login.status_code == 200
+            missing = c.post(
+                "/term_offerings/save",
+                json={"course_names": []},
+                headers={"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
+            )
+            assert missing.status_code == 400
+            assert (missing.get_json() or {}).get("error") == "CSRF_FAILED"
+
+            page = c.get("/term_offerings")
+            assert page.status_code == 200
+            token = _csrf_from_html(page.data)
+            ok = c.post(
+                "/term_offerings/save",
+                json={"course_names": [], "csrf_token": token},
+                headers={
+                    "Accept": "application/json",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "X-CSRFToken": token,
+                },
+            )
+            assert ok.status_code == 200, ok.get_data(as_text=True)
+            assert (ok.get_json() or {}).get("status") == "ok"
+
+            body_only = c.post(
+                "/term_offerings/save",
+                json={"course_names": [], "csrf_token": token},
+                headers={"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
+            )
+            assert body_only.status_code == 200, body_only.get_data(as_text=True)
+    finally:
+        _restore_csrf(app, prev)

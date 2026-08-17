@@ -857,11 +857,15 @@ def _general_owned_visibility_sql(
     """
     _ensure_shared_catalog_tables(conn)
     gen_id = resolve_college_general_department_id(conn)
-    if gen_id is None:
-        return " AND 1=0 ", ()
     prefix = f"{table_alias}." if table_alias else ""
     own_expr = f"{prefix}{owning_col.split('.')[-1]}" if table_alias else owning_col
     cname_expr = f"{prefix}{course_name_col.split('.')[-1]}" if table_alias else course_name_col
+    if gen_id is None:
+        # كلية بلا قسم عام: يبقى القسم يرى مقرراته وغير المملوكة بدل حجب كل شيء.
+        return (
+            f" AND (COALESCE({own_expr}, -1) = ? OR {own_expr} IS NULL) ",
+            (dep,),
+        )
     return (
         f"""
          AND (

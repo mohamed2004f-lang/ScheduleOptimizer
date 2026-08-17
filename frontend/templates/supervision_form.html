@@ -13,7 +13,7 @@
     <div class="page-header mb-3">
       <div>
         <h1 class="page-title">إسناد الطلبة للمشرفين</h1>
-        <p class="page-subtitle">اختر عضو هيئة التدريس ثم حدّد الطلبة الذين يشرف عليهم</p>
+        <p class="page-subtitle">اختر الأستاذ ثم حدّد الطلبة الذين يشرف عليهم. رئيس القسم يرى أساتذة وطلبة قسمه فقط.</p>
       </div>
     </div>
 
@@ -177,9 +177,7 @@
         return;
       }
       const btn = document.getElementById('btnSaveAssignments');
-      const tbody = document.querySelector('#studentsTable tbody');
-      const checked = tbody.querySelectorAll('input[type="checkbox"][data-sid]:checked');
-      const studentIds = Array.from(checked).map(ch => ch.dataset.sid);
+      const studentIds = Array.from(CURRENT_SUPERVISED);
       try {
         setLoading('btnSaveAssignments', true, 'جاري الحفظ...');
         const data = await apiPost('/instructors/assign_students', {

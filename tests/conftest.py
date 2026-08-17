@@ -275,7 +275,7 @@ CREATE TABLE IF NOT EXISTS registrations (
     teaching_group_id INTEGER,
     semester TEXT DEFAULT '',
     registered_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (student_id, course_name)
+    UNIQUE (student_id, course_name, semester)
 );
 
 CREATE TABLE IF NOT EXISTS schedule (
@@ -1014,6 +1014,29 @@ CREATE TABLE IF NOT EXISTS term_operation_exceptions (
     updated_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS term_course_offerings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    term_key TEXT NOT NULL,
+    course_name TEXT NOT NULL,
+    department_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'offered',
+    created_at TEXT,
+    created_by TEXT NOT NULL DEFAULT '',
+    updated_at TEXT,
+    UNIQUE (term_key, course_name, department_id)
+);
+
+CREATE TABLE IF NOT EXISTS term_offering_state (
+    term_key TEXT NOT NULL,
+    department_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    published_at TEXT,
+    published_by TEXT NOT NULL DEFAULT '',
+    updated_at TEXT,
+    updated_by TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (term_key, department_id)
+);
+
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value_json TEXT,
@@ -1443,6 +1466,7 @@ def _setup_shared_db():
         "backend.services.users",
         "backend.services.academic_calendar",
         "backend.services.term_ops_routes",
+        "backend.services.term_offerings",
         "backend.services.term_policy",
         "backend.services.term_basket",
         "backend.services.academic_rules",

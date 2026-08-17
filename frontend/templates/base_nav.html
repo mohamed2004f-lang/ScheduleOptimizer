@@ -189,8 +189,18 @@
 <link rel="stylesheet" href="/static/css/term-help.css">
 <link rel="stylesheet" href="/static/vendor/fontawesome/all.min.css">
 <meta name="csrf-token" content="{{ csrf_token() }}">
+<script nonce="{{ csp_nonce }}">
+(function(){
+  var m = document.querySelector('meta[name="csrf-token"]');
+  var t = m ? (m.getAttribute('content') || '') : '';
+  window.__CSRF_TOKEN__ = t;
+  if (m && document.head && m.parentNode !== document.head && !document.head.querySelector('meta[name="csrf-token"]')) {
+    document.head.appendChild(m.cloneNode(true));
+  }
+})();
+</script>
 <meta name="show-dev-hints" content="{{ '1' if show_dev_hints else '0' }}">
-<script nonce="{{ csp_nonce }}" src="/static/js/common.js?v=20260520"></script>
+<script nonce="{{ csp_nonce }}" src="/static/js/common.js?v=20260817"></script>
 <script nonce="{{ csp_nonce }}" src="/static/js/guide-catalog.js"></script>
 <script nonce="{{ csp_nonce }}" src="/static/js/page-guide.js"></script>
 <script nonce="{{ csp_nonce }}" src="/static/js/quality-assistant-fab.js" defer></script>
@@ -555,6 +565,7 @@
           <ul class="dropdown-menu" aria-labelledby="planningMenu">
             <li><a class="dropdown-item" id="navAcademicCalendar" href="/academic_calendar_page">التقويم الأكاديمي</a></li>
             <li><a class="dropdown-item" id="navTermOps" href="/term_ops">تشغيل الفصل</a></li>
+            <li><a class="dropdown-item" id="navTermOfferings" href="/term_offerings">عرض مقررات الفصل</a></li>
             <li><a class="dropdown-item" id="navScheduleForm" href="/schedule_form">الجدول الدراسي</a></li>
             <li><a class="dropdown-item" id="navResults" href="/results">تعارضات الجدول الدراسي</a></li>
             <li><a class="dropdown-item" id="navScheduleVersions" href="/schedule_versions_page" style="display:none;">أرشيف نسخ الجدول الدراسي</a></li>

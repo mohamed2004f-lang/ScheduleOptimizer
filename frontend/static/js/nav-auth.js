@@ -243,7 +243,7 @@
           role === 'admin' || role === 'admin_main' || role === 'system_admin' ||
           role === 'college_dean' || role === 'academic_vice_dean' || role === 'head_of_department'
         );
-        navSup = navUsers;
+        navSup = navUsers || role === 'head_of_department';
         navRules = navUsers;
         showCourseReg = ACAD_STAFF_ROLES.includes(role || '');
         showScheduleVersions = showCourseReg;
@@ -571,6 +571,8 @@
       if (elTermOps) elTermOps.style.display = showTermOps ? '' : 'none';
       const elTermOpsAffairs = document.getElementById('navTermOpsAffairs');
       if (elTermOpsAffairs) elTermOpsAffairs.style.display = showTermOps ? '' : 'none';
+      const elTermOfferings = document.getElementById('navTermOfferings');
+      if (elTermOfferings) elTermOfferings.style.display = showTermOps ? '' : 'none';
       const elSurveysCompletion = document.getElementById('navSurveysCompletion');
       if (elSurveysCompletion) elSurveysCompletion.style.display = showSurveysResults ? '' : 'none';
       const elSurveysTrends = document.getElementById('navSurveysTrends');
@@ -1752,6 +1754,7 @@
         ['/course_quality_college_page','navCourseQualityCollege'],
         ['/academic_quality/term_closure','navTermClosure'],
         ['/term_ops','navTermOps'],
+        ['/term_offerings','navTermOfferings'],
         ['/academic_quality/surveys/completion','navSurveysCompletion'],
         ['/academic_quality/surveys/trends','navSurveysTrends'],
         ['/academic_quality/surveys/invites','navSurveysInvites'],

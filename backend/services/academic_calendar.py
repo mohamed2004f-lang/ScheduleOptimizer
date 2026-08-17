@@ -1,5 +1,6 @@
 import datetime
 import logging
+import re
 
 from flask import Blueprint, request, jsonify, session
 from werkzeug.exceptions import HTTPException
@@ -58,13 +59,46 @@ def _as_day(raw):
     if raw is None:
         return None
     if hasattr(raw, "isoformat"):
-        return str(raw.isoformat())[:10]
+        token = str(raw.isoformat())[:10]
+        return token if re.match(r"^\d{4}-\d{2}-\d{2}$", token) else None
     s = str(raw).strip()
-    return s[:10] if s else None
+    if not s or s.lower() in ("none", "null"):
+        return None
+    token = s.replace("T", " ").split()[0][:10]
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", token):
+        return token
+    m = re.match(r"^(\d{1,2})[/.](\d{1,2})[/.](\d{4})$", s.strip())
+    if m:
+        d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if mo > 12 and d <= 12:
+            d, mo = mo, d
+        try:
+            return datetime.date(y, mo, d).isoformat()
+        except ValueError:
+            return None
+    return None
 
 
 def _needs_range(title: str) -> bool:
     return "لمدة" in (title or "")
+
+
+def _needs_range_item(item_no: int, title: str, default_title: str = "") -> bool:
+    return _needs_range(default_title) or _needs_range(title)
+
+
+def _match_standard_item_no(title: str, titles: list) -> int:
+    t = (title or "").strip()
+    if not t:
+        return 0
+    for i, default_title in enumerate(titles, start=1):
+        if t == default_title:
+            return i
+    for i, default_title in enumerate(titles, start=1):
+        base = re.sub(r"\s*\(لمدة[^)]*\)\s*", "", default_title).strip()
+        if t == base or t.startswith(base):
+            return i
+    return 0
 
 
 def _canonical_year(raw: str) -> str:
@@ -102,7 +136,7 @@ def assemble_calendar_items(*, academic_year: str, term: str, existing: dict) ->
                 "is_deleted": 0,
                 "updated_at": row.get("updated_at"),
                 "is_custom": False,
-                "needs_range": _needs_range(row.get("title") or default_title),
+                "needs_range": _needs_range_item(i, row.get("title") or "", default_title),
             }
         )
     for no in sorted(existing.keys()):
@@ -120,7 +154,7 @@ def assemble_calendar_items(*, academic_year: str, term: str, existing: dict) ->
                 "is_deleted": 0,
                 "updated_at": row.get("updated_at"),
                 "is_custom": True,
-                "needs_range": _needs_range(row.get("title") or ""),
+                "needs_range": _needs_range_item(no, row.get("title") or "", ""),
             }
         )
     return out
@@ -136,8 +170,8 @@ def _calendar_has_start_column(conn) -> bool:
     return "event_date_start" in cols
 
 
-def write_calendar_items(conn, *, academic_year: str, term: str, titles: list, items: list, now: str) -> int:
-    """upsert صفوف academic_calendar. لا يعتمد على سياسة النوافذ ولا على عمود اختياري."""
+def write_calendar_items(conn, *, academic_year: str, term: str, titles: list, items: list, now: str) -> list:
+    """upsert صفوف academic_calendar. يعيد الصفوف المكتوبة."""
     has_start = _calendar_has_start_column(conn)
     cur = conn.cursor()
     row_max = cur.execute(
@@ -147,7 +181,7 @@ def write_calendar_items(conn, *, academic_year: str, term: str, titles: list, i
     max_no = len(titles)
     current_max = int(row_max[0] or 0) if row_max else 0
     current_max = max(current_max, max_no)
-    written = 0
+    written_rows: list = []
 
     if has_start:
         sql = """
@@ -182,17 +216,22 @@ def write_calendar_items(conn, *, academic_year: str, term: str, titles: list, i
         except Exception:
             no = 0
 
-        event_date = (it.get("event_date") or "").strip() or None
-        event_date_start = (it.get("event_date_start") or "").strip() or None
+        event_date = _as_day(it.get("event_date"))
+        event_date_start = _as_day(it.get("event_date_start"))
         is_deleted = 1 if int(it.get("is_deleted") or 0) else 0
         incoming_title = (it.get("title") or "").strip()
 
         if no <= 0:
             if not incoming_title:
                 continue
-            current_max += 1
-            no = current_max
-            title = incoming_title
+            matched = _match_standard_item_no(incoming_title, titles)
+            if matched:
+                no = matched
+                title = incoming_title
+            else:
+                current_max += 1
+                no = current_max
+                title = incoming_title
         elif 1 <= no <= max_no:
             title = incoming_title or titles[no - 1]
         else:
@@ -211,8 +250,17 @@ def write_calendar_items(conn, *, academic_year: str, term: str, titles: list, i
                 sql,
                 (academic_year, term, no, title, event_date, is_deleted, now),
             )
-        written += 1
-    return written
+        written_rows.append(
+            {
+                "item_no": no,
+                "title": title,
+                "event_date": event_date,
+                "event_date_start": event_date_start,
+                "is_deleted": is_deleted,
+                "updated_at": now,
+            }
+        )
+    return written_rows
 
 
 @academic_calendar_bp.route("/items", methods=["GET"])
@@ -341,10 +389,14 @@ def _upsert_items_impl():
         except Exception:
             logger.exception("calendar amendment preview skipped")
             preview = {}
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         if preview_only:
             return jsonify(preview)
 
-        written = write_calendar_items(
+        written_rows = write_calendar_items(
             conn,
             academic_year=academic_year,
             term=term,
@@ -352,6 +404,10 @@ def _upsert_items_impl():
             items=items,
             now=now,
         )
+        written = len(written_rows)
+        conn.commit()
+        persisted = load_calendar_item_rows(conn, academic_year, term)
+        extra = None
         try:
             extra = on_calendar_saved(
                 conn,
@@ -359,23 +415,48 @@ def _upsert_items_impl():
                 season=term,
                 actor=actor,
             )
+            conn.commit()
         except Exception:
             logger.exception("term_engine on_calendar_saved after calendar write skipped")
             extra = None
-        saved = load_calendar_item_rows(conn, academic_year, term)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         saved_items = assemble_calendar_items(
-            academic_year=academic_year, term=term, existing=saved
+            academic_year=academic_year, term=term, existing=persisted
         )
-        conn.commit()
 
     dated = sum(1 for it in saved_items if it.get("event_date") or it.get("event_date_start"))
+    sent_dated = sum(
+        1
+        for it in items
+        if not int(it.get("is_deleted") or 0)
+        and (_as_day(it.get("event_date")) or _as_day(it.get("event_date_start")))
+    )
     logger.info(
-        "academic_calendar saved year=%s term=%s written=%s dated=%s",
+        "academic_calendar saved year=%s term=%s written=%s dated=%s sent_dated=%s",
         academic_year,
         term,
         written,
         dated,
+        sent_dated,
     )
+    if sent_dated > 0 and dated == 0:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "error": "CALENDAR_NOT_PERSISTED",
+                    "message": "تعذر تثبيت التواريخ في قاعدة البيانات. لم يُعتبر الحفظ ناجحاً.",
+                    "academic_year": academic_year,
+                    "term": term,
+                    "written": written,
+                    "items": saved_items,
+                }
+            ),
+            500,
+        )
     payload = {
         "status": "ok",
         "message": f"تم حفظ التقويم الأكاديمي ({dated} تاريخ) لعام {academic_year}",

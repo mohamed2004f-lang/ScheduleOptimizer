@@ -2989,18 +2989,51 @@ def _insert_registrations_rows(
     semester: str = "",
 ) -> None:
     has_tg = _registrations_has_teaching_group_column(conn)
+    has_sem = False
+    try:
+        from backend.services.term_basket import registrations_has_semester
+
+        has_sem = registrations_has_semester(conn)
+    except Exception:
+        has_sem = False
+    label = (semester or "").strip()
+    if has_sem and not label:
+        try:
+            from backend.services.term_basket import current_ops_label
+
+            label = current_ops_label(conn)
+        except Exception:
+            label = ""
     pc_map = course_pc_map or {}
     for item in items:
         cname = item["course_name"]
         pcid = pc_map.get(cname)
         gid = item.get("teaching_group_id")
-        if has_tg:
+        if has_tg and has_sem:
+            cur.execute(
+                """
+                INSERT INTO registrations (student_id, course_name, program_course_id, teaching_group_id, semester)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (student_id, cname, pcid, gid, label),
+            )
+        elif has_tg:
             cur.execute(
                 """
                 INSERT INTO registrations (student_id, course_name, program_course_id, teaching_group_id)
                 VALUES (?, ?, ?, ?)
                 """,
                 (student_id, cname, pcid, gid),
+            )
+        elif has_sem and pcid is not None:
+            cur.execute(
+                "INSERT INTO registrations (student_id, course_name, program_course_id, semester) VALUES (?,?,?,?)",
+                (student_id, cname, pcid, label),
+            )
+        elif has_sem:
+            cur.execute(
+                "INSERT INTO registrations (student_id, course_name, semester) VALUES (?,?,?)",
+                (student_id, cname, label),
             )
         elif pcid is not None:
             cur.execute(
@@ -3015,7 +3048,7 @@ def _insert_registrations_rows(
         try:
             from backend.services.term_basket import stamp_registration_semester
 
-            stamp_registration_semester(cur, conn, student_id, cname, semester)
+            stamp_registration_semester(cur, conn, student_id, cname, label)
         except Exception:
             pass
 
@@ -4730,59 +4763,59 @@ def attendance_allowed_courses():
 @login_required
 def eligible_courses():
     """
-    المقررات المتاحة للطالب ضمن خطته الدراسية: فقط المقررات الموجودة في الجدول الدراسي المعتمد.
-    إذا لم يُنشر الجدول بعد، تُرجع eligible فارغة و schedule_published=False.
+    المقررات المتاحة للطالب: عرض الفصل المعتمد فقط (term_course_offerings).
+    إن لم يُعتمد العرض تُرجع eligible فارغة و offerings_published=False.
+    schedule_published يبقى لاعتماد الجدول الزمني وليس لقائمة التسجيل.
     """
     sid = normalize_sid(request.args.get("student_id"))
     if not sid:
-        return jsonify({"eligible": [], "completed": [], "schedule_published": False})
+        return jsonify({
+            "eligible": [],
+            "completed": [],
+            "schedule_published": False,
+            "offerings_published": False,
+        })
 
     PASS_TEXT = {'p','pass','نجاح','مقبول','a','b','c'}
     PASS_NUM_THRESHOLD = 50.0
+
+    def _is_pass(g) -> bool:
+        try:
+            if float(g) >= PASS_NUM_THRESHOLD:
+                return True
+        except Exception:
+            pass
+        return isinstance(g, str) and g.strip().lower() in PASS_TEXT
 
     try:
         with get_connection() as conn:
             cur = conn.cursor()
             published_at = get_schedule_published_at(conn)
-            if published_at is None:
-                try:
-                    grade_rows = cur.execute(
-                        "SELECT course_name, grade FROM grades WHERE student_id = ?", (sid,)
-                    ).fetchall()
-                except Exception:
-                    grade_rows = []
-                grade_map = {r[0]: r[1] for r in grade_rows}
-                try:
-                    all_rows = cur.execute(
-                        "SELECT course_name, COALESCE(course_code, ''), COALESCE(units, 0) FROM courses"
-                    ).fetchall()
-                    all_courses = [{"course_name": r[0], "course_code": r[1], "units": r[2]} for r in all_rows]
-                except Exception:
-                    all_courses = []
-                completed = []
-                for c in all_courses:
-                    g = grade_map.get(c["course_name"], None)
-                    if g is None:
-                        continue
-                    passed = False
-                    try:
-                        if float(g) >= PASS_NUM_THRESHOLD:
-                            passed = True
-                    except Exception:
-                        pass
-                    if not passed and isinstance(g, str) and g.strip().lower() in PASS_TEXT:
-                        passed = True
-                    if passed:
-                        completed.append({**c, "grade": g})
-                return jsonify({"eligible": [], "completed": completed, "schedule_published": False})
+            schedule_published = published_at is not None
 
-            schedule_course_names = {
-                str(r[0]).strip()
-                for r in cur.execute(
-                    "SELECT DISTINCT course_name FROM schedule WHERE COALESCE(course_name,'') <> ''"
-                ).fetchall()
-                if str(r[0] or "").strip()
-            }
+            from backend.services.term_engine import ensure_term_engine_tables, parse_ops_term
+            from backend.services.term_offerings import published_offered_course_names
+
+            ensure_term_engine_tables(conn)
+            term_name, term_year = get_current_term(conn=conn)
+            parsed = parse_ops_term(term_name, term_year)
+            term_key = (parsed or {}).get("term_key") or ""
+
+            student_dept = None
+            try:
+                srow = cur.execute(
+                    "SELECT department_id FROM students WHERE student_id = ? LIMIT 1",
+                    (sid,),
+                ).fetchone()
+                if srow and srow[0] not in (None, ""):
+                    student_dept = int(srow[0])
+            except Exception:
+                student_dept = None
+
+            offered_names, offerings_published = published_offered_course_names(
+                conn, term_key=term_key, department_id=student_dept
+            )
+
             try:
                 all_rows = cur.execute(
                     "SELECT course_name, COALESCE(course_code, ''), COALESCE(units, 0) FROM courses"
@@ -4793,59 +4826,59 @@ def eligible_courses():
                     if str(r[0] or "").strip()
                 ]
             except Exception:
-                all_rows = cur.execute("SELECT DISTINCT course_name FROM schedule").fetchall()
-                all_courses = [
-                    {"course_name": str(r[0]).strip(), "course_code": "", "units": 0}
-                    for r in all_rows
-                    if str(r[0] or "").strip()
-                ]
+                all_courses = []
 
-            # مقررات وردت في الجدول الدراسي دون صف مطابق في courses (أو اختلاف مسافات)
-            by_name = {c["course_name"]: c for c in all_courses}
-            for scn in schedule_course_names:
-                if scn not in by_name:
-                    by_name[scn] = {"course_name": scn, "course_code": "", "units": 0}
-            all_courses = [by_name[k] for k in sorted(by_name.keys()) if k in schedule_course_names]
-
-            grade_rows = cur.execute(
-                "SELECT course_name, grade FROM grades WHERE student_id = ? ORDER BY course_name",
-                (sid,),
-            ).fetchall()
+            try:
+                grade_rows = cur.execute(
+                    "SELECT course_name, grade FROM grades WHERE student_id = ?",
+                    (sid,),
+                ).fetchall()
+            except Exception:
+                grade_rows = []
             grade_map = {}
             for r in grade_rows:
                 cn = str(r[0] or "").strip()
                 if cn:
                     grade_map[cn] = r[1]
 
-            eligible = []
             completed = []
             for c in all_courses:
-                cname = c["course_name"]
-                g = grade_map.get(cname, None)
+                g = grade_map.get(c["course_name"], None)
                 if g is None:
-                    eligible.append(c)
                     continue
-                passed = False
-                try:
-                    gn = float(g)
-                    if gn >= PASS_NUM_THRESHOLD:
-                        passed = True
-                except Exception:
-                    pass
-                if not passed:
-                    if isinstance(g, str) and g.strip().lower() in PASS_TEXT:
-                        passed = True
-                if passed:
-                    comp = c.copy()
-                    comp["grade"] = g
-                    completed.append(comp)
-                else:
-                    eligible.append(c)
+                if _is_pass(g):
+                    completed.append({**c, "grade": g})
 
-        return jsonify({"eligible": eligible, "completed": completed, "schedule_published": True})
+            if not offerings_published:
+                return jsonify({
+                    "eligible": [],
+                    "completed": completed,
+                    "schedule_published": schedule_published,
+                    "offerings_published": False,
+                })
+
+            by_name = {c["course_name"]: c for c in all_courses}
+            passed_names = {c["course_name"] for c in completed}
+            eligible = []
+            for scn in sorted(offered_names):
+                if scn in passed_names:
+                    continue
+                eligible.append(by_name.get(scn) or {"course_name": scn, "course_code": "", "units": 0})
+
+        return jsonify({
+            "eligible": eligible,
+            "completed": completed,
+            "schedule_published": schedule_published,
+            "offerings_published": True,
+        })
     except Exception:
         current_app.logger.exception("eligible_courses failed")
-        return jsonify({"eligible": [], "completed": [], "schedule_published": False})
+        return jsonify({
+            "eligible": [],
+            "completed": [],
+            "schedule_published": False,
+            "offerings_published": False,
+        })
 
 # -----------------------------
 # Timetable conflicts (robust)

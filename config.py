@@ -103,6 +103,10 @@ SESSION_LIFETIME_MINUTES = int(os.environ.get('SESSION_LIFETIME_MINUTES', '60'))
 # إعدادات CSRF
 WTF_CSRF_ENABLED = True
 WTF_CSRF_TIME_LIMIT = 3600  # ساعة واحدة
+# فحص Referer على HTTPS يرفض حفظاً صحيحاً إذا حجب المتصفح الترويسة (وكيل عكسي / خصوصية).
+# الحماية الفعلية تبقى رمز الجلسة. للتفعيل: WTF_CSRF_SSL_STRICT=1
+_wtf_ssl_strict = (os.environ.get("WTF_CSRF_SSL_STRICT") or "").strip().lower()
+WTF_CSRF_SSL_STRICT = _wtf_ssl_strict in ("1", "true", "yes")
 
 # ============================================
 # إعدادات التسجيل (Logging)
@@ -135,6 +139,7 @@ class Config:
     SECRET_KEY = SECRET_KEY
     WTF_CSRF_ENABLED = WTF_CSRF_ENABLED
     WTF_CSRF_TIME_LIMIT = WTF_CSRF_TIME_LIMIT
+    WTF_CSRF_SSL_STRICT = WTF_CSRF_SSL_STRICT
     
     # إعدادات الجلسة
     PERMANENT_SESSION_LIFETIME = SESSION_LIFETIME_MINUTES * 60  # بالثواني

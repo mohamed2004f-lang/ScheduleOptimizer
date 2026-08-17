@@ -17,7 +17,9 @@
       </div>
       <div class="d-flex flex-wrap gap-2">
         <a class="btn btn-sm btn-outline-secondary" href="/academic_calendar_page">التقويم الأكاديمي</a>
-        <a class="btn btn-sm btn-outline-secondary" href="/academic_quality/term_closure">إغلاق المراحل</a>
+        <a class="btn btn-sm btn-outline-secondary" href="/term_offerings">عرض المقررات</a>
+        <a class="btn btn-sm btn-outline-secondary" href="/schedule_form">الجدول الدراسي</a>
+        <a class="btn btn-sm btn-outline-secondary" href="/academic_quality/term_closure">أرشيف الإغلاق</a>
         <button type="button" class="btn btn-sm btn-outline-primary" id="btnReload">تحديث</button>
       </div>
     </div>
@@ -127,8 +129,79 @@
 
     <div class="card mb-3">
       <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+          <div>
+            <h6 class="mb-1">حالة الفصل الرسمية</h6>
+            <p class="small text-muted mb-0">تُستنتج من النوافذ والإغلاق. التعيين اليدوي لسلطة الكلية.</p>
+          </div>
+          <div class="d-flex flex-wrap gap-2 align-items-end" id="opsStatusControls">
+            <select id="opsStatusSelect" class="form-select form-select-sm" style="min-width:10rem"></select>
+            <button type="button" class="btn btn-sm btn-outline-primary" id="btnSetStatus">تعيين</button>
+          </div>
+        </div>
+        <div class="fw-semibold" id="opsLifecycle">—</div>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+          <div>
+            <h6 class="mb-1">إغلاق المراحل</h6>
+            <p class="small text-muted mb-0">غرفة العمليات هنا. صفحة الجودة تبقى للأرشيف والتنزيل.</p>
+          </div>
+          <a class="btn btn-sm btn-outline-secondary" href="/academic_quality/term_closure">تفاصيل الأرشيف</a>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered align-middle mb-0">
+            <thead class="table-light">
+              <tr><th>المرحلة</th><th>الحالة</th><th style="width:12rem">إجراء</th></tr>
+            </thead>
+            <tbody id="opsStages"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h6 class="mb-2">استثناء طالب (نافذة مغلقة)</h6>
+        <p class="small text-muted">مشرف/رئيس قسم يقترح · رئيس القسم يعتمد · العميد إن فاتت المهلة. يتجاوز النافذة لا قفل المرحلة.</p>
+        <div class="row g-2 align-items-end mb-3">
+          <div class="col-md-3">
+            <label class="form-label small mb-0">رقم الطالب</label>
+            <input id="excSid" class="form-control form-control-sm" dir="ltr">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small mb-0">العملية</label>
+            <select id="excOp" class="form-select form-select-sm">
+              <option value="add_course">إضافة مقرر</option>
+              <option value="drop_course">إسقاط مقرر</option>
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small mb-0">السبب (≥٥)</label>
+            <input id="excReason" class="form-control form-control-sm">
+          </div>
+          <div class="col-md-2">
+            <button type="button" class="btn btn-sm btn-primary w-100" id="btnExcPropose">اقتراح</button>
+          </div>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered align-middle mb-0">
+            <thead class="table-light">
+              <tr><th>الطالب</th><th>العملية</th><th>الحالة</th><th>السبب</th><th style="width:10rem">إجراء</th></tr>
+            </thead>
+            <tbody id="opsExceptions"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
         <h6 class="mb-2">أرشفة السلة قبل فصل جديد</h6>
-        <p class="small text-muted mb-2">السلة الحية واحدة لكل طالب/مقرر. الانتقال لفصل جديد يتطلب أرشفة أو سلة فارغة. الطلبات المعلّقة لا تُحذف.</p>
+        <p class="small text-muted mb-2">السلة الحية للفصل الحالي. الانتقال لفصل جديد يتطلب أرشفة أو سلة فارغة.</p>
         <div class="d-flex gap-2">
           <input id="archReason" class="form-control form-control-sm" placeholder="سبب الأرشفة (٥ أحرف على الأقل)">
           <button type="button" class="btn btn-sm btn-warning" id="btnArchive">أرشفة السلة الحالية</button>
@@ -191,14 +264,55 @@
     else if (setSeason && /ربيع/.test(ct.term_name||'')) setSeason.value = 'ربيع';
     if (setYear && ct.term_year) setYear.value = ct.term_year;
     const m = STATE.term_master || {};
-    const statusAr = {planned:'مخطط', closed:'مغلق', open:'مفتوح'}[m.status] || m.status;
+    const statusAr = (STATE.lifecycle_statuses || []).reduce((acc, x) => {
+      acc[x.value] = x.label_ar; return acc;
+    }, {planned:'مخطط', closed:'مغلق', open:'مفتوح', registration:'تسجيل', instruction:'دراسة', exams:'امتحان', grading:'درجات'});
+    const lifeLabel = m.status_label_ar || statusAr[m.status] || m.status || '—';
+    document.getElementById('opsLifecycle').textContent = lifeLabel + (m.term_key ? ` · ${m.term_key}` : '');
     if (m.term_key || m.status) {
       document.getElementById('opsMaster').textContent =
-        `حالة الفصل: ${statusAr || 'مربوط'}` + (STATE.academic_year ? ` · ${STATE.academic_year}` : '');
+        `حالة الفصل: ${lifeLabel}` + (STATE.academic_year ? ` · ${STATE.academic_year}` : '');
     } else if ((STATE.windows||[]).some(w => w.starts_at || w.ends_at)) {
       document.getElementById('opsMaster').textContent = 'مربوط من التقويم';
     } else {
       document.getElementById('opsMaster').textContent = 'لم يُربط بعد';
+    }
+    const caps = STATE.capabilities || {};
+    const statusCtrl = document.getElementById('opsStatusControls');
+    if (statusCtrl) statusCtrl.style.display = caps.can_set_status ? '' : 'none';
+    const selStatus = document.getElementById('opsStatusSelect');
+    if (selStatus) {
+      const opts = STATE.lifecycle_statuses || [];
+      selStatus.innerHTML = opts.map(o =>
+        `<option value="${o.value}"${o.value===m.status?' selected':''}>${o.label_ar}</option>`
+      ).join('');
+    }
+    const stagesBody = document.getElementById('opsStages');
+    if (stagesBody) {
+      stagesBody.innerHTML = '';
+      const board = (STATE.closure && STATE.closure.stage_board) || [];
+      board.forEach(st => {
+        const tr = document.createElement('tr');
+        const closed = !!st.closed;
+        let actions = '';
+        if (!closed && caps.can_close_stages !== false) {
+          actions += `<button type="button" class="btn btn-sm btn-outline-danger ops-close-stage" data-stage="${st.stage}">إغلاق</button>`;
+        }
+        if (closed && caps.can_reopen_stages) {
+          actions += ` <button type="button" class="btn btn-sm btn-outline-secondary ops-reopen-stage" data-stage="${st.stage}">إعادة فتح</button>`;
+        }
+        tr.innerHTML = `<td>${st.label_ar||st.stage}${st.optional?' <span class="badge text-bg-light">اختياري</span>':''}</td>
+          <td>${closed ? '<span class="badge text-bg-secondary">مغلقة</span>' : '<span class="badge text-bg-success">مفتوحة</span>'}
+            <div class="small text-muted">${st.closed_by||''}${st.closed_at? ' · '+String(st.closed_at).slice(0,16):''}</div></td>
+          <td>${actions || '—'}</td>`;
+        stagesBody.appendChild(tr);
+      });
+      stagesBody.querySelectorAll('.ops-close-stage').forEach(btn => {
+        btn.addEventListener('click', () => closeStage(btn.dataset.stage));
+      });
+      stagesBody.querySelectorAll('.ops-reopen-stage').forEach(btn => {
+        btn.addEventListener('click', () => reopenStage(btn.dataset.stage));
+      });
     }
     const notice = STATE.notice_ar || '';
     const elN = document.getElementById('opsNotice');
@@ -256,8 +370,96 @@
     STATE = r.json;
     setMsg('','');
     render();
+    loadExceptions();
+  }
+  async function postJSON(url, body){
+    return fetchJSON(url, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body || {})
+    });
+  }
+  async function closeStage(stage){
+    if (!confirm('إغلاق مرحلة «' + stage + '»؟')) return;
+    const r = await postJSON('/term_ops/stages/close', { stage, semester: (STATE.current_term||{}).ops_label });
+    if (!r.ok) { setMsg(apiErr(r),'danger'); return; }
+    setMsg('تم إغلاق المرحلة.','success');
+    await load();
+  }
+  async function reopenStage(stage){
+    const reason = prompt('سبب إعادة الفتح (≥٥ أحرف):') || '';
+    if (reason.trim().length < 5) { setMsg('أُلغي — السبب مطلوب','warning'); return; }
+    const r = await postJSON('/term_ops/stages/reopen', {
+      stage, reason: reason.trim(), semester: (STATE.current_term||{}).ops_label
+    });
+    if (!r.ok) { setMsg(apiErr(r),'danger'); return; }
+    setMsg('أُعيد فتح المرحلة.','warning');
+    await load();
+  }
+  async function loadExceptions(){
+    const body = document.getElementById('opsExceptions');
+    if (!body) return;
+    const r = await fetchJSON('/term_ops/exceptions');
+    if (!r.ok) { body.innerHTML = `<tr><td colspan="5" class="text-danger">${apiErr(r)}</td></tr>`; return; }
+    const items = (r.json && r.json.items) || [];
+    const caps = (STATE && STATE.capabilities) || {};
+    if (!items.length) {
+      body.innerHTML = '<tr><td colspan="5" class="text-muted">لا استثناءات.</td></tr>';
+      return;
+    }
+    body.innerHTML = '';
+    items.forEach(it => {
+      const tr = document.createElement('tr');
+      let actions = '—';
+      if (it.status === 'proposed' && caps.can_approve_exception) {
+        actions = `<button type="button" class="btn btn-sm btn-success ops-exc-ok" data-id="${it.id}">اعتماد</button>
+          <button type="button" class="btn btn-sm btn-outline-danger ops-exc-no" data-id="${it.id}">رفض</button>`;
+      }
+      const stBadge = it.status === 'approved' ? 'success' : (it.status === 'rejected' ? 'secondary' : 'warning');
+      tr.innerHTML = `<td>${it.student_name||''}<div class="small" dir="ltr">${it.student_id||''}</div></td>
+        <td>${it.operation_label_ar||it.operation||''}</td>
+        <td><span class="badge text-bg-${stBadge}">${it.status||''}</span></td>
+        <td class="small">${it.reason||''}</td>
+        <td>${actions}</td>`;
+      body.appendChild(tr);
+    });
+    body.querySelectorAll('.ops-exc-ok').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const r = await postJSON('/term_ops/exceptions/' + btn.dataset.id + '/approve', { days: 7 });
+        if (!r.ok) { setMsg(apiErr(r),'danger'); return; }
+        setMsg('تم اعتماد الاستثناء.','success');
+        await loadExceptions();
+      });
+    });
+    body.querySelectorAll('.ops-exc-no').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const reason = prompt('ملاحظة الرفض (اختياري):') || '';
+        const r = await postJSON('/term_ops/exceptions/' + btn.dataset.id + '/reject', { reason });
+        if (!r.ok) { setMsg(apiErr(r),'danger'); return; }
+        setMsg('رُفض الاستثناء.','warning');
+        await loadExceptions();
+      });
+    });
   }
   document.getElementById('btnReload').addEventListener('click', ()=>load());
+  document.getElementById('btnSetStatus').addEventListener('click', async ()=>{
+    const status = document.getElementById('opsStatusSelect').value;
+    const r = await postJSON('/term_ops/status', { status, term_key: (STATE.term_master||{}).term_key || STATE.term_key });
+    if (!r.ok) { setMsg(apiErr(r),'danger'); return; }
+    setMsg('تم تحديث حالة الفصل.','success');
+    await load();
+  });
+  document.getElementById('btnExcPropose').addEventListener('click', async ()=>{
+    const student_id = (document.getElementById('excSid').value||'').trim();
+    const operation = document.getElementById('excOp').value;
+    const reason = (document.getElementById('excReason').value||'').trim();
+    if (!student_id || reason.length < 5) { setMsg('رقم الطالب وسبب ≥٥ مطلوبان','warning'); return; }
+    const r = await postJSON('/term_ops/exceptions', { student_id, operation, reason });
+    if (!r.ok) { setMsg(apiErr(r),'danger'); return; }
+    setMsg('تم اقتراح الاستثناء.','success');
+    document.getElementById('excReason').value = '';
+    await loadExceptions();
+  });
   document.getElementById('btnViewStored').addEventListener('click', ()=>{
     const v = (document.getElementById('opsStored').value||'').split('|');
     if (v.length < 2) return;

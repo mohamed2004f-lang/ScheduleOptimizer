@@ -37,7 +37,7 @@ class TestScheduleManualDepartmentBinding:
                     "time": "08:00-09:00",
                     "room": "R1",
                     "instructor": "Dr. X",
-                    "semester": "خريف 25-26",
+                    "semester": "خريف 44-45",
                 },
             )
             assert add.status_code == 200, add.get_data(as_text=True)

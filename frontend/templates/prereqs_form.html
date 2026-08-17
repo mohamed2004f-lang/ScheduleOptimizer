@@ -87,8 +87,15 @@ async function loadCourses(){
 
 /* load prereqs */
 async function loadPrereqs(){
-  const r = await fetchJSON('/list_prereqs');
-  PREREQS = Array.isArray(r.json) ? r.json : [];
+  const r = await fetchJSON('/courses/prereqs/list');
+  if (!r.ok || !Array.isArray(r.json)) {
+    PREREQS = [];
+    renderPrereqs(PREREQS);
+    const err = (r.json && r.json.message) ? r.json.message : `تعذر تحميل المتطلبات (HTTP ${r.status})`;
+    setMsg('danger', err);
+    return;
+  }
+  PREREQS = r.json;
   renderPrereqs(PREREQS);
 }
 

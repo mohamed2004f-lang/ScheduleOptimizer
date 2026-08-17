@@ -115,6 +115,7 @@
               <strong>المقررات في الخطة:</strong>
               <ul class="list-group list-group-flush mt-2" id="planCoursesList"></ul>
             </div>
+            <div id="planPrereqBanner" class="alert alert-warning py-2 small d-none" role="alert"></div>
             <div class="d-flex gap-2" id="planActions">
               <button class="btn btn-warning btn-sm" id="btnEditPlan">تعديل الخطة</button>
               <button class="btn btn-success btn-sm" id="btnSubmitPlan">إرسال للمراجعة</button>
@@ -173,8 +174,83 @@
     let eligibleCourses = [];
     let currentPlan = null;
     let allPlans = [];
+    let lastPrereqValidation = null;
+    let prereqValidateTimer = null;
+    let selectedCourseNames = new Set();
 
     function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+    function unmetPrereqItems(validation) {
+      const items = [];
+      const courses = (validation && validation.courses) || {};
+      for (const cname of Object.keys(courses)) {
+        const unmet = (courses[cname].requirements || []).filter(r => r.status && r.status !== 'passed' && r.status !== 'in_plan');
+        if (unmet.length) {
+          items.push({
+            course: cname,
+            reqs: unmet.map(r => ({ name: r.prereq || '', label: r.label_ar || r.status || '' })),
+          });
+        }
+      }
+      return items;
+    }
+
+    function formatUnmetPrereqText(validation) {
+      return unmetPrereqItems(validation).map(it =>
+        '• المقرر «' + it.course + '» يحتاج: ' + it.reqs.map(r => '«' + r.name + '»' + (r.label ? ' (' + r.label + ')' : '')).join('، ')
+      ).join('\n');
+    }
+
+    function unmetMapFromValidation(validation) {
+      const map = {};
+      unmetPrereqItems(validation).forEach(it => { map[it.course] = it.reqs; });
+      return map;
+    }
+
+    function renderPrereqWarningBox(elId, validation) {
+      const box = document.getElementById(elId);
+      if (!box) return;
+      const items = unmetPrereqItems(validation);
+      if (!items.length) {
+        box.classList.add('d-none');
+        box.innerHTML = '';
+        return;
+      }
+      box.classList.remove('d-none');
+      box.className = 'alert alert-warning py-2 small mb-3';
+      box.innerHTML = '<strong>متطلبات ناقصة:</strong><ul class="mb-0 mt-2">' +
+        items.map(it =>
+          '<li><strong>' + esc(it.course) + '</strong> يحتاج ' +
+          it.reqs.map(r => '<em>' + esc(r.name) + '</em>').join('، ') +
+          (it.reqs.some(r => r.label) ? ' <span class="text-muted">(' + esc(it.reqs.map(r => r.label).filter(Boolean).join('؛ ')) + ')</span>' : '') +
+          '</li>'
+        ).join('') +
+        '</ul>';
+    }
+
+    async function validateCourses(courses) {
+      if (!courses.length) {
+        lastPrereqValidation = null;
+        return null;
+      }
+      const r = await fetch('/enrollment/prereqs/validate', {
+        method: 'POST', credentials: 'include', headers: hdr(),
+        body: JSON.stringify({ student_id: studentId, courses, context: 'plan' }),
+      });
+      const j = await r.json().catch(() => null);
+      lastPrereqValidation = (r.ok && j) ? j : null;
+      return lastPrereqValidation;
+    }
+
+    function scheduleEditorPrereqValidate() {
+      clearTimeout(prereqValidateTimer);
+      prereqValidateTimer = setTimeout(async () => {
+        const courses = [...selectedCourseNames];
+        const data = await validateCourses(courses);
+        renderPrereqWarningBox('prereqWarnings', data);
+        renderCourseCheckList(document.getElementById('courseFilter')?.value || '');
+      }, 400);
+    }
     function hdr() {
       const c = document.querySelector('meta[name=csrf-token]')?.content || '';
       const h = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
@@ -335,9 +411,30 @@
       document.getElementById('planStatusText').textContent = sm.label;
 
       const courses = currentPlan.courses || [];
-      document.getElementById('planCoursesList').innerHTML = courses.map(c =>
-        `<li class="list-group-item py-1 px-2 small">${esc(c)}</li>`
-      ).join('') || '<li class="list-group-item text-muted py-1 px-2 small">لا مقررات</li>';
+      const unmet = unmetMapFromValidation(lastPrereqValidation);
+      document.getElementById('planCoursesList').innerHTML = courses.map(c => {
+        const reqs = unmet[c] || [];
+        const note = reqs.length
+          ? `<div class="text-danger small mt-1">يحتاج: ${reqs.map(r => esc(r.name)).join('، ')}</div>`
+          : '';
+        return `<li class="list-group-item py-1 px-2 small">${esc(c)}${note}</li>`;
+      }).join('') || '<li class="list-group-item text-muted py-1 px-2 small">لا مقررات</li>';
+      renderPrereqWarningBox('planPrereqBanner', lastPrereqValidation);
+      if (courses.length) {
+        validateCourses(courses).then(data => {
+          if (currentPlan && (currentPlan.courses || []).join('\0') === courses.join('\0')) {
+            const u2 = unmetMapFromValidation(data);
+            document.getElementById('planCoursesList').innerHTML = courses.map(c => {
+              const reqs = u2[c] || [];
+              const note = reqs.length
+                ? `<div class="text-danger small mt-1">يحتاج: ${reqs.map(r => esc(r.name)).join('، ')}</div>`
+                : '';
+              return `<li class="list-group-item py-1 px-2 small">${esc(c)}${note}</li>`;
+            }).join('');
+            renderPrereqWarningBox('planPrereqBanner', data);
+          }
+        }).catch(() => {});
+      }
 
       const rejBox = document.getElementById('planRejectionBox');
       if (status === 'Rejected' && currentPlan.rejection_reason) {
@@ -357,6 +454,11 @@
       try {
         const r = await fetch('/students/eligible_courses?student_id=' + encodeURIComponent(studentId), { credentials: 'include' });
         const j = await r.json().catch(() => ({}));
+        if (j.offerings_published === false) {
+          eligibleCourses = [];
+          document.getElementById('courseCheckList').innerHTML = '<p class="text-muted text-center small py-2">لم يُعتمد عرض مقررات هذا الفصل بعد.</p>';
+          return;
+        }
         eligibleCourses = j.eligible || j.courses || [];
         renderCourseCheckList();
       } catch(e) {
@@ -369,13 +471,21 @@
       const f = (filter || '').trim().toLowerCase();
       let list = eligibleCourses;
       if (f) list = list.filter(c => (c.course_name || '').toLowerCase().includes(f) || (c.course_code || '').toLowerCase().includes(f));
-      const planCourses = (currentPlan && (currentPlan.status === 'Draft' || currentPlan.status === 'Rejected')) ? new Set(currentPlan.courses || []) : new Set();
+      const checkedSet = selectedCourseNames.size
+        ? selectedCourseNames
+        : new Set((currentPlan && (currentPlan.status === 'Draft' || currentPlan.status === 'Rejected')) ? (currentPlan.courses || []) : []);
+      const unmet = unmetMapFromValidation(lastPrereqValidation);
       box.innerHTML = list.map(c => {
         const name = c.course_name || c.name || '';
         const code = c.course_code || c.code || '';
         const units = c.units || c.credit_hours || 0;
-        const checked = planCourses.has(name) ? ' checked' : '';
-        return `<label class="d-block"><input type="checkbox" class="form-check-input me-1 plan-course-cb" value="${esc(name)}" data-units="${units}"${checked}> <strong>${esc(name)}</strong> <code class="ms-1">${esc(code)}</code> <span class="text-muted">(${units} و)</span></label>`;
+        const isChecked = checkedSet.has(name);
+        const checked = isChecked ? ' checked' : '';
+        const reqs = unmet[name] || [];
+        const note = (isChecked && reqs.length)
+          ? `<div class="text-danger small me-4">يحتاج: ${reqs.map(r => esc(r.name)).join('، ')}</div>`
+          : '';
+        return `<label class="d-block"><input type="checkbox" class="form-check-input me-1 plan-course-cb" value="${esc(name)}" data-units="${units}"${checked}> <strong>${esc(name)}</strong> <code class="ms-1">${esc(code)}</code> <span class="text-muted">(${units} و)</span>${note}</label>`;
       }).join('') || '<p class="text-muted text-center small py-2">لا مقررات متاحة.</p>';
       updateSelectedCount();
     }
@@ -392,9 +502,34 @@
       document.getElementById('planExistingView').classList.add('d-none');
       document.getElementById('planNoneView').classList.add('d-none');
       document.getElementById('planEditorView').classList.remove('d-none');
+      selectedCourseNames = new Set((currentPlan && (currentPlan.status === 'Draft' || currentPlan.status === 'Rejected')) ? (currentPlan.courses || []) : []);
       if (!eligibleCourses.length) loadEligibleCourses();
       else renderCourseCheckList();
       document.getElementById('planSemesterInput').value = currentPlan?.semester || currentTerm;
+      scheduleEditorPrereqValidate();
+    }
+
+    async function submitPlanWithAck(planId, extra) {
+      extra = extra || {};
+      const r = await fetch('/enrollment/plans/' + planId + '/submit', {
+        method: 'POST', credentials: 'include', headers: hdr(), body: JSON.stringify(extra)
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) return { ok: true, json: j };
+      if (j.code === 'PREREQ_ACK_REQUIRED') {
+        const detail = formatUnmetPrereqText(j.prereq_validation) || '';
+        const msg = (j.message || 'الخطة تحتوي متطلبات غير مكتملة.') + (j.message && detail && j.message.indexOf('•') >= 0 ? '' : (detail ? '\n\n' + detail : ''));
+        if (!confirm(msg + '\n\nهل تريد الإرسال مع إقرار بالمخالفة؟')) {
+          return { ok: false, json: j, cancelled: true };
+        }
+        const reason = prompt('اكتب سبب الإرسال رغم المتطلبات الناقصة (سيظهر للمشرف):', '') || '';
+        if (!reason.trim()) {
+          alert('يلزم كتابة سبب واضح قبل الإرسال.');
+          return { ok: false, json: j, cancelled: true };
+        }
+        return submitPlanWithAck(planId, { ack_prereq_violation: true, ack_reason: reason.trim() });
+      }
+      return { ok: false, json: j };
     }
 
     async function savePlan(andSubmit) {
@@ -411,11 +546,8 @@
       if (!r.ok) { alert(j.message || 'فشل الحفظ'); return; }
 
       if (andSubmit && j.plan_id) {
-        const sr = await fetch('/enrollment/plans/' + j.plan_id + '/submit', {
-          method: 'POST', credentials: 'include', headers: hdr(), body: JSON.stringify({})
-        });
-        const sj = await sr.json().catch(() => ({}));
-        if (!sr.ok) { alert(sj.message || 'فشل الإرسال'); }
+        const sr = await submitPlanWithAck(j.plan_id);
+        if (!sr.ok && !sr.cancelled) { alert(sr.json?.message || 'فشل الإرسال'); }
       }
 
       await loadPlans();
@@ -434,17 +566,22 @@
     document.getElementById('btnSubmitPlan').addEventListener('click', async () => {
       if (!currentPlan || !currentPlan.id) return;
       if (!confirm('هل تريد إرسال الخطة للمراجعة؟')) return;
-      const r = await fetch('/enrollment/plans/' + currentPlan.id + '/submit', {
-        method: 'POST', credentials: 'include', headers: hdr(), body: JSON.stringify({})
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) { alert(j.message || 'فشل'); return; }
-      await loadPlans();
+      const sr = await submitPlanWithAck(currentPlan.id);
+      if (!sr.ok && !sr.cancelled) { alert(sr.json?.message || 'فشل'); return; }
+      if (sr.ok) await loadPlans();
     });
     document.getElementById('courseFilter').addEventListener('input', e => {
       renderCourseCheckList(e.target.value);
     });
-    document.getElementById('courseCheckList').addEventListener('change', updateSelectedCount);
+    document.getElementById('courseCheckList').addEventListener('change', (ev) => {
+      const cb = ev.target.closest('.plan-course-cb');
+      if (cb) {
+        if (cb.checked) selectedCourseNames.add(cb.value);
+        else selectedCourseNames.delete(cb.value);
+      }
+      updateSelectedCount();
+      scheduleEditorPrereqValidate();
+    });
 
     init();
   </script>

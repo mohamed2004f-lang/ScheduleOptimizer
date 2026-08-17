@@ -19,7 +19,13 @@ from backend.services.term_engine import (
 
 
 def test_schema_includes_term_engine_tables():
-    for name in ("term_master", "term_windows", "academic_calendar_versions"):
+    for name in (
+        "term_master",
+        "term_windows",
+        "academic_calendar_versions",
+        "term_course_offerings",
+        "term_offering_state",
+    ):
         assert name in TABLES_SCHEMA
 
 
@@ -246,6 +252,29 @@ def test_calendar_get_payload_unchanged(auth_client):
     assert "تجديد القيد" in first["title"]
 
 
+def test_duration_range_survives_edited_title():
+    from backend.services.academic_calendar import assemble_calendar_items
+
+    items = assemble_calendar_items(
+        academic_year="2026/2027",
+        term="fall",
+        existing={
+            1: {
+                "title": "تجديد القيد وتسجيل المقررات الدراسية",
+                "event_date": "2026-09-10",
+                "event_date_start": "2026-09-01",
+                "is_deleted": 0,
+            },
+            3: {"title": "بداية الدراسة", "event_date": "2026-09-12", "is_deleted": 0},
+        },
+    )
+    by_no = {int(it["item_no"]): it for it in items}
+    assert by_no[1]["needs_range"] is True
+    assert by_no[1]["event_date_start"] == "2026-09-01"
+    assert by_no[3]["needs_range"] is False
+    assert by_no[3]["event_date"] == "2026-09-12"
+
+
 def test_calendar_post_persists_dashed_year_and_reloads_slash(auth_client, db_conn):
     """حفظ بـ 2061-2062 يجب أن يظهر عند التحميل بـ 2061/2062."""
     r = auth_client.post(
@@ -313,6 +342,46 @@ def test_calendar_post_does_not_require_preview_confirm(auth_client):
     assert r.status_code == 200, r.get_data(as_text=True)
     first = next(i for i in r.get_json()["items"] if i["item_no"] == 1)
     assert first["event_date"] == "2064-02-10"
+
+
+def test_calendar_rows_survive_ops_sync_rollback(auth_client, db_conn, monkeypatch):
+    """حفظ الإعلان يُثبَّت حتى لو مزامنة التشغيل ألغت المعاملة."""
+
+    def _boom(conn, **kwargs):
+        conn.rollback()
+        return None
+
+    monkeypatch.setattr("backend.services.term_engine.on_calendar_saved", _boom)
+    r = auth_client.post(
+        "/academic_calendar/items",
+        json={
+            "academic_year": "2071/2072",
+            "term": "fall",
+            "items": [
+                {
+                    "item_no": 1,
+                    "title": "تجديد القيد وتسجيل المقررات الدراسية (لمدة أسبوع)",
+                    "event_date": "2071-09-10",
+                    "event_date_start": "2071-09-01",
+                    "is_deleted": 0,
+                }
+            ],
+        },
+    )
+    assert r.status_code == 200, r.get_data(as_text=True)
+    body = r.get_json()
+    assert body["status"] == "ok"
+    first = next(i for i in body["items"] if i["item_no"] == 1)
+    assert first["event_date"] == "2071-09-10"
+    row = db_conn.execute(
+        "SELECT event_date FROM academic_calendar WHERE academic_year='2071/2072' AND term='fall' AND item_no=1"
+    ).fetchone()
+    assert row is not None
+    stored = row["event_date"] if hasattr(row, "keys") else row[0]
+    assert str(stored)[:10] == "2071-09-10"
+    g = auth_client.get("/academic_calendar/items?academic_year=2071/2072&term=fall")
+    loaded = next(i for i in g.get_json()["items"] if i["item_no"] == 1)
+    assert loaded["event_date"] == "2071-09-10"
 
 
 def test_year_aliases_include_short_and_long():

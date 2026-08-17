@@ -775,24 +775,25 @@ def delete_prereq():
 @courses_bp.route("/prereqs/list")
 @login_required
 def list_prereqs():
+    """نفس مصدر خريطة المتطلبات حتى لا تختفي الصفوف عند نطاق القسم."""
     with get_connection() as conn:
-        cur = conn.cursor()
-        scope_dep = _effective_department_scope_id(conn)
-        if scope_dep is None:
-            rows = cur.execute("SELECT course_name, required_course_name FROM prereqs ORDER BY course_name, required_course_name").fetchall()
-        else:
-            scope_sql, scope_params = courses_department_scope_filter(conn, int(scope_dep))
-            rows = cur.execute(
-                f"""
-                SELECT p.course_name, p.required_course_name
-                FROM prereqs p
-                JOIN courses c ON LOWER(TRIM(c.course_name)) = LOWER(TRIM(p.course_name))
-                WHERE 1=1{scope_sql}
-                ORDER BY p.course_name, p.required_course_name
-                """,
-                scope_params,
-            ).fetchall()
-        return jsonify([{"course_name": r[0], "required_course_name": r[1]} for r in rows])
+        _courses, prereqs = _load_courses_and_prereqs(conn)
+        prereqs_sorted = sorted(
+            prereqs,
+            key=lambda r: (
+                (r.get("course_name") or ""),
+                (r.get("required_course_name") or ""),
+            ),
+        )
+        return jsonify(
+            [
+                {
+                    "course_name": r.get("course_name"),
+                    "required_course_name": r.get("required_course_name"),
+                }
+                for r in prereqs_sorted
+            ]
+        )
 
 @courses_bp.route("/prereqs/status")
 @login_required

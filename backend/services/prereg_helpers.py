@@ -338,8 +338,34 @@ def prereq_validation_snapshot(full_eval: dict[str, Any], semester: str) -> dict
     }
 
 
+def format_unmet_prereqs_student_ar(eval_result: dict[str, Any]) -> str:
+    """نص قصير للطالب: كل مقرر وما ينقصه من متطلبات."""
+    lines: list[str] = []
+    courses = eval_result.get("courses") or {}
+    skip = {STATUS_PASSED, STATUS_IN_PLAN}
+    for cname, data in courses.items():
+        bits: list[str] = []
+        for req in data.get("requirements") or []:
+            st = (req.get("status") or "").strip()
+            if st in skip:
+                continue
+            pname = (req.get("prereq") or "").strip()
+            if not pname:
+                continue
+            label = (req.get("label_ar") or "").strip()
+            bits.append(f"«{pname}»" + (f" ({label})" if label else ""))
+        if bits:
+            lines.append(f"• المقرر «{cname}» يحتاج: " + "، ".join(bits))
+    return "\n".join(lines)
+
+
+def prereq_ack_required(eval_result: dict[str, Any]) -> bool:
+    """إقرار المخالفة فقط عند متطلب ناقص/راسب/بدون درجة — وليس عند تسجيل المتطلب معه في الخطة."""
+    summ = eval_result.get("summary") or {}
+    return bool(summ.get("has_blocking") or summ.get("has_warnings"))
+
+
 def format_supervisor_prereq_summary(student_id: str, semester: str, eval_result: dict[str, Any]) -> str:
-    """نص عربي + JSON مختصر في آخر الرسالة للأرشفة السريعة."""
     lines = [
         f"طالب: {student_id} — فصل: {semester}",
     ]

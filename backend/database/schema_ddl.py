@@ -213,7 +213,7 @@ TABLES_SCHEMA = {
             teaching_group_id INTEGER,
             semester TEXT DEFAULT '',
             registered_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (student_id, course_name),
+            UNIQUE (student_id, course_name, semester),
             FOREIGN KEY (student_id) REFERENCES students(student_id) 
                 ON DELETE CASCADE ON UPDATE CASCADE,
             FOREIGN KEY (course_name) REFERENCES courses(course_name) 
@@ -708,6 +708,35 @@ TABLES_SCHEMA = {
             expires_at TEXT,
             created_at TEXT,
             updated_at TEXT
+        )
+    """,
+
+    'term_course_offerings': """
+        CREATE TABLE IF NOT EXISTS term_course_offerings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            term_key TEXT NOT NULL,
+            course_name TEXT NOT NULL,
+            department_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'offered'
+                CHECK (status IN ('offered', 'cancelled')),
+            created_at TEXT,
+            created_by TEXT NOT NULL DEFAULT '',
+            updated_at TEXT,
+            UNIQUE (term_key, course_name, department_id)
+        )
+    """,
+
+    'term_offering_state': """
+        CREATE TABLE IF NOT EXISTS term_offering_state (
+            term_key TEXT NOT NULL,
+            department_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft'
+                CHECK (status IN ('draft', 'published')),
+            published_at TEXT,
+            published_by TEXT NOT NULL DEFAULT '',
+            updated_at TEXT,
+            updated_by TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (term_key, department_id)
         )
     """,
 
@@ -1515,6 +1544,7 @@ TABLES_SCHEMA = {
 INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_registrations_student ON registrations(student_id)",
     "CREATE INDEX IF NOT EXISTS idx_registrations_course ON registrations(course_name)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_registrations_student_course_sem ON registrations(student_id, course_name, semester)",
     "CREATE INDEX IF NOT EXISTS idx_schedule_course ON schedule(course_name)",
     "CREATE INDEX IF NOT EXISTS idx_schedule_day_time ON schedule(day, time)",
     "CREATE INDEX IF NOT EXISTS idx_schedule_instructor_id ON schedule(instructor_id)",
@@ -1581,6 +1611,9 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_term_amend_log_term ON term_amendment_log(term_key, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_term_reg_arch_term ON term_registration_archives(archived_term, student_id)",
     "CREATE INDEX IF NOT EXISTS idx_term_op_exc_student ON term_operation_exceptions(student_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_term_offerings_term ON term_course_offerings(term_key)",
+    "CREATE INDEX IF NOT EXISTS idx_term_offerings_dept ON term_course_offerings(term_key, department_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_term_offerings_term_course_dept ON term_course_offerings(term_key, course_name, department_id)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_courses_code_unique ON courses(course_code) WHERE course_code IS NOT NULL AND course_code <> ''",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_departments_code_unique ON departments(code) WHERE code IS NOT NULL AND code <> ''",
     "CREATE INDEX IF NOT EXISTS idx_programs_dept ON programs(department_id)",

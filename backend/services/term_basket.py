@@ -49,9 +49,9 @@ def stamp_registration_semester(cur, conn, student_id: str, course_name: str, se
             UPDATE registrations
             SET semester = ?
             WHERE student_id = ? AND course_name = ?
-              AND (semester IS NULL OR TRIM(semester) = '')
+              AND (semester IS NULL OR TRIM(semester) = '' OR semester = ?)
             """,
-            (label, student_id, course_name),
+            (label, student_id, course_name, label),
         )
     except Exception:
         logger.exception("stamp registration semester failed")

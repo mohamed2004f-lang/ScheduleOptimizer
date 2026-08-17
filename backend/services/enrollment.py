@@ -19,7 +19,9 @@ from backend.services.grades import _load_transcript_data
 from backend.services.prereg_helpers import (
     evaluate_prereqs_for_student,
     format_supervisor_prereq_summary,
+    format_unmet_prereqs_student_ar,
     planning_course_hints,
+    prereq_ack_required,
     prereq_validation_snapshot,
 )
 from backend.database.database import is_postgresql, fetch_table_columns
@@ -1071,13 +1073,18 @@ def submit_plan(plan_id: int):
         snap = prereq_validation_snapshot(full_eval, semester)
         snap_json = json.dumps(snap, ensure_ascii=False)
         unmet_count = int((full_eval.get("summary") or {}).get("courses_with_unmet_count") or 0)
-        if user_role == "student" and unmet_count > 0 and (not ack_prereq_violation or not ack_reason):
+        needs_ack = prereq_ack_required(full_eval)
+        if user_role == "student" and needs_ack and (not ack_prereq_violation or not ack_reason):
+            detail = format_unmet_prereqs_student_ar(full_eval)
+            msg = "الخطة تحتوي متطلبات غير مكتملة. يلزم الإقرار بالمخالفة وكتابة سبب قبل الإرسال."
+            if detail:
+                msg = msg + "\n\n" + detail
             return (
                 jsonify(
                     {
                         "status": "error",
                         "code": "PREREQ_ACK_REQUIRED",
-                        "message": "الخطة تحتوي متطلبات غير مكتملة. يلزم الإقرار بالمخالفة وكتابة سبب قبل الإرسال.",
+                        "message": msg,
                         "prereq_validation": full_eval,
                     }
                 ),

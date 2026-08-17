@@ -122,6 +122,20 @@ def register_term_closure_routes(bp) -> None:
                 return jsonify({"status": "error", "message": str(exc)}), 400
             except Exception as exc:
                 return jsonify({"status": "error", "message": str(exc)}), 500
+            try:
+                from backend.services.term_engine import parse_ops_term, sync_term_master_status
+                from backend.services.utilities import get_current_term
+
+                name, year = get_current_term(conn=conn)
+                parsed = parse_ops_term(name, year) or {}
+                if parsed.get("term_key"):
+                    sync_term_master_status(
+                        conn,
+                        term_key=parsed["term_key"],
+                        ops_label=parsed.get("ops_label") or sem,
+                    )
+            except Exception:
+                pass
         return jsonify(result), 200
 
     @bp.route("/term_closure/reopen_stage", methods=["POST"])

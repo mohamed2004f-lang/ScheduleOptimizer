@@ -424,14 +424,14 @@ class TestHeadDepartmentIsolation:
         cur.execute(
             """
             INSERT INTO schedule (course_name, department_id, day, time, room, instructor, semester)
-            VALUES ('Statics-C', ?, 'الأحد', '08:00-09:00', 'R1', 'I1', 'خريف 25-26')
+            VALUES ('Statics-C', ?, 'الأحد', '08:00-09:00', 'R1', 'I1', 'خريف 44-45')
             """,
             (d1,),
         )
         cur.execute(
             """
             INSERT INTO schedule (course_name, department_id, day, time, room, instructor, semester)
-            VALUES ('Statics-M', ?, 'الأحد', '10:00-11:00', 'R2', 'I2', 'خريف 25-26')
+            VALUES ('Statics-M', ?, 'الأحد', '10:00-11:00', 'R2', 'I2', 'خريف 44-45')
             """,
             (d2,),
         )

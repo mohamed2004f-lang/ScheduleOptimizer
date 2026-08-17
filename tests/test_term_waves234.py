@@ -20,6 +20,7 @@ from backend.services.term_policy import (
     apply_window_dates,
     classify_window_change,
     preview_calendar_amendment,
+    window_has_begun,
 )
 from backend.services.term_basket import (
     CODE_BASKET_BLOCKED,
@@ -113,6 +114,89 @@ def test_classify_reopen_when_stage_open(db_conn):
     )
 
 
+def test_future_single_date_has_not_begun():
+    today = datetime.date(2026, 8, 16)
+    assert window_has_begun(None, "2026-09-12", today) is False
+    assert window_has_begun(None, "2026-08-16", today) is True
+    assert window_has_begun(None, "2026-08-15", today) is True
+    assert window_has_begun("2026-09-01", "2026-09-10", today) is False
+    assert window_has_begun("2026-08-15", "2026-08-22", today) is True
+
+
+def test_calendar_save_updates_already_scheduled_ops_window(auth_client, db_conn):
+    """تعديل بند التجديد بعد جدولة أولية يجب أن يحرّك نافذة التشغيل."""
+    today = datetime.date.today()
+    y = today.year + 48
+    year = f"{y}/{y + 1}"
+    old_start = (today + datetime.timedelta(days=20)).isoformat()
+    old_end = (today + datetime.timedelta(days=27)).isoformat()
+    new_start = today.isoformat()
+    new_end = (today + datetime.timedelta(days=7)).isoformat()
+    milestone = (today + datetime.timedelta(days=40)).isoformat()
+    first = auth_client.post(
+        "/academic_calendar/items",
+        json={
+            "academic_year": year,
+            "term": "fall",
+            "items": [
+                {
+                    "item_no": 1,
+                    "title": "تجديد القيد وتسجيل المقررات الدراسية (لمدة أسبوع)",
+                    "event_date": old_end,
+                    "event_date_start": old_start,
+                    "is_deleted": 0,
+                },
+                {
+                    "item_no": 3,
+                    "title": "بداية الدراسة",
+                    "event_date": milestone,
+                    "is_deleted": 0,
+                },
+            ],
+        },
+    )
+    assert first.status_code == 200, first.get_data(as_text=True)
+    second = auth_client.post(
+        "/academic_calendar/items",
+        json={
+            "academic_year": year,
+            "term": "fall",
+            "items": [
+                {
+                    "item_no": 1,
+                    "title": "تجديد القيد وتسجيل المقررات الدراسية (لمدة أسبوع)",
+                    "event_date": new_end,
+                    "event_date_start": new_start,
+                    "is_deleted": 0,
+                },
+                {
+                    "item_no": 3,
+                    "title": "بداية الدراسة",
+                    "event_date": milestone,
+                    "is_deleted": 0,
+                },
+            ],
+        },
+    )
+    assert second.status_code == 200, second.get_data(as_text=True)
+    term_key = f"fall:{year}"
+    row = db_conn.execute(
+        "SELECT starts_at, ends_at, status FROM term_windows WHERE term_key=? AND window_key='registration_renewal'",
+        (term_key,),
+    ).fetchone()
+    assert row is not None
+    starts = str(row["starts_at"] if hasattr(row, "keys") else row[0])[:10]
+    ends = str(row["ends_at"] if hasattr(row, "keys") else row[1])[:10]
+    assert starts == new_start
+    assert ends == new_end
+    dash = auth_client.get(f"/term_ops/dashboard?academic_year={year}&term=fall")
+    assert dash.status_code == 200
+    renewal = next(w for w in dash.get_json()["windows"] if w["window_key"] == "registration_renewal")
+    assert str(renewal.get("starts_at") or "")[:10] == new_start
+    assert str(renewal.get("ends_at") or "")[:10] == new_end
+    assert renewal.get("open_now") is True
+
+
 def test_locked_stage_save_does_not_reopen_window(db_conn):
     from backend.services.term_closure import close_term_stage
 
@@ -196,7 +280,7 @@ def test_basket_blocks_term_switch(db_conn):
     )
     db_conn.commit()
     leftover = unmigrated_students(db_conn, "ربيع 45-46")
-    assert leftover and leftover[0]["student_id"] == "S001"
+    assert "S001" in {row["student_id"] for row in leftover}
     try:
         assert_current_term_switch_allowed(
             db_conn, term_name="ربيع", term_year="45-46"

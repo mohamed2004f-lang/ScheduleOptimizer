@@ -85,6 +85,7 @@ class TestAuth:
         assert c_ins.get("nav_student_affairs_attendance_only") is True
         assert c_ins.get("can_manage_schedule_edit") is False
         assert c_ins.get("is_instructor_or_supervisor_nav") is True
+        assert c_ins.get("nav_supervision") is False
         c_sup = compute_capabilities("head_of_department", 0, "supervisor")
         assert c_sup.get("nav_transcript_nav") is True
         assert c_sup.get("is_supervisor_effective") is True
@@ -154,6 +155,7 @@ class TestAuth:
         assert hod_head.get("nav_staff_operations_menu") is True
         assert hod_head.get("nav_instructor_portal_menu") is False
         assert hod_head.get("nav_surveys_hub") is True
+        assert hod_head.get("nav_supervision") is True
         hod_ins = compute_capabilities("head_of_department", 0, "instructor")
         assert hod_ins.get("nav_staff_operations_menu") is False
         assert hod_ins.get("nav_instructor_portal_menu") is True

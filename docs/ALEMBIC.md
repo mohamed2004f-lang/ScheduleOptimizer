@@ -43,6 +43,9 @@ alembic revision -m "describe change"
 | `0005_term_ops` | موجات 2–4: `grace_until`، `registrations.semester`، أرشيف السلة، سجل التعديل، استثناءات |
 | `0006_spring_new` | تقويم الربيع: بند تسجيل المستجدين (رقم 2) مع إزاحة البنود التالية |
 | `0007_cal_start` | `academic_calendar.event_date_start` — بداية النافذة للبنود ذات المدة |
+| `0008_term_offer` | عرض مقررات الفصل: `term_course_offerings` + `term_offering_state` |
+| `0009_dept_offer` | عرض لكل قسم: `UNIQUE(term_key, course_name, department_id)` وحالة اعتماد لكل قسم |
+| `0010_reg_sem_uq` | سلة متعددة الفصول: `UNIQUE(student_id, course_name, semester)` |
 
 قاعدة قديمة بلا `alembic_version`: `alembic upgrade head` آمن لأن الجمل `IF NOT EXISTS`.
 

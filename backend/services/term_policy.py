@@ -94,12 +94,13 @@ def window_has_begun(
     ends_at: Any,
     today: datetime.date,
 ) -> bool:
+    """بدأت النافذة فعلاً اليوم: من تاريخ البداية، أو من الموعد الواحد إن لم يكن هناك «من»."""
     start = _parse_date(starts_at)
     end = _parse_date(ends_at)
-    if start is not None and today >= start:
-        return True
-    if start is None and end is not None:
-        return True
+    if start is not None:
+        return today >= start
+    if end is not None:
+        return today >= end
     return False
 
 
@@ -472,17 +473,12 @@ def apply_calendar_amendment(
     )
     if preview.get("status") != "ok":
         return preview
-    if preview.get("has_reject"):
-        raise AmendmentRejected(
-            "لا يمكن إرجاع نافذة سابقة بعد بدء ما يليها في التقويم التشغيلي.",
-            preview,
-        )
+    reason = (reason or "").strip()
     if preview.get("needs_confirm") and not confirm:
         raise AmendmentNeedsConfirm(
             "هذا التعديل يقصّر أو يغلق أو يعيد فتح نافذة — أرسل confirm=true وسبباً.",
             preview,
         )
-    reason = (reason or "").strip()
     if preview.get("needs_confirm") and len(reason) < 5:
         raise AmendmentNeedsConfirm("سبب التعديل مطلوب (٥ أحرف على الأقل).", preview)
 

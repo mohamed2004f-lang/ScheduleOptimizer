@@ -81,6 +81,7 @@ def test_hod_head_ops_caps_and_quality():
     assert caps.get("nav_admin_settings") is True
     assert caps.get("nav_users_admin") is False
     assert caps.get("nav_dashboard") is True
+    assert caps.get("nav_supervision") is True
 
 
 def test_hod_instructor_mode_not_staff_ops():

@@ -106,6 +106,18 @@ def set_schedule_published_at(conn=None, db_file=DB_FILE):
         return _set(c)
 
 
+def clear_schedule_published_at(conn=None, db_file=DB_FILE):
+    """يلغي اعتماد الجدول الدراسي (يبقى الأرشيف/النسخ)."""
+    def _clear(c):
+        cur = c.cursor()
+        cur.execute("DELETE FROM system_settings WHERE key = ?", (SCHEDULE_PUBLISHED_KEY,))
+        c.commit()
+    if conn is not None:
+        return _clear(conn)
+    with get_connection(db_file) as c:
+        return _clear(c)
+
+
 def get_schedule_updated_at(conn=None, db_file=DB_FILE):
     """يرجع وقت آخر تعديل للجدول (ISO نص) أو None إذا لم يُسجل تعديل بعد."""
     def _get(c):
