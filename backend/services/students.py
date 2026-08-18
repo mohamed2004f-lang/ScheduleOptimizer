@@ -29,8 +29,12 @@ from .utilities import (
 from .prereg_helpers import evaluate_courses_prereqs
 from backend.core.feature_flags import registration_program_course_mode
 from backend.core.department_scope_policy import (
+    ACADEMIC_REPORT_STAFF_ROLES,
+    ACADEMIC_REPORT_VIEW_ROLES,
     assert_course_in_actor_scope,
     assert_student_in_actor_scope,
+    courses_catalog_scope_sql,
+    filter_report_rows_by_course_scope,
     resolve_import_department_binding,
     resolve_registration_course_scope_sql,
     resolve_scope_sql_for_aliased_student,
@@ -502,7 +506,7 @@ def students_filter_summary_ar(request) -> str:
 # شرط المقررات الاختيارية بعد 100 وحدة
 # -----------------------------
 @students_bp.route("/electives_status")
-@role_required("admin", "supervisor")
+@role_required(*ACADEMIC_REPORT_VIEW_ROLES)
 def electives_status_api():
     sid = normalize_sid(request.args.get("student_id"))
     if not sid:
@@ -522,7 +526,7 @@ def electives_status_api():
 
 
 @students_bp.route("/electives_report")
-@role_required("admin", "supervisor")
+@role_required(*ACADEMIC_REPORT_VIEW_ROLES)
 def electives_report_api():
     """
     تقرير: الطلبة الذين تجاوزوا 100 وحدة ولا يزالون أقل من 3 مقررات اختيارية (بدون استثناء).
@@ -567,7 +571,7 @@ def electives_report_api():
 
 
 @students_bp.route("/electives_report/excel")
-@role_required("admin", "supervisor")
+@role_required(*ACADEMIC_REPORT_VIEW_ROLES)
 def electives_report_excel():
     r = electives_report_api()
     # electives_report_api returns (json, status) sometimes; normalize
@@ -583,7 +587,7 @@ def electives_report_excel():
 
 
 @students_bp.route("/electives_report/pdf")
-@role_required("admin", "supervisor")
+@role_required(*ACADEMIC_REPORT_VIEW_ROLES)
 def electives_report_pdf():
     r = electives_report_api()
     payload = r[0].get_json() if isinstance(r, tuple) else r.get_json()
@@ -853,6 +857,18 @@ def _registration_changes_report_items(
         sql += " AND (course_name LIKE ? OR course_code LIKE ?)"
         q = "%" + course_name_like.strip() + "%"
         params.extend([q, q])
+    try:
+        from flask import session as flask_session
+
+        actor = (flask_session.get("user") or flask_session.get("username") or "").strip()
+    except Exception:
+        actor = ""
+    course_scope_sql, course_scope_params = resolve_registration_course_scope_sql(
+        conn, actor, registration_course_col="course_name"
+    )
+    if course_scope_sql:
+        sql += course_scope_sql
+        params.extend(course_scope_params)
     sql += " ORDER BY action_time DESC, id DESC"
     cur.execute(sql, params)
     rows = cur.fetchall()
@@ -864,7 +880,7 @@ def _registration_changes_report_items(
 
 
 @students_bp.route("/registration_changes_report")
-@role_required("admin", "supervisor")
+@role_required(*ACADEMIC_REPORT_VIEW_ROLES)
 def registration_changes_report_api():
     """
     تقرير: المواد المضافة والمسقطة مع تواريخ الإضافة والإسقاط من registration_changes_log.
@@ -903,7 +919,7 @@ def registration_changes_report_api():
 
 
 @students_bp.route("/registration_changes_report/excel")
-@role_required("admin", "supervisor")
+@role_required(*ACADEMIC_REPORT_VIEW_ROLES)
 def registration_changes_report_excel():
     """تصدير تقرير الإضافة والإسقاط إلى Excel مع نفس الفلاتر."""
     date_from = request.args.get("date_from", "").strip() or None
@@ -942,7 +958,7 @@ def registration_changes_report_excel():
 
 
 @students_bp.route("/registration_changes_report/pdf")
-@role_required("admin", "supervisor")
+@role_required(*ACADEMIC_REPORT_VIEW_ROLES)
 def registration_changes_report_pdf():
     """تصدير تقرير الإضافة والإسقاط إلى PDF بنفس أعمدة التقرير ومع نفس الفلاتر."""
     date_from = request.args.get("date_from", "").strip() or None
@@ -1237,7 +1253,7 @@ def _students_scope_rows(conn, student_id=None, student_ids=None):
     return [{"student_id": normalize_sid(r[0]), "student_name": (r[1] or "")} for r in (rows or [])]
 
 
-def _courses_catalog_rows(conn, course_name_like=None):
+def _courses_catalog_rows(conn, course_name_like=None, actor_username=None):
     cur = conn.cursor()
     sql = """
         SELECT COALESCE(course_name,'') AS course_name,
@@ -1251,6 +1267,10 @@ def _courses_catalog_rows(conn, course_name_like=None):
         q = "%" + str(course_name_like).strip() + "%"
         sql += " AND (course_name LIKE ? OR course_code LIKE ?)"
         params.extend([q, q])
+    scope_sql, scope_params = courses_catalog_scope_sql(conn, actor_username)
+    if scope_sql:
+        sql += scope_sql
+        params.extend(scope_params)
     sql += " ORDER BY course_name"
     rows = cur.execute(sql, params).fetchall()
     out = []
@@ -1291,10 +1311,14 @@ def _classified_uncompleted_items(conn, student_id=None, student_ids=None, cours
       - not_registered: المقرر موجود بالخطة (courses) ولا توجد له أي محاولة في grades
       - failed: توجد محاولة/محاولات لكن أفضل نتيجة < 50 أو "راسب"
     """
+    try:
+        actor = (session.get("user") or session.get("username") or "").strip()
+    except Exception:
+        actor = ""
     students = _students_scope_rows(conn, student_id=student_id, student_ids=student_ids)
     if not students:
         return []
-    catalog = _courses_catalog_rows(conn, course_name_like=course_name_like)
+    catalog = _courses_catalog_rows(conn, course_name_like=course_name_like, actor_username=actor)
     if not catalog:
         return []
 
@@ -1651,8 +1675,21 @@ def not_registered_courses_report_pdf():
     return pdf_response_from_html(html, filename_prefix="not_registered_courses_report")
 
 
+def _failed_course_report_items(conn, *, allowed_student_ids, course_name_like=None):
+    """صفوف الرسوب ضمن نطاق الطلبة والمقررات."""
+    best = _best_grades_map(
+        conn,
+        student_id=None,
+        student_ids=allowed_student_ids,
+        course_name_like=course_name_like,
+    )
+    actor = (session.get("user") or session.get("username") or "").strip()
+    failed = [v for v in (best or {}).values() if not v.get("passed")]
+    return filter_report_rows_by_course_scope(conn, failed, actor)
+
+
 @students_bp.route("/failed_courses_report")
-@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
+@role_required(*ACADEMIC_REPORT_VIEW_ROLES)
 def failed_courses_report_api():
     """
     تقرير عام: المقررات التي رسب فيها الطلبة.
@@ -1676,13 +1713,11 @@ def failed_courses_report_api():
                 return jsonify({"status": "ok", "summary": [], "items": []})
             return jsonify({"status": "ok", "summary": []})
 
-        best = _best_grades_map(
+        failed_items = _failed_course_report_items(
             conn,
-            student_id=None,
-            student_ids=allowed_student_ids,
+            allowed_student_ids=allowed_student_ids,
             course_name_like=course_name,
         )
-    failed_items = [v for v in best.values() if not v.get("passed")]
 
     # summary by course
     by_course = {}
@@ -1716,7 +1751,7 @@ def failed_courses_report_api():
 
 
 @students_bp.route("/failed_courses_report/excel")
-@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
+@role_required(*ACADEMIC_REPORT_VIEW_ROLES)
 def failed_courses_report_excel():
     course_name = (request.args.get("course_name") or "").strip() or None
     min_failed = request.args.get("min_failed")
@@ -1733,13 +1768,11 @@ def failed_courses_report_excel():
                 {"Summary": df_summary, "Students": df_items},
                 filename_prefix="failed_courses_report",
             )
-        best = _best_grades_map(
+        failed_items = _failed_course_report_items(
             conn,
-            student_id=None,
-            student_ids=allowed_student_ids,
+            allowed_student_ids=allowed_student_ids,
             course_name_like=course_name,
         )
-    failed_items = [v for v in best.values() if not v.get("passed")]
     # build frames
     # summary
     by_course = {}
@@ -1766,7 +1799,7 @@ def failed_courses_report_excel():
 
 
 @students_bp.route("/failed_courses_report/pdf")
-@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
+@role_required(*ACADEMIC_REPORT_VIEW_ROLES)
 def failed_courses_report_pdf():
     course_name = (request.args.get("course_name") or "").strip() or None
     min_failed = request.args.get("min_failed")
@@ -1788,13 +1821,11 @@ def failed_courses_report_pdf():
             """
             return pdf_response_from_html(html, filename_prefix="failed_courses_report")
 
-        best = _best_grades_map(
+        failed_items = _failed_course_report_items(
             conn,
-            student_id=None,
-            student_ids=allowed_student_ids,
+            allowed_student_ids=allowed_student_ids,
             course_name_like=course_name,
         )
-    failed_items = [v for v in best.values() if not v.get("passed")]
     by_course = {}
     for it in failed_items:
         ck = (it.get("course_name") or "", it.get("course_code") or "")
@@ -1991,7 +2022,13 @@ def _get_allowed_student_ids_for_role(conn, user_role: str) -> set:
     - instructor: طلاب مقررات الفصل الحالي عبر schedule + registrations
     """
     role = _normalize_role((user_role or "").strip())
+    actor = (session.get("user") or session.get("username") or "").strip()
     if role in ("admin_main", "admin", "system_admin"):
+        scope_mode, scope_dep = resolve_users_list_scope(conn, actor)
+        if scope_mode == "empty":
+            return set()
+        if scope_mode == "department" and scope_dep is not None:
+            return {normalize_sid(s) for s in student_ids_for_department(conn, int(scope_dep))}
         return None
 
     if role == "college_dean":

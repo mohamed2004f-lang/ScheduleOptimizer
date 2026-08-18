@@ -1013,3 +1013,146 @@ class TestHeadDepartmentIsolation:
             assert c_civ not in miss
             assert c_mec not in miss
 
+
+class TestAcademicReportsDepartmentScope:
+    def _seed_two_departments(self, db_conn, uid):
+        cur = db_conn.cursor()
+        code1 = f"RC{uid}".upper()[:12]
+        code2 = f"RM{uid}".upper()[:12]
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (code1, "مدني", "Civil"),
+        )
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (code2, "ميكانيك", "Mech"),
+        )
+        d1 = cur.execute("SELECT id FROM departments WHERE code = ?", (code1,)).fetchone()[0]
+        d2 = cur.execute("SELECT id FROM departments WHERE code = ?", (code2,)).fetchone()[0]
+        s1 = f"RS1{uid}"
+        s2 = f"RS2{uid}"
+        cur.execute(
+            "INSERT INTO students (student_id, student_name, enrollment_status, department_id) VALUES (?, ?, 'active', ?)",
+            (s1, "طالب مدني", d1),
+        )
+        cur.execute(
+            "INSERT INTO students (student_id, student_name, enrollment_status, department_id) VALUES (?, ?, 'active', ?)",
+            (s2, "طالب ميكانيك", d2),
+        )
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO courses
+            (course_name, course_code, units, category, owning_department_id)
+            VALUES ('FailCivil', ?, 3, 'required', ?)
+            """,
+            (f"FC{uid[:4]}", d1),
+        )
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO courses
+            (course_name, course_code, units, category, owning_department_id)
+            VALUES ('FailMech', ?, 3, 'required', ?)
+            """,
+            (f"FM{uid[:4]}", d2),
+        )
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade)
+            VALUES (?, 'ف1', 'FailCivil', ?, 3, 40)
+            """,
+            (s1, f"FC{uid[:4]}"),
+        )
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade)
+            VALUES (?, 'ف1', 'FailMech', ?, 3, 30)
+            """,
+            (s2, f"FM{uid[:4]}"),
+        )
+        db_conn.commit()
+        return d1, d2, s1, s2
+
+    def test_admin_scoped_electives_and_failed_reports(self, app, db_conn):
+        uid = uuid.uuid4().hex[:8]
+        d1, d2, s1, s2 = self._seed_two_departments(db_conn, uid)
+        cur = db_conn.cursor()
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade)
+            VALUES (?, 'ف1', 'ElectCivil', 'ELC1', 3, 60)
+            """,
+            (s1,),
+        )
+        for i in range(34):
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO grades (student_id, semester, course_name, course_code, units, grade)
+                VALUES (?, 'ف1', ?, ?, 3, 60)
+                """,
+                (s1, f"ReqC{i}", f"RC{i:02d}"),
+            )
+        db_conn.commit()
+        headers = {"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"}
+        with app.test_client() as c:
+            c.post("/auth/login", json={"username": "admin-test", "password": "TestP@ssw0rd!"})
+            c.post(
+                "/auth/admin_department_scope",
+                json={"department_id": d1},
+                headers=headers,
+            )
+            er = c.get("/students/electives_report", headers=headers)
+            assert er.status_code == 200
+            eids = {it.get("student_id") for it in (er.get_json().get("items") or [])}
+            assert s1 in eids or s2 not in eids
+            fr = c.get("/students/failed_courses_report", headers=headers)
+            assert fr.status_code == 200
+            fnames = {(it.get("course_name") or "").strip() for it in (fr.get_json().get("summary") or [])}
+            assert "FailCivil" in fnames
+            assert "FailMech" not in fnames
+
+    def test_dean_can_access_performance_report(self, app, db_conn):
+        uid = uuid.uuid4().hex[:8]
+        d1, _d2, s1, s2 = self._seed_two_departments(db_conn, uid)
+        pw = db_conn.execute(
+            "SELECT password_hash FROM users WHERE username = 'admin-test' LIMIT 1"
+        ).fetchone()[0]
+        dean_user = f"dean_rep_{uid}"
+        db_conn.execute(
+            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'college_dean')",
+            (dean_user, pw),
+        )
+        db_conn.commit()
+        headers = {"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"}
+        with app.test_client() as c:
+            assert c.post("/auth/login", json={"username": dean_user, "password": "TestP@ssw0rd!"}).status_code == 200
+            r = c.get("/performance/report", headers=headers)
+            assert r.status_code == 200
+            ids = {x.get("student_id") for x in (r.get_json().get("students") or [])}
+            assert s1 in ids and s2 in ids
+            c.post("/auth/admin_department_scope", json={"department_id": d1}, headers=headers)
+            r2 = c.get("/performance/report", headers=headers)
+            ids2 = {x.get("student_id") for x in (r2.get_json().get("students") or [])}
+            assert s1 in ids2
+            assert s2 not in ids2
+
+    def test_course_mapping_issues_respects_department_scope(self, app, db_conn):
+        uid = uuid.uuid4().hex[:8]
+        d1, _d2, s1, s2 = self._seed_two_departments(db_conn, uid)
+        pw = db_conn.execute(
+            "SELECT password_hash FROM users WHERE username = 'admin-test' LIMIT 1"
+        ).fetchone()[0]
+        head_user = f"head_map_{uid}"
+        db_conn.execute(
+            "INSERT INTO users (username, password_hash, role, department_id) VALUES (?, ?, 'head_of_department', ?)",
+            (head_user, pw, d1),
+        )
+        db_conn.commit()
+        headers = {"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"}
+        with app.test_client() as c:
+            assert c.post("/auth/login", json={"username": head_user, "password": "TestP@ssw0rd!"}).status_code == 200
+            r = c.get("/grades/course_mapping_issues", headers=headers)
+            assert r.status_code == 200
+            sids = {it.get("student_id") for it in (r.get_json().get("items") or [])}
+            assert s2 not in sids
+            assert s1 in sids or len(sids) == 0
+

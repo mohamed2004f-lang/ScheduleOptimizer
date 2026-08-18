@@ -8,6 +8,28 @@ from backend.core.auth import _normalize_role, get_admin_department_scope_id
 
 UsersListScopeMode = Literal["none", "department", "empty"]
 
+# أدوار تقارير السجل الأكاديمي (عرض/تصدير)
+ACADEMIC_REPORT_VIEW_ROLES: tuple[str, ...] = (
+    "admin",
+    "admin_main",
+    "system_admin",
+    "college_dean",
+    "academic_vice_dean",
+    "head_of_department",
+    "staff",
+    "supervisor",
+)
+
+ACADEMIC_REPORT_STAFF_ROLES: tuple[str, ...] = (
+    "admin",
+    "admin_main",
+    "system_admin",
+    "college_dean",
+    "academic_vice_dean",
+    "head_of_department",
+    "staff",
+)
+
 _SCOPE_SESSION_ROLES = frozenset(
     {
         "admin",
@@ -1621,4 +1643,81 @@ def invalidate_department_scope_list_caches() -> None:
             invalidate_list_prefix(prefix)
     except Exception:
         pass
+
+
+def allowed_student_ids_for_actor(
+    conn,
+    actor_username: str | None = None,
+) -> set[str] | None:
+    """
+    معرّفات الطلبة المسموح بها للمنفّذ.
+    None = كل الكلية (بدون تقييد قسم).
+    """
+    mode, dep_id = resolve_users_list_scope(conn, _actor_username(actor_username))
+    if mode == "none":
+        return None
+    if mode == "empty" or dep_id is None:
+        return set()
+    return student_ids_for_department(conn, int(dep_id))
+
+
+def courses_catalog_scope_sql(
+    conn,
+    actor_username: str | None = None,
+    *,
+    table_alias: str = "",
+) -> tuple[str, tuple]:
+    """جزء AND لفلترة صفوف جدول courses حسب نطاق القسم."""
+    scope_dep = resolve_effective_department_scope_id(conn, _actor_username(actor_username))
+    if scope_dep is None:
+        return "", ()
+    own_col = "owning_department_id"
+    cname_col = "course_name"
+    if table_alias:
+        own_col = f"{table_alias}.owning_department_id"
+        cname_col = f"{table_alias}.course_name"
+    return courses_department_scope_filter(
+        conn,
+        int(scope_dep),
+        owning_col=own_col,
+        course_name_col=cname_col,
+    )
+
+
+def filter_report_rows_by_course_scope(
+    conn,
+    rows: list[dict],
+    actor_username: str | None = None,
+    *,
+    course_name_key: str = "course_name",
+) -> list[dict]:
+    """يُبقي صفوف التقرير التي يقع مقررها ضمن نطاق القسم."""
+    if resolve_effective_department_scope_id(conn, _actor_username(actor_username)) is None:
+        return rows
+    actor = _actor_username(actor_username)
+    out: list[dict] = []
+    for row in rows or []:
+        cname = str(row.get(course_name_key) or "").strip()
+        if not cname:
+            continue
+        if course_in_actor_scope(conn, cname, actor):
+            out.append(row)
+    return out
+
+
+def apply_grade_rows_scope_sql(
+    conn,
+    actor_username: str | None,
+    *,
+    student_alias: str = "s",
+    grade_course_col: str = "g.course_name",
+) -> tuple[str, tuple, str, tuple]:
+    """أجزاء AND لاستعلام grades: طلبة + مقررات."""
+    st_sql, st_params = resolve_scope_sql_for_aliased_student(conn, actor_username, student_alias)
+    course_sql, course_params = resolve_registration_course_scope_sql(
+        conn,
+        actor_username,
+        registration_course_col=grade_course_col,
+    )
+    return st_sql, st_params, course_sql, course_params
 

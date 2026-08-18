@@ -3,7 +3,13 @@ from datetime import datetime
 from flask import Blueprint, jsonify, render_template, request, send_file, session
 
 from backend.core.auth import role_required, current_supervisor_effective, _normalize_role
-from backend.core.department_scope_policy import resolve_users_list_scope, resolve_scope_sql_for_students_table
+from backend.core.department_scope_policy import (
+    ACADEMIC_REPORT_STAFF_ROLES,
+    ACADEMIC_REPORT_VIEW_ROLES,
+    resolve_users_list_scope,
+    resolve_scope_sql_for_students_table,
+    student_in_actor_scope,
+)
 from backend.database.database import fetch_table_columns
 from .utilities import get_connection, excel_response_from_df, pdf_response_from_html, get_current_term
 from backend.services.grades import (
@@ -503,7 +509,7 @@ def _apply_export_filters(
 
 
 @performance_bp.route("/report")
-@role_required("admin", "supervisor")
+@role_required(*ACADEMIC_REPORT_VIEW_ROLES)
 def performance_report():
     """
     تقرير موجز لأداء الطلبة:
@@ -703,6 +709,10 @@ def performance_status(student_id: str):
             ).fetchone()
             if not allowed:
                 return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        elif user_role not in ("student",):
+            uname = (session.get("user") or session.get("username") or "").strip()
+            if not student_in_actor_scope(conn, sid, uname):
+                return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         if user_role == "instructor":
             instructor_id = session.get("instructor_id")
             if not instructor_id:
@@ -787,7 +797,7 @@ def performance_status(student_id: str):
 
 
 @performance_bp.route("/extra_chance", methods=["POST"])
-@role_required("admin")
+@role_required(*ACADEMIC_REPORT_STAFF_ROLES)
 def set_extra_chance():
     """
     منح / إلغاء فرصة استثنائية لطالب.
@@ -827,7 +837,7 @@ def set_extra_chance():
 
 
 @performance_bp.route("/export")
-@role_required("admin")
+@role_required(*ACADEMIC_REPORT_VIEW_ROLES)
 def export_performance():
     """
     تصدير تقرير الأداء مع نفس فلاتر الاستعلام:

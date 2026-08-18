@@ -27,6 +27,16 @@ PERMISSION_CATALOG: list[dict[str, Any]] = [
     {"key": "can_manage_transcript_admin", "group_key": "records", "group_label_ar": "السجل الأكademي", "label_ar": "إدارة الكشوف"},
     {"key": "nav_grade_drafts", "group_key": "records", "group_label_ar": "السجل الأكademي", "label_ar": "مسودات الدرجات"},
     {"key": "nav_academic_quality_dashboard", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "لوحة الجودة"},
+    {"key": "nav_academic_reports_section", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "قسم تقارير القسم/الكلية"},
+    {"key": "nav_performance_report", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "تقرير الأداء"},
+    {"key": "nav_electives_report", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "تقرير المقررات الاختيارية"},
+    {"key": "nav_registration_changes_report", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "تقرير الإضافة والإسقاط"},
+    {"key": "nav_failed_courses_report", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "تقرير مقررات الرسوب"},
+    {"key": "nav_not_registered_courses_report", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "تقرير المقررات غير المسجل بها"},
+    {"key": "nav_uncompleted_courses_report", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "تقرير المقررات غير المنجزة"},
+    {"key": "nav_grade_course_mapping_audit", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "تدقيق ترميز المقررات"},
+    {"key": "nav_analytics_report", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "التحليلات الأكاديمية"},
+    {"key": "nav_course_registration_report", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "أعداد التسجيل بالمقررات"},
     {"key": "nav_college_archive", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "أرشيف الكلية"},
     {"key": "nav_surveys_results", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "نتائج الاستبيانات"},
     {"key": "nav_surveys_invites", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "دعوات الاستبيانات الخارجية"},
@@ -70,6 +80,11 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
             "nav_planning_menu",
             "nav_transcript_nav",
             "nav_grade_drafts", "nav_academic_quality_dashboard",
+            "nav_academic_reports_section", "nav_performance_report",
+            "nav_electives_report", "nav_registration_changes_report",
+            "nav_failed_courses_report", "nav_not_registered_courses_report",
+            "nav_uncompleted_courses_report", "nav_grade_course_mapping_audit",
+            "nav_analytics_report", "nav_course_registration_report",
             "nav_college_archive",
             "nav_surveys_results", "nav_surveys_invites", "can_manage_survey_invites",
             "nav_evaluation_survey_admin",
@@ -92,6 +107,11 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
             "nav_planning_menu",
             "nav_transcript_nav",
             "nav_grade_drafts", "nav_academic_quality_dashboard",
+            "nav_academic_reports_section", "nav_performance_report",
+            "nav_electives_report", "nav_registration_changes_report",
+            "nav_failed_courses_report", "nav_not_registered_courses_report",
+            "nav_uncompleted_courses_report", "nav_grade_course_mapping_audit",
+            "nav_analytics_report", "nav_course_registration_report",
             "nav_college_archive",
             "nav_surveys_results", "nav_evaluation_survey_admin",
             "can_edit_accreditation_catalog",
@@ -108,6 +128,11 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
         "permissions": [
             "nav_dashboard", "nav_student_affairs_menu", "can_manage_students",
             "nav_transcript_nav", "can_manage_transcript_admin", "nav_planning_menu",
+            "nav_academic_reports_section", "nav_performance_report",
+            "nav_electives_report", "nav_registration_changes_report",
+            "nav_failed_courses_report", "nav_not_registered_courses_report",
+            "nav_uncompleted_courses_report", "nav_grade_course_mapping_audit",
+            "nav_analytics_report", "nav_course_registration_report",
             "can_switch_department_scope",
         ],
     },
@@ -116,7 +141,13 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
         "name_ar": "موظف شؤون الطلبة",
         "base_role": "staff",
         "scope_mode": "department",
-        "permissions": ["nav_dashboard", "nav_student_affairs_menu", "can_manage_students"],
+        "permissions": [
+            "nav_dashboard", "nav_student_affairs_menu", "can_manage_students",
+            "nav_academic_reports_section", "nav_performance_report",
+            "nav_registration_changes_report", "nav_failed_courses_report",
+            "nav_not_registered_courses_report", "nav_uncompleted_courses_report",
+            "nav_course_registration_report",
+        ],
     },
     {
         "code": "library_manager",
@@ -155,6 +186,11 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
             "can_manage_schedule_edit", "nav_staff_operations_menu",
             "nav_academic_quality_dashboard", "nav_surveys_results", "nav_grade_drafts",
             "nav_supervision",
+            "nav_academic_reports_section", "nav_performance_report",
+            "nav_electives_report", "nav_registration_changes_report",
+            "nav_failed_courses_report", "nav_not_registered_courses_report",
+            "nav_uncompleted_courses_report", "nav_grade_course_mapping_audit",
+            "nav_analytics_report", "nav_course_registration_report",
         ],
     },
     {
@@ -298,6 +334,19 @@ def apply_permissions_to_caps(caps: dict, granted: set[str]) -> dict:
     # مفاتيح nav مشتقة
     if "nav_planning_menu" in granted:
         out["nav_course_registration_report"] = out.get("nav_course_registration_report") or True
+    if "nav_academic_reports_section" in granted:
+        for rk in (
+            "nav_performance_report",
+            "nav_electives_report",
+            "nav_registration_changes_report",
+            "nav_failed_courses_report",
+            "nav_not_registered_courses_report",
+            "nav_uncompleted_courses_report",
+            "nav_grade_course_mapping_audit",
+            "nav_analytics_report",
+            "nav_course_registration_report",
+        ):
+            out[rk] = out.get(rk) or True
     if "can_manage_users" in granted:
         out["nav_users_admin"] = True
     if "can_edit_college_identity" in granted:

@@ -13,7 +13,7 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">خطط تسجيل الطلبة</h1>
-        <p class="page-subtitle">إنشاء خطة تنزيل مواد، إرسالها للمراجعة، ومتابعة اعتماد المشرف/الأدمن</p>
+        <p class="page-subtitle">رئيس القسم يراجع الخطط المعلّقة لقسمه ويعتمدها أو يرفضها — ويمكن إنشاء خطة لطالب عند الحاجة</p>
       </div>
       <div>
         <button type="button" class="btn btn-outline-info btn-sm" onclick="PageGuide.open()" title="دليل استخدام الصفحة">❓ دليل الاستخدام</button>
@@ -21,8 +21,39 @@
     </div>
 
     <span data-hint="هنا تُنشئ خطة التسجيل الفصلية — اختر المقررات المتاحة حسب الجدول المعتمد والمتطلبات المكتملة، ثم أرسل الخطة للمراجعة والاعتماد من المشرف." data-hint-id="enroll_plan" data-hint-icon="📝" data-for-role="student"></span>
-    <!-- قسم الطالب: إنشاء/تعديل خطة -->
-    <div class="card mb-3 chart-container">
+
+    <!-- طابور المراجعة — أولوية رئيس القسم/المشرف -->
+    <div class="card chart-container mb-3" id="reviewSection">
+      <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+          <div>
+            <h2 class="page-title mb-1" style="font-size:18px;">الخطط المعلقة للمراجعة</h2>
+            <p class="page-subtitle mb-0">طلبات قسمك بانتظار الاعتماد. يظهر لكل طالب المقررات والمتطلبات الناقصة دون إخفاء.</p>
+          </div>
+          <div class="d-flex flex-wrap gap-2" id="reviewSummaryChips"></div>
+        </div>
+        <div class="row g-2 align-items-end mb-3">
+          <div class="col-md-3">
+            <label class="form-label">الفصل الدراسي</label>
+            <input id="reviewSemesterInput" class="form-control form-control-sm" placeholder="الكل إن تُرك فارغاً">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">بحث (اسم / رقم / مقرر)</label>
+            <input id="reviewSearchInput" class="form-control form-control-sm" placeholder="مثال: أحمد أو ME 409">
+          </div>
+          <div class="col-md-2">
+            <button id="btnLoadPending" class="btn btn-outline-primary btn-sm w-100">تحديث القائمة</button>
+          </div>
+          <div class="col-md-3 small text-muted">
+            الاعتماد ينقل المقررات إلى التسجيل الفعلي لنفس الطالب.
+          </div>
+        </div>
+        <div id="pendingList"></div>
+      </div>
+    </div>
+
+    <!-- قسم إنشاء/تعديل خطة -->
+    <div class="card mb-3 chart-container" id="composePlanSection">
       <div class="card-body">
         <div class="page-header" style="margin:0 0 10px;">
           <div>
@@ -73,31 +104,6 @@
           <button type="button" id="btnPrereqDetails" class="btn btn-outline-warning btn-sm d-none">تفاصيل المتطلبات</button>
           <button type="button" id="btnPlanningHints" class="btn btn-outline-secondary btn-sm" title="ما الذي يفتح أكبر عدد من المقررات لاحقاً">أولوية المقررات</button>
         </div>
-      </div>
-    </div>
-
-    <!-- قسم المشرف/رئيس القسم: الخطط المعلقة -->
-    <div class="card chart-container" id="reviewSection">
-      <div class="card-body">
-        <div class="page-header" style="margin:0 0 10px;">
-          <div>
-            <h2 class="page-title" style="font-size:16px;">الخطط المعلقة للمراجعة</h2>
-            <p class="page-subtitle">للمشرف/الأدمن: اعتماد/رفض الخطط بعد مناقشة الطالب</p>
-          </div>
-        </div>
-        <div class="row g-2 align-items-end mb-2">
-          <div class="col-md-4">
-            <label class="form-label">الفصل الدراسي</label>
-            <input id="reviewSemesterInput" class="form-control form-control-sm" placeholder="اتركه فارغاً لعرض جميع الفصول">
-          </div>
-          <div class="col-md-2">
-            <button id="btnLoadPending" class="btn btn-outline-primary btn-sm w-100">تحديث القائمة</button>
-          </div>
-          <div class="col-md-6 text-end small text-muted">
-            ملاحظة: عند الاعتماد، يتم ترحيل المقررات إلى جدول التسجيلات الفعلي لنفس الطالب.
-          </div>
-        </div>
-        <div id="pendingList" class="list-group small"></div>
       </div>
     </div>
 
@@ -771,87 +777,192 @@
       }
     }
 
-    async function loadPending(){
-      const sem = document.getElementById('reviewSemesterInput').value.trim();
-      const url = sem ? `/enrollment/plans?semester=${encodeURIComponent(sem)}` : '/enrollment/plans';
-      const res = await fetchJSON(url);
+    let pendingPlansCache = [];
+
+    function _fmtWhen(v){
+      const s = String(v || '').trim();
+      if (!s) return '';
+      return s.replace('T', ' ').slice(0, 16);
+    }
+
+    function _unmetItemsForPlan(p){
+      return unmetPrereqItemsFromValidation(p?.prereq_validation);
+    }
+
+    function renderReviewSummary(plans){
+      const el = document.getElementById('reviewSummaryChips');
+      if (!el) return;
+      const n = plans.length;
+      const nGap = plans.filter(p => _unmetItemsForPlan(p).length > 0).length;
+      const nAck = plans.filter(p => Number(p.prereq_ack_by_student || 0) === 1).length;
+      el.innerHTML = `
+        <span class="badge bg-primary">معلّقة: ${n}</span>
+        <span class="badge bg-warning text-dark">بمتطلبات ناقصة: ${nGap}</span>
+        <span class="badge bg-danger">بإقرار طالب: ${nAck}</span>
+      `;
+    }
+
+    function renderPendingCards(plans){
       const container = document.getElementById('pendingList');
       container.innerHTML = '';
-      if(!res.ok){
-        container.innerHTML = '<div class="text-danger p-2">فشل جلب الخطط.</div>';
+      renderReviewSummary(plans);
+      if (!plans.length){
+        container.innerHTML = '<div class="alert alert-light border mb-0">لا توجد خطط معلّقة مطابقة للبحث أو الفصل.</div>';
         return;
       }
-      const plans = (Array.isArray(res.json?.plans) ? res.json.plans : []).filter(p=>p.status === 'Pending');
-      if(!plans.length){
-        container.innerHTML = '<div class="text-muted p-2">لا توجد خطط معلّقة حالياً.</div>';
-        return;
-      }
-      plans.forEach(p=>{
+      plans.forEach(p => {
         const item = document.createElement('div');
-        item.className = 'list-group-item d-flex justify-content-between align-items-start';
-        const left = document.createElement('div');
-        const st = STUDENTS.find(s=>s.student_id === p.student_id);
-        const name = st ? (st.student_name || '') : '';
-        const pv = p.prereq_validation;
-        const nUnmet = pv?.summary?.courses_with_unmet_count ?? 0;
-        const pBadge = !pv
-          ? `<span class="badge bg-secondary ms-1">بلا لقطة متطلبات</span>`
-          : (nUnmet > 0
-            ? `<span class="badge bg-warning text-dark ms-1">مخالفات متطلبات (${nUnmet})</span>`
-            : `<span class="badge bg-success ms-1">سليمة نسبياً</span>`);
-        const pvBody = buildPrereqTableHtml(pv?.courses);
+        item.className = 'card mb-3 border-0 shadow-sm';
+        const st = STUDENTS.find(s => s.student_id === p.student_id);
+        const name = (p.student_name || (st && st.student_name) || '').trim();
+        const unmet = _unmetItemsForPlan(p);
+        const nUnmet = unmet.length;
+        const when = _fmtWhen(p.updated_at || p.created_at);
+        const units = (p.units_total != null && p.units_total !== '') ? p.units_total : '';
+        const courses = p.courses || [];
+        const courseChips = courses.map(cn => {
+          const hit = unmet.find(u => u.course === cn);
+          const cls = hit ? 'bg-warning-subtle text-dark border' : 'bg-light text-dark border';
+          return `<span class="badge ${cls} fw-normal">${escPlain(cn)}</span>`;
+        }).join(' ');
+        const gapHtml = nUnmet
+          ? `<div class="alert alert-warning py-2 px-3 small mb-2"><strong>متطلبات ناقصة:</strong><ul class="mb-0 mt-1">${
+              unmet.map(it => `<li><strong>${escPlain(it.course)}</strong> يحتاج ${it.reqs.map(n => `<em>${escPlain(n)}</em>`).join('، ')}</li>`).join('')
+            }</ul></div>`
+          : `<div class="small text-success mb-2">لا تظهر متطلبات ناقصة في لقطة الإرسال.</div>`;
         const ackTag = Number(p.prereq_ack_by_student || 0) === 1
-          ? `<span class="badge bg-danger ms-1">إقرار طالب بالمخالفة</span>`
-          : '';
+          ? `<span class="badge bg-danger">إقرار طالب بالمخالفة</span>` : '';
         const ackReason = (p.prereq_ack_reason || '').trim();
-        left.innerHTML = `<div><strong>${p.student_id}</strong> — ${name} ${pBadge} ${ackTag}</div>
-                          <div class="small text-muted">الفصل: ${p.semester}</div>
-                          <div class="small">المقررات: ${p.courses.join(', ') || '—'}</div>
-                          ${ackReason ? `<div class="small text-danger">سبب الإرسال الاستثنائي: ${escPlain(ackReason)}</div>` : ''}
-                          <div class="mt-1">
-                            <button type="button" class="btn btn-sm btn-outline-secondary" data-acad="${p.id}" title="عرض ملخص سريع (معدل/وحدات/غير منجزة/حالة)">ملخص أكاديمي</button>
-                            <button class="btn btn-sm btn-outline-info" type="button" data-bs-toggle="collapse" data-bs-target="#pv_${p.id}" aria-expanded="false">جدول المتطلبات (لقطة الإرسال)</button>
-                          </div>
-                          <div class="collapse mt-2" id="pv_${p.id}"><div class="card card-body p-2 small">${pvBody}</div></div>
-                          <div id="acadSummary_${p.id}" data-open="0"></div>`;
-        const right = document.createElement('div');
+        const pBadge = nUnmet
+          ? `<span class="badge bg-warning text-dark">متطلبات ناقصة (${nUnmet})</span>`
+          : `<span class="badge bg-success">سليمة نسبياً</span>`;
+        const left = document.createElement('div');
+        left.className = 'card-body';
+        left.innerHTML = `
+          <div class="d-flex flex-wrap justify-content-between gap-2 mb-2">
+            <div>
+              <div class="fw-semibold fs-6">${escPlain(name || 'طالب')} <span class="text-muted">— ${escPlain(p.student_id)}</span></div>
+              <div class="small text-muted">الفصل: ${escPlain(p.semester || '—')}${when ? ' · أُرسلت: ' + escPlain(when) : ''}${units !== '' ? ' · وحدات الخطة: ' + escPlain(units) : ''}</div>
+            </div>
+            <div class="d-flex flex-wrap gap-1 align-items-start">${pBadge} ${ackTag}</div>
+          </div>
+          <div class="mb-2 d-flex flex-wrap gap-1">${courseChips || '<span class="text-muted small">لا مقررات</span>'}</div>
+          ${gapHtml}
+          ${ackReason ? `<div class="small text-danger mb-2">سبب الإرسال الاستثنائي: ${escPlain(ackReason)}</div>` : ''}
+          <div class="d-flex flex-wrap gap-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-acad="${p.id}">ملخص أكاديمي</button>
+            ${IS_VIEW_ONLY_ROLE ? '' : `<button type="button" class="btn btn-sm btn-outline-primary" data-recheck="${p.id}">إعادة فحص المتطلبات</button>`}
+            <button class="btn btn-sm btn-outline-info" type="button" data-bs-toggle="collapse" data-bs-target="#pv_${p.id}" aria-expanded="false">جدول المتطلبات الكامل</button>
+          </div>
+          <div class="collapse mt-2" id="pv_${p.id}"><div class="card card-body p-2 small">${buildPrereqTableHtml(p.prereq_validation?.courses)}</div></div>
+          <div id="acadSummary_${p.id}" data-open="0"></div>
+        `;
+        const footer = document.createElement('div');
+        footer.className = 'card-footer bg-white d-flex flex-wrap gap-2 justify-content-end';
         if (IS_VIEW_ONLY_ROLE) {
-          right.innerHTML = '<span class="badge bg-light text-dark">عرض فقط</span>';
+          footer.innerHTML = '<span class="badge bg-light text-dark">عرض فقط — الاعتماد لرئيس القسم</span>';
         } else {
           const approveBtn = document.createElement('button');
-          approveBtn.className = 'btn btn-sm btn-success mb-1';
-          approveBtn.textContent = 'اعتماد';
-          approveBtn.addEventListener('click', ()=> approvePlan(p.id, p.prereq_validation));
+          approveBtn.className = 'btn btn-sm btn-success';
+          approveBtn.textContent = 'اعتماد وترحيل للتسجيل';
+          approveBtn.addEventListener('click', () => approvePlan(p.id, p.prereq_validation));
           const rejectBtn = document.createElement('button');
-          rejectBtn.className = 'btn btn-sm btn-danger';
+          rejectBtn.className = 'btn btn-sm btn-outline-danger';
           rejectBtn.textContent = 'رفض';
-          rejectBtn.addEventListener('click', ()=> rejectPlan(p.id));
-          right.appendChild(approveBtn);
-          right.appendChild(document.createElement('br'));
-          right.appendChild(rejectBtn);
+          rejectBtn.addEventListener('click', () => rejectPlan(p.id));
+          footer.appendChild(rejectBtn);
+          footer.appendChild(approveBtn);
         }
         item.appendChild(left);
-        item.appendChild(right);
+        item.appendChild(footer);
         container.appendChild(item);
-
-        // ربط زر الملخص الأكاديمي
-        try{
+        try {
           const btn = left.querySelector(`button[data-acad="${p.id}"]`);
-          if(btn){
-            btn.addEventListener('click', (ev)=>{
+          if (btn) {
+            btn.addEventListener('click', (ev) => {
               ev.preventDefault();
               toggleAcademicSummary(p.id, p.student_id);
             });
           }
-        }catch(e){}
+          const recheckBtn = left.querySelector(`button[data-recheck="${p.id}"]`);
+          if (recheckBtn) {
+            recheckBtn.addEventListener('click', (ev) => {
+              ev.preventDefault();
+              recheckPlanPrereqs(p.id);
+            });
+          }
+        } catch (e) {}
       });
+    }
+
+    async function recheckPlanPrereqs(planId){
+      const btn = document.querySelector(`button[data-recheck="${planId}"]`);
+      const prevLabel = btn ? btn.textContent : '';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'جاري الفحص...';
+      }
+      try {
+        const res = await fetchJSON(`/enrollment/plans/${planId}/recheck_prereqs`, { method: 'POST' });
+        if (!res.ok) {
+          alert(res.json?.message || `فشل إعادة الفحص (${res.status})`);
+          return;
+        }
+        const pv = res.json?.prereq_validation;
+        const idx = pendingPlansCache.findIndex(p => p.id === planId);
+        if (idx >= 0 && pv) {
+          pendingPlansCache[idx] = {
+            ...pendingPlansCache[idx],
+            prereq_validation: pv,
+            updated_at: new Date().toISOString(),
+          };
+        }
+        applyPendingFilter();
+        alert(res.json?.message || 'تم تحديث فحص المتطلبات.');
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = prevLabel || 'إعادة فحص المتطلبات';
+        }
+      }
+    }
+
+    function applyPendingFilter(){
+      const q = (document.getElementById('reviewSearchInput')?.value || '').trim().toLowerCase();
+      if (!q) {
+        renderPendingCards(pendingPlansCache);
+        return;
+      }
+      const filtered = pendingPlansCache.filter(p => {
+        const name = (p.student_name || '').toLowerCase();
+        const sid = String(p.student_id || '').toLowerCase();
+        const courses = (p.courses || []).join(' ').toLowerCase();
+        return name.includes(q) || sid.includes(q) || courses.includes(q);
+      });
+      renderPendingCards(filtered);
+    }
+
+    async function loadPending(){
+      const sem = document.getElementById('reviewSemesterInput').value.trim();
+      const qs = new URLSearchParams({ status: 'Pending' });
+      if (sem) qs.set('semester', sem);
+      const res = await fetchJSON('/enrollment/plans?' + qs.toString());
+      const container = document.getElementById('pendingList');
+      if (!res.ok){
+        pendingPlansCache = [];
+        container.innerHTML = '<div class="alert alert-danger mb-0">فشل جلب الخطط.</div>';
+        renderReviewSummary([]);
+        return;
+      }
+      pendingPlansCache = Array.isArray(res.json?.plans) ? res.json.plans : [];
+      applyPendingFilter();
     }
 
     async function approvePlan(id, prereqVal){
       let cmsg = 'هل تريد اعتماد هذه الخطة وترحيلها إلى التسجيلات الفعلية؟';
-      const nu = prereqVal?.summary?.courses_with_unmet_count ?? 0;
-      if (nu > 0) {
-        cmsg = `تحذير: لقطة الإرسال تُظهر ${nu} مقرراً بمتطلبات غير مكتملة النجاح. ` + cmsg;
+      const lines = formatUnmetPrereqConfirm(prereqVal);
+      if (lines) {
+        cmsg = 'تحذير — متطلبات ناقصة:\n\n' + lines + '\n\n' + cmsg;
       }
       if(!confirm(cmsg)) return;
       const res = await fetchJSON(`/enrollment/plans/${id}/approve`, {method:'POST'});
@@ -1051,7 +1162,6 @@
           'btnSubmitPlan',
           'btnPrintForm',
           'btnImproveGPA',
-          'btnLoadPending',
         ];
         hideIds.forEach(id => {
           const el = document.getElementById(id);
@@ -1110,6 +1220,10 @@
       const btnPrintHtml = document.getElementById('btnPrintFormHtml');
       if (btnPrintHtml) btnPrintHtml.addEventListener('click', openPrintRegistrationInBrowser);
       document.getElementById('btnLoadPending').addEventListener('click', loadPending);
+      const searchEl = document.getElementById('reviewSearchInput');
+      if (searchEl) searchEl.addEventListener('input', applyPendingFilter);
+      const semEl = document.getElementById('reviewSemesterInput');
+      if (semEl) semEl.addEventListener('change', loadPending);
       await loadPending();
     });
   </script>

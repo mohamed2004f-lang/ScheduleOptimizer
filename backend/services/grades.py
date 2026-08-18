@@ -14,12 +14,16 @@ from flask import Blueprint, request, jsonify, Response, send_file, session, cur
 from backend.core.auth import login_required, role_required, current_supervisor_effective
 from backend.database.database import is_postgresql, schedule_pk_column, fetch_table_columns
 from backend.core.department_scope_policy import (
+    ACADEMIC_REPORT_STAFF_ROLES,
     assert_course_in_actor_scope,
     assert_hod_for_course_operation,
     assert_student_in_actor_scope,
     course_in_actor_scope,
     filter_items_for_course_hod_scope,
+    resolve_registration_course_scope_sql,
+    resolve_scope_sql_for_aliased_student,
     resolve_users_list_scope,
+    student_in_actor_scope,
     student_matches_department,
 )
 from .utilities import (
@@ -3216,7 +3220,7 @@ def update_grade():
 
 
 @grades_bp.route("/course_mapping_issues", methods=["GET"])
-@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+@role_required(*ACADEMIC_REPORT_STAFF_ROLES)
 def course_mapping_issues():
     """
     يعرض سجلات grades غير المطابقة مع دليل المقررات.
@@ -3227,7 +3231,10 @@ def course_mapping_issues():
     """
     semester = (request.args.get("semester") or "").strip()
     sid = (request.args.get("student_id") or "").strip()
+    actor = (session.get("user") or session.get("username") or "").strip()
     with get_connection() as conn:
+        if sid and not student_in_actor_scope(conn, sid, actor):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
         cur = conn.cursor()
         sql = """
         SELECT g.student_id,
@@ -3253,6 +3260,16 @@ def course_mapping_issues():
         WHERE 1=1
         """
         params = []
+        st_scope_sql, st_scope_params = resolve_scope_sql_for_aliased_student(conn, actor, "s")
+        if st_scope_sql:
+            sql += f" AND ({st_scope_sql})"
+            params.extend(st_scope_params)
+        course_scope_sql, course_scope_params = resolve_registration_course_scope_sql(
+            conn, actor, registration_course_col="g.course_name"
+        )
+        if course_scope_sql:
+            sql += course_scope_sql
+            params.extend(course_scope_params)
         if semester:
             sql += " AND g.semester = ?"
             params.append(semester)

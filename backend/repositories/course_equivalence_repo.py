@@ -57,6 +57,44 @@ def list_items_for_group(conn, group_id: int) -> list[dict]:
     ]
 
 
+def expand_course_names_global(conn, course_names: set[str]) -> set[str]:
+    """
+    يوسّع أسماء المقررات بكل الأسماء في مجموعات التكافؤ النشطة
+    (أي قسم) التي تضم أحد هذه الأسماء.
+    """
+    if not course_names or not table_exists(conn, "course_equivalence_items"):
+        return set(course_names)
+    names = [(n or "").strip() for n in course_names if (n or "").strip()]
+    if not names:
+        return set(course_names)
+    cur = conn.cursor()
+    ph = "%s" if is_postgresql() else "?"
+    placeholders = ",".join([ph] * len(names))
+    rows = cur.execute(
+        f"""
+        SELECT DISTINCT group_id FROM course_equivalence_items
+        WHERE is_active = 1 AND course_name IN ({placeholders})
+        """,
+        tuple(names),
+    ).fetchall()
+    gids = [int(r[0]) for r in rows or []]
+    if not gids:
+        return set(course_names)
+    ph2 = ",".join([ph] * len(gids))
+    rows2 = cur.execute(
+        f"""
+        SELECT DISTINCT course_name FROM course_equivalence_items
+        WHERE is_active = 1 AND group_id IN ({ph2})
+        """,
+        tuple(gids),
+    ).fetchall()
+    expanded = set(course_names)
+    for r in rows2 or []:
+        if r and r[0]:
+            expanded.add(str(r[0]).strip())
+    return expanded
+
+
 def expand_course_names_for_department(
     conn, department_id: int, course_names: set[str]
 ) -> set[str]:

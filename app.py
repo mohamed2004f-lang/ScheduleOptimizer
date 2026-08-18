@@ -53,6 +53,7 @@ from backend.core.auth import (
     _normalize_role,
     get_admin_department_scope_id,
 )
+from backend.core.department_scope_policy import ACADEMIC_REPORT_STAFF_ROLES
 from backend.core.logging_config import setup_logging
 from backend.core.monitoring import init_monitoring
 from backend.core.security import init_security_headers
@@ -472,6 +473,10 @@ def inject_ui_context():
                 student_identity_label = dep_id is not None
             elif role_n in _COLLEGE_LEADERSHIP:
                 dep_id = get_admin_department_scope_id()
+            elif role_n == "staff":
+                from backend.core.department_scope_policy import resolve_effective_department_scope_id
+
+                dep_id = resolve_effective_department_scope_id(conn, uname)
             elif role_n == "head_of_department":
                 # في كل أوضاع رئيس القسم اربط النطاق بقسمه المنزلي
                 dep_id = _resolve_actor_department_id(conn)
@@ -1367,7 +1372,7 @@ def not_registered_courses_report_page():
 
 @app.route("/grade_course_mapping_audit_page")
 @login_required
-@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+@role_required(*ACADEMIC_REPORT_STAFF_ROLES)
 def grade_course_mapping_audit_page():
     return render_template("grade_course_mapping_audit.html")
 

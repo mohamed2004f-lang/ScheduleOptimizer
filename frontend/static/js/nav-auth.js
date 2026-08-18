@@ -462,6 +462,41 @@
       }
       const elCourseRegReport = document.getElementById('navCourseRegistrationReport');
       if (elCourseRegReport) elCourseRegReport.style.display = showCourseReg ? '' : 'none';
+      const staffReportsFallback = ACAD_STAFF_ROLES.includes(role || '') && !inSupervisorPortal && !useInstructorMore;
+      const showPerfReport = (caps && caps.v >= 1) ? !!caps.nav_performance_report : staffReportsFallback;
+      const showElectivesReport = (caps && caps.v >= 1) ? !!caps.nav_electives_report : staffReportsFallback;
+      const showRegChangesReport = (caps && caps.v >= 1) ? !!caps.nav_registration_changes_report : staffReportsFallback;
+      const showFailedReport = (caps && caps.v >= 1) ? !!caps.nav_failed_courses_report : staffReportsFallback;
+      const showNotRegReport = (caps && caps.v >= 1) ? !!caps.nav_not_registered_courses_report : staffReportsFallback;
+      const showUncompletedReport = (caps && caps.v >= 1) ? !!caps.nav_uncompleted_courses_report : staffReportsFallback;
+      const showGradeAuditReport = (caps && caps.v >= 1) ? !!caps.nav_grade_course_mapping_audit : staffReportsFallback;
+      const showAnalyticsReport = (caps && caps.v >= 1) ? !!caps.nav_analytics_report : staffReportsFallback;
+      const showDeptReportsSection = (caps && caps.v >= 1)
+        ? !!caps.nav_academic_reports_section
+        : staffReportsFallback;
+      function applyAcademicReportNavVisibility() {
+        const reportMap = [
+          ['navPerformance', showPerfReport],
+          ['navElectivesReport', showElectivesReport],
+          ['navRegistrationChangesReport', showRegChangesReport],
+          ['navFailedCoursesReport', showFailedReport],
+          ['navNotRegisteredCoursesReport', showNotRegReport],
+          ['navUncompletedCoursesReport', showUncompletedReport],
+          ['navGradeCourseAudit', showGradeAuditReport],
+          ['navCourseRegistrationReport', showCourseReg],
+          ['navAnalytics', showAnalyticsReport],
+        ];
+        reportMap.forEach(function ([id, show]) {
+          const el = document.getElementById(id);
+          if (el) el.style.display = show ? '' : 'none';
+        });
+        const anyReport = reportMap.some(function (pair) { return pair[1]; });
+        const header = document.getElementById('navDeptReportsHeader');
+        const gradesDivider = document.getElementById('navAcademicRecordsGradesDivider');
+        if (header) header.style.display = (showDeptReportsSection && anyReport) ? '' : 'none';
+        if (gradesDivider) gradesDivider.style.display = anyReport ? '' : 'none';
+      }
+      applyAcademicReportNavVisibility();
       const elScheduleVersions = document.getElementById('navScheduleVersions');
       if (elScheduleVersions) elScheduleVersions.style.display = showScheduleVersions ? '' : 'none';
       const elExamScheduleVersions = document.getElementById('navExamScheduleVersions');
@@ -1465,7 +1500,7 @@
         if (roleKey === 'head_of_department') {
           reorderMenuByIds('academicRecordsMenuList', [
             'navHodFinalBatch', 'navGradeDrafts', 'navHodCourseDelivery', 'navTranscript',
-            'navAcademicRecordsGradesDivider',
+            'navAcademicRecordsGradesDivider', 'navDeptReportsHeader',
             'navPerformance', 'navElectivesReport', 'navRegistrationChangesReport',
             'navFailedCoursesReport', 'navNotRegisteredCoursesReport', 'navUncompletedCoursesReport',
             'navGradeCourseAudit', 'navCourseRegistrationReport',
@@ -1474,7 +1509,7 @@
         } else if (roleKey === 'college_dean' || roleKey === 'academic_vice_dean' || roleKey === 'admin_main') {
           reorderMenuByIds('academicRecordsMenuList', [
             'navDeanFinalBatches', 'navGradeDrafts', 'navTranscript',
-            'navAcademicRecordsGradesDivider',
+            'navAcademicRecordsGradesDivider', 'navDeptReportsHeader',
             'navPerformance', 'navElectivesReport', 'navRegistrationChangesReport',
             'navFailedCoursesReport', 'navNotRegisteredCoursesReport', 'navUncompletedCoursesReport',
             'navGradeCourseAudit', 'navCourseRegistrationReport',

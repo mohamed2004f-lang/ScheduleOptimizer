@@ -500,6 +500,28 @@ def _build_registration_form_context(student_id: str, semester_param: str, sourc
     return context
 
 
+def _student_names_by_ids(cur, student_ids: list[str]) -> dict[str, str]:
+    sids = [str(s).strip() for s in student_ids if str(s or "").strip()]
+    if not sids:
+        return {}
+    ph = ",".join("?" for _ in sids)
+    rows = cur.execute(
+        f"SELECT student_id, COALESCE(student_name, '') FROM students WHERE student_id IN ({ph})",
+        sids,
+    ).fetchall()
+    return {str(r[0]): (r[1] or "") for r in rows if r and r[0]}
+
+
+def _course_units_map(cur) -> dict[str, float]:
+    try:
+        rows = cur.execute(
+            "SELECT course_name, COALESCE(units, 0) FROM courses WHERE COALESCE(course_name,'') <> ''"
+        ).fetchall()
+        return {str(r[0]): float(r[1] or 0) for r in rows if r and r[0]}
+    except Exception:
+        return {}
+
+
 @enrollment_bp.route("/plans", methods=["GET"])
 @login_required
 def list_plans():
@@ -508,6 +530,7 @@ def list_plans():
     query params:
       - student_id (اختياري)
       - semester (اختياري)
+      - status (اختياري: Draft/Pending/Approved/Rejected)
     """
     student_id = (request.args.get("student_id") or "").strip()
     semester = (request.args.get("semester") or "").strip()
@@ -566,6 +589,10 @@ def list_plans():
         if semester:
             q += " AND semester = ?"
             params.append(semester)
+        status_f = (request.args.get("status") or "").strip()
+        if status_f:
+            q += " AND status = ?"
+            params.append(status_f)
         if not include_archived:
             q += " AND status != 'Archived'"
         q += " ORDER BY COALESCE(updated_at, created_at) DESC, id DESC"
@@ -617,6 +644,15 @@ def list_plans():
                 entry["prereq_ack_by_student"] = int(r[ack_i] or 0)
                 entry["prereq_ack_reason"] = r[rsn_i] or ""
             plans.append(entry)
+
+        names = _student_names_by_ids(cur, [p["student_id"] for p in plans])
+        units_map = _course_units_map(cur)
+        for p in plans:
+            p["student_name"] = names.get(str(p.get("student_id") or ""), "")
+            p["units_total"] = round(
+                sum(float(units_map.get(cn, 0) or 0) for cn in (p.get("courses") or [])),
+                2,
+            )
 
     return jsonify({"status": "ok", "plans": plans})
 
@@ -1163,6 +1199,134 @@ def submit_plan(plan_id: int):
             "prereq_warnings": full_eval.get("warnings") or [],
             "prereq_coregister_pairs": full_eval.get("coregister_pairs") or [],
             "prereq_validation": full_eval,
+        }
+    )
+
+
+@enrollment_bp.route("/plans/<int:plan_id>/recheck_prereqs", methods=["POST"])
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
+def recheck_plan_prereqs(plan_id: int):
+    """
+    إعادة فحص متطلبات خطة معلّقة بدرجات اليوم — تحديث prereq_validation_json دون تغيير الحالة.
+    """
+    if _is_instructor_or_supervisor_view_only():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+    now = _now_iso()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT id, student_id, semester, status FROM enrollment_plans WHERE id = ?",
+            (plan_id,),
+        ).fetchone()
+        if not row:
+            return (
+                jsonify({"status": "error", "message": "الخطة غير موجودة"}),
+                404,
+            )
+        _, student_id, semester, status = row
+        if not _student_in_effective_scope(conn, student_id):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        if status != "Pending":
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": f"يمكن إعادة فحص المتطلبات للخطط المعلّقة فقط (الحالية: {status})",
+                    }
+                ),
+                400,
+            )
+
+        is_supervisor_chk = current_supervisor_effective()
+        if is_supervisor_chk:
+            instructor_id = _session_instructor_id(conn)
+            if not instructor_id:
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "لا يوجد ربط بين هذا الحساب وعضو هيئة تدريس",
+                            "code": "FORBIDDEN",
+                        }
+                    ),
+                    403,
+                )
+            row_sv = cur.execute(
+                """
+                SELECT 1 FROM student_supervisor
+                WHERE instructor_id = ? AND student_id = ? LIMIT 1
+                """,
+                (instructor_id, student_id),
+            ).fetchone()
+            if not row_sv:
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "لا يمكن تقييم مقررات طالب غير مسند إليك",
+                        }
+                    ),
+                    403,
+                )
+
+        items = cur.execute(
+            "SELECT course_name FROM enrollment_plan_items WHERE plan_id = ?",
+            (plan_id,),
+        ).fetchall()
+        courses = [it[0] for it in items if it and it[0]]
+        if not courses:
+            return (
+                jsonify({"status": "error", "message": "الخطة لا تحتوي مقررات"}),
+                400,
+            )
+
+        full_eval = evaluate_prereqs_for_student(
+            cur,
+            student_id,
+            courses,
+            proposed_courses=courses,
+            old_registered=set(courses),
+        )
+        snap = prereq_validation_snapshot(full_eval, semester)
+        snap_json = json.dumps(snap, ensure_ascii=False)
+
+        if _enrollment_plans_has_prereq_json_column(cur):
+            cur.execute(
+                """
+                UPDATE enrollment_plans
+                SET updated_at = ?, prereq_validation_json = ?
+                WHERE id = ?
+                """,
+                (now, snap_json, plan_id),
+            )
+        else:
+            cur.execute(
+                "UPDATE enrollment_plans SET updated_at = ? WHERE id = ?",
+                (now, plan_id),
+            )
+        conn.commit()
+
+    try:
+        log_activity(
+            action="plan_prereqs_rechecked",
+            details=f"plan_id={plan_id}",
+        )
+    except Exception:
+        pass
+
+    summ = full_eval.get("summary") or {}
+    unmet = int(summ.get("courses_with_unmet_count") or 0)
+    msg = "تم تحديث فحص المتطلبات."
+    if unmet == 0:
+        msg += " لا تظهر متطلبات ناقصة الآن."
+    else:
+        msg += f" ما زالت {unmet} مقرر/مقررات بمتطلبات ناقصة."
+    return jsonify(
+        {
+            "status": "ok",
+            "message": msg,
+            "prereq_validation": full_eval,
+            "unmet_count": unmet,
         }
     )
 

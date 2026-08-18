@@ -8,6 +8,23 @@ from backend.core.auth_session import (
     is_supervisor_effective_session,
 )
 
+_ACADEMIC_REPORT_NAV_KEYS: tuple[str, ...] = (
+    "nav_academic_reports_section",
+    "nav_performance_report",
+    "nav_electives_report",
+    "nav_registration_changes_report",
+    "nav_failed_courses_report",
+    "nav_not_registered_courses_report",
+    "nav_uncompleted_courses_report",
+    "nav_grade_course_mapping_audit",
+    "nav_analytics_report",
+)
+
+
+def _apply_academic_report_nav_caps(caps: dict, enabled: bool) -> None:
+    for key in _ACADEMIC_REPORT_NAV_KEYS:
+        caps[key] = bool(enabled)
+
 
 def compute_capabilities(
     user_role: str | None,
@@ -141,6 +158,7 @@ def compute_capabilities(
             "nav_planning_student_view": False,
             "can_switch_department_scope": False,
         }
+        _apply_academic_report_nav_caps(hod_caps, hod_mode == "head")
         if hod_mode == "supervisor":
             from backend.core.permissions import apply_supervisor_portal_caps
             apply_supervisor_portal_caps(hod_caps)
@@ -230,6 +248,7 @@ def compute_capabilities(
         "can_transfer_student_department": role in ("admin", "admin_main", "college_dean", "academic_vice_dean", "system_admin"),
         "can_rename_student_id": role in ("admin", "admin_main", "college_dean", "academic_vice_dean", "system_admin"),
     }
+    _apply_academic_report_nav_caps(base_caps, staff_planning and role != "student")
     if role == "college_dean":
         base_caps["nav_surveys_invites"] = True
         base_caps["can_manage_survey_invites"] = True
