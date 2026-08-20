@@ -22,8 +22,11 @@ from flask import Blueprint, jsonify, request, send_file, session
 
 from backend.core.auth import login_required, role_required
 from backend.core.department_scope_policy import (
-    assert_hod_for_course_operation,
-    hod_may_operate_on_course,
+    actor_bypasses_course_department_guard,
+    course_in_actor_scope,
+    course_is_college_general,
+    course_is_college_shared_catalog,
+    course_writable_by_actor,
     resolve_effective_department_scope_id,
 )
 from backend.database.database import fetch_table_columns, is_postgresql, table_exists
@@ -979,33 +982,184 @@ def _normalize_course(name: str) -> str:
     return (name or "").strip()
 
 
+KIND_DEPT = "department"
+KIND_SHARED = "shared"
+KIND_GENERAL = "college_general"
+KIND_LABELS = {
+    KIND_DEPT: "قسم",
+    KIND_SHARED: "مشترك",
+    KIND_GENERAL: "اتجاه عام",
+}
+
+
+def _cell(row, idx: int = 0, key: str | None = None):
+    if row is None:
+        return None
+    if key and hasattr(row, "keys"):
+        try:
+            return row[key]
+        except (KeyError, TypeError):
+            pass
+    try:
+        return row[idx]
+    except (IndexError, KeyError, TypeError):
+        return None
+
+
+def _course_page_kind(conn, course_name: str, department_id: int | None = None) -> str:
+    cn = _normalize_course(course_name)
+    if course_is_college_shared_catalog(conn, cn, department_id=department_id):
+        return KIND_SHARED
+    if course_is_college_general(conn, cn):
+        return KIND_GENERAL
+    return KIND_DEPT
+
+
+def _add_course_name(names: set[str], raw) -> None:
+    n = str(raw or "").strip()
+    if n:
+        names.add(n)
+
+
+def _collect_hod_board_course_names(conn, *, department_id: int | None) -> set[str]:
+    """خطة القسم + عرض الفصل + مجموعات التدريس + الصفحات الموجودة + المشتركة الظاهرة."""
+    cur = conn.cursor()
+    names: set[str] = set()
+    dep = int(department_id) if department_id is not None else None
+
+    def _run(sql: str, params: tuple = ()) -> None:
+        try:
+            for r in cur.execute(sql, params).fetchall() or []:
+                _add_course_name(names, _cell(r, 0))
+        except Exception:
+            pass
+
+    if table_exists(conn, "course_catalog_pages"):
+        _run("SELECT course_name FROM course_catalog_pages")
+
+    if table_exists(conn, "courses"):
+        cols = set(fetch_table_columns(conn, "courses") or [])
+        if dep is not None and "owning_department_id" in cols:
+            _run(
+                "SELECT course_name FROM courses WHERE owning_department_id = ?",
+                (dep,),
+            )
+
+    if dep is not None and table_exists(conn, "program_courses") and table_exists(conn, "programs"):
+        _run(
+            """
+            SELECT COALESCE(
+                NULLIF(TRIM(pc.course_name_override), ''),
+                NULLIF(TRIM(cm.title_ar), ''),
+                c.course_name
+            )
+            FROM program_courses pc
+            INNER JOIN programs p ON p.id = pc.program_id
+            LEFT JOIN course_master cm ON cm.id = pc.course_master_id
+            LEFT JOIN courses c ON (
+                (c.course_master_id IS NOT NULL AND c.course_master_id = pc.course_master_id)
+                OR lower(trim(COALESCE(c.course_code, ''))) = lower(trim(COALESCE(pc.course_code, '')))
+            )
+            WHERE p.department_id = ?
+              AND COALESCE(pc.is_active, 1) = 1
+            """,
+            (dep,),
+        )
+
+    if table_exists(conn, "teaching_groups"):
+        if dep is not None:
+            _run(
+                """
+                SELECT DISTINCT course_name FROM teaching_groups
+                WHERE COALESCE(is_active, 1) = 1 AND department_id = ?
+                """,
+                (dep,),
+            )
+        else:
+            _run(
+                "SELECT DISTINCT course_name FROM teaching_groups WHERE COALESCE(is_active, 1) = 1"
+            )
+
+    if table_exists(conn, "schedule"):
+        sch_cols = set(fetch_table_columns(conn, "schedule") or [])
+        if "department_id" in sch_cols and dep is not None:
+            _run(
+                "SELECT DISTINCT course_name FROM schedule WHERE department_id = ?",
+                (dep,),
+            )
+        elif dep is None:
+            _run("SELECT DISTINCT course_name FROM schedule")
+
+    if table_exists(conn, "term_course_offerings"):
+        try:
+            from backend.services.term_engine import parse_ops_term
+
+            tname, tyear = get_current_term(conn=conn)
+            parsed = parse_ops_term(tname, tyear) or {}
+            term_key = (parsed.get("term_key") or "").strip()
+            if term_key:
+                if dep is not None:
+                    _run(
+                        """
+                        SELECT DISTINCT course_name FROM term_course_offerings
+                        WHERE term_key = ? AND department_id = ?
+                          AND COALESCE(status, 'offered') <> 'cancelled'
+                        """,
+                        (term_key, dep),
+                    )
+                else:
+                    _run(
+                        """
+                        SELECT DISTINCT course_name FROM term_course_offerings
+                        WHERE term_key = ?
+                          AND COALESCE(status, 'offered') <> 'cancelled'
+                        """,
+                        (term_key,),
+                    )
+        except Exception:
+            pass
+
+    if table_exists(conn, "college_shared_catalog"):
+        try:
+            rows = cur.execute(
+                """
+                SELECT canonical_course_name FROM college_shared_catalog
+                WHERE COALESCE(is_active, 1) = 1
+                """
+            ).fetchall() or []
+            for r in rows:
+                cn = str(_cell(r, 0, "canonical_course_name") or "").strip()
+                if not cn:
+                    continue
+                if dep is None or course_is_college_shared_catalog(conn, cn, department_id=dep):
+                    names.add(cn)
+        except Exception:
+            pass
+
+    return names
+
+
+def _hod_can_manage_catalog(conn, course_name: str) -> bool:
+    """تثبيت المحتوى واعتماد التعديل لمالك المقرر فقط (أو إدارة الكلية)."""
+    uname = _username()
+    if actor_bypasses_course_department_guard(conn, uname):
+        return True
+    try:
+        return bool(course_writable_by_actor(conn, course_name, uname))
+    except Exception:
+        return False
+
+
 def _can_edit_lockable(conn, course_name: str, field: str, status: str) -> tuple[bool, str]:
     """هل يمكن تعديل حقل قابل للقفل؟"""
     if field not in LOCKABLE_FIELDS:
         return False, "حقل غير معروف"
     if status == STATUS_LOCKED:
-        if _is_hod_or_admin():
-            try:
-                assert_hod_for_course_operation(conn, _username(), course_name)
-                return True, ""
-            except Exception as exc:
-                return False, str(exc) or "غير مصرح لرئيس القسم"
-        return False, "الحقل مثبت — يعدّله رئيس القسم فقط (أو أرسل طلب تعديل)"
-    # empty أو draft: أستاذ مكلّف أو رئيس قسم
-    if _is_hod_or_admin():
-        try:
-            if hod_may_operate_on_course(conn, _username(), course_name):
-                return True, ""
-        except Exception:
-            pass
-        if session.get("user_role") in (
-            "admin_main",
-            "admin",
-            "system_admin",
-            "college_dean",
-            "academic_vice_dean",
-        ):
+        if _is_hod_or_admin() and _hod_can_manage_catalog(conn, course_name):
             return True, ""
+        return False, "الحقل مثبت — يعدّله مالك المقرر فقط (أو أرسل طلب تعديل)"
+    if _is_hod_or_admin() and _hod_can_manage_catalog(conn, course_name):
+        return True, ""
     iid = _session_instructor_id()
     if iid and _instructor_assigned_to_course(conn, iid, course_name):
         return True, ""
@@ -1120,6 +1274,29 @@ def _get_or_create_catalog(conn, course_name: str) -> dict:
         (cn,),
     ).fetchone()
     return _serialize_catalog(_row_dict(row))
+
+
+def _board_field_status(conn, course_name: str) -> dict:
+    cn = _normalize_course(course_name)
+    empty = {f: STATUS_EMPTY for f in LOCKABLE_FIELDS}
+    if not cn or not table_exists(conn, "course_catalog_pages"):
+        return empty
+    row = conn.cursor().execute(
+        """
+        SELECT objectives_status, outcomes_status, topics_status
+        FROM course_catalog_pages
+        WHERE lower(trim(course_name)) = lower(trim(?))
+        LIMIT 1
+        """,
+        (cn,),
+    ).fetchone()
+    if not row:
+        return empty
+    return {
+        "objectives": (_cell(row, 0, "objectives_status") or STATUS_EMPTY),
+        "outcomes": (_cell(row, 1, "outcomes_status") or STATUS_EMPTY),
+        "topics": (_cell(row, 2, "topics_status") or STATUS_EMPTY),
+    }
 
 
 def _serialize_catalog(d: dict) -> dict:
@@ -1504,6 +1681,9 @@ def api_catalog_get():
             can_map[f] = ok
         catalog["can_edit"] = can_map
         catalog["is_hod"] = _is_hod_or_admin()
+        catalog["can_manage"] = _hod_can_manage_catalog(conn, course_name) if _is_hod_or_admin() else False
+        catalog["ownership_kind"] = _course_page_kind(conn, course_name)
+        catalog["catalog_readonly"] = bool(_is_hod_or_admin() and not catalog["can_manage"])
         return jsonify({"status": "ok", "catalog": catalog})
 
 
@@ -2983,39 +3163,31 @@ def api_hod_board():
     with get_connection() as conn:
         ensure_course_pages_schema(conn)
         cur = conn.cursor()
-        # courses from teaching groups / catalog / baselines
-        names: set[str] = set()
-        if table_exists(conn, "teaching_groups"):
-            for r in cur.execute(
-                "SELECT DISTINCT course_name FROM teaching_groups WHERE COALESCE(is_active,1)=1"
-            ).fetchall() or []:
-                n = (r[0] if not hasattr(r, "keys") else r["course_name"]) or ""
-                if n.strip():
-                    names.add(n.strip())
-        for r in cur.execute("SELECT course_name FROM course_catalog_pages").fetchall() or []:
-            n = (r[0] if not hasattr(r, "keys") else r["course_name"]) or ""
-            if n.strip():
-                names.add(n.strip())
         uname = _username()
         scope = resolve_effective_department_scope_id(conn, uname)
+        college_wide = actor_bypasses_course_department_guard(conn, uname)
+        names = _collect_hod_board_course_names(conn, department_id=None if college_wide else scope)
         items = []
         for cn in sorted(names, key=lambda x: x.lower()):
-            if scope is not None and not _is_hod_or_admin():
-                pass
-            try:
-                if not hod_may_operate_on_course(conn, uname, cn) and session.get("user_role") == "head_of_department":
+            if not college_wide:
+                try:
+                    if not course_in_actor_scope(conn, cn, uname):
+                        continue
+                except Exception:
                     continue
-            except Exception:
-                if session.get("user_role") == "head_of_department":
-                    continue
-            cat = _get_or_create_catalog(conn, cn)
-            fs = cat.get("field_status") or {}
+            cat_fs = _board_field_status(conn, cn)
+            fs = cat_fs
             missing = [f for f in LOCKABLE_FIELDS if (fs.get(f) or STATUS_EMPTY) == STATUS_EMPTY]
             draft = [f for f in LOCKABLE_FIELDS if (fs.get(f) or "") == STATUS_DRAFT]
             locked = [f for f in LOCKABLE_FIELDS if (fs.get(f) or "") == STATUS_LOCKED]
+            kind = _course_page_kind(conn, cn, scope)
+            can_manage = _hod_can_manage_catalog(conn, cn)
             items.append(
                 {
                     "course_name": cn,
+                    "kind": kind,
+                    "kind_label": KIND_LABELS.get(kind, kind),
+                    "can_manage": can_manage,
                     "field_status": fs,
                     "missing": missing,
                     "draft": draft,
@@ -3034,13 +3206,14 @@ def api_hod_board():
         for r in pending or []:
             d = _row_dict(r)
             d["proposed"] = _json_list(d.pop("proposed_json", None))
-            try:
-                if session.get("user_role") == "head_of_department" and not hod_may_operate_on_course(
-                    conn, uname, d.get("course_name") or ""
-                ):
+            cn = d.get("course_name") or ""
+            if not college_wide:
+                try:
+                    if not course_in_actor_scope(conn, cn, uname):
+                        continue
+                except Exception:
                     continue
-            except Exception:
-                continue
+            d["can_review"] = _hod_can_manage_catalog(conn, cn)
             reqs.append(d)
         return jsonify({"status": "ok", "courses": items, "change_requests": reqs})
 
@@ -3066,11 +3239,11 @@ def api_hod_review_request(rid: int):
         if d.get("status") != "pending":
             return jsonify({"status": "error", "message": "الطلب ليس معلقاً"}), 400
         cn = d.get("course_name") or ""
-        try:
-            assert_hod_for_course_operation(conn, _username(), cn)
-        except Exception as exc:
-            if session.get("user_role") == "head_of_department":
-                return jsonify({"status": "error", "message": str(exc)}), 403
+        if not _hod_can_manage_catalog(conn, cn):
+            return jsonify({
+                "status": "error",
+                "message": "اعتماد التعديل لمالك المقرر فقط (قسم التخصص، أو الاتجاه العام/الكلية للمقررات المشتركة).",
+            }), 403
         note = (data.get("review_note") or "").strip()
         if action == "approve":
             catalog = _get_or_create_catalog(conn, cn)

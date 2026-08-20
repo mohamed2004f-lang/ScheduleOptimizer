@@ -503,10 +503,10 @@ class StudentService:
             raise DatabaseError(f"فشل تحديث بيانات الطالب: {str(e)}")
 
     @staticmethod
-    def _clear_registration_state_for_suspend(conn, cur, student_id: str) -> Dict[str, Any]:
+    def _clear_operational_registration_state(conn, cur, student_id: str) -> Dict[str, Any]:
         """
-        سياسة إيقاف القيد: الطالب يُعامل كغير مسجّل في المقررات (لا يبقى له تسجيل فعلي)،
-        مع بقائه في سجل الكلية. تُفرَّغ جدول التسجيلات الفعلية ويُزال توقيع الفصل الحالي إن وُجد.
+        إزالة التسجيلات الفعلية وتوقيع الفصل الحالي.
+        يُستخدم عند إيقاف القيد أو التحويل إلى خريج (الطالب لم يعد في التشغيل الفصلي).
         """
         row = cur.execute(
             "SELECT COUNT(*) AS c FROM registrations WHERE student_id = ?",
@@ -539,12 +539,49 @@ class StudentService:
                 sig_rows = int(cur.rowcount or 0)
             except Exception:
                 pass
+        archived_plans = 0
+        cancelled_requests = 0
+        now = datetime.utcnow().isoformat()
+        try:
+            cur.execute(
+                """
+                UPDATE enrollment_plans
+                SET status = 'Archived', updated_at = ?
+                WHERE student_id = ? AND status IN ('Pending', 'Draft')
+                """,
+                (now, student_id),
+            )
+            archived_plans = int(cur.rowcount or 0)
+        except Exception:
+            pass
+        try:
+            cur.execute(
+                """
+                UPDATE registration_requests
+                SET status = 'cancelled'
+                WHERE student_id = ? AND LOWER(COALESCE(status, '')) = 'pending'
+                """,
+                (student_id,),
+            )
+            cancelled_requests = int(cur.rowcount or 0)
+        except Exception:
+            pass
         return {
+            "cleared_registration_rows": n_before,
+            "cleared_signature_term": term_label or None,
+            "cleared_signature_events": sig_events,
+            "cleared_signature_rows": sig_rows,
+            "archived_open_plans": archived_plans,
+            "cancelled_pending_requests": cancelled_requests,
             "suspension_cleared_registration_rows": n_before,
             "suspension_cleared_signature_term": term_label or None,
             "suspension_cleared_signature_events": sig_events,
             "suspension_cleared_signature_rows": sig_rows,
         }
+
+    @staticmethod
+    def _clear_registration_state_for_suspend(conn, cur, student_id: str) -> Dict[str, Any]:
+        return StudentService._clear_operational_registration_state(conn, cur, student_id)
 
     @staticmethod
     def update_enrollment_status(
@@ -557,8 +594,8 @@ class StudentService:
         """
         تحديث حالة قيد الطالب (مسجَّل، سحب الملف، موقوف قيده، خريج).
 
-        عند ``suspended`` تُزال تلقائياً كل التسجيلات الفعلية (جدول registrations)
-        وتُحذف سجلات التوقيع للفصل الحالي إن وُجدت، بما يتوافق مع اعتبار الطالب غير مسجّل بالمقررات.
+        عند ``suspended`` أو ``graduated`` تُزال التسجيلات الفعلية وتُؤرشف الخطط المفتوحة،
+        لأن الطالب لم يعد في التشغيل الفصلي.
         """
         sid = normalize_student_id(student_id)
         if not sid:
@@ -638,13 +675,25 @@ class StudentService:
                     "student_id": sid,
                     "enrollment_status": status,
                 }
-                if status == "suspended":
-                    extra = StudentService._clear_registration_state_for_suspend(conn, cur, sid)
+                if status in ("suspended", "graduated"):
+                    extra = StudentService._clear_operational_registration_state(conn, cur, sid)
                     result.update(extra)
-                    result["message"] += (
-                        " — أُلغيت التسجيلات الفعلية للمقررات (يُعامل الطالب كغير مسجّل بها)؛ "
-                        "يمكنه التسجيل من جديد بعد إعادة تنشيط القيد."
-                    )
+                    if status == "suspended":
+                        result["message"] += (
+                            " — أُلغيت التسجيلات الفعلية للمقررات (يُعامل الطالب كغير مسجّل بها)؛ "
+                            "يمكنه التسجيل من جديد بعد إعادة تنشيط القيد."
+                        )
+                    else:
+                        result["message"] += (
+                            " — أُغلق التشغيل الفصلي: أُزيلت التسجيلات الحالية وأُرشفت الخطط المعلّقة. "
+                            "السجل الأكاديمي والكشف يبقيان للرجوع إليهما."
+                        )
+                try:
+                    from backend.core.cache_setup import invalidate_list_prefix
+
+                    invalidate_list_prefix("students")
+                except Exception:
+                    pass
                 return result
         except NotFoundError:
             raise

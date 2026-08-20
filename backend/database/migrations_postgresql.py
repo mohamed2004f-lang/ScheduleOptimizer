@@ -640,7 +640,7 @@ def _ensure_tables_postgresql() -> None:
                     approved_by TEXT,
                     review_note TEXT DEFAULT '',
                     CONSTRAINT course_closure_status_chk
-                        CHECK (status IN ('draft', 'submitted', 'approved', 'rejected')),
+                        CHECK (status IN ('draft', 'submitted', 'approved', 'rejected', 'admin_closed')),
                     UNIQUE (section_id, instructor_id, semester)
                 )
                 """
@@ -1327,4 +1327,15 @@ def _ensure_tables_postgresql() -> None:
                 migrate_legacy_admin_to_system(conn, None)
         except Exception as e:
             logger.warning("role profiles seed (postgresql): %s", e)
+        try:
+            from backend.services.course_closure_admin import ensure_admin_closed_status_allowed
+
+            ensure_admin_closed_status_allowed(conn)
+            conn.commit()
+        except Exception as e:
+            logger.warning("admin_closed status constraint (postgresql): %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
     logger.info("PostgreSQL compatibility migrations applied")

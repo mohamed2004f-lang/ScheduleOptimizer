@@ -290,7 +290,7 @@ def _binding_fulfillment_status(
                 params.append(int(department_id))
             try:
                 row = cur.execute(
-                    f"SELECT COUNT(*) FROM course_closure_reports c WHERE c.semester = ? AND {dept_clause}",
+                    f"SELECT COUNT(*) FROM course_closure_reports c WHERE c.semester = ? AND c.status IN ('submitted', 'approved') AND {dept_clause}",
                     tuple(params),
                 ).fetchone()
                 if int(row[0] if row else 0) > 0:

@@ -434,3 +434,24 @@ def test_alumni_incomplete_answers_rejected(db_conn):
             profile=_alumni_base_profile(dept_id),
             answers_payload={"answers": {}},
         )
+
+
+def test_deactivate_invites_for_cycle_stops_validate(db_conn):
+    from backend.services.survey_invites import deactivate_invites_for_cycle
+
+    ensure_survey_invite_schema(db_conn)
+    ensure_survey_templates_seeded(db_conn)
+    invite = create_survey_invite(
+        db_conn,
+        template_code="alumni",
+        cycle_label="دورة-إغلاق-اختبار",
+        invite_kind="campaign",
+        created_by="test",
+    )
+    db_conn.commit()
+    validate_invite(db_conn, invite["token"])
+    n = deactivate_invites_for_cycle(db_conn, "دورة-إغلاق-اختبار")
+    db_conn.commit()
+    assert n >= 1
+    with pytest.raises(ValueError, match="انتهت صلاحية"):
+        validate_invite(db_conn, invite["token"])

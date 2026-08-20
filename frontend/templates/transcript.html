@@ -426,7 +426,7 @@ async function loadStudents(){
   }
 
   // استخدم المسار الحقيقي مباشرة لتفادي مشاكل إعادة التوجيه 302 مع fetch
-  const r = await fetchJSON('/students/list');
+  const r = await fetchJSON('/students/list?include_inactive=1');
   console.debug('loadStudents response:', r);
   const sel = document.getElementById('studentSelect');
   if(!sel) return;

@@ -13,7 +13,7 @@
   <div class="page-header d-flex justify-content-between align-items-start flex-wrap gap-2">
     <div>
       <h1 class="page-title">صفحات المقررات</h1>
-      <p class="page-subtitle">اكتمال الأهداف والمخرجات والمفردات · طلبات التعديل</p>
+      <p class="page-subtitle">اكتمال الأهداف والمخرجات والمفردات · طلبات التعديل — يشمل خطة القسم والمشتركة (عرض) مع اعتماد المالك فقط</p>
     </div>
     <a class="btn btn-outline-secondary btn-sm" href="/course_delivery_hod_page">← اعتماد التنفيذ</a>
   </div>
@@ -25,10 +25,10 @@
   </div>
 
   <div class="card d-none" id="boardCard">
-    <div class="card-header fw-semibold">مقررات القسم</div>
+    <div class="card-header fw-semibold">مقررات القسم والخطة والمشتركة الظاهرة</div>
     <div class="table-responsive">
       <table class="table table-sm align-middle mb-0">
-        <thead><tr><th>المقرر</th><th>الأهداف</th><th>المخرجات</th><th>المفردات</th><th>الاكتمال</th><th></th></tr></thead>
+        <thead><tr><th>المقرر</th><th>النوع</th><th>الأهداف</th><th>المخرجات</th><th>المفردات</th><th>الاكتمال</th><th></th></tr></thead>
         <tbody id="boardBody"></tbody>
       </table>
     </div>
@@ -52,6 +52,12 @@
     return h;
   }
   function esc(s){ return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  const KIND_LABEL = {department:'قسم', shared:'مشترك', college_general:'اتجاه عام'};
+  function kindBadge(kind, label){
+    const k = kind || '';
+    const cls = k === 'shared' ? 'bg-info text-dark' : k === 'college_general' ? 'bg-primary' : 'bg-secondary';
+    return '<span class="badge ' + cls + '">' + esc(label || KIND_LABEL[k] || 'قسم') + '</span>';
+  }
   function stBadge(st){
     if (st === 'locked') return '<span class="badge bg-success">مثبت</span>';
     if (st === 'draft') return '<span class="badge bg-warning text-dark">مسودة</span>';
@@ -74,11 +80,15 @@
         '<div class="border rounded p-2 mb-2">' +
         '<div class="d-flex justify-content-between flex-wrap gap-2">' +
         '<div><strong>'+esc(rq.course_name)+'</strong> — حقل <code>'+esc(rq.field_name)+'</code>' +
-        '<div class="small text-muted">من: '+esc(rq.requested_by||'')+' · '+esc(rq.note||'')+'</div></div>' +
+        '<div class="small text-muted">من: '+esc(rq.requested_by||'')+' · '+esc(rq.note||'')+'</div>' +
+        (rq.can_review === false ? '<div class="small text-muted">يُراجع من مالك المقرر (اتجاه عام/كلية للم مشتركة).</div>' : '') +
+        '</div>' +
+        (rq.can_review === false ? '<span class="badge bg-light text-muted">عرض فقط</span>' :
         '<div class="d-flex gap-1">' +
         '<button type="button" class="btn btn-sm btn-success req-act" data-id="'+rq.id+'" data-act="approve">اعتماد</button>' +
         '<button type="button" class="btn btn-sm btn-outline-danger req-act" data-id="'+rq.id+'" data-act="reject">رفض</button>' +
-        '</div></div></div>'
+        '</div>') +
+        '</div></div>'
       ).join('');
       document.querySelectorAll('.req-act').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -98,13 +108,14 @@
       const fs = c.field_status || {};
       return '<tr>' +
         '<td>'+esc(c.course_name)+'</td>' +
+        '<td>'+kindBadge(c.kind, c.kind_label)+(c.can_manage ? '' : ' <span class="small text-muted">عرض</span>')+'</td>' +
         '<td>'+stBadge(fs.objectives)+'</td>' +
         '<td>'+stBadge(fs.outcomes)+'</td>' +
         '<td>'+stBadge(fs.topics)+'</td>' +
         '<td><div class="progress" style="height:6px;min-width:80px"><div class="progress-bar" style="width:'+c.completeness+'%"></div></div> '+c.completeness+'%</td>' +
         '<td><a class="btn btn-sm btn-outline-primary" href="/course_page?course_name='+encodeURIComponent(c.course_name)+'">فتح</a></td>' +
         '</tr>';
-    }).join('') || '<tr><td colspan="6" class="text-muted">لا مقررات.</td></tr>';
+    }).join('') || '<tr><td colspan="7" class="text-muted">لا مقررات.</td></tr>';
   }
   load();
 })();

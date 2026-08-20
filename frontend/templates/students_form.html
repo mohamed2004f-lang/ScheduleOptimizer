@@ -91,8 +91,8 @@
             <div class="col-md-3">
               <label class="form-label small mb-0">من يُعرض في القائمة</label>
               <select id="filter_list_scope" class="form-select form-select-sm" title="فلترة حسب حالة القيد؛ التصدير يطابق نفس الفلتر">
-                <option value="all" selected>الكل — كل حالات القيد</option>
-                <option value="active_only">مسجّلون فقط</option>
+                <option value="active_only" selected>مسجّلون فقط</option>
+                <option value="all">الكل — كل حالات القيد (أرشيف)</option>
                 <option value="suspended">موقوفو القيد فقط</option>
                 <option value="withdrawn">سحب الملف فقط</option>
                 <option value="graduated">خريجون فقط</option>
@@ -608,11 +608,12 @@
   }
   function buildStudentsQueryParams() {
     const scopeEl = document.getElementById('filter_list_scope');
-    const scope = scopeEl ? scopeEl.value : 'all';
+    const scope = scopeEl ? scopeEl.value : 'active_only';
     const joinTerm = (document.getElementById('filter_join_term')||{}).value || '';
     const joinYear = (document.getElementById('filter_join_year')||{}).value || '';
     const params = new URLSearchParams();
-    if (scope === 'active_only') params.set('active_only', '1');
+    if (scope === 'all') params.set('include_inactive', '1');
+    else if (scope === 'active_only' || !scope) params.set('active_only', '1');
     else if (['suspended', 'withdrawn', 'graduated'].includes(scope)) params.set('enrollment_status', scope);
     if (joinTerm) params.set('join_term', joinTerm);
     if (joinYear) params.set('join_year', joinYear);

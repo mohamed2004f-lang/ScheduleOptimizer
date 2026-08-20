@@ -50,6 +50,8 @@ def _student_row(conn, sid: str) -> dict | None:
         extra += ", s.current_program_id"
     if "admission_program_id" in cols:
         extra += ", s.admission_program_id"
+    if "enrollment_status" in cols:
+        extra += ", COALESCE(s.enrollment_status, 'active') AS enrollment_status"
     row = cur.execute(
         f"""
         SELECT s.student_id, COALESCE(s.student_name,'') AS student_name,
@@ -237,10 +239,13 @@ def _upcoming_exams_count(conn, sid: str) -> int:
 
 
 def build_portal_summary(conn, sid: str) -> dict[str, Any]:
+    from backend.core.enrollment_status_policy import is_alumni_enrollment, normalize_enrollment_status
+
     stu = _student_row(conn, sid) or {}
+    alumni = is_alumni_enrollment(stu.get("enrollment_status"))
     term_name, term_year, term_label = _current_term_label(conn)
     regs = _registrations_summary(conn, sid, term_label)
-    plan = _enrollment_plan_status(conn, sid, term_label)
+    plan = {} if alumni else _enrollment_plan_status(conn, sid, term_label)
     gpa = None
     completed_units = None
     try:
@@ -251,8 +256,8 @@ def build_portal_summary(conn, sid: str) -> dict[str, Any]:
     except Exception:
         pass
     sem = term_label_from_conn(conn)
-    eval_pending = list_pending_course_evaluations(conn, sid, semester=sem)
-    surveys_pending = list_pending_for_user(
+    eval_pending = [] if alumni else list_pending_course_evaluations(conn, sid, semester=sem)
+    surveys_pending = [] if alumni else list_pending_for_user(
         conn,
         user_role="student",
         session_data=dict(session),
@@ -265,48 +270,49 @@ def build_portal_summary(conn, sid: str) -> dict[str, Any]:
     exam_pub = get_exam_schedule_published_at("midterm", conn=conn) or get_exam_schedule_published_at("final", conn=conn)
 
     action_items: list[dict] = []
-    for ev in eval_pending[:5]:
-        action_items.append({
-            "type": "course_eval_pending",
-            "tab": "quality",
-            "focus": "evaluations",
-            "course": ev.get("course_name") or "",
-            "message": ev.get("title_ar") or "تقييم مقرر معلّق",
-            "href": ev.get("fill_url") or "/students/evaluations/",
-        })
-    for sv in surveys_pending[:5]:
-        action_items.append({
-            "type": "survey_pending",
-            "tab": "quality",
-            "focus": "surveys",
-            "course": "",
-            "message": sv.get("title_ar") or "استبيان معلّق",
-            "href": sv.get("fill_url") or "/academic_quality/surveys",
-        })
-    if plan.get("status") == "Rejected":
-        action_items.append({
-            "type": "plan_rejected",
-            "tab": "registrations",
-            "focus": "plan",
-            "message": "خطة التسجيل مرفوضة — راجع السبب وعدّلها",
-            "href": "/my_registrations?focus=plan",
-        })
-    elif plan.get("status") == "Draft":
-        action_items.append({
-            "type": "plan_draft",
-            "tab": "registrations",
-            "focus": "plan",
-            "message": "لديك مسودة خطة تسجيل — أكملها وأرسلها",
-            "href": "/my_registrations?focus=plan",
-        })
-    for c in conflicts[:3]:
-        action_items.append({
-            "type": "schedule_conflict",
-            "tab": "registrations",
-            "focus": "conflicts",
-            "message": f"تعارض جدول: {c.get('day')} {c.get('time')}",
-            "href": "/my_registrations?tab=conflicts",
-        })
+    if not alumni:
+        for ev in eval_pending[:5]:
+            action_items.append({
+                "type": "course_eval_pending",
+                "tab": "quality",
+                "focus": "evaluations",
+                "course": ev.get("course_name") or "",
+                "message": ev.get("title_ar") or "تقييم مقرر معلّق",
+                "href": ev.get("fill_url") or "/students/evaluations/",
+            })
+        for sv in surveys_pending[:5]:
+            action_items.append({
+                "type": "survey_pending",
+                "tab": "quality",
+                "focus": "surveys",
+                "course": "",
+                "message": sv.get("title_ar") or "استبيان معلّق",
+                "href": sv.get("fill_url") or "/academic_quality/surveys",
+            })
+        if plan.get("status") == "Rejected":
+            action_items.append({
+                "type": "plan_rejected",
+                "tab": "registrations",
+                "focus": "plan",
+                "message": "خطة التسجيل مرفوضة — راجع السبب وعدّلها",
+                "href": "/my_registrations?focus=plan",
+            })
+        elif plan.get("status") == "Draft":
+            action_items.append({
+                "type": "plan_draft",
+                "tab": "registrations",
+                "focus": "plan",
+                "message": "لديك مسودة خطة تسجيل — أكملها وأرسلها",
+                "href": "/my_registrations?focus=plan",
+            })
+        for c in conflicts[:3]:
+            action_items.append({
+                "type": "schedule_conflict",
+                "tab": "registrations",
+                "focus": "conflicts",
+                "message": f"تعارض جدول: {c.get('day')} {c.get('time')}",
+                "href": "/my_registrations?tab=conflicts",
+            })
     if stu.get("program_id") or stu.get("department_id"):
         action_items.append({
             "type": "identity_read",
@@ -324,6 +330,8 @@ def build_portal_summary(conn, sid: str) -> dict[str, Any]:
         "department_name": stu.get("department_name") or "",
         "program_id": stu.get("program_id"),
         "program_name": stu.get("program_name") or "",
+        "enrollment_status": normalize_enrollment_status(stu.get("enrollment_status")),
+        "alumni_mode": alumni,
         "term_label": term_label,
         "term_name": term_name,
         "term_year": term_year,

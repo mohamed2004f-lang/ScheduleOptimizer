@@ -158,7 +158,10 @@ def _avg_ilo(conn, cur, semester: str, department_id: int | None = None) -> floa
         f"""
         SELECT AVG(c.ilo_achievement_percent)
         FROM course_closure_reports c
-        WHERE c.semester = ? AND c.ilo_achievement_percent IS NOT NULL {dept_sql}
+        WHERE c.semester = ?
+          AND c.ilo_achievement_percent IS NOT NULL
+          AND c.status IN ('submitted', 'approved')
+          {dept_sql}
         """,
         tuple(params),
     ).fetchone()
@@ -392,7 +395,10 @@ def list_critical_courses(conn, semester: str, department_id: int | None = None,
         FROM course_closure_reports c
         JOIN schedule sch ON sch.{pk} = c.section_id
         LEFT JOIN instructors i ON i.id = c.instructor_id
-        WHERE c.semester = ? AND COALESCE(c.student_failure_rate, 0) >= ? {dept_sql}
+        WHERE c.semester = ?
+          AND COALESCE(c.student_failure_rate, 0) >= ?
+          AND c.status IN ('submitted', 'approved')
+          {dept_sql}
         ORDER BY c.student_failure_rate DESC
         LIMIT 50
         """,

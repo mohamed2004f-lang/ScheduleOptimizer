@@ -66,6 +66,15 @@ def create_request():
     if sid_session != student_id:
         return jsonify({"status": "error", "message": "لا يمكنك إنشاء طلب لطالب آخر"}), 403
 
+    from backend.core.enrollment_status_policy import is_operational_enrollment, lookup_student_enrollment_status
+
+    if not is_operational_enrollment(lookup_student_enrollment_status(student_id)):
+        return jsonify({
+            "status": "error",
+            "message": "لا يمكن إنشاء طلب إضافة/إسقاط لطالب غير مسجّل (خريج أو إيقاف قيد أو سحب ملف).",
+            "code": "ENROLLMENT_INACTIVE",
+        }), 400
+
     requested_by = _current_user()
 
     with get_connection() as conn:

@@ -1483,7 +1483,9 @@ def _setup_shared_db():
         "backend.core.monitoring",
         "backend.core.auth",
         "backend.core.mfa",
+        "backend.core.services",
         "backend.services.course_delivery",
+        "backend.services.course_pages",
     ]
     import importlib
     for mod_name in _modules_to_patch:

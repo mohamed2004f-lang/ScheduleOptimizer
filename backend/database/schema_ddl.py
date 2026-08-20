@@ -1016,7 +1016,7 @@ TABLES_SCHEMA = {
             improvement_notes TEXT DEFAULT '',
             reflection_text TEXT DEFAULT '',
             status TEXT NOT NULL DEFAULT 'draft'
-                CHECK (status IN ('draft', 'submitted', 'approved', 'rejected')),
+                CHECK (status IN ('draft', 'submitted', 'approved', 'rejected', 'admin_closed')),
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             created_by TEXT DEFAULT '',
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,

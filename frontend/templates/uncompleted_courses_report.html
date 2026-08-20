@@ -163,13 +163,13 @@
       // للمشرف: فقط الطلبة المسندين له
       const isSupervisor = (CURRENT_ROLE === 'supervisor') || (CURRENT_ROLE === 'instructor' && Number(auth.json?.is_supervisor || 0) === 1);
       if(isSupervisor){
-        const r = await fetchJSON('/instructors/supervised_students');
+        const r = await fetchJSON('/instructors/supervised_students?active_only=1');
         if(r.ok && r.json && Array.isArray(r.json.students)){
           STUDENTS = r.json.students;
         }
       } else {
         // للأدمن/رئيس القسم: كل الطلبة
-        const r = await fetchJSON('/students/list');
+        const r = await fetchJSON('/students/list?active_only=1');
         if(r.ok){
           // /students/list في مشروعك يرجع Array مباشرة
           if(Array.isArray(r.json)) STUDENTS = r.json;

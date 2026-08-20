@@ -64,6 +64,46 @@ _INSTRUCTOR_STUDENT_PORTAL_PREFIXES = (
 )
 
 
+_ALUMNI_ALLOWED_PREFIXES = (
+    "/my_portal",
+    "/my_transcript",
+    "/transcript_page",
+    "/students/me",
+    "/students/portal_summary",
+    "/students/academic_progress",
+    "/students/identity_context",
+    "/academic_quality/student/",
+    "/academic_quality/ilo/student/",
+    "/academic_quality/ilo/api/student/",
+    "/academic_quality/glossary",
+    "/academic_quality/surveys",
+    "/grades/transcript/",
+    "/grades/export/",
+    "/performance/status/",
+    "/auth/",
+    "/change_password",
+    "/mfa",
+    "/notifications",
+    "/api/v1/students/me",
+    "/static/",
+    "/health",
+    "/favicon",
+)
+
+
+def student_alumni_path_allowed(path: str) -> bool:
+    """مسارات بوابة الخريج: كشف ووثائق وتقدّم — بدون تشغيل فصلي."""
+    p = (path or "/").split("?")[0].rstrip("/") or "/"
+    if p in ("/", "/login", "/logout"):
+        return True
+    if any(p.startswith(b) for b in _STUDENT_SURVEY_BLOCKED):
+        return False
+    for prefix in _ALUMNI_ALLOWED_PREFIXES:
+        if p.startswith(prefix):
+            return True
+    return False
+
+
 def student_portal_path_allowed(path: str) -> bool:
     """مسارات مسموحة للطالب (صفحات + APIs). الباقي يُحجب."""
     p = (path or "/").split("?")[0].rstrip("/") or "/"
@@ -94,22 +134,41 @@ def register_student_route_guard(app) -> None:
         if role != "student":
             return None
         path = request.path or "/"
-        if student_portal_path_allowed(path):
-            return None
-        accept = (request.headers.get("Accept") or "").lower()
-        is_api = (
-            request.is_json
-            or "application/json" in accept
-            or path.startswith("/api/")
-            or request.headers.get("X-Requested-With") == "XMLHttpRequest"
-        )
-        if is_api:
-            return jsonify({
-                "status": "error",
-                "message": "غير مصرح — هذه الصفحة للموظفين فقط",
-                "code": "FORBIDDEN",
-            }), 403
-        return redirect(url_for("my_portal_page"))
+        if not student_portal_path_allowed(path):
+            accept = (request.headers.get("Accept") or "").lower()
+            is_api = (
+                request.is_json
+                or "application/json" in accept
+                or path.startswith("/api/")
+                or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+            )
+            if is_api:
+                return jsonify({
+                    "status": "error",
+                    "message": "غير مصرح — هذه الصفحة للموظفين فقط",
+                    "code": "FORBIDDEN",
+                }), 403
+            return redirect(url_for("my_portal_page"))
+        from backend.core.enrollment_status_policy import is_alumni_enrollment, lookup_student_enrollment_status
+
+        sid = (session.get("student_id") or session.get("user") or "").strip()
+        if sid and is_alumni_enrollment(lookup_student_enrollment_status(sid)):
+            if not student_alumni_path_allowed(path):
+                accept = (request.headers.get("Accept") or "").lower()
+                is_api = (
+                    request.is_json
+                    or "application/json" in accept
+                    or path.startswith("/api/")
+                    or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+                )
+                if is_api:
+                    return jsonify({
+                        "status": "error",
+                        "message": "حساب خريج — التشغيل الفصلي مغلق. يمكنك الاطلاع على كشف الدرجات والسجل الأكاديمي.",
+                        "code": "ALUMNI_READONLY",
+                    }), 403
+                return redirect(url_for("my_portal_page"))
+        return None
 
 
 def instructor_blocked_student_portal_path(path: str) -> bool:

@@ -1035,6 +1035,14 @@ def close_cycle_and_snapshot(
             evidence_result = None
 
     conn.commit()
+    invites_stopped = 0
+    try:
+        from backend.services.survey_invites import deactivate_invites_for_cycle
+
+        invites_stopped = deactivate_invites_for_cycle(conn, cycle)
+        conn.commit()
+    except Exception:
+        invites_stopped = 0
     closure = _get_closure_by_scope(conn, cycle, sk) or {}
     return {
         "status": "ok",
@@ -1042,6 +1050,7 @@ def close_cycle_and_snapshot(
         "scope_key": sk,
         "closure_id": closure_id,
         "snapshot_count": len(reports),
+        "invites_deactivated": invites_stopped,
         "closed_at": now,
         "archive_url": f"/academic_quality/surveys/archives/{archive_filename}",
         "compliance_map_url": f"/academic_quality/accreditation/map?cycle={cycle}",

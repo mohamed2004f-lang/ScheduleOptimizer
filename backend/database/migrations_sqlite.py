@@ -328,6 +328,13 @@ def ensure_sqlite_tables(db_file=None):
             logger.warning("Could not migrate course_closure_reports columns: %s", e)
 
         try:
+            from backend.services.course_closure_admin import ensure_admin_closed_status_allowed
+
+            ensure_admin_closed_status_allowed(conn)
+        except Exception as e:
+            logger.warning("Could not allow admin_closed on course_closure_reports: %s", e)
+
+        try:
             backfill_instructor_cross_department_data(conn)
         except Exception as e:
             logger.warning("backfill instructor cross-department (sqlite): %s", e)

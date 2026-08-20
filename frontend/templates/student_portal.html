@@ -27,6 +27,7 @@
         <h1 class="page-title mb-1">بوابتي</h1>
         <p class="page-subtitle mb-0" id="welcomeLine">جاري التحميل…</p>
         <p class="small text-muted mb-0 d-none" id="termLine"></p>
+        <div class="alert alert-info py-2 px-3 mt-2 mb-0 d-none" id="alumniBanner">حساب خريج — يمكنك الاطلاع على كشف الدرجات والسجل الأكاديمي. التسجيل الفصلي مغلق.</div>
       </div>
       <button type="button" class="btn btn-outline-secondary btn-sm" id="btnRefresh">تحديث</button>
     </div>
@@ -73,7 +74,7 @@
     </div>
   </main>
   <script>
-    const CACHE_KEY = 'stu_portal_v1';
+    const CACHE_KEY = 'stu_portal_v2';
     const CACHE_TTL = 5 * 60 * 1000;
     let G_SUMMARY = {};
 
@@ -97,22 +98,34 @@
     }
 
     function renderHubs(d) {
+      const alumni = !!d.alumni_mode;
       const qc = d.quality_counts || {};
-      const ac = [
-        { href:'/my_transcript', icon:'📄', label:'كشف الدرجات', badge:0 },
-        { href:'/my_registrations', icon:'📋', label:'تسجيلاتي', badge: d.enrollment_plan_status === 'Rejected' ? 1 : 0 },
-        { href:'/my_schedule', icon:'📅', label:'جدولي', badge:0 },
-        { href:'/my_exams', icon:'📝', label:'امتحاناتي', badge: d.exams_upcoming || 0 },
-        { href:'/my_announcements', icon:'📢', label:'إعلانات', badge: d.announcements_total || 0 },
-        { href:'/my_requests', icon:'✉', label:'طلباتي', badge:0 },
-      ];
-      const ql = [
-        { href:'/academic_quality/student/identity', icon:'🏛', label:'هويتي الأكاديمية', badge:0 },
-        { href:'/students/evaluations/', icon:'⭐', label:'تقييم المقررات', badge: qc.evaluations_pending || 0 },
-        { href:'/academic_quality/surveys', icon:'📊', label:'استبيانات', badge: qc.surveys_pending || 0 },
-        { href:'/academic_quality/ilo/student/learning-outcomes', icon:'🎯', label:'مخرجاتي', badge:0 },
-        { href:'/academic_quality/student/progress', icon:'📈', label:'تقدّمي', badge:0 },
-      ];
+      const ac = alumni
+        ? [
+            { href:'/my_transcript', icon:'📄', label:'كشف الدرجات', badge:0 },
+          ]
+        : [
+            { href:'/my_transcript', icon:'📄', label:'كشف الدرجات', badge:0 },
+            { href:'/my_registrations', icon:'📋', label:'تسجيلاتي', badge: d.enrollment_plan_status === 'Rejected' ? 1 : 0 },
+            { href:'/my_schedule', icon:'📅', label:'جدولي', badge:0 },
+            { href:'/my_exams', icon:'📝', label:'امتحاناتي', badge: d.exams_upcoming || 0 },
+            { href:'/my_announcements', icon:'📢', label:'إعلانات', badge: d.announcements_total || 0 },
+            { href:'/my_requests', icon:'✉', label:'طلباتي', badge:0 },
+          ];
+      const ql = alumni
+        ? [
+            { href:'/academic_quality/student/identity', icon:'🏛', label:'هويتي الأكاديمية', badge:0 },
+            { href:'/academic_quality/student/progress', icon:'📈', label:'تقدّمي', badge:0 },
+            { href:'/academic_quality/surveys', icon:'📊', label:'استبيانات', badge: 0 },
+            { href:'/academic_quality/glossary', icon:'📖', label:'دليل المصطلحات', badge:0 },
+          ]
+        : [
+            { href:'/academic_quality/student/identity', icon:'🏛', label:'هويتي الأكاديمية', badge:0 },
+            { href:'/students/evaluations/', icon:'⭐', label:'تقييم المقررات', badge: qc.evaluations_pending || 0 },
+            { href:'/academic_quality/surveys', icon:'📊', label:'استبيانات', badge: qc.surveys_pending || 0 },
+            { href:'/academic_quality/ilo/student/learning-outcomes', icon:'🎯', label:'مخرجاتي', badge:0 },
+            { href:'/academic_quality/student/progress', icon:'📈', label:'تقدّمي', badge:0 },
+          ];
       function tiles(arr, elId) {
         document.getElementById(elId).innerHTML = arr.map(t =>
           '<div class="col-4 col-md-2"><a class="hub-tile" href="' + t.href + '">' +
@@ -134,7 +147,17 @@
       document.getElementById('statRegs').textContent = d.registrations_count || 0;
       document.getElementById('statUnits').textContent = d.units_registered || 0;
       document.getElementById('statGpa').textContent = d.gpa != null ? d.gpa : '—';
-      document.getElementById('statPlan').textContent = planLabel(d.enrollment_plan_status);
+      const alumni = !!d.alumni_mode;
+      document.getElementById('statPlan').textContent = alumni ? 'خريج' : planLabel(d.enrollment_plan_status);
+      const alumniBanner = document.getElementById('alumniBanner');
+      if (alumniBanner) alumniBanner.classList.toggle('d-none', !alumni);
+      const weeklyCard = document.getElementById('weeklyWrap')?.closest('.card');
+      if (weeklyCard) weeklyCard.classList.toggle('d-none', alumni);
+      const statsBar = document.getElementById('statsBar');
+      if (alumni && statsBar) {
+        document.getElementById('statRegs').closest('.col-6')?.classList.add('d-none');
+        document.getElementById('statUnits').closest('.col-6')?.classList.add('d-none');
+      }
       renderHubs(d);
       const items = d.action_items || [];
       const ac = document.getElementById('actionCard');
@@ -174,7 +197,7 @@
     async function loadPortal(skipCache) {
       if (!skipCache) {
         const c = cacheGet();
-        if (c) { renderSummary(c); loadWeekly(); return; }
+        if (c) { renderSummary(c); if (!c.alumni_mode) loadWeekly(); return; }
       }
       try {
         const r = await fetch('/students/portal_summary', { credentials: 'include' });
@@ -182,7 +205,7 @@
         if (!r.ok) throw new Error(j.message || 'fail');
         cacheSet(j);
         renderSummary(j);
-        loadWeekly();
+        if (!j.alumni_mode) loadWeekly();
       } catch(e) {
         document.getElementById('welcomeLine').textContent = 'تعذر تحميل البوابة.';
         document.getElementById('loadSkeleton').classList.add('d-none');

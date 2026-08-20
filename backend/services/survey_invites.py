@@ -236,6 +236,17 @@ def create_survey_invite(
     cycle = (cycle_label or "").strip()
     if not cycle:
         raise ValueError("اسم الدورة مطلوب")
+    try:
+        from backend.services.survey_snapshots import is_cycle_closed
+
+        if is_cycle_closed(conn, cycle):
+            raise ValueError(
+                f"الدورة «{cycle}» مُغلقة. أنشئ دورة جديدة باسم مختلف (مثال: استشارة قطاع 2027)."
+            )
+    except ValueError:
+        raise
+    except Exception:
+        pass
     kind = (invite_kind or "campaign").strip().lower()
     if kind not in ("campaign", "personal"):
         raise ValueError("نوع الدعوة غير صالح")
@@ -408,6 +419,15 @@ def validate_invite(conn, token: str) -> dict:
         raise ValueError("رابط الدعوة غير صالح")
     if not int(invite.get("is_active") or 0):
         raise ValueError("انتهت صلاحية هذه الدعوة")
+    try:
+        from backend.services.survey_snapshots import is_cycle_closed
+
+        if is_cycle_closed(conn, invite.get("cycle_label") or ""):
+            raise ValueError("أُغلقت هذه الدورة ولم تعد تستقبل ردوداً")
+    except ValueError:
+        raise
+    except Exception:
+        pass
     expires = (invite.get("expires_at") or "").strip()
     if expires:
         try:
@@ -428,6 +448,24 @@ def validate_invite(conn, token: str) -> dict:
     if not template:
         raise ValueError("قالب الاستبيان غير متاح")
     return invite
+
+
+def deactivate_invites_for_cycle(conn, cycle_label: str) -> int:
+    """إيقاف روابط الدعوة لدورة أُغلقت حتى لا تدخل ردود جديدة بعد اللقطة."""
+    cycle = (cycle_label or "").strip()
+    if not cycle or not table_exists(conn, "survey_invites"):
+        return 0
+    ensure_survey_invite_schema(conn)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE survey_invites
+        SET is_active = 0
+        WHERE cycle_label = ? AND COALESCE(is_active, 1) = 1
+        """,
+        (cycle,),
+    )
+    return int(cur.rowcount or 0)
 
 
 def _phone_hash(phone: str) -> str:

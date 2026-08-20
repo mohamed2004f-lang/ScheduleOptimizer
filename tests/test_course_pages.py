@@ -119,11 +119,7 @@ def test_hod_can_edit_locked(conn, monkeypatch):
     monkeypatch.setattr("backend.services.course_pages._session_instructor_id", lambda: None)
     monkeypatch.setattr("backend.services.course_pages._is_hod_or_admin", lambda: True)
     monkeypatch.setattr(
-        "backend.services.course_pages.assert_hod_for_course_operation",
-        lambda *_a, **_k: None,
-    )
-    monkeypatch.setattr(
-        "backend.services.course_pages.hod_may_operate_on_course",
+        "backend.services.course_pages._hod_can_manage_catalog",
         lambda *_a, **_k: True,
     )
 

@@ -204,6 +204,7 @@
         ));
       const inInstructorPortal = !dualInstructorSupervisor || activeModeNav !== 'supervisor';
       let isSupervisor = inSupervisorPortal;
+      const alumniMode = !!(caps && caps.alumni_mode);
       const isStudentUi = (caps && caps.v >= 1) ? !!caps.is_student : (role === 'student');
       if (caps && caps.v >= 1) {
         navUsers = !!caps.nav_users_admin;
@@ -325,6 +326,10 @@
         showStudentHubMore = false;
         showStudentRegs = false;
       }
+      if (alumniMode) {
+        showStudentRegs = false;
+        showStudentEvals = false;
+      }
       const wrapStudentPortal = document.getElementById('navStudentPortalWrap');
       if (wrapStudentPortal) wrapStudentPortal.style.display = showStudentPortal ? '' : 'none';
       const wrapStudentMore = document.getElementById('navStudentMoreWrap');
@@ -338,6 +343,19 @@
       if (wrapStudentLo) wrapStudentLo.style.display = 'none';
       const wrapStudentRegs = document.getElementById('navStudentRegistrationsWrap');
       if (wrapStudentRegs) wrapStudentRegs.style.display = showStudentRegs ? '' : 'none';
+      if (alumniMode) {
+        [
+          'navStudentSchedule', 'navStudentExams', 'navStudentAnnouncements',
+          'navStudentCoursePages', 'navStudentRequests', 'navStudentEvaluations',
+        ].forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) {
+            const li = el.closest('li');
+            if (li) li.style.display = 'none';
+            else el.style.display = 'none';
+          }
+        });
+      }
 
       if (!navUsers) {
         const elUsers = document.getElementById('navUsersAdmin');

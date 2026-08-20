@@ -706,7 +706,7 @@ function applyListFilters(){
 async function loadData(){
   const studentsUrl = (CURRENT_ROLE === 'student')
     ? '/students/list?active_only=1'
-    : (WITHDRAWN_MODE ? '/students/list?enrollment_status=withdrawn' : '/students/list');
+    : (WITHDRAWN_MODE ? '/students/list?enrollment_status=withdrawn' : '/students/list?active_only=1');
   const [r1, r2] = await Promise.all([fetchJSON(studentsUrl), fetchJSON('/list_courses')]);
   STUDENTS = Array.isArray(r1.json) ? r1.json.map(s=>{
     return {

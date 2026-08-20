@@ -18,7 +18,13 @@
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
       <div>
         <h4 class="mb-0"><i class="fa-solid fa-chart-bar"></i> نتائج الاستبيانات المجمّعة</h4>
-        <p class="small text-muted mb-0">تحليل وتصدير النتائج — إغلاق الفصل التشغيلي من لوحة إغلاق الفصل.</p>
+        <p class="small text-muted mb-0">
+          {% if results_view == 'external' %}
+          تحليل وتصدير حملات الخريج/القطاع. تجميد الدورة من أزرار الإغلاق في هذه الصفحة (عميد أو أدمن رئيسي).
+          {% else %}
+          اختر الفصل ثم استخدم معاينة/PDF للطباعة. إغلاق الفصل التشغيلي من لوحته المنفصلة.
+          {% endif %}
+        </p>
       </div>
       <div class="d-flex gap-2 flex-wrap align-items-center">
         {% if results_view == 'external' %}
@@ -30,6 +36,20 @@
         <a class="btn btn-success btn-sm" href="/academic_quality/surveys/export/external/package.xlsx?cycle={{ external_cycle|urlencode }}{{ external_department_qs or '' }}">
           <i class="fa-solid fa-file-excel"></i> تصدير الدورة (Excel)
         </a>
+        {% if cycle_closure and cycle_closure.archive_url %}
+        <a class="btn btn-outline-success btn-sm" href="{{ cycle_closure.archive_url }}">
+          <i class="fa-solid fa-lock"></i> أرشيف Excel المُقفل
+        </a>
+        {% elif can_close_external_cycle %}
+        <button type="button" class="btn btn-warning btn-sm" id="btnCloseCycle"
+                data-cycle="{{ external_cycle }}">
+          <i class="fa-solid fa-camera"></i> إغلاق الدورة وحفظ لقطة
+        </button>
+        <button type="button" class="btn btn-outline-warning btn-sm" id="btnCloseCycleEvidence"
+                data-cycle="{{ external_cycle }}" title="إغلاق + رفع الأرشيف كشاهد في خريطة الامتثال">
+          إغلاق + شاهد اعتماد
+        </button>
+        {% endif %}
         {% endif %}
         <div class="dropdown">
           <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
@@ -187,19 +207,16 @@
           <a class="btn btn-sm btn-outline-primary" href="/academic_quality/surveys/trends#externalTrends">مقارنة مع دورات أخرى</a>
         </div>
         {% elif can_close_external_cycle %}
-        <div class="alert alert-warning border-start border-warning border-4 mb-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
-          <div class="small">
-            <strong>إغلاق الدورة وحفظ لقطة</strong> — يُجمّد أرقام هذه الحملة للمقارنة عبر السنوات ويحفظ أرشيف Excel.
+        <div class="alert alert-warning border-start border-warning border-4 mb-3">
+          <div class="small mb-0">
+            <strong>إغلاق الدورة</strong> — استخدم الزرين الأصفرين أعلى الصفحة لحفظ لقطة وأرشيف Excel، وإيقاف روابط الدعوة.
+            زر «إغلاق + شاهد اعتماد» يربط الأرشيف بمؤشر GV-01-1 في خريطة الامتثال.
           </div>
-          <div class="d-flex gap-2 flex-wrap">
-            <button type="button" class="btn btn-warning btn-sm" id="btnCloseCycle"
-                    data-cycle="{{ external_cycle }}">
-              <i class="fa-solid fa-camera"></i> إغلاق الدورة وحفظ لقطة
-            </button>
-            <button type="button" class="btn btn-outline-warning btn-sm" id="btnCloseCycleEvidence"
-                    data-cycle="{{ external_cycle }}" title="إغلاق + رفع الأرشيف كشاهد في خريطة الامتثال">
-              إغلاق + شاهد اعتماد
-            </button>
+        </div>
+        {% else %}
+        <div class="alert alert-light border mb-3">
+          <div class="small mb-0 text-muted">
+            تجميد الدورة وأرشيف Excel المقفول متاحان لحساب <strong>عميد الكلية</strong> أو <strong>الأدمن الرئيسي</strong> من الأزرار أعلى هذه الصفحة — وليسا في لوحة إغلاق الفصل التشغيلي.
           </div>
         </div>
         {% endif %}
@@ -266,6 +283,40 @@
     {% endif %}
 
     {% if results_view != 'external' %}
+    <form method="get" action="/academic_quality/surveys/results" class="row g-2 align-items-end mb-2">
+      <div class="col-md-4">
+        <label class="form-label small mb-1">الفصل المعروض</label>
+        <select class="form-select form-select-sm" name="semester" onchange="this.form.submit()">
+          {% for s in available_semesters %}
+          <option value="{{ s }}" {% if s == semester %}selected{% endif %}>{{ s }}</option>
+          {% else %}
+          <option value="{{ semester }}" selected>{{ semester }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-8 d-flex flex-wrap gap-2">
+        <button type="submit" class="btn btn-sm btn-primary">عرض النتائج</button>
+        <a class="btn btn-sm btn-info text-white" href="/academic_quality/surveys/export/package?semester={{ semester|urlencode }}" target="_blank">
+          <i class="fa-solid fa-print"></i> معاينة للطباعة
+        </a>
+        <a class="btn btn-sm btn-outline-danger" href="/academic_quality/surveys/export/package.pdf?semester={{ semester|urlencode }}">PDF</a>
+        <a class="btn btn-sm btn-outline-success" href="/academic_quality/surveys/export/package.xlsx?semester={{ semester|urlencode }}">Excel</a>
+        <a class="btn btn-sm btn-outline-primary" href="/academic_quality/surveys/trends">لقطات مغلقة</a>
+      </div>
+    </form>
+    <p class="small mb-3">
+      تُعرض الآن نتائج <strong>{{ semester }}</strong>
+      {% if is_historical_semester %}(فصل سابق — الفصل التشغيلي الحالي {{ current_term }}){% endif %}.
+      للطباعة: <strong>معاينة للطباعة</strong> ثم Ctrl+P، أو نزّل PDF.
+    </p>
+    {% if closed_semesters %}
+    <p class="small text-muted mb-3">
+      فصول لها لقطة محفوظة:
+      {% for c in closed_semesters %}
+      <a href="/academic_quality/surveys/results?semester={{ c.semester|urlencode }}">{{ c.semester }}</a>{% if not loop.last %} · {% endif %}
+      {% endfor %}
+    </p>
+    {% endif %}
     {% if semester_closure %}
     <div class="alert alert-success border-start border-success border-4 mb-3">
       <strong><i class="fa-solid fa-lock"></i> لقطة الاستبيانات محفوظة لهذا الفصل</strong>
@@ -281,6 +332,25 @@
       {% endif %}
       <a class="btn btn-sm btn-outline-primary" href="/academic_quality/surveys/trends">مقارنة مع فصول أخرى</a>
       <a class="btn btn-sm btn-warning" href="/academic_quality/term_closure">متابعة إغلاق الفصل الموحّد</a>
+    </div>
+    {% else %}
+    {% if is_historical_semester %}
+    <div class="alert alert-light border mb-3 small">
+      لا توجد لقطة مُغلقة لهذا الفصل بعد. يمكنك عرض النتائج الحية وطباعتها من الأزرار أعلاه.
+      لحفظ أرشيف مقفول لاحقاً استخدم «خيارات متقدمة» أو لوحة إغلاق الفصل.
+      <details class="mt-2">
+        <summary class="text-muted" style="cursor:pointer">خيارات متقدمة — حفظ لقطة هذا الفصل</summary>
+        <div class="d-flex gap-2 flex-wrap mt-2">
+          <button type="button" class="btn btn-outline-warning btn-sm" id="btnCloseSemester"
+                  data-semester="{{ semester }}">
+            <i class="fa-solid fa-camera"></i> إغلاق لقطة الاستبيانات فقط
+          </button>
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="btnCloseSemesterEvidence"
+                  data-semester="{{ semester }}">
+            لقطة + شاهد اعتماد
+          </button>
+        </div>
+      </details>
     </div>
     {% else %}
     <div class="alert alert-warning border-start border-warning border-4 mb-3">
@@ -307,6 +377,7 @@
         </div>
       </details>
     </div>
+    {% endif %}
     {% endif %}
 
     <div class="alert alert-info border-start border-info border-4 mb-4">
@@ -755,6 +826,7 @@
     const j = await r.json();
     if (j.status === 'ok') {
       let msg = 'تم إغلاق الدورة وحفظ ' + (j.snapshot_count || 0) + ' لقطة(ات).';
+      if (j.invites_deactivated) msg += '\nأُوقفت ' + j.invites_deactivated + ' دعوة — لن تُقبل ردود جديدة.';
       if (j.archive_url) msg += '\nيمكنك تحميل الأرشيف بعد إعادة التحميل.';
       if (j.evidence && j.evidence.id) msg += '\nتم رفع الشاهد #' + j.evidence.id;
       alert(msg);

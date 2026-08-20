@@ -158,6 +158,8 @@ def _override_status_by_enrollment(enrollment_status: str, academic_status: dict
         return {"code": "withdrawn", "label": "سحب ملف"}
     if es == "suspended":
         return {"code": "suspended", "label": "إيقاف قيد"}
+    if es == "graduated":
+        return {"code": "graduated", "label": "خريج"}
     return academic_status
 
 

@@ -234,7 +234,9 @@
           <tbody>
             {% for c in closed_semesters %}
             <tr>
-              <td>{{ c.semester }}</td>
+              <td>
+                <a href="/academic_quality/surveys/results?semester={{ c.semester|urlencode }}">{{ c.semester }}</a>
+              </td>
               <td class="small">{{ c.closed_at }}</td>
               <td>{{ c.snapshot_count }}</td>
               <td>

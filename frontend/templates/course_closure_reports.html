@@ -13,16 +13,57 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">تقارير إقفال المقرر</h1>
-        <p class="page-subtitle">اعتماد تقارير الشعب من أعضاء هيئة التدريس</p>
+        <p class="page-subtitle">اعتماد أكاديمي لتقارير الشعب، أو إقفال إداري استثنائي لفصول سابقة دون احتسابه دليلاً للجودة</p>
       </div>
       <button class="btn btn-outline-info btn-sm" onclick="PageGuide.open()">❓ دليل الاستخدام</button>
     </div>
+
+    <div class="card mb-3">
+      <div class="card-header fw-semibold">إقفال إداري لفصل سابق</div>
+      <div class="card-body">
+        <p class="small text-muted mb-2">
+          للتشغيل التجريبي والتدريب: يُقفل الملف الناقص باسم رئيس القسم مع ملاحظة إلزامية.
+          لا يُحتسب اعتماداً أكاديمياً ولا يدخل مؤشرات الجودة.
+        </p>
+        <p class="small mb-3">الفصل الحالي في الإعدادات: <strong id="adminCurrentTerm">—</strong></p>
+        <div class="row g-2 align-items-end mb-3">
+          <div class="col-md-4">
+            <label class="form-label small" for="adminSemester">الفصل السابق</label>
+            <select id="adminSemester" class="form-select form-select-sm"></select>
+          </div>
+          <div class="col-md-8">
+            <label class="form-label small" for="adminNote">الملاحظة (إلزامية)</label>
+            <textarea id="adminNote" class="form-control form-control-sm" rows="3" required></textarea>
+          </div>
+        </div>
+        <div class="d-flex gap-2 mb-2">
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="btnLoadQueue">تحديث القائمة</button>
+          <button type="button" class="btn btn-sm btn-warning" id="btnCloseAll">إقفال إداري لكل المفتوحة</button>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead>
+              <tr>
+                <th>المقرر/الشعبة</th>
+                <th>الأستاذ</th>
+                <th>الحالة الحالية</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="adminQueueBody"></tbody>
+          </table>
+        </div>
+        <div id="adminQueueEmpty" class="p-2 text-muted small">لا توجد شعب مفتوحة لهذا الفصل في نطاقك.</div>
+      </div>
+    </div>
+
     <div class="card">
       <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
         <span>التقارير</span>
         <select id="statusFilter" class="form-select form-select-sm" style="max-width:220px;">
           <option value="submitted">بانتظار الاعتماد</option>
-          <option value="approved">معتمدة</option>
+          <option value="approved">معتمدة أكاديمياً</option>
+          <option value="admin_closed">إقفال إداري</option>
           <option value="rejected">مرفوضة</option>
           <option value="">الكل</option>
         </select>
@@ -48,6 +89,104 @@
     </div>
   </main>
   <script>
+    const STATUS_LABEL = {
+      draft: 'مسودة',
+      submitted: 'بانتظار الاعتماد',
+      approved: 'معتمد أكاديمياً',
+      rejected: 'مرفوض',
+      admin_closed: 'إقفال إداري',
+      missing: 'بلا تقرير'
+    };
+    function statusBadge(st) {
+      const s = (st || '').toLowerCase();
+      const cls = s === 'approved' ? 'bg-success' : s === 'admin_closed' ? 'bg-warning text-dark' : s === 'rejected' ? 'bg-danger' : 'bg-secondary';
+      return '<span class="badge ' + cls + '">' + (STATUS_LABEL[s] || st || '') + '</span>';
+    }
+    async function loadAdminQueue() {
+      const sel = document.getElementById('adminSemester');
+      const sem = sel.value || '';
+      const url = '/schedule/course_closure_admin_queue' + (sem ? ('?semester=' + encodeURIComponent(sem)) : '');
+      const r = await fetch(url, { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      const noteEl = document.getElementById('adminNote');
+      if (j.default_note && !noteEl.value.trim()) noteEl.value = j.default_note;
+      const curEl = document.getElementById('adminCurrentTerm');
+      if (curEl) curEl.textContent = j.current_term || '—';
+      const prev = Array.isArray(j.previous_semesters) ? j.previous_semesters : [];
+      const keep = sel.value;
+      sel.innerHTML = '';
+      if (!prev.length) {
+        const o = document.createElement('option');
+        o.value = '';
+        o.textContent = 'لا يوجد فصل سابق في الجدول';
+        sel.appendChild(o);
+      } else {
+        prev.forEach(p => {
+          const o = document.createElement('option');
+          o.value = p;
+          o.textContent = p;
+          sel.appendChild(o);
+        });
+        if (keep && prev.indexOf(keep) >= 0) sel.value = keep;
+        else if (j.semester) sel.value = j.semester;
+      }
+      const body = document.getElementById('adminQueueBody');
+      const empty = document.getElementById('adminQueueEmpty');
+      const items = Array.isArray(j.items) ? j.items : [];
+      if (!r.ok) {
+        body.innerHTML = '<tr><td colspan="4">' + (j.message || 'تعذر تحميل قائمة الإقفال الإداري') + '</td></tr>';
+        empty.classList.add('d-none');
+        return;
+      }
+      if (!items.length) {
+        body.innerHTML = '';
+        empty.textContent = j.empty_reason || 'لا توجد شعب مفتوحة لهذا الفصل في نطاقك.';
+        empty.classList.remove('d-none');
+        return;
+      }
+      empty.classList.add('d-none');
+      body.innerHTML = '';
+      items.forEach(it => {
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td>' + (it.course_name || '') + ' <span class="text-muted small">#' + (it.section_id || '') + '</span></td>' +
+          '<td>' + (it.instructor_name || '') + '</td>' +
+          '<td>' + statusBadge(it.closure_status) + '</td>' +
+          '<td><button class="btn btn-sm btn-outline-warning" data-admin-close="' + it.section_id + '">إقفال إداري</button></td>';
+        body.appendChild(tr);
+      });
+      body.querySelectorAll('[data-admin-close]').forEach(btn => {
+        btn.addEventListener('click', () => adminClose([Number(btn.getAttribute('data-admin-close'))]));
+      });
+    }
+    async function adminClose(sectionIds) {
+      const semester = document.getElementById('adminSemester').value || '';
+      const note = (document.getElementById('adminNote').value || '').trim();
+      if (!semester) {
+        window.showToast && window.showToast('اختر فصلاً سابقاً', 'danger');
+        return;
+      }
+      if (note.length < 20) {
+        window.showToast && window.showToast('الملاحظة إلزامية (20 حرفاً على الأقل)', 'danger');
+        return;
+      }
+      const payload = { semester, note };
+      if (Array.isArray(sectionIds) && sectionIds.length) payload.section_ids = sectionIds;
+      const r = await fetch('/schedule/course_closure_admin_close', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        window.showToast && window.showToast(j.message || 'تعذر الإقفال الإداري', 'danger');
+        return;
+      }
+      window.showToast && window.showToast('أُقفل ' + (j.closed || 0) + ' شعبة إدارياً', 'success');
+      loadAdminQueue().catch(() => {});
+      loadReports().catch(() => {});
+    }
     async function loadReports() {
       const st = document.getElementById('statusFilter').value || '';
       const url = '/schedule/course_closure_reports' + (st ? ('?status=' + encodeURIComponent(st)) : '');
@@ -69,17 +208,23 @@
       empty.classList.add('d-none');
       body.innerHTML = '';
       items.forEach(it => {
+        const stv = (it.status || '').toLowerCase();
+        const note = (it.review_note || '').slice(0, 80);
+        let actions = '—';
+        if (stv === 'submitted') {
+          actions =
+            '<button class="btn btn-sm btn-success me-1" data-approve="' + it.id + '">اعتماد</button>' +
+            '<button class="btn btn-sm btn-outline-danger" data-reject="' + it.id + '">رفض</button>';
+        }
         const tr = document.createElement('tr');
         tr.innerHTML =
           '<td>' + (it.course_name || '') + ' <span class="text-muted small">#' + (it.section_id || '') + '</span></td>' +
           '<td>' + (it.instructor_name || '') + '</td>' +
           '<td>' + (it.semester || '') + '</td>' +
-          '<td class="small">' + ((it.implementation_summary || '').slice(0, 120) || '—') + '</td>' +
-          '<td><span class="badge bg-secondary">' + (it.status || '') + '</span></td>' +
-          '<td>' +
-            '<button class="btn btn-sm btn-success me-1" data-approve="' + it.id + '">اعتماد</button>' +
-            '<button class="btn btn-sm btn-outline-danger" data-reject="' + it.id + '">رفض</button>' +
-          '</td>';
+          '<td class="small">' + ((it.implementation_summary || '').slice(0, 120) || '—') +
+            (note ? '<div class="text-muted">' + note + '</div>' : '') + '</td>' +
+          '<td>' + statusBadge(it.status) + '</td>' +
+          '<td>' + actions + '</td>';
         body.appendChild(tr);
       });
       body.querySelectorAll('[data-approve]').forEach(btn => {
@@ -106,6 +251,10 @@
       loadReports().catch(() => {});
     }
     document.getElementById('statusFilter').addEventListener('change', () => loadReports().catch(() => {}));
+    document.getElementById('adminSemester').addEventListener('change', () => loadAdminQueue().catch(() => {}));
+    document.getElementById('btnLoadQueue').addEventListener('click', () => loadAdminQueue().catch(() => {}));
+    document.getElementById('btnCloseAll').addEventListener('click', () => adminClose(null));
+    loadAdminQueue().catch(() => {});
     loadReports().catch(() => {});
   </script>
 </body>

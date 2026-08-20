@@ -444,8 +444,10 @@ def _format_status_action_period(term: str, year: str) -> str:
 def students_filtered_from_request(request):
     """
     قائمة طلاب (dicts) حسب:
+      بدون معامل → مسجّلون فقط (تشغيل يومي)
       active_only=1 → مسجّلون فقط
-      enrollment_status=active|withdrawn|suspended|graduated → يُفضّل على active_only
+      include_inactive=1 → كل حالات القيد (أرشيف)
+      enrollment_status=active|withdrawn|suspended|graduated → يُفضّل على الباقي
       join_term / join_year
     """
     from backend.core.services import StudentService
@@ -456,15 +458,17 @@ def students_filtered_from_request(request):
     join_year = (request.args.get("join_year") or "").strip()
     pathway_stage = (request.args.get("pathway_stage") or "").strip().lower()
     allowed_es = {"active", "withdrawn", "suspended", "graduated"}
+    include_inactive = request.args.get("include_inactive", "").lower() in ("1", "true", "yes")
     if enrollment_status in allowed_es:
         students = StudentService.get_all_students(active_only=False)
         students = [s for s in students if (s.get("enrollment_status") or "active") == enrollment_status]
     elif active_only:
         students = StudentService.get_all_students(active_only=True)
-    else:
+    elif include_inactive:
         students = StudentService.get_all_students(active_only=False)
-        # السلوك الافتراضي: إخفاء "سحب ملف" من قوائم الطلبة التشغيلية
-        students = [s for s in students if (s.get("enrollment_status") or "active") != "withdrawn"]
+    else:
+        # الافتراضي التشغيلي: مسجّلون فقط (لا خريج ولا إيقاف قيد ولا سحب ملف)
+        students = StudentService.get_all_students(active_only=True)
     if join_term:
         students = [s for s in students if (s.get("join_term") or "").strip() == join_term]
     if join_year:
@@ -489,12 +493,13 @@ def students_filter_summary_ar(request) -> str:
     join_year = (request.args.get("join_year") or "").strip()
     parts = []
     allowed_es = {"active", "withdrawn", "suspended", "graduated"}
+    include_inactive = request.args.get("include_inactive", "").lower() in ("1", "true", "yes")
     if enrollment_status in allowed_es:
         parts.append("حالة القيد: " + _enrollment_label_ar(enrollment_status))
-    elif active_only:
+    elif active_only or not include_inactive:
         parts.append("نطاق: مسجّلون فقط")
     else:
-        parts.append("نطاق: جميع حالات القيد (مع إخفاء سحب الملف)")
+        parts.append("نطاق: جميع حالات القيد")
     if join_term:
         parts.append("فصل الالتحاق: " + join_term)
     if join_year:
@@ -543,15 +548,19 @@ def electives_report_api():
         except Exception:
             check_electives_requirement = None
         if allowed_student_ids is None:
+            st_cols = fetch_table_columns(conn, "students")
+            op = " WHERE COALESCE(enrollment_status, 'active') = 'active'" if "enrollment_status" in st_cols else ""
             rows = cur.execute(
                 "SELECT student_id, COALESCE(student_name,'') AS student_name "
-                "FROM students ORDER BY student_name, student_id"
+                f"FROM students{op} ORDER BY student_name, student_id"
             ).fetchall()
         else:
             placeholders = ",".join("?" for _ in allowed_student_ids)
+            st_cols = fetch_table_columns(conn, "students")
+            op = " AND COALESCE(enrollment_status, 'active') = 'active'" if "enrollment_status" in st_cols else ""
             rows = cur.execute(
                 f"SELECT student_id, COALESCE(student_name,'') AS student_name "
-                f"FROM students WHERE student_id IN ({placeholders}) "
+                f"FROM students WHERE student_id IN ({placeholders}){op} "
                 "ORDER BY student_name, student_id",
                 list(allowed_student_ids),
             ).fetchall()
@@ -1229,8 +1238,12 @@ def _best_grades_map(conn, student_id=None, student_ids=None, course_name_like=N
 
 
 def _students_scope_rows(conn, student_id=None, student_ids=None):
-    """يرجع قائمة طلاب ضمن النطاق المطلوب."""
+    """يرجع قائمة طلاب ضمن النطاق المطلوب. التقارير الجماعية تستبعد غير المسجّلين."""
+    from backend.core.enrollment_status_policy import operational_status_sql
+
     cur = conn.cursor()
+    cols = fetch_table_columns(conn, "students")
+    op_sql = operational_status_sql() if "enrollment_status" in cols else "1=1"
     if student_id:
         sid = normalize_sid(student_id)
         rows = cur.execute(
@@ -1243,12 +1256,13 @@ def _students_scope_rows(conn, student_id=None, student_ids=None):
             return []
         placeholders = ",".join("?" for _ in ids)
         rows = cur.execute(
-            f"SELECT student_id, COALESCE(student_name,'') AS student_name FROM students WHERE student_id IN ({placeholders})",
+            f"SELECT student_id, COALESCE(student_name,'') AS student_name FROM students "
+            f"WHERE student_id IN ({placeholders}) AND {op_sql}",
             ids,
         ).fetchall()
     else:
         rows = cur.execute(
-            "SELECT student_id, COALESCE(student_name,'') AS student_name FROM students"
+            f"SELECT student_id, COALESCE(student_name,'') AS student_name FROM students WHERE {op_sql}"
         ).fetchall()
     return [{"student_id": normalize_sid(r[0]), "student_name": (r[1] or "")} for r in (rows or [])]
 
@@ -2208,6 +2222,14 @@ def _students_list_fallback_payload(user_role: str) -> list[dict]:
             if has_track:
                 item["track_code"] = (_cell(r, idx, "track_code", "") or "")
         out.append(item)
+    enrollment_status = (request.args.get("enrollment_status") or "").strip().lower()
+    include_inactive = request.args.get("include_inactive", "").lower() in ("1", "true", "yes")
+    active_only = request.args.get("active_only", "").lower() in ("1", "true", "yes")
+    allowed_es = {"active", "withdrawn", "suspended", "graduated"}
+    if enrollment_status in allowed_es:
+        out = [s for s in out if (s.get("enrollment_status") or "active") == enrollment_status]
+    elif not include_inactive or active_only:
+        out = [s for s in out if (s.get("enrollment_status") or "active") == "active"]
     return out
 
 
@@ -2217,7 +2239,7 @@ def _students_list_fallback_payload(user_role: str) -> list[dict]:
 @students_bp.route("/list")
 @login_required
 def list_students():
-    """جلب قائمة الطلاب. معاملات: active_only=1، enrollment_status=active|withdrawn|suspended|graduated، join_term، join_year."""
+    """جلب قائمة الطلاب. افتراضي: مسجّلون فقط. include_inactive=1 لكل الحالات."""
     try:
         from backend.core.cache_setup import list_cache_key, safe_cache_get, safe_cache_set
         from backend.core.exceptions import AppException

@@ -81,6 +81,7 @@ from backend.core.auth_guards import (  # noqa: E402
     instructor_blocked_student_portal_path,
     register_instructor_route_guard,
     register_student_route_guard,
+    student_alumni_path_allowed,
     student_portal_path_allowed,
 )
 from backend.core.auth_password import hash_password, verify_password  # noqa: E402
@@ -1212,6 +1213,19 @@ def init_auth(app):
                     conn=None,
                 )
             admin_dept_scope = resolve_admin_department_scope_api_dict()
+            if (role or "") == "student" and student_id_val and isinstance(caps, dict):
+                from backend.core.enrollment_status_policy import (
+                    apply_alumni_student_caps,
+                    is_alumni_enrollment,
+                    lookup_student_enrollment_status,
+                    normalize_enrollment_status,
+                )
+
+                es = lookup_student_enrollment_status(str(student_id_val))
+                caps["enrollment_status"] = normalize_enrollment_status(es)
+                caps["alumni_mode"] = is_alumni_enrollment(es)
+                if caps["alumni_mode"]:
+                    apply_alumni_student_caps(caps)
 
         resp = jsonify({
             'status': 'ok',

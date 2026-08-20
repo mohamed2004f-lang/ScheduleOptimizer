@@ -69,6 +69,17 @@ VALID_FACULTY_LOG_TYPES = frozenset({"communication", "supervision_session", "qu
 VALID_FACULTY_LOG_APPROVAL = frozenset({"draft", "submitted", "approved", "rejected"})
 
 
+def _tuples_for_current_term(tuples: list, term_label: str) -> list:
+    if not term_label:
+        return []
+    out = []
+    for t in tuples or []:
+        sem = t[6] if t and len(t) > 6 else ""
+        if schedule_semester_matches_current_term(sem, term_label):
+            out.append(t)
+    return out
+
+
 def _current_term_label_safe(conn) -> str:
     try:
         tname, tyear = get_current_term(conn=conn)
@@ -3244,9 +3255,22 @@ def my_assigned_sections():
                         "schedule_published": published_at is not None,
                         "axis_catalog": axis_labels_for_api(),
                         "assignment_mode": "teaching_groups",
+                        "term_label": sem_label,
                     }
                 )
-        tuples = _assigned_section_rows(cur, iid, inst_name)
+            return jsonify(
+                {
+                    "rows": [],
+                    "instructor_name": inst_name,
+                    "instructor_id": instructor_id,
+                    "schedule_published": published_at is not None,
+                    "axis_catalog": axis_labels_for_api(),
+                    "assignment_mode": "teaching_groups",
+                    "term_label": sem_label,
+                    "hint": "لا توجد مجموعات تدريس مسندة إليك في الفصل الحالي.",
+                }
+            )
+        tuples = _tuples_for_current_term(_assigned_section_rows(cur, iid, inst_name), sem_label)
         section_ids = [t[0] for t in tuples]
         axis_map = _axis_status_map_for_sections(cur, iid, section_ids)
         reg_counts: dict[str, int] = {}
@@ -3280,6 +3304,12 @@ def my_assigned_sections():
                 }
             )
         _enrich_rows_delivery_summary(conn, out, sem_label, iid)
+        empty_hint = ""
+        if not out:
+            empty_hint = (
+                "الفصل الحالي بلا جدول بعد. التسجيل جارٍ من عرض المقررات؛ "
+                "ستظهر مقرراتك هنا بعد بناء جدول هذا الفصل."
+            )
     return jsonify(
         {
             "rows": out,
@@ -3287,6 +3317,8 @@ def my_assigned_sections():
             "instructor_id": instructor_id,
             "schedule_published": published_at is not None,
             "axis_catalog": axis_labels_for_api(),
+            "term_label": sem_label,
+            "hint": empty_hint or None,
         }
     )
 
@@ -3330,11 +3362,9 @@ def my_dashboard_summary():
     iid = int(instructor_id)
     with get_connection() as conn:
         cur = conn.cursor()
-        tuples = _assigned_section_rows(cur, iid, inst_name)
+        tuples = _tuples_for_current_term(_assigned_section_rows(cur, iid, inst_name), _current_term_label_safe(conn))
         section_ids = [t[0] for t in tuples]
         sections_count = len(section_ids)
-        if not sections_count:
-            return jsonify({"sections_count": 0, "students_count": 0, "action_items": [], "axes_done": 0, "axes_total": 0, "clo_avg": None})
         axes_done, axes_total, delivery_items = _portal_section_metrics(conn, instructor_id=iid, tuples=tuples)
         students_count = 0
         try:
@@ -3363,7 +3393,7 @@ def my_dashboard_summary():
                 pass
             try:
                 closure = cur.execute("SELECT status FROM course_closure_reports WHERE section_id = ? AND instructor_id = ? ORDER BY id DESC LIMIT 1", (sid, iid)).fetchone()
-                if not closure or closure[0] == "draft":
+                if not closure or (closure[0] or "").strip().lower() not in ("submitted", "approved", "admin_closed"):
                     action_items.append({"type": "closure_pending", "section_id": sid, "course": cn, "message": f"تقرير إقفال {cn} لم يُرسل بعد"})
             except Exception:
                 pass
@@ -3426,7 +3456,7 @@ def instructor_portal_summary():
                 dept_name = (dr[0] if dr else "") or ""
             except Exception:
                 dept_name = ""
-        tuples = _assigned_section_rows(cur, iid, inst_name)
+        tuples = _tuples_for_current_term(_assigned_section_rows(cur, iid, inst_name), term_label)
         section_ids = [t[0] for t in tuples]
         sections_count = len(section_ids)
         axes_done, axes_total, delivery_items = _portal_section_metrics(conn, instructor_id=iid, tuples=tuples)
@@ -3512,7 +3542,7 @@ def instructor_portal_summary():
                     "SELECT status FROM course_closure_reports WHERE section_id = ? AND instructor_id = ? ORDER BY id DESC LIMIT 1",
                     (sid, iid),
                 ).fetchone()
-                if not closure or closure[0] == "draft":
+                if not closure or (closure[0] or "").strip().lower() not in ("submitted", "approved", "admin_closed"):
                     action_items.append(
                         {
                             "type": "closure_pending",
@@ -4477,14 +4507,15 @@ def list_course_closure_reports():
                    COALESCE(c.status,'draft') AS status,
                    COALESCE(c.updated_at,'') AS updated_at,
                    COALESCE(c.approved_at,'') AS approved_at,
-                   COALESCE(c.approved_by,'') AS approved_by
+                   COALESCE(c.approved_by,'') AS approved_by,
+                   COALESCE(c.review_note,'') AS review_note
             FROM course_closure_reports c
             LEFT JOIN instructors i ON i.id = c.instructor_id
             LEFT JOIN schedule s ON s.{SCHEDULE_PK_COL} = c.section_id
             WHERE 1=1
         """
         params = []
-        if status in ("draft", "submitted", "approved", "rejected"):
+        if status in ("draft", "submitted", "approved", "rejected", "admin_closed"):
             q += " AND c.status = ?"
             params.append(status)
         q += " ORDER BY c.updated_at DESC, c.id DESC"
@@ -4505,9 +4536,11 @@ def review_course_closure_report(report_id: int):
     now = datetime.datetime.utcnow().isoformat()
     with get_connection() as conn:
         cur = conn.cursor()
-        row = cur.execute("SELECT id FROM course_closure_reports WHERE id = ? LIMIT 1", (int(report_id),)).fetchone()
+        row = cur.execute("SELECT id, COALESCE(status,'') FROM course_closure_reports WHERE id = ? LIMIT 1", (int(report_id),)).fetchone()
         if not row:
             return jsonify({"status": "error", "message": "report not found"}), 404
+        if (row[1] or "").strip().lower() == "admin_closed":
+            return jsonify({"status": "error", "message": "تقرير مقفل إدارياً ولا يُعتمد أكاديمياً"}), 400
         cur.execute(
             """
             UPDATE course_closure_reports
@@ -4530,6 +4563,154 @@ def review_course_closure_report(report_id: int):
     return jsonify({"status": "ok", "report_id": int(report_id), "reviewed_status": status}), 200
 
 
+@schedule_bp.route("/course_closure_admin_queue", methods=["GET"])
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+def course_closure_admin_queue():
+    """شعب فصل سابق بلا إقفال أكاديمي مكتمل — مرشحة للإقفال الإداري."""
+    from backend.services.course_closure_admin import (
+        DEFAULT_ADMIN_CLOSE_NOTE,
+        current_term_label,
+        list_admin_close_queue,
+        list_previous_semesters,
+    )
+
+    with get_connection() as conn:
+        _sync_schedule_pk_col(conn)
+        try:
+            current = current_term_label(conn)
+            prev = list_previous_semesters(conn, current)
+        except Exception:
+            logger.exception("course_closure_admin_queue: list previous semesters")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            return jsonify({
+                "status": "error",
+                "message": "تعذر قراءة الفصول من الجدول.",
+                "current_term": "",
+                "previous_semesters": [],
+                "items": [],
+            }), 500
+        semester = (request.args.get("semester") or "").strip()
+        if not semester:
+            semester = prev[0] if prev else ""
+        if semester and current and schedule_semester_matches_current_term(semester, current):
+            return jsonify({
+                "status": "error",
+                "message": "الإقفال الإداري للفصل السابق فقط، وليس للفصل الحالي.",
+                "current_term": current,
+                "previous_semesters": prev,
+            }), 400
+        dept_id = _effective_schedule_department_scope_id(conn)
+        items = []
+        if semester:
+            try:
+                items = list_admin_close_queue(
+                    conn,
+                    semester=semester,
+                    department_id=dept_id,
+                    pk_col=SCHEDULE_PK_COL,
+                )
+            except Exception:
+                logger.exception("course_closure_admin_queue: list items")
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                return jsonify({
+                    "status": "error",
+                    "message": "تعذر تحميل شعب الإقفال الإداري.",
+                    "current_term": current,
+                    "semester": semester,
+                    "previous_semesters": prev,
+                    "default_note": DEFAULT_ADMIN_CLOSE_NOTE,
+                    "items": [],
+                }), 500
+        empty_reason = ""
+        if not prev:
+            empty_reason = (
+                f"الفصل الحالي في الإعدادات هو «{current or '—'}»، "
+                "وكل صفوف الجدول/مجموعات التدريس بهذا الفصل. "
+                "لا يوجد فصل سابق في الجدول يُقفل إدارياً. "
+                "إذا انتقل التشغيل إلى الخريف فحدّثوا الفصل الحالي من الإعدادات حتى يظهر الربيع هنا."
+            )
+    return jsonify({
+        "status": "ok",
+        "current_term": current,
+        "semester": semester,
+        "previous_semesters": prev,
+        "default_note": DEFAULT_ADMIN_CLOSE_NOTE,
+        "items": items,
+        "open_count": len(items),
+        "empty_reason": empty_reason,
+    })
+
+
+@schedule_bp.route("/course_closure_admin_close", methods=["POST"])
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+def course_closure_admin_close():
+    """إقفال إداري استثنائي (تدريب/تطوير) — لا يُحتسب اعتماداً أكاديمياً."""
+    from backend.services.course_closure_admin import (
+        DEFAULT_ADMIN_CLOSE_NOTE,
+        admin_close_sections,
+        current_term_label,
+        list_admin_close_queue,
+    )
+
+    data = request.get_json(force=True) or {}
+    semester = (data.get("semester") or "").strip()
+    note = (data.get("note") or data.get("review_note") or "").strip()
+    if not semester:
+        return jsonify({"status": "error", "message": "semester مطلوب"}), 400
+    if len(note) < 20:
+        return jsonify({
+            "status": "error",
+            "message": "الملاحظة إلزامية (20 حرفاً على الأقل) وتُسجَّل باسم رئيس القسم.",
+        }), 400
+    raw_ids = data.get("section_ids")
+    actor = (session.get("user") or session.get("username") or "").strip() or "system"
+    with get_connection() as conn:
+        _sync_schedule_pk_col(conn)
+        current = current_term_label(conn)
+        if current and schedule_semester_matches_current_term(semester, current):
+            return jsonify({
+                "status": "error",
+                "message": "لا يمكن الإقفال الإداري للفصل الحالي.",
+            }), 400
+        dept_id = _effective_schedule_department_scope_id(conn)
+        queue = list_admin_close_queue(
+            conn,
+            semester=semester,
+            department_id=dept_id,
+            pk_col=SCHEDULE_PK_COL,
+        )
+        if isinstance(raw_ids, list) and raw_ids:
+            want = {int(x) for x in raw_ids if str(x).strip().isdigit() or isinstance(x, int)}
+            queue = [it for it in queue if int(it.get("section_id") or 0) in want]
+        if not queue:
+            return jsonify({"status": "ok", "closed": 0, "skipped": 0, "message": "لا توجد شعب مفتوحة في النطاق."})
+        result = admin_close_sections(
+            conn,
+            semester=semester,
+            note=note or DEFAULT_ADMIN_CLOSE_NOTE,
+            actor=actor,
+            items=queue,
+        )
+        _append_governance_audit(
+            conn=conn,
+            actor=actor,
+            action="COURSE_CLOSURE_ADMIN_CLOSE",
+            scope_type="semester",
+            scope_id=semester,
+            old_value="open",
+            new_value="admin_closed",
+            reason=note,
+        )
+        conn.commit()
+    return jsonify({"status": "ok", "semester": semester, **result})
+
+
 def _closure_status_score(status: str) -> float:
     s = (status or "").strip().lower()
     if s == "approved":
@@ -4540,6 +4721,8 @@ def _closure_status_score(status: str) -> float:
         return 0.1
     if s == "draft":
         return 0.3
+    if s == "admin_closed":
+        return 0.0
     return 0.0
 
 

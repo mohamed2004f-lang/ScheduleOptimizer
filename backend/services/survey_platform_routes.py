@@ -913,8 +913,14 @@ def register_survey_platform_routes(bp) -> None:
         results_view = (request.args.get("view") or "internal").strip().lower()
         manage_invites = can_manage_survey_invites()
         with get_connection() as conn:
-            sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
+            current_term = term_label_from_conn(conn)
+            raw_sem = (request.args.get("semester") or "").strip()
+            sem = normalize_term_label(raw_sem, conn) if raw_sem else current_term
             dept_id = _user_department_id(conn)
+            available_semesters = list_available_semesters_for_trends(conn, dept_id)
+            if sem and sem not in available_semesters:
+                available_semesters = [sem] + available_semesters
+            closed_semesters = list_closed_semesters(conn, department_id=dept_id, limit=20)
             ext_dept_id, can_pick_ext_dept, ext_departments = _external_results_scope(conn)
             templates = list_templates(conn)
             external_cycles = list_external_cycles(conn)
@@ -1087,6 +1093,10 @@ def register_survey_platform_routes(bp) -> None:
             results_view=results_view,
             templates=templates,
             semester=sem,
+            current_term=current_term,
+            is_historical_semester=(sem != current_term),
+            available_semesters=available_semesters,
+            closed_semesters=closed_semesters,
             selected_template=code,
             survey_metrics=metrics,
             course_eval_count=course_eval_count,

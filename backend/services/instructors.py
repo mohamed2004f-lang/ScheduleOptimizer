@@ -604,8 +604,11 @@ def available_students():
     actor = _current_actor_username()
     with get_connection() as conn:
         cur = conn.cursor()
+        cols = fetch_table_columns(conn, "students")
         scope_sql, scope_params = resolve_scope_sql_for_aliased_student(conn, actor, "s")
         where_sql = f"WHERE {scope_sql}" if scope_sql else ""
+        if "enrollment_status" in cols:
+            where_sql += (" AND " if where_sql else " WHERE ") + "COALESCE(s.enrollment_status, 'active') = 'active'"
         rows = cur.execute(
             """
             SELECT s.student_id,
