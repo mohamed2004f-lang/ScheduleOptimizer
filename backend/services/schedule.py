@@ -225,10 +225,22 @@ def _create_schedule_version(conn, event_type: str, note: str = "", is_published
     except Exception:
         semester = SEMESTER_LABEL
 
+    # توحيد الأوقات المعكوسة في الجدول الحي قبل التقاط اللقطة
+    try:
+        _auto_normalize_schedule_times_in_db(conn)
+    except Exception:
+        logger.exception("auto normalize schedule times before snapshot failed")
+
     rows = cur.execute(
         f"""
-        SELECT {SCHEDULE_PK_COL}, COALESCE(course_name,''), COALESCE(day,''), COALESCE(time,''),
-               COALESCE(room,''), COALESCE(instructor,''), COALESCE(semester,'')
+        SELECT {SCHEDULE_PK_COL} AS section_id,
+               COALESCE(course_name, '') AS course_name,
+               COALESCE(day, '') AS day,
+               COALESCE(time, '') AS time,
+               COALESCE(room, '') AS room,
+               COALESCE(instructor, '') AS instructor,
+               COALESCE(semester, '') AS semester,
+               COALESCE(instructor_id, 0) AS instructor_id
         FROM schedule
         ORDER BY day, time, course_name, {SCHEDULE_PK_COL}
         """
@@ -236,20 +248,48 @@ def _create_schedule_version(conn, event_type: str, note: str = "", is_published
     items = []
     for r in rows:
         try:
-            section_id = int(r[0]) if r[0] is not None else 0
-        except (TypeError, ValueError):
+            section_id = int(r["section_id"] or 0)
+        except (TypeError, ValueError, KeyError):
             section_id = 0
+        try:
+            instructor_id = int(r["instructor_id"] or 0)
+        except (TypeError, ValueError, KeyError):
+            instructor_id = 0
+        day = _canonical_schedule_day_label(str(r["day"] or "").strip())
+        time = _canonical_time_slot_label(str(r["time"] or "").strip())
         items.append(
             {
                 "section_id": section_id,
-                "course_name": r[1],
-                "day": r[2],
-                "time": r[3],
-                "room": r[4],
-                "instructor": r[5],
-                "semester": r[6],
+                "course_name": (r["course_name"] or "").strip(),
+                "day": day,
+                "time": time,
+                "room": (r["room"] or "").strip(),
+                "instructor": (r["instructor"] or "").strip(),
+                "semester": (r["semester"] or "").strip(),
+                "instructor_id": instructor_id if instructor_id > 0 else None,
             }
         )
+
+    try:
+        term_key = _current_term_key_suffix(conn)
+        cfg = [
+            _canonical_time_slot_label(s)
+            for s in (_get_time_slots_setting(conn).get("slots") or [])
+            if _looks_like_time_slot(_canonical_time_slot_label(s))
+        ]
+    except Exception:
+        term_key = semester
+        cfg = []
+
+    # أعمدة اللقطة مستقلة عن إعدادات الفصل الحالية لاحقاً:
+    # أوقات الصفوف أولاً، ثم التقسيمات المحفوظة التي لها صفوف، مرتّبة زمنياً.
+    row_times = _times_from_snapshot_rows(items)
+    row_set = set(row_times)
+    time_slots = _sort_time_slots(
+        list(dict.fromkeys([t for t in cfg if t in row_set] + row_times))
+    )
+    if not time_slots:
+        time_slots = _sort_time_slots(cfg) or _default_time_slots()
 
     actor = (session.get("user") or session.get("username") or "").strip() or "system"
     now = datetime.datetime.utcnow().isoformat()
@@ -259,7 +299,10 @@ def _create_schedule_version(conn, event_type: str, note: str = "", is_published
     ).fetchone()
     version_no = int((max_row[0] if max_row and max_row[0] is not None else 0) or 0) + 1
     snapshot = {
+        "schema_version": SCHEDULE_SNAPSHOT_SCHEMA_VERSION,
         "semester": semester,
+        "term_key": term_key,
+        "time_slots": time_slots,
         "captured_at": now,
         "captured_by": actor,
         "row_count": len(items),
@@ -403,6 +446,76 @@ def _validate_time_slot_format(s: str) -> bool:
         return ok(a) and ok(b)
     except Exception:
         return False
+
+
+def _canonical_time_slot_label(time_str: str) -> str:
+    """توحيد HH:MM-HH:MM مع قلب المدى إن كان النهاية قبل البداية (مثل 13:00-09:00)."""
+    s = _normalize_time_slot_str(time_str)
+    if not s or "-" not in s:
+        return s
+    try:
+        a, b = [p.strip() for p in s.split("-", 1)]
+
+        def pad_part(p: str) -> str:
+            if ":" not in p:
+                return p
+            hh_s, mm_s = p.split(":", 1)
+            return f"{int(hh_s):02d}:{int(mm_s[:2]):02d}"
+
+        a_pad = pad_part(a)
+        b_pad = pad_part(b)
+        try:
+            a_min = int(a_pad[0:2]) * 60 + int(a_pad[3:5])
+            b_min = int(b_pad[0:2]) * 60 + int(b_pad[3:5])
+            if a_min > b_min:
+                a_pad, b_pad = b_pad, a_pad
+        except Exception:
+            pass
+        return f"{a_pad}-{b_pad}"
+    except Exception:
+        return s
+
+
+def _sort_time_slots(slots: list[str]) -> list[str]:
+    def _key(s: str):
+        start, _end = _parse_time_range_to_minutes(s)
+        return (start if start is not None else 10**9, s)
+
+    return sorted([str(x).strip() for x in (slots or []) if str(x).strip()], key=_key)
+
+
+def _resolve_matrix_time_column(time: str, columns: list[str]) -> str | None:
+    if not time or not columns:
+        return None
+    cn = _canonical_time_slot_label(time)
+    for c in columns:
+        if _canonical_time_slot_label(c) == cn:
+            return c
+    return cn if cn in columns else None
+
+
+def _auto_normalize_schedule_times_in_db(conn) -> int:
+    """يحدّث schedule.time للأوقات المعكوسة/غير الموحّدة. يُرجع عدد الصفوف المحدّثة."""
+    cur = conn.cursor()
+    rows = cur.execute(
+        """
+        SELECT DISTINCT COALESCE(time, '') AS time
+        FROM schedule
+        WHERE COALESCE(time, '') <> ''
+        """
+    ).fetchall()
+    updated = 0
+    for r in rows or []:
+        try:
+            old = str(r["time"] if hasattr(r, "keys") else r[0] or "").strip()
+        except Exception:
+            old = str(r[0] or "").strip() if r else ""
+        new = _canonical_time_slot_label(old)
+        if not new or new == old or not _looks_like_time_slot(new):
+            continue
+        cur.execute("UPDATE schedule SET time = ? WHERE time = ?", (new, old))
+        updated += int(cur.rowcount or 0)
+    return updated
 
 
 def _get_time_slots_setting(conn) -> dict:
@@ -619,7 +732,359 @@ def _load_schedule_rows_for_export(conn) -> list:
     return [dict(r) for r in rows] if rows else []
 
 
-def _build_schedule_triple_export_matrix(rows: list, time_slots: list, include_empty: bool) -> dict:
+SCHEDULE_SNAPSHOT_SCHEMA_VERSION = 2
+
+
+def _looks_like_time_slot(value: str) -> bool:
+    return _validate_time_slot_format(str(value or "").strip())
+
+
+def _normalize_snapshot_rows(rows: list | None, *, semester: str = "") -> list[dict]:
+    sem_norm = (semester or "").strip().lower()
+    out: list[dict] = []
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            iid = int(r.get("instructor_id") or 0)
+        except (TypeError, ValueError):
+            iid = 0
+        try:
+            sid = int(r.get("section_id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        day = _canonical_schedule_day_label(str(r.get("day") or "").strip())
+        time_raw = str(r.get("time") or "").strip()
+        time = _canonical_time_slot_label(time_raw)
+        if time and not _looks_like_time_slot(time):
+            if sem_norm and time_raw.strip().lower() == sem_norm:
+                time = ""
+            elif sem_norm and time.strip().lower() == sem_norm:
+                time = ""
+        out.append(
+            {
+                "section_id": sid,
+                "course_name": str(r.get("course_name") or "").strip(),
+                "day": day,
+                "time": time,
+                "room": str(r.get("room") or "").strip(),
+                "instructor": str(r.get("instructor") or "").strip(),
+                "instructor_id": iid if iid > 0 else None,
+                "semester": str(r.get("semester") or "").strip(),
+            }
+        )
+    return out
+
+
+def _snapshot_rows_look_corrupted(rows: list | None) -> bool:
+    sample = [r for r in (rows or []) if isinstance(r, dict)][:10]
+    if len(sample) < 2:
+        return False
+    bad = 0
+    for r in sample:
+        cn = str(r.get("course_name") or "").strip()
+        day = str(r.get("day") or "").strip()
+        t = str(r.get("time") or "").strip()
+        inst = str(r.get("instructor") or "").strip()
+        if not cn:
+            continue
+        if cn == day == t or cn == day == t == inst:
+            bad += 1
+    return bad >= max(2, len(sample) // 2)
+
+
+def _times_from_snapshot_rows(rows: list | None) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for r in rows or []:
+        t = _canonical_time_slot_label(str((r or {}).get("time") or "").strip())
+        if not t or not _looks_like_time_slot(t):
+            continue
+        if t not in seen:
+            seen.add(t)
+            ordered.append(t)
+    return ordered
+
+
+def _filter_snapshot_rows_for_matrix(rows: list | None, *, semester: str = "") -> list[dict]:
+    """صفوف صالحة للشبكة (توقيت HH:MM-HH:MM)."""
+    return [
+        r
+        for r in _normalize_snapshot_rows(rows, semester=semester)
+        if (r.get("time") or "") and _looks_like_time_slot(r.get("time") or "")
+    ]
+
+
+def _time_slots_from_snapshot(conn, snap: dict | None, *, matrix_rows: list | None = None) -> list[str]:
+    """
+    أعمدة الأرشيف من اللقطة فقط:
+    1) time_slots المحفوظة في اللقطة
+    2) أوقات الصفوف الصالحة داخل اللقطة
+    لا نرجع إلى إعدادات الفصل الحالي حتى لا تتغير معاينة الأرشيف بعد تغيير التقسيمات.
+    """
+    raw = (snap or {}).get("time_slots")
+    if isinstance(raw, list):
+        slots = [
+            _canonical_time_slot_label(str(s))
+            for s in raw
+            if str(s).strip() and _looks_like_time_slot(_canonical_time_slot_label(str(s)))
+        ]
+        slots = list(dict.fromkeys(slots))
+        if slots:
+            from_rows = _times_from_snapshot_rows(matrix_rows)
+            # أضف أي أوقات في البيانات غير موجودة في time_slots المحفوظة
+            merged = list(dict.fromkeys(slots + from_rows))
+            return _sort_time_slots(merged)
+    from_rows = _times_from_snapshot_rows(matrix_rows)
+    if from_rows:
+        return _sort_time_slots(from_rows)
+    return []
+
+
+def _snapshot_usability(snap: dict | None) -> dict:
+    snap = snap if isinstance(snap, dict) else {}
+    raw_rows = snap.get("rows") if isinstance(snap.get("rows"), list) else []
+    semester = str(snap.get("semester") or "").strip()
+    corrupted = _snapshot_rows_look_corrupted(raw_rows)
+    matrix_rows = _filter_snapshot_rows_for_matrix(raw_rows, semester=semester)
+    usable = (not corrupted) and len(matrix_rows) > 0
+    return {
+        "usable": usable,
+        "corrupted": corrupted,
+        "matrix_row_count": len(matrix_rows),
+        "row_count": len(raw_rows),
+    }
+
+
+def _build_schedule_version_view(conn, snap: dict, *, include_empty: bool | None = None) -> dict:
+    semester = str((snap or {}).get("semester") or "").strip()
+    schema_version = int((snap or {}).get("schema_version") or 1)
+    raw_rows = (snap or {}).get("rows") if isinstance((snap or {}).get("rows"), list) else []
+    usability = _snapshot_usability(snap)
+    all_rows = _normalize_snapshot_rows(raw_rows, semester=semester)
+    matrix_rows = _filter_snapshot_rows_for_matrix(raw_rows, semester=semester)
+    slots = _time_slots_from_snapshot(conn, snap or {}, matrix_rows=matrix_rows)
+    if include_empty is None:
+        # لا تُظهر أعمدة فارغة من إعدادات قديمة؛ فقط إن وُجدت time_slots في اللقطة وبيانات فعلية
+        include_empty = False
+    built = _build_schedule_triple_export_matrix(matrix_rows, slots, include_empty=include_empty)
+    list_rows = sorted(
+        all_rows,
+        key=lambda r: (
+            r.get("day") or "",
+            r.get("time") or "",
+            r.get("course_name") or "",
+            r.get("instructor") or "",
+        ),
+    )
+    return {
+        "columns": built.get("columns") or [],
+        "matrix": built.get("matrix") or {},
+        "list_rows": list_rows,
+        "time_slots": slots,
+        "empty_saved_slots": built.get("empty_saved_slots") or [],
+        "nonmatching_times": built.get("nonmatching_times") or [],
+        "schema_version": schema_version,
+        "corrupted": usability["corrupted"],
+        "usable": usability["usable"],
+        "matrix_row_count": usability["matrix_row_count"],
+    }
+
+
+def _schedule_timetable_html_from_built(built: dict) -> str:
+    cols = built.get("columns") or []
+    matrix = built.get("matrix") or {}
+
+    def _escape_html(s: str) -> str:
+        return (
+            str(s or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+        )
+
+    timetable_html = (
+        "<table class='timetable timetable--cols3'>"
+        "<thead>"
+        "<tr>"
+        "<th rowspan='2' class='day-header'>اليوم</th>"
+        + "".join(f"<th colspan='3' class='time-header'>{_escape_html(c)}</th>" for c in cols)
+        + "</tr>"
+        "<tr>"
+        + "".join(
+            "<th class='sub-time-header'>المقرر</th><th class='sub-time-header'>الأستاذ</th><th class='sub-time-header'>القاعة</th>"
+            for _ in cols
+        )
+        + "</tr>"
+        "</thead>"
+        "<tbody>"
+    )
+    for day in matrix.keys():
+        timetable_html += f"<tr><th class='day-header'>{_escape_html(day)}</th>"
+        for c in cols:
+            items = matrix[day].get(c) or []
+            timetable_html += "<td colspan='3' class='time-slot-cell slot-slot-block'>"
+            timetable_html += "<div class='slot-aligned-rows'>"
+            if not items:
+                timetable_html += "<div class='slot-course-record slot-course-record--empty'>"
+                timetable_html += "<div class='slot-cell slot-cell--course'><span class='slot-placeholder'>—</span></div>"
+                timetable_html += "<div class='slot-cell slot-cell--inst'><span class='slot-placeholder'>—</span></div>"
+                timetable_html += "<div class='slot-cell slot-cell--room'><span class='slot-placeholder'>—</span></div>"
+                timetable_html += "</div>"
+            else:
+                for idx, it in enumerate(items):
+                    if idx > 0:
+                        timetable_html += "<div class='slot-record-fullsep'></div>"
+                    timetable_html += "<div class='slot-course-record'>"
+                    timetable_html += f"<div class='slot-cell slot-cell--course'><span class='course-pub-label'>{_escape_html(it.get('course_name') or '')}</span></div>"
+                    timetable_html += f"<div class='slot-cell slot-cell--inst'><span class='slot-text'>{_escape_html(it.get('instructor') or '')}</span></div>"
+                    timetable_html += f"<div class='slot-cell slot-cell--room'><span class='slot-text'>{_escape_html(it.get('room') or '')}</span></div>"
+                    timetable_html += "</div>"
+            timetable_html += "</div></td>"
+        timetable_html += "</tr>"
+    timetable_html += "</tbody></table>"
+    return timetable_html
+
+
+def _schedule_archive_pdf_html(
+    *,
+    built: dict,
+    term_label: str,
+    version_no: int,
+    generated_at: str,
+    generated_by: str,
+    is_published: bool,
+    note: str = "",
+) -> str:
+    timetable_html = _schedule_timetable_html_from_built(built)
+    now_print = (generated_at or "")[:10] or datetime.datetime.now().strftime("%Y-%m-%d")
+    status_ar = "منشور" if is_published else "غير منشور"
+    meta_bits = (
+        f"الفصل: {term_label or '—'} <span class=\"sep\">|</span> "
+        f"التاريخ: {now_print} <span class=\"sep\">|</span> "
+        f"النسخة: #{int(version_no or 0)} <span class=\"sep\">|</span> "
+        f"الحالة: {status_ar}"
+    )
+    if generated_by:
+        meta_bits += f" <span class=\"sep\">|</span> المنشئ: {generated_by}"
+    if note:
+        meta_bits += f" <span class=\"sep\">|</span> ملاحظة: {note}"
+
+    appendix_html = ""
+    empty_saved = built.get("empty_saved_slots") or []
+    nonmatching = built.get("nonmatching_times") or []
+    appendix = ""
+    if empty_saved:
+        appendix += "<p><strong>تقسيمات بدون مقررات:</strong> " + "، ".join(empty_saved) + "</p>"
+    if nonmatching:
+        appendix += (
+            "<p><strong>أوقات في اللقطة خارج التقسيمات المحفوظة:</strong> "
+            + "، ".join(nonmatching)
+            + "</p>"
+        )
+    if appendix:
+        appendix_html = "<hr/><h3 style='margin:10px 0 6px 0;'>ملحق</h3>" + appendix
+
+    logo_src = "/static/images/mech_logo_small.png"
+    try:
+        logo_file = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..",
+            "frontend",
+            "static",
+            "images",
+            "mech_logo_small.png",
+        )
+        with open(os.path.abspath(logo_file), "rb") as lf:
+            logo_b64 = base64.b64encode(lf.read()).decode("ascii")
+            logo_src = f"data:image/png;base64,{logo_b64}"
+    except Exception:
+        pass
+
+    header_html = f"""
+      <div class="hdr official">
+        <div class="hdr-col hdr-inst">
+          <div class="line">جامعة درنة</div>
+          <div class="line">كلية الهندسة</div>
+          <div class="line">قسم الهندسة الميكانيكية</div>
+        </div>
+        <div class="hdr-col hdr-logo">
+          <img src="{logo_src}" alt="شعار كلية الهندسة" />
+        </div>
+        <div class="hdr-col hdr-schedule">
+          <div class="line strong">جدول المحاضرات (أرشيف)</div>
+          <div class="line">فصل {term_label or '—'}</div>
+        </div>
+      </div>
+      <div class="meta under">{meta_bits}</div>
+      <div class="top-rule"></div>
+    """
+
+    return f"""
+    <html dir="rtl" lang="ar">
+    <head>
+      <meta charset="utf-8"/>
+      <style>
+        @page {{ size: A4 landscape; margin: 6mm 6mm 12mm 6mm; }}
+        body {{ font-family: Arial, sans-serif; padding-bottom: 10mm; color: #111; }}
+        .hdr.official {{
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+          align-items: start;
+          gap: 10px;
+          margin-bottom: 1px;
+          width: 100%;
+          min-height: 95px;
+        }}
+        .hdr-col {{ line-height: 1.35; font-size: 15px; font-weight: 700; margin-top: 0; padding-top: 0; }}
+        .hdr-inst {{ text-align: right; }}
+        .hdr-schedule {{ text-align: left; margin-top: 0; padding-top: 0; }}
+        .hdr-schedule .line.strong {{ font-size: 17px; }}
+        .hdr-logo {{ text-align: center; justify-self: center; margin-top: -2px; }}
+        .hdr-logo img {{ width: 82px; height: 82px; object-fit: contain; display: inline-block; vertical-align: top; }}
+        .meta {{ color: #444; font-size: 10px; margin-top: 2px; text-align: center; }}
+        .meta.under {{ margin-bottom: 1px; }}
+        .sep {{ padding: 0 6px; color: #aaa; }}
+        .top-rule {{ border-top: 2px solid #000; margin: 1px 0 2px 0; }}
+        table.timetable {{ width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; margin-top: 0; border: 1px solid rgba(15,23,42,0.10); border-radius: 8px; }}
+        .timetable th, .timetable td {{ border-bottom: 1px solid rgba(15,23,42,0.08); border-left: 1px solid rgba(15,23,42,0.06); padding: 6px 4px; font-size: 9.8px; vertical-align: top; word-wrap: break-word; text-align: center; }}
+        .timetable th {{ background: #f8fafc; font-weight: 900; }}
+        .timetable th.day-header {{ width: 92px; background: #f1f5f9; }}
+        .sub-time-header {{ background: #eef2f7; font-weight: 900; font-size: 9.5px; }}
+        .timetable td.time-slot-cell {{ padding: 8px 10px; }}
+        .slot-aligned-rows {{ display: flex; flex-direction: column; gap: 0; position: relative; z-index: 2; }}
+        .slot-course-record {{ display: grid; grid-template-columns: minmax(0,1.15fr) minmax(0,1fr) minmax(0,0.9fr); gap: 6px 8px; align-items: start; padding: 4px 0; }}
+        .slot-course-record--empty {{ opacity: 0.85; }}
+        .slot-record-fullsep {{ height: 0; margin: 2px 0 4px; border: 0; border-top: 2px solid rgba(15,23,42,0.16); }}
+        .slot-cell {{ min-width: 0; text-align: right; }}
+        .slot-text {{ display: block; font-size: 9.8px; font-weight: 700; line-height: 1.25; color: #0f172a; word-break: break-word; }}
+        .slot-placeholder {{ color: #94a3b8; font-size: 10px; }}
+        .course-pub-label {{ display: block; font-size: 9.8px; font-weight: 700; padding: 3px 4px; border-radius: 6px; background: #e2e8f0; color: #0f172a; line-height: 1.3; }}
+        .timetable td.slot-slot-block {{ position: relative; }}
+        .timetable td.slot-slot-block::after {{
+          content: '';
+          position: absolute;
+          top: 6px;
+          bottom: 6px;
+          right: 29.5%;
+          border-left: 2px solid rgba(15,23,42,0.65);
+          pointer-events: none;
+          z-index: 1;
+        }}
+      </style>
+    </head>
+    <body>
+      {header_html}
+      {timetable_html}
+      {appendix_html}
+    </body>
+    </html>
+    """
+
+
+def _build_schedule_triple_export_matrix(rows, time_slots, *, include_empty: bool = False):
     """
     مصفوفة خاصة بالتصدير:
     { day -> { time -> [ {course_name, instructor, room} ] } }
@@ -664,13 +1129,16 @@ def _build_schedule_triple_export_matrix(rows: list, time_slots: list, include_e
     )
 
     for r in ordered_rows:
-        day = str(r.get("day") or "").strip()
-        time = str(r.get("time") or "").strip()
+        day = _canonical_schedule_day_label(str(r.get("day") or "").strip())
+        time = _canonical_time_slot_label(str(r.get("time") or "").strip())
         if not day or not time:
             continue
-        if day not in matrix or time not in columns:
+        col = _resolve_matrix_time_column(time, columns)
+        if not col:
             continue
-        matrix[day][time].append(
+        if day not in matrix:
+            matrix[day] = {t: [] for t in columns}
+        matrix[day][col].append(
             {
                 "course_name": str(r.get("course_name") or "").strip(),
                 "instructor": str(r.get("instructor") or "").strip(),
@@ -1458,6 +1926,11 @@ def add_schedule_row():
         if not sem:
             return jsonify({"status": "error", "message": "يجب تحديد الفصل الحالي أولاً من الإعدادات"}), 400
 
+        data["time"] = _canonical_time_slot_label(str(data.get("time") or "").strip())
+        data["day"] = _canonical_schedule_day_label(str(data.get("day") or "").strip())
+        if not _looks_like_time_slot(data["time"]):
+            return jsonify({"status": "error", "message": f"صيغة وقت غير صحيحة: {data.get('time')}"}), 400
+
         dept_id = None
         with get_connection() as conn:
             dept_id = _resolve_schedule_row_department_id(conn, data.get("course_name"))
@@ -1582,6 +2055,12 @@ def update_schedule_row():
     for k in ("course_name", "day", "time", "room", "instructor", "semester", "instructor_id"):
         if k in data:
             fields[k] = data.get(k)
+    if "time" in fields:
+        fields["time"] = _canonical_time_slot_label(str(fields.get("time") or "").strip())
+        if fields["time"] and not _looks_like_time_slot(fields["time"]):
+            return jsonify({"status": "error", "message": f"صيغة وقت غير صحيحة: {fields['time']}"}), 400
+    if "day" in fields:
+        fields["day"] = _canonical_schedule_day_label(str(fields.get("day") or "").strip())
     try:
         from backend.core.services import ScheduleService
         from backend.services.term_closure import TermClosedError
@@ -1864,7 +2343,7 @@ def save_time_slots():
     cleaned = []
     seen = set()
     for s in slots:
-        s = _normalize_time_slot_str(str(s or ""))
+        s = _canonical_time_slot_label(_normalize_time_slot_str(str(s or "")))
         if not s:
             continue
         if not _validate_time_slot_format(s):
@@ -1873,6 +2352,7 @@ def save_time_slots():
             continue
         seen.add(s)
         cleaned.append(s)
+    cleaned = _sort_time_slots(cleaned)
     if not cleaned:
         return jsonify({"status": "error", "message": "أدخل تقسيمات صالحة (غير فارغة)"}), 400
 
@@ -2520,19 +3000,29 @@ def schedule_versions():
             rows = cur.execute(
                 f"""
                 SELECT v.id, v.semester, v.version_no, v.generated_at, v.generated_by, v.note, v.is_published,
-                       e.event_type, e.event_time
+                       e.event_type, e.event_time, v.snapshot_json
                 FROM schedule_versions v
                 LEFT JOIN schedule_version_events e ON e.schedule_version_id = v.id
                 {wsql}
-                ORDER BY v.generated_at DESC, v.id DESC
+                ORDER BY v.generated_at DESC, v.id DESC, e.event_time DESC
                 """,
                 params,
             ).fetchall()
             items = []
+            seen_ids: set[int] = set()
             for r in rows:
+                vid = int(r[0])
+                if vid in seen_ids:
+                    continue
+                seen_ids.add(vid)
+                try:
+                    snap = json.loads(r[9] or "{}")
+                except Exception:
+                    snap = {}
+                usability = _snapshot_usability(snap if isinstance(snap, dict) else {})
                 items.append(
                     {
-                        "id": int(r[0]),
+                        "id": vid,
                         "semester": r[1] or "",
                         "version_no": int(r[2] or 0),
                         "generated_at": r[3] or "",
@@ -2541,12 +3031,112 @@ def schedule_versions():
                         "is_published": bool(int(r[6] or 0)),
                         "event_type": r[7] or "",
                         "event_time": r[8] or "",
+                        "usable": usability["usable"],
+                        "corrupted": usability["corrupted"],
+                        "matrix_row_count": usability["matrix_row_count"],
+                        "row_count": usability["row_count"],
                     }
                 )
             return jsonify({"status": "ok", "items": items})
     except Exception:
         logger.exception("schedule_versions list failed")
         return jsonify({"status": "error", "message": "فشل تحميل أرشيف نسخ الجدول"}), 500
+
+
+@schedule_bp.route("/versions/<int:version_id>", methods=["DELETE"])
+@login_required
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+def schedule_version_delete(version_id: int):
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            _ensure_schedule_version_tables(cur)
+            row = cur.execute(
+                "SELECT id, version_no, semester FROM schedule_versions WHERE id = ? LIMIT 1",
+                (int(version_id),),
+            ).fetchone()
+            if not row:
+                return jsonify({"status": "error", "message": "النسخة غير موجودة"}), 404
+            cur.execute(
+                "DELETE FROM schedule_version_events WHERE schedule_version_id = ?",
+                (int(version_id),),
+            )
+            cur.execute("DELETE FROM schedule_versions WHERE id = ?", (int(version_id),))
+            conn.commit()
+        try:
+            log_activity(
+                action="schedule_version_delete",
+                details=f"version_id={int(version_id)}, version_no={int(row[1] or 0)}, semester={row[2] or ''}",
+            )
+        except Exception:
+            pass
+        return jsonify(
+            {
+                "status": "ok",
+                "message": f"تم حذف النسخة #{int(row[1] or 0)}",
+                "id": int(version_id),
+            }
+        )
+    except Exception:
+        logger.exception("schedule_version_delete failed")
+        return jsonify({"status": "error", "message": "فشل حذف النسخة"}), 500
+
+
+@schedule_bp.route("/versions/purge_unusable", methods=["POST"])
+@login_required
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+def schedule_versions_purge_unusable():
+    """حذف النسخ التالفة أو بدون أوقات صالحة (اختياريًا لفصل محدد)."""
+    data = request.get_json(silent=True) or {}
+    semester = (data.get("semester") or request.args.get("semester") or "").strip()
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            _ensure_schedule_version_tables(cur)
+            if semester:
+                rows = cur.execute(
+                    "SELECT id, version_no, snapshot_json FROM schedule_versions WHERE semester = ?",
+                    (semester,),
+                ).fetchall()
+            else:
+                rows = cur.execute(
+                    "SELECT id, version_no, snapshot_json FROM schedule_versions"
+                ).fetchall()
+            deleted = []
+            for r in rows or []:
+                try:
+                    snap = json.loads(r[2] or "{}")
+                except Exception:
+                    snap = {}
+                usability = _snapshot_usability(snap if isinstance(snap, dict) else {})
+                if usability["usable"]:
+                    continue
+                vid = int(r[0])
+                cur.execute(
+                    "DELETE FROM schedule_version_events WHERE schedule_version_id = ?",
+                    (vid,),
+                )
+                cur.execute("DELETE FROM schedule_versions WHERE id = ?", (vid,))
+                deleted.append({"id": vid, "version_no": int(r[1] or 0)})
+            conn.commit()
+        try:
+            log_activity(
+                action="schedule_versions_purge_unusable",
+                details=f"semester={semester or '*'}, deleted={len(deleted)}",
+            )
+        except Exception:
+            pass
+        return jsonify(
+            {
+                "status": "ok",
+                "message": f"تم حذف {len(deleted)} نسخة غير صالحة",
+                "deleted": deleted,
+                "deleted_count": len(deleted),
+            }
+        )
+    except Exception:
+        logger.exception("schedule_versions_purge_unusable failed")
+        return jsonify({"status": "error", "message": "فشل تنظيف النسخ غير الصالحة"}), 500
 
 
 @schedule_bp.route("/versions/<int:version_id>")
@@ -2584,19 +3174,63 @@ def schedule_version_detail(version_id: int):
                 return jsonify(payload)
             snap = payload["snapshot"] if isinstance(payload["snapshot"], dict) else {}
             rows = snap.get("rows") if isinstance(snap.get("rows"), list) else []
-            built = _build_schedule_matrix(rows, [], include_empty=False)
-            columns = built.get("columns") or []
-            matrix = built.get("matrix") or {}
+            built = _build_schedule_version_view(conn, snap)
             payload["row_count"] = int(snap.get("row_count") or len(rows))
             return render_template(
                 "schedule_version_preview.html",
                 item=payload,
-                columns=columns,
-                matrix=matrix,
+                built=built,
+                columns=built.get("columns") or [],
+                matrix=built.get("matrix") or {},
+                list_rows=built.get("list_rows") or [],
             )
     except Exception:
         logger.exception("schedule_version_detail failed")
         return jsonify({"status": "error", "message": "فشل قراءة نسخة الجدول"}), 500
+
+
+@schedule_bp.route("/versions/<int:version_id>/pdf")
+@login_required
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+def schedule_version_pdf(version_id: int):
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            _ensure_schedule_version_tables(cur)
+            row = cur.execute(
+                """
+                SELECT id, semester, version_no, snapshot_json, generated_at, generated_by, note, is_published
+                FROM schedule_versions
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (int(version_id),),
+            ).fetchone()
+            if not row:
+                return jsonify({"status": "error", "message": "النسخة غير موجودة"}), 404
+            try:
+                snap = json.loads(row[3] or "{}")
+            except Exception:
+                snap = {}
+            if not isinstance(snap, dict):
+                snap = {}
+            built = _build_schedule_version_view(conn, snap)
+            html = _schedule_archive_pdf_html(
+                built=built,
+                term_label=(row[1] or snap.get("semester") or "").strip(),
+                version_no=int(row[2] or 0),
+                generated_at=row[4] or "",
+                generated_by=row[5] or "",
+                is_published=bool(int(row[7] or 0)),
+                note=row[6] or "",
+            )
+            return pdf_response_from_html(
+                html,
+                filename_prefix=f"schedule_archive_v{int(row[2] or 0)}",
+            )
+    except Exception:
+        logger.exception("schedule_version_pdf failed")
+        return jsonify({"status": "error", "message": "فشل تصدير PDF للنسخة"}), 500
 
 
 @schedule_bp.route("/versions/<int:version_id>/restore_draft", methods=["POST"])
@@ -4833,8 +5467,14 @@ def faculty_scorecards():
         else:
             params = []
             q = f"""
-                SELECT s.{SCHEDULE_PK_COL} AS section_id, COALESCE(s.course_name,''), COALESCE(s.day,''), COALESCE(s.time,''),
-                       COALESCE(s.room,''), COALESCE(s.instructor,''), COALESCE(s.semester,''), COALESCE(s.instructor_id,0)
+                SELECT s.{SCHEDULE_PK_COL} AS section_id,
+                       COALESCE(s.course_name, '') AS course_name,
+                       COALESCE(s.day, '') AS day,
+                       COALESCE(s.time, '') AS time,
+                       COALESCE(s.room, '') AS room,
+                       COALESCE(s.instructor, '') AS instructor,
+                       COALESCE(s.semester, '') AS semester,
+                       COALESCE(s.instructor_id, 0) AS instructor_id
                 FROM schedule s
                 WHERE COALESCE(s.instructor_id,0) > 0
             """
@@ -4843,7 +5483,19 @@ def faculty_scorecards():
                 params.append(int(requested_instructor_id))
             q += f" ORDER BY s.semester, s.course_name, s.{SCHEDULE_PK_COL}"
             rows = cur.execute(q, tuple(params)).fetchall()
-            tuples = [(r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]) for r in (rows or [])]
+            tuples = [
+                (
+                    r["section_id"],
+                    r["course_name"],
+                    r["day"],
+                    r["time"],
+                    r["room"],
+                    r["instructor"],
+                    r["semester"],
+                    r["instructor_id"],
+                )
+                for r in (rows or [])
+            ]
 
         out = []
         for t in tuples or []:

@@ -719,6 +719,7 @@ TABLES_SCHEMA = {
             department_id INTEGER NOT NULL,
             status TEXT NOT NULL DEFAULT 'offered'
                 CHECK (status IN ('offered', 'cancelled')),
+            proposed_instructor_id INTEGER,
             created_at TEXT,
             created_by TEXT NOT NULL DEFAULT '',
             updated_at TEXT,

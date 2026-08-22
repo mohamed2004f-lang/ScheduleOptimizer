@@ -17,8 +17,13 @@ from backend.services.term_engine import (
     parse_ops_term,
     season_name_ar,
 )
-from backend.services.utilities import get_connection, get_current_term, log_activity
-
+from backend.services.utilities import (
+    excel_response_from_frames,
+    get_connection,
+    get_current_term,
+    log_activity,
+    pdf_response_from_html,
+)
 logger = logging.getLogger(__name__)
 
 term_offerings_bp = Blueprint("term_offerings", __name__)
@@ -106,6 +111,7 @@ def _state_payload(
     general_gaps: list | None = None,
     general_published: bool = False,
     writer: bool = False,
+    instructors: list[dict] | None = None,
 ) -> dict:
     published = (state.get("status") or "") == STATE_PUBLISHED
     can_publish = bool(writer)
@@ -168,6 +174,7 @@ def _state_payload(
         "general_gaps": general_gaps or [],
         "courses": courses,
         "groups": _group_courses(courses),
+        "instructors": instructors or [],
         "offered_count": sum(1 for c in courses if c.get("offered")),
         "previous_term": previous,
         "catalog_warning": catalog_warning,
@@ -706,18 +713,21 @@ def _offered_map(
 ) -> dict[str, dict]:
     if not term_key or not table_exists(conn, "term_course_offerings"):
         return {}
+    cols = {c.lower() for c in (fetch_table_columns(conn, "term_course_offerings") or [])}
+    has_proposed = "proposed_instructor_id" in cols
+    proposed_sel = ", proposed_instructor_id" if has_proposed else ""
     if any_department or department_id is None:
         rows = conn.cursor().execute(
-            """
-            SELECT course_name, department_id, status
+            f"""
+            SELECT course_name, department_id, status{proposed_sel}
             FROM term_course_offerings WHERE term_key = ?
             """,
             (term_key,),
         ).fetchall()
     else:
         rows = conn.cursor().execute(
-            """
-            SELECT course_name, department_id, status
+            f"""
+            SELECT course_name, department_id, status{proposed_sel}
             FROM term_course_offerings
             WHERE term_key = ? AND department_id = ?
             """,
@@ -728,10 +738,104 @@ def _offered_map(
         name = str(r[0] or "").strip()
         if not name:
             continue
+        proposed_id = None
+        if has_proposed:
+            proposed_id = _as_optional_int(r[3] if len(r) > 3 else None)
         out[name] = {
             "department_id": _as_optional_int(r[1]),
             "status": str(r[2] or STATUS_OFFERED).strip() or STATUS_OFFERED,
+            "proposed_instructor_id": proposed_id,
         }
+    return out
+
+
+def _list_offering_instructors(conn, department_id: int | None) -> list[dict]:
+    """أساتذة نشطون لاختيار المقترح (نطاق القسم إن وُجد، وإلا الكل)."""
+    if not table_exists(conn, "instructors"):
+        return []
+    cols = {c.lower() for c in (fetch_table_columns(conn, "instructors") or [])}
+    if "id" not in cols or "name" not in cols:
+        return []
+    active_sql = "COALESCE(is_active, 1) = 1" if "is_active" in cols else "1=1"
+    params: list = []
+    dept_sql = ""
+    if department_id is not None and int(department_id) != COLLEGE_LIST_DEPT_ID and "department_id" in cols:
+        dept_sql = " AND department_id = ?"
+        params.append(int(department_id))
+    rows = conn.cursor().execute(
+        f"""
+        SELECT id, COALESCE(TRIM(name), '') AS name
+        FROM instructors
+        WHERE {active_sql}{dept_sql}
+        ORDER BY name, id
+        """,
+        tuple(params),
+    ).fetchall()
+    out = []
+    for row in rows or []:
+        d = dict(row) if hasattr(row, "keys") else {"id": row[0], "name": row[1]}
+        iid = int(d.get("id") or 0)
+        if iid <= 0:
+            continue
+        name = (d.get("name") or "").strip() or f"أستاذ #{iid}"
+        out.append({"id": iid, "name": name})
+    return out
+
+
+def _instructor_names_by_id(conn, instructor_ids: list[int] | set[int]) -> dict[int, str]:
+    ids = sorted({int(i) for i in (instructor_ids or []) if i and int(i) > 0})
+    if not ids or not table_exists(conn, "instructors"):
+        return {}
+    ph = ",".join("?" for _ in ids)
+    rows = conn.cursor().execute(
+        f"""
+        SELECT id, COALESCE(TRIM(name), '') AS name
+        FROM instructors WHERE id IN ({ph})
+        """,
+        tuple(ids),
+    ).fetchall()
+    out: dict[int, str] = {}
+    for row in rows or []:
+        d = dict(row) if hasattr(row, "keys") else {"id": row[0], "name": row[1]}
+        iid = int(d.get("id") or 0)
+        if iid <= 0:
+            continue
+        out[iid] = (d.get("name") or "").strip() or f"أستاذ #{iid}"
+    return out
+
+
+def _normalize_proposed_instructors(
+    raw: object,
+    *,
+    course_names: list[str],
+) -> dict[str, int | None]:
+    """خريطة اسم مقرر → معرف أستاذ مقترح (أو None لمسح الاختيار)."""
+    allowed = {(n or "").strip().lower(): (n or "").strip() for n in course_names if (n or "").strip()}
+    out: dict[str, int | None] = {}
+    if isinstance(raw, dict):
+        items = raw.items()
+    elif isinstance(raw, list):
+        items = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            cname = (entry.get("course_name") or "").strip()
+            items.append((cname, entry.get("proposed_instructor_id")))
+    else:
+        return out
+    for key, val in items:
+        cname = (str(key) if key is not None else "").strip()
+        canon = allowed.get(cname.lower())
+        if not canon:
+            continue
+        if val in (None, "", 0, "0"):
+            out[canon] = None
+            continue
+        try:
+            iid = int(val)
+        except (TypeError, ValueError):
+            continue
+        out[canon] = iid if iid > 0 else None
     return out
 
 
@@ -781,7 +885,15 @@ def _upsert_state(
     )
 
 
-def save_offered_courses(conn, *, term_key: str, course_names: list[str], actor: str, department_id: int | None) -> dict:
+def save_offered_courses(
+    conn,
+    *,
+    term_key: str,
+    course_names: list[str],
+    actor: str,
+    department_id: int | None,
+    proposed_instructors: dict[str, int | None] | None = None,
+) -> dict:
     """يستبدل قائمة القسم بالكامل. المشترك والعام المحددان يُحفظان تحت department_id للقائمة."""
     names = []
     seen = set()
@@ -802,27 +914,55 @@ def save_offered_courses(conn, *, term_key: str, course_names: list[str], actor:
     owner_id = _list_department_id(department_id)
     cur = conn.cursor()
     now = _now()
+    cols = {c.lower() for c in (fetch_table_columns(conn, "term_course_offerings") or [])}
+    has_proposed = "proposed_instructor_id" in cols
+    proposals = _normalize_proposed_instructors(
+        proposed_instructors or {},
+        course_names=[r["course_name"] for r in resolved],
+    )
     cur.execute(
         "DELETE FROM term_course_offerings WHERE term_key = ? AND department_id = ?",
         (term_key, owner_id),
     )
     for rec in resolved:
-        cur.execute(
-            """
-            INSERT INTO term_course_offerings
-                (term_key, course_name, department_id, status, created_at, created_by, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                term_key,
-                rec["course_name"],
-                owner_id,
-                STATUS_OFFERED,
-                now,
-                actor,
-                now,
-            ),
-        )
+        cname = rec["course_name"]
+        proposed_id = proposals.get(cname)
+        if has_proposed:
+            cur.execute(
+                """
+                INSERT INTO term_course_offerings
+                    (term_key, course_name, department_id, status, proposed_instructor_id,
+                     created_at, created_by, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    term_key,
+                    cname,
+                    owner_id,
+                    STATUS_OFFERED,
+                    int(proposed_id) if proposed_id else None,
+                    now,
+                    actor,
+                    now,
+                ),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO term_course_offerings
+                    (term_key, course_name, department_id, status, created_at, created_by, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    term_key,
+                    cname,
+                    owner_id,
+                    STATUS_OFFERED,
+                    now,
+                    actor,
+                    now,
+                ),
+            )
     state = get_offering_state(conn, term_key, owner_id)
     if (state.get("status") or STATE_DRAFT) != STATE_PUBLISHED:
         _upsert_state(conn, term_key, owner_id, status=STATE_DRAFT, actor=actor, published=False)
@@ -898,6 +1038,73 @@ def term_offerings_page():
     return render_template("term_offerings.html", active_page="term_offerings")
 
 
+def _preview_filter_department_id():
+    raw = (request.args.get("department_id") or "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+@term_offerings_bp.route("/term_offerings/preview")
+@login_required
+@role_required(*_EDIT_ROLES)
+def term_offerings_preview():
+    """معاينة HTML لعرض مقررات الفصل — طباعة من المتصفح."""
+    with get_connection() as conn:
+        ctx = prepare_term_offerings_preview_context(
+            conn, filter_department_id=_preview_filter_department_id()
+        )
+    if not ctx.get("ok"):
+        return (
+            render_template(
+                "term_offerings_preview.html",
+                for_pdf=False,
+                ok=False,
+                error=ctx.get("error") or "تعذر تحميل المعاينة.",
+                title="عرض مقررات الفصل",
+                preview_banner_title="معاينة عرض مقررات الفصل",
+                preview_hide_names_toggle=True,
+                pdf_download_url="",
+                rows=[],
+            ),
+            400,
+        )
+    return render_template("term_offerings_preview.html", for_pdf=False, **ctx)
+
+
+@term_offerings_bp.route("/term_offerings/preview.pdf")
+@login_required
+@role_required(*_EDIT_ROLES)
+def term_offerings_preview_pdf():
+    with get_connection() as conn:
+        ctx = prepare_term_offerings_preview_context(
+            conn, filter_department_id=_preview_filter_department_id()
+        )
+    if not ctx.get("ok"):
+        return jsonify({"status": "error", "message": ctx.get("error") or "تعذر التصدير"}), 400
+    html = render_template("term_offerings_preview.html", for_pdf=True, **ctx)
+    slug = (ctx.get("ops_label") or "offerings").replace(" ", "_")[:40]
+    return pdf_response_from_html(html, filename_prefix=f"term_offerings_{slug}")
+
+
+@term_offerings_bp.route("/term_offerings/preview.xlsx")
+@login_required
+@role_required(*_EDIT_ROLES)
+def term_offerings_preview_xlsx():
+    with get_connection() as conn:
+        ctx = prepare_term_offerings_preview_context(
+            conn, filter_department_id=_preview_filter_department_id()
+        )
+    if not ctx.get("ok"):
+        return jsonify({"status": "error", "message": ctx.get("error") or "تعذر التصدير"}), 400
+    frames = term_offerings_preview_excel_frames(ctx)
+    slug = (ctx.get("ops_label") or "offerings").replace(" ", "_")[:40]
+    return excel_response_from_frames(frames, filename_prefix=f"term_offerings_{slug}")
+
+
 @term_offerings_bp.route("/term_offerings/state", methods=["GET"])
 @login_required
 @role_required(*_EDIT_ROLES)
@@ -953,6 +1160,18 @@ def term_offerings_state():
             for c in courses:
                 rec = offered.get(c["course_name"]) or {}
                 c["offered"] = (rec.get("status") or "") == STATUS_OFFERED
+                pid = rec.get("proposed_instructor_id")
+                c["proposed_instructor_id"] = int(pid) if pid else None
+            name_map = _instructor_names_by_id(
+                conn,
+                [c.get("proposed_instructor_id") for c in courses if c.get("proposed_instructor_id")],
+            )
+            for c in courses:
+                pid = c.get("proposed_instructor_id")
+                c["proposed_instructor_name"] = name_map.get(int(pid), "") if pid else ""
+            instructors = _list_offering_instructors(
+                conn, list_dept if writer else (scope if scope is not None else None)
+            )
             gen_id = resolve_college_general_department_id(conn)
             general_gaps, general_published = _general_alignment(
                 conn, term_key, courses, scope, gen_id
@@ -970,6 +1189,7 @@ def term_offerings_state():
                     general_gaps=general_gaps,
                     general_published=general_published,
                     writer=writer,
+                    instructors=instructors,
                 )
             )
     except Exception:
@@ -981,6 +1201,68 @@ def term_offerings_state():
         )
 
 
+@term_offerings_bp.route("/term_offerings/proposed_instructors", methods=["GET"])
+@login_required
+@role_required(*_EDIT_ROLES)
+def term_offerings_proposed_instructors():
+    """
+    خريطة المقرر → أستاذ مقترح من عرض الفصل الحالي (استرشادي للجدول).
+    غير إلزامي — للتمييز في قائمة اختيار الأستاذ فقط.
+    """
+    with get_connection() as conn:
+        _ensure_offerings_schema(conn)
+        parsed = _current_parsed(conn)
+        if not parsed:
+            return jsonify(
+                {
+                    "status": "ok",
+                    "term_key": "",
+                    "ops_label": "",
+                    "by_course": {},
+                }
+            )
+        actor = _actor()
+        role = _role()
+        scope = resolve_effective_department_scope_id(conn, actor)
+        writer = _can_write_offerings(role, scope)
+        term_key = parsed["term_key"]
+        if writer:
+            offered = _offered_map(conn, term_key, _list_department_id(scope))
+        elif role in _ADMIN_ROLES or role in ("college_dean", "academic_vice_dean"):
+            offered = _offered_map(conn, term_key, any_department=True)
+        elif scope is not None:
+            offered = _offered_map(conn, term_key, int(scope))
+        else:
+            offered = _offered_map(conn, term_key, any_department=True)
+        by_course: dict[str, dict] = {}
+        ids: list[int] = []
+        for name, rec in (offered or {}).items():
+            if (rec.get("status") or "") != STATUS_OFFERED:
+                continue
+            pid = rec.get("proposed_instructor_id")
+            if not pid:
+                continue
+            try:
+                iid = int(pid)
+            except (TypeError, ValueError):
+                continue
+            if iid <= 0:
+                continue
+            by_course[name] = {"instructor_id": iid, "instructor_name": ""}
+            ids.append(iid)
+        names = _instructor_names_by_id(conn, ids)
+        for payload in by_course.values():
+            payload["instructor_name"] = names.get(int(payload["instructor_id"]), "") or ""
+        return jsonify(
+            {
+                "status": "ok",
+                "term_key": term_key,
+                "ops_label": parsed.get("ops_label") or "",
+                "by_course": by_course,
+            }
+        )
+
+
 @term_offerings_bp.route("/term_offerings/save", methods=["POST"])
 @login_required
 @role_required(*_WRITE_ROLES)
@@ -989,6 +1271,15 @@ def term_offerings_save():
     names = data.get("course_names") or data.get("offered") or []
     if not isinstance(names, list):
         return jsonify({"status": "error", "message": "course_names يجب أن تكون قائمة."}), 400
+    offerings_payload = data.get("offerings")
+    proposed_raw = data.get("proposed_instructors")
+    if isinstance(offerings_payload, list) and not proposed_raw:
+        proposed_raw = offerings_payload
+        if not names:
+            names = [
+                (e.get("course_name") if isinstance(e, dict) else None)
+                for e in offerings_payload
+            ]
     with get_connection() as conn:
         _ensure_offerings_schema(conn)
         parsed = _current_parsed(conn)
@@ -1003,12 +1294,15 @@ def term_offerings_save():
         list_dept = _list_department_id(scope)
         state = get_offering_state(conn, term_key, list_dept)
         published = (state.get("status") or "") == STATE_PUBLISHED
+        course_names = [str(x) for x in names if x is not None]
+        proposals = _normalize_proposed_instructors(proposed_raw, course_names=course_names)
         result = save_offered_courses(
             conn,
             term_key=term_key,
-            course_names=[str(x) for x in names],
+            course_names=course_names,
             actor=actor or "system",
             department_id=scope,
+            proposed_instructors=proposals,
         )
         try:
             log_activity(
@@ -1134,18 +1428,30 @@ def term_offerings_copy_previous():
             ), 404
         names_rows = conn.cursor().execute(
             """
-            SELECT course_name FROM term_course_offerings
+            SELECT course_name, proposed_instructor_id FROM term_course_offerings
             WHERE term_key = ? AND status = ? AND department_id = ?
             """,
             (prev["term_key"], STATUS_OFFERED, list_dept),
         ).fetchall()
-        names = [str(r[0] or "").strip() for r in names_rows if r and str(r[0] or "").strip()]
+        names = []
+        proposals: dict[str, int | None] = {}
+        for r in names_rows or []:
+            cname = str(r[0] or "").strip()
+            if not cname:
+                continue
+            names.append(cname)
+            try:
+                pid = int(r[1]) if r[1] is not None else None
+            except (TypeError, ValueError):
+                pid = None
+            proposals[cname] = pid if pid and pid > 0 else None
         result = save_offered_courses(
             conn,
             term_key=term_key,
             course_names=names,
             actor=actor or "system",
             department_id=scope,
+            proposed_instructors=proposals,
         )
         try:
             log_activity(
@@ -1282,3 +1588,383 @@ def _count_offered(conn, term_key: str, department_id: int) -> tuple[int, bool]:
     ).fetchone()
     n = _as_int(row[0] if row else 0, 0)
     return n, True
+
+
+def _kind_label_ar(kind: str) -> str:
+    k = (kind or "").strip()
+    if k == KIND_GENERAL:
+        return "قسم عام"
+    if k == KIND_SHARED:
+        return "مشترك"
+    return "قسم"
+
+
+def _department_label(conn, department_id: int | None) -> str:
+    if department_id is None or int(department_id) == COLLEGE_LIST_DEPT_ID:
+        return "الكلية / كل الأقسام"
+    if not table_exists(conn, "departments"):
+        return f"قسم #{int(department_id)}"
+    cols = {str(c).strip().lower() for c in (fetch_table_columns(conn, "departments") or [])}
+    parts = [name for name in ("name_ar", "name_en", "name", "code") if name in cols]
+    if not parts:
+        return f"قسم #{int(department_id)}"
+    expr = "COALESCE(" + ", ".join(
+        f"NULLIF(TRIM(CAST({p} AS TEXT)), '')" for p in parts
+    ) + f", 'قسم #{int(department_id)}')"
+    row = conn.cursor().execute(
+        f"SELECT {expr} FROM departments WHERE id = ? LIMIT 1",
+        (int(department_id),),
+    ).fetchone()
+    if not row:
+        return f"قسم #{int(department_id)}"
+    return str(row[0] or f"قسم #{int(department_id)}")
+
+
+def _offering_enrollment_counts(
+    conn,
+    *,
+    course_names: list[str],
+    semester: str,
+) -> dict[str, int]:
+    """
+    عدد المسجّلين الأحياء لكل مقرر معروض في الفصل الحالي.
+    يفضّل مجموعات التدريس إن وُجدت للفصل، وإلا العدّ باسم المقرر.
+    طلبة نشطون فقط عند توفر enrollment_status. المقررات بلا تسجيل → 0.
+    """
+    names = sorted({(n or "").strip() for n in (course_names or []) if (n or "").strip()})
+    if not names or not table_exists(conn, "registrations"):
+        return {n: 0 for n in names}
+
+    sem = (semester or "").strip()
+    reg_cols = {c.lower() for c in (fetch_table_columns(conn, "registrations") or [])}
+    stu_cols = (
+        {c.lower() for c in (fetch_table_columns(conn, "students") or [])}
+        if table_exists(conn, "students")
+        else set()
+    )
+    active_only = "enrollment_status" in stu_cols
+    active_sql = (
+        " AND COALESCE(s.enrollment_status, 'active') = 'active'"
+        if active_only
+        else " AND COALESCE(r.student_id, '') <> ''"
+    )
+    join_stu = " LEFT JOIN students s ON s.student_id = r.student_id "
+
+    sem_sql = ""
+    sem_params: list = []
+    if sem and "semester" in reg_cols:
+        sem_sql = """
+          AND (
+            lower(trim(COALESCE(r.semester, ''))) = lower(trim(?))
+            OR trim(COALESCE(r.semester, '')) = ''
+          )
+        """
+        sem_params.append(sem)
+
+    out: dict[str, int] = {n: 0 for n in names}
+    name_key = {n.lower(): n for n in names}
+    placeholders = ",".join("?" for _ in names)
+    lower_names = [n.lower() for n in names]
+    cur = conn.cursor()
+
+    use_tg = (
+        sem
+        and "teaching_group_id" in reg_cols
+        and table_exists(conn, "teaching_groups")
+    )
+    courses_with_tg: set[str] = set()
+    if use_tg:
+        tg_rows = cur.execute(
+            f"""
+            SELECT id, course_name FROM teaching_groups
+            WHERE is_active = 1
+              AND lower(trim(COALESCE(semester, ''))) = lower(trim(?))
+              AND lower(trim(course_name)) IN ({placeholders})
+            """,
+            (sem, *lower_names),
+        ).fetchall()
+        all_tg_ids: list[int] = []
+        for row in tg_rows or []:
+            d = dict(row) if hasattr(row, "keys") else {"id": row[0], "course_name": row[1]}
+            cname = (d.get("course_name") or "").strip()
+            key = cname.lower()
+            if key not in name_key:
+                continue
+            tid = int(d.get("id") or 0)
+            if tid <= 0:
+                continue
+            courses_with_tg.add(key)
+            all_tg_ids.append(tid)
+
+        if all_tg_ids:
+            tg_ph = ",".join("?" for _ in all_tg_ids)
+            rows = cur.execute(
+                f"""
+                SELECT lower(trim(tg.course_name)) AS ckey,
+                       COUNT(DISTINCT r.student_id) AS student_count
+                FROM registrations r
+                JOIN teaching_groups tg ON tg.id = r.teaching_group_id
+                {join_stu}
+                WHERE r.teaching_group_id IN ({tg_ph})
+                  {active_sql}
+                  {sem_sql}
+                GROUP BY lower(trim(tg.course_name))
+                """,
+                tuple(all_tg_ids) + tuple(sem_params),
+            ).fetchall()
+            for row in rows or []:
+                d = dict(row) if hasattr(row, "keys") else {"ckey": row[0], "student_count": row[1]}
+                key = (d.get("ckey") or "").strip().lower()
+                canon = name_key.get(key)
+                if canon:
+                    out[canon] = int(d.get("student_count") or 0)
+
+    fallback_names = [name_key[k] for k in name_key if k not in courses_with_tg]
+    if fallback_names:
+        fb_lower = [n.lower() for n in fallback_names]
+        fb_ph = ",".join("?" for _ in fallback_names)
+        rows = cur.execute(
+            f"""
+            SELECT lower(trim(r.course_name)) AS ckey,
+                   COUNT(DISTINCT r.student_id) AS student_count
+            FROM registrations r
+            {join_stu}
+            WHERE lower(trim(r.course_name)) IN ({fb_ph})
+              {active_sql}
+              {sem_sql}
+            GROUP BY lower(trim(r.course_name))
+            """,
+            tuple(fb_lower) + tuple(sem_params),
+        ).fetchall()
+        for row in rows or []:
+            d = dict(row) if hasattr(row, "keys") else {"ckey": row[0], "student_count": row[1]}
+            key = (d.get("ckey") or "").strip().lower()
+            canon = name_key.get(key)
+            if canon:
+                out[canon] = int(d.get("student_count") or 0)
+
+    return out
+
+
+def prepare_term_offerings_preview_context(
+    conn,
+    *,
+    filter_department_id: int | None = None,
+    actor: str | None = None,
+    role: str | None = None,
+) -> dict:
+    """
+    سياق معاينة/طباعة عرض مقررات الفصل الحالي.
+    يعرض المقررات المختارة في قائمة القسم؛ يميّز المعتمد عن المسودة.
+    """
+    from backend.core.arabic_export import pdf_arabic_extra_css
+
+    _ensure_offerings_schema(conn)
+    parsed = _current_parsed(conn)
+    if not parsed:
+        return {
+            "ok": False,
+            "error": "عيّن الفصل الحالي أولاً من تشغيل الفصل.",
+            "error_code": "CURRENT_TERM_UNSET",
+        }
+
+    try:
+        actor_name = (actor if actor is not None else _actor()).strip()
+    except RuntimeError:
+        actor_name = (actor or "").strip()
+    try:
+        role_name = _normalize_role((role if role is not None else _role()) or "")
+    except RuntimeError:
+        role_name = _normalize_role((role or "").strip())
+    scope = resolve_effective_department_scope_id(conn, actor_name)
+    writer = _can_write_offerings(role_name, scope)
+    can_pick = role_name in _ADMIN_ROLES or role_name in ("college_dean", "academic_vice_dean")
+    term_key = parsed["term_key"]
+    ops_label = parsed.get("ops_label") or term_key
+
+    if writer:
+        list_dept = _list_department_id(scope)
+    elif can_pick and filter_department_id is not None:
+        list_dept = int(filter_department_id)
+    elif can_pick:
+        list_dept = None
+    elif scope is not None:
+        list_dept = int(scope)
+    else:
+        list_dept = COLLEGE_LIST_DEPT_ID
+
+    rows: list[dict] = []
+    states: list[dict] = []
+    if list_dept is not None:
+        state = get_offering_state(conn, term_key, list_dept)
+        states.append(state)
+        offered = _offered_map(conn, term_key, list_dept)
+        catalog_scope = None if int(list_dept) == COLLEGE_LIST_DEPT_ID else int(list_dept)
+        catalog = _annotate_offering_kinds(
+            conn, _catalog_courses(conn, department_id=catalog_scope)
+        )
+        by_name = {c["course_name"]: c for c in catalog}
+        for name, rec in sorted(offered.items(), key=lambda x: x[0]):
+            if (rec.get("status") or "") != STATUS_OFFERED:
+                continue
+            c = by_name.get(name) or {
+                "course_name": name,
+                "course_code": "",
+                "units": None,
+                "kind": KIND_DEPT,
+                "department_name": "",
+            }
+            kind = (c.get("kind") or KIND_DEPT).strip() or KIND_DEPT
+            rows.append(
+                {
+                    "course_name": name,
+                    "course_code": (c.get("course_code") or "") or "—",
+                    "units": c.get("units") if c.get("units") is not None else "—",
+                    "kind": kind,
+                    "kind_label": _kind_label_ar(kind),
+                    "department_name": (c.get("department_name") or "").strip() or "—",
+                    "proposed_instructor_id": rec.get("proposed_instructor_id"),
+                    "proposed_instructor_name": "",
+                }
+            )
+        department_label = _department_label(conn, list_dept)
+        is_published = (state.get("status") or "") == STATE_PUBLISHED
+        published_at = state.get("published_at") or ""
+        published_by = state.get("published_by") or ""
+    else:
+        published_depts = sorted(_published_department_ids(conn, term_key))
+        catalog = _annotate_offering_kinds(conn, _catalog_courses(conn, department_id=None))
+        by_name = {c["course_name"]: c for c in catalog}
+        seen: set[str] = set()
+        for did in published_depts:
+            st = get_offering_state(conn, term_key, did)
+            states.append(st)
+            offered = _offered_map(conn, term_key, did)
+            for name, rec in offered.items():
+                if (rec.get("status") or "") != STATUS_OFFERED:
+                    continue
+                if name in seen:
+                    continue
+                seen.add(name)
+                c = by_name.get(name) or {
+                    "course_name": name,
+                    "course_code": "",
+                    "units": None,
+                    "kind": KIND_DEPT,
+                    "department_name": "",
+                }
+                kind = (c.get("kind") or KIND_DEPT).strip() or KIND_DEPT
+                rows.append(
+                    {
+                        "course_name": name,
+                        "course_code": (c.get("course_code") or "") or "—",
+                        "units": c.get("units") if c.get("units") is not None else "—",
+                        "kind": kind,
+                        "kind_label": _kind_label_ar(kind),
+                        "department_name": (c.get("department_name") or "").strip()
+                        or _department_label(conn, did),
+                        "proposed_instructor_id": rec.get("proposed_instructor_id"),
+                        "proposed_instructor_name": "",
+                    }
+                )
+        rows.sort(key=lambda r: ((r.get("department_name") or ""), r.get("course_name") or ""))
+        department_label = "كل الأقسام المعتمدة"
+        is_published = bool(published_depts)
+        published_at = next((s.get("published_at") for s in states if s.get("published_at")), "") or ""
+        published_by = next((s.get("published_by") for s in states if s.get("published_by")), "") or ""
+
+    proposed_name_map = _instructor_names_by_id(
+        conn,
+        [r.get("proposed_instructor_id") for r in rows if r.get("proposed_instructor_id")],
+    )
+    for r in rows:
+        pid = r.get("proposed_instructor_id")
+        r["proposed_instructor_name"] = (
+            proposed_name_map.get(int(pid), "") if pid else ""
+        ) or "—"
+
+    enroll_map = _offering_enrollment_counts(
+        conn,
+        course_names=[r.get("course_name") or "" for r in rows],
+        semester=ops_label,
+    )
+    total_enrolled = 0
+    for r in rows:
+        n = int(enroll_map.get(r.get("course_name") or "", 0) or 0)
+        r["enrolled_count"] = n
+        total_enrolled += n
+
+    status_ar = "معتمد" if is_published else "مسودة (غير معتمد)"
+    now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+    qs = f"?department_id={int(list_dept)}" if list_dept is not None else ""
+    base_footer = (
+        "قائمة معتمدة للتسجيل — ليست جدولاً زمنياً. "
+        "عمود الأستاذ المقترح استرشادي فقط وليس تعييناً نهائياً."
+        if is_published
+        else "مسودة غير معتمدة — لا تُستخدم وثيقة رسمية للتسجيل حتى يتم الاعتماد. "
+        "عمود الأستاذ المقترح استرشادي فقط."
+    )
+    return {
+        "ok": True,
+        "title": "عرض مقررات الفصل المعتمد",
+        "term_key": term_key,
+        "ops_label": ops_label,
+        "department_id": list_dept,
+        "department_label": department_label,
+        "is_published": is_published,
+        "status_ar": status_ar,
+        "published_at": published_at or "—",
+        "published_by": published_by or "—",
+        "rows": rows,
+        "course_count": len(rows),
+        "total_enrolled": total_enrolled,
+        "export_date": now,
+        "generated_at": now,
+        "preview_banner_title": "معاينة عرض مقررات الفصل",
+        "preview_hide_names_toggle": True,
+        "pdf_download_url": f"/term_offerings/preview.pdf{qs}",
+        "pdf_arabic_css": pdf_arabic_extra_css(for_pdf=False),
+        "pdf_arabic_css_print": pdf_arabic_extra_css(for_pdf=True),
+        "can_pick_department": can_pick,
+        "footer_note": (
+            f"{base_footer} "
+            f"إجمالي المسجّلين (مجموع الصفوف): {total_enrolled} — تاريخ الطباعة: {now}."
+        ),
+    }
+
+
+def term_offerings_preview_excel_frames(ctx: dict) -> list[tuple[str, object]]:
+    import pandas as pd
+
+    rows = ctx.get("rows") or []
+    df = pd.DataFrame(
+        [
+            {
+                "الرمز": r.get("course_code") or "",
+                "المقرر": r.get("course_name") or "",
+                "الوحدات": r.get("units") if r.get("units") is not None else "",
+                "التصنيف": r.get("kind_label") or "",
+                "القسم": r.get("department_name") or "",
+                "أستاذ مقترح": (
+                    r.get("proposed_instructor_name")
+                    if (r.get("proposed_instructor_name") or "") not in ("", "—")
+                    else ""
+                ),
+                "عدد المسجّلين": int(r.get("enrolled_count") or 0),
+            }
+            for r in rows
+        ]
+    )
+    meta = pd.DataFrame(
+        [
+            {"البند": "الفصل", "القيمة": ctx.get("ops_label") or ""},
+            {"البند": "النطاق", "القيمة": ctx.get("department_label") or ""},
+            {"البند": "الحالة", "القيمة": ctx.get("status_ar") or ""},
+            {"البند": "تاريخ الاعتماد", "القيمة": ctx.get("published_at") or ""},
+            {"البند": "اعتمد بواسطة", "القيمة": ctx.get("published_by") or ""},
+            {"البند": "عدد المقررات", "القيمة": ctx.get("course_count") or 0},
+            {"البند": "إجمالي المسجّلين", "القيمة": ctx.get("total_enrolled") or 0},
+            {"البند": "تاريخ التصدير", "القيمة": ctx.get("export_date") or ""},
+        ]
+    )
+    return [("الغلاف", meta), ("المقررات", df)]

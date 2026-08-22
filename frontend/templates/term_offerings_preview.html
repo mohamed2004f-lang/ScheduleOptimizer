@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title|default('عرض مقررات الفصل') }}</title>
+  {% include "survey_export_pdf_styles.html" %}
+  <style>
+    {% if for_pdf %}
+    {{ pdf_arabic_css_print|safe }}
+    {% else %}
+    {{ pdf_arabic_css|safe }}
+    body { max-width: 960px; margin: 0 auto; padding: 20px 24px 40px; }
+    {% endif %}
+    .status-ok { color: #0f5132; font-weight: 600; }
+    .status-draft { color: #664d03; font-weight: 600; }
+    .warn-box {
+      background: #fff3cd; border-right: 4px solid #ffc107;
+      padding: 10px 12px; margin: 10px 0 16px;
+    }
+    .ok-box {
+      background: #d1e7dd; border-right: 4px solid #198754;
+      padding: 10px 12px; margin: 10px 0 16px;
+    }
+    table.tbl-offerings th:nth-child(1) { width: 10%; }
+    table.tbl-offerings th:nth-child(2) { width: 26%; }
+    table.tbl-offerings th:nth-child(3) { width: 8%; }
+    table.tbl-offerings th:nth-child(4) { width: 10%; }
+    table.tbl-offerings th:nth-child(5) { width: 14%; }
+    table.tbl-offerings th:nth-child(6) { width: 18%; }
+    table.tbl-offerings th:nth-child(7) { width: 14%; }
+    table.tbl-offerings td:nth-child(7) { text-align: center; font-weight: 600; }
+  </style>
+</head>
+<body>
+  {% if not for_pdf %}
+  {% set preview_banner_title = preview_banner_title|default('معاينة عرض مقررات الفصل') %}
+  {% set preview_hide_names_toggle = true %}
+  {% include "survey_export_preview_controls.html" %}
+  {% endif %}
+
+  {% if not ok|default(true) %}
+  <h1>عرض مقررات الفصل</h1>
+  <div class="warn-box">{{ error|default('تعذر تحميل المعاينة.') }}</div>
+  {% else %}
+  <h1>{{ title }}</h1>
+  <p class="meta">
+    الفصل الدراسي: <strong>{{ ops_label }}</strong> —
+    النطاق: <strong>{{ department_label }}</strong> —
+    الحالة:
+    {% if is_published %}
+    <span class="status-ok">{{ status_ar }}</span>
+    {% else %}
+    <span class="status-draft">{{ status_ar }}</span>
+    {% endif %}
+    —
+    تاريخ التصدير: <strong>{{ export_date }}</strong>
+  </p>
+
+  {% if is_published %}
+  <div class="ok-box">
+    قائمة معتمدة للتسجيل.
+    الاعتماد بتاريخ <strong>{{ published_at }}</strong>
+    بواسطة <strong>{{ published_by }}</strong>.
+    عدد المقررات: <strong>{{ course_count }}</strong> —
+    إجمالي المسجّلين: <strong>{{ total_enrolled|default(0) }}</strong>.
+  </div>
+  {% else %}
+  <div class="warn-box">
+    <strong>مسودة غير معتمدة.</strong>
+    هذه القائمة للمراجعة الداخلية فقط — لا تُستخدم وثيقة رسمية للتسجيل حتى يتم الاعتماد من رئيس القسم.
+    عدد المقررات المحددة: <strong>{{ course_count }}</strong> —
+    إجمالي المسجّلين: <strong>{{ total_enrolled|default(0) }}</strong>.
+  </div>
+  {% endif %}
+
+  <h2>المقررات المعروضة</h2>
+  {% if rows %}
+  <table class="tbl-offerings">
+    <thead>
+      <tr>
+        <th>الرمز</th>
+        <th>المقرر</th>
+        <th>الوحدات</th>
+        <th>التصنيف</th>
+        <th>القسم</th>
+        <th>أستاذ مقترح</th>
+        <th>عدد المسجّلين</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.course_code }}</td>
+        <td>{{ r.course_name }}</td>
+        <td>{{ r.units }}</td>
+        <td>{{ r.kind_label }}</td>
+        <td>{{ r.department_name }}</td>
+        <td>{{ r.proposed_instructor_name|default('—') }}</td>
+        <td>{{ r.enrolled_count|default(0) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="meta">لا توجد مقررات محددة في هذا العرض.</p>
+  {% endif %}
+
+  <p class="footer-note">{{ footer_note }}</p>
+  {% endif %}
+</body>
+</html>

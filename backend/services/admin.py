@@ -429,6 +429,421 @@ def admin_summary():
     return jsonify({"status": "ok", "data": data, "recent": recent})
 
 
+def _parse_iso_loose(value: str | None):
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _days_waiting(iso_ts: str | None) -> int | None:
+    dt = _parse_iso_loose(iso_ts)
+    if not dt:
+        return None
+    if dt.tzinfo is not None:
+        now = datetime.now(timezone.utc)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            now = now.astimezone(dt.tzinfo)
+    else:
+        now = datetime.utcnow()
+    return max(0, int((now - dt).total_seconds() // 86400))
+
+
+def _build_dashboard_ops_payload(conn) -> dict:
+    """ملخص تشغيلي للوحة القيادة: حالة الفصل، الجدول، العرض، المتابعة، الأرشيف."""
+    from backend.core.department_scope_policy import resolve_effective_department_scope_id
+    from backend.services.utilities import (
+        get_schedule_published_at,
+        get_schedule_updated_at,
+    )
+
+    cur = conn.cursor()
+    actor = (session.get("user") or session.get("username") or "").strip()
+    scope = resolve_effective_department_scope_id(conn, actor)
+
+    term_name, term_year = get_current_term(conn=conn)
+    term_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
+    term_key = ""
+    try:
+        from backend.services.term_engine import parse_ops_term, current_term_match_context
+
+        parsed = parse_ops_term(term_name, term_year)
+        if parsed:
+            term_key = str(parsed.get("term_key") or "")
+        else:
+            ctx = current_term_match_context(conn)
+            if ctx:
+                term_key = str(ctx.get("term_key") or "")
+                if not term_label:
+                    term_label = str(ctx.get("raw_label") or "").strip()
+    except Exception:
+        pass
+
+    published_at = get_schedule_published_at(conn)
+    updated_at = get_schedule_updated_at(conn)
+    schedule_rows = 0
+    try:
+        if table_exists(conn, "schedule"):
+            if term_label:
+                schedule_rows = int(
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) FROM schedule
+                        WHERE TRIM(COALESCE(semester, '')) = ?
+                           OR TRIM(COALESCE(semester, '')) LIKE ?
+                        """,
+                        (term_label, f"%{(term_year or '').strip()}%"),
+                    ).fetchone()[0]
+                    or 0
+                )
+            if schedule_rows <= 0:
+                schedule_rows = int(cur.execute("SELECT COUNT(*) FROM schedule").fetchone()[0] or 0)
+    except Exception:
+        schedule_rows = 0
+
+    pub_dt = _parse_iso_loose(published_at)
+    upd_dt = _parse_iso_loose(updated_at)
+    changed_since_publish = bool(
+        published_at and updated_at and upd_dt and pub_dt and upd_dt > pub_dt
+    )
+
+    offerings_status = "unset"
+    offerings_published_at = None
+    offered_count = 0
+    try:
+        from backend.services.term_offerings import (
+            STATE_DRAFT,
+            STATE_PUBLISHED,
+            STATUS_OFFERED,
+            _ensure_offerings_schema,
+            _list_department_id,
+            _offered_map,
+            get_offering_state,
+        )
+
+        _ensure_offerings_schema(conn)
+        if term_key:
+            list_dept = _list_department_id(scope)
+            state = get_offering_state(conn, term_key, list_dept)
+            offerings_status = (state.get("status") or STATE_DRAFT).strip() or STATE_DRAFT
+            offerings_published_at = state.get("published_at")
+            offered = _offered_map(conn, term_key, list_dept)
+            offered_count = sum(
+                1 for rec in (offered or {}).values() if (rec.get("status") or "") == STATUS_OFFERED
+            )
+    except Exception:
+        offerings_status = "unavailable"
+
+    # مقررات عالية المخاطرة / تحتاج متابعة
+    followup: list[dict] = []
+    risk_breakdown = {"high_failed": 0, "no_instructor": 0, "no_section": 0}
+    try:
+        from backend.services.students import (
+            _failed_course_report_items,
+            _get_allowed_student_ids_for_role,
+        )
+
+        allowed = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        failed_items = []
+        # None = بدون قيد؛ set فارغ = لا طلاب في النطاق
+        if allowed is None or (isinstance(allowed, (set, list, tuple)) and len(allowed) > 0):
+            failed_items = _failed_course_report_items(
+                conn, allowed_student_ids=allowed, course_name_like=None
+            )
+        by_course: dict[tuple, dict] = {}
+        for it in failed_items:
+            ck = (it.get("course_name") or "", it.get("course_code") or "")
+            s = by_course.get(ck)
+            if not s:
+                s = {
+                    "course_name": ck[0],
+                    "course_code": ck[1],
+                    "failed_count": 0,
+                }
+                by_course[ck] = s
+            s["failed_count"] += 1
+        summary = sorted(
+            by_course.values(),
+            key=lambda x: (-int(x.get("failed_count") or 0), x.get("course_name") or ""),
+        )
+
+        schedule_by_course: dict[str, dict] = {}
+        if table_exists(conn, "schedule"):
+            rows = cur.execute(
+                """
+                SELECT COALESCE(course_name, '') AS course_name,
+                       COALESCE(instructor, '') AS instructor,
+                       COALESCE(instructor_id, 0) AS instructor_id
+                FROM schedule
+                """
+            ).fetchall()
+            for r in rows:
+                cn = str(r["course_name"] or "").strip()
+                if not cn:
+                    continue
+                entry = schedule_by_course.setdefault(
+                    cn, {"has_section": True, "has_instructor": False}
+                )
+                inst = str(r["instructor"] or "").strip()
+                try:
+                    iid = int(r["instructor_id"] or 0)
+                except (TypeError, ValueError):
+                    iid = 0
+                if inst or iid > 0:
+                    entry["has_instructor"] = True
+
+        tg_by_course: set[str] = set()
+        if table_exists(conn, "teaching_groups"):
+            tg_rows = cur.execute(
+                """
+                SELECT DISTINCT COALESCE(course_name, '') AS course_name
+                FROM teaching_groups
+                WHERE COALESCE(is_active, 1) = 1
+                  AND COALESCE(instructor_id, 0) > 0
+                """
+            ).fetchall()
+            tg_by_course = {
+                str(r["course_name"] or "").strip()
+                for r in tg_rows
+                if str(r["course_name"] or "").strip()
+            }
+
+        proposed_by_course: set[str] = set()
+        try:
+            if term_key:
+                from backend.services.term_offerings import _list_department_id, _offered_map
+
+                for name, rec in (_offered_map(conn, term_key, _list_department_id(scope)) or {}).items():
+                    try:
+                        pid = int(rec.get("proposed_instructor_id") or 0)
+                    except (TypeError, ValueError):
+                        pid = 0
+                    if pid > 0:
+                        proposed_by_course.add((name or "").strip())
+        except Exception:
+            pass
+
+        for s in summary[:40]:
+            cn = (s.get("course_name") or "").strip()
+            failed_count = int(s.get("failed_count") or 0)
+            sch = schedule_by_course.get(cn) or {}
+            has_section = bool(sch.get("has_section"))
+            has_instructor = bool(sch.get("has_instructor")) or cn in tg_by_course or cn in proposed_by_course
+            reasons: list[str] = []
+            if failed_count >= 1:
+                reasons.append("high_failed")
+            if not has_section:
+                reasons.append("no_section")
+            elif not has_instructor:
+                reasons.append("no_instructor")
+            if "high_failed" in reasons:
+                risk_breakdown["high_failed"] += 1
+            if "no_section" in reasons:
+                risk_breakdown["no_section"] += 1
+            if "no_instructor" in reasons:
+                risk_breakdown["no_instructor"] += 1
+            followup.append(
+                {
+                    "course_name": cn,
+                    "course_code": s.get("course_code") or "",
+                    "failed_count": failed_count,
+                    "has_section": has_section,
+                    "has_instructor": has_instructor,
+                    "reasons": reasons,
+                }
+            )
+    except Exception:
+        # لا نخفي البيانات: إن فشل الإثراء نعرض ملخص الرسوب فقط
+        try:
+            from backend.services.students import (
+                _failed_course_report_items,
+                _get_allowed_student_ids_for_role,
+            )
+
+            allowed = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+            failed_items = []
+            if allowed is None or (isinstance(allowed, (set, list, tuple)) and len(allowed) > 0):
+                failed_items = _failed_course_report_items(
+                    conn, allowed_student_ids=allowed, course_name_like=None
+                )
+            by_course = {}
+            for it in failed_items:
+                ck = (it.get("course_name") or "", it.get("course_code") or "")
+                s = by_course.get(ck)
+                if not s:
+                    s = {"course_name": ck[0], "course_code": ck[1], "failed_count": 0}
+                    by_course[ck] = s
+                s["failed_count"] += 1
+            summary = sorted(
+                by_course.values(),
+                key=lambda x: (-int(x.get("failed_count") or 0), x.get("course_name") or ""),
+            )
+            for s in summary[:40]:
+                risk_breakdown["high_failed"] += 1
+                followup.append(
+                    {
+                        "course_name": s.get("course_name") or "",
+                        "course_code": s.get("course_code") or "",
+                        "failed_count": int(s.get("failed_count") or 0),
+                        "has_section": None,
+                        "has_instructor": None,
+                        "reasons": ["high_failed"],
+                    }
+                )
+        except Exception:
+            followup = []
+            risk_breakdown = {"high_failed": 0, "no_instructor": 0, "no_section": 0}
+
+    # أرشيف نسخ الجدول غير الصالحة
+    unusable_versions = 0
+    latest_usable_version = None
+    try:
+        from backend.services.schedule import (
+            _ensure_schedule_version_tables,
+            _snapshot_usability,
+        )
+        import json as _json
+
+        _ensure_schedule_version_tables(cur)
+        if table_exists(conn, "schedule_versions"):
+            if term_label:
+                vrows = cur.execute(
+                    """
+                    SELECT id, version_no, snapshot_json, generated_at
+                    FROM schedule_versions
+                    WHERE semester = ?
+                    ORDER BY id DESC
+                    LIMIT 40
+                    """,
+                    (term_label,),
+                ).fetchall()
+            else:
+                vrows = cur.execute(
+                    """
+                    SELECT id, version_no, snapshot_json, generated_at
+                    FROM schedule_versions
+                    ORDER BY id DESC
+                    LIMIT 40
+                    """
+                ).fetchall()
+            for vr in vrows or []:
+                try:
+                    snap = _json.loads(vr[2] or "{}")
+                except Exception:
+                    snap = {}
+                usability = _snapshot_usability(snap if isinstance(snap, dict) else {})
+                if not usability.get("usable"):
+                    unusable_versions += 1
+                elif latest_usable_version is None:
+                    latest_usable_version = {
+                        "id": int(vr[0]),
+                        "version_no": int(vr[1] or 0),
+                        "generated_at": vr[3] or "",
+                    }
+    except Exception:
+        unusable_versions = 0
+
+    alerts: list[dict] = []
+    if not term_label:
+        alerts.append(
+            {
+                "level": "warning",
+                "code": "term_unset",
+                "message": "الفصل الحالي غير معيّن — عيّنه من تشغيل الفصل.",
+                "href": "/term_ops",
+            }
+        )
+    if schedule_rows > 0 and not published_at:
+        alerts.append(
+            {
+                "level": "warning",
+                "code": "schedule_unpublished",
+                "message": f"يوجد جدول مسودة ({schedule_rows} صف) غير منشور للطلبة.",
+                "href": "/schedule_form",
+            }
+        )
+    if changed_since_publish:
+        alerts.append(
+            {
+                "level": "info",
+                "code": "schedule_draft_changed",
+                "message": "تم تعديل الجدول بعد آخر نشر — أعد النشر عند الاعتماد.",
+                "href": "/schedule_form",
+            }
+        )
+    if offerings_status not in ("published", "unavailable", "unset") and term_key:
+        alerts.append(
+            {
+                "level": "info",
+                "code": "offerings_draft",
+                "message": "عرض المقررات للفصل الحالي ما زال مسودة (غير معتمد).",
+                "href": "/term_offerings",
+            }
+        )
+    if unusable_versions > 0:
+        alerts.append(
+            {
+                "level": "danger",
+                "code": "archive_unusable",
+                "message": f"يوجد {unusable_versions} نسخة جدول غير صالحة في الأرشيف — يُفضّل حذفها.",
+                "href": "/schedule_versions_page",
+            }
+        )
+
+    return {
+        "term": {
+            "term_name": term_name or "",
+            "term_year": term_year or "",
+            "term_label": term_label,
+            "term_key": term_key,
+        },
+        "schedule": {
+            "published": bool(published_at),
+            "published_at": published_at,
+            "updated_at": updated_at,
+            "row_count": schedule_rows,
+            "changed_since_publish": changed_since_publish,
+        },
+        "offerings": {
+            "status": offerings_status,
+            "published_at": offerings_published_at,
+            "offered_count": offered_count,
+        },
+        "archive": {
+            "unusable_count": unusable_versions,
+            "latest_usable": latest_usable_version,
+        },
+        "risk_breakdown": risk_breakdown,
+        "followup_courses": followup[:12],
+        "alerts": alerts,
+    }
+
+
+@admin_bp.route("/dashboard_ops")
+@login_required
+@role_required(
+    "admin",
+    "admin_main",
+    "system_admin",
+    "college_dean",
+    "academic_vice_dean",
+    "head_of_department",
+)
+def admin_dashboard_ops():
+    try:
+        with get_connection() as conn:
+            payload = _build_dashboard_ops_payload(conn)
+        return jsonify({"status": "ok", **payload})
+    except Exception:
+        current_app.logger.exception("admin_dashboard_ops failed")
+        return jsonify({"status": "error", "message": "فشل تحميل ملخص لوحة القيادة"}), 500
+
+
 # --- إصدار المشروع / آخر تعديل للبيانات (بدون Git — يتجنب مشاكل الترميز وكشف المستودع) ---
 
 PROJECT_VERSION_LABEL_KEY = "project_version_label"

@@ -52,8 +52,10 @@ COURSE_EVAL_RESPONSE_RATE_SETTING_KEY = "course_eval_response_rate_percent"
 COURSE_EVAL_DEFAULT_RATE_PERCENT = 50
 COURSE_EVAL_RATE_MIN_PERCENT = 5
 COURSE_EVAL_RATE_MAX_PERCENT = 100
-# عند غياب بيانات التسجيل لا تُطبَّق النسبة — لا يُعرض التجميع
+# عند غياب بيانات التسجيل لا تُطبَّق النسبة — لا يُعرض التجميع (للفصل الحالي)
 COURSE_EVAL_NO_ENROLLMENT_MIN = 2**30
+# فصل سابق بلا مسجّلين أحياء: اعرض نتيجة الشعبة عند بلوغ هذا الحد من التقييمات
+COURSE_EVAL_HISTORICAL_ORPHAN_MIN = 3
 
 COLLEGE_NAME_AR = "كلية الهندسة"
 
@@ -372,11 +374,84 @@ def course_eval_is_aggregated(response_count: int, enrolled: int, *, conn=None) 
     return int(response_count) >= min_req
 
 
-def _course_registration_count(conn, course_name: str) -> int:
+def is_course_eval_historical_term(conn, semester: str) -> bool:
+    """فصل سابق أو مُغلق بلقطة — يُسمح بعرض نتائج الشعب عند غياب التسجيلات الحية."""
+    sem = " ".join((semester or "").split()).strip()
+    if not sem:
+        return False
+    current = " ".join((term_label_from_conn(conn) or "").split()).strip()
+    if current and sem != current:
+        return True
+    try:
+        from backend.services.survey_snapshots import is_semester_closed
+
+        if is_semester_closed(conn, sem, None):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _archived_registration_count(
+    conn,
+    course_name: str,
+    semester: str,
+    *,
+    teaching_group_id: int | None = None,
+) -> int:
+    """عدد المسجّلين من أرشيف التسجيلات بعد إغلاق الفصل."""
+    cname = (course_name or "").strip()
+    sem = (semester or "").strip()
+    if not cname or not sem or not table_exists(conn, "term_registration_archives"):
+        return 0
+    cur = conn.cursor()
+    cols = {c.lower() for c in fetch_table_columns(conn, "term_registration_archives")}
+    tg = int(teaching_group_id or 0)
+    params: list[Any] = [cname, sem, sem]
+    tg_sql = ""
+    if tg > 0 and "teaching_group_id" in cols:
+        tg_sql = " AND teaching_group_id = ?"
+        params.append(tg)
+    row = cur.execute(
+        f"""
+        SELECT COUNT(DISTINCT student_id)
+        FROM term_registration_archives
+        WHERE lower(trim(course_name)) = lower(trim(?))
+          AND (
+            lower(trim(COALESCE(archived_term, ''))) = lower(trim(?))
+            OR lower(trim(COALESCE(semester, ''))) = lower(trim(?))
+          )
+          {tg_sql}
+        """,
+        tuple(params),
+    ).fetchone()
+    return int(_row_val(row, 0) or 0)
+
+
+def _course_registration_count(conn, course_name: str, semester: str | None = None) -> int:
     cname = (course_name or "").strip()
     if not cname or not table_exists(conn, "registrations"):
         return 0
     cur = conn.cursor()
+    cols = {c.lower() for c in fetch_table_columns(conn, "registrations")}
+    sem = (semester or "").strip()
+    if sem and "semester" in cols:
+        row = cur.execute(
+            """
+            SELECT COUNT(DISTINCT student_id)
+            FROM registrations
+            WHERE lower(trim(course_name)) = lower(trim(?))
+              AND (
+                lower(trim(COALESCE(semester, ''))) = lower(trim(?))
+                OR trim(COALESCE(semester, '')) = ''
+              )
+            """,
+            (cname, sem),
+        ).fetchone()
+        n = int(_row_val(row, 0) or 0)
+        if n > 0:
+            return n
+        return _archived_registration_count(conn, cname, sem)
     row = cur.execute(
         """
         SELECT COUNT(DISTINCT student_id)
@@ -385,7 +460,12 @@ def _course_registration_count(conn, course_name: str) -> int:
         """,
         (cname,),
     ).fetchone()
-    return int(_row_val(row, 0) or 0)
+    n = int(_row_val(row, 0) or 0)
+    if n > 0:
+        return n
+    if sem:
+        return _archived_registration_count(conn, cname, sem)
+    return 0
 
 
 def _course_section_count(conn, course_name: str, semester: str) -> int:
@@ -455,35 +535,77 @@ def _college_course_eval_enrolled(
     department_id: int | None = None,
 ) -> int:
     """عدد الطلاب المسجّلين في المقررات التي وُجد لها تقييم في الفصل."""
-    if not table_exists(conn, "registrations") or not table_exists(conn, "course_evaluations"):
+    if not table_exists(conn, "course_evaluations"):
         return 0
     cur = conn.cursor()
+    n = 0
+    if table_exists(conn, "registrations"):
+        if department_id is not None:
+            pk = schedule_pk_column(conn)
+            row = cur.execute(
+                f"""
+                SELECT COUNT(DISTINCT r.student_id)
+                FROM registrations r
+                INNER JOIN course_evaluations e
+                    ON lower(trim(e.course_name)) = lower(trim(r.course_name))
+                   AND e.semester = ?
+                WHERE EXISTS (
+                    SELECT 1 FROM schedule sch
+                    WHERE sch.{pk} = e.section_id AND sch.department_id = ?
+                )
+                """,
+                (semester, int(department_id)),
+            ).fetchone()
+        else:
+            row = cur.execute(
+                """
+                SELECT COUNT(DISTINCT r.student_id)
+                FROM registrations r
+                INNER JOIN course_evaluations e
+                    ON lower(trim(e.course_name)) = lower(trim(r.course_name))
+                   AND e.semester = ?
+                """,
+                (semester,),
+            ).fetchone()
+        n = int(_row_val(row, 0) or 0)
+    if n > 0:
+        return n
+    if not table_exists(conn, "term_registration_archives"):
+        return 0
     if department_id is not None:
         pk = schedule_pk_column(conn)
         row = cur.execute(
             f"""
-            SELECT COUNT(DISTINCT r.student_id)
-            FROM registrations r
+            SELECT COUNT(DISTINCT a.student_id)
+            FROM term_registration_archives a
             INNER JOIN course_evaluations e
-                ON lower(trim(e.course_name)) = lower(trim(r.course_name))
+                ON lower(trim(e.course_name)) = lower(trim(a.course_name))
                AND e.semester = ?
-            WHERE EXISTS (
+            WHERE (
+                lower(trim(COALESCE(a.archived_term, ''))) = lower(trim(?))
+                OR lower(trim(COALESCE(a.semester, ''))) = lower(trim(?))
+            )
+              AND EXISTS (
                 SELECT 1 FROM schedule sch
                 WHERE sch.{pk} = e.section_id AND sch.department_id = ?
             )
             """,
-            (semester, int(department_id)),
+            (semester, semester, semester, int(department_id)),
         ).fetchone()
     else:
         row = cur.execute(
             """
-            SELECT COUNT(DISTINCT r.student_id)
-            FROM registrations r
+            SELECT COUNT(DISTINCT a.student_id)
+            FROM term_registration_archives a
             INNER JOIN course_evaluations e
-                ON lower(trim(e.course_name)) = lower(trim(r.course_name))
+                ON lower(trim(e.course_name)) = lower(trim(a.course_name))
                AND e.semester = ?
+            WHERE (
+                lower(trim(COALESCE(a.archived_term, ''))) = lower(trim(?))
+                OR lower(trim(COALESCE(a.semester, ''))) = lower(trim(?))
+            )
             """,
-            (semester,),
+            (semester, semester, semester),
         ).fetchone()
     return int(_row_val(row, 0) or 0)
 
@@ -499,15 +621,91 @@ def section_enrolled_count(
     """
     عدد مسجّلي الشعبة/المجموعة.
     إن وُجد teaching_group_id يُستخدم COUNT الفعلي؛ وإلا تقدير قديم ÷ عدد الشعب.
+    يبحث أيضاً في أرشيف التسجيلات للفصول السابقة.
     """
     if teaching_group_id is not None and int(teaching_group_id) > 0:
         from backend.services import teaching_groups as tg_svc
-        return tg_svc.count_registrations_for_teaching_group(conn, int(teaching_group_id))
-    total = _course_registration_count(conn, course_name)
+
+        n = tg_svc.count_registrations_for_teaching_group(conn, int(teaching_group_id))
+        if n > 0:
+            return n
+        archived_tg = _archived_registration_count(
+            conn, course_name, semester, teaching_group_id=int(teaching_group_id)
+        )
+        if archived_tg > 0:
+            return archived_tg
+        return _archived_registration_count(conn, course_name, semester)
+    total = _course_registration_count(conn, course_name, semester=semester)
     if total <= 0:
         return 0
     n_sections = max(1, int(section_count or 1))
     return max(1, int(math.ceil(total / n_sections)))
+
+
+def resolve_course_eval_enrollment(
+    conn,
+    *,
+    course_name: str,
+    semester: str,
+    response_count: int,
+    section_count: int = 1,
+    teaching_group_id: int | None = None,
+) -> tuple[int, int, bool, str]:
+    """
+    (enrolled, min_required, aggregated, enrollment_source)
+    القاعدة الرسمية: إظهار النتيجة عند بلوغ 50% (قابل للتعديل) من المسجّلين الفعليين.
+    enrollment_source: live | grades | archive | historical_orphan | none
+    """
+    cname = (course_name or "").strip()
+    sem = (semester or "").strip()
+    count = int(response_count or 0)
+    enrolled = section_enrolled_count(
+        conn,
+        cname,
+        sem,
+        section_count=section_count,
+        teaching_group_id=teaching_group_id,
+    )
+    source = "live" if enrolled > 0 else "none"
+    if enrolled <= 0:
+        enrolled = _grades_registration_count(conn, cname, sem)
+        if enrolled > 0:
+            source = "grades"
+    if enrolled <= 0 and sem:
+        enrolled = _archived_registration_count(
+            conn, cname, sem, teaching_group_id=teaching_group_id
+        )
+        if enrolled <= 0 and teaching_group_id:
+            enrolled = _archived_registration_count(conn, cname, sem)
+        if enrolled > 0:
+            source = "archive"
+    if enrolled > 0:
+        min_req = course_eval_min_required(enrolled, conn=conn)
+        return enrolled, min_req, count >= min_req, source
+    # لا مسجّلين محفوظين: لا نخفي النتائج الإدارية لفصل سابق إن وُجدت تقييمات كافية
+    if count > 0 and is_course_eval_historical_term(conn, sem):
+        min_req = COURSE_EVAL_HISTORICAL_ORPHAN_MIN
+        return 0, min_req, count >= min_req, "historical_orphan"
+    return 0, COURSE_EVAL_NO_ENROLLMENT_MIN, False, "none"
+
+
+def _grades_registration_count(conn, course_name: str, semester: str) -> int:
+    """عدد الطلبة من سجل الدرجات لنفس المقرر/الفصل (بديل عند غياب التسجيلات)."""
+    cname = (course_name or "").strip()
+    sem = (semester or "").strip()
+    if not cname or not sem or not table_exists(conn, "grades"):
+        return 0
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT COUNT(DISTINCT student_id)
+        FROM grades
+        WHERE lower(trim(course_name)) = lower(trim(?))
+          AND lower(trim(semester)) = lower(trim(?))
+        """,
+        (cname, sem),
+    ).fetchone()
+    return int(_row_val(row, 0) or 0)
 
 
 def _row_val(row, idx: int = 0, key: str | None = None):
@@ -1071,12 +1269,14 @@ def _finalize_course_eval_unit_report(
         conn, semester=semester, department_id=department_id, eval_cache=eval_cache
     )
     if summary_only:
+        min_agg = report.get("min_aggregate")
+        if min_agg is None:
+            min_agg = course_eval_min_required(enrolled, conn=conn)
         report.update(
             {
                 "template_code": "student_course",
                 "title_ar": title,
-                "min_aggregate": report.get("min_aggregate")
-                or course_eval_min_required(enrolled, conn=conn),
+                "min_aggregate": min_agg,
                 "course_eval_policy_ar": meta["course_eval_policy_ar"],
                 "questions": [],
                 "weakest_item": "—",
@@ -1090,12 +1290,14 @@ def _finalize_course_eval_unit_report(
             }
         )
         return report
+    min_agg = report.get("min_aggregate")
+    if min_agg is None:
+        min_agg = course_eval_min_required(enrolled, conn=conn)
     report.update(
         {
             "template_code": "student_course",
             "title_ar": title,
-            "min_aggregate": report.get("min_aggregate")
-            or course_eval_min_required(enrolled, conn=conn),
+            "min_aggregate": min_agg,
             "course_eval_policy_ar": meta["course_eval_policy_ar"],
             "questions": questions,
             "weakest_item": weakest,
@@ -1154,25 +1356,42 @@ def build_course_eval_section_report(
     iid = int(group["instructor_id"])
     tgid = int(group.get("teaching_group_id") or 0)
     cname = group["course_name"]
+    if tgid <= 0:
+        # استرجاع مجموعة التدريس من التقييمات إن غابت من الملخص
+        ce_cols_peek = _course_eval_columns_cached(conn, eval_cache=eval_cache)
+        if "teaching_group_id" in ce_cols_peek:
+            cur = conn.cursor()
+            row = cur.execute(
+                """
+                SELECT COALESCE(MAX(teaching_group_id), 0)
+                FROM course_evaluations
+                WHERE semester = ? AND section_id = ?
+                  AND lower(trim(course_name)) = lower(trim(?))
+                  AND instructor_id = ?
+                """,
+                (sem, sid, cname, iid),
+            ).fetchone()
+            tgid = int(_row_val(row, 0) or 0)
     reg_total = _cache_get(
         eval_cache,
-        ("reg_count", cname),
-        lambda: _course_registration_count(conn, cname),
+        ("reg_count", cname, sem),
+        lambda: _course_registration_count(conn, cname, semester=sem),
     )
     n_groups = _cache_get(
         eval_cache,
         ("tg_count", cname, sem, iid),
         lambda: _course_teaching_group_count(conn, cname, sem, instructor_id=iid),
     )
-    enrolled = section_enrolled_count(
+    enrolled, min_req, aggregated, enrollment_source = resolve_course_eval_enrollment(
         conn,
-        cname,
-        sem,
+        course_name=cname,
+        semester=sem,
+        response_count=count,
         section_count=n_groups,
         teaching_group_id=tgid or None,
     )
-    min_req = course_eval_min_required(enrolled, conn=conn)
-    aggregated = course_eval_is_aggregated(count, enrolled, conn=conn)
+    if enrolled > 0 and reg_total < enrolled:
+        reg_total = enrolled
     ce_cols = _course_eval_columns_cached(conn, eval_cache=eval_cache)
     if tgid > 0 and "teaching_group_id" in ce_cols:
         where_sql = " AND e.teaching_group_id = ? AND e.course_name = ? AND e.instructor_id = ?"
@@ -1206,6 +1425,7 @@ def build_course_eval_section_report(
         "response_rate_percent": round((count / enrolled) * 100.0, 1) if enrolled > 0 else None,
         "response_count": count,
         "aggregated": aggregated,
+        "enrollment_source": enrollment_source,
         "overall_score_percent": overall,
         "questions": questions,
         "group_type": "section",
@@ -1253,9 +1473,13 @@ def build_course_eval_by_course_report(
         return None
 
     count = sum(int(g["response_count"]) for g in groups)
-    enrolled = _course_registration_count(conn, cname)
-    min_req = course_eval_min_required(enrolled, conn=conn)
-    aggregated = course_eval_is_aggregated(count, enrolled, conn=conn)
+    enrolled, min_req, aggregated, enrollment_source = resolve_course_eval_enrollment(
+        conn,
+        course_name=cname,
+        semester=sem,
+        response_count=count,
+        section_count=max(1, len(groups)),
+    )
     dept_sql, dept_params = _course_eval_dept_filter(conn, department_id)
     where_sql = (
         " AND lower(trim(e.course_name)) = lower(trim(?)) AND e.instructor_id = ?"
@@ -1287,6 +1511,7 @@ def build_course_eval_by_course_report(
         "response_rate_percent": round((count / enrolled) * 100.0, 1) if enrolled > 0 else None,
         "response_count": count,
         "aggregated": aggregated,
+        "enrollment_source": enrollment_source,
         "overall_score_percent": overall,
         "questions": questions,
         "group_type": "course_instructor",
@@ -1458,8 +1683,18 @@ def build_course_eval_report(
     ).fetchone()
     count = int((count_row[0] if count_row else 0) or 0)
     enrolled = _college_course_eval_enrolled(conn, sem, department_id)
-    min_n = course_eval_min_required(enrolled, conn=conn)
-    aggregated = course_eval_is_aggregated(count, enrolled, conn=conn)
+    if enrolled > 0:
+        min_n = course_eval_min_required(enrolled, conn=conn)
+        aggregated = count >= min_n
+        enrollment_source = "live"
+    elif count > 0 and is_course_eval_historical_term(conn, sem):
+        min_n = COURSE_EVAL_HISTORICAL_ORPHAN_MIN
+        aggregated = count >= min_n
+        enrollment_source = "historical_orphan"
+    else:
+        min_n = COURSE_EVAL_NO_ENROLLMENT_MIN
+        aggregated = False
+        enrollment_source = "none"
     overall = _avg_eval_score(conn, cur, sem, department_id) if aggregated else None
 
     questions: list[dict] = []
@@ -1499,6 +1734,7 @@ def build_course_eval_report(
         "min_aggregate": min_n,
         "response_rate_percent": round((count / enrolled) * 100.0, 1) if enrolled > 0 else None,
         "aggregated": aggregated,
+        "enrollment_source": enrollment_source,
         "overall_score_percent": round(overall, 1) if overall is not None else None,
         "questions": questions,
         "compliance_status": compliance,

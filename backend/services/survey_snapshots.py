@@ -212,6 +212,47 @@ def list_closed_semesters(
     return out
 
 
+def course_eval_summary_from_closure_snapshot(
+    conn,
+    semester: str,
+    department_id: int | None = None,
+    *,
+    live_summary: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """
+    عند فصل مُغلق: أعد ملخص تقييم المقرر من اللقطة المحفوظة.
+    الصفحة الحية تعيد الحساب من التسجيلات الحالية؛ بعد أرشفة التسجيلات
+    ينخفض المسجّلون فيختفي التجميع رغم وجود التقييمات واللقطة.
+    """
+    snaps = list_semester_snapshots(conn, semester, department_id)
+    # إن أُغلق على نطاق الكلية (عميد) والصفحة تُعرض لقسم — جرّب لقطة الكلية.
+    if department_id is not None and not any(
+        (s.get("template_code") or "") == "student_course" for s in snaps
+    ):
+        snaps = list_semester_snapshots(conn, semester, None)
+    snap = next((s for s in snaps if (s.get("template_code") or "") == "student_course"), None)
+    if not snap:
+        return None
+    base = dict(live_summary or {})
+    base.update(
+        {
+            "template_code": "student_course",
+            "title_ar": snap.get("title_ar") or base.get("title_ar") or "تقييم المقرر والأستاذ (طالب)",
+            "semester": (semester or "").strip(),
+            "response_count": int(snap.get("response_count") or 0),
+            "min_aggregate": int(snap.get("min_aggregate") or 0),
+            "aggregated": bool(int(snap.get("aggregated") or 0)),
+            "overall_score_percent": snap.get("overall_score_percent"),
+            "compliance_status_ar": snap.get("compliance_status_ar") or base.get("compliance_status_ar"),
+            "questions": snap.get("questions") or [],
+            "primary_accreditation": snap.get("primary_accreditation")
+            or base.get("primary_accreditation"),
+            "from_closure_snapshot": True,
+        }
+    )
+    return base
+
+
 def list_semester_snapshots(
     conn,
     semester: str,

@@ -78,7 +78,7 @@
       <button type="button" id="btnNamesOff" data-names="off" title="لشواهد الاعتماد والطباعة الرسمية">إخفاء الأسماء</button>
     </div>
     {% endif %}
-    <button type="button" class="btn-print" onclick="window.print()">طباعة / حفظ PDF (موصى به)</button>
+    <button type="button" class="btn-print" id="btnPreviewPrint">طباعة / حفظ PDF (موصى به)</button>
     {% if pdf_download_url %}
     <a class="btn-pdf-dl" href="{{ pdf_download_url }}" title="تنزيل PDF عبر Chromium">تنزيل PDF</a>
     {% endif %}
@@ -95,8 +95,13 @@
 <p class="preview-mode-note preview-mode-note-anon">
   <strong>التنسيق الحالي:</strong> شاهد اعتماد — نصوص حرة مجهولة الهوية (قائمة مرقّمة بدون أسماء).
 </p>
-<script>
+{% endif %}
+<script{% if csp_nonce is defined and csp_nonce %} nonce="{{ csp_nonce }}"{% endif %}>
 (function () {
+  document.getElementById('btnPreviewPrint')?.addEventListener('click', function () {
+    window.print();
+  });
+  {% if not preview_hide_names_toggle %}
   var KEY = 'surveyPreviewShowNames';
   function apply(show) {
     document.body.classList.toggle('preview-names-on', show);
@@ -119,12 +124,12 @@
       if (s === '1') return true;
       if (s === '0') return false;
     } catch (e) {}
-    return false; /* افتراضي: إخفاء الأسماء (أنسب للطباعة الرسمية) */
+    return false;
   }
   document.getElementById('btnNamesOn')?.addEventListener('click', function () { apply(true); });
   document.getElementById('btnNamesOff')?.addEventListener('click', function () { apply(false); });
   apply(fromQuery());
+  {% endif %}
 })();
 </script>
-{% endif %}
 {% endif %}

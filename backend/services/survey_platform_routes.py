@@ -114,6 +114,7 @@ from backend.services.survey_snapshots import (
     list_closed_semesters,
     list_cycle_snapshots,
     list_semester_snapshots,
+    course_eval_summary_from_closure_snapshot,
     survey_archive_dir,
 )
 from backend.services.survey_completion import (
@@ -1047,6 +1048,18 @@ def register_survey_platform_routes(bp) -> None:
             except Exception:
                 course_eval_summary["primary_indicator"] = "INST-09-15"
             semester_closure = get_semester_closure(conn, sem, dept_id)
+            if not semester_closure and dept_id is not None:
+                semester_closure = get_semester_closure(conn, sem, None)
+            # فصل مُغلق: اعرض لقطة تقييم المقرر المحفوظة بدل إعادة الحساب الحي
+            # (التسجيلات غالباً أُرشِفت فيختفي شرط نسبة المشاركة).
+            if semester_closure:
+                frozen = course_eval_summary_from_closure_snapshot(
+                    conn, sem, dept_id, live_summary=course_eval_summary
+                )
+                if frozen:
+                    course_eval_summary = frozen
+                    if not course_eval_summary.get("primary_indicator"):
+                        course_eval_summary["primary_indicator"] = "INST-09-15"
             agg_for_closure = sum(1 for a in aggregates if a.get("aggregated"))
             total_for_closure = len(aggregates) + 1
             if course_eval_summary.get("aggregated"):

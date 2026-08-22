@@ -219,7 +219,8 @@
                 <select id="newInstructor" class="form-select" aria-describedby="newInstructorHelp">
                   <option value="">-- اختر أستاذ --</option>
                 </select>
-                <div id="newInstructorHelp" class="form-text small">يُفضَّل الاختيار من القائمة لربط الصف بمعرّف عضو هيئة التدريس (حساب «مقرراتي»).</div>
+                <div id="newInstructorHelp" class="form-text small">يُفضَّل الاختيار من القائمة لربط الصف بمعرّف عضو هيئة التدريس (حساب «مقرراتي»). إن وُجد أستاذ مقترح من عرض المقررات يظهر بشارة «مقترح» في أعلى القائمة — اختيار حر وغير إلزامي.</div>
+                <div id="newInstructorProposedHint" class="form-text small text-primary d-none"></div>
               </div>
               <div class="col-12">
                 <button type="submit" class="btn btn-primary btn-sm">إضافة</button>
@@ -368,33 +369,144 @@ async function loadInstructors(){
     const r = await fetch('/instructors/list');
     const data = r.ok ? await r.json() : {};
     INSTRUCTORS = Array.isArray(data.instructors) ? data.instructors : [];
-    const sel = document.getElementById('newInstructor');
-    if (sel) {
-      sel.innerHTML = '<option value="">-- اختر أستاذ --</option>';
-      INSTRUCTORS.forEach(inst => {
-        if (!inst.is_active) return;
-        const o = document.createElement('option');
-        o.value = inst.id != null ? String(inst.id) : '';
-        o.setAttribute('data-inst-name', (inst.name || '').trim());
-        const typeLabel = inst.type === 'external' ? ' (متعاون)' : '';
-        const primaryDept =
-          (inst.department_name_ar && String(inst.department_name_ar).trim()) ||
-          (inst.department_code && String(inst.department_code).trim()) ||
-          '';
-        const coopParts = Array.isArray(inst.departments)
-          ? inst.departments
-              .map((d) => (d.department_name_ar || d.department_code || '').toString().trim())
-              .filter(Boolean)
-          : [];
-        const coopLabel = coopParts.length ? ` | متعاون: ${coopParts.join('، ')}` : '';
-        const primaryLabel = primaryDept ? ` | رئيسي: ${primaryDept}` : '';
-        o.text = (inst.name || '') + typeLabel + primaryLabel + coopLabel;
-        sel.appendChild(o);
-      });
-    }
+    rebuildInstructorSelect();
   } catch (err) {
     console.error('loadInstructors error', err);
   }
+}
+
+/** مقترحات الأساتذة من عرض مقررات الفصل (استرشادية) */
+let PROPOSED_BY_COURSE = {};
+
+async function loadProposedInstructors(){
+  try {
+    const r = await fetch('/term_offerings/proposed_instructors');
+    const data = r.ok ? await r.json() : {};
+    PROPOSED_BY_COURSE = (data && data.by_course && typeof data.by_course === 'object')
+      ? data.by_course
+      : {};
+  } catch (err) {
+    console.error('loadProposedInstructors error', err);
+    PROPOSED_BY_COURSE = {};
+  }
+}
+
+function proposedForCourse(courseName){
+  const key = String(courseName || '').trim();
+  if (!key) return null;
+  const hit = PROPOSED_BY_COURSE[key];
+  if (hit && hit.instructor_id) return hit;
+  const lower = key.toLowerCase();
+  for (const [name, payload] of Object.entries(PROPOSED_BY_COURSE || {})) {
+    if (String(name || '').trim().toLowerCase() === lower && payload && payload.instructor_id) {
+      return payload;
+    }
+  }
+  return null;
+}
+
+function setProposedInstructorHint(courseName){
+  const el = document.getElementById('newInstructorProposedHint');
+  if (!el) return;
+  const proposed = proposedForCourse(courseName);
+  if (!proposed) {
+    el.classList.add('d-none');
+    el.textContent = '';
+    return;
+  }
+  const label = (proposed.instructor_name || '').trim() || ('أستاذ #' + proposed.instructor_id);
+  el.textContent = 'مقترح من عرض المقررات: ' + label + ' (اختياري — يمكنك اختيار أستاذ آخر).';
+  el.classList.remove('d-none');
+}
+
+function rebuildInstructorSelect(preferredId){
+  const sel = document.getElementById('newInstructor');
+  if (!sel) return;
+  const prev = preferredId != null && preferredId !== ''
+    ? String(preferredId)
+    : (sel.value || '');
+  const courseSel = document.getElementById('newCourseSelect');
+  const courseName = courseSel ? courseSel.value : '';
+  const proposed = proposedForCourse(courseName);
+  const proposedId = proposed && proposed.instructor_id != null
+    ? String(proposed.instructor_id)
+    : '';
+
+  sel.innerHTML = '<option value="">-- اختر أستاذ --</option>';
+
+  const seen = new Set();
+  const appendOpt = (inst, { proposedMark } = {}) => {
+    if (!inst || !inst.is_active) return;
+    const id = inst.id != null ? String(inst.id) : '';
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    const o = document.createElement('option');
+    o.value = id;
+    o.setAttribute('data-inst-name', (inst.name || '').trim());
+    if (proposedMark) o.setAttribute('data-proposed', '1');
+    const typeLabel = inst.type === 'external' ? ' (متعاون)' : '';
+    const primaryDept =
+      (inst.department_name_ar && String(inst.department_name_ar).trim()) ||
+      (inst.department_code && String(inst.department_code).trim()) ||
+      '';
+    const coopParts = Array.isArray(inst.departments)
+      ? inst.departments
+          .map((d) => (d.department_name_ar || d.department_code || '').toString().trim())
+          .filter(Boolean)
+      : [];
+    const coopLabel = coopParts.length ? ` | متعاون: ${coopParts.join('، ')}` : '';
+    const primaryLabel = primaryDept ? ` | رئيسي: ${primaryDept}` : '';
+    const mark = proposedMark ? '★ مقترح — ' : '';
+    o.text = mark + (inst.name || '') + typeLabel + primaryLabel + coopLabel;
+    sel.appendChild(o);
+  };
+
+  if (proposedId) {
+    let proposedInst = INSTRUCTORS.find(x => String(x.id) === proposedId);
+    if (!proposedInst) {
+      proposedInst = {
+        id: Number(proposedId),
+        name: (proposed.instructor_name || '').trim() || ('أستاذ #' + proposedId),
+        type: 'internal',
+        is_active: true,
+        department_name_ar: '',
+        department_code: '',
+        departments: [],
+      };
+    }
+    appendOpt(proposedInst, { proposedMark: true });
+  }
+
+  INSTRUCTORS.forEach(inst => {
+    if (proposedId && String(inst.id) === proposedId) return;
+    appendOpt(inst, { proposedMark: false });
+  });
+
+  if (prev && Array.from(sel.options).some(o => o.value === prev)) {
+    sel.value = prev;
+  } else {
+    sel.value = '';
+  }
+  setProposedInstructorHint(courseName);
+}
+
+/** عند اختيار مقرر جديد: املأ المقترح إن وُجد (لا يفرض في وضع التعديل إن كان للصف أستاذ مسبقاً). */
+function applyProposedInstructorForSelectedCourse({ forceSelect } = {}){
+  const courseSel = document.getElementById('newCourseSelect');
+  const courseName = courseSel ? courseSel.value : '';
+  const proposed = proposedForCourse(courseName);
+  const preferred = proposed && proposed.instructor_id != null
+    ? String(proposed.instructor_id)
+    : '';
+  rebuildInstructorSelect(preferred && (forceSelect || !EDITING_SECTION_ID) ? preferred : undefined);
+  const instSel = document.getElementById('newInstructor');
+  if (!instSel) return;
+  if (preferred && (forceSelect || !EDITING_SECTION_ID)) {
+    if (Array.from(instSel.options).some(o => o.value === preferred)) {
+      instSel.value = preferred;
+    }
+  }
+  setProposedInstructorHint(courseName);
 }
 
 /** اسم الأستاذ + instructor_id للحفظ (قيمة القائمة = معرّف الدليل) */
@@ -771,6 +883,7 @@ async function resetManageCoursesAddForm(){
   const modalMsg = document.getElementById('modalMsg');
   if (modalMsg) modalMsg.innerHTML = '';
   await loadInstructors();
+  applyProposedInstructorForSelectedCourse({ forceSelect: false });
 }
 
 function openManageCourses(day, time){
@@ -794,6 +907,12 @@ function startEditExistingCourse(sectionId, courseName, room, instructor, instru
   if(roomInput){
     roomInput.value = room || '';
   }
+  // أعد بناء القائمة مع إبراز المقترح، مع الإبقاء على أستاذ الصف الحالي
+  rebuildInstructorSelect(
+    instructorId != null && instructorId !== '' && String(instructorId) !== '0'
+      ? String(instructorId)
+      : undefined
+  );
   if(instInput){
     instInput.querySelectorAll('option[data-legacy]').forEach(o => o.remove());
     const name = (instructor || '').trim();
@@ -821,11 +940,13 @@ function startEditExistingCourse(sectionId, courseName, room, instructor, instru
       opt.textContent = name + ' (غير مربوط بدليل)';
       instInput.appendChild(opt);
       instInput.value = 'legacy';
+      set = true;
     }
     if (!set && !name) {
       instInput.value = '';
     }
   }
+  setProposedInstructorHint(courseName || '');
   showMsg('وضع التعديل: سيتم تحديث هذا الصف في الجدول عند الحفظ.', 'info', 4000, 'modalMsg');
 }
 
@@ -1745,7 +1866,16 @@ async function setupInstructorDeptStudentPanel(auth) {
 /* ---------- Init ---------- */
 document.addEventListener('DOMContentLoaded', () => {
   loadCourses();
-  loadInstructors();
+  Promise.all([loadInstructors(), loadProposedInstructors()]).then(() => {
+    applyProposedInstructorForSelectedCourse({ forceSelect: false });
+  });
+
+  const courseSel = document.getElementById('newCourseSelect');
+  if (courseSel) {
+    courseSel.addEventListener('change', () => {
+      applyProposedInstructorForSelectedCourse({ forceSelect: !EDITING_SECTION_ID });
+    });
+  }
 
   const btnRun = document.getElementById('btnRun');
   if(btnRun) btnRun.addEventListener('click', runOptimize);
@@ -1906,7 +2036,10 @@ document.addEventListener('DOMContentLoaded', () => {
   fetch('/auth/check').then(r=>r.json()).then(auth=>{
     applyScheduleRoleUi(auth);
     if (IS_ADMIN) {
-      loadInstructors().then(() => setupInstructorDeptStudentPanel(auth));
+      Promise.all([loadInstructors(), loadProposedInstructors()]).then(() => {
+        applyProposedInstructorForSelectedCourse({ forceSelect: false });
+        setupInstructorDeptStudentPanel(auth);
+      });
     }
     refreshPublishStatus();
     loadSchedule();

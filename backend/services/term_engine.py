@@ -551,6 +551,7 @@ def _ensure_wave234_schema(conn) -> None:
     _add_if_missing("term_windows", "grace_until", "TEXT")
     _add_if_missing("registrations", "semester", "TEXT DEFAULT ''")
     _add_if_missing("term_offering_state", "department_id", "INTEGER NOT NULL DEFAULT 0")
+    _add_if_missing("term_course_offerings", "proposed_instructor_id", "INTEGER")
     _exec_ddl_safe(
         conn,
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_term_offerings_term_course_dept "

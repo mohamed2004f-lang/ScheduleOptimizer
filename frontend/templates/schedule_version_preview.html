@@ -8,7 +8,8 @@
   <link rel="stylesheet" href="/static/styles.css">
   <style>
     @media print {
-      nav, .no-print { display: none !important; }
+      nav, .no-print, .nav-tabs { display: none !important; }
+      .tab-pane { display: block !important; opacity: 1 !important; }
       body { background: #fff; }
       .card { border: 0 !important; box-shadow: none !important; }
     }
@@ -25,8 +26,9 @@
         الفصل: {{ item.semester or '—' }} — النسخة: #{{ item.version_no or 0 }} — التاريخ: {{ item.generated_at or '—' }}
       </p>
     </div>
-    <div class="d-flex gap-2 no-print">
+    <div class="d-flex gap-2 flex-wrap no-print">
       <button class="btn btn-outline-dark btn-sm" onclick="window.print()">طباعة</button>
+      <a class="btn btn-outline-danger btn-sm" href="/schedule/versions/{{ item.id }}/pdf" target="_blank">تصدير PDF</a>
       <a class="btn btn-outline-success btn-sm" href="/schedule/versions/{{ item.id }}?download=1" target="_blank">تنزيل JSON</a>
       <a class="btn btn-outline-secondary btn-sm" href="/schedule_versions_page">العودة للأرشيف</a>
     </div>
@@ -37,47 +39,144 @@
       المنشئ: {{ item.generated_by or '—' }} |
       حالة النشر: {{ 'منشور' if item.is_published else 'غير منشور' }} |
       عدد الصفوف: {{ item.row_count or 0 }}
+      {% if built and built.schema_version %}| مخطط اللقطة: v{{ built.schema_version }}{% endif %}
       {% if item.note %}| ملاحظة: {{ item.note }}{% endif %}
     </div>
   </div>
 
-  <div class="card">
-    <div class="card-body">
-      {% if not columns %}
-      <div class="text-muted">لا توجد بيانات جدول داخل هذه النسخة.</div>
-      {% else %}
-      <div class="table-responsive">
-        <table class="table table-sm table-bordered align-middle mb-0">
-          <thead class="table-light">
-            <tr>
-              <th>اليوم / الوقت</th>
-              {% for c in columns %}
-              <th>{{ c }}</th>
-              {% endfor %}
-            </tr>
-          </thead>
-          <tbody>
-            {% for day, by_time in matrix.items() %}
-            <tr>
-              <th>{{ day }}</th>
-              {% for c in columns %}
-              <td>
-                {% set items = by_time.get(c, []) %}
-                {% if items %}
-                  {{ items|join(' / ') }}
-                {% else %}
-                  —
-                {% endif %}
-              </td>
-              {% endfor %}
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+  {% if built and built.corrupted %}
+  <div class="alert alert-danger py-2 small">
+    <strong>لقطة تالفة:</strong> بيانات هذه النسخة (#{{ item.version_no }}) غير صالحة للعرض (خطأ حفظ سابق على PostgreSQL).
+    افتح نسخة أقدم سليمة (مثل #15) أو أعد <strong>نشر الجدول</strong> لإنشاء لقطة جديدة صحيحة.
+  </div>
+  {% elif built and built.matrix_row_count == 0 and list_rows %}
+  <div class="alert alert-warning py-2 small">
+    لا توجد تقسيمات زمنية صالحة في هذه اللقطة — راجع تبويب «قائمة الصفوف» أو أنشئ نسخة جديدة بعد النشر.
+  </div>
+  {% endif %}
+
+  {% if built and (built.empty_saved_slots or built.nonmatching_times) and not built.corrupted %}
+  <div class="alert alert-warning py-2 small no-print">
+    {% if built.empty_saved_slots %}
+    <div><strong>تقسيمات بدون مقررات:</strong> {{ built.empty_saved_slots|join('، ') }}</div>
+    {% endif %}
+    {% if built.nonmatching_times %}
+    <div><strong>أوقات في اللقطة خارج التقسيمات:</strong> {{ built.nonmatching_times|join('، ') }}</div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <ul class="nav nav-tabs mb-3 no-print" role="tablist">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link active" id="tab-grid-btn" data-bs-toggle="tab" data-bs-target="#tab-grid" type="button" role="tab">شبكة الجدول</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" id="tab-list-btn" data-bs-toggle="tab" data-bs-target="#tab-list" type="button" role="tab">قائمة الصفوف</button>
+    </li>
+  </ul>
+
+  <div class="tab-content">
+    <div class="tab-pane fade show active" id="tab-grid" role="tabpanel">
+      <div class="card">
+        <div class="card-body">
+          {% if not columns %}
+          <div class="text-muted">لا توجد بيانات جدول داخل هذه النسخة.</div>
+          {% else %}
+          <div class="table-responsive">
+            <table class="timetable timetable--cols3">
+              <thead>
+                <tr>
+                  <th rowspan="2" class="day-header">اليوم</th>
+                  {% for c in columns %}
+                  <th colspan="3" class="time-header">{{ c }}</th>
+                  {% endfor %}
+                </tr>
+                <tr>
+                  {% for c in columns %}
+                  <th class="sub-time-header">المقرر</th>
+                  <th class="sub-time-header">الأستاذ</th>
+                  <th class="sub-time-header">القاعة</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for day, by_time in matrix.items() %}
+                <tr>
+                  <th class="day-header">{{ day }}</th>
+                  {% for c in columns %}
+                  {% set items = by_time.get(c, []) %}
+                  <td colspan="3" class="time-slot-cell slot-slot-block">
+                    <div class="slot-aligned-rows">
+                      {% if not items %}
+                      <div class="slot-course-record slot-course-record--empty">
+                        <div class="slot-cell slot-cell--course"><span class="slot-placeholder">—</span></div>
+                        <div class="slot-cell slot-cell--inst"><span class="slot-placeholder">—</span></div>
+                        <div class="slot-cell slot-cell--room"><span class="slot-placeholder">—</span></div>
+                      </div>
+                      {% else %}
+                      {% for it in items %}
+                      {% if not loop.first %}<div class="slot-record-fullsep"></div>{% endif %}
+                      <div class="slot-course-record">
+                        <div class="slot-cell slot-cell--course"><span class="course-pub-label">{{ it.course_name or '' }}</span></div>
+                        <div class="slot-cell slot-cell--inst"><span class="slot-text">{{ it.instructor or '' }}</span></div>
+                        <div class="slot-cell slot-cell--room"><span class="slot-text">{{ it.room or '' }}</span></div>
+                      </div>
+                      {% endfor %}
+                      {% endif %}
+                    </div>
+                  </td>
+                  {% endfor %}
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% endif %}
+        </div>
       </div>
-      {% endif %}
+    </div>
+
+    <div class="tab-pane fade" id="tab-list" role="tabpanel">
+      <div class="card">
+        <div class="card-body">
+          {% if not list_rows %}
+          <div class="text-muted">لا توجد صفوف في هذه النسخة.</div>
+          {% else %}
+          <div class="table-responsive">
+            <table class="table table-sm table-bordered align-middle mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>#</th>
+                  <th>اليوم</th>
+                  <th>التوقيت</th>
+                  <th>المقرر</th>
+                  <th>الأستاذ</th>
+                  <th>القاعة</th>
+                  <th>الفصل</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for r in list_rows %}
+                <tr>
+                  <td>{{ loop.index }}</td>
+                  <td>{{ r.day or '—' }}</td>
+                  <td>{{ r.time or '—' }}</td>
+                  <td>{{ r.course_name or '—' }}</td>
+                  <td>{{ r.instructor or '—' }}</td>
+                  <td>{{ r.room or '—' }}</td>
+                  <td>{{ r.semester or '—' }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% endif %}
+        </div>
+      </div>
     </div>
   </div>
 </main>
+
+<script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
 </body>
 </html>

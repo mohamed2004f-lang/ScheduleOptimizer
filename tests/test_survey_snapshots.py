@@ -10,6 +10,7 @@ from backend.services.quality_metrics import term_label_from_conn
 from backend.services.survey_snapshots import (
     close_semester_and_snapshot,
     compare_semester_snapshots,
+    course_eval_summary_from_closure_snapshot,
     get_semester_closure,
     is_semester_closed,
     list_semester_snapshots,
@@ -60,6 +61,60 @@ def test_close_semester_creates_snapshots(db_conn):
     dean = next(s for s in snaps if s["template_code"] == "faculty_dean")
     assert dean.get("aggregated")
     assert dean.get("overall_score_percent") is not None
+
+
+def test_course_eval_summary_from_closure_snapshot(db_conn):
+    ensure_survey_templates_seeded(db_conn)
+    sem = "snap-sem-ce"
+    _seed_faculty_dean(db_conn, sem)
+    close_semester_and_snapshot(db_conn, semester=sem, department_id=1, actor="pytest")
+    cur = db_conn.cursor()
+    # ثبّت أرقام تقييم المقرر في اللقطة كما كانت وقت الإغلاق (حتى لو الحساب الحي ناقص)
+    cur.execute(
+        """
+        UPDATE survey_semester_snapshots
+        SET response_count = ?, min_aggregate = ?, aggregated = ?, overall_score_percent = ?
+        WHERE semester = ? AND scope_key = ? AND template_code = ?
+        """,
+        (40, 20, 1, 81.5, sem, "dept:1", "student_course"),
+    )
+    if cur.rowcount == 0:
+        closure = get_semester_closure(db_conn, sem, department_id=1)
+        cur.execute(
+            """
+            INSERT INTO survey_semester_snapshots (
+                closure_id, semester, scope_key, template_code, title_ar,
+                response_count, min_aggregate, aggregated, overall_score_percent,
+                compliance_status_ar, weakest_item, strongest_item,
+                primary_accreditation, questions_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(closure["id"]),
+                sem,
+                "dept:1",
+                "student_course",
+                "تقييم المقرر والأستاذ (طالب)",
+                40,
+                20,
+                1,
+                81.5,
+                "مطابق",
+                "",
+                "",
+                "",
+                "[]",
+            ),
+        )
+    db_conn.commit()
+    frozen = course_eval_summary_from_closure_snapshot(
+        db_conn, sem, 1, live_summary={"aggregated": False, "overall_score_percent": None}
+    )
+    assert frozen is not None
+    assert frozen["from_closure_snapshot"] is True
+    assert frozen["aggregated"] is True
+    assert frozen["overall_score_percent"] == 81.5
+    assert frozen["response_count"] == 40
 
 
 def test_close_semester_twice_requires_force(db_conn):

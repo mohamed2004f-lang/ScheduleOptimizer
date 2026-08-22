@@ -528,3 +528,162 @@ def test_specialty_eligibility_unions_general_list_and_warns_gaps(db_conn):
     assert wanted_general in gaps
     assert other_general not in gaps
 
+
+def test_term_offerings_preview_html_and_xlsx(app, db_conn):
+    from backend.services.term_offerings import (
+        _upsert_state,
+        prepare_term_offerings_preview_context,
+        save_offered_courses,
+    )
+    from backend.services.term_engine import parse_ops_term
+    from backend.services.utilities import get_current_term
+
+    uid = uuid.uuid4().hex[:8]
+    course = f"معاينة عرض {uid}"
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO courses (course_name, course_code, units) VALUES (?, ?, 3)",
+        (course, f"V{uid[:6]}"),
+    )
+    db_conn.commit()
+    parsed = parse_ops_term(*get_current_term(conn=db_conn))
+    term_key = parsed["term_key"]
+    save_offered_courses(
+        db_conn,
+        term_key=term_key,
+        course_names=[course],
+        actor="admin-test",
+        department_id=0,
+    )
+    _upsert_state(db_conn, term_key, 0, status="published", actor="admin-test", published=True)
+    db_conn.commit()
+
+    ops_label = parsed.get("ops_label") or term_key
+    for i in range(3):
+        sid = f"prev-enr-{uid}-{i}"
+        cur.execute(
+            "INSERT OR IGNORE INTO students (student_id, student_name, enrollment_status) VALUES (?, ?, 'active')",
+            (sid, f"طالب معاينة {i}"),
+        )
+        try:
+            cur.execute(
+                "INSERT INTO registrations (student_id, course_name, semester) VALUES (?, ?, ?)",
+                (sid, course, ops_label),
+            )
+        except Exception:
+            cur.execute(
+                "INSERT INTO registrations (student_id, course_name) VALUES (?, ?)",
+                (sid, course),
+            )
+    db_conn.commit()
+
+    ctx = prepare_term_offerings_preview_context(
+        db_conn, actor="admin-test", role="admin_main"
+    )
+    assert ctx.get("ok") is True
+    assert ctx.get("is_published") is True
+    names = [r["course_name"] for r in (ctx.get("rows") or [])]
+    assert course in names
+    row = next(r for r in (ctx.get("rows") or []) if r["course_name"] == course)
+    assert int(row.get("enrolled_count") or 0) == 3
+    assert int(ctx.get("total_enrolled") or 0) >= 3
+
+    from backend.services.term_offerings import term_offerings_preview_excel_frames
+
+    frames = term_offerings_preview_excel_frames(ctx)
+    sheet_names = [n for n, _ in frames]
+    assert "المقررات" in sheet_names
+    courses_df = next(df for n, df in frames if n == "المقررات")
+    assert "عدد المسجّلين" in list(courses_df.columns)
+    assert "أستاذ مقترح" in list(courses_df.columns)
+
+    client = _login_admin(app)
+    r_html = client.get("/term_offerings/preview")
+    assert r_html.status_code == 200
+    body = r_html.get_data(as_text=True) or ""
+    assert "معاينة عرض مقررات الفصل" in body or "عرض مقررات الفصل" in body
+    assert course in body
+    assert "عدد المسجّلين" in body
+    assert "طباعة" in body
+
+    r_xlsx = client.get("/term_offerings/preview.xlsx")
+    assert r_xlsx.status_code == 200
+    assert "spreadsheet" in (r_xlsx.content_type or "") or "octet-stream" in (
+        r_xlsx.content_type or ""
+    )
+
+    r_pdf = client.get("/term_offerings/preview.pdf")
+    assert r_pdf.status_code in (200, 500)
+
+
+def test_term_offerings_proposed_instructor_save_and_preview(app, db_conn):
+    from backend.services.term_engine import parse_ops_term
+    from backend.services.term_offerings import (
+        _upsert_state,
+        prepare_term_offerings_preview_context,
+        save_offered_courses,
+    )
+    from backend.services.utilities import get_current_term
+
+    uid = uuid.uuid4().hex[:8]
+    course = f"مقترح أستاذ {uid}"
+    cur = db_conn.cursor()
+    ensure_term_engine_tables(db_conn)
+    db_conn.commit()
+    cur.execute(
+        "INSERT OR REPLACE INTO courses (course_name, course_code, units) VALUES (?, ?, 3)",
+        (course, f"P{uid[:6]}"),
+    )
+    cur.execute(
+        "INSERT INTO instructors (name, type, is_active) VALUES (?, 'internal', 1)",
+        (f"د. مقترح {uid}",),
+    )
+    db_conn.commit()
+    iid = int(cur.execute("SELECT id FROM instructors ORDER BY id DESC LIMIT 1").fetchone()[0])
+    parsed = parse_ops_term(*get_current_term(conn=db_conn))
+    term_key = parsed["term_key"]
+    save_offered_courses(
+        db_conn,
+        term_key=term_key,
+        course_names=[course],
+        actor="admin-test",
+        department_id=0,
+        proposed_instructors={course: iid},
+    )
+    _upsert_state(db_conn, term_key, 0, status="published", actor="admin-test", published=True)
+    db_conn.commit()
+
+    row = cur.execute(
+        """
+        SELECT proposed_instructor_id FROM term_course_offerings
+        WHERE term_key = ? AND course_name = ? AND department_id = 0
+        """,
+        (term_key, course),
+    ).fetchone()
+    assert row is not None
+    assert int(row[0] or 0) == iid
+
+    ctx = prepare_term_offerings_preview_context(
+        db_conn, actor="admin-test", role="admin_main"
+    )
+    assert ctx.get("ok") is True
+    preview_row = next(r for r in (ctx.get("rows") or []) if r["course_name"] == course)
+    assert int(preview_row.get("proposed_instructor_id") or 0) == iid
+    assert f"مقترح {uid}" in (preview_row.get("proposed_instructor_name") or "")
+
+    client = _login_admin(app)
+    r_html = client.get("/term_offerings/preview")
+    assert r_html.status_code == 200
+    body = r_html.get_data(as_text=True) or ""
+    assert "أستاذ مقترح" in body
+    assert f"مقترح {uid}" in body
+
+    r_api = client.get("/term_offerings/proposed_instructors")
+    assert r_api.status_code == 200
+    payload = r_api.get_json() or {}
+    assert payload.get("status") == "ok"
+    by_course = payload.get("by_course") or {}
+    assert course in by_course
+    assert int((by_course[course] or {}).get("instructor_id") or 0) == iid
+    assert f"مقترح {uid}" in ((by_course[course] or {}).get("instructor_name") or "")
+

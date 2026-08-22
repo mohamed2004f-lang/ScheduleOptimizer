@@ -436,3 +436,94 @@ def test_export_routes(app):
         r_bad_pdf = c.get("/academic_quality/surveys/export/not_a_survey.pdf")
         assert r_bad_pdf.status_code == 404
 
+
+def test_historical_section_scores_without_live_registrations(db_conn):
+    """فصل سابق بلا تسجيلات حية: تظهر نتيجة الشعبة عند ≥3 تقييمات."""
+    from backend.services.survey_analytics import (
+        COURSE_EVAL_HISTORICAL_ORPHAN_MIN,
+        resolve_course_eval_enrollment,
+    )
+
+    past_sem = "ربيع 25-26-hist"
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT INTO schedule (course_name, day, time, room, instructor_id, semester) VALUES (?,?,?,?,?,?)",
+        ("اقتصاد هندسي تاريخي", "الأحد", "08:00", "201", 1, past_sem),
+    )
+    db_conn.commit()
+    cur.execute("UPDATE schedule SET id = rowid WHERE id IS NULL")
+    db_conn.commit()
+    sec_id = int(cur.execute("SELECT id FROM schedule ORDER BY rowid DESC LIMIT 1").fetchone()[0])
+    _seed_course_eval_for_section(
+        db_conn,
+        section_id=sec_id,
+        course_name="اقتصاد هندسي تاريخي",
+        instructor_id=1,
+        sem=past_sem,
+        n=6,
+    )
+
+    enrolled, min_req, aggregated, source = resolve_course_eval_enrollment(
+        db_conn,
+        course_name="اقتصاد هندسي تاريخي",
+        semester=past_sem,
+        response_count=6,
+    )
+    assert enrolled == 0
+    assert min_req == COURSE_EVAL_HISTORICAL_ORPHAN_MIN
+    assert aggregated is True
+    assert source == "historical_orphan"
+
+    rep = build_course_eval_section_report(db_conn, sec_id, semester=past_sem)
+    assert rep is not None
+    assert rep["aggregated"] is True
+    assert rep["overall_score_percent"] is not None
+    assert rep.get("enrollment_source") == "historical_orphan"
+    assert int(rep["min_aggregate"]) == COURSE_EVAL_HISTORICAL_ORPHAN_MIN
+    assert int(rep["min_aggregate"]) < 1000000
+
+
+def test_section_fifty_percent_rule_uses_registrations(db_conn):
+    """القاعدة الرسمية: الحد = 50% من المسجّلين ويُعرض عدد المسجّلين."""
+    from backend.services.survey_analytics import resolve_course_eval_enrollment
+
+    sem = "ربيع-fifty-pct"
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT INTO schedule (course_name, day, time, room, instructor_id, semester) VALUES (?,?,?,?,?,?)",
+        ("مقرر خمسين بالمئة", "الأحد", "08:00", "301", 1, sem),
+    )
+    db_conn.commit()
+    cur.execute("UPDATE schedule SET id = rowid WHERE id IS NULL")
+    db_conn.commit()
+    sec_id = int(cur.execute("SELECT id FROM schedule ORDER BY rowid DESC LIMIT 1").fetchone()[0])
+    for i in range(10):
+        cur.execute(
+            "INSERT OR IGNORE INTO registrations (student_id, course_name) VALUES (?, ?)",
+            (f"fifty-{i}", "مقرر خمسين بالمئة"),
+        )
+    db_conn.commit()
+    _seed_course_eval_for_section(
+        db_conn,
+        section_id=sec_id,
+        course_name="مقرر خمسين بالمئة",
+        instructor_id=1,
+        sem=sem,
+        n=5,
+    )
+    enrolled, min_req, aggregated, source = resolve_course_eval_enrollment(
+        db_conn,
+        course_name="مقرر خمسين بالمئة",
+        semester=sem,
+        response_count=5,
+    )
+    assert enrolled == 10
+    assert min_req == 5
+    assert aggregated is True
+    assert source == "live"
+    rep = build_course_eval_section_report(db_conn, sec_id, semester=sem)
+    assert rep["enrolled_count"] == 10
+    assert rep["min_aggregate"] == 5
+    assert rep["aggregated"] is True
+    assert rep["overall_score_percent"] is not None
+
