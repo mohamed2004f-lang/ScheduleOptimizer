@@ -205,6 +205,23 @@ def set_exam_schedule_published_at(exam_type: str, conn=None, db_file=DB_FILE):
         return _set(c)
 
 
+def clear_exam_schedule_published_at(exam_type: str, conn=None, db_file=DB_FILE):
+    """يلغي اعتماد/نشر جدول الامتحانات (الجزئي أو النهائي) مع بقاء الأرشيف."""
+    if exam_type not in ("midterm", "final"):
+        return
+    key = _exam_schedule_published_key(exam_type)
+
+    def _clear(c):
+        cur = c.cursor()
+        cur.execute("DELETE FROM system_settings WHERE key = ?", (key,))
+        c.commit()
+
+    if conn is not None:
+        return _clear(conn)
+    with get_connection(db_file) as c:
+        return _clear(c)
+
+
 def get_exam_schedule_updated_at(exam_type: str, conn=None, db_file=DB_FILE):
     if exam_type not in ("midterm", "final"):
         return None

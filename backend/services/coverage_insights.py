@@ -16,6 +16,141 @@ def normalize_coverage_course_key(name: str) -> str:
     return (name or "").strip().lower()
 
 
+_COVERAGE_SCOPE_LABELS_AR = {
+    "current_term": "مقررات الجدول الدراسي للفصل الحالي فقط",
+    "current_semester_or_blank": "مقررات الجدول الدراسي للفصل الحالي فقط",
+    "current_term_empty": "لا توجد مقررات في الجدول الدراسي للفصل الحالي (قد توجد صفوف لفصول أخرى)",
+    "none": "لا توجد مقررات في جدول schedule",
+    "scoped_no_schedule_course_department_columns": (
+        "لا يمكن حصر مقررات الجدولة حسب القسم (أعمدة القسم غير متوفرة في الجدولة/المقررات)"
+    ),
+    # توافق قديم — لم يعد يُستخدم بعد إيقاف الرجوع لكل الجدولة
+    "all_schedule": "كل المقررات الظاهرة في جدول المقررات (لم يُعثر على بيانات للفصل الحالي)",
+    "all_schedule_scoped": "كل مقررات الجدولة المطابقة للفصل (ضمن مقررات قسم نطاقك)",
+}
+
+
+def coverage_scope_label_ar(scope: str) -> str:
+    return _COVERAGE_SCOPE_LABELS_AR.get(scope, scope or "")
+
+
+def _schedule_dept_sql_parts(conn, dept_scope_id: int | None):
+    """أجزاء JOIN/WHERE لقيد القسم على schedule؛ أو (None, None, None) عند تعذّر القيد."""
+    if dept_scope_id is None:
+        return "", "", ()
+    scols = fetch_table_columns(conn, "schedule")
+    try:
+        ccols = fetch_table_columns(conn, "courses")
+    except Exception:
+        ccols = []
+    sched_has_dept = "department_id" in scols
+    courses_have_owning = "owning_department_id" in ccols
+    if sched_has_dept:
+        return (
+            "",
+            " AND COALESCE(s.department_id, -987654321) = ? ",
+            (int(dept_scope_id),),
+        )
+    if courses_have_owning:
+        join_owner = """
+            INNER JOIN courses ccov_dep
+              ON lower(trim(ccov_dep.course_name)) = lower(trim(s.course_name))
+             AND COALESCE(ccov_dep.owning_department_id, -1) = ?
+        """
+        return join_owner, "", (int(dept_scope_id),)
+    return None, None, None
+
+
+def _fetch_schedule_name_semester_rows(conn, cur, *, dept_scope_id: int | None):
+    """
+    صفوف (course_name, semester) من schedule مع قيد القسم الاختياري.
+    يُرجع (rows, error_scope) حيث error_scope عند تعذّر قيد القسم.
+    """
+    parts = _schedule_dept_sql_parts(conn, dept_scope_id)
+    if parts[0] is None:
+        return [], "scoped_no_schedule_course_department_columns"
+    join_owner, dept_sql_frag, dept_params = parts
+    try:
+        rows = cur.execute(
+            f"""
+            SELECT TRIM(s.course_name) AS course_name,
+                   COALESCE(TRIM(s.semester), '') AS semester
+            FROM schedule s
+            {join_owner}
+            WHERE COALESCE(TRIM(s.course_name), '') <> ''
+              {dept_sql_frag}
+            """,
+            dept_params,
+        ).fetchall()
+    except Exception:
+        return [], "none"
+    out = []
+    for r in rows or []:
+        if hasattr(r, "keys"):
+            name = (r["course_name"] or "").strip()
+            sem = (r["semester"] or "").strip()
+        else:
+            name = (r[0] or "").strip()
+            sem = (r[1] or "").strip() if len(r) > 1 else ""
+        if name:
+            out.append((name, sem))
+    return out, ""
+
+
+def schedule_other_term_leftover_summary(
+    conn,
+    cur,
+    *,
+    dept_scope_id: int | None = None,
+) -> dict:
+    """
+    صفوف الجدولة التي لا تطابق الفصل الحالي (بما فيها بلا فصل).
+    لا تُحسب في مقارنة تغطية الفصل الحالي بعد إيقاف الرجوع لـ all_schedule.
+    """
+    from backend.services.term_engine import (
+        current_term_match_context,
+        schedule_semester_matches_term_context,
+    )
+
+    empty = {
+        "row_count": 0,
+        "distinct_courses": 0,
+        "semesters": [],
+        "warning_ar": "",
+    }
+    rows, err = _fetch_schedule_name_semester_rows(conn, cur, dept_scope_id=dept_scope_id)
+    if err == "scoped_no_schedule_course_department_columns":
+        return empty
+    ctx = current_term_match_context(conn)
+    leftover_names: set[str] = set()
+    leftover_sems: dict[str, int] = {}
+    row_count = 0
+    for name, sem in rows:
+        if ctx and schedule_semester_matches_term_context(sem, ctx):
+            continue
+        row_count += 1
+        leftover_names.add(normalize_coverage_course_key(name))
+        label = sem.strip() if sem.strip() else "(بلا فصل)"
+        leftover_sems[label] = leftover_sems.get(label, 0) + 1
+    if row_count <= 0:
+        return empty
+    semesters = sorted(leftover_sems.keys(), key=lambda s: (-leftover_sems[s], s))
+    sem_txt = "، ".join(semesters[:6])
+    if len(semesters) > 6:
+        sem_txt += "…"
+    warning_ar = (
+        f"تنبيه: يوجد {row_count} صفاً ({len(leftover_names)} مقرراً) في الجدولة "
+        f"لفصول أخرى أو بلا فصل ({sem_txt}). "
+        "لا تُحسب في مقارنة الفصل الحالي بعد التفريغ."
+    )
+    return {
+        "row_count": row_count,
+        "distinct_courses": len(leftover_names),
+        "semesters": semesters,
+        "warning_ar": warning_ar,
+    }
+
+
 def schedule_distinct_course_names_for_coverage(
     conn,
     cur,
@@ -24,89 +159,43 @@ def schedule_distinct_course_names_for_coverage(
     dept_scope_id: int | None = None,
 ) -> tuple[list[str], str]:
     """
-    أسماء المقررات الفريدة من schedule (الفصل الحالي أو كل الجدولة عند الحاجة).
+    أسماء المقررات الفريدة من schedule للفصل الحالي فقط.
+    لا رجوع إلى كل الجدولة عند فراغ الفصل (تجنّب عدّ بقايا فصول أخرى بعد التفريغ).
+    المطابقة عبر term_engine (مثل لوحة الجدول وتفريغ الفصل).
     عند dept_scope_id يُقيَّد القسم عبر schedule.department_id أو courses.owning_department_id.
     """
+    from backend.services.term_engine import (
+        current_term_match_context,
+        schedule_semester_matches_term_context,
+    )
+
     tl = (term_label or "").strip()
-    rows: list = []
-    used_filter = ""
+    rows, err = _fetch_schedule_name_semester_rows(conn, cur, dept_scope_id=dept_scope_id)
+    if err:
+        return [], err
 
-    dept = dept_scope_id
-    scols = fetch_table_columns(conn, "schedule")
-    try:
-        ccols = fetch_table_columns(conn, "courses")
-    except Exception:
-        ccols = []
-    sched_has_dept = "department_id" in scols
-    courses_have_owning = "owning_department_id" in ccols
+    ctx = current_term_match_context(conn)
+    by_key: dict[str, str] = {}
+    any_rows = False
+    for name, sem in rows:
+        any_rows = True
+        matched = False
+        if ctx:
+            matched = schedule_semester_matches_term_context(sem, ctx)
+        elif tl:
+            matched = (sem or "").strip().lower() == tl.lower()
+        if not matched:
+            continue
+        ck = normalize_coverage_course_key(name)
+        if ck and ck not in by_key:
+            by_key[ck] = name
 
-    join_owner = ""
-    dept_params: tuple = ()
-    dept_sql_frag = ""
-
-    if dept is not None:
-        if sched_has_dept:
-            dept_sql_frag = " AND COALESCE(s.department_id, -987654321) = ? "
-            dept_params = (int(dept),)
-        elif courses_have_owning:
-            join_owner = """
-                INNER JOIN courses ccov_dep
-                  ON lower(trim(ccov_dep.course_name)) = lower(trim(s.course_name))
-                 AND COALESCE(ccov_dep.owning_department_id, -1) = ?
-            """
-            dept_params = (int(dept),)
-        else:
-            return [], "scoped_no_schedule_course_department_columns"
-
-    def _suffix():
-        return join_owner, dept_sql_frag, dept_params
-
-    try:
-        if tl:
-            jo, dfs, dp = _suffix()
-            rows = cur.execute(
-                f"""
-                SELECT MIN(TRIM(s.course_name)) AS course_name
-                FROM schedule s
-                {jo}
-                WHERE COALESCE(TRIM(s.course_name), '') <> ''
-                  AND (
-                      COALESCE(TRIM(s.semester), '') = ''
-                      OR LOWER(TRIM(COALESCE(s.semester,''))) = LOWER(TRIM(?))
-                  )
-                  {dfs}
-                GROUP BY LOWER(TRIM(s.course_name))
-                ORDER BY MIN(TRIM(s.course_name))
-                """,
-                (tl,) + dp,
-            ).fetchall()
-            used_filter = "current_semester_or_blank"
-    except Exception:
-        rows = []
-
-    names = [(r[0] or "").strip() for r in rows if r and (r[0] or "").strip()]
-    if not names:
-        try:
-            jo, dfs, dp = _suffix()
-            rows = cur.execute(
-                f"""
-                SELECT MIN(TRIM(s.course_name)) AS course_name
-                FROM schedule s
-                {jo}
-                WHERE COALESCE(TRIM(s.course_name), '') <> ''
-                  {dfs}
-                GROUP BY LOWER(TRIM(s.course_name))
-                ORDER BY MIN(TRIM(s.course_name))
-                """,
-                dp,
-            ).fetchall()
-            names = [(r[0] or "").strip() for r in rows if r and (r[0] or "").strip()]
-            used_filter = "all_schedule" + ("_scoped" if dept is not None else "")
-        except Exception:
-            names = []
-            used_filter = "none"
-
-    return names, used_filter
+    names = sorted(by_key.values(), key=lambda x: x.lower())
+    if names:
+        return names, "current_term"
+    if any_rows:
+        return [], "current_term_empty"
+    return [], "none"
 
 
 def _resolve_schedule_instructor(cur, instructor_id, instructor_text: str) -> tuple[int | None, str]:
@@ -153,8 +242,14 @@ def schedule_course_primary_assignments(
     """
     لكل مقرر في الجدول الدراسي (الفصل الحالي): الأستاذ والقاعة الأكثر تكراراً في schedule.
     المفتاح: اسم المقرر كما يظهر في القائمة (course_name).
+    لا رجوع لصفوف فصول أخرى عند فراغ الفصل الحالي.
     """
     from collections import defaultdict
+
+    from backend.services.term_engine import (
+        current_term_match_context,
+        schedule_semester_matches_term_context,
+    )
 
     tl = (term_label or "").strip()
     dept = dept_scope_id
@@ -185,39 +280,35 @@ def schedule_course_primary_assignments(
             return {}
 
     iid_expr = "s.instructor_id" if has_iid else "NULL"
+    ctx = current_term_match_context(conn)
 
-    def _fetch_rows(use_term: bool) -> list:
-        term_frag = ""
-        params: tuple = dept_params
-        if use_term and tl:
-            term_frag = """
-              AND (
-                  COALESCE(TRIM(s.semester), '') = ''
-                  OR LOWER(TRIM(COALESCE(s.semester,''))) = LOWER(TRIM(?))
-              )
-            """
-            params = (tl,) + dept_params
-        try:
-            return cur.execute(
-                f"""
-                SELECT TRIM(s.course_name),
-                       {iid_expr},
-                       TRIM(COALESCE(s.instructor, '')),
-                       TRIM(COALESCE(s.room, ''))
-                FROM schedule s
-                {join_owner}
-                WHERE COALESCE(TRIM(s.course_name), '') <> ''
-                  {term_frag}
-                  {dept_sql_frag}
-                """,
-                params,
-            ).fetchall()
-        except Exception:
-            return []
+    try:
+        raw_rows = cur.execute(
+            f"""
+            SELECT TRIM(s.course_name),
+                   {iid_expr},
+                   TRIM(COALESCE(s.instructor, '')),
+                   TRIM(COALESCE(s.room, '')),
+                   COALESCE(TRIM(s.semester), '')
+            FROM schedule s
+            {join_owner}
+            WHERE COALESCE(TRIM(s.course_name), '') <> ''
+              {dept_sql_frag}
+            """,
+            dept_params,
+        ).fetchall()
+    except Exception:
+        raw_rows = []
 
-    rows = _fetch_rows(bool(tl))
-    if not rows and tl:
-        rows = _fetch_rows(False)
+    rows = []
+    for r in raw_rows or []:
+        sem = (r[4] or "").strip() if len(r) > 4 else ""
+        if ctx:
+            if not schedule_semester_matches_term_context(sem, ctx):
+                continue
+        elif tl and sem.lower() != tl.lower():
+            continue
+        rows.append(r)
 
     sig_counts: dict[str, dict[tuple, int]] = defaultdict(lambda: defaultdict(int))
     display_names: dict[str, str] = {}

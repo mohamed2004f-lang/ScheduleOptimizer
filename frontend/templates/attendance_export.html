@@ -32,6 +32,8 @@
       </div>
     </div>
 
+    <div id="attendanceSourceBanner" class="alert alert-info py-2 small d-none mb-3" role="status"></div>
+
     <ul class="nav nav-tabs mb-3" id="attendanceMainTabs" role="tablist">
       <li class="nav-item" role="presentation">
         <button class="nav-link active" id="tab-register" data-bs-toggle="tab" data-bs-target="#pane-register" type="button" role="tab">تسجيل الحضور</button>
@@ -221,8 +223,20 @@
         }
         const data = Array.isArray(allowedJson?.courses) ? allowedJson.courses : [];
         const rows = data.filter((item) => item && String(item.course_name || '').trim());
+        const banner = document.getElementById('attendanceSourceBanner');
+        if (banner) {
+          const pub = !!allowedJson?.schedule_published;
+          let txt = 'قوائم الحضور مبنية على <strong>التسجيل الفعلي</strong> للطلبة.';
+          if (!pub) {
+            txt += ' الجدول الدراسي لم يُعتمد بعد — يمكن تسجيل الحضور على قوائم التسجيل.';
+          } else {
+            txt += ' المقررات المعلّمة «تسجيل فقط» ليست في الجدول المعتمد بعد.';
+          }
+          banner.innerHTML = txt;
+          banner.classList.remove('d-none');
+        }
         if (!rows.length) {
-          const emptyMsg = 'لا توجد مقررات مطابقة';
+          const emptyMsg = 'لا توجد مقررات بها تسجيلات فعلية';
           if (select) {
             select.innerHTML = '';
             const opt = document.createElement('option');
@@ -239,9 +253,16 @@
           }
           if (preview) {
             preview.textContent =
-              'لا توجد مقررات تربط تسجيل الطلبة بجدول الفصل الحالي. تأكد من ضبط الفصل الحالي وتطابق أسماء المقررات.';
+              'لا توجد مقررات لها طلبة مسجّلون في التسجيل الفعلي ضمن صلاحياتك. تأكد من إتمام تسجيل الطلبة للفصل.';
           }
           return;
+        }
+        function courseLabel(item) {
+          let label = item.course_code
+            ? `${item.course_name} — ${item.course_code}`
+            : item.course_name;
+          if (item.registration_only) label += ' [تسجيل فقط]';
+          return label;
         }
         const sorted = rows.sort((a, b) => (a.course_name || '').localeCompare(b.course_name || '', 'ar'));
         if (select) {
@@ -249,9 +270,7 @@
           sorted.forEach((item) => {
             const opt = document.createElement('option');
             opt.value = item.course_name;
-            opt.textContent = item.course_code
-              ? `${item.course_name} — ${item.course_code}`
-              : item.course_name;
+            opt.textContent = courseLabel(item);
             select.appendChild(opt);
           });
         }
@@ -260,9 +279,7 @@
           sorted.forEach((item) => {
             const opt = document.createElement('option');
             opt.value = item.course_name;
-            opt.textContent = item.course_code
-              ? `${item.course_name} — ${item.course_code}`
-              : item.course_name;
+            opt.textContent = courseLabel(item);
             registerSelect.appendChild(opt);
           });
         }

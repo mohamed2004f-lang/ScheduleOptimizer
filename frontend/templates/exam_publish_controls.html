@@ -1,58 +1,108 @@
-{# يتطلب المتغير: exam_publish_kind = 'midterm' | 'final' #}
-<div class="container-fluid px-0">
-  <div class="alert alert-warning py-2 px-3 mb-2 d-none" id="examChangeBanner_{{ exam_publish_kind }}" style="border-radius:10px;">
-    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-      <div>
-        <strong>تنبيه</strong>: تم تعديل جدول الامتحانات بعد اعتماده ونشره.
-        <span class="small text-muted">آخر تعديل: <span id="examUpdatedAt_{{ exam_publish_kind }}">—</span></span>
-      </div>
-      <span class="small text-muted">راجع الجدول ثم أعد النشر إن لزم.</span>
+{# أزرار اعتماد / إلغاء نشر / تفريغ / أرشيف لجداول الامتحانات.
+   يعمل مع exams_schedule.html (#examType) أو صفحات ثابتة عبر exam_publish_kind. #}
+{% set _exam_kind_fallback = (exam_publish_kind | default('midterm') | string | lower) %}
+{% if _exam_kind_fallback not in ['midterm', 'final'] %}
+  {% set _exam_kind_fallback = 'midterm' %}
+{% endif %}
+
+<div class="alert alert-warning py-2 px-3 mb-2 d-none" id="examChangeBanner" style="border-radius:10px;">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div>
+      <strong>تنبيه</strong>: تم تعديل جدول الامتحانات بعد اعتماده ونشره.
+      <span class="small text-muted">آخر تعديل: <span id="examUpdatedAt">—</span></span>
     </div>
+    <span class="small text-muted">راجع الجدول ثم أعد النشر إن لزم.</span>
   </div>
 </div>
 
-<div class="card mb-3 border-primary-subtle" id="examPublishCard_{{ exam_publish_kind }}">
+<div class="card mb-3 border-primary-subtle d-none" id="examPublishCard">
   <div class="card-body py-2">
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
-      <div id="examPublishStatus_{{ exam_publish_kind }}" class="small text-muted flex-grow-1">—</div>
-      <button type="button" class="btn btn-outline-primary btn-sm d-none" id="btnExamPublish_{{ exam_publish_kind }}">
-        اعتماد ونشر جدول الامتحانات
-      </button>
+      <div id="examPublishStatus" class="small text-muted flex-grow-1">—</div>
+      <div class="d-flex flex-wrap gap-2 align-items-center">
+        <a class="btn btn-outline-secondary btn-sm" id="btnExamArchive" href="/exam_schedule_versions_page" title="عرض النسخ الأرشيفية لجداول الامتحانات">
+          أرشيف النسخ
+        </a>
+        <button type="button" class="btn btn-outline-danger btn-sm" id="btnExamClear" title="تفريغ صفوف هذا النوع بعد حفظ نسخة">
+          تفريغ الجدول
+        </button>
+        <button type="button" class="btn btn-outline-warning btn-sm d-none" id="btnExamUnpublish" title="إلغاء النشر دون حذف المواعيد">
+          إلغاء النشر
+        </button>
+        <button type="button" class="btn btn-outline-primary btn-sm" id="btnExamPublish">
+          اعتماد ونشر
+        </button>
+      </div>
     </div>
   </div>
 </div>
 
 <script>
 (function () {
-  const examType = "{{ exam_publish_kind }}";
-  const banner = document.getElementById("examChangeBanner_" + examType);
-  const updatedEl = document.getElementById("examUpdatedAt_" + examType);
-  const statusEl = document.getElementById("examPublishStatus_" + examType);
-  const btn = document.getElementById("btnExamPublish_" + examType);
-  const card = document.getElementById("examPublishCard_" + examType);
+  const FALLBACK_TYPE = {{ _exam_kind_fallback | tojson }};
+  const banner = document.getElementById("examChangeBanner");
+  const updatedEl = document.getElementById("examUpdatedAt");
+  const statusEl = document.getElementById("examPublishStatus");
+  const btn = document.getElementById("btnExamPublish");
+  const btnClear = document.getElementById("btnExamClear");
+  const btnUnpublish = document.getElementById("btnExamUnpublish");
+  const btnArchive = document.getElementById("btnExamArchive");
+  const card = document.getElementById("examPublishCard");
+
+  function currentExamType() {
+    var sel = document.getElementById("examType");
+    if (sel && sel.value) {
+      var v = String(sel.value || "").trim().toLowerCase();
+      if (v === "midterm" || v === "final") return v;
+    }
+    return FALLBACK_TYPE === "final" ? "final" : "midterm";
+  }
+
+  function typeAr(t) {
+    return t === "final" ? "نهائي" : "جزئي";
+  }
+
+  function csrfHeaders() {
+    var csrf = document.querySelector('meta[name="csrf-token"]') && document.querySelector('meta[name="csrf-token"]').getAttribute("content");
+    var headers = { "Content-Type": "application/json", "Accept": "application/json" };
+    if (csrf) headers["X-CSRFToken"] = csrf;
+    return headers;
+  }
+
+  function toast(msg, kind) {
+    if (window.showToast) window.showToast(msg, kind || "info");
+    else alert(msg);
+  }
 
   async function refreshExamPublishStatus() {
     if (!statusEl || !btn || !card) return;
+    var examType = currentExamType();
     try {
       const auth = await fetch("/auth/check", { credentials: "include" }).then(function (r) { return r.json(); }).catch(function () { return {}; });
       const role = auth.role || "";
       const mayPublish = !!(auth.capabilities && auth.capabilities.can_manage_schedule_edit)
-        || ["admin", "admin_main", "head_of_department"].includes(role);
+        || ["admin", "admin_main", "head_of_department", "college_dean", "academic_vice_dean", "system_admin"].includes(role);
       if (!mayPublish) {
         card.classList.add("d-none");
         if (banner) banner.classList.add("d-none");
         return;
       }
       card.classList.remove("d-none");
+      if (btnArchive) {
+        btnArchive.href = "/exam_schedule_versions_page?exam_type=" + encodeURIComponent(examType);
+      }
       const st = await fetch("/exams/" + encodeURIComponent(examType) + "/publish_status", { credentials: "include" })
         .then(function (r) { return r.json(); })
         .catch(function () { return {}; });
       if (st.published && st.published_at) {
-        statusEl.textContent = "الجدول معتمد ومنشور للطلبة والمشرفين منذ " + String(st.published_at || "").slice(0, 19).replace("T", " ");
+        statusEl.textContent = "جدول الامتحانات («" + typeAr(examType) + "») معتمد ومنشور منذ " + String(st.published_at || "").slice(0, 19).replace("T", " ");
+        if (btnUnpublish) btnUnpublish.classList.remove("d-none");
       } else {
-        statusEl.textContent = "الجدول غير منشور بعد؛ الطلبة والمشرفون لن يرَوا التفاصيل حتى تعتمده.";
+        statusEl.textContent = "جدول الامتحانات («" + typeAr(examType) + "») غير منشور؛ الطلبة والمشرفون لن يرَوا التفاصيل حتى تعتمده.";
+        if (btnUnpublish) btnUnpublish.classList.add("d-none");
       }
       btn.classList.remove("d-none");
+      if (btnClear) btnClear.classList.remove("d-none");
       if (banner && updatedEl && st.published && st.changed_since_publish) {
         updatedEl.textContent = st.updated_at || "—";
         banner.classList.remove("d-none");
@@ -66,34 +116,99 @@
 
   if (btn) {
     btn.addEventListener("click", async function () {
-      if (!confirm("اعتماد ونشر جدول الامتحانات الحالي؟\\nسيتم حفظ نسخة أرشيفية للنشر (منشور) ويصبح الجدول ظاهراً للطلبة والمشرفين.")) return;
-      var csrf = document.querySelector('meta[name="csrf-token"]') && document.querySelector('meta[name="csrf-token"]').getAttribute("content");
-      var headers = { "Content-Type": "application/json" };
-      if (csrf) headers["X-CSRFToken"] = csrf;
+      var examType = currentExamType();
+      if (!confirm("اعتماد ونشر جدول الامتحانات («" + typeAr(examType) + "»)؟\nسيتم حفظ نسخة أرشيفية ويصبح الجدول ظاهراً للطلبة والمشرفين.")) return;
       try {
-        var r = await fetch("/exams/" + encodeURIComponent(examType) + "/publish", { method: "POST", credentials: "include", headers: headers, body: "{}" });
+        var r = await fetch("/exams/" + encodeURIComponent(examType) + "/publish", {
+          method: "POST", credentials: "include", headers: csrfHeaders(), body: "{}"
+        });
         var j = await r.json().catch(function () { return null; });
         if (r.ok && j && j.status === "ok") {
-          if (window.showToast) window.showToast(j.message || "تم النشر", "success");
-          else alert(j.message || "تم النشر");
+          toast(j.message || "تم النشر", "success");
           refreshExamPublishStatus();
           if (typeof loadExamSchedule === "function") loadExamSchedule();
         } else {
-          var msg = (j && j.message) ? j.message : r.statusText;
-          if (window.showToast) window.showToast("فشل النشر: " + msg, "danger");
-          else alert("فشل النشر: " + msg);
+          toast("فشل النشر: " + ((j && j.message) ? j.message : r.statusText), "danger");
         }
       } catch (e) {
-        if (window.showToast) window.showToast("خطأ في الاتصال", "danger");
-        else alert("خطأ في الاتصال");
+        toast("خطأ في الاتصال", "danger");
       }
     });
   }
 
+  if (btnUnpublish) {
+    btnUnpublish.addEventListener("click", async function () {
+      var examType = currentExamType();
+      if (!confirm("إلغاء نشر جدول الامتحانات («" + typeAr(examType) + "»)؟\nالمواعيد تبقى؛ يخفى الجدول عن الطلبة والمشرفين.")) return;
+      try {
+        var r = await fetch("/exams/" + encodeURIComponent(examType) + "/unpublish", {
+          method: "POST", credentials: "include", headers: csrfHeaders(), body: "{}"
+        });
+        var j = await r.json().catch(function () { return null; });
+        if (r.ok && j && j.status === "ok") {
+          toast(j.message || "تم إلغاء النشر", "success");
+          refreshExamPublishStatus();
+          if (typeof loadExamSchedule === "function") loadExamSchedule();
+        } else {
+          toast("فشل إلغاء النشر: " + ((j && j.message) ? j.message : r.statusText), "danger");
+        }
+      } catch (e) {
+        toast("خطأ في الاتصال", "danger");
+      }
+    });
+  }
+
+  if (btnClear) {
+    btnClear.addEventListener("click", async function () {
+      var examType = currentExamType();
+      var termLabel = "";
+      try {
+        var tr = await fetch("/admin/settings/current_term", { credentials: "include" });
+        var tj = await tr.json().catch(function () { return null; });
+        if (tj && tj.term_name) {
+          termLabel = ((tj.term_name || "") + " " + (tj.term_year || "")).trim();
+        }
+      } catch (e) {}
+      if (!termLabel) {
+        toast("عيّن الفصل الحالي أولاً قبل التفريغ.", "warning");
+        return;
+      }
+      var explain =
+        "لوحة الامتحانات («" + typeAr(examType) + "») لا تُقسَّم بالفصل في قاعدة البيانات.\n" +
+        "سيتم تفريغ كل المواعيد الظاهرة الآن (بما فيها بقايا الفصل السابق مثل ربيع 25-26) بعد حفظ نسخة أرشيف،\n" +
+        "ثم تلغي النشر لتبدأ العمل على الفصل الحالي: «" + termLabel + "».\n\n" +
+        "للتأكيد ستُطلب منك كتابة تسمية الفصل الحالي.";
+      if (!confirm(explain)) return;
+      var typed = prompt("اكتب تسمية الفصل الحالي كما هي للتأكيد:\n" + termLabel);
+      if (typed == null) return;
+      if (String(typed).trim() !== termLabel) {
+        toast("لم يُطابق النص تسمية الفصل الحالي. لم يُفرَّغ الجدول.", "warning");
+        return;
+      }
+      try {
+        var r = await fetch("/exams/" + encodeURIComponent(examType) + "/clear_all", {
+          method: "POST",
+          credentials: "include",
+          headers: csrfHeaders(),
+          body: JSON.stringify({ confirm_label: termLabel })
+        });
+        var j = await r.json().catch(function () { return null; });
+        if (r.ok && j && j.status === "ok") {
+          toast((j.message || "تم التفريغ") + " (" + (j.deleted_rows || 0) + " صف)", "success");
+          refreshExamPublishStatus();
+          if (typeof loadExamSchedule === "function") loadExamSchedule();
+        } else {
+          toast("فشل التفريغ: " + ((j && j.message) ? j.message : r.statusText), "danger");
+        }
+      } catch (e) {
+        toast("خطأ في الاتصال", "danger");
+      }
+    });
+  }
+
+  window.refreshExamPublishStatus = refreshExamPublishStatus;
   window.addEventListener("load", function () {
     refreshExamPublishStatus();
   });
-  window.refreshExamPublishStatus = window.refreshExamPublishStatus || {};
-  window.refreshExamPublishStatus[examType] = refreshExamPublishStatus;
 })();
 </script>

@@ -760,9 +760,15 @@ def course_is_college_general(
     *,
     course_code: str | None = None,
 ) -> bool:
-    """هل المقرر ضمن اتجاه عام الكلية (خطة PROG_U1 أو ملكية قسم GENERAL)؟"""
+    """هل المقرر ضمن اتجاه عام الكلية (خطة PROG_U1 أو ملكية قسم GENERAL)؟
+
+    المقررات في سجل المشترك للكلية ليست «اتجاهاً عاماً» رغم ملكية صف courses لـ GENERAL.
+    """
     cname = (course_name or "").strip()
     if not cname:
+        return False
+    # المشترك للكلية له مسار صلاحيات منفصل (رمز خطة القسم لرؤساء التخصص)
+    if course_is_college_shared_catalog(conn, cname):
         return False
     cur = conn.cursor()
     from backend.database.database import fetch_table_columns
@@ -1447,7 +1453,7 @@ def course_writable_by_actor(
             return True
         return False
 
-    # رئيس تخصص / نطاق قسم آخر: لا تعديل للعامة/المشتركة
+    # رئيس تخصص / نطاق قسم آخر: لا تعديل كامل للعامة/المشتركة
     if is_general_course or is_shared:
         return False
     if gen_id is not None and owning is not None and owning == int(gen_id):
@@ -1458,6 +1464,41 @@ def course_writable_by_actor(
     return course_in_actor_scope(conn, cname, actor)
 
 
+def course_code_editable_by_actor(
+    conn,
+    course_name: str,
+    actor_username: str | None = None,
+) -> bool:
+    """
+    تعديل رمز المقرر فقط (رمز خطة القسم للمقررات المشتركة).
+    - اتجاه عام: لا (إلا بصلاحية الكتابة الكاملة).
+    - مشترك كلية: نعم لرئيس التخصص ضمن نطاقه (وليس لرئيس الاتجاه العام).
+    - مقرر قسم: يغطيه course_writable_by_actor.
+    """
+    if course_writable_by_actor(conn, course_name, actor_username):
+        return True
+    actor = _actor_username(actor_username)
+    dep = resolve_effective_department_scope_id(conn, actor)
+    if dep is None:
+        return False
+    cname = (course_name or "").strip()
+    if not cname:
+        return False
+    gen_id = resolve_college_general_department_id(conn)
+    try:
+        if gen_id is not None and int(dep) == int(gen_id):
+            # رئيس الاتجاه العام: المشتركة للكلية وليست له
+            return False
+    except (TypeError, ValueError):
+        return False
+    # اتجاه عام صِرف (بدون سجل مشترك): لا تعديل رمز لرئيس التخصص
+    if course_is_college_general(conn, cname):
+        return False
+    if not course_is_college_shared_catalog(conn, cname, department_id=int(dep)):
+        return False
+    return True
+
+
 def assert_course_writable_by_actor(
     conn,
     course_name: str,
@@ -1466,8 +1507,9 @@ def assert_course_writable_by_actor(
     if not course_writable_by_actor(conn, course_name, actor_username):
         label = (course_name or "").strip() or "—"
         raise ValueError(
-            f"لا يمكن تعديل المقرر «{label}» من نطاق قسمك "
-            "(مقرر مشترك يُدار من العميد/الوكيلة/الإدارة، أو خارج قسمك)."
+            f"لا يمكن تعديل المقرر «{label}» من نطاق قسمك. "
+            "مقررات الاتجاه العام تُدار من رئيس الاتجاه العام أو العميد/الإدارة، "
+            "والمشتركة من العميد/الوكيلة/الإدارة فقط."
         )
 
 

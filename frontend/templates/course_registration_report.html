@@ -6,6 +6,11 @@
   <title>تقرير أعداد التسجيل بالمقررات</title>
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    tr.roster-row td { background: #f8fafc; }
+    .roster-inner { padding: 0.5rem 0.25rem 0.75rem; }
+    .btn-toggle-roster { min-width: 2.5rem; }
+  </style>
 </head>
 <body>
 {% include "base_nav.html" %}
@@ -53,6 +58,7 @@
               <th class="text-center">رمز المقرر</th>
               <th class="text-center">الوحدات</th>
               <th class="text-center">عدد الطلبة</th>
+              <th class="text-center" style="width:7rem">القائمة</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -63,6 +69,8 @@
 </main>
 
 <script>
+const rosterCache = new Map();
+
 async function fetchJSON(url, opts){
   const r = await fetch(url, { credentials: 'include', ...opts });
   const j = await r.json().catch(()=>null);
@@ -71,6 +79,68 @@ async function fetchJSON(url, opts){
 function setMsg(kind, text){
   const el = document.getElementById('msg');
   el.innerHTML = text ? `<div class="alert alert-${kind} p-2 mb-0">${text}</div>` : '';
+}
+function escapeHtml(s){
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function loadRoster(courseName){
+  const key = String(courseName || '').trim();
+  if (rosterCache.has(key)) return rosterCache.get(key);
+  const r = await fetchJSON('/students/course_registration_counts/roster?course_name=' + encodeURIComponent(key));
+  if (!r.ok) throw new Error((r.json && r.json.message) || 'تعذر جلب قائمة الطلبة');
+  rosterCache.set(key, r.json.students || []);
+  return rosterCache.get(key);
+}
+
+function renderRosterTable(students){
+  if (!students || !students.length) {
+    return '<p class="text-muted small mb-0">لا يوجد طلبة مسجّلون في هذا المقرر.</p>';
+  }
+  const rows = students.map((st, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td><code>${escapeHtml(st.student_id)}</code></td>
+      <td>${escapeHtml(st.student_name || '—')}</td>
+      <td>${escapeHtml(st.university_number || '—')}</td>
+      <td><a class="small" href="/transcript_page?student_id=${encodeURIComponent(st.student_id)}" target="_blank">كشف</a></td>
+    </tr>`).join('');
+  return `<div class="roster-inner table-responsive">
+    <table class="table table-sm table-bordered mb-0 bg-white">
+      <thead class="table-light"><tr><th>#</th><th>الرقم</th><th>الاسم</th><th>رقم جامعي</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+async function toggleRoster(btn, courseName){
+  const tr = btn.closest('tr');
+  const next = tr.nextElementSibling;
+  const open = next && next.classList.contains('roster-row');
+  if (open) {
+    next.remove();
+    btn.textContent = 'عرض';
+    btn.classList.remove('btn-secondary');
+    btn.classList.add('btn-outline-primary');
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = '…';
+  try {
+    const students = await loadRoster(courseName);
+    const rosterTr = document.createElement('tr');
+    rosterTr.className = 'roster-row';
+    rosterTr.innerHTML = `<td colspan="6">${renderRosterTable(students)}</td>`;
+    tr.after(rosterTr);
+    btn.textContent = 'إخفاء';
+    btn.classList.remove('btn-outline-primary');
+    btn.classList.add('btn-secondary');
+  } catch (e) {
+    setMsg('warning', e.message || 'تعذر تحميل قائمة الطلبة');
+    btn.textContent = 'عرض';
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function load(){
@@ -92,24 +162,29 @@ async function load(){
 
   const items = r.json?.items || [];
   if(!items.length){
-    tb.innerHTML = '<tr><td colspan="5" class="text-center text-muted">لا توجد تسجيلات</td></tr>';
+    tb.innerHTML = '<tr><td colspan="6" class="text-center text-muted">لا توجد تسجيلات</td></tr>';
     return;
   }
   items.forEach((it, idx)=>{
     const tr = document.createElement('tr');
     const u = it.units;
+    const cname = it.course_name || '';
+    const count = it.student_count ?? 0;
     tr.innerHTML = `
       <td>${idx+1}</td>
-      <td>${escapeHtml(it.course_name || '')}</td>
+      <td>${escapeHtml(cname)}</td>
       <td class="text-center">${escapeHtml(it.course_code || '')}</td>
       <td class="text-center">${u !== null && u !== undefined && u !== '' ? escapeHtml(String(u)) : '—'}</td>
-      <td class="text-center fw-semibold">${it.student_count ?? 0}</td>
-    `;
+      <td class="text-center fw-semibold">${count}</td>
+      <td class="text-center">
+        <button type="button" class="btn btn-sm btn-outline-primary btn-toggle-roster" ${count > 0 ? '' : 'disabled'}>عرض</button>
+      </td>`;
+    const btn = tr.querySelector('.btn-toggle-roster');
+    if (btn && count > 0) {
+      btn.addEventListener('click', () => toggleRoster(btn, cname));
+    }
     tb.appendChild(tr);
   });
-}
-function escapeHtml(s){
-  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 load();
 </script>

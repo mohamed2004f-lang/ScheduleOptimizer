@@ -1552,8 +1552,10 @@ def registration_coverage():
     """
     try:
         from backend.services.coverage_insights import (
+            coverage_scope_label_ar,
             registered_distinct_course_names,
             schedule_distinct_course_names_for_coverage,
+            schedule_other_term_leftover_summary,
         )
 
         with get_connection() as conn:
@@ -1564,11 +1566,15 @@ def registration_coverage():
             dept_scoped = (
                 dep is not None and role_cov in ("admin", "admin_main", "head_of_department")
             )
+            scope_dept = int(dep) if dept_scoped else None
             schedule_names, scope = schedule_distinct_course_names_for_coverage(
                 conn,
                 cur,
                 term_label,
-                dept_scope_id=int(dep) if dept_scoped else None,
+                dept_scope_id=scope_dept,
+            )
+            leftover = schedule_other_term_leftover_summary(
+                conn, cur, dept_scope_id=scope_dept
             )
             actor_u = (session.get("user") or session.get("username") or "").strip()
             registered_names = registered_distinct_course_names(cur, conn, actor_username=actor_u)
@@ -1581,18 +1587,11 @@ def registration_coverage():
             extra_in_schedule = sorted(
                 n for n in schedule_names if _norm_course_key(n) and _norm_course_key(n) not in reg_keys
             )
-            scope_labels = {
-                "current_semester_or_blank": "مقررات الجدول الدراسي للفصل الحالي (أو صفوف بلا حقل فصل)",
-                "all_schedule": "كل المقررات الظاهرة في جدول المقررات (لم يُعثر على بيانات للفصل الحالي)",
-                "all_schedule_scoped": "كل مقررات الجدولة المطابقة للفصل (ضمن مقررات قسم نطاقك)",
-                "none": "لا توجد مقررات في جدول schedule",
-                "scoped_no_schedule_course_department_columns": "لا يمكن حصر مقررات الجدولة حسب القسم (أعمدة القسم غير متوفرة في الجدولة/المقررات)",
-            }
-            scope_ar = scope_labels.get(scope, scope)
+            scope_ar = coverage_scope_label_ar(scope)
             if dept_scoped:
                 if scope == "scoped_no_schedule_course_department_columns":
                     scope_ar = (
-                        scope_labels["scoped_no_schedule_course_department_columns"]
+                        coverage_scope_label_ar(scope)
                         + " أضف department_id في الجدولة أو owning_department_id في المقررات لقياس الدقة داخل القسم."
                     )
                 elif scope_ar:
@@ -1602,11 +1601,15 @@ def registration_coverage():
                     "term_label": term_label,
                     "schedule_scope": scope,
                     "schedule_scope_ar": scope_ar,
+                    "other_term_leftover": leftover,
+                    "leftover_warning_ar": leftover.get("warning_ar") or "",
                     "missing_in_schedule": missing_in_schedule,
                     "extra_in_schedule": extra_in_schedule,
                     "counts": {
                         "schedule_distinct": len(sched_keys),
                         "registrations_distinct": len(reg_keys),
+                        "other_term_schedule_rows": int(leftover.get("row_count") or 0),
+                        "other_term_schedule_courses": int(leftover.get("distinct_courses") or 0),
                     },
                 }
             )
@@ -2198,9 +2201,16 @@ def normalize_schedule_times():
 @login_required
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def clear_schedule_all():
-    """تفريغ لوحة الجدول للفصل الحالي فقط بعد نسخة، مع إلغاء اعتماد الجدول الزمني."""
+    """
+    تفريغ صفوف الجدول الدراسي بعد نسخة، مع إلغاء اعتماد الجدول الزمني.
+    mode: current (افتراضي) | other (بقايا فصول سابقة) | all
+    يتطلب confirm_label = تسمية الفصل الحالي.
+    """
     data = request.get_json(silent=True) or {}
     confirm_label = str(data.get("confirm_label") or data.get("confirm") or "").strip()
+    mode = str(data.get("mode") or "current").strip().lower()
+    if mode not in ("current", "other", "all"):
+        mode = "current"
     from backend.services.term_engine import (
         confirm_term_label_matches,
         current_term_match_context,
@@ -2241,8 +2251,20 @@ def clear_schedule_all():
             ), 400
 
         _sync_schedule_pk_col(conn)
+        event_map = {
+            "current": "clear_current_term",
+            "other": "clear_other_terms",
+            "all": "clear_all_terms",
+        }
+        note_map = {
+            "current": f"تفريغ الفصل الحالي {ops_label}",
+            "other": f"تفريغ بقايا الفصول السابقة — تهيئة للعمل على {ops_label}",
+            "all": f"تفريغ كل الجدولة — تهيئة للعمل على {ops_label}",
+        }
         try:
-            _create_schedule_version(conn, event_type="clear_current_term", note=f"تفريغ {ops_label}")
+            _create_schedule_version(
+                conn, event_type=event_map[mode], note=note_map[mode]
+            )
         except Exception:
             logger.exception("schedule snapshot before clear failed")
             return jsonify({"status": "error", "message": "تعذر حفظ نسخة قبل التفريغ."}), 500
@@ -2266,7 +2288,10 @@ def clear_schedule_all():
         ids = []
         for r in rows:
             sem = r[1]
-            if not schedule_semester_matches_term_context(sem, ctx):
+            is_current = schedule_semester_matches_term_context(sem, ctx)
+            if mode == "current" and not is_current:
+                continue
+            if mode == "other" and is_current:
                 continue
             if dept_id is not None and has_dept:
                 try:
@@ -2310,13 +2335,26 @@ def clear_schedule_all():
 
     try:
         log_activity(
-            action="clear_schedule_current_term",
-            details=f"deleted_rows={deleted}, term={ops_label}",
+            action=f"clear_schedule_{mode}",
+            details=f"deleted_rows={deleted}, term={ops_label}, mode={mode}",
         )
     except Exception:
         pass
 
-    return jsonify({"status": "ok", "deleted_rows": int(deleted), "ops_label": ops_label}), 200
+    msg_map = {
+        "current": f"تم تفريغ جدول الفصل الحالي ({ops_label})",
+        "other": f"تم تفريغ بقايا الفصول السابقة — جاهز للعمل على {ops_label}",
+        "all": f"تم تفريغ كل صفوف الجدولة — جاهز للعمل على {ops_label}",
+    }
+    return jsonify(
+        {
+            "status": "ok",
+            "message": msg_map.get(mode, "تم التفريغ"),
+            "deleted_rows": int(deleted),
+            "ops_label": ops_label,
+            "mode": mode,
+        }
+    ), 200
 
 
 @schedule_bp.route("/time_slots")

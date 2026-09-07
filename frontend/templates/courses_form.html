@@ -94,12 +94,19 @@
       <!-- قائمة المقررات -->
       <div class="card chart-container">
         <div class="card-body">
-          <div class="d-flex align-items-center justify-content-between mb-2">
+          <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
             <h6 class="mb-0">قائمة المقررات</h6>
-            <div class="d-flex gap-2">
-              <input id="filterInput" class="form-control form-control-sm" placeholder="فلترة بالاسم/الرمز" style="max-width: 220px;">
+            <div class="d-flex flex-wrap gap-2 align-items-center">
+              <input id="filterInput" class="form-control form-control-sm" placeholder="فلترة بالاسم/الرمز (مثال: CIEN)" style="max-width: 240px;">
+              <div id="coursesBulkToolbar" class="d-none d-flex flex-wrap gap-2">
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="btnSelectFiltered">تحديد نتائج الفلتر</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="btnClearSelection">إلغاء التحديد</button>
+                <button type="button" class="btn btn-danger btn-sm" id="btnDeleteSelected">حذف المحدد</button>
+                <button type="button" class="btn btn-outline-warning btn-sm" id="btnDeleteAllDept" title="مقررات قسمك فقط — لا يشمل الاتجاه العام ولا المشتركة">حذف/أرشفة مقررات القسم فقط</button>
+              </div>
             </div>
           </div>
+          <div id="coursesSelectionHint" class="small text-muted mb-2 d-none"></div>
           <div id="coursesList" class="small mono"></div>
           <div id="coursesPagination" class="list-pagination-bar"></div>
           <div class="mt-3">
@@ -177,6 +184,7 @@ let editModal;
 let editCourseName = '';
 let IS_ADMIN = false;
 let IS_VIEW_ONLY_ROLE = false;
+const SELECTED_COURSES = new Set();
 
 function categoryLabel(cat){
   if(cat === 'elective_major') return 'اختياري (تخصصي)';
@@ -268,7 +276,7 @@ function renderCoursesPagination(total, pages) {
   bar.querySelector('[data-pg="next"]')?.addEventListener('click', () => { if (COURSES_PAGE<pages) { COURSES_PAGE++; renderCoursesPage(); } });
 }
 
-function renderCoursesPage() {
+function getFilteredCourses(){
   const q = (document.getElementById('filterInput')?.value || '').trim().toLowerCase();
   let filtered = ALL_COURSES.filter(c => Number(c.is_archived || 0) !== 1);
   if (q) {
@@ -277,12 +285,103 @@ function renderCoursesPage() {
       (c.course_code||'').toLowerCase().includes(q)
     );
   }
+  return filtered;
+}
+
+function updateSelectionHint(){
+  const hint = document.getElementById('coursesSelectionHint');
+  if (!hint) return;
+  const n = SELECTED_COURSES.size;
+  if (!IS_ADMIN || n <= 0) {
+    hint.classList.add('d-none');
+    hint.textContent = '';
+    return;
+  }
+  hint.classList.remove('d-none');
+  hint.textContent = `محدد: ${n} مقرراً`;
+}
+
+function csrfHeadersJson(){
+  const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+  const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+  if (csrf) headers['X-CSRFToken'] = csrf;
+  return headers;
+}
+
+function syncPageSelectCheckbox(){
+  const pageChk = document.getElementById('chkSelectPage');
+  if (!pageChk) return;
+  const boxes = Array.from(document.querySelectorAll('.course-select-cb'));
+  if (!boxes.length) {
+    pageChk.checked = false;
+    pageChk.indeterminate = false;
+    return;
+  }
+  const checked = boxes.filter(b => b.checked).length;
+  pageChk.checked = checked === boxes.length;
+  pageChk.indeterminate = checked > 0 && checked < boxes.length;
+}
+
+async function bulkDeleteCourses({ names = null, allInScope = false } = {}){
+  const payload = {};
+  if (allInScope) {
+    if (!confirm('سيتم حذف أو أرشفة مقررات قسمك فقط (غير المؤرشفة).\nمقررات الاتجاه العام والمشتركة تبقى ظاهرة ولا تُمس.\nثم يمكنك استيراد مقررات القسم بالعربية.')) return;
+    const typed = prompt('للتأكيد اكتب كلمة: تأكيد');
+    if (typed == null) return;
+    if (String(typed).trim() !== 'تأكيد') {
+      window.showToast?.('لم يُطابق التأكيد. لم يُحذف شيء.', 'warning');
+      return;
+    }
+    payload.all_in_scope = true;
+    payload.confirm_phrase = 'تأكيد';
+  } else {
+    const list = Array.isArray(names) ? names.filter(Boolean) : [];
+    if (!list.length) {
+      window.showToast?.('لم يُحدد أي مقرر.', 'warning');
+      return;
+    }
+    if (!confirm(`حذف/أرشفة ${list.length} مقرراً محدداً؟\n(المرتبط بدرجات/تسجيلات/جدول يُؤرشف ولا يُحذف صلباً)`)) return;
+    payload.course_names = list;
+    if (list.length > 20) {
+      const typed = prompt('عدد المحدد أكبر من 20. اكتب كلمة التأكيد: تأكيد');
+      if (typed == null) return;
+      if (String(typed).trim() !== 'تأكيد') {
+        window.showToast?.('لم يُطابق التأكيد. لم يُحذف شيء.', 'warning');
+        return;
+      }
+      payload.confirm_phrase = 'تأكيد';
+    }
+  }
+  try {
+    const resp = await fetch('/courses/bulk_delete', {
+      method: 'POST',
+      credentials: 'include',
+      headers: csrfHeadersJson(),
+      body: JSON.stringify(payload),
+    });
+    const j = await resp.json().catch(()=>null);
+    if (resp.ok && j?.status === 'ok') {
+      window.showToast?.(j.message || 'تم', 'success');
+      SELECTED_COURSES.clear();
+      await loadCourses();
+    } else {
+      window.showToast?.(j?.message || resp.statusText || 'فشل الحذف الجماعي', 'danger');
+    }
+  } catch (err) {
+    console.error(err);
+    window.showToast?.('خطأ في الاتصال بالخادم', 'danger');
+  }
+}
+
+function renderCoursesPage() {
+  const filtered = getFilteredCourses();
   const total = filtered.length;
   const pages = Math.max(1, Math.ceil(total / COURSES_PAGE_SIZE) || 1);
   if (COURSES_PAGE > pages) COURSES_PAGE = pages;
   const slice = filtered.slice((COURSES_PAGE - 1) * COURSES_PAGE_SIZE, COURSES_PAGE * COURSES_PAGE_SIZE);
   renderCoursesTable(slice);
   renderCoursesPagination(total, pages);
+  updateSelectionHint();
 }
 
 function renderCoursesTable(list){
@@ -298,6 +397,7 @@ function renderCoursesTable(list){
   table.innerHTML = `
     <thead class="table-light">
       <tr>
+        ${IS_ADMIN ? '<th class="text-center" style="width:2.5rem"><input type="checkbox" id="chkSelectPage" title="تحديد الصفحة"></th>' : ''}
         <th>الاسم</th>
         <th>الرمز</th>
         <th class="text-center">الوحدات</th>
@@ -312,20 +412,42 @@ function renderCoursesTable(list){
   const tbody = table.querySelector('tbody');
 
   list.forEach(c=>{
+    const name = c.course_name || '';
+    const canEdit = IS_ADMIN && !!c.can_edit;
+    const canEditCode = IS_ADMIN && (!!c.can_edit_code || canEdit);
+    const kind = c.course_kind || 'department';
+    const kindAr = c.course_kind_ar || '';
+    const kindBadge = kind === 'college_general'
+      ? `<span class="badge text-bg-secondary ms-1">اتجاه عام</span>`
+      : (kind === 'shared'
+        ? `<span class="badge text-bg-info ms-1">مشترك كلية</span>`
+        : '');
+    const showCode = c.display_code || c.dept_plan_code || c.course_code || '';
+    const checked = SELECTED_COURSES.has(name) ? 'checked' : '';
+    const selectable = canEdit; // الحذف الجماعي لمقررات القسم فقط
+    let actionsHtml = `<span class="text-muted small">عرض فقط</span>`;
+    if (IS_ADMIN) {
+      if (canEdit) {
+        actionsHtml = `<button class="btn btn-sm btn-outline-primary me-1" data-action="edit" data-name="${escapeAttr(name)}">تحرير</button>
+          <button class="btn btn-sm btn-danger" data-action="delete" data-name="${escapeAttr(name)}">حذف</button>`;
+      } else if (canEditCode && kind === 'shared') {
+        actionsHtml = `<button class="btn btn-sm btn-outline-primary" data-action="edit-code" data-name="${escapeAttr(name)}">تحرير الرمز</button>`;
+      } else if (kind === 'college_general') {
+        actionsHtml = `<span class="text-muted small">اتجاه عام — بلا تعديل</span>`;
+      } else {
+        actionsHtml = `<span class="text-muted small">مملوك لجهة أخرى</span>`;
+      }
+    }
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${escapeHtml(c.course_name)}</td>
-      <td>${escapeHtml(c.course_code || '')}</td>
+      ${IS_ADMIN ? `<td class="text-center"><input type="checkbox" class="course-select-cb" data-name="${escapeAttr(name)}" ${checked} ${selectable ? '' : 'disabled'}></td>` : ''}
+      <td>${escapeHtml(name)}${kindBadge}${kind === 'shared' && IS_ADMIN && !canEdit ? '<div class="small text-muted">يمكن تعديل رمز قسمك فقط</div>' : ''}</td>
+      <td>${escapeHtml(showCode)}</td>
       <td class="text-center">${(typeof c.units === 'number' ? c.units : (c.units || 0))}</td>
       <td class="text-center">${escapeHtml(categoryLabel(c.category))}</td>
       <td class="text-center">${escapeHtml(assessmentTypeLabel(c.assessment_type || 'theoretical'))}</td>
       <td class="text-center">${escapeHtml((c.coursework_weight ?? 10) + '/' + (c.midterm_weight ?? 30) + '/' + (c.final_exam_weight ?? 60))}</td>
-      <td class="text-center">
-        ${IS_ADMIN ? `
-          <button class="btn btn-sm btn-outline-primary me-1" data-action="edit" data-name="${escapeAttr(c.course_name)}">تحرير</button>
-          <button class="btn btn-sm btn-danger" data-action="delete" data-name="${escapeAttr(c.course_name)}">حذف</button>
-        ` : `<span class="text-muted small">عرض فقط</span>`}
-      </td>
+      <td class="text-center">${actionsHtml}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -340,9 +462,40 @@ function renderCoursesTable(list){
       const action = e.currentTarget.dataset.action;
       const name = e.currentTarget.dataset.name;
       if(action === 'delete') deleteCourse(name);
-      if(action === 'edit') openEdit(name);
+      if(action === 'edit') openEdit(name, false);
+      if(action === 'edit-code') openEdit(name, true);
     });
   });
+
+  tbody.querySelectorAll('.course-select-cb').forEach(cb=>{
+    cb.addEventListener('change', ()=>{
+      const name = cb.dataset.name || '';
+      if (!name) return;
+      if (cb.checked) SELECTED_COURSES.add(name);
+      else SELECTED_COURSES.delete(name);
+      updateSelectionHint();
+      syncPageSelectCheckbox();
+    });
+  });
+
+  const pageChk = document.getElementById('chkSelectPage');
+  if (pageChk) {
+    pageChk.addEventListener('change', ()=>{
+      list.forEach(c=>{
+        const name = c.course_name || '';
+        if (!name) return;
+        if (c.can_edit === false) return;
+        if (pageChk.checked) SELECTED_COURSES.add(name);
+        else SELECTED_COURSES.delete(name);
+      });
+      tbody.querySelectorAll('.course-select-cb').forEach(cb=>{
+        if (cb.disabled) return;
+        cb.checked = pageChk.checked;
+      });
+      updateSelectionHint();
+    });
+    syncPageSelectCheckbox();
+  }
 }
 
 function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
@@ -452,16 +605,19 @@ document.getElementById('btnAddCourse').addEventListener('click', async () => {
   }
 });
 
+let editCodeOnly = false;
+
 /* inline edit (upsert via wrapper -> /courses/add) */
-function openEdit(name){
+function openEdit(name, codeOnly){
   const c = ALL_COURSES.find(x=>x.course_name === name);
   if(!c) return;
   if(!editModal){
     editModal = new bootstrap.Modal(document.getElementById('editCourseModal'));
   }
   editCourseName = name;
+  editCodeOnly = !!codeOnly || (!c.can_edit && !!c.can_edit_code);
   document.getElementById('ecName').textContent = name;
-  document.getElementById('ecCode').value = c.course_code || '';
+  document.getElementById('ecCode').value = c.display_code || c.dept_plan_code || c.course_code || '';
   document.getElementById('ecUnits').value = (typeof c.units === 'number' ? c.units : (c.units || ''));
   const catEl = document.getElementById('ecCategory');
   if (catEl) catEl.value = c.category || 'required';
@@ -473,7 +629,16 @@ function openEdit(name){
   if (cwEl) cwEl.value = (c.coursework_weight ?? '');
   if (mdEl) mdEl.value = (c.midterm_weight ?? '');
   if (feEl) feEl.value = (c.final_exam_weight ?? '');
-  document.getElementById('ecMsg').innerHTML = '';
+  const lock = editCodeOnly;
+  ['ecUnits','ecCategory','ecAssessmentType','ecCwWeight','ecMidWeight','ecFinalWeight'].forEach(id=>{
+    const el = document.getElementById(id);
+    if (el) el.disabled = lock;
+  });
+  const title = document.querySelector('#editCourseModal .modal-title');
+  if (title) title.textContent = lock ? 'تحرير رمز المقرر (لقسمك)' : 'تحرير بيانات المقرر';
+  document.getElementById('ecMsg').innerHTML = lock
+    ? '<div class="alert alert-info p-2 mb-0 small">مقرر مشترك: يُحفظ الرمز لخطة قسمك فقط دون تغيير الاسم الرسمي.</div>'
+    : '';
   editModal.show();
 }
 
@@ -489,34 +654,49 @@ document.getElementById('ecSaveBtn').addEventListener('click', async ()=>{
   const cwWeight = cwWeightRaw === '' ? null : Number(cwWeightRaw);
   const midWeight = midWeightRaw === '' ? null : Number(midWeightRaw);
   const finalWeight = finalWeightRaw === '' ? null : Number(finalWeightRaw);
-  if(unitsRaw !== '' && (isNaN(units) || units < 0)){
-    showInModal('ecMsg', 'warning', 'عدد الوحدات يجب أن يكون رقماً صحيحاً >= 0');
-    return;
-  }
-  const weights = [cwWeight, midWeight, finalWeight];
-  if(weights.some(w => w !== null && (isNaN(w) || w < 0 || w > 100))){
-    showInModal('ecMsg', 'warning', 'أوزان التقييم يجب أن تكون بين 0 و 100');
-    return;
+  if(editCodeOnly){
+    if(!code){
+      showInModal('ecMsg', 'warning', 'أدخل رمز المقرر لقسمك');
+      return;
+    }
+  } else {
+    if(unitsRaw !== '' && (isNaN(units) || units < 0)){
+      showInModal('ecMsg', 'warning', 'عدد الوحدات يجب أن يكون رقماً صحيحاً >= 0');
+      return;
+    }
+    const weights = [cwWeight, midWeight, finalWeight];
+    if(weights.some(w => w !== null && (isNaN(w) || w < 0 || w > 100))){
+      showInModal('ecMsg', 'warning', 'أوزان التقييم يجب أن تكون بين 0 و 100');
+      return;
+    }
   }
   try {
+    const body = editCodeOnly
+      ? {
+          old_course_name: editCourseName,
+          new_course_name: editCourseName,
+          course_code: code,
+          code_only: true,
+        }
+      : {
+          old_course_name: editCourseName,
+          new_course_name: editCourseName,
+          course_code: code,
+          units,
+          category,
+          assessment_type: assessmentType,
+          coursework_weight: cwWeight,
+          midterm_weight: midWeight,
+          final_exam_weight: finalWeight
+        };
     const resp = await fetch('/courses/update',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        old_course_name: editCourseName,
-        new_course_name: editCourseName,
-        course_code: code,
-        units,
-        category,
-        assessment_type: assessmentType,
-        coursework_weight: cwWeight,
-        midterm_weight: midWeight,
-        final_exam_weight: finalWeight
-      })
+      body: JSON.stringify(body)
     });
     const j = await resp.json().catch(()=>({}));
     if(resp.ok){
-      showInModal('ecMsg', 'success', 'تم حفظ التعديلات');
+      showInModal('ecMsg', 'success', j.message || 'تم حفظ التعديلات');
       setTimeout(async ()=>{ editModal.hide(); await loadCourses(); }, 800);
     } else {
       showInModal('ecMsg', 'danger', j.message || 'فشل الحفظ');
@@ -612,6 +792,25 @@ window.addEventListener('load', async ()=>{
     if(formAdd) formAdd.querySelectorAll('input,button,select,textarea').forEach(x=> x.disabled = true);
     const importForm = document.getElementById('courses-import-form');
     if(importForm) importForm.style.display = 'none';
+  } else {
+    const bulk = document.getElementById('coursesBulkToolbar');
+    if (bulk) bulk.classList.remove('d-none');
+    document.getElementById('btnSelectFiltered')?.addEventListener('click', ()=>{
+      getFilteredCourses().forEach(c=>{
+        if (c.course_name && c.can_edit !== false) SELECTED_COURSES.add(c.course_name);
+      });
+      renderCoursesPage();
+    });
+    document.getElementById('btnClearSelection')?.addEventListener('click', ()=>{
+      SELECTED_COURSES.clear();
+      renderCoursesPage();
+    });
+    document.getElementById('btnDeleteSelected')?.addEventListener('click', ()=>{
+      bulkDeleteCourses({ names: Array.from(SELECTED_COURSES) });
+    });
+    document.getElementById('btnDeleteAllDept')?.addEventListener('click', ()=>{
+      bulkDeleteCourses({ allInScope: true });
+    });
   }
   if (IS_VIEW_ONLY_ROLE) {
     const exportWrap = document.getElementById('coursesExportWrap');

@@ -38,6 +38,8 @@
           <option value="">الكل</option>
           <option value="distribute">توزيع</option>
           <option value="publish">اعتماد ونشر</option>
+          <option value="unpublish">إلغاء نشر</option>
+          <option value="clear_all">تفريغ</option>
           <option value="export_txt">تصدير نص</option>
           <option value="export_xlsx">تصدير Excel</option>
           <option value="export_pdf">تصدير PDF</option>
@@ -103,6 +105,8 @@ function eventLabel(v){
   const m = {
     distribute: 'توزيع',
     publish: 'اعتماد ونشر',
+    unpublish: 'إلغاء نشر',
+    clear_all: 'تفريغ',
     export_txt: 'تصدير نص',
     export_xlsx: 'تصدير Excel',
     export_pdf: 'تصدير PDF',
@@ -195,6 +199,14 @@ document.getElementById('btnReset').addEventListener('click', () => {
   if (ev) ev.value = '';
   loadVersions();
 });
+(function initFromQuery(){
+  try {
+    const q = new URLSearchParams(window.location.search || '');
+    const et = (q.get('exam_type') || '').trim().toLowerCase();
+    const sel = document.getElementById('examType');
+    if (sel && (et === 'midterm' || et === 'final')) sel.value = et;
+  } catch (_e) {}
+})();
 loadVersions();
 </script>
 </body>

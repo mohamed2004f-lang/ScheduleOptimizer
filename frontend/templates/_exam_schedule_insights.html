@@ -33,6 +33,7 @@
     const extras = cov.extras_in_exams_not_in_schedule || [];
     const scope = esc(cov.schedule_scope_ar || '');
     const term = esc(cov.term_label || '');
+    const leftoverWarn = String(cov.leftover_warning_ar || '').trim();
     const parts = [];
     parts.push('<div class="exam-insights-summary card border-secondary mb-3"><div class="card-body py-2 px-3">');
     parts.push(
@@ -41,6 +42,11 @@
         (term ? ' · <strong>الفصل:</strong> ' + term : '') +
         '</div>'
     );
+    if (leftoverWarn) {
+      parts.push(
+        '<div class="alert alert-info py-2 px-3 mb-2 small">' + esc(leftoverWarn) + '</div>'
+      );
+    }
     if (dups.length) {
       parts.push(
         '<div class="alert alert-danger py-2 px-3 mb-2"><strong>مقررات مكررة</strong> (نفس المقرر في أكثر من سجل بجدول الامتحانات): '

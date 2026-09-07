@@ -85,6 +85,64 @@ def _safe_weight(raw, fallback: float | None = None):
         return fallback
     return v
 
+
+def _annotate_courses_edit_meta(conn, courses: list) -> None:
+    """وسم مقررات الاتجاه العام/المشترك وصلاحية التعديل لكل صف في قائمة المقررات."""
+    from backend.core.college_shared_catalog import get_department_plan_course_code
+    from backend.core.department_scope_policy import (
+        course_code_editable_by_actor,
+        course_is_college_general,
+        course_is_college_shared_catalog,
+        course_writable_by_actor,
+        resolve_effective_department_scope_id,
+    )
+
+    actor = _actor_username()
+    scope_dep = resolve_effective_department_scope_id(conn, actor)
+    for c in courses or []:
+        name = getattr(c, "course_name", None) or ""
+        try:
+            can_edit = bool(course_writable_by_actor(conn, name, actor))
+        except Exception:
+            can_edit = False
+        try:
+            can_edit_code = bool(course_code_editable_by_actor(conn, name, actor))
+        except Exception:
+            can_edit_code = can_edit
+        try:
+            is_general = bool(course_is_college_general(conn, name))
+        except Exception:
+            is_general = False
+        try:
+            is_shared = bool(
+                course_is_college_shared_catalog(
+                    conn, name, department_id=int(scope_dep) if scope_dep is not None else None
+                )
+            )
+        except Exception:
+            is_shared = False
+        if is_general:
+            kind, kind_ar = "college_general", "اتجاه عام"
+        elif is_shared:
+            kind, kind_ar = "shared", "مشترك كلية"
+        else:
+            kind, kind_ar = "department", "قسم"
+        display_code = getattr(c, "course_code", None) or ""
+        if is_shared and scope_dep is not None:
+            try:
+                dept_code = get_department_plan_course_code(conn, name, int(scope_dep))
+                if dept_code:
+                    display_code = dept_code
+            except Exception:
+                pass
+        setattr(c, "can_edit", can_edit)
+        setattr(c, "can_edit_code", can_edit_code)
+        setattr(c, "course_kind", kind)
+        setattr(c, "course_kind_ar", kind_ar)
+        setattr(c, "display_code", display_code)
+        setattr(c, "dept_plan_code", display_code if is_shared else "")
+
+
 @courses_bp.route("/list")
 @login_required
 def list_courses():
@@ -227,6 +285,7 @@ def list_courses():
                 setattr(c, "midterm_weight", None)
                 setattr(c, "final_exam_weight", None)
                 courses.append(c)
+        _annotate_courses_edit_meta(conn, courses)
     resp = jsonify([c.__dict__ for c in courses])
     try:
         from backend.core.cache_setup import cache, list_cache_key
@@ -399,11 +458,59 @@ def update_course():
     coursework_weight = _safe_weight(data.get("coursework_weight"), None)
     midterm_weight = _safe_weight(data.get("midterm_weight"), None)
     final_exam_weight = _safe_weight(data.get("final_exam_weight"), None)
+    code_only = bool(data.get("code_only"))
     if not old_name or not new_name:
         return jsonify({"status": "error", "message": "old_course_name و new_course_name مطلوبة"}), 400
 
     with get_connection() as conn:
         cur = conn.cursor()
+        from backend.core.department_scope_policy import (
+            course_code_editable_by_actor,
+            course_writable_by_actor,
+        )
+
+        full_ok = course_writable_by_actor(conn, old_name, _actor_username())
+        code_ok = course_code_editable_by_actor(conn, old_name, _actor_username())
+
+        # رئيس تخصص على مقرر مشترك: تعديل رمز خطة القسم فقط
+        if (code_only or not full_ok) and code_ok and not full_ok:
+            if new_name != old_name:
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": "لا يمكن تغيير اسم المقرر المشترك من نطاق قسمك — عدّل الرمز فقط.",
+                    }
+                ), 403
+            if not new_code:
+                return jsonify({"status": "error", "message": "رمز المقرر مطلوب."}), 400
+            scope_dep = _effective_department_scope_id(conn)
+            if scope_dep is None:
+                return jsonify({"status": "error", "message": "لا يوجد نطاق قسم لتحديث الرمز."}), 400
+            try:
+                from backend.core.college_shared_catalog import set_department_plan_course_code
+
+                info = set_department_plan_course_code(
+                    conn, old_name, int(scope_dep), new_code
+                )
+                conn.commit()
+            except ValueError as e:
+                return jsonify({"status": "error", "message": str(e)}), 400
+            try:
+                from backend.core.cache_setup import invalidate_list_prefix
+
+                invalidate_list_prefix("courses")
+            except Exception:
+                pass
+            return jsonify(
+                {
+                    "status": "ok",
+                    "message": "تم حفظ رمز المقرر لقسمك (المقرر المشترك).",
+                    "code_only": True,
+                    "plan_course_code": info.get("plan_course_code"),
+                    "canonical_course_code": info.get("canonical_course_code"),
+                }
+            ), 200
+
         try:
             _forbid_course_write(conn, old_name)
         except ValueError as e:
@@ -552,6 +659,121 @@ def update_course():
         conn.commit()
     return jsonify({"status": "ok", "message": "تم تعديل بيانات المقرر"}), 200
 
+def _ensure_courses_archived_column(conn, cur) -> None:
+    try:
+        cols = fetch_table_columns(conn, "courses")
+    except Exception:
+        cols = []
+    if "is_archived" not in cols and not is_postgresql():
+        try:
+            cur.execute("ALTER TABLE courses ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+
+
+def _course_link_counts(cur, cname: str) -> dict:
+    links = {}
+    for tbl in ("grades", "registrations", "schedule", "enrollment_plan_items", "exams", "prereqs"):
+        try:
+            if tbl == "prereqs":
+                row = cur.execute(
+                    "SELECT COUNT(*) FROM prereqs WHERE course_name = ? OR required_course_name = ?",
+                    (cname, cname),
+                ).fetchone()
+            else:
+                row = cur.execute(
+                    f"SELECT COUNT(*) FROM {tbl} WHERE course_name = ?",
+                    (cname,),
+                ).fetchone()
+            links[tbl] = int(row[0] or 0) if row else 0
+        except Exception:
+            links[tbl] = 0
+    return links
+
+
+def _delete_or_archive_course(conn, cur, cname: str) -> dict:
+    """
+    حذف صلب إن لم توجد ارتباطات؛ وإلا أرشفة.
+    يفترض أن الصلاحية فُحصت مسبقاً عبر _forbid_course_write.
+    """
+    name = (cname or "").strip()
+    if not name:
+        return {"course_name": cname, "status": "skipped", "reason": "empty"}
+    _ensure_courses_archived_column(conn, cur)
+    links = _course_link_counts(cur, name)
+    if any(v > 0 for v in links.values()):
+        cur.execute("UPDATE courses SET is_archived = 1 WHERE course_name = ?", (name,))
+        return {
+            "course_name": name,
+            "status": "archived",
+            "archived": True,
+            "links": links,
+        }
+    cur.execute("DELETE FROM courses WHERE course_name = ?", (name,))
+    cur.execute(
+        "DELETE FROM prereqs WHERE course_name = ? OR required_course_name = ?",
+        (name, name),
+    )
+    return {
+        "course_name": name,
+        "status": "deleted",
+        "archived": False,
+        "links": links,
+    }
+
+
+def _invalidate_courses_list_cache() -> None:
+    try:
+        from backend.core.cache_setup import invalidate_list_prefix
+
+        invalidate_list_prefix("courses")
+    except Exception:
+        pass
+
+
+def _scoped_active_course_names(conn, cur, *, dept_scope_id: int | None) -> list[str]:
+    """
+    أسماء المقررات غير المؤرشفة ضمن نطاق العرض للقسم،
+    ثم تُصفّى إلى ما يحق للفاعل تعديله/حذفه فقط
+    (لا تشمل اتجاه عام/مشترك لرئيس تخصص).
+    """
+    from backend.core.department_scope_policy import course_writable_by_actor
+
+    try:
+        cols = fetch_table_columns(conn, "courses")
+    except Exception:
+        cols = []
+    has_archived = "is_archived" in cols
+    has_owning = "owning_department_id" in cols
+    sql = "SELECT DISTINCT course_name FROM courses WHERE COALESCE(TRIM(course_name),'') <> ''"
+    params: tuple = ()
+    if has_archived:
+        sql += " AND COALESCE(is_archived,0) = 0"
+    if dept_scope_id is not None and has_owning:
+        scope_sql, scope_params = courses_department_scope_filter(conn, int(dept_scope_id))
+        sql += scope_sql
+        params = scope_params
+    sql += " ORDER BY course_name"
+    rows = cur.execute(sql, params).fetchall()
+    out = []
+    seen = set()
+    actor = _actor_username()
+    for r in rows or []:
+        name = (r[0] if not hasattr(r, "keys") else r["course_name"]) or ""
+        name = str(name).strip()
+        key = name.lower()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        try:
+            if not course_writable_by_actor(conn, name, actor):
+                continue
+        except Exception:
+            continue
+        out.append(name)
+    return out
+
+
 @courses_bp.route("/delete", methods=["POST"])
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def delete_course():
@@ -565,49 +787,25 @@ def delete_course():
             _forbid_course_write(conn, cname)
         except ValueError as e:
             return jsonify({"status": "error", "message": str(e)}), 403
-        # تحقق ارتباطات أكاديمية - لا نحذف صلباً عند وجود آثار
-        links = {}
-        for tbl in ("grades", "registrations", "schedule", "enrollment_plan_items", "exams", "prereqs"):
+        result = _delete_or_archive_course(conn, cur, cname)
+        if result.get("status") == "archived":
             try:
-                if tbl == "prereqs":
-                    row = cur.execute(
-                        "SELECT COUNT(*) FROM prereqs WHERE course_name = ? OR required_course_name = ?",
-                        (cname, cname),
-                    ).fetchone()
-                else:
-                    row = cur.execute(
-                        f"SELECT COUNT(*) FROM {tbl} WHERE course_name = ?",
-                        (cname,),
-                    ).fetchone()
-                links[tbl] = int(row[0] or 0) if row else 0
-            except Exception:
-                links[tbl] = 0
-
-        has_links = any(v > 0 for v in links.values())
-        # عمود الأرشيف من ensure_tables؛ ALTER يبقى لقواعد SQLite القديمة فقط
-        try:
-            cols = fetch_table_columns(conn, "courses")
-        except Exception:
-            cols = []
-        if "is_archived" not in cols and not is_postgresql():
-            try:
-                cur.execute("ALTER TABLE courses ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")
+                cur.execute("DELETE FROM optimized_schedule")
             except Exception:
                 pass
-
-        if has_links:
-            cur.execute("UPDATE courses SET is_archived = 1 WHERE course_name = ?", (cname,))
+            try:
+                cur.execute("DELETE FROM conflict_report")
+            except Exception:
+                pass
             conn.commit()
+            _invalidate_courses_list_cache()
             return jsonify({
                 "status": "ok",
                 "archived": True,
                 "message": "تمت أرشفة المقرر بدلاً من الحذف لأنه مرتبط ببيانات أكاديمية تاريخية.",
-                "links": links,
+                "links": result.get("links") or {},
             }), 200
 
-        # حذف صلب فقط إذا لا يوجد أي ارتباط
-        cur.execute("DELETE FROM courses WHERE course_name = ?", (cname,))
-        cur.execute("DELETE FROM prereqs WHERE course_name = ? OR required_course_name = ?", (cname, cname))
         try:
             cur.execute("DELETE FROM optimized_schedule")
         except Exception:
@@ -617,7 +815,125 @@ def delete_course():
         except Exception:
             pass
         conn.commit()
+    _invalidate_courses_list_cache()
     return jsonify({"status": "ok", "archived": False, "message": "تم حذف المقرر (لا توجد له ارتباطات)."}), 200
+
+
+@courses_bp.route("/bulk_delete", methods=["POST"])
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+def bulk_delete_courses():
+    """
+    حذف/أرشفة دفعة مقررات.
+    body:
+      - course_names: [..]  (اختياري إن all_in_scope)
+      - all_in_scope: true   → كل مقررات نطاق القسم الظاهرة (غير مؤرشفة)
+      - confirm_phrase: يجب أن يساوي «تأكيد» عند all_in_scope أو عند أكثر من 20 مقرراً
+    """
+    data = request.get_json(silent=True) or {}
+    all_in_scope = bool(data.get("all_in_scope"))
+    raw_names = data.get("course_names") or data.get("names") or []
+    if not isinstance(raw_names, list):
+        raw_names = []
+    confirm_phrase = str(data.get("confirm_phrase") or data.get("confirm") or "").strip()
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        scope_dep = _effective_department_scope_id(conn)
+
+        if all_in_scope:
+            if scope_dep is None:
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": "حذف كل مقررات القسم متاح لحساب مرتبط بقسم (رئيس قسم / نطاق قسم).",
+                        "code": "scope_required",
+                    }
+                ), 400
+            if confirm_phrase != "تأكيد":
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": "للتأكيد اكتب كلمة: تأكيد",
+                        "code": "confirm_required",
+                    }
+                ), 400
+            names = _scoped_active_course_names(conn, cur, dept_scope_id=int(scope_dep))
+        else:
+            names = []
+            seen = set()
+            for n in raw_names:
+                name = str(n or "").strip()
+                key = name.lower()
+                if not name or key in seen:
+                    continue
+                seen.add(key)
+                names.append(name)
+            if len(names) > 20 and confirm_phrase != "تأكيد":
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": "لحذف أكثر من 20 مقرراً اكتب كلمة التأكيد: تأكيد",
+                        "code": "confirm_required",
+                    }
+                ), 400
+
+        if not names:
+            return jsonify({"status": "error", "message": "لا توجد مقررات للحذف."}), 400
+        if len(names) > 800:
+            return jsonify({"status": "error", "message": "الحد الأقصى 800 مقرراً في الطلب."}), 400
+
+        deleted = 0
+        archived = 0
+        forbidden = 0
+        errors: list[dict] = []
+        details: list[dict] = []
+
+        for name in names:
+            try:
+                _forbid_course_write(conn, name)
+            except ValueError as e:
+                forbidden += 1
+                errors.append({"course_name": name, "message": str(e)})
+                continue
+            try:
+                result = _delete_or_archive_course(conn, cur, name)
+            except Exception as exc:
+                errors.append({"course_name": name, "message": str(exc)})
+                continue
+            st = result.get("status")
+            if st == "archived":
+                archived += 1
+            elif st == "deleted":
+                deleted += 1
+            details.append(result)
+
+        try:
+            cur.execute("DELETE FROM optimized_schedule")
+        except Exception:
+            pass
+        try:
+            cur.execute("DELETE FROM conflict_report")
+        except Exception:
+            pass
+        conn.commit()
+
+    _invalidate_courses_list_cache()
+    return jsonify(
+        {
+            "status": "ok",
+            "message": (
+                f"اكتمل: حُذف {deleted} وأُرشف {archived}"
+                + (f" وتُخطّي {forbidden} بلا صلاحية" if forbidden else "")
+            ),
+            "deleted": deleted,
+            "archived": archived,
+            "forbidden": forbidden,
+            "requested": len(names),
+            "errors": errors[:50],
+            "all_in_scope": all_in_scope,
+        }
+    ), 200
+
 
 # المتطلبات (Prereqs) - يدعم زوج واحد أو دفعة items[]
 @courses_bp.route("/prereqs/add", methods=["POST"])

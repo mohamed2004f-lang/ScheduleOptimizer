@@ -9,6 +9,7 @@ from backend.core.college_shared_catalog import save_catalog_entry
 from backend.core.department_scope_policy import (
     actor_manages_college_general_scope,
     can_manage_college_shared_catalog,
+    course_code_editable_by_actor,
     course_writable_by_actor,
 )
 
@@ -111,7 +112,7 @@ def test_general_hod_writes_general_not_shared_catalog(app, db_conn):
         )
         assert r2.status_code == 200, r2.get_json()
 
-        # مقرر مشترك: ممنوع على رئيس الاتجاه العام
+        # مقرر مشترك: ممنوع التعديل الكامل على رئيس الاتجاه العام
         r_shared = c.post(
             "/courses/update",
             json={
@@ -123,6 +124,7 @@ def test_general_hod_writes_general_not_shared_catalog(app, db_conn):
         )
         assert r_shared.status_code == 403
 
+        assert c.post("/auth/login", json={"username": head_gen, "password": "TestP@ssw0rd!"}).status_code == 200
         r3 = c.post(
             "/college/catalog/shared_catalog/save",
             json={
@@ -135,6 +137,22 @@ def test_general_hod_writes_general_not_shared_catalog(app, db_conn):
             },
         )
         assert r3.status_code == 403
+
+        # رئيس التخصص: يمكنه تعديل رمز خطة القسم للمقرر المشترك
+        assert c.post("/auth/login", json={"username": head_spec, "password": "TestP@ssw0rd!"}).status_code == 200
+        assert course_code_editable_by_actor(db_conn, shared_name, head_spec)
+        assert not course_code_editable_by_actor(db_conn, gen_course, head_spec)
+        r_code = c.post(
+            "/courses/update",
+            json={
+                "old_course_name": shared_name,
+                "new_course_name": shared_name,
+                "course_code": f"ME{uid[:3]}",
+                "code_only": True,
+            },
+        )
+        assert r_code.status_code == 200, r_code.get_json()
+        assert (r_code.get_json() or {}).get("code_only") is True
 
 
 def test_specialty_hod_cannot_save_shared_catalog(app, db_conn):

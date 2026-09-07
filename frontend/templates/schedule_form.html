@@ -91,6 +91,9 @@
                 <button type="button" class="btn btn-outline-danger btn-sm" id="btnClearSchedule" disabled>
                   تفريغ جدول الفصل الحالي
                 </button>
+                <button type="button" class="btn btn-outline-warning btn-sm" id="btnClearOtherTerms" disabled title="حذف صفوف ربيع/فصول سابقة وغيرها غير مطابقة للفصل الحالي">
+                  تفريغ بقايا الفصول السابقة
+                </button>
               </div>
             </div>
           </div>
@@ -281,9 +284,17 @@ function renderScheduleRegistrationInsights(cov){
   const missing = Array.isArray(cov.missing_in_schedule) ? cov.missing_in_schedule : [];
   const extra = Array.isArray(cov.extra_in_schedule) ? cov.extra_in_schedule : [];
   const counts = cov.counts || {};
+  const leftoverWarn = String(cov.leftover_warning_ar || '').trim();
+  const scopeAr = String(cov.schedule_scope_ar || '').trim();
   let html = '<div class="card border-secondary"><div class="card-body py-2 px-3">';
   html += `<div class="small text-muted mb-2"><strong>مقارنة الجدول الدراسي بالتسجيل الفعلي</strong> — الفصل: ${escapeHtml(cov.term_label || '')}</div>`;
+  if(scopeAr){
+    html += `<div class="small text-muted mb-2">${escapeHtml(scopeAr)}</div>`;
+  }
   html += `<div class="small mb-2">المقررات الفعلية: <strong>${Number(counts.registrations_distinct || 0)}</strong> | الموجودة في الجدول الدراسي: <strong>${Number(counts.schedule_distinct || 0)}</strong></div>`;
+  if(leftoverWarn){
+    html += `<div class="alert alert-info py-2 mb-2 small">${escapeHtml(leftoverWarn)}</div>`;
+  }
   if(missing.length){
     html += `<div class="alert alert-warning py-2 mb-2"><strong>مقررات مسجلة فعلياً وغير موجودة في الجدول الدراسي (${missing.length}):</strong><div class="small mt-1">${missing.map(escapeHtml).join('، ')}</div></div>`;
   }
@@ -1301,7 +1312,8 @@ async function submitNormalizeTimes(){
   }
 }
 
-async function clearScheduleAll(){
+async function clearScheduleAll(mode){
+  const clearMode = (mode === 'other' || mode === 'all') ? mode : 'current';
   let termLabel = '';
   try {
     const tr = await fetch('/admin/settings/current_term', { credentials: 'include' });
@@ -1314,11 +1326,19 @@ async function clearScheduleAll(){
     showMsg('عيّن الفصل الحالي أولاً قبل تفريغ الجدول.', 'warning');
     return;
   }
-  if(!confirm(`سيتم تفريغ لوحة الجدول لـ «${termLabel}» فقط (بعد حفظ نسخة). الفصول الأخرى تبقى.`)) return;
-  const typed = prompt(`للتأكيد اكتب تسمية الفصل كما هي:\n${termLabel}`);
+  let explain = '';
+  if (clearMode === 'other') {
+    explain = `سيتم حذف صفوف الجدول للفصول السابقة فقط (مثل ربيع 25-26) وبلا فصل، بعد حفظ نسخة.\nصفوف الفصل الحالي «${termLabel}» تبقى إن وُجدت.\nللتأكيد ستُطلب كتابة تسمية الفصل الحالي.`;
+  } else if (clearMode === 'all') {
+    explain = `سيتم تفريغ كل صفوف الجدول (الحالي والسابق) بعد حفظ نسخة، للعمل على «${termLabel}».`;
+  } else {
+    explain = `سيتم تفريغ لوحة الجدول لـ «${termLabel}» فقط (بعد حفظ نسخة). بقايا الفصول السابقة تبقى — استخدم زر «تفريغ بقايا الفصول السابقة» إن أردت حذفها.`;
+  }
+  if(!confirm(explain)) return;
+  const typed = prompt(`اكتب تسمية الفصل الحالي كما هي للتأكيد:\n${termLabel}`);
   if (typed == null) return;
   if (String(typed).trim() !== termLabel) {
-    showMsg('لم يُطابق النص تسمية الفصل. لم يُفرَّغ الجدول.', 'warning');
+    showMsg('لم يُطابق النص تسمية الفصل الحالي. لم يُفرَّغ الجدول.', 'warning');
     return;
   }
   const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
@@ -1330,11 +1350,11 @@ async function clearScheduleAll(){
       'Content-Type':'application/json',
       ...(csrfToken ? {'X-CSRFToken': csrfToken} : {})
     },
-    body: JSON.stringify({ confirm_label: termLabel })
+    body: JSON.stringify({ confirm_label: termLabel, mode: clearMode })
   });
   const j = await resp.json().catch(()=>null);
   if(resp.ok && j && j.status === 'ok'){
-    showMsg(`فُرّغ جدول ${j.ops_label || termLabel} (${j.deleted_rows || 0} صف)`, 'success');
+    showMsg((j.message || `فُرّغ جدول ${j.ops_label || termLabel}`) + ` (${j.deleted_rows || 0} صف)`, 'success');
     await loadSchedule();
   } else {
     showMsg('فشل تفريغ الجدول: ' + ((j && j.message) ? j.message : resp.statusText), 'danger');
@@ -1988,9 +2008,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnSaveSlots = document.getElementById('btnSaveTimeSlots');
     const btnNormalize = document.getElementById('btnNormalizeTimes');
     const btnClear = document.getElementById('btnClearSchedule');
+    const btnClearOther = document.getElementById('btnClearOtherTerms');
     if (btnSaveSlots) btnSaveSlots.disabled = !IS_ADMIN;
     if (btnNormalize) btnNormalize.disabled = !IS_ADMIN;
     if (btnClear) btnClear.disabled = !IS_ADMIN;
+    if (btnClearOther) btnClearOther.disabled = !IS_ADMIN;
 
     if (!IS_ADMIN) {
       const importForm = document.getElementById('schedule-import-form');
@@ -2084,7 +2106,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   const btnClear = document.getElementById('btnClearSchedule');
   if (btnClear){
-    btnClear.addEventListener('click', clearScheduleAll);
+    btnClear.addEventListener('click', () => clearScheduleAll('current'));
+  }
+  const btnClearOther = document.getElementById('btnClearOtherTerms');
+  if (btnClearOther){
+    btnClearOther.addEventListener('click', () => clearScheduleAll('other'));
   }
 
   // حمّل التقسيمات المحفوظة للفصل الحالي أولاً ثم ارسم الجدول بها

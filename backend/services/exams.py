@@ -5,13 +5,15 @@ from backend.core.department_scope_policy import resolve_effective_department_sc
 
 from backend.services.coverage_insights import (
     classify_registration_exam_gaps,
+    coverage_scope_label_ar,
     normalize_coverage_course_key,
     registered_distinct_course_names,
     registration_course_student_counts,
     schedule_course_primary_assignments,
     schedule_distinct_course_names_for_coverage,
+    schedule_other_term_leftover_summary,
 )
-from backend.database.database import is_postgresql, fetch_table_columns
+from backend.database.database import is_postgresql, fetch_table_columns, table_exists
 from .utilities import (
     get_connection,
     excel_response_from_df,
@@ -21,6 +23,7 @@ from .utilities import (
     get_current_term,
     get_exam_schedule_published_at,
     set_exam_schedule_published_at,
+    clear_exam_schedule_published_at,
     get_exam_schedule_updated_at,
     touch_exam_schedule_updated_at,
 )
@@ -239,6 +242,13 @@ def _empty_schedule_coverage_payload(exam_type: str, *, coverage_available: bool
         "term_label": "",
         "schedule_scope": "",
         "schedule_scope_ar": "",
+        "other_term_leftover": {
+            "row_count": 0,
+            "distinct_courses": 0,
+            "semesters": [],
+            "warning_ar": "",
+        },
+        "leftover_warning_ar": "",
         "duplicate_courses": [],
         "missing_from_exams": [],
         "extras_in_exams_not_in_schedule": [],
@@ -268,8 +278,13 @@ def _create_exam_schedule_version(
 
     rows = cur.execute(
         """
-        SELECT id, COALESCE(course_name,''), COALESCE(exam_date,''), COALESCE(exam_time,''),
-               COALESCE(room,''), COALESCE(instructor,''), exam_id
+        SELECT id AS exam_pk,
+               COALESCE(course_name, '') AS course_name,
+               COALESCE(exam_date, '') AS exam_date,
+               COALESCE(exam_time, '') AS exam_time,
+               COALESCE(room, '') AS room,
+               COALESCE(instructor, '') AS instructor,
+               exam_id AS legacy_exam_id
         FROM exams
         WHERE exam_type = ?
         ORDER BY exam_date, exam_time, course_name, id
@@ -278,15 +293,19 @@ def _create_exam_schedule_version(
     ).fetchall()
     items = []
     for r in rows:
+        try:
+            eid = int(r["exam_pk"] or 0)
+        except (TypeError, ValueError, KeyError):
+            eid = 0
         items.append(
             {
-                "exam_id": int(r[0]),
-                "course_name": r[1],
-                "exam_date": r[2],
-                "exam_time": r[3],
-                "room": r[4],
-                "instructor": r[5],
-                "legacy_exam_id": r[6],
+                "exam_id": eid,
+                "course_name": r["course_name"] or "",
+                "exam_date": r["exam_date"] or "",
+                "exam_time": r["exam_time"] or "",
+                "room": r["room"] or "",
+                "instructor": r["instructor"] or "",
+                "legacy_exam_id": r["legacy_exam_id"],
             }
         )
 
@@ -660,6 +679,221 @@ def exam_schedule_publish(exam_type):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@exams_bp.route("/<exam_type>/unpublish", methods=["POST"])
+@login_required
+@role_required(
+    "admin",
+    "admin_main",
+    "system_admin",
+    "college_dean",
+    "academic_vice_dean",
+    "head_of_department",
+)
+def exam_schedule_unpublish(exam_type):
+    """إلغاء نشر جدول الامتحانات دون حذف المواعيد (إخفاء عن الطلبة/المشرفين)."""
+    if exam_type not in VALID_TYPES:
+        return jsonify({"status": "error", "message": "invalid exam type"}), 400
+    type_ar = "منتصف الفصل" if exam_type == "midterm" else "نهائي"
+    try:
+        with get_connection() as conn:
+            from backend.services.term_closure import TermClosedError
+            from backend.services.term_engine import (
+                OP_EXAM_PUBLISH,
+                TermOperationError,
+                assert_term_operation,
+                http_term_blocked,
+            )
+
+            actor = (session.get("user") or session.get("username") or "").strip()
+            scope = resolve_effective_department_scope_id(conn, actor)
+            try:
+                assert_term_operation(conn, operation=OP_EXAM_PUBLISH, department_id=scope)
+            except (TermClosedError, TermOperationError) as exc:
+                return http_term_blocked(exc)
+
+            published_before = get_exam_schedule_published_at(exam_type, conn=conn)
+            clear_exam_schedule_published_at(exam_type, conn=conn)
+            try:
+                _create_exam_schedule_version(
+                    conn,
+                    exam_type,
+                    event_type="unpublish",
+                    note=f"إلغاء نشر جدول الامتحانات ({type_ar})",
+                    is_published=False,
+                )
+            except Exception:
+                logger.exception("exam snapshot on unpublish failed")
+            try:
+                log_activity(
+                    action="exam_schedule_unpublish",
+                    details=f"exam_type={exam_type}, was_published={bool(published_before)}",
+                )
+            except Exception:
+                pass
+        return jsonify(
+            {
+                "status": "ok",
+                "message": "تم إلغاء نشر جدول الامتحانات",
+                "published": False,
+            }
+        )
+    except Exception as e:
+        logger.exception("exam_schedule_unpublish failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@exams_bp.route("/<exam_type>/clear_all", methods=["POST"])
+@login_required
+@role_required(
+    "admin",
+    "admin_main",
+    "system_admin",
+    "college_dean",
+    "academic_vice_dean",
+    "head_of_department",
+)
+def exam_schedule_clear_all(exam_type):
+    """
+    تفريغ لوحة الامتحانات الحية لهذا النوع (جزئي/نهائي) ضمن نطاق القسم إن وُجد:
+    صفوف exams بلا عمود فصل — لذا يُمسح كل الظاهر الآن (بما فيه بقايا فصل سابق)
+    للعمل على الفصل الحالي. نسخة أرشيف → حذف → مسح تعارضات → إلغاء النشر.
+    يتطلب confirm_label = تسمية الفصل الحالي (تأكيد تشغيل، لا فلتر حذف).
+    """
+    if exam_type not in VALID_TYPES:
+        return jsonify({"status": "error", "message": "invalid exam type"}), 400
+
+    data = request.get_json(silent=True) or {}
+    confirm_label = str(data.get("confirm_label") or data.get("confirm") or "").strip()
+    from backend.services.term_engine import (
+        OP_EXAM_WRITE,
+        TermOperationError,
+        assert_term_operation,
+        confirm_term_label_matches,
+        current_term_match_context,
+        http_term_blocked,
+    )
+    from backend.services.term_closure import TermClosedError
+
+    type_ar = "منتصف الفصل" if exam_type == "midterm" else "نهائي"
+    deleted = 0
+    ops_label = ""
+    ver = None
+
+    try:
+        with get_connection() as conn:
+            actor = (session.get("user") or session.get("username") or "").strip()
+            dep_id = resolve_effective_department_scope_id(conn, actor)
+            try:
+                assert_term_operation(conn, operation=OP_EXAM_WRITE, department_id=dep_id)
+            except (TermClosedError, TermOperationError) as exc:
+                return http_term_blocked(exc)
+
+            ctx = current_term_match_context(conn)
+            if not ctx:
+                return jsonify({"status": "error", "message": "عيّن الفصل الحالي أولاً."}), 400
+            ops_label = ctx.get("ops_label") or ctx.get("raw_label") or ""
+            if not confirm_term_label_matches(confirm_label, ctx):
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": f"للتأكيد اكتب تسمية الفصل الحالي كما هي: {ops_label}",
+                        "code": "confirm_required",
+                        "ops_label": ops_label,
+                    }
+                ), 400
+
+            try:
+                ver = _create_exam_schedule_version(
+                    conn,
+                    exam_type,
+                    event_type="clear_all",
+                    note=(
+                        f"تفريغ لوحة الامتحانات ({type_ar}) بما فيها بقايا فصول سابقة "
+                        f"— تهيئة للعمل على {ops_label}"
+                    ),
+                    is_published=False,
+                )
+            except Exception:
+                logger.exception("exam snapshot before clear failed")
+                return jsonify({"status": "error", "message": "تعذر حفظ نسخة قبل التفريغ."}), 500
+
+            cur = conn.cursor()
+            dept_scoped = dep_id is not None
+            before = cur.execute(
+                "SELECT COUNT(*) FROM exams WHERE exam_type = ?",
+                (exam_type,),
+            ).fetchone()
+            before_n = int((before[0] if before else 0) or 0)
+            _delete_exams_for_type_respecting_scope(
+                cur, exam_type, int(dep_id) if dept_scoped else None, dept_scoped
+            )
+            after = cur.execute(
+                "SELECT COUNT(*) FROM exams WHERE exam_type = ?",
+                (exam_type,),
+            ).fetchone()
+            after_n = int((after[0] if after else 0) or 0)
+            deleted = max(0, before_n - after_n)
+
+            # مسح تعارضات هذا النوع (ضمن نطاق الطلاب إن وُجد)
+            uname = actor
+            stu_scope_sql, stu_scope_params = dept_scope_policy.resolve_scope_sql_for_students_table(
+                conn, uname
+            )
+            if table_exists(conn, "exam_conflicts"):
+                if stu_scope_sql and stu_scope_sql != "1=0":
+                    cur.execute(
+                        f"""
+                        DELETE FROM exam_conflicts
+                        WHERE exam_type = ?
+                          AND EXISTS (
+                            SELECT 1 FROM students
+                            WHERE students.student_id = exam_conflicts.student_id
+                              AND ({stu_scope_sql})
+                          )
+                        """,
+                        (exam_type,) + tuple(stu_scope_params or ()),
+                    )
+                elif not stu_scope_sql:
+                    cur.execute(
+                        "DELETE FROM exam_conflicts WHERE exam_type = ?",
+                        (exam_type,),
+                    )
+
+            clear_exam_schedule_published_at(exam_type, conn=conn)
+            try:
+                touch_exam_schedule_updated_at(exam_type, conn=conn)
+            except Exception:
+                pass
+            conn.commit()
+
+        try:
+            log_activity(
+                action="exam_schedule_clear_all",
+                details=f"exam_type={exam_type}, deleted={deleted}, term={ops_label}",
+            )
+        except Exception:
+            pass
+
+        return jsonify(
+            {
+                "status": "ok",
+                "message": (
+                    f"تم تفريغ لوحة الامتحانات ({type_ar}) بما فيها بقايا الفصول السابقة "
+                    f"— جاهز للعمل على {ops_label}"
+                ),
+                "exam_type": exam_type,
+                "deleted_rows": deleted,
+                "ops_label": ops_label,
+                "version": (
+                    {"id": ver.get("id"), "version_no": ver.get("version_no")} if ver else None
+                ),
+            }
+        ), 200
+    except Exception as e:
+        logger.exception("exam_schedule_clear_all failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 def normalize_dates(dates):
     # expect list of date strings, normalize to ISO YYYY-MM-DD
     out = []
@@ -803,11 +1037,15 @@ def exam_schedule_coverage(exam_type):
             dep = _effective_department_scope_id(conn)
             dept_scoped_user = dep is not None
 
+            scope_dept = int(dep) if dept_scoped_user else None
             schedule_names, scope = schedule_distinct_course_names_for_coverage(
                 conn,
                 cur,
                 term_label,
-                dept_scope_id=int(dep) if dept_scoped_user else None,
+                dept_scope_id=scope_dept,
+            )
+            leftover = schedule_other_term_leftover_summary(
+                conn, cur, dept_scope_id=scope_dept
             )
             actor_u = (session.get("user") or session.get("username") or "").strip()
             sched_keys = {_norm_exam_course_key(n) for n in schedule_names if _norm_exam_course_key(n)}
@@ -815,7 +1053,7 @@ def exam_schedule_coverage(exam_type):
             reg_keys = {_norm_exam_course_key(n) for n in registered_names if _norm_exam_course_key(n)}
 
             rows = _fetch_scoped_exam_rows(
-                conn, cur, exam_type, dep_id=int(dep) if dept_scoped_user else None
+                conn, cur, exam_type, dep_id=scope_dept
             )
 
             by_key: dict[str, list[dict]] = {}
@@ -886,22 +1124,31 @@ def exam_schedule_coverage(exam_type):
                 }
             )
 
-            scope_labels = {
-                "current_semester_or_blank": "مقررات الجدول الدراسي للفصل الحالي (أو صفوف بلا حقل فصل)",
-                "all_schedule": "كل المقررات الظاهرة في جدول المقررات (لم يُعثر على بيانات للفصل الحالي)",
-                "all_schedule_scoped": "كل مقررات الجدولة المطابقة للفصل (ضمن مقررات قسم نطاقك)",
-                "none": "لا توجد مقررات في جدول schedule",
-                "scoped_no_schedule_course_department_columns": "لا يمكن حصر مقررات الجدولة حسب القسم (أعمدة القسم غير متوفرة في الجدولة/المقررات)",
-            }
-            scope_ar = scope_labels.get(scope, scope)
+            scope_ar = coverage_scope_label_ar(scope)
             if dept_scoped_user:
                 if scope == "scoped_no_schedule_course_department_columns":
                     scope_ar = (
-                        scope_labels["scoped_no_schedule_course_department_columns"]
+                        coverage_scope_label_ar(scope)
                         + " أضف department_id في الجدولة أو owning_department_id في المقررات لقياس الدقة داخل القسم."
                     )
                 elif scope_ar:
                     scope_ar = scope_ar + " — الأعداد والقوائم أعلاه تخص مقررات قسم عملك وفق هذا النطاق."
+
+            leftover_warning = leftover.get("warning_ar") or ""
+            if (
+                not schedule_names
+                and exam_keys
+                and scope in ("current_term_empty", "none")
+            ):
+                exam_empty_note = (
+                    f"جدول الامتحانات فيه {len(exam_keys)} مقرراً بينما الجدول الدراسي للفصل الحالي فارغ؛ "
+                    "المقارنة مع الجدول الدراسي لا تستخدم بقايا فصول أخرى."
+                )
+                leftover_warning = (
+                    f"{leftover_warning} {exam_empty_note}".strip()
+                    if leftover_warning
+                    else exam_empty_note
+                )
 
             return jsonify(
                 {
@@ -910,6 +1157,8 @@ def exam_schedule_coverage(exam_type):
                     "term_label": term_label,
                     "schedule_scope": scope,
                     "schedule_scope_ar": scope_ar,
+                    "other_term_leftover": leftover,
+                    "leftover_warning_ar": leftover_warning,
                     "duplicate_courses": duplicate_courses,
                     "missing_from_exams": missing_from_exams,
                     "extras_in_exams_not_in_schedule": extras_in_exams,
@@ -928,6 +1177,8 @@ def exam_schedule_coverage(exam_type):
                         "required_missing": len(missing_required),
                         "optional_shared_missing": len(missing_optional),
                         "exempt_missing": len(missing_exempt),
+                        "other_term_schedule_rows": int(leftover.get("row_count") or 0),
+                        "other_term_schedule_courses": int(leftover.get("distinct_courses") or 0),
                     },
                 }
             )
@@ -1232,33 +1483,10 @@ def distribute_exams(exam_type):
             dept_scope_id=int(dep) if dept_scoped_user else None,
         )
         if not courses:
+            # لا نسحب بقايا فصول أخرى من schedule؛ نعتمد التسجيل الفعلي ثم كتالوج المقررات.
             try:
-                join_owner = ""
-                dept_par: tuple = ()
-                if dept_scoped_user and dep is not None:
-                    try:
-                        ccols = fetch_table_columns(conn, "courses")
-                    except Exception:
-                        ccols = []
-                    if "owning_department_id" in ccols:
-                        join_owner = """
-                            INNER JOIN courses ccov_dep
-                              ON lower(trim(ccov_dep.course_name)) = lower(trim(s.course_name))
-                             AND COALESCE(ccov_dep.owning_department_id, -1) = ?
-                        """
-                        dept_par = (int(dep),)
-                rows_fb = cur.execute(
-                    f"""
-                    SELECT MIN(TRIM(s.course_name)) AS course_name
-                    FROM schedule s
-                    {join_owner}
-                    WHERE COALESCE(TRIM(s.course_name), '') <> ''
-                    GROUP BY LOWER(TRIM(s.course_name))
-                    ORDER BY MIN(TRIM(s.course_name))
-                    """,
-                    dept_par,
-                ).fetchall()
-                courses = [(r[0] or "").strip() for r in rows_fb if r and (r[0] or "").strip()]
+                actor_u = (session.get("user") or session.get("username") or "").strip()
+                courses = registered_distinct_course_names(cur, conn, actor_username=actor_u)
             except Exception:
                 courses = []
         if not courses:
@@ -1378,32 +1606,8 @@ def available_courses():
         )
         if not courses:
             try:
-                join_owner = ""
-                dept_par: tuple = ()
-                if dept_scoped_user and dep is not None:
-                    try:
-                        ccols = fetch_table_columns(conn, "courses")
-                    except Exception:
-                        ccols = []
-                    if "owning_department_id" in ccols:
-                        join_owner = """
-                            INNER JOIN courses ccov_dep
-                              ON lower(trim(ccov_dep.course_name)) = lower(trim(s.course_name))
-                             AND COALESCE(ccov_dep.owning_department_id, -1) = ?
-                        """
-                        dept_par = (int(dep),)
-                rows = cur.execute(
-                    f"""
-                    SELECT MIN(TRIM(s.course_name)) AS course_name
-                    FROM schedule s
-                    {join_owner}
-                    WHERE COALESCE(TRIM(s.course_name), '') <> ''
-                    GROUP BY LOWER(TRIM(s.course_name))
-                    ORDER BY MIN(TRIM(s.course_name))
-                    """,
-                    dept_par,
-                ).fetchall()
-                courses = [r[0] for r in rows]
+                actor_u = (session.get("user") or session.get("username") or "").strip()
+                courses = registered_distinct_course_names(cur, conn, actor_username=actor_u)
             except Exception:
                 courses = []
         if not courses:

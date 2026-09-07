@@ -290,6 +290,132 @@ def get_catalog_entry(conn, catalog_id: int) -> dict[str, Any] | None:
     return items[0] if items else None
 
 
+def find_shared_catalog_id_by_course_name(conn, course_name: str) -> int | None:
+    """معرّف سجل المشترك بالاسم الرسمي (canonical)."""
+    cname = (course_name or "").strip()
+    if not cname:
+        return None
+    ensure_college_shared_catalog_schema(conn)
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT id FROM college_shared_catalog
+        WHERE lower(trim(canonical_course_name)) = lower(trim(?))
+          AND COALESCE(is_active, 1) = 1
+        LIMIT 1
+        """,
+        (cname,),
+    ).fetchone()
+    if not row:
+        return None
+    return int(row[0] if not hasattr(row, "keys") else row["id"])
+
+
+def get_department_plan_course_code(
+    conn,
+    course_name: str,
+    department_id: int,
+) -> str | None:
+    """رمز خطة القسم لمقرر مشترك، أو الرمز المرجعي عند عدم وجود صف قسم."""
+    cid = find_shared_catalog_id_by_course_name(conn, course_name)
+    if cid is None:
+        return None
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT plan_course_code
+        FROM college_shared_catalog_depts
+        WHERE catalog_id = ? AND department_id = ? AND COALESCE(is_active, 1) = 1
+        LIMIT 1
+        """,
+        (int(cid), int(department_id)),
+    ).fetchone()
+    if row:
+        code = (row[0] if not hasattr(row, "keys") else row["plan_course_code"]) or ""
+        code = str(code).strip()
+        if code:
+            return code
+    entry = get_catalog_entry(conn, int(cid))
+    return ((entry or {}).get("canonical_course_code") or "").strip() or None
+
+
+def set_department_plan_course_code(
+    conn,
+    course_name: str,
+    department_id: int,
+    plan_course_code: str,
+) -> dict[str, Any]:
+    """
+    تحديث رمز المقرر في خطة القسم ضمن سجل المشترك
+    (لا يغيّر الاسم الرسمي ولا صف courses العام للكلية).
+    """
+    ensure_college_shared_catalog_schema(conn)
+    cname = (course_name or "").strip()
+    code = (plan_course_code or "").strip()
+    if not cname:
+        raise ValueError("اسم المقرر مطلوب.")
+    if not code:
+        raise ValueError("رمز المقرر مطلوب.")
+    cid = find_shared_catalog_id_by_course_name(conn, cname)
+    if cid is None:
+        raise ValueError("المقرر ليس في سجل المقررات المشتركة.")
+    entry = get_catalog_entry(conn, int(cid))
+    if not entry:
+        raise ValueError("السجل غير موجود.")
+    cur = conn.cursor()
+    existing = cur.execute(
+        """
+        SELECT id, program_course_id FROM college_shared_catalog_depts
+        WHERE catalog_id = ? AND department_id = ?
+        LIMIT 1
+        """,
+        (int(cid), int(department_id)),
+    ).fetchone()
+    if existing:
+        eid = int(existing[0] if not hasattr(existing, "keys") else existing["id"])
+        pcid = existing[1] if not hasattr(existing, "keys") else existing["program_course_id"]
+        cur.execute(
+            """
+            UPDATE college_shared_catalog_depts
+            SET plan_course_code = ?, is_active = 1
+            WHERE id = ?
+            """,
+            (code, eid),
+        )
+        if pcid:
+            try:
+                cur.execute(
+                    "UPDATE program_courses SET course_code = ? WHERE id = ?",
+                    (code, int(pcid)),
+                )
+            except Exception:
+                pass
+    else:
+        cur.execute(
+            """
+            INSERT INTO college_shared_catalog_depts
+            (catalog_id, department_id, plan_course_code, plan_course_name_override, is_active)
+            VALUES (?, ?, ?, '', 1)
+            """,
+            (int(cid), int(department_id), code),
+        )
+        try:
+            sync_catalog_entry(conn, int(cid))
+        except Exception:
+            pass
+    cur.execute(
+        "UPDATE college_shared_catalog SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (int(cid),),
+    )
+    return {
+        "catalog_id": int(cid),
+        "department_id": int(department_id),
+        "plan_course_code": code,
+        "canonical_course_name": cname,
+        "canonical_course_code": (entry.get("canonical_course_code") or "").strip(),
+    }
+
+
 def _normalize_departments_payload(
     conn,
     share_type: str,

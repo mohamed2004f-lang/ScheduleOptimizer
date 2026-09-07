@@ -55,6 +55,9 @@
       </div>
     </div>
 
+    {% set exam_publish_kind = _exam_entry %}
+    {% include 'exam_publish_controls.html' %}
+
     <div class="card mb-3">
       <div class="card-body">
         <div class="d-flex flex-wrap align-items-end controls-no-print">
@@ -690,6 +693,9 @@ if (examTypeEl) {
     }
     await loadCourses();
     await loadExamSchedule();
+    if (typeof window.refreshExamPublishStatus === 'function') {
+      try { window.refreshExamPublishStatus(); } catch (_e) {}
+    }
   });
 }
 const btnSaveDatesEl = document.getElementById('btnSaveDates');

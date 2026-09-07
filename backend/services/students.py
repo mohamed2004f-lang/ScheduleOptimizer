@@ -652,55 +652,36 @@ def electives_report_pdf():
 # -----------------------------
 def _course_registration_count_rows(conn):
     """صف واحد لكل مقرر: عدد الطلبة المسجّلين فعلياً في جدول التسجيلات."""
-    cur = conn.cursor()
-    cols_stu = fetch_table_columns(conn, "students")
-    active_only = "enrollment_status" in cols_stu
+    from backend.services.registration_roster import registration_course_count_rows
+
     actor = (session.get("user") or session.get("username") or "").strip()
-    scope_sql, scope_params = resolve_scope_sql_for_aliased_student(conn, actor, "s")
-    scope_and = f" AND ({scope_sql})" if scope_sql else ""
-    course_scope_sql, course_scope_params = resolve_registration_course_scope_sql(conn, actor)
-    if active_only:
-        q = f"""
-        SELECT r.course_name,
-               COALESCE(c.course_code, '') AS course_code,
-               COALESCE(c.units, 0) AS units,
-               COUNT(DISTINCT r.student_id) AS student_count
-        FROM registrations r
-        LEFT JOIN courses c ON c.course_name = r.course_name
-        LEFT JOIN students s ON s.student_id = r.student_id
-        WHERE COALESCE(s.enrollment_status, 'active') = 'active'
-          {scope_and}
-          {course_scope_sql}
-        GROUP BY r.course_name, c.course_code, c.units
-        ORDER BY r.course_name
-        """
-    else:
-        q = f"""
-        SELECT r.course_name,
-               COALESCE(c.course_code, '') AS course_code,
-               COALESCE(c.units, 0) AS units,
-               COUNT(DISTINCT r.student_id) AS student_count
-        FROM registrations r
-        LEFT JOIN courses c ON c.course_name = r.course_name
-        LEFT JOIN students s ON s.student_id = r.student_id
-        WHERE COALESCE(r.student_id, '') <> ''
-          {scope_and}
-          {course_scope_sql}
-        GROUP BY r.course_name, c.course_code, c.units
-        ORDER BY r.course_name
-        """
-    params = tuple(scope_params or ()) + tuple(course_scope_params or ())
-    rows = cur.execute(q, params).fetchall()
-    items = []
-    for row in rows or []:
-        d = dict(row)
-        items.append({
-            "course_name": (d.get("course_name") or "").strip(),
-            "course_code": (d.get("course_code") or "").strip(),
-            "units": int(d.get("units") or 0),
-            "student_count": int(d.get("student_count") or 0),
-        })
-    return items
+    return registration_course_count_rows(conn, actor)
+
+
+@students_bp.route("/course_registration_counts/roster")
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+def course_registration_counts_roster():
+    """قائمة طلبة مقرر واحد من التسجيل الفعلي (عند الطلب)."""
+    from backend.services.registration_roster import registration_course_roster
+
+    course_name = (request.args.get("course_name") or "").strip()
+    if not course_name:
+        return jsonify({"status": "error", "message": "course_name مطلوب"}), 400
+    actor = (session.get("user") or session.get("username") or "").strip()
+    with get_connection() as conn:
+        students = registration_course_roster(conn, course_name, actor)
+    if students is None:
+        return jsonify({
+            "status": "error",
+            "message": "المقرر غير موجود أو خارج نطاقك",
+            "code": "FORBIDDEN",
+        }), 403
+    return jsonify({
+        "status": "ok",
+        "course_name": course_name,
+        "student_count": len(students),
+        "students": students,
+    })
 
 
 @students_bp.route("/course_registration_counts")
@@ -4681,9 +4662,11 @@ def attendance_register_save():
 @login_required
 def attendance_allowed_courses():
     """
-    قائمة مقررات الحضور: مبنية على التسجيلات الفعلية (registrations) للفصل الحالي،
-    مربوطة بصف الجدول schedule بنفس الفصل مع تطبيع اسم المقرر (ليس مساواة حرفية صارمة).
+    قائمة مقررات الحضور من التسجيل الفعلي (registrations).
+    الجدول الدراسي اختياري — لا يُشترط اعتماده لظهور المقرر.
     """
+    from backend.services.registration_roster import registration_attendance_course_rows
+
     user_role = (session.get("user_role") or "").strip()
     mode = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower()
     effective_supervisor = current_supervisor_effective()
@@ -4699,120 +4682,74 @@ def attendance_allowed_courses():
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
 
     role_bucket = attendance_export_role_bucket()
-    if attendance_uses_department_scope(role_bucket):
-        with get_connection() as conn:
-            cur = conn.cursor()
-            term_name, term_year = get_current_term(conn=conn)
-            semester_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
-            if not semester_label:
-                return jsonify(
-                    {"status": "error", "message": "لا يمكن تحديد الفصل الحالي", "code": "FORBIDDEN"}
-                ), 403
-            dep_scope = _effective_attendance_department_scope(conn)
-            rows = attendance_eligible_course_rows(
-                conn, cur, term_name, term_year, dept_scope_id=dep_scope
-            )
-            if not rows:
-                fb = fallback_distinct_attendance_courses(
-                    cur, term_name, term_year, conn=conn, dept_scope_id=dep_scope
-                )
-                rows = course_rows_with_meta(cur, fb)
-        courses = [
-            {"course_name": r[0], "course_code": r[1], "units": int(r[2] or 0)}
-            for r in rows
-            if r and r[0]
-        ]
-        return jsonify({"status": "ok", "courses": courses})
+    actor = (session.get("user") or session.get("username") or "").strip()
 
     with get_connection() as conn:
         cur = conn.cursor()
         term_name, term_year = get_current_term(conn=conn)
         semester_label = f"{(term_name or '').strip()} {(term_year or '').strip()}".strip()
         if not semester_label:
-            return jsonify({"status": "error", "message": "لا يمكن تحديد الفصل الحالي", "code": "FORBIDDEN"}), 403
+            return jsonify(
+                {"status": "error", "message": "لا يمكن تحديد الفصل الحالي", "code": "FORBIDDEN"}
+            ), 403
 
-        sem_sql, sem_bind = build_schedule_semester_match("s.semester", term_name, term_year)
-        sched_sem_and = f" AND ({sem_sql})"
-
-        if effective_supervisor:
+        kwargs: dict = {
+            "dept_scope_id": None,
+            "role_bucket": role_bucket,
+            "instructor_id": None,
+            "instructor_name": None,
+            "supervisor_instructor_id": None,
+        }
+        if attendance_uses_department_scope(role_bucket):
+            kwargs["dept_scope_id"] = _effective_attendance_department_scope(conn)
+        elif effective_supervisor:
             instructor_id = session.get("instructor_id")
             if not instructor_id:
                 return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
-
-            rows = cur.execute(
-                f"""
-                SELECT DISTINCT r.course_name,
-                                COALESCE(c.course_code,'') AS course_code,
-                                COALESCE(c.units,0) AS units
-                FROM registrations r
-                INNER JOIN students st ON st.student_id = r.student_id
-                    AND COALESCE(st.enrollment_status, 'active') = 'active'
-                INNER JOIN schedule s
-                  ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
-                {sched_sem_and}
-                LEFT JOIN courses c
-                  ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(c.course_name, '')))
-                WHERE r.student_id IN (
-                      SELECT student_id FROM student_supervisor WHERE instructor_id = ?
-                  )
-                  AND COALESCE(r.course_name, '') <> ''
-                ORDER BY r.course_name
-                """,
-                tuple(sem_bind) + (instructor_id,),
-            ).fetchall()
-            if not rows:
-                fb = fallback_distinct_attendance_courses(
-                    cur, term_name, term_year, supervisor_instructor_id=int(instructor_id)
-                )
-                rows = course_rows_with_meta(cur, fb)
-
+            kwargs["supervisor_instructor_id"] = int(instructor_id)
         elif role_for_scope == "instructor":
             instructor_id = session.get("instructor_id")
             if not instructor_id:
                 return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
-
             instr_row = cur.execute(
                 "SELECT name FROM instructors WHERE id = ? LIMIT 1",
                 (instructor_id,),
             ).fetchone()
             if not instr_row:
                 return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
-
-            instructor_name = instr_row[0]
-            rows = cur.execute(
-                f"""
-                SELECT DISTINCT r.course_name,
-                                COALESCE(c.course_code,'') AS course_code,
-                                COALESCE(c.units,0) AS units
-                FROM registrations r
-                INNER JOIN students st ON st.student_id = r.student_id
-                    AND COALESCE(st.enrollment_status, 'active') = 'active'
-                INNER JOIN schedule s
-                  ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
-                {sched_sem_and}
-                 AND TRIM(COALESCE(s.instructor, '')) = TRIM(?)
-                LEFT JOIN courses c
-                  ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(c.course_name, '')))
-                WHERE COALESCE(r.course_name, '') <> ''
-                ORDER BY r.course_name
-                """,
-                tuple(sem_bind) + (instructor_name,),
-            ).fetchall()
-            if not rows:
-                fb = fallback_distinct_attendance_courses(
-                    cur, term_name, term_year, instructor_name=instructor_name
-                )
-                rows = course_rows_with_meta(cur, fb)
-
+            kwargs["instructor_id"] = int(instructor_id)
+            kwargs["instructor_name"] = instr_row[0]
         else:
             return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
 
+        rows = registration_attendance_course_rows(
+            conn, cur, term_name, term_year, actor, **kwargs
+        )
+
+    schedule_published = False
+    try:
+        with get_connection() as conn:
+            schedule_published = get_schedule_published_at(conn) is not None
+    except Exception:
+        pass
+
     courses = [
-        {"course_name": r[0], "course_code": r[1], "units": int(r[2] or 0)}
+        {
+            "course_name": r["course_name"],
+            "course_code": r["course_code"],
+            "units": r["units"],
+            "in_schedule": r.get("in_schedule", False),
+            "registration_only": r.get("registration_only", False),
+        }
         for r in rows
-        if r and r[0]
+        if r and r.get("course_name")
     ]
-    return jsonify({"status": "ok", "courses": courses})
+    return jsonify({
+        "status": "ok",
+        "courses": courses,
+        "schedule_published": schedule_published,
+        "source": "registrations",
+    })
 
 
 # -----------------------------

@@ -234,40 +234,22 @@ def attendance_eligible_course_rows(
     dept_scope_id: int | None,
 ) -> list[tuple]:
     """
-    صفوف (course_name, course_code, units) لمقررات لها طلاب نشطون + مطابقة جدول الفصل؛
-    مع عزل القسم على schedule/courses وطلاب المنطقي عند تفعيله.
+    صفوف (course_name, course_code, units) من التسجيل الفعلي؛
+    الجدول اختياري (لا يُستبعد المقرر إن لم يُعتمد الجدول بعد).
     """
-    sem_sql, sem_bind = build_schedule_semester_match("s.semester", term_name, term_year)
-    sched_sem_and = f" AND ({sem_sql})"
-    dept_join, dept_and, dept_p = _schedule_dept_join_and_params(conn, dept_scope_id)
+    from backend.services.registration_roster import registration_attendance_course_tuples
 
-    suff, spar = attendance_student_scope_and_params(conn)
-    if suff == "EMPTY":
-        return []
-
-    qs = f"""
-        SELECT DISTINCT r.course_name,
-               COALESCE(c.course_code,'') AS course_code,
-               COALESCE(c.units,0) AS units
-        FROM registrations r
-        {_SQL_REG_ACTIVE_STUDENT}
-        INNER JOIN schedule s
-          ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
-        {dept_join}
-        LEFT JOIN courses c
-          ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(c.course_name, '')))
-        WHERE COALESCE(r.course_name, '') <> ''
-          {sched_sem_and}
-          {dept_and}
-          {suff or ''}
-        ORDER BY r.course_name
-    """
-    params = tuple(sem_bind) + tuple(dept_p) + tuple(spar)
-    try:
-        rows = cur.execute(qs, params).fetchall()
-    except Exception:
-        rows = []
-    return [r for r in rows if r and r[0]]
+    actor = (session.get("user") or session.get("username") or "").strip()
+    role_bucket = attendance_export_role_bucket()
+    return registration_attendance_course_tuples(
+        conn,
+        cur,
+        term_name,
+        term_year,
+        actor,
+        dept_scope_id=dept_scope_id,
+        role_bucket=role_bucket,
+    )
 
 
 def fallback_distinct_attendance_courses(
@@ -466,6 +448,20 @@ def collect_attendance_export_state(
         allowed_student_filter_sql = None
         allowed_student_filter_params: list = []
 
+        def _registration_course_names(**extra) -> list[str]:
+            from backend.services.registration_roster import registration_attendance_course_rows
+
+            actor = (session.get("user") or session.get("username") or "").strip()
+            base = {
+                "dept_scope_id": dep_scope_joint if attendance_uses_department_scope(role_bucket) else None,
+                "role_bucket": role_bucket,
+            }
+            base.update(extra)
+            rows = registration_attendance_course_rows(
+                conn, cur, term_name, term_year, actor, **base
+            )
+            return [r["course_name"] for r in rows if r.get("course_name")]
+
         if attendance_uses_department_scope(role_bucket):
             if not (semester_label or "").strip():
                 return {
@@ -517,29 +513,7 @@ def collect_attendance_export_state(
 
             allowed_student_filter_sql = "r.student_id = ?"
             allowed_student_filter_params = [sid_session]
-            allowed_course_set = set(
-                c[0]
-                for c in cur.execute(
-                    f"""
-                    SELECT DISTINCT r.course_name
-                    FROM registrations r
-                    {_SQL_REG_ACTIVE_STUDENT}
-                    INNER JOIN schedule s
-                      ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
-                    {sched_sem_and}
-                    WHERE r.student_id = ?
-                      AND COALESCE(r.course_name, '') <> ''
-                    """,
-                    tuple(sem_match_params) + (sid_session,),
-                ).fetchall()
-                if c and c[0]
-            )
-            if not allowed_course_set:
-                allowed_course_set = set(
-                    fallback_distinct_attendance_courses(
-                        cur, term_name, term_year, student_id=sid_session
-                    )
-                )
+            allowed_course_set = set(_registration_course_names(student_id=sid_session))
 
         elif role_bucket == "supervisor":
             instructor_id = session.get("instructor_id")
@@ -561,30 +535,8 @@ def collect_attendance_export_state(
             allowed_student_filter_sql = "r.student_id IN (SELECT student_id FROM student_supervisor WHERE instructor_id = ?)"
             allowed_student_filter_params = [instructor_id]
             allowed_course_set = set(
-                c[0]
-                for c in cur.execute(
-                    f"""
-                    SELECT DISTINCT r.course_name
-                    FROM registrations r
-                    {_SQL_REG_ACTIVE_STUDENT}
-                    INNER JOIN schedule s
-                      ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
-                    {sched_sem_and}
-                    WHERE r.student_id IN (
-                          SELECT student_id FROM student_supervisor WHERE instructor_id = ?
-                      )
-                      AND COALESCE(r.course_name, '') <> ''
-                    """,
-                    tuple(sem_match_params) + (instructor_id,),
-                ).fetchall()
-                if c and c[0]
+                _registration_course_names(supervisor_instructor_id=int(instructor_id))
             )
-            if not allowed_course_set:
-                allowed_course_set = set(
-                    fallback_distinct_attendance_courses(
-                        cur, term_name, term_year, supervisor_instructor_id=int(instructor_id)
-                    )
-                )
 
         elif role_bucket == "instructor":
             instructor_id = session.get("instructor_id")
@@ -624,90 +576,39 @@ def collect_attendance_export_state(
             instructor_name = instr_row[0]
 
             allowed_course_set = set(
-                c[0]
-                for c in cur.execute(
-                    f"""
-                    SELECT DISTINCT r.course_name
-                    FROM registrations r
-                    {_SQL_REG_ACTIVE_STUDENT}
-                    INNER JOIN schedule s
-                      ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
-                    {sched_sem_and}
-                     AND TRIM(COALESCE(s.instructor, '')) = TRIM(?)
-                    WHERE COALESCE(r.course_name, '') <> ''
-                    """,
-                    tuple(sem_match_params) + (instructor_name,),
-                ).fetchall()
-                if c and c[0]
-            )
-            if not allowed_course_set:
-                allowed_course_set = set(
-                    fallback_distinct_attendance_courses(
-                        cur, term_name, term_year, instructor_name=instructor_name
-                    )
+                _registration_course_names(
+                    instructor_id=int(instructor_id),
+                    instructor_name=instructor_name,
                 )
+            )
 
         def _fetch_all_courses():
-            """مقررات يوجد لها طالب نشط مسجّل + صف جدول للفصل الحالي (لا احتياط بلا فصل)."""
+            """مقررات من التسجيل الفعلي (الجدول اختياري)."""
             sem = (semester_label or "").strip()
-            if sem:
-                names: list = []
-                if attendance_uses_department_scope(role_bucket):
-                    er = attendance_eligible_course_rows(
-                        conn, cur, term_name, term_year, dept_scope_id=dep_scope_joint
-                    )
-                    names = [r[0] for r in er if r and r[0]]
-                    if not names:
-                        names = fallback_distinct_attendance_courses(
-                            cur, term_name, term_year,
-                            conn=conn, dept_scope_id=dep_scope_joint,
-                        )
-                    return _dedupe_course_list(names)
-                try:
-                    rows = cur.execute(
-                        f"""
-                        SELECT DISTINCT r.course_name
-                        FROM registrations r
-                        {_SQL_REG_ACTIVE_STUDENT}
-                        INNER JOIN schedule s
-                          ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
-                        {sched_sem_and}
-                        WHERE COALESCE(r.course_name, '') <> ''
-                        ORDER BY r.course_name
-                        """,
-                        tuple(sem_match_params),
-                    ).fetchall()
-                    names = [r[0] for r in rows if r[0]]
-                except Exception:
-                    names = []
-                if not names:
-                    names = fallback_distinct_attendance_courses(cur, term_name, term_year)
+            if not sem:
+                return []
+            if role_bucket == "student":
+                sid_session = session.get("student_id") or session.get("user")
+                names = _registration_course_names(student_id=sid_session)
                 return _dedupe_course_list(names)
-            names = []
-            try:
-                rows = cur.execute(
-                    "SELECT DISTINCT course_name FROM courses WHERE COALESCE(course_name,'') <> '' ORDER BY course_name"
-                ).fetchall()
-                names = [r[0] for r in rows if r[0]]
-            except Exception:
-                names = []
-            if not names:
-                try:
-                    rows = cur.execute(
-                        "SELECT DISTINCT course_name FROM schedule WHERE COALESCE(course_name,'') <> '' ORDER BY course_name"
-                    ).fetchall()
-                    names = [r[0] for r in rows if r[0]]
-                except Exception:
-                    names = []
-            seen = set()
-            ordered = []
-            for item in names:
-                key = item.lower()
-                if key in seen:
-                    continue
-                seen.add(key)
-                ordered.append(item)
-            return ordered
+            if role_bucket == "supervisor":
+                iid = session.get("instructor_id")
+                names = _registration_course_names(supervisor_instructor_id=iid)
+                return _dedupe_course_list(names)
+            if role_bucket == "instructor":
+                iid = session.get("instructor_id")
+                iname = None
+                if iid:
+                    ir = cur.execute(
+                        "SELECT name FROM instructors WHERE id = ? LIMIT 1", (iid,)
+                    ).fetchone()
+                    iname = ir[0] if ir else None
+                names = _registration_course_names(
+                    instructor_id=iid, instructor_name=iname
+                )
+                return _dedupe_course_list(names)
+            names = _registration_course_names()
+            return _dedupe_course_list(names)
 
         all_courses = _fetch_all_courses()
         normalized_map: dict[str, str] = {}
@@ -716,46 +617,12 @@ def collect_attendance_export_state(
             if k and k not in normalized_map:
                 normalized_map[k] = c
 
-        # تقييد الإدارة بمجموعة المقررات المستخرجة من التسجيلات + الجدول (all_courses)
+        # تقييد الإدارة بمجموعة المقررات من التسجيل الفعلي
         if attendance_uses_department_scope(role_bucket) and (semester_label or "").strip():
             allowed_course_set = set(all_courses)
 
         if not selected_courses:
-            sem = (semester_label or "").strip()
-            if sem:
-                if attendance_uses_department_scope(role_bucket):
-                    er2 = attendance_eligible_course_rows(
-                        conn, cur, term_name, term_year, dept_scope_id=dep_scope_joint
-                    )
-                    auto_courses = [r[0] for r in er2 if r and r[0]]
-                else:
-                    try:
-                        reg_rows = cur.execute(
-                            f"""
-                            SELECT DISTINCT r.course_name
-                            FROM registrations r
-                            {_SQL_REG_ACTIVE_STUDENT}
-                            INNER JOIN schedule s
-                              ON LOWER(TRIM(COALESCE(r.course_name, ''))) = LOWER(TRIM(COALESCE(s.course_name, '')))
-                            {sched_sem_and}
-                            WHERE COALESCE(r.course_name, '') <> ''
-                            ORDER BY r.course_name
-                            """,
-                            tuple(sem_match_params),
-                        ).fetchall()
-                    except Exception:
-                        reg_rows = []
-                    auto_courses = [r[0] for r in reg_rows if r[0]]
-            else:
-                auto_courses = []
-            if not auto_courses and sem:
-                fb_kw = {}
-                if attendance_uses_department_scope(role_bucket):
-                    fb_kw = {"conn": conn, "dept_scope_id": dep_scope_joint}
-                auto_courses = fallback_distinct_attendance_courses(cur, term_name, term_year, **fb_kw)
-            if not auto_courses:
-                auto_courses = all_courses
-            selected_courses = auto_courses
+            selected_courses = list(all_courses)
         else:
             resolved = []
             for val in selected_courses:
