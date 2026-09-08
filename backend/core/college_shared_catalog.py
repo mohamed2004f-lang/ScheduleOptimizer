@@ -279,10 +279,147 @@ def list_catalog_entries(conn, *, include_inactive: bool = False) -> list[dict[s
                     "department_name": r[8] or "",
                 }
             )
+    specialty_n = len(list_specialty_departments(conn))
     for item in items:
-        item["departments"] = by_cat.get(int(item["id"]), [])
-        item["department_count"] = len([x for x in item["departments"] if x.get("is_active")])
+        deps = by_cat.get(int(item["id"]), [])
+        item["departments"] = deps
+        linked = len([x for x in deps if x.get("is_active")])
+        item["linked_department_count"] = linked
+        st = str(item.get("share_type") or "").strip().lower()
+        # موحّد ← كل التخصصات؛ multi_code/subset ← الأقسام المرتبطة فعلياً
+        if st == "unified":
+            item["department_count"] = specialty_n
+            item["department_count_label"] = f"كل التخصصات ({specialty_n})"
+        else:
+            item["department_count"] = linked
+            item["department_count_label"] = str(linked)
+        _annotate_plan_variance(item)
     return items
+
+
+def _annotate_plan_variance(item: dict[str, Any]) -> None:
+    """تلخيص اختلاف رموز/وحدات خطط الأقسام لعرض القائمة."""
+    canonical_code = (item.get("canonical_course_code") or "").strip()
+    base_units = int(item.get("units") or 0)
+    active = [d for d in (item.get("departments") or []) if d.get("is_active")]
+    codes: list[str] = []
+    units_vals: list[int] = []
+    for d in active:
+        c = (d.get("plan_course_code") or "").strip() or canonical_code
+        if c:
+            codes.append(c)
+        uo = d.get("units_override")
+        if uo is None or uo == "":
+            units_vals.append(base_units)
+        else:
+            try:
+                units_vals.append(int(uo))
+            except (TypeError, ValueError):
+                units_vals.append(base_units)
+    uniq_codes = []
+    for c in codes:
+        if c not in uniq_codes:
+            uniq_codes.append(c)
+    codes_vary = len(uniq_codes) > 1
+    item["codes_vary"] = codes_vary
+    if not uniq_codes:
+        item["codes_summary"] = canonical_code or "—"
+        item["codes_summary_short"] = canonical_code or "—"
+    elif not codes_vary:
+        item["codes_summary"] = uniq_codes[0]
+        item["codes_summary_short"] = uniq_codes[0]
+    elif len(uniq_codes) <= 4:
+        joined = " / ".join(uniq_codes)
+        item["codes_summary"] = joined
+        item["codes_summary_short"] = "رموز متعددة"
+    else:
+        item["codes_summary"] = " / ".join(uniq_codes[:4]) + "…"
+        item["codes_summary_short"] = "رموز متعددة"
+
+    uniq_units = sorted(set(units_vals)) if units_vals else [base_units]
+    units_vary = len(uniq_units) > 1
+    item["units_vary"] = units_vary
+    if not units_vary:
+        item["units_summary"] = str(uniq_units[0] if uniq_units else base_units)
+        item["units_summary_short"] = item["units_summary"]
+    else:
+        item["units_summary"] = f"{uniq_units[0]}–{uniq_units[-1]}"
+        item["units_summary_short"] = "متفاوتة"
+
+
+def repair_college_wide_department_links(conn) -> int:
+    """
+    إكمال صفوف خطة الأقسام للموحّد (unified) لكل الأقسام التخصصية.
+    لا يوسّع multi_code/subset — هذه تُحدَّد بأقسامها المرتبطة فقط.
+    """
+    ensure_college_shared_catalog_schema(conn)
+    specialty = list_specialty_departments(conn)
+    if not specialty:
+        return 0
+    cur = conn.cursor()
+    rows = cur.execute(
+        """
+        SELECT id, share_type, canonical_course_code
+        FROM college_shared_catalog
+        WHERE COALESCE(is_active, 1) = 1
+          AND share_type = 'unified'
+        """
+    ).fetchall()
+    added = 0
+    for r in rows:
+        if hasattr(r, "keys"):
+            cid = int(r["id"])
+            code = (r["canonical_course_code"] or "").strip()
+        else:
+            cid = int(r[0])
+            code = (r[2] or "").strip()
+        existing_rows = cur.execute(
+            """
+            SELECT department_id, is_active, plan_course_code
+            FROM college_shared_catalog_depts
+            WHERE catalog_id = ?
+            """,
+            (cid,),
+        ).fetchall()
+        by_dep: dict[int, Any] = {}
+        for er in existing_rows:
+            if hasattr(er, "keys"):
+                by_dep[int(er["department_id"])] = er
+            else:
+                by_dep[int(er[0])] = er
+        changed = False
+        for dep in specialty:
+            did = int(dep["id"])
+            if did in by_dep:
+                er = by_dep[did]
+                active = er["is_active"] if hasattr(er, "keys") else er[1]
+                if not int(active or 0):
+                    cur.execute(
+                        """
+                        UPDATE college_shared_catalog_depts
+                        SET is_active = 1
+                        WHERE catalog_id = ? AND department_id = ?
+                        """,
+                        (cid, did),
+                    )
+                    changed = True
+                continue
+            cur.execute(
+                """
+                INSERT INTO college_shared_catalog_depts
+                (catalog_id, department_id, plan_course_code, plan_course_name_override, is_active)
+                VALUES (?, ?, ?, '', 1)
+                """,
+                (cid, did, code),
+            )
+            added += 1
+            changed = True
+        if changed:
+            cur.execute(
+                "UPDATE college_shared_catalog SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (cid,),
+            )
+    return added
 
 
 def get_catalog_entry(conn, catalog_id: int) -> dict[str, Any] | None:
@@ -339,14 +476,45 @@ def get_department_plan_course_code(
     return ((entry or {}).get("canonical_course_code") or "").strip() or None
 
 
+def get_department_plan_units(
+    conn,
+    course_name: str,
+    department_id: int,
+) -> int | None:
+    """وحدات خطة القسم لمقرر مشترك (units_override أو وحدات السجل المرجعية)."""
+    cid = find_shared_catalog_id_by_course_name(conn, course_name)
+    if cid is None:
+        return None
+    entry = get_catalog_entry(conn, int(cid))
+    if not entry:
+        return None
+    base = int(entry.get("units") or 0)
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT units_override
+        FROM college_shared_catalog_depts
+        WHERE catalog_id = ? AND department_id = ? AND COALESCE(is_active, 1) = 1
+        LIMIT 1
+        """,
+        (int(cid), int(department_id)),
+    ).fetchone()
+    override = None
+    if row:
+        raw = row[0] if not hasattr(row, "keys") else row["units_override"]
+        override = _parse_units_override(raw)
+    return _effective_dept_units(base, override)
+
+
 def set_department_plan_course_code(
     conn,
     course_name: str,
     department_id: int,
     plan_course_code: str,
+    units: int | None = None,
 ) -> dict[str, Any]:
     """
-    تحديث رمز المقرر في خطة القسم ضمن سجل المشترك
+    تحديث رمز/وحدات المقرر في خطة القسم ضمن سجل المشترك
     (لا يغيّر الاسم الرسمي ولا صف courses العام للكلية).
     """
     ensure_college_shared_catalog_schema(conn)
@@ -356,6 +524,11 @@ def set_department_plan_course_code(
         raise ValueError("اسم المقرر مطلوب.")
     if not code:
         raise ValueError("رمز المقرر مطلوب.")
+    units_ov = _parse_units_override(units) if units is not None else None
+    if units is not None and units_ov is None:
+        raise ValueError("عدد الوحدات غير صالح.")
+    if units_ov is not None and units_ov < 0:
+        raise ValueError("عدد الوحدات يجب ألا يكون سالباً.")
     cid = find_shared_catalog_id_by_course_name(conn, cname)
     if cid is None:
         raise ValueError("المقرر ليس في سجل المقررات المشتركة.")
@@ -365,7 +538,7 @@ def set_department_plan_course_code(
     cur = conn.cursor()
     existing = cur.execute(
         """
-        SELECT id, program_course_id FROM college_shared_catalog_depts
+        SELECT id, program_course_id, units_override FROM college_shared_catalog_depts
         WHERE catalog_id = ? AND department_id = ?
         LIMIT 1
         """,
@@ -374,30 +547,44 @@ def set_department_plan_course_code(
     if existing:
         eid = int(existing[0] if not hasattr(existing, "keys") else existing["id"])
         pcid = existing[1] if not hasattr(existing, "keys") else existing["program_course_id"]
+        if units_ov is None:
+            prev = existing[2] if not hasattr(existing, "keys") else existing["units_override"]
+            units_ov = _parse_units_override(prev)
         cur.execute(
             """
             UPDATE college_shared_catalog_depts
-            SET plan_course_code = ?, is_active = 1
+            SET plan_course_code = ?, units_override = ?, is_active = 1
             WHERE id = ?
             """,
-            (code, eid),
+            (code, units_ov, eid),
         )
         if pcid:
             try:
                 cur.execute(
-                    "UPDATE program_courses SET course_code = ? WHERE id = ?",
-                    (code, int(pcid)),
+                    """
+                    UPDATE program_courses
+                    SET course_code = ?, units_override = COALESCE(?, units_override)
+                    WHERE id = ?
+                    """,
+                    (code, units_ov, int(pcid)),
                 )
             except Exception:
-                pass
+                try:
+                    cur.execute(
+                        "UPDATE program_courses SET course_code = ? WHERE id = ?",
+                        (code, int(pcid)),
+                    )
+                except Exception:
+                    pass
     else:
         cur.execute(
             """
             INSERT INTO college_shared_catalog_depts
-            (catalog_id, department_id, plan_course_code, plan_course_name_override, is_active)
-            VALUES (?, ?, ?, '', 1)
+            (catalog_id, department_id, plan_course_code, plan_course_name_override,
+             units_override, is_active)
+            VALUES (?, ?, ?, '', ?, 1)
             """,
-            (int(cid), int(department_id), code),
+            (int(cid), int(department_id), code, units_ov),
         )
         try:
             sync_catalog_entry(conn, int(cid))
@@ -407,12 +594,16 @@ def set_department_plan_course_code(
         "UPDATE college_shared_catalog SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         (int(cid),),
     )
+    effective_units = _effective_dept_units(int(entry.get("units") or 0), units_ov)
     return {
         "catalog_id": int(cid),
         "department_id": int(department_id),
         "plan_course_code": code,
+        "units": effective_units,
+        "units_override": units_ov,
         "canonical_course_name": cname,
         "canonical_course_code": (entry.get("canonical_course_code") or "").strip(),
+        "canonical_units": int(entry.get("units") or 0),
     }
 
 
@@ -444,15 +635,19 @@ def _normalize_departments_payload(
                 continue
             override = ""
             uo = None
+            pcode = code
             for x in raw:
                 if int(x.get("department_id") or -1) == did:
                     override = (x.get("plan_course_name_override") or "").strip()
                     uo = _parse_units_override(x.get("units_override"))
+                    raw_code = (x.get("plan_course_code") or "").strip()
+                    if raw_code:
+                        pcode = raw_code
                     break
             out.append(
                 {
                     "department_id": did,
-                    "plan_course_code": code,
+                    "plan_course_code": pcode,
                     "plan_course_name_override": override,
                     "units_override": uo,
                     "is_active": 1,

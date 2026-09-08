@@ -797,6 +797,8 @@ def course_is_college_general(
     if "requirement_scope" not in pc_cols:
         return False
     code = (course_code or "").strip()
+    # ملاحظة: لا نقارن title_ar لصف courses نفسه باسم المقرر داخل EXISTS —
+    # ذلك يجعل أي مقرر بمساق رئيسي يطابق كل صفوف college_general بالخطأ.
     row = cur.execute(
         """
         SELECT 1 FROM program_courses pc
@@ -805,13 +807,22 @@ def course_is_college_general(
           AND (
             EXISTS (
               SELECT 1 FROM courses c
-              LEFT JOIN course_master cm ON cm.id = c.course_master_id
               WHERE lower(trim(c.course_name)) = lower(trim(?))
                 AND (
                   (c.course_master_id IS NOT NULL AND c.course_master_id = pc.course_master_id)
-                  OR lower(trim(COALESCE(pc.course_code, ''))) = lower(trim(COALESCE(c.course_code, '')))
-                  OR lower(trim(COALESCE(cm.title_ar, ''))) = lower(trim(?))
+                  OR (
+                    trim(COALESCE(c.course_code, '')) <> ''
+                    AND lower(trim(COALESCE(pc.course_code, ''))) = lower(trim(COALESCE(c.course_code, '')))
+                  )
                 )
+            )
+            OR (
+              pc.course_master_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM course_master cm
+                WHERE cm.id = pc.course_master_id
+                  AND lower(trim(COALESCE(cm.title_ar, ''))) = lower(trim(?))
+              )
             )
             OR (
               ? <> ''
@@ -840,7 +851,11 @@ def course_is_college_shared_catalog(
     *,
     department_id: int | None = None,
 ) -> bool:
-    """هل المقرر في سجل المقررات المشتركة (مع اختيار تحقق قسم للنوع subset)؟"""
+    """هل المقرر في سجل المقررات المشتركة؟
+
+    - unified: لكل الأقسام التخصصية.
+    - multi_code / subset: للأقسام المرتبطة فعلياً في سجل الأقسام (إن مُرّر department_id).
+    """
     cname = (course_name or "").strip()
     if not cname:
         return False
@@ -858,8 +873,11 @@ def course_is_college_shared_catalog(
     if not row:
         return False
     cid = int(row[0] if not hasattr(row, "keys") else row["id"])
-    st = str(row[1] if not hasattr(row, "keys") else row["share_type"] or "")
-    if st != "subset" or department_id is None:
+    st = str(row[1] if not hasattr(row, "keys") else row["share_type"] or "").strip().lower()
+    if st == "unified":
+        return True
+    if department_id is None:
+        # عضوية السجل دون فلتر قسم
         return True
     hit = cur.execute(
         """
@@ -881,7 +899,12 @@ def _general_owned_visibility_sql(
     table_alias: str = "",
 ) -> tuple[str, tuple]:
     """
-    مقررات GENERAL الظاهرة لقسم: اتجاه عام + مشترك unified/multi_code + subset للمشاركين.
+    نطاق عرض المقررات لقسم:
+
+    - قسم الاتجاه العام (GENERAL): مقررات الاتجاه العام فقط — بلا سجل المشترك
+      (الطلبة يقضون فصلين ثم يتخصصون؛ المشتركة لخطط الأقسام الأربعة).
+    - قسم تخصص: مقرراته + الاتجاه العام + المشترك الموحّد للكل،
+      و multi_code/subset للأقسام المرتبطة فقط.
     """
     _ensure_shared_catalog_tables(conn)
     gen_id = resolve_college_general_department_id(conn)
@@ -894,6 +917,21 @@ def _general_owned_visibility_sql(
             f" AND (COALESCE({own_expr}, -1) = ? OR {own_expr} IS NULL) ",
             (dep,),
         )
+
+    # رئيس/نطاق الاتجاه العام: لا تظهر المقررات المشتركة هنا
+    if int(dep) == int(gen_id):
+        return (
+            f"""
+             AND COALESCE({own_expr}, -1) = ?
+             AND NOT EXISTS (
+               SELECT 1 FROM college_shared_catalog csc
+               WHERE lower(trim(csc.canonical_course_name)) = lower(trim({cname_expr}))
+                 AND COALESCE(csc.is_active, 1) = 1
+             )
+            """,
+            (int(gen_id),),
+        )
+
     return (
         f"""
          AND (
@@ -917,14 +955,14 @@ def _general_owned_visibility_sql(
                  SELECT 1 FROM college_shared_catalog csc
                  WHERE lower(trim(csc.canonical_course_name)) = lower(trim({cname_expr}))
                    AND COALESCE(csc.is_active, 1) = 1
-                   AND csc.share_type IN ('unified', 'multi_code')
+                   AND csc.share_type = 'unified'
                )
                OR EXISTS (
                  SELECT 1 FROM college_shared_catalog csc
                  INNER JOIN college_shared_catalog_depts csd ON csd.catalog_id = csc.id
                  WHERE lower(trim(csc.canonical_course_name)) = lower(trim({cname_expr}))
                    AND COALESCE(csc.is_active, 1) = 1
-                   AND csc.share_type = 'subset'
+                   AND csc.share_type IN ('multi_code', 'subset')
                    AND COALESCE(csd.is_active, 1) = 1
                    AND csd.department_id = ?
                )
@@ -1188,7 +1226,8 @@ def courses_department_scope_filter(
     course_name_col: str = "course_name",
 ) -> tuple[str, tuple]:
     """
-    شرط SQL لعرض مقررات القسم + الاتجاه العام + المشترك حسب النوع.
+    شرط SQL لعرض المقررات حسب نطاق القسم:
+    تخصص ← قسمه + اتجاه عام + مشترك؛ اتجاه عام ← مقررات الاتجاه العام فقط.
     """
     if scope_dep is None:
         return "", ()
@@ -1307,12 +1346,41 @@ def course_in_actor_scope(
     from backend.database.database import fetch_table_columns
 
     cols = fetch_table_columns(conn, "courses")
+    gen_id = resolve_college_general_department_id(conn)
+    is_general_scope = False
+    try:
+        is_general_scope = gen_id is not None and int(dep) == int(gen_id)
+    except (TypeError, ValueError):
+        is_general_scope = False
+
+    # نطاق الاتجاه العام: مقررات الاتجاه العام فقط (بدون المشترك)
+    if is_general_scope:
+        if course_is_college_shared_catalog(conn, cname):
+            return False
+        if course_is_college_general(conn, cname):
+            return True
+        if "owning_department_id" in cols:
+            row = cur.execute(
+                """
+                SELECT owning_department_id FROM courses
+                WHERE lower(trim(course_name)) = lower(trim(?))
+                LIMIT 1
+                """,
+                (cname,),
+            ).fetchone()
+            if row:
+                raw = row["owning_department_id"] if hasattr(row, "keys") else row[0]
+                try:
+                    return raw not in (None, "") and int(raw) == int(gen_id)
+                except (TypeError, ValueError):
+                    return False
+        return False
+
     if course_is_college_general(conn, cname):
         return True
     if course_is_college_shared_catalog(conn, cname, department_id=int(dep)):
         return True
     if "owning_department_id" in cols:
-        gen_id = resolve_college_general_department_id(conn)
         row = cur.execute(
             """
             SELECT owning_department_id FROM courses
@@ -1470,7 +1538,7 @@ def course_code_editable_by_actor(
     actor_username: str | None = None,
 ) -> bool:
     """
-    تعديل رمز المقرر فقط (رمز خطة القسم للمقررات المشتركة).
+    تعديل حقول خطة القسم للمقرر المشترك (الرمز والوحدات) دون الاسم الرسمي.
     - اتجاه عام: لا (إلا بصلاحية الكتابة الكاملة).
     - مشترك كلية: نعم لرئيس التخصص ضمن نطاقه (وليس لرئيس الاتجاه العام).
     - مقرر قسم: يغطيه course_writable_by_actor.

@@ -227,14 +227,36 @@ async function importCourses(){
       const boundMsg = (j.department_bound != null && j.department_bound > 0)
         ? ` وربط ${j.department_bound} بقسمك`
         : '';
+      const createdN = Number(j.created != null ? j.created : j.imported || 0);
+      const updatedN = Number(j.updated || 0);
       const ignoredN = Number(j.ignored_count || (j.ignored || []).length || 0);
-      const ignoredMsg = ignoredN > 0
-        ? ` — تُجاهل ${ignoredN} (رمز موجود مسبقاً/كلية)`
-        : '';
-      window.showToast?.(`تم استيراد ${j.imported ?? 'عدد'} مقرر${boundMsg}${ignoredMsg}`, ignoredN ? 'warning' : 'success');
+      const parts = [];
+      if (createdN) parts.push(`${createdN} جديداً`);
+      if (updatedN) parts.push(`${updatedN} محدّثاً (اسم موجود)`);
+      if (ignoredN) parts.push(`تُجاهل ${ignoredN}`);
+      const summary = parts.length ? parts.join(' — ') : `تم معالجة ${j.imported ?? 0}`;
+      const warn = updatedN > 0 || ignoredN > 0;
+      window.showToast?.(
+        `تم الاستيراد${boundMsg}: ${summary}`,
+        warn ? 'warning' : 'success'
+      );
+      const lines = [];
+      if (updatedN > 0 && Array.isArray(j.updated_items)) {
+        lines.push('<strong>أسماء موجودة — حُدّثت واستُكمل الباقي:</strong>');
+        j.updated_items.slice(0, 8).forEach(x => {
+          lines.push(`• ${x.message || x.course_name}`);
+        });
+        if (updatedN > 8) lines.push('…');
+      }
       if (ignoredN > 0 && Array.isArray(j.ignored)) {
-        const details = j.ignored.slice(0, 5).map(x => x.message || `${x.course_code}: ${x.course_name}`).join('<br>');
-        msg.innerHTML = `<div class="alert alert-warning p-2 small">تُجاهلت مقررات مكررة الرمز:<br>${details}${ignoredN > 5 ? '<br>…' : ''}</div>`;
+        lines.push('<strong class="d-block mt-1">تُجاهلت (رمز/كلية):</strong>');
+        j.ignored.slice(0, 5).forEach(x => {
+          lines.push(`• ${x.message || `${x.course_code}: ${x.course_name}`}`);
+        });
+        if (ignoredN > 5) lines.push('…');
+      }
+      if (lines.length) {
+        msg.innerHTML = `<div class="alert alert-warning p-2 small">${lines.join('<br>')}</div>`;
       }
       await loadCourses();
       form.reset();
@@ -431,7 +453,7 @@ function renderCoursesTable(list){
         actionsHtml = `<button class="btn btn-sm btn-outline-primary me-1" data-action="edit" data-name="${escapeAttr(name)}">تحرير</button>
           <button class="btn btn-sm btn-danger" data-action="delete" data-name="${escapeAttr(name)}">حذف</button>`;
       } else if (canEditCode && kind === 'shared') {
-        actionsHtml = `<button class="btn btn-sm btn-outline-primary" data-action="edit-code" data-name="${escapeAttr(name)}">تحرير الرمز</button>`;
+        actionsHtml = `<button class="btn btn-sm btn-outline-primary" data-action="edit-code" data-name="${escapeAttr(name)}">تحرير الرمز/الوحدات</button>`;
       } else if (kind === 'college_general') {
         actionsHtml = `<span class="text-muted small">اتجاه عام — بلا تعديل</span>`;
       } else {
@@ -441,7 +463,7 @@ function renderCoursesTable(list){
     const tr = document.createElement('tr');
     tr.innerHTML = `
       ${IS_ADMIN ? `<td class="text-center"><input type="checkbox" class="course-select-cb" data-name="${escapeAttr(name)}" ${checked} ${selectable ? '' : 'disabled'}></td>` : ''}
-      <td>${escapeHtml(name)}${kindBadge}${kind === 'shared' && IS_ADMIN && !canEdit ? '<div class="small text-muted">يمكن تعديل رمز قسمك فقط</div>' : ''}</td>
+      <td>${escapeHtml(name)}${kindBadge}${kind === 'shared' && IS_ADMIN && !canEdit ? '<div class="small text-muted">يمكن تعديل الرمز والوحدات لقسمك فقط — الاسم رسمي للكلية</div>' : ''}</td>
       <td>${escapeHtml(showCode)}</td>
       <td class="text-center">${(typeof c.units === 'number' ? c.units : (c.units || 0))}</td>
       <td class="text-center">${escapeHtml(categoryLabel(c.category))}</td>
@@ -618,7 +640,7 @@ function openEdit(name, codeOnly){
   editCodeOnly = !!codeOnly || (!c.can_edit && !!c.can_edit_code);
   document.getElementById('ecName').textContent = name;
   document.getElementById('ecCode').value = c.display_code || c.dept_plan_code || c.course_code || '';
-  document.getElementById('ecUnits').value = (typeof c.units === 'number' ? c.units : (c.units || ''));
+  document.getElementById('ecUnits').value = (typeof c.display_units === 'number' ? c.display_units : (typeof c.units === 'number' ? c.units : (c.units || '')));
   const catEl = document.getElementById('ecCategory');
   if (catEl) catEl.value = c.category || 'required';
   const assEl = document.getElementById('ecAssessmentType');
@@ -630,14 +652,17 @@ function openEdit(name, codeOnly){
   if (mdEl) mdEl.value = (c.midterm_weight ?? '');
   if (feEl) feEl.value = (c.final_exam_weight ?? '');
   const lock = editCodeOnly;
-  ['ecUnits','ecCategory','ecAssessmentType','ecCwWeight','ecMidWeight','ecFinalWeight'].forEach(id=>{
+  // المشترك: الاسم ثابت؛ الرمز والوحدات قابلان للتعديل لقسم الرئيس
+  ['ecCategory','ecAssessmentType','ecCwWeight','ecMidWeight','ecFinalWeight'].forEach(id=>{
     const el = document.getElementById(id);
     if (el) el.disabled = lock;
   });
+  const unitsEl = document.getElementById('ecUnits');
+  if (unitsEl) unitsEl.disabled = false;
   const title = document.querySelector('#editCourseModal .modal-title');
-  if (title) title.textContent = lock ? 'تحرير رمز المقرر (لقسمك)' : 'تحرير بيانات المقرر';
+  if (title) title.textContent = lock ? 'تحرير الرمز والوحدات (لقسمك)' : 'تحرير بيانات المقرر';
   document.getElementById('ecMsg').innerHTML = lock
-    ? '<div class="alert alert-info p-2 mb-0 small">مقرر مشترك: يُحفظ الرمز لخطة قسمك فقط دون تغيير الاسم الرسمي.</div>'
+    ? '<div class="alert alert-info p-2 mb-0 small">مقرر مشترك: يُحفظ الرمز والوحدات لخطة قسمك فقط دون تغيير الاسم الرسمي للكلية.</div>'
     : '';
   editModal.show();
 }
@@ -659,6 +684,10 @@ document.getElementById('ecSaveBtn').addEventListener('click', async ()=>{
       showInModal('ecMsg', 'warning', 'أدخل رمز المقرر لقسمك');
       return;
     }
+    if(unitsRaw === '' || isNaN(units) || units < 0){
+      showInModal('ecMsg', 'warning', 'عدد الوحدات يجب أن يكون رقماً صحيحاً >= 0');
+      return;
+    }
   } else {
     if(unitsRaw !== '' && (isNaN(units) || units < 0)){
       showInModal('ecMsg', 'warning', 'عدد الوحدات يجب أن يكون رقماً صحيحاً >= 0');
@@ -676,6 +705,7 @@ document.getElementById('ecSaveBtn').addEventListener('click', async ()=>{
           old_course_name: editCourseName,
           new_course_name: editCourseName,
           course_code: code,
+          units,
           code_only: true,
         }
       : {

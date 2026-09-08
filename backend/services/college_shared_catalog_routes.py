@@ -14,6 +14,7 @@ from backend.core.college_shared_catalog import (
     import_catalog_workbook,
     list_catalog_entries,
     list_specialty_departments,
+    repair_college_wide_department_links,
     save_catalog_entry,
     set_catalog_active,
     sync_catalog_entry,
@@ -82,6 +83,12 @@ def register_shared_catalog_routes(bp) -> None:
             "yes",
         )
         with get_connection() as conn:
+            try:
+                n = repair_college_wide_department_links(conn)
+                if n:
+                    conn.commit()
+            except Exception:
+                pass
             items = list_catalog_entries(conn, include_inactive=include_inactive)
         return jsonify({"status": "ok", "items": items})
 

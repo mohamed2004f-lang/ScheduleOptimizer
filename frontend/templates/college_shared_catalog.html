@@ -30,9 +30,14 @@
 
     <div class="alert alert-info small">
       <strong>أنواع المشاركة:</strong>
-      <span class="badge bg-primary">unified</span> نفس الاسم والرمز لكل الأقسام &nbsp;
-      <span class="badge bg-secondary">multi_code</span> محتوى واحد — رمز ووحدات اختيارية لكل قسم &nbsp;
+      <span class="badge bg-primary">unified</span> نفس الاسم والرمز — يظهر لكل الأقسام التخصصية &nbsp;
+      <span class="badge bg-secondary">multi_code</span> محتوى واحد — رمز/وحدات لكل قسم، ويظهر لكل التخصصات &nbsp;
       <span class="badge bg-warning text-dark">subset</span> مشترك بين أقسام محددة فقط
+      <div class="mt-1">
+        عمود <strong>أقسام الظهور</strong>: للموحّد = كل التخصصات.
+        لـ multi_code / subset = عدد الأقسام المرتبطة فعلياً فقط.
+        عند اختلاف الرموز/الوحدات يظهر ملخص في عمودي الرمز والوحدات؛ التفاصيل عند <strong>تحرير</strong>.
+      </div>
     </div>
 
     <div id="adminTools" class="card mb-3 d-none">
@@ -62,7 +67,7 @@
               <th>الرمز</th>
               <th>النوع</th>
               <th>و.</th>
-              <th>أقسام</th>
+              <th title="عدد أقسام التخصص التي يظهر لها المقرر">أقسام الظهور</th>
               <th>حالة</th>
               <th class="admin-col d-none">إجراء</th>
             </tr>
@@ -94,7 +99,7 @@
             <input class="form-control form-control-sm" id="fCode">
           </div>
           <div class="col-md-1">
-            <label class="form-label small">وحدات</label>
+            <label class="form-label small">وحدات مرجعية</label>
             <input class="form-control form-control-sm" id="fUnits" type="number" min="0" value="3">
           </div>
           <div class="col-md-2">
@@ -110,11 +115,15 @@
           <label class="form-label small">ملاحظات</label>
           <input class="form-control form-control-sm" id="fNotes">
         </div>
-        <div id="deptSection" class="d-none">
-          <label class="form-label small fw-bold">أقسام المشاركة (multi_code / subset)</label>
-          <p class="small text-muted mb-1">لكل قسم: رمز الخطة، اسم العرض (اختياري)، ووحدات خاصة (فارغ = وحدات السجل أعلاه).</p>
+        <div id="deptSection">
+          <label class="form-label small fw-bold">خطط الأقسام (رمز ووحدات لكل قسم)</label>
+          <p class="small text-muted mb-1" id="deptHint">
+            للأدمن/العميد: عدّل رمز ووحدات كل قسم هنا. الاسم الرسمي أعلاه ثابت للكلية.
+            فارغ في الوحدات = استخدام الوحدات المرجعية.
+          </p>
           <div id="deptRows"></div>
-          <button type="button" class="btn btn-sm btn-outline-secondary mt-1" id="btnAddDept">+ قسم</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary mt-1 d-none" id="btnAddDept">+ قسم</button>
+          <button type="button" class="btn btn-sm btn-outline-primary mt-1" id="btnFillCanonical">تعبئة الرمز/الوحدات المرجعية لكل الأقسام</button>
         </div>
         <div class="mt-3 d-flex gap-2">
           <button type="button" class="btn btn-success btn-sm" id="btnSave">حفظ ومزامنة</button>
@@ -129,7 +138,7 @@
     let ITEMS = [];
     let DEPS = [];
 
-    function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+    function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
 
     async function apiGet(url){
       const r = await fetch(url, { credentials: 'include' });
@@ -151,30 +160,101 @@
 
     function toggleDeptSection(){
       const st = document.getElementById('fShareType').value;
-      const show = st === 'multi_code' || st === 'subset';
-      document.getElementById('deptSection').classList.toggle('d-none', !show);
+      const addBtn = document.getElementById('btnAddDept');
+      const hint = document.getElementById('deptHint');
+      // إضافة صف: multi_code و subset — الموحّد يملأ كل التخصصات تلقائياً
+      addBtn.classList.toggle('d-none', st === 'unified');
+      if (hint) {
+        if (st === 'subset') {
+          hint.textContent = 'اختر الأقسام المشاركة فقط (قسمان فأكثر)، مع رمز ووحدات لكل منها.';
+        } else if (st === 'multi_code') {
+          hint.textContent = 'أدرج فقط الأقسام التي تشارك المقرر (مع رمز/وحدات كل قسم). لن يظهر للأقسام غير المدرجة — مقرر قسم واحد يُحذف من هذا السجل ويبقى في مقررات القسم.';
+        } else {
+          hint.textContent = 'يظهر المقرر لكل الأقسام التخصصية. عدّل رمز ووحدات كل قسم عند الحاجة؛ فارغ في الوحدات = المرجعية.';
+        }
+      }
+      if (st === 'unified') {
+        ensureAllSpecialtyRows();
+      }
     }
 
-    function renderDeptRow(dep){
+    function renderDeptRow(dep, { lockedDept } = {}){
       const wrap = document.createElement('div');
-      wrap.className = 'row g-1 mb-1 dept-row';
-      const opts = DEPS.map(d => `<option value="${d.id}" ${dep && dep.department_id==d.id?'selected':''}>${esc(d.name_ar)} (${esc(d.code)})</option>`).join('');
+      wrap.className = 'row g-1 mb-1 dept-row align-items-center';
+      const did = dep && dep.department_id != null ? String(dep.department_id) : '';
+      const opts = DEPS.map(d =>
+        `<option value="${d.id}" ${did && String(d.id)===String(did)?'selected':''}>${esc(d.name_ar)} (${esc(d.code)})</option>`
+      ).join('');
       const uo = (dep && dep.units_override != null && dep.units_override !== '') ? String(dep.units_override) : '';
+      const codeVal = (dep && dep.plan_course_code) ? dep.plan_course_code : '';
+      const nameOv = (dep && dep.plan_course_name_override) ? dep.plan_course_name_override : '';
+      const deptSelectDisabled = lockedDept ? 'disabled' : '';
       wrap.innerHTML = `
-        <div class="col-md-3"><select class="form-select form-select-sm dept-id"><option value="">— قسم —</option>${opts}</select></div>
-        <div class="col-md-3"><input class="form-control form-control-sm dept-code" placeholder="رمز الخطة" value="${esc(dep&&dep.plan_course_code)}"></div>
-        <div class="col-md-3"><input class="form-control form-control-sm dept-name" placeholder="اسم العرض (اختياري)" value="${esc(dep&&dep.plan_course_name_override)}"></div>
+        <div class="col-md-3">
+          <select class="form-select form-select-sm dept-id" ${deptSelectDisabled}>
+            <option value="">— قسم —</option>${opts}
+          </select>
+          ${lockedDept && did ? `<input type="hidden" class="dept-id-fixed" value="${esc(did)}">` : ''}
+        </div>
+        <div class="col-md-3"><input class="form-control form-control-sm dept-code" placeholder="رمز الخطة" value="${esc(codeVal)}"></div>
+        <div class="col-md-3"><input class="form-control form-control-sm dept-name" placeholder="اسم العرض (اختياري)" value="${esc(nameOv)}"></div>
         <div class="col-md-2"><input class="form-control form-control-sm dept-units" type="number" min="0" placeholder="وحدات" value="${esc(uo)}" title="فارغ = وحدات السجل المرجعية"></div>
-        <div class="col-md-1"><button type="button" class="btn btn-sm btn-outline-danger w-100 btn-rm">×</button></div>`;
-      wrap.querySelector('.btn-rm').onclick = () => wrap.remove();
+        <div class="col-md-1">${lockedDept ? '' : '<button type="button" class="btn btn-sm btn-outline-danger w-100 btn-rm">×</button>'}</div>`;
+      const rm = wrap.querySelector('.btn-rm');
+      if (rm) rm.onclick = () => wrap.remove();
       return wrap;
+    }
+
+    function ensureAllSpecialtyRows(){
+      const st = document.getElementById('fShareType').value;
+      if (st !== 'unified') return;
+      const dr = document.getElementById('deptRows');
+      const byId = {};
+      [...dr.querySelectorAll('.dept-row')].forEach(row => {
+        const idEl = row.querySelector('.dept-id-fixed') || row.querySelector('.dept-id');
+        const id = parseInt(idEl && idEl.value, 10);
+        if (id > 0) byId[id] = {
+          department_id: id,
+          plan_course_code: row.querySelector('.dept-code').value.trim(),
+          plan_course_name_override: row.querySelector('.dept-name').value.trim(),
+          units_override: row.querySelector('.dept-units').value.trim() === ''
+            ? null
+            : parseInt(row.querySelector('.dept-units').value, 10)
+        };
+      });
+      const canon = document.getElementById('fCode').value.trim();
+      dr.innerHTML = '';
+      DEPS.forEach(d => {
+        const prev = byId[d.id];
+        const dep = prev || {
+          department_id: d.id,
+          plan_course_code: canon,
+          plan_course_name_override: '',
+          units_override: null
+        };
+        if (!prev) dep.plan_course_code = canon;
+        dr.appendChild(renderDeptRow(dep, { lockedDept: true }));
+      });
+    }
+
+    function fillCanonicalToAllDepts(){
+      const code = document.getElementById('fCode').value.trim();
+      const units = document.getElementById('fUnits').value;
+      document.querySelectorAll('.dept-row').forEach(row => {
+        const codeEl = row.querySelector('.dept-code');
+        const unitsEl = row.querySelector('.dept-units');
+        if (codeEl) codeEl.value = code;
+        if (unitsEl) unitsEl.value = units;
+      });
     }
 
     function collectDepartments(){
       return [...document.querySelectorAll('.dept-row')].map(row => {
+        const fixed = row.querySelector('.dept-id-fixed');
+        const sel = row.querySelector('.dept-id');
         const uRaw = row.querySelector('.dept-units').value.trim();
         const item = {
-          department_id: parseInt(row.querySelector('.dept-id').value, 10),
+          department_id: parseInt((fixed && fixed.value) || (sel && sel.value) || '', 10),
           plan_course_code: row.querySelector('.dept-code').value.trim(),
           plan_course_name_override: row.querySelector('.dept-name').value.trim(),
           is_active: true
@@ -187,6 +267,26 @@
       }).filter(x => x.department_id > 0);
     }
 
+    function renderCodeCell(it){
+      const main = it.codes_summary_short || it.canonical_course_code || '';
+      const full = it.codes_summary || it.canonical_course_code || '';
+      if (it.codes_vary) {
+        return `<code title="${esc(full)}">${esc(main)}</code>
+          <div class="small text-muted" title="${esc(full)}">${esc(full)}</div>`;
+      }
+      return `<code>${esc(main)}</code>`;
+    }
+
+    function renderUnitsCell(it){
+      const short = it.units_summary_short != null ? it.units_summary_short : (it.units || 0);
+      const full = it.units_summary != null ? it.units_summary : String(it.units || 0);
+      if (it.units_vary) {
+        return `<span title="${esc(full)}">${esc(short)}</span>
+          <div class="small text-muted">${esc(full)}</div>`;
+      }
+      return esc(String(short));
+    }
+
     function renderTable(){
       const tb = document.querySelector('#tbl tbody');
       tb.innerHTML = '';
@@ -195,14 +295,15 @@
         const active = it.is_active ? '<span class="badge bg-success">نشط</span>' : '<span class="badge bg-secondary">موقوف</span>';
         tr.innerHTML = `
           <td>${esc(it.canonical_course_name)}</td>
-          <td><code>${esc(it.canonical_course_code)}</code></td>
+          <td>${renderCodeCell(it)}</td>
           <td><span class="badge bg-light text-dark border">${esc(it.share_type_label||it.share_type)}</span></td>
-          <td>${it.units||0}</td>
-          <td>${it.department_count||0}</td>
+          <td class="text-center">${renderUnitsCell(it)}</td>
+          <td title="${esc(it.department_count_label||'')}">${it.department_count||0}</td>
           <td>${active}</td>
           <td class="admin-col d-none text-nowrap">
             <button class="btn btn-sm btn-outline-primary btn-edit" data-id="${it.id}">تحرير</button>
             ${it.is_active ? `<button class="btn btn-sm btn-outline-warning btn-off" data-id="${it.id}">إيقاف</button>` : ''}
+            <button class="btn btn-sm btn-outline-danger btn-del" data-id="${it.id}" data-name="${esc(it.canonical_course_name)}">حذف</button>
           </td>`;
         tb.appendChild(tr);
       });
@@ -211,6 +312,7 @@
       }
       tb.querySelectorAll('.btn-edit').forEach(b => b.onclick = () => openEdit(parseInt(b.dataset.id,10)));
       tb.querySelectorAll('.btn-off').forEach(b => b.onclick = () => setActive(parseInt(b.dataset.id,10), false));
+      tb.querySelectorAll('.btn-del').forEach(b => b.onclick = () => deleteEntry(parseInt(b.dataset.id,10), b.dataset.name || ''));
     }
 
     async function load(){
@@ -236,12 +338,41 @@
       document.getElementById('fNotes').value = it ? (it.notes||'') : '';
       const dr = document.getElementById('deptRows');
       dr.innerHTML = '';
-      (it && it.departments ? it.departments : [{}]).forEach(d => dr.appendChild(renderDeptRow(d)));
+      const st = document.getElementById('fShareType').value;
+      const existing = (it && it.departments) ? it.departments.filter(d => d.is_active !== false) : [];
+      if (st === 'unified') {
+        const byId = {};
+        existing.forEach(d => { byId[d.department_id] = d; });
+        const canon = document.getElementById('fCode').value.trim();
+        DEPS.forEach(d => {
+          const prev = byId[d.id];
+          dr.appendChild(renderDeptRow(prev || {
+            department_id: d.id,
+            plan_course_code: canon,
+            plan_course_name_override: '',
+            units_override: null
+          }, { lockedDept: true }));
+        });
+      } else {
+        // multi_code / subset: الأقسام المرتبطة فقط (مع إمكانية الإضافة)
+        (existing.length ? existing : [{}]).forEach(d =>
+          dr.appendChild(renderDeptRow(d, { lockedDept: false }))
+        );
+      }
       toggleDeptSection();
+      if (!IS_ADMIN) {
+        document.getElementById('editCard').querySelectorAll('input,select,button').forEach(el => {
+          if (el.id === 'btnCancel') return;
+          if (el.tagName === 'BUTTON' && el.id !== 'btnCancel') el.disabled = true;
+          else if (el.id !== 'btnCancel') el.disabled = true;
+        });
+      }
     }
 
     async function saveEntry(){
+      if (!IS_ADMIN) return;
       const st = document.getElementById('fShareType').value;
+      if (st === 'unified') ensureAllSpecialtyRows();
       const payload = {
         id: document.getElementById('fId').value || undefined,
         share_type: st,
@@ -250,7 +381,7 @@
         units: parseInt(document.getElementById('fUnits').value, 10) || 0,
         requirement_scope: document.getElementById('fScope').value,
         notes: document.getElementById('fNotes').value.trim(),
-        departments: (st === 'unified') ? [] : collectDepartments()
+        departments: collectDepartments()
       };
       const { ok, data } = await apiPost('/college/catalog/shared_catalog/save', payload);
       if (ok) {
@@ -268,8 +399,30 @@
       await load();
     }
 
-    document.getElementById('fShareType').addEventListener('change', toggleDeptSection);
-    document.getElementById('btnAddDept').onclick = () => document.getElementById('deptRows').appendChild(renderDeptRow(null));
+    async function deleteEntry(id, name){
+      if (!IS_ADMIN) return;
+      if (!confirm('حذف «' + (name || id) + '» من سجل المقررات المشتركة؟\nالمقرر التشغيلي في مقررات القسم يبقى إن وُجد.')) return;
+      const { ok, data } = await apiPost('/college/catalog/shared_catalog/delete', { id, force: true });
+      showMsg(ok ? 'تم الحذف من السجل المشترك.' : esc(data.message || 'فشل الحذف'), ok ? 'text-success' : 'text-danger');
+      await load();
+    }
+
+    document.getElementById('fShareType').addEventListener('change', () => {
+      const st = document.getElementById('fShareType').value;
+      const dr = document.getElementById('deptRows');
+      if (st === 'unified') {
+        ensureAllSpecialtyRows();
+      } else {
+        const collected = collectDepartments();
+        dr.innerHTML = '';
+        (collected.length ? collected : [{}]).forEach(d =>
+          dr.appendChild(renderDeptRow(d, { lockedDept: false }))
+        );
+      }
+      toggleDeptSection();
+    });
+    document.getElementById('btnAddDept').onclick = () => document.getElementById('deptRows').appendChild(renderDeptRow(null, { lockedDept: false }));
+    document.getElementById('btnFillCanonical').onclick = fillCanonicalToAllDepts;
     document.getElementById('btnNew').onclick = () => openEdit(null);
     document.getElementById('btnSave').onclick = saveEntry;
     document.getElementById('btnCancel').onclick = () => document.getElementById('editCard').classList.add('d-none');

@@ -148,11 +148,115 @@ def test_general_hod_writes_general_not_shared_catalog(app, db_conn):
                 "old_course_name": shared_name,
                 "new_course_name": shared_name,
                 "course_code": f"ME{uid[:3]}",
+                "units": 4,
                 "code_only": True,
             },
         )
         assert r_code.status_code == 200, r_code.get_json()
-        assert (r_code.get_json() or {}).get("code_only") is True
+        body = r_code.get_json() or {}
+        assert body.get("code_only") is True
+        assert body.get("effective_units") == 4 or body.get("units_override") == 4
+        # منع تغيير الاسم
+        r_name = c.post(
+            "/courses/update",
+            json={
+                "old_course_name": shared_name,
+                "new_course_name": shared_name + "-X",
+                "course_code": f"ME{uid[:3]}",
+                "units": 4,
+                "code_only": True,
+            },
+        )
+        assert r_name.status_code == 403
+
+
+def test_general_scope_hides_shared_shows_general_only(app, db_conn):
+    """قسم الاتجاه العام: مقررات الاتجاه العام فقط — بلا المشتركة."""
+    uid = uuid.uuid4().hex[:8]
+    cur = db_conn.cursor()
+    gen_id = _ensure_general(cur)
+    ccode = f"SP{uid}"[:12].upper()
+    cur.execute(
+        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+        (ccode, "تخصص", "Spec"),
+    )
+    spec_id = int(cur.execute("SELECT id FROM departments WHERE code=?", (ccode,)).fetchone()[0])
+    gen_course = f"GenOnly-{uid}"
+    shared_name = f"SharedVis-{uid}"
+    cur.execute(
+        "INSERT INTO courses (course_name, course_code, units, owning_department_id) VALUES (?, ?, 3, ?)",
+        (gen_course, f"G{uid[:4]}", gen_id),
+    )
+    cur.execute(
+        "INSERT OR IGNORE INTO programs (code, name_ar, department_id, is_active) VALUES (?, ?, ?, 1)",
+        ("PROG_U1", "اتجاه عام", gen_id),
+    )
+    prog_id = int(cur.execute("SELECT id FROM programs WHERE code='PROG_U1'").fetchone()[0])
+    cur.execute(
+        """
+        INSERT INTO course_master (title_ar, default_units, assessment_type)
+        VALUES (?, 3, 'theoretical')
+        """,
+        (gen_course,),
+    )
+    cm_id = int(cur.execute("SELECT id FROM course_master WHERE title_ar=?", (gen_course,)).fetchone()[0])
+    try:
+        cur.execute(
+            "UPDATE courses SET course_master_id = ? WHERE course_name = ?",
+            (cm_id, gen_course),
+        )
+    except Exception:
+        pass
+    cur.execute(
+        """
+        INSERT INTO program_courses (program_id, course_master_id, course_code, requirement_scope, is_active)
+        VALUES (?, ?, ?, 'college_general', 1)
+        """,
+        (prog_id, cm_id, f"G{uid[:4]}"),
+    )
+    save_catalog_entry(
+        db_conn,
+        {
+            "catalog_key": f"gv_{uid}",
+            "share_type": "unified",
+            "canonical_course_name": shared_name,
+            "canonical_course_code": f"SH{uid[:3]}",
+            "units": 3,
+            "requirement_scope": "pre_track",
+        },
+    )
+    pw = cur.execute(
+        "SELECT password_hash FROM users WHERE username = 'admin-test' LIMIT 1"
+    ).fetchone()[0]
+    head_gen = f"hod_gv_{uid}"
+    head_spec = f"hod_sv_{uid}"
+    cur.execute(
+        "INSERT INTO users (username, password_hash, role, department_id) VALUES (?, ?, 'head_of_department', ?)",
+        (head_gen, pw, gen_id),
+    )
+    cur.execute(
+        "INSERT INTO users (username, password_hash, role, department_id) VALUES (?, ?, 'head_of_department', ?)",
+        (head_spec, pw, spec_id),
+    )
+    db_conn.commit()
+
+    from backend.core.department_scope_policy import course_in_actor_scope
+
+    assert course_in_actor_scope(db_conn, gen_course, head_gen) is True
+    assert course_in_actor_scope(db_conn, shared_name, head_gen) is False
+    assert course_in_actor_scope(db_conn, gen_course, head_spec) is True
+    assert course_in_actor_scope(db_conn, shared_name, head_spec) is True
+
+    with app.test_client() as c:
+        assert c.post("/auth/login", json={"username": head_gen, "password": "TestP@ssw0rd!"}).status_code == 200
+        names_gen = {x.get("course_name") for x in (c.get("/courses/list").get_json() or [])}
+        assert gen_course in names_gen
+        assert shared_name not in names_gen
+
+        assert c.post("/auth/login", json={"username": head_spec, "password": "TestP@ssw0rd!"}).status_code == 200
+        names_sp = {x.get("course_name") for x in (c.get("/courses/list").get_json() or [])}
+        assert gen_course in names_sp
+        assert shared_name in names_sp
 
 
 def test_specialty_hod_cannot_save_shared_catalog(app, db_conn):

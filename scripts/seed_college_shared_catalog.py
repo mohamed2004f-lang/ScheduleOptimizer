@@ -55,15 +55,8 @@ INITIAL_ENTRIES = [
         "requirement_scope": "pre_track",
         "department_codes": {"MECH": "ME 205"},
     },
-    {
-        "catalog_key": "engineering_survey",
-        "share_type": "multi_code",
-        "canonical_course_name": "قياسات هندسية",
-        "canonical_course_code": "ME 209",
-        "units": 3,
-        "requirement_scope": "pre_track",
-        "department_codes": {"MECH": "ME 209"},
-    },
+    # قياسات هندسية / كتابة تقارير / تحليلات عددية: مقررات قسم الميكانيكا فقط —
+    # لا تُدرج في سجل المشترك (تُدار من مقررات القسم).
     {
         "catalog_key": "tech_report_writing",
         "share_type": "multi_code",

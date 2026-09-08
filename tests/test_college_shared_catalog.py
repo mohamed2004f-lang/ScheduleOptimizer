@@ -98,6 +98,192 @@ class TestCollegeSharedCatalog:
         assert did == teach_id
         assert did != home_id
 
+    def test_multi_code_visible_only_to_linked_departments(self, app, db_conn):
+        """multi_code يظهر فقط للأقسام المرتبطة — ليس لكل التخصصات تلقائياً."""
+        uid = uuid.uuid4().hex[:8]
+        cur = db_conn.cursor()
+        cur.execute(
+            "INSERT OR IGNORE INTO departments (code, name_ar, name_en, is_active) "
+            "VALUES ('GENERAL', 'عام', 'Gen', 1)"
+        )
+        gen_id = int(cur.execute("SELECT id FROM departments WHERE code='GENERAL'").fetchone()[0])
+        mcode = f"MM{uid}"[:12].upper()
+        ccode = f"CC{uid}"[:12].upper()
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (mcode, "ميكانيك", "Mech"),
+        )
+        mech_id = int(cur.execute("SELECT id FROM departments WHERE code=?", (mcode,)).fetchone()[0])
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (ccode, "مدني", "Civ"),
+        )
+        civil_id = int(cur.execute("SELECT id FROM departments WHERE code=?", (ccode,)).fetchone()[0])
+        from backend.core.college_shared_catalog import list_catalog_entries, save_catalog_entry
+
+        name = f"SurveyOnly-{uid}"
+        save_catalog_entry(
+            db_conn,
+            {
+                "catalog_key": f"so_{uid}",
+                "share_type": "multi_code",
+                "canonical_course_name": name,
+                "canonical_course_code": "ME 209",
+                "units": 3,
+                "requirement_scope": "pre_track",
+                "departments": [
+                    {"department_id": mech_id, "plan_course_code": "ME 209", "units_override": 3},
+                ],
+            },
+        )
+        db_conn.commit()
+        hit = next(x for x in list_catalog_entries(db_conn) if x["canonical_course_name"] == name)
+        assert hit["department_count"] == 1
+        assert hit["linked_department_count"] == 1
+
+        pw = cur.execute(
+            "SELECT password_hash FROM users WHERE username = 'admin-test' LIMIT 1"
+        ).fetchone()[0]
+        head_m = f"hm_{uid}"
+        head_c = f"hc_{uid}"
+        cur.execute(
+            "INSERT INTO users (username, password_hash, role, department_id) VALUES (?, ?, 'head_of_department', ?)",
+            (head_m, pw, mech_id),
+        )
+        cur.execute(
+            "INSERT INTO users (username, password_hash, role, department_id) VALUES (?, ?, 'head_of_department', ?)",
+            (head_c, pw, civil_id),
+        )
+        db_conn.commit()
+        with app.test_client() as c:
+            assert c.post("/auth/login", json={"username": head_m, "password": "TestP@ssw0rd!"}).status_code == 200
+            names_m = {x.get("course_name") for x in (c.get("/courses/list").get_json() or [])}
+            assert name in names_m
+            assert c.post("/auth/login", json={"username": head_c, "password": "TestP@ssw0rd!"}).status_code == 200
+            names_c = {x.get("course_name") for x in (c.get("/courses/list").get_json() or [])}
+            assert name not in names_c
+
+        # تنظيف من السجل + ملكية الميكانيكا
+        from backend.core.college_shared_catalog import delete_catalog_entry
+
+        delete_catalog_entry(db_conn, int(hit["id"]), force=True)
+        cur.execute(
+            "UPDATE courses SET owning_department_id = ? WHERE course_name = ?",
+            (mech_id, name),
+        )
+        db_conn.commit()
+        assert int(cur.execute(
+            "SELECT owning_department_id FROM courses WHERE course_name=?", (name,)
+        ).fetchone()[0]) == mech_id
+        assert not any(
+            x.get("canonical_course_name") == name
+            for x in list_catalog_entries(db_conn, include_inactive=True)
+        )
+
+    def test_plan_variance_summary_in_list(self, db_conn):
+        uid = uuid.uuid4().hex[:8]
+        cur = db_conn.cursor()
+        cur.execute(
+            "INSERT OR IGNORE INTO departments (code, name_ar, name_en, is_active) "
+            "VALUES ('GENERAL', 'عام', 'Gen', 1)"
+        )
+        ids = []
+        for i, label in enumerate(("A", "B"), start=1):
+            code = f"V{i}{uid}"[:12].upper()
+            cur.execute(
+                "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+                (code, f"قسم{label}", f"Dept{label}"),
+            )
+            ids.append(int(cur.execute("SELECT id FROM departments WHERE code=?", (code,)).fetchone()[0]))
+        from backend.core.college_shared_catalog import list_catalog_entries, save_catalog_entry
+
+        name = f"VarSum-{uid}"
+        save_catalog_entry(
+            db_conn,
+            {
+                "catalog_key": f"vs_{uid}",
+                "share_type": "multi_code",
+                "canonical_course_name": name,
+                "canonical_course_code": f"SH{uid[:3]}",
+                "units": 3,
+                "requirement_scope": "pre_track",
+                "departments": [
+                    {"department_id": ids[0], "plan_course_code": "ME 201", "units_override": 3},
+                    {"department_id": ids[1], "plan_course_code": "CE 201", "units_override": 4},
+                ],
+            },
+        )
+        db_conn.commit()
+        hit = next(x for x in list_catalog_entries(db_conn) if x["canonical_course_name"] == name)
+        assert hit["codes_vary"] is True
+        assert hit["codes_summary_short"] == "رموز متعددة"
+        assert "ME 201" in hit["codes_summary"] and "CE 201" in hit["codes_summary"]
+        assert hit["units_vary"] is True
+        assert hit["units_summary"] == "3–4"
+
+    def test_unified_department_count_is_specialty_visibility(self, db_conn):
+        """عمود أقسام الظهور للموحّد = عدد التخصصات وليس صفوف الربط الناقصة."""
+        uid = uuid.uuid4().hex[:8]
+        cur = db_conn.cursor()
+        cur.execute(
+            "INSERT OR IGNORE INTO departments (code, name_ar, name_en, is_active) "
+            "VALUES ('GENERAL', 'عام', 'Gen', 1)"
+        )
+        for i, label in enumerate(("A", "B", "C", "D"), start=1):
+            code = f"D{i}{uid}"[:12].upper()
+            cur.execute(
+                "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+                (code, f"قسم{label}", f"Dept{label}"),
+            )
+        from backend.core.college_shared_catalog import (
+            ensure_college_shared_catalog_schema,
+            list_catalog_entries,
+            list_specialty_departments,
+            repair_college_wide_department_links,
+            save_catalog_entry,
+        )
+
+        ensure_college_shared_catalog_schema(db_conn)
+        specialty_n = len(list_specialty_departments(db_conn))
+        assert specialty_n >= 4
+        shared_name = f"CountU-{uid}"
+        save_catalog_entry(
+            db_conn,
+            {
+                "catalog_key": f"cu_{uid}",
+                "share_type": "unified",
+                "canonical_course_name": shared_name,
+                "canonical_course_code": f"GS{uid[:3]}",
+                "units": 3,
+                "requirement_scope": "pre_track",
+            },
+        )
+        # محاكاة ربط ناقص: احذف كل صفوف الأقسام عدا واحد
+        cid = cur.execute(
+            "SELECT id FROM college_shared_catalog WHERE canonical_course_name=?",
+            (shared_name,),
+        ).fetchone()[0]
+        keep = cur.execute(
+            "SELECT id FROM college_shared_catalog_depts WHERE catalog_id=? ORDER BY id LIMIT 1",
+            (int(cid),),
+        ).fetchone()[0]
+        cur.execute(
+            "DELETE FROM college_shared_catalog_depts WHERE catalog_id=? AND id<>?",
+            (int(cid), int(keep)),
+        )
+        db_conn.commit()
+        items = list_catalog_entries(db_conn)
+        hit = next(x for x in items if x["canonical_course_name"] == shared_name)
+        assert hit["linked_department_count"] == 1
+        assert hit["department_count"] == specialty_n
+        n = repair_college_wide_department_links(db_conn)
+        db_conn.commit()
+        assert n >= specialty_n - 1
+        items2 = list_catalog_entries(db_conn)
+        hit2 = next(x for x in items2 if x["canonical_course_name"] == shared_name)
+        assert hit2["linked_department_count"] == specialty_n
+        assert hit2["department_count"] == specialty_n
+
     def test_shared_catalog_api_save_unified(self, app, db_conn):
         uid = uuid.uuid4().hex[:8]
         cur = db_conn.cursor()

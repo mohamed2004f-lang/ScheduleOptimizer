@@ -86,6 +86,64 @@ class TestCoursesImportExcelDepartmentBinding:
             (f"Other-{uid}",),
         ).fetchone()[0] != int(dept_id)
 
+    def test_import_warns_existing_name_updates_and_continues(self, app, db_conn):
+        """اسم موجود → تنبيه + تحديث، ويُستكمل استيراد المقررات الجديدة."""
+        uid = uuid.uuid4().hex[:8]
+        code = f"WN{uid}".upper()[:12]
+        cur = db_conn.cursor()
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (code, "مدني", "Civil"),
+        )
+        dept_id = int(cur.execute("SELECT id FROM departments WHERE code = ?", (code,)).fetchone()[0])
+        existing = f"Exist-{uid}"
+        cur.execute(
+            "INSERT INTO courses (course_name, course_code, units, owning_department_id) VALUES (?, ?, ?, ?)",
+            (existing, f"OLD{uid[:4]}".upper(), 2, dept_id),
+        )
+        pw = cur.execute(
+            "SELECT password_hash FROM users WHERE username = 'admin-test' LIMIT 1"
+        ).fetchone()[0]
+        head_user = f"head_wn_{uid}"
+        cur.execute(
+            "INSERT INTO users (username, password_hash, role, department_id) VALUES (?, ?, 'head_of_department', ?)",
+            (head_user, pw, dept_id),
+        )
+        db_conn.commit()
+
+        fresh = f"Fresh-{uid}"
+        xls = _courses_excel_bytes(
+            [
+                {"course_name": existing, "course_code": f"NEW{uid[:4]}".upper(), "units": 4},
+                {"course_name": fresh, "course_code": f"FR{uid[:4]}".upper(), "units": 3},
+            ]
+        )
+        with app.test_client() as c:
+            assert c.post("/auth/login", json={"username": head_user, "password": "TestP@ssw0rd!"}).status_code == 200
+            imp = c.post(
+                "/courses/import/excel",
+                data={"file": (xls, "courses.xlsx")},
+                content_type="multipart/form-data",
+            )
+            assert imp.status_code == 200, imp.get_data(as_text=True)
+            body = imp.get_json() or {}
+            assert body.get("status") == "ok"
+            assert body.get("imported") == 2
+            assert body.get("created") == 1
+            assert body.get("updated") == 1
+            assert body.get("ignored_count") == 0
+            assert any(x.get("course_name") == existing for x in (body.get("updated_items") or []))
+
+        row = cur.execute(
+            "SELECT course_code, units FROM courses WHERE course_name = ?",
+            (existing,),
+        ).fetchone()
+        assert (row[0] if not hasattr(row, "keys") else row["course_code"]) == f"NEW{uid[:4]}".upper()
+        assert int(row[1] if not hasattr(row, "keys") else row["units"]) == 4
+        assert cur.execute(
+            "SELECT 1 FROM courses WHERE course_name = ?", (fresh,)
+        ).fetchone()
+
     def test_head_import_skips_existing_course_code_without_failing(self, app, db_conn):
         """رمز كلية موجود (مثل GS 201) يُتجاهل ولا يوقف استيراد مقررات القسم."""
         uid = uuid.uuid4().hex[:8]

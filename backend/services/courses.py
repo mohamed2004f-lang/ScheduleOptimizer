@@ -88,7 +88,10 @@ def _safe_weight(raw, fallback: float | None = None):
 
 def _annotate_courses_edit_meta(conn, courses: list) -> None:
     """وسم مقررات الاتجاه العام/المشترك وصلاحية التعديل لكل صف في قائمة المقررات."""
-    from backend.core.college_shared_catalog import get_department_plan_course_code
+    from backend.core.college_shared_catalog import (
+        get_department_plan_course_code,
+        get_department_plan_units,
+    )
     from backend.core.department_scope_policy import (
         course_code_editable_by_actor,
         course_is_college_general,
@@ -128,6 +131,7 @@ def _annotate_courses_edit_meta(conn, courses: list) -> None:
         else:
             kind, kind_ar = "department", "قسم"
         display_code = getattr(c, "course_code", None) or ""
+        display_units = getattr(c, "units", None)
         if is_shared and scope_dep is not None:
             try:
                 dept_code = get_department_plan_course_code(conn, name, int(scope_dep))
@@ -135,12 +139,21 @@ def _annotate_courses_edit_meta(conn, courses: list) -> None:
                     display_code = dept_code
             except Exception:
                 pass
+            try:
+                dept_units = get_department_plan_units(conn, name, int(scope_dep))
+                if dept_units is not None:
+                    display_units = dept_units
+            except Exception:
+                pass
         setattr(c, "can_edit", can_edit)
         setattr(c, "can_edit_code", can_edit_code)
         setattr(c, "course_kind", kind)
         setattr(c, "course_kind_ar", kind_ar)
         setattr(c, "display_code", display_code)
+        setattr(c, "display_units", display_units)
         setattr(c, "dept_plan_code", display_code if is_shared else "")
+        if is_shared and display_units is not None:
+            setattr(c, "units", display_units)
 
 
 @courses_bp.route("/list")
@@ -472,25 +485,37 @@ def update_course():
         full_ok = course_writable_by_actor(conn, old_name, _actor_username())
         code_ok = course_code_editable_by_actor(conn, old_name, _actor_username())
 
-        # رئيس تخصص على مقرر مشترك: تعديل رمز خطة القسم فقط
+        # رئيس تخصص على مقرر مشترك: رمز ووحدات خطة القسم — دون الاسم الرسمي
         if (code_only or not full_ok) and code_ok and not full_ok:
             if new_name != old_name:
                 return jsonify(
                     {
                         "status": "error",
-                        "message": "لا يمكن تغيير اسم المقرر المشترك من نطاق قسمك — عدّل الرمز فقط.",
+                        "message": "لا يمكن تغيير اسم المقرر المشترك من نطاق قسمك — عدّل الرمز/الوحدات فقط.",
                     }
                 ), 403
             if not new_code:
                 return jsonify({"status": "error", "message": "رمز المقرر مطلوب."}), 400
+            units_override = None
+            if new_units is not None and str(new_units).strip() != "":
+                try:
+                    units_override = int(new_units)
+                except (TypeError, ValueError):
+                    return jsonify({"status": "error", "message": "عدد الوحدات غير صالح."}), 400
+                if units_override < 0:
+                    return jsonify({"status": "error", "message": "عدد الوحدات يجب أن يكون >= 0."}), 400
             scope_dep = _effective_department_scope_id(conn)
             if scope_dep is None:
-                return jsonify({"status": "error", "message": "لا يوجد نطاق قسم لتحديث الرمز."}), 400
+                return jsonify({"status": "error", "message": "لا يوجد نطاق قسم لتحديث الخطة."}), 400
             try:
                 from backend.core.college_shared_catalog import set_department_plan_course_code
 
                 info = set_department_plan_course_code(
-                    conn, old_name, int(scope_dep), new_code
+                    conn,
+                    old_name,
+                    int(scope_dep),
+                    new_code,
+                    units=units_override,
                 )
                 conn.commit()
             except ValueError as e:
@@ -504,9 +529,11 @@ def update_course():
             return jsonify(
                 {
                     "status": "ok",
-                    "message": "تم حفظ رمز المقرر لقسمك (المقرر المشترك).",
+                    "message": "تم حفظ رمز/وحدات المقرر لخطة قسمك (المقرر المشترك).",
                     "code_only": True,
                     "plan_course_code": info.get("plan_course_code"),
+                    "units_override": info.get("units_override"),
+                    "effective_units": info.get("units"),
                     "canonical_course_code": info.get("canonical_course_code"),
                 }
             ), 200
@@ -1717,6 +1744,8 @@ def courses_import_excel():
             return jsonify({"status": "error", "message": "Columns required: course_name"}), 400
         rows = df.to_dict(orient="records")
         imported_names: list[str] = []
+        created: list[str] = []
+        updated: list[dict] = []
         ignored: list[dict] = []
         with get_connection() as conn:
             cur = conn.cursor()
@@ -1724,6 +1753,9 @@ def courses_import_excel():
             has_cat = "category" in cols
             has_owning = "owning_department_id" in cols
             dept_id = _effective_department_scope_id(conn)
+            from backend.core.department_scope_policy import course_writable_by_actor
+
+            actor = _actor_username()
             for r in rows:
                 cname = (r.get("course_name") or "").strip()
                 if not cname:
@@ -1756,6 +1788,28 @@ def courses_import_excel():
                                 "message": (
                                     f"الرمز {code} مستخدم مسبقاً للمقرر «{existing_name}» "
                                     "— لم يُنشأ صف جديد (مقرر كلية/موجود)."
+                                ),
+                            }
+                        )
+                        continue
+
+                name_hit = courses_repo.find_course_name_duplicate_ci(conn, cname)
+                name_exists = bool(name_hit)
+                if name_exists:
+                    # اتجاه عام / مشترك: لا يحدّثه رئيس تخصص — تنبيه وتجاوز
+                    is_locked = course_is_college_general(conn, cname) or course_is_college_shared_catalog(
+                        conn, cname, department_id=int(dept_id) if dept_id is not None else None
+                    )
+                    if is_locked and not course_writable_by_actor(conn, cname, actor):
+                        ignored.append(
+                            {
+                                "course_name": cname,
+                                "course_code": code,
+                                "existing_course_name": cname,
+                                "reason": "name_exists_college",
+                                "message": (
+                                    f"الاسم «{cname}» موجود ضمن الاتجاه العام/المشترك — "
+                                    "تُجاهل دون تعديل، ويُستكمل باقي الملف."
                                 ),
                             }
                         )
@@ -1827,6 +1881,20 @@ def courses_import_excel():
                         (cname, code, units),
                     )
                 imported_names.append(cname)
+                if name_exists:
+                    updated.append(
+                        {
+                            "course_name": cname,
+                            "course_code": code,
+                            "reason": "name_exists_updated",
+                            "message": (
+                                f"الاسم «{cname}» موجود مسبقاً — تم تحديث الرمز/الوحدات "
+                                "واستُكمل استيراد باقي المقررات."
+                            ),
+                        }
+                    )
+                else:
+                    created.append(cname)
             department_bound = 0
             if dept_id is not None and imported_names and has_owning:
                 department_bound = _bind_imported_courses_department(
@@ -1844,8 +1912,12 @@ def courses_import_excel():
         payload: dict = {
             "status": "ok",
             "imported": len(imported_names),
+            "created": len(created),
+            "updated": len(updated),
+            "updated_items": updated,
             "ignored": ignored,
             "ignored_count": len(ignored),
+            "warnings_count": len(updated) + len(ignored),
         }
         if dept_id is not None:
             payload["department_id"] = int(dept_id)
