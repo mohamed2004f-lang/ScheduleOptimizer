@@ -206,6 +206,8 @@ def list_courses():
             if has_final_weight:
                 sel += ", final_exam_weight"
             sel += " FROM courses WHERE COALESCE(course_name,'') <> ''"
+            if has_archived:
+                sel += " AND COALESCE(is_archived,0) = 0"
             q_params: tuple = ()
             if scope_dep is not None and has_owning_dept:
                 scope_sql, scope_params = courses_department_scope_filter(conn, int(scope_dep))
@@ -341,38 +343,53 @@ def add_course():
     with get_connection() as conn:
         cur = conn.cursor()
         # الجداول تُنشأ عند التشغيل عبر ensure_tables في database.py — لا CREATE في المسار
-        # منع تكرار الاسم (تطبيع بسيط lower/strip)
-        row = courses_repo.find_course_name_duplicate_ci(conn, cname)
-        if row:
-            from backend.core.department_scope_policy import (
-                course_is_college_general,
-                course_is_college_shared_catalog,
-            )
+        from backend.core.department_scope_policy import (
+            course_is_college_general,
+            course_is_college_shared_catalog,
+        )
 
-            if course_is_college_general(conn, cname, course_code=code) or course_is_college_shared_catalog(
-                conn, cname
-            ):
+        existing = courses_repo.find_course_name_row_ci(conn, cname)
+        existing_archived = False
+        if existing is not None:
+            try:
+                existing_archived = int(
+                    existing["is_archived"] if hasattr(existing, "keys") else existing[3] or 0
+                ) == 1
+            except Exception:
+                existing_archived = False
+            if not existing_archived:
+                if course_is_college_general(conn, cname, course_code=code) or course_is_college_shared_catalog(
+                    conn, cname
+                ):
+                    return jsonify(
+                        {
+                            "status": "error",
+                            "code": "COLLEGE_SHARED_COURSE",
+                            "message": (
+                                "هذا المقرر مُعرَّف في سجل المقررات المشتركة/الكلية — "
+                                "متاح لقسمك تلقائياً في القائمة والجدول والتسجيل. "
+                                "راجع «سجل المقررات المشتركة» أو حدّث الصفحة."
+                            ),
+                        }
+                    ), 409
                 return jsonify(
                     {
                         "status": "error",
-                        "code": "COLLEGE_SHARED_COURSE",
-                        "message": (
-                            "هذا المقرر مُعرَّف في سجل المقررات المشتركة/الكلية — "
-                            "متاح لقسمك تلقائياً في القائمة والجدول والتسجيل. "
-                            "راجع «سجل المقررات المشتركة» أو حدّث الصفحة."
-                        ),
+                        "message": "يوجد مقرر آخر بنفس الاسم. استخدم زر \"تحرير\" لتعديله.",
                     }
-                ), 409
-            return jsonify({"status": "error", "message": "يوجد مقرر آخر بنفس الاسم. استخدم زر \"تحرير\" لتعديله."}), 400
+                ), 400
 
-        # منع تكرار الرمز إذا تم إدخاله
+        # منع تكرار الرمز إذا تم إدخاله (يشمل المؤرشف بسبب فهرس الرمز الفريد)
         if code:
-            row = courses_repo.find_course_code_duplicate_ci(conn, code)
+            row = courses_repo.find_course_code_duplicate_ci(
+                conn, code, exclude_course_name=cname if existing_archived else None
+            )
             if row:
+                other = _course_row_name(row)
                 return jsonify(
                     {
                         "status": "error",
-                        "message": f"يوجد مقرر آخر بنفس الرمز ({row['course_name']}). الرجاء اختيار رمز مختلف.",
+                        "message": f"يوجد مقرر آخر بنفس الرمز ({other}). الرجاء اختيار رمز مختلف.",
                     }
                 ), 400
 
@@ -382,12 +399,70 @@ def add_course():
         except Exception:
             cols = []
         has_owning_dept = "owning_department_id" in cols
+        has_archived = "is_archived" in cols
         scope_dep = _effective_department_scope_id(conn)
         owning_id = (
             resolve_import_owning_department_id(conn, cname, scope_dep, course_code=code)
             if has_owning_dept
             else None
         )
+
+        if existing_archived:
+            # استعادة السجل المؤرشف بدل INSERT (الاسم مفتاح أساسي ولا يُحرَّر بالأرشفة)
+            sets = ["course_code = ?", "units = ?"]
+            params: list = [code, units]
+            if "category" in cols:
+                sets.append("category = ?")
+                params.append(category)
+            has_assessment_cols = all(
+                k in cols
+                for k in ("assessment_type", "coursework_weight", "midterm_weight", "final_exam_weight")
+            )
+            if has_assessment_cols:
+                sets.extend(
+                    [
+                        "assessment_type = ?",
+                        "coursework_weight = ?",
+                        "midterm_weight = ?",
+                        "final_exam_weight = ?",
+                    ]
+                )
+                params.extend(
+                    [assessment_type, coursework_weight, midterm_weight, final_exam_weight]
+                )
+            if has_owning_dept and owning_id is not None:
+                sets.append("owning_department_id = COALESCE(owning_department_id, ?)")
+                params.append(int(owning_id))
+            if has_archived:
+                sets.append("is_archived = 0")
+            params.append(cname)
+            cur.execute(
+                f"UPDATE courses SET {', '.join(sets)} WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
+                tuple(params),
+            )
+            try:
+                from backend.services.college_catalog import _link_operational_course_to_master
+
+                _link_operational_course_to_master(
+                    conn, cur, cname, int(owning_id) if owning_id is not None else None
+                )
+            except Exception:
+                pass
+            conn.commit()
+            try:
+                from backend.core.cache_setup import invalidate_list_prefix
+
+                invalidate_list_prefix("courses")
+            except Exception:
+                pass
+            return jsonify(
+                {
+                    "status": "ok",
+                    "restored": True,
+                    "message": "تم استعادة المقرر من الأرشيف وتحديث بياناته",
+                }
+            ), 200
+
         if "category" in cols:
             has_assessment_cols = all(k in cols for k in ("assessment_type", "coursework_weight", "midterm_weight", "final_exam_weight"))
             if has_assessment_cols:
@@ -1752,6 +1827,8 @@ def courses_import_excel():
             cols = fetch_table_columns(conn, "courses")
             has_cat = "category" in cols
             has_owning = "owning_department_id" in cols
+            has_archived = "is_archived" in cols
+            archive_clear_sql = ", is_archived = 0" if has_archived else ""
             dept_id = _effective_department_scope_id(conn)
             from backend.core.department_scope_policy import course_writable_by_actor
 
@@ -1771,7 +1848,9 @@ def courses_import_excel():
 
                 # رمز مستخدم لمقرر باسم آخر (مثل GS 201 للكلية) — تجاهل دون إيقاف الاستيراد
                 if code:
-                    code_hit = courses_repo.find_course_code_duplicate_ci(conn, code)
+                    code_hit = courses_repo.find_course_code_duplicate_ci(
+                        conn, code, exclude_course_name=cname
+                    )
                     existing_name = _course_row_name(code_hit)
                     if existing_name and existing_name.casefold() != cname.casefold():
                         reason = "course_code_exists"
@@ -1793,9 +1872,20 @@ def courses_import_excel():
                         )
                         continue
 
-                name_hit = courses_repo.find_course_name_duplicate_ci(conn, cname)
-                name_exists = bool(name_hit)
-                if name_exists:
+                name_row = courses_repo.find_course_name_row_ci(conn, cname)
+                name_exists = bool(name_row)
+                name_archived = False
+                if name_row is not None:
+                    try:
+                        name_archived = int(
+                            name_row["is_archived"]
+                            if hasattr(name_row, "keys")
+                            else name_row[3] or 0
+                        ) == 1
+                    except Exception:
+                        name_archived = False
+                # نشط فقط يمنع التحديث لقفل الكلية؛ المؤرشف يُستعاد عبر ON CONFLICT
+                if name_exists and not name_archived:
                     # اتجاه عام / مشترك: لا يحدّثه رئيس تخصص — تنبيه وتجاوز
                     is_locked = course_is_college_general(conn, cname) or course_is_college_shared_catalog(
                         conn, cname, department_id=int(dept_id) if dept_id is not None else None
@@ -1822,7 +1912,7 @@ def courses_import_excel():
                 )
                 if has_cat and has_owning and owning_id is not None:
                     cur.execute(
-                        """
+                        f"""
                         INSERT INTO courses (course_name, course_code, units, category, owning_department_id)
                         VALUES (?, ?, ?, ?, ?)
                         ON CONFLICT(course_name) DO UPDATE SET
@@ -1830,53 +1920,58 @@ def courses_import_excel():
                           units = excluded.units,
                           category = excluded.category,
                           owning_department_id = COALESCE(courses.owning_department_id, excluded.owning_department_id)
+                          {archive_clear_sql}
                         """,
                         (cname, code, units, category, int(owning_id)),
                     )
                 elif has_cat and has_owning:
                     cur.execute(
-                        """
+                        f"""
                         INSERT INTO courses (course_name, course_code, units, category, owning_department_id)
                         VALUES (?, ?, ?, ?, NULL)
                         ON CONFLICT(course_name) DO UPDATE SET
                           course_code = excluded.course_code,
                           units = excluded.units,
                           category = excluded.category
+                          {archive_clear_sql}
                         """,
                         (cname, code, units, category),
                     )
                 elif has_cat:
                     cur.execute(
-                        """
+                        f"""
                         INSERT INTO courses (course_name, course_code, units, category)
                         VALUES (?, ?, ?, ?)
                         ON CONFLICT(course_name) DO UPDATE SET
                           course_code = excluded.course_code,
                           units = excluded.units,
                           category = excluded.category
+                          {archive_clear_sql}
                         """,
                         (cname, code, units, category),
                     )
                 elif has_owning and owning_id is not None:
                     cur.execute(
-                        """
+                        f"""
                         INSERT INTO courses (course_name, course_code, units, owning_department_id)
                         VALUES (?, ?, ?, ?)
                         ON CONFLICT(course_name) DO UPDATE SET
                           course_code = excluded.course_code,
                           units = excluded.units,
                           owning_department_id = COALESCE(courses.owning_department_id, excluded.owning_department_id)
+                          {archive_clear_sql}
                         """,
                         (cname, code, units, int(owning_id)),
                     )
                 else:
                     cur.execute(
-                        """
+                        f"""
                         INSERT INTO courses (course_name, course_code, units)
                         VALUES (?, ?, ?)
                         ON CONFLICT(course_name) DO UPDATE SET
                           course_code = excluded.course_code,
                           units = excluded.units
+                          {archive_clear_sql}
                         """,
                         (cname, code, units),
                     )
@@ -1886,10 +1981,14 @@ def courses_import_excel():
                         {
                             "course_name": cname,
                             "course_code": code,
-                            "reason": "name_exists_updated",
+                            "reason": "name_exists_restored" if name_archived else "name_exists_updated",
                             "message": (
-                                f"الاسم «{cname}» موجود مسبقاً — تم تحديث الرمز/الوحدات "
-                                "واستُكمل استيراد باقي المقررات."
+                                f"الاسم «{cname}» كان مؤرشفاً — تم استعادته وتحديث الرمز/الوحدات."
+                                if name_archived
+                                else (
+                                    f"الاسم «{cname}» موجود مسبقاً — تم تحديث الرمز/الوحدات "
+                                    "واستُكمل استيراد باقي المقررات."
+                                )
                             ),
                         }
                     )
