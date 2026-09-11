@@ -12,6 +12,7 @@ from backend.database.backfills import (
     HOME_ASSIGNMENT_SECTION_ID,
     backfill_academic_pathway_defaults,
     backfill_instructor_cross_department_data,
+    ensure_schedule_id_identity,
 )
 from backend.database.connection import (
     close_pool,
@@ -94,6 +95,7 @@ __all__ = [
     "assert_schema_ready",
     "backfill_academic_pathway_defaults",
     "backfill_instructor_cross_department_data",
+    "ensure_schedule_id_identity",
     "close_pool",
     "conn_is_postgresql",
     "db_transaction",

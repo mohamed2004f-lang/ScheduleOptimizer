@@ -27,6 +27,8 @@ def test_role_profile_seed_instructor_student_hod():
     assert "nav_grade_drafts" in hod["permissions"]
     assert "can_manage_schedule_edit" in hod["permissions"]
     assert "nav_student_portal" not in hod["permissions"]
+    assert "can_add_department_users" not in hod["permissions"]
+    assert "can_manage_users" not in hod["permissions"]
 
 
 def test_resolve_capabilities_instructor_student_hod(app):
@@ -52,6 +54,10 @@ def test_resolve_capabilities_instructor_student_hod(app):
         assert hod.get("nav_grade_drafts") is True
         assert hod.get("can_manage_schedule_edit") is True
         assert not hod.get("nav_student_portal")
+        assert not hod.get("can_add_department_users")
+        assert not hod.get("nav_users_admin")
+        assert not hod.get("can_add_department_users")
+        assert not hod.get("nav_users_admin")
 
 
 def test_student_portal_path_allowlist():

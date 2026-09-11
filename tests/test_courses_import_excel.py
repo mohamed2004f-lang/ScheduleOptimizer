@@ -327,3 +327,80 @@ class TestCoursesImportExcelDepartmentBinding:
             scoped_ids = {x.get("student_id") for x in (scoped.get_json() or [])}
             assert s1 in scoped_ids
             assert s2 not in scoped_ids
+
+
+class TestCoursesImportCrossDepartmentShared:
+    def test_import_same_name_other_dept_promotes_multi_code(self, app, db_conn):
+        """اسم مملوك لتخصص آخر برمز مختلف → ترقية multi_code بدل استبدال الرمز."""
+        uid = uuid.uuid4().hex[:8]
+        cur = db_conn.cursor()
+        if cur.execute(
+            "SELECT id FROM departments WHERE UPPER(TRIM(code)) = 'GENERAL' LIMIT 1"
+        ).fetchone() is None:
+            cur.execute(
+                "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES ('GENERAL', 'عام', 'Gen', 1)"
+            )
+        mech_code = f"MH{uid}".upper()[:12]
+        civil_code = f"CV{uid}".upper()[:12]
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (mech_code, "ميكانيك", "Mech"),
+        )
+        mech_id = int(cur.execute("SELECT id FROM departments WHERE code = ?", (mech_code,)).fetchone()[0])
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (civil_code, "مدني", "Civil"),
+        )
+        civil_id = int(cur.execute("SELECT id FROM departments WHERE code = ?", (civil_code,)).fetchone()[0])
+        cname = f"Fluids-{uid}"
+        mech_plan = f"ME{uid[:4]}".upper()
+        civil_plan = f"CE{uid[:4]}".upper()
+        cur.execute(
+            "INSERT INTO courses (course_name, course_code, units, owning_department_id) VALUES (?, ?, ?, ?)",
+            (cname, mech_plan, 3, mech_id),
+        )
+        pw = cur.execute(
+            "SELECT password_hash FROM users WHERE username = 'admin-test' LIMIT 1"
+        ).fetchone()[0]
+        head_user = f"head_fl_{uid}"
+        cur.execute(
+            "INSERT INTO users (username, password_hash, role, department_id) VALUES (?, ?, 'head_of_department', ?)",
+            (head_user, pw, civil_id),
+        )
+        db_conn.commit()
+
+        xls = _courses_excel_bytes(
+            [{"course_name": cname, "course_code": civil_plan, "units": 4}]
+        )
+        with app.test_client() as c:
+            lg = c.post("/auth/login", json={"username": head_user, "password": "TestP@ssw0rd!"})
+            assert lg.status_code == 200
+            imp = c.post(
+                "/courses/import/excel",
+                data={"file": (xls, "courses.xlsx")},
+                content_type="multipart/form-data",
+            )
+            assert imp.status_code == 200, imp.get_data(as_text=True)
+            body = imp.get_json() or {}
+            assert body.get("status") == "ok", body
+            assert int(body.get("promoted_shared") or 0) >= 1, body
+            reasons = {x.get("reason") for x in (body.get("promoted_items") or [])}
+            assert "promoted_to_shared_multi_code" in reasons
+
+        from backend.core.college_shared_catalog import (
+            find_shared_catalog_id_by_course_name,
+            get_department_plan_course_code,
+        )
+
+        cid = find_shared_catalog_id_by_course_name(db_conn, cname)
+        assert cid is not None
+        assert get_department_plan_course_code(db_conn, cname, mech_id) == mech_plan
+        assert get_department_plan_course_code(db_conn, cname, civil_id) == civil_plan
+        # الرمز العام للمقرر لا يُستبدل برمز المدني
+        row = cur.execute(
+            "SELECT course_code, owning_department_id FROM courses WHERE course_name = ?",
+            (cname,),
+        ).fetchone()
+        assert row is not None
+        code_now = row[0] if not hasattr(row, "keys") else row["course_code"]
+        assert str(code_now).strip() == mech_plan

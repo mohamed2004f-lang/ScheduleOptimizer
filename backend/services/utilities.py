@@ -68,38 +68,95 @@ def ensure_tables():
     ensure_schema(DB_FILE)
 
 # -----------------------------
-# حالة نشر الجدول الدراسي (اعتماد الأدمن)
+# حالة نشر الجدول الدراسي (اعتماد الأدمن) — مربوطة بالفصل الحالي
 # -----------------------------
 SCHEDULE_PUBLISHED_KEY = "schedule_published_at"
+SCHEDULE_PUBLISHED_TERM_KEY = "schedule_published_term"
 SCHEDULE_UPDATED_KEY = "schedule_updated_at"
 
-def get_schedule_published_at(conn=None, db_file=DB_FILE):
-    """يرجع وقت آخر نشر للجدول (ISO نص) أو None إذا لم يُنشر بعد."""
+
+def _current_term_key_for_publish(conn) -> str | None:
+    """معرّف الفصل الحالي لربط حالة النشر، أو None إن تعذّر."""
+    try:
+        from backend.services.term_engine import current_term_match_context
+
+        ctx = current_term_match_context(conn) or {}
+        key = (ctx.get("term_key") or "").strip()
+        if key:
+            return key
+        # احتياطي: تسمية تشغيلية إن لم يُبنَ term_key
+        label = (ctx.get("ops_label") or ctx.get("raw_label") or "").strip()
+        return label or None
+    except Exception:
+        return None
+
+
+def get_schedule_published_term(conn=None, db_file=DB_FILE) -> str | None:
     def _get(c):
         cur = c.cursor()
-        cur.execute("SELECT value FROM system_settings WHERE key = ?", (SCHEDULE_PUBLISHED_KEY,))
+        cur.execute("SELECT value FROM system_settings WHERE key = ?", (SCHEDULE_PUBLISHED_TERM_KEY,))
         row = cur.fetchone()
-        return row[0] if row and row[0] else None
+        return (row[0] if row and row[0] else None)
+
     if conn is not None:
         return _get(conn)
     with get_connection(db_file) as c:
         return _get(c)
 
+
+def get_schedule_published_at(conn=None, db_file=DB_FILE, *, for_current_term: bool = True):
+    """يرجع وقت آخر نشر للجدول (ISO نص) أو None إذا لم يُنشر بعد.
+
+    افتراضياً: يُعتبر النشر صالحاً فقط إن طابق الفصل الحالي
+    (يمنع بقاء ختم نشر فصل سابق بعد تبديل الفصل).
+    """
+    def _get(c):
+        cur = c.cursor()
+        cur.execute("SELECT value FROM system_settings WHERE key = ?", (SCHEDULE_PUBLISHED_KEY,))
+        row = cur.fetchone()
+        raw = row[0] if row and row[0] else None
+        if not raw or not for_current_term:
+            return raw
+        cur_term = _current_term_key_for_publish(c)
+        if not cur_term:
+            return raw
+        pub_term = get_schedule_published_term(c)
+        # بدون term محفوظ (بيانات قديمة): اعتبره نشراً قديماً غير صالح للفصل الحالي
+        if not pub_term or str(pub_term).strip() != str(cur_term).strip():
+            return None
+        return raw
+
+    if conn is not None:
+        return _get(conn)
+    with get_connection(db_file) as c:
+        return _get(c)
+
+
 def set_schedule_published_at(conn=None, db_file=DB_FILE):
-    """يضبط وقت نشر الجدول إلى الآن. يرجع الوقت المضبوط (ISO)."""
+    """يضبط وقت نشر الجدول إلى الآن ويربطه بالفصل الحالي. يرجع الوقت المضبوط (ISO)."""
     from datetime import datetime
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
     def _set(c):
         cur = c.cursor()
+        term_key = _current_term_key_for_publish(c) or ""
         cur.execute(
             """
             INSERT INTO system_settings (key, value) VALUES (?, ?)
             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
             """,
-            (SCHEDULE_PUBLISHED_KEY, now)
+            (SCHEDULE_PUBLISHED_KEY, now),
+        )
+        cur.execute(
+            """
+            INSERT INTO system_settings (key, value) VALUES (?, ?)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """,
+            (SCHEDULE_PUBLISHED_TERM_KEY, term_key),
         )
         c.commit()
         return now
+
     if conn is not None:
         return _set(conn)
     with get_connection(db_file) as c:
@@ -111,7 +168,9 @@ def clear_schedule_published_at(conn=None, db_file=DB_FILE):
     def _clear(c):
         cur = c.cursor()
         cur.execute("DELETE FROM system_settings WHERE key = ?", (SCHEDULE_PUBLISHED_KEY,))
+        cur.execute("DELETE FROM system_settings WHERE key = ?", (SCHEDULE_PUBLISHED_TERM_KEY,))
         c.commit()
+
     if conn is not None:
         return _clear(conn)
     with get_connection(db_file) as c:

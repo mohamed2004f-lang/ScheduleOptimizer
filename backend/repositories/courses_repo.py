@@ -19,18 +19,25 @@ def find_course_name_row_ci(conn, course_name: str) -> Optional[Any]:
     if not cname:
         return None
     cur = conn.cursor()
-    if _has_archived_column(conn):
-        return cur.execute(
-            """
-            SELECT course_name, course_code, units, COALESCE(is_archived, 0) AS is_archived
-            FROM courses
-            WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))
-            """,
-            (cname,),
-        ).fetchone()
+    archived_expr = (
+        "COALESCE(is_archived, 0) AS is_archived"
+        if _has_archived_column(conn)
+        else "0 AS is_archived"
+    )
+    try:
+        from backend.database.database import fetch_table_columns
+
+        cols = fetch_table_columns(conn, "courses")
+    except Exception:
+        cols = []
+    owning_expr = (
+        "owning_department_id"
+        if "owning_department_id" in cols
+        else "NULL AS owning_department_id"
+    )
     return cur.execute(
-        """
-        SELECT course_name, course_code, units, 0 AS is_archived
+        f"""
+        SELECT course_name, course_code, units, {archived_expr}, {owning_expr}
         FROM courses
         WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))
         """,

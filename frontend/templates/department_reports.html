@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>تقارير القسم</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .dept-report-card {
+      height: 100%;
+      border: 1px solid rgba(0,0,0,.08);
+      border-radius: .5rem;
+      transition: border-color .15s ease, box-shadow .15s ease;
+    }
+    .dept-report-card:hover {
+      border-color: rgba(13,110,253,.35);
+      box-shadow: 0 .25rem .75rem rgba(0,0,0,.06);
+    }
+    .dept-report-card .card-body {
+      display: flex;
+      flex-direction: column;
+      gap: .5rem;
+    }
+    .dept-report-card .card-text {
+      flex: 1;
+      font-size: .9rem;
+      color: var(--bs-secondary-color, #6c757d);
+    }
+    .dept-report-section + .dept-report-section {
+      margin-top: 1.5rem;
+    }
+  </style>
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100">
+    <div class="page-header mb-3">
+      <div>
+        <h1 class="page-title">تقارير القسم</h1>
+        <p class="page-subtitle mb-0">
+          قراءة وتحليل على مستوى القسم لاتخاذ القرار — منفصلة عن تشغيل السجل الأكاديمي (الكشوف والمسودات والاعتماد).
+        </p>
+      </div>
+    </div>
+
+    <div id="msgBox" class="mb-3"></div>
+    <div id="sectionsWrap"></div>
+  </main>
+
+  <script src="/static/js/common.js"></script>
+  <script>
+    const REPORT_SECTIONS = [
+      {
+        title: 'متابعة الطلبة',
+        items: [
+          {
+            cap: 'nav_performance_report',
+            href: '/performance_report',
+            title: 'تقرير الأداء',
+            blurb: 'الإنذارات الأكاديمية، المعدلات، والوحدات المنجزة لكل طالب.',
+          },
+          {
+            cap: 'nav_failed_courses_report',
+            href: '/failed_courses_report_page',
+            title: 'مقررات الرسوب',
+            blurb: 'من رسب في مقررات معيّنة ومتابعة حالات الرسوب.',
+          },
+          {
+            cap: 'nav_not_registered_courses_report',
+            href: '/not_registered_courses_report_page',
+            title: 'المقررات غير المسجّل بها',
+            blurb: 'مقررات كان يُتوقَّع تسجيلها ولم تُسجَّل.',
+          },
+          {
+            cap: 'nav_uncompleted_courses_report',
+            href: '/uncompleted_courses_report_page',
+            title: 'المقررات غير المنجزة',
+            blurb: 'ما تبقّى على الطالب حسب الخطة (حسب طالب).',
+          },
+        ],
+      },
+      {
+        title: 'التسجيل والعرض',
+        items: [
+          {
+            cap: 'nav_registration_changes_report',
+            href: '/registration_changes_report_page',
+            title: 'الإضافة والإسقاط',
+            blurb: 'حركة الإضافة والإسقاط خلال الفصل.',
+          },
+          {
+            cap: 'nav_electives_report',
+            href: '/electives_report_page',
+            title: 'المقررات الاختيارية',
+            blurb: 'طلبة تجاوزوا عتبة الوحدات دون إكمال الاختيارية المطلوبة.',
+          },
+          {
+            cap: 'nav_course_registration_report',
+            href: '/course_registration_report_page',
+            title: 'أعداد التسجيل بالمقررات',
+            blurb: 'أعداد الطلبة الفعلية لكل مقرر من التسجيلات.',
+          },
+        ],
+      },
+      {
+        title: 'جودة البيانات والتحليل',
+        items: [
+          {
+            cap: 'nav_grade_course_mapping_audit',
+            href: '/grade_course_mapping_audit_page',
+            title: 'تدقيق ترميز المقررات',
+            blurb: 'كشف تعارضات أو أخطاء في ربط الدرجات بترميز المقررات.',
+          },
+          {
+            cap: 'nav_analytics_report',
+            href: '/analytics',
+            title: 'التحليلات الأكاديمية',
+            blurb: 'لوحة مؤشرات وتجميع أداء على مستوى القسم/الكلية.',
+          },
+        ],
+      },
+    ];
+
+    function setMsg(kind, text) {
+      const el = document.getElementById('msgBox');
+      el.innerHTML = text ? `<div class="alert alert-${kind} mb-0">${text}</div>` : '';
+    }
+
+    function canShow(caps, capKey, fallbackStaff) {
+      if (caps && caps.v >= 1) return !!caps[capKey];
+      return !!fallbackStaff;
+    }
+
+    function renderSections(caps, fallbackStaff) {
+      const wrap = document.getElementById('sectionsWrap');
+      let html = '';
+      let total = 0;
+
+      REPORT_SECTIONS.forEach(function (section) {
+        const visible = section.items.filter(function (item) {
+          return canShow(caps, item.cap, fallbackStaff);
+        });
+        if (!visible.length) return;
+        total += visible.length;
+        html += `<section class="dept-report-section">
+          <h2 class="h5 mb-3">${section.title}</h2>
+          <div class="row g-3">`;
+        visible.forEach(function (item) {
+          html += `<div class="col-md-6 col-lg-4">
+            <div class="card dept-report-card">
+              <div class="card-body">
+                <h3 class="h6 mb-0">${item.title}</h3>
+                <p class="card-text mb-0">${item.blurb}</p>
+                <a class="btn btn-sm btn-outline-primary align-self-start" href="${item.href}">فتح التقرير</a>
+              </div>
+            </div>
+          </div>`;
+        });
+        html += `</div></section>`;
+      });
+
+      if (!total) {
+        setMsg('warning', 'لا توجد تقارير متاحة لحسابك الحالي. راجع صلاحيات ملف الدور إن لزم.');
+        wrap.innerHTML = '';
+        return;
+      }
+      setMsg('', '');
+      wrap.innerHTML = html;
+    }
+
+    (async function init() {
+      try {
+        const auth = await apiGet('/auth/check');
+        const caps = (auth && auth.capabilities) || null;
+        const role = (auth && (auth.user_role || auth.role)) || '';
+        const staffFallback = ['admin', 'admin_main', 'system_admin', 'college_dean', 'academic_vice_dean', 'head_of_department', 'staff'].indexOf(role) >= 0;
+        const hubOk = canShow(caps, 'nav_department_reports', staffFallback)
+          || canShow(caps, 'nav_academic_reports_section', staffFallback)
+          || REPORT_SECTIONS.some(function (s) {
+            return s.items.some(function (it) { return canShow(caps, it.cap, staffFallback); });
+          });
+        if (!hubOk) {
+          setMsg('danger', 'غير مصرح لك بعرض تقارير القسم.');
+          return;
+        }
+        renderSections(caps, staffFallback);
+      } catch (e) {
+        setMsg('danger', 'تعذّر تحميل الصلاحيات.');
+      }
+    })();
+  </script>
+  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+</body>
+</html>

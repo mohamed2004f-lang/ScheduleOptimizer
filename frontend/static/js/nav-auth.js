@@ -49,7 +49,7 @@
 
     function enforceStudentNavShell() {
       const hideIds = [
-        'navDashboardWrap', 'navStudentAffairsWrap', 'navAcademicRecordsMenuWrap',
+        'navDashboardWrap', 'navStudentAffairsWrap', 'navAcademicRecordsMenuWrap', 'navDeptReportsMenuWrap',
         'navPlanningMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
         'navAdminSettingsWrap', 'navQualityAccreditationWrap', 'navArchivesMenuWrap', 'navStaffCompactMoreWrap',
         'navDensityToggleWrap', 'navMyCoursesWrap', 'navInstructorMoreWrap', 'navInstructorGradeDraftsWrap',
@@ -72,10 +72,13 @@
     function enforceInstructorNavShell() {
       hideStudentNavShell();
       const hideIds = [
-        'navDashboardWrap', 'navStudentAffairsWrap', 'navAcademicRecordsMenuWrap',
+        'navDashboardWrap', 'navStudentAffairsWrap', 'navAcademicRecordsMenuWrap', 'navDeptReportsMenuWrap',
         'navPlanningMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
         'navAdminSettingsWrap', 'navQualityAccreditationWrap', 'navStaffCompactMoreWrap',
-        'navDensityToggleWrap', 'navSupervisorPortalWrap', 'navSupervisorSurveysWrap', 'navSupervisorMoreWrap',
+        'navDensityToggleWrap', 'navSupervisorPortalWrap', 'navSupervisorSurveysWrap',
+        'navSupCollegeStoryWrap', 'navSupQualityReportWrap', 'navSupTranscriptWrap',
+        'navSupPerformanceWrap', 'navSupSummaryPdfWrap', 'navSupSurveysFullWrap',
+        'navSupervisorMoreWrap',
         'navHodCourseDeliveryWrap', 'navInstructorMoreWrap',
       ];
       hideIds.forEach(id => {
@@ -104,7 +107,7 @@
       hideStudentNavShell();
       hideInstructorFlatNav();
       const hideIds = [
-        'navDashboardWrap', 'navStudentAffairsWrap', 'navAcademicRecordsMenuWrap',
+        'navDashboardWrap', 'navStudentAffairsWrap', 'navAcademicRecordsMenuWrap', 'navDeptReportsMenuWrap',
         'navPlanningMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
         'navAdminSettingsWrap', 'navQualityAccreditationWrap', 'navArchivesMenuWrap', 'navStaffCompactMoreWrap',
         'navDensityToggleWrap', 'navMyCoursesWrap', 'navInstructorMoreWrap', 'navInstructorGradeDraftsWrap',
@@ -114,7 +117,12 @@
         const el = document.getElementById(id);
         if (el) { el.style.display = 'none'; el.classList.add('d-none'); }
       });
-      ['navSupervisorPortalWrap', 'navSupervisorSurveysWrap', 'navSupervisorMoreWrap'].forEach(id => {
+      const SUPERVISOR_FLAT_WRAP_IDS = [
+        'navSupervisorPortalWrap', 'navSupervisorSurveysWrap',
+        'navSupCollegeStoryWrap', 'navSupQualityReportWrap', 'navSupTranscriptWrap',
+        'navSupPerformanceWrap', 'navSupSummaryPdfWrap', 'navSupSurveysFullWrap',
+      ];
+      SUPERVISOR_FLAT_WRAP_IDS.forEach(id => {
         const el = document.getElementById(id);
         if (el) { el.style.display = ''; el.classList.remove('d-none'); }
       });
@@ -306,9 +314,16 @@
       const wrapSupPortal = document.getElementById('navSupervisorPortalWrap');
       if (wrapSupPortal) wrapSupPortal.style.display = showSupervisorPortal ? '' : 'none';
       const wrapSupSurveys = document.getElementById('navSupervisorSurveysWrap');
-      const wrapSupMore = document.getElementById('navSupervisorMoreWrap');
       if (wrapSupSurveys) wrapSupSurveys.style.display = showSupervisorPortalMenu ? '' : 'none';
-      if (wrapSupMore) wrapSupMore.style.display = showSupervisorPortalMenu ? '' : 'none';
+      [
+        'navSupCollegeStoryWrap', 'navSupQualityReportWrap', 'navSupTranscriptWrap',
+        'navSupPerformanceWrap', 'navSupSummaryPdfWrap', 'navSupSurveysFullWrap',
+      ].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = showSupervisorPortalMenu ? '' : 'none';
+      });
+      const wrapSupMore = document.getElementById('navSupervisorMoreWrap');
+      if (wrapSupMore) { wrapSupMore.style.display = 'none'; wrapSupMore.classList.add('d-none'); }
       const wrapStudentAffairs = document.getElementById('navStudentAffairsWrap');
       if (wrapStudentAffairs) wrapStudentAffairs.style.display = showStudentAffairsMenu ? '' : 'none';
       let showStudentPortal = false, showStudentHubMore = false;
@@ -408,7 +423,7 @@
         const elHeadPolicy2 = document.getElementById('navDepartmentPolicyHead');
         const elMainPolicy2 = document.getElementById('navDepartmentPolicyApprovals');
         if (hodHeadModeSettings) {
-          if (elUsers) elUsers.style.display = 'none';
+          if (elUsers) elUsers.style.display = navUsers ? '' : 'none';
           if (elRules) elRules.style.display = 'none';
           if (elProjectStatus) elProjectStatus.style.display = 'none';
           if (elAdminBackup) elAdminBackup.style.display = 'none';
@@ -489,10 +504,10 @@
       const showUncompletedReport = (caps && caps.v >= 1) ? !!caps.nav_uncompleted_courses_report : staffReportsFallback;
       const showGradeAuditReport = (caps && caps.v >= 1) ? !!caps.nav_grade_course_mapping_audit : staffReportsFallback;
       const showAnalyticsReport = (caps && caps.v >= 1) ? !!caps.nav_analytics_report : staffReportsFallback;
-      const showDeptReportsSection = (caps && caps.v >= 1)
-        ? !!caps.nav_academic_reports_section
+      const showDeptReportsHub = (caps && caps.v >= 1)
+        ? !!(caps.nav_department_reports || caps.nav_academic_reports_section)
         : staffReportsFallback;
-      function applyAcademicReportNavVisibility() {
+      function applyDepartmentReportNavVisibility() {
         const reportMap = [
           ['navPerformance', showPerfReport],
           ['navElectivesReport', showElectivesReport],
@@ -509,12 +524,26 @@
           if (el) el.style.display = show ? '' : 'none';
         });
         const anyReport = reportMap.some(function (pair) { return pair[1]; });
-        const header = document.getElementById('navDeptReportsHeader');
-        const gradesDivider = document.getElementById('navAcademicRecordsGradesDivider');
-        if (header) header.style.display = (showDeptReportsSection && anyReport) ? '' : 'none';
-        if (gradesDivider) gradesDivider.style.display = anyReport ? '' : 'none';
+        const showMenu = !inSupervisorPortal && !useInstructorMore && !isStudentUi
+          && (showDeptReportsHub || anyReport);
+        const wrapDept = document.getElementById('navDeptReportsMenuWrap');
+        if (wrapDept) {
+          if (showMenu) {
+            wrapDept.style.removeProperty('display');
+            wrapDept.classList.remove('d-none');
+          } else {
+            wrapDept.style.display = 'none';
+            wrapDept.classList.add('d-none');
+          }
+        }
+        const hub = document.getElementById('navDeptReportsHub');
+        if (hub) hub.style.display = showMenu ? '' : 'none';
+        const hubDiv = document.getElementById('navDeptReportsHubDivider');
+        if (hubDiv) hubDiv.style.display = (showMenu && anyReport) ? '' : 'none';
+        const analyticsDiv = document.getElementById('navDeptReportsAnalyticsDivider');
+        if (analyticsDiv) analyticsDiv.style.display = (showMenu && showAnalyticsReport) ? '' : 'none';
       }
-      applyAcademicReportNavVisibility();
+      applyDepartmentReportNavVisibility();
       const elScheduleVersions = document.getElementById('navScheduleVersions');
       if (elScheduleVersions) elScheduleVersions.style.display = showScheduleVersions ? '' : 'none';
       const elExamScheduleVersions = document.getElementById('navExamScheduleVersions');
@@ -533,10 +562,6 @@
       const hodHeadModeNav = role === 'head_of_department'
         && (activeModeNav === 'head' || activeModeNav === 'hod' || activeModeNav === 'department_head' || activeModeNav === '');
       const showHodCourseDelivery = hodHeadModeNav;
-      const elHodCourseDelivery = document.getElementById('navHodCourseDelivery');
-      if (elHodCourseDelivery) elHodCourseDelivery.style.display = showHodCourseDelivery ? '' : 'none';
-      const elHodCoursePages = document.getElementById('navHodCoursePages');
-      if (elHodCoursePages) elHodCoursePages.style.display = showHodCourseDelivery ? '' : 'none';
       const elHodCourseDeliveryFaculty = document.getElementById('navHodCourseDeliveryFaculty');
       if (elHodCourseDeliveryFaculty) elHodCourseDeliveryFaculty.style.display = showHodCourseDelivery ? '' : 'none';
       const elHodCoursePagesFaculty = document.getElementById('navHodCoursePagesFaculty');
@@ -683,7 +708,7 @@
         ];
         if (useInstructorMore) {
           hideIds.push(
-            'navStudentAffairsWrap', 'navPlanningMenuWrap', 'navAcademicRecordsMenuWrap',
+            'navStudentAffairsWrap', 'navPlanningMenuWrap', 'navAcademicRecordsMenuWrap', 'navDeptReportsMenuWrap',
             'navStudentPortalWrap', 'navStudentRegistrationsWrap', 'navStudentMoreWrap',
           );
         }
@@ -777,7 +802,7 @@
       }
       applyInstructorConditionalExtras();
       if (useInstructorMore) {
-        ['navPlanningMenuWrap', 'navAcademicRecordsMenuWrap', 'navStudentAffairsWrap'].forEach(id => {
+        ['navPlanningMenuWrap', 'navAcademicRecordsMenuWrap', 'navDeptReportsMenuWrap', 'navStudentAffairsWrap'].forEach(id => {
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
         });
@@ -811,7 +836,11 @@
           wrapQuality.style.display = 'none';
         }
         if (showSupervisorPortalMenu || supervisorSlimNav) {
-          ['navSupervisorPortalWrap', 'navSupervisorSurveysWrap', 'navSupervisorMoreWrap'].forEach(id => {
+          [
+            'navSupervisorPortalWrap', 'navSupervisorSurveysWrap',
+            'navSupCollegeStoryWrap', 'navSupQualityReportWrap', 'navSupTranscriptWrap',
+            'navSupPerformanceWrap', 'navSupSummaryPdfWrap', 'navSupSurveysFullWrap',
+          ].forEach(id => {
             const el = document.getElementById(id);
             if (el) { el.style.removeProperty('display'); el.classList.remove('d-none'); }
           });
@@ -838,11 +867,17 @@
           wrapAR.style.display = 'none';
           wrapAR.classList.add('d-none');
         }
+        const wrapDeptSup = document.getElementById('navDeptReportsMenuWrap');
+        if (wrapDeptSup) {
+          wrapDeptSup.style.display = 'none';
+          wrapDeptSup.classList.add('d-none');
+        }
         [
-          'navGradeDrafts', 'navHodCourseDelivery', 'navElectivesReport',
+          'navGradeDrafts', 'navElectivesReport',
           'navRegistrationChangesReport', 'navFailedCoursesReport',
           'navNotRegisteredCoursesReport', 'navUncompletedCoursesReport',
           'navGradeCourseAudit', 'navCourseRegistrationReport', 'navAnalytics',
+          'navDeptReportsHub',
         ].forEach(id => {
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
@@ -850,7 +885,7 @@
         const elTranscriptSup = document.getElementById('navTranscript');
         if (elTranscriptSup) elTranscriptSup.style.display = showTranscriptNav ? '' : 'none';
         const elPerfSup = document.getElementById('navPerformance');
-        if (elPerfSup) elPerfSup.style.display = '';
+        if (elPerfSup) elPerfSup.style.display = 'none';
       }
       if (isStaffOpsNav && !useInstructorMore && !supervisorSlimNav && !inSupervisorPortal) {
         [
@@ -1274,6 +1309,7 @@
         skipAutoShow.add('navAdminSettingsWrap');
         skipAutoShow.add('navStudentMoreWrap');
         skipAutoShow.add('navAcademicRecordsMenuWrap');
+        skipAutoShow.add('navDeptReportsMenuWrap');
         skipAutoShow.add('navPlanningMenuWrap');
         skipAutoShow.add('navQualityAccreditationWrap');
         skipAutoShow.add('navArchivesMenuWrap');
@@ -1281,6 +1317,7 @@
       if (useInstructorMore) {
         skipAutoShow.add('navStudentAffairsWrap');
         skipAutoShow.add('navAcademicRecordsMenuWrap');
+        skipAutoShow.add('navDeptReportsMenuWrap');
         skipAutoShow.add('navPlanningMenuWrap');
         skipAutoShow.add('navCatalogWrap');
         skipAutoShow.add('navFacultySupervisionWrap');
@@ -1293,6 +1330,7 @@
       if (supervisorSlimNav || inSupervisorPortal) {
         skipAutoShow.add('navStudentAffairsWrap');
         skipAutoShow.add('navAcademicRecordsMenuWrap');
+        skipAutoShow.add('navDeptReportsMenuWrap');
         skipAutoShow.add('navPlanningMenuWrap');
         skipAutoShow.add('navCatalogWrap');
         skipAutoShow.add('navFacultySupervisionWrap');
@@ -1345,29 +1383,34 @@
       const STAFF_NAV_SECONDARY_BY_ROLE = {
         admin_main: [
           { wrapId: 'navAcademicRecordsMenuWrap', header: 'السجل الأكاديمي' },
+          { wrapId: 'navDeptReportsMenuWrap', header: 'تقارير القسم' },
           { wrapId: 'navCatalogWrap', header: 'المقررات' },
           { wrapId: 'navFacultySupervisionWrap', header: 'الأساتذة والإشراف' },
           { wrapId: 'navAdminSettingsWrap', header: 'الإدارة والإعدادات' },
         ],
         head_of_department: [
           { wrapId: 'navAcademicRecordsMenuWrap', header: 'السجل الأكاديمي' },
+          { wrapId: 'navDeptReportsMenuWrap', header: 'تقارير القسم' },
           { wrapId: 'navCatalogWrap', header: 'المقررات' },
           { wrapId: 'navFacultySupervisionWrap', header: 'الأساتذة والإشراف' },
           { wrapId: 'navAdminSettingsWrap', header: 'إعدادات القسم' },
         ],
         college_dean: [
           { wrapId: 'navAcademicRecordsMenuWrap', header: 'السجل الأكاديمي' },
+          { wrapId: 'navDeptReportsMenuWrap', header: 'تقارير القسم' },
           { wrapId: 'navCatalogWrap', header: 'المقررات' },
           { wrapId: 'navFacultySupervisionWrap', header: 'الأساتذة والإشراف' },
           { wrapId: 'navAdminSettingsWrap', header: 'قيادة الكلية' },
         ],
         academic_vice_dean: [
           { wrapId: 'navAcademicRecordsMenuWrap', header: 'السجل الأكاديمي' },
+          { wrapId: 'navDeptReportsMenuWrap', header: 'تقارير القسم' },
           { wrapId: 'navCatalogWrap', header: 'المقررات' },
         ],
       };
       const STAFF_NAV_SECONDARY_DEFAULT = [
         { wrapId: 'navAcademicRecordsMenuWrap', header: 'السجل الأكاديمي' },
+        { wrapId: 'navDeptReportsMenuWrap', header: 'تقارير القسم' },
         { wrapId: 'navCatalogWrap', header: 'المقررات' },
         { wrapId: 'navFacultySupervisionWrap', header: 'الأساتذة والإشراف' },
         { wrapId: 'navQualityAccreditationWrap', header: 'ضمان الجودة والاعتماد' },
@@ -1377,22 +1420,22 @@
       const EXPANDED_NAV_ORDER = {
         admin_main: [
           'navDashboardWrap', 'navStudentAffairsWrap', 'navPlanningMenuWrap',
-          'navAcademicRecordsMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
+          'navAcademicRecordsMenuWrap', 'navDeptReportsMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
           'navQualityAccreditationWrap', 'navArchivesMenuWrap', 'navAdminSettingsWrap',
         ],
         head_of_department: [
           'navDashboardWrap', 'navHodCourseDeliveryWrap', 'navStudentAffairsWrap',
-          'navPlanningMenuWrap', 'navAcademicRecordsMenuWrap', 'navCatalogWrap',
+          'navPlanningMenuWrap', 'navAcademicRecordsMenuWrap', 'navDeptReportsMenuWrap', 'navCatalogWrap',
           'navQualityAccreditationWrap', 'navArchivesMenuWrap', 'navFacultySupervisionWrap', 'navAdminSettingsWrap',
         ],
         college_dean: [
           'navDashboardWrap', 'navStudentAffairsWrap', 'navPlanningMenuWrap',
-          'navAcademicRecordsMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
+          'navAcademicRecordsMenuWrap', 'navDeptReportsMenuWrap', 'navCatalogWrap', 'navFacultySupervisionWrap',
           'navQualityAccreditationWrap', 'navArchivesMenuWrap', 'navAdminSettingsWrap',
         ],
         academic_vice_dean: [
           'navDashboardWrap', 'navStudentAffairsWrap', 'navPlanningMenuWrap',
-          'navAcademicRecordsMenuWrap', 'navCatalogWrap', 'navQualityAccreditationWrap', 'navArchivesMenuWrap',
+          'navAcademicRecordsMenuWrap', 'navDeptReportsMenuWrap', 'navCatalogWrap', 'navQualityAccreditationWrap', 'navArchivesMenuWrap',
         ],
       };
       const QUALITY_PRIMARY_ROLES = new Set([
@@ -1419,13 +1462,13 @@
       };
       const STAFF_NAV_ORDER_RESET_IDS = [
         'navDashboardWrap', 'navHodCourseDeliveryWrap', 'navStudentAffairsWrap',
-        'navPlanningMenuWrap', 'navAcademicRecordsMenuWrap', 'navCatalogWrap',
+        'navPlanningMenuWrap', 'navAcademicRecordsMenuWrap', 'navDeptReportsMenuWrap', 'navCatalogWrap',
         'navFacultySupervisionWrap', 'navQualityAccreditationWrap', 'navArchivesMenuWrap',
         'navAdminSettingsWrap', 'navStaffCompactMoreWrap',
       ];
       const STAFF_NAV_ALL_OPS_WRAP_IDS = [
         'navDashboardWrap', 'navHodCourseDeliveryWrap', 'navStudentAffairsWrap',
-        'navPlanningMenuWrap', 'navAcademicRecordsMenuWrap', 'navCatalogWrap',
+        'navPlanningMenuWrap', 'navAcademicRecordsMenuWrap', 'navDeptReportsMenuWrap', 'navCatalogWrap',
         'navFacultySupervisionWrap', 'navQualityAccreditationWrap', 'navArchivesMenuWrap',
         'navAdminSettingsWrap', 'navStaffCompactMoreWrap',
       ];
@@ -1514,24 +1557,28 @@
         });
       }
       function applyRoleDropdownOrders(roleKey) {
-        // السجل: درجات التشغيل أولاً (الـ HTML أصلاً مرتّب؛ إعادة ضمان حسب الدور)
+        // السجل: تشغيل الدرجات فقط؛ التقارير في قائمة مستقلة
         if (roleKey === 'head_of_department') {
           reorderMenuByIds('academicRecordsMenuList', [
-            'navHodFinalBatch', 'navGradeDrafts', 'navHodCourseDelivery', 'navTranscript',
-            'navAcademicRecordsGradesDivider', 'navDeptReportsHeader',
+            'navHodFinalBatch', 'navGradeDrafts', 'navTranscript',
+          ]);
+          reorderMenuByIds('deptReportsMenuList', [
+            'navDeptReportsHub', 'navDeptReportsHubDivider',
             'navPerformance', 'navElectivesReport', 'navRegistrationChangesReport',
             'navFailedCoursesReport', 'navNotRegisteredCoursesReport', 'navUncompletedCoursesReport',
             'navGradeCourseAudit', 'navCourseRegistrationReport',
-            'navAcademicRecordsReportsDivider', 'navAnalytics',
+            'navDeptReportsAnalyticsDivider', 'navAnalytics',
           ]);
         } else if (roleKey === 'college_dean' || roleKey === 'academic_vice_dean' || roleKey === 'admin_main') {
           reorderMenuByIds('academicRecordsMenuList', [
             'navDeanFinalBatches', 'navGradeDrafts', 'navTranscript',
-            'navAcademicRecordsGradesDivider', 'navDeptReportsHeader',
+          ]);
+          reorderMenuByIds('deptReportsMenuList', [
+            'navDeptReportsHub', 'navDeptReportsHubDivider',
             'navPerformance', 'navElectivesReport', 'navRegistrationChangesReport',
             'navFailedCoursesReport', 'navNotRegisteredCoursesReport', 'navUncompletedCoursesReport',
             'navGradeCourseAudit', 'navCourseRegistrationReport',
-            'navAcademicRecordsReportsDivider', 'navAnalytics',
+            'navDeptReportsAnalyticsDivider', 'navAnalytics',
           ]);
         }
         reorderMenuByIds('studentAffairsMenuList', [
@@ -1549,7 +1596,7 @@
           ]);
         } else if (roleKey === 'head_of_department') {
           reorderMenuByIds('adminSettingsMenuList', [
-            'navDepartmentPolicyHead', 'navCollegeSharedCatalog',
+            'navUsersAdmin', 'navDepartmentPolicyHead', 'navCollegeSharedCatalog',
           ]);
         }
       }
@@ -1584,7 +1631,6 @@
           const wrap = document.getElementById(wrapId);
           if (!wrap) return;
           const items = Array.from(wrap.querySelectorAll('.dropdown-item')).filter(it => {
-            // لا تعتمد على computed للأب المخفي؛ استخدم style مباشرة
             if (it.classList.contains('d-none')) return false;
             if (it.style.display === 'none') return false;
             return true;
@@ -1642,11 +1688,11 @@
         applyQualityNavTier(roleKey);
         applyRoleDropdownOrders(roleKey);
         const compact = mode === 'compact';
-        navBar.classList.remove('nav-staff-expanded');
+        navBar.classList.remove('nav-staff-expanded', 'nav-staff-compact');
         resetExpandedNavOrder();
         if (compact) {
+          // مدمج: أساسيات ظاهرة + بقية الروابط داخل «المزيد — إدارة»
           revealStaffNavSecondaryList(secondaryList);
-          // الجودة primary للقيادات + رئيس القسم: ظاهرة خارج «المزيد»
           if (QUALITY_PRIMARY_ROLES.has(roleKey)) {
             revealStaffSecondaryWrap('navQualityAccreditationWrap');
           }
@@ -1656,8 +1702,12 @@
             moreWrap.classList.remove('d-none');
             moreWrap.style.removeProperty('display');
             applyCompactNavOrder(roleKey);
+            // أخفِ القوائم الثانوية من الشريط (موجودة في المزيد)
+            (secondaryList || []).forEach(({ wrapId }) => {
+              const wrap = document.getElementById(wrapId);
+              if (wrap) { wrap.style.display = 'none'; wrap.classList.add('d-none'); }
+            });
           } else {
-            navBar.classList.remove('nav-staff-compact');
             moreWrap.classList.add('d-none');
             moreWrap.style.display = 'none';
             revealStaffNavSecondaryList(secondaryList);
@@ -1671,7 +1721,7 @@
             updateNavDensityToggleUi('expanded');
           }
         } else {
-          navBar.classList.remove('nav-staff-compact');
+          // موسع: كل القوائم على شبكة متعددة الصفوف (5 أعمدة ⇒ صفين فأكثر)
           moreWrap.classList.add('d-none');
           moreWrap.style.display = 'none';
           revealStaffNavSecondaryList(secondaryList);
@@ -1687,7 +1737,7 @@
         applyNavLabelVisibility(effectiveMode === 'expanded');
         updateNavDensityToggleUi(effectiveMode);
         if (persist) {
-          try { localStorage.setItem(staffNavDensityStorageKey(), mode); } catch (_e) { /* ignore */ }
+          try { localStorage.setItem(staffNavDensityStorageKey(), effectiveMode); } catch (_e) { /* ignore */ }
         }
         if (typeof window.initNavDropdowns === 'function') window.initNavDropdowns();
       }
@@ -1700,10 +1750,14 @@
           revealStaffSecondaryWrap('navQualityAccreditationWrap');
         }
       }
-      if (isStaffOpsNav) {
+      if (isStaffOpsNav && !useInstructorMore && !isStudentUi) {
         const toggleWrap = document.getElementById('navDensityToggleWrap');
-        if (toggleWrap) toggleWrap.classList.remove('d-none');
-        let densityMode = 'compact';
+        if (toggleWrap) {
+          toggleWrap.hidden = false;
+          toggleWrap.classList.remove('d-none');
+          toggleWrap.style.removeProperty('display');
+        }
+        let densityMode = 'expanded';
         try {
           const saved = localStorage.getItem(staffNavDensityStorageKey());
           if (saved === 'compact' || saved === 'expanded') densityMode = saved;
@@ -1711,12 +1765,14 @@
         applyStaffNavDensity(densityMode, false);
         const compactBtn = document.getElementById('navDensityCompactBtn');
         const expandedBtn = document.getElementById('navDensityExpandedBtn');
-        if (compactBtn) {
+        if (compactBtn && !compactBtn.dataset.bound) {
+          compactBtn.dataset.bound = '1';
           compactBtn.addEventListener('click', function () {
             applyStaffNavDensity('compact', true);
           });
         }
-        if (expandedBtn) {
+        if (expandedBtn && !expandedBtn.dataset.bound) {
+          expandedBtn.dataset.bound = '1';
           expandedBtn.addEventListener('click', function () {
             applyStaffNavDensity('expanded', true);
           });
@@ -1730,6 +1786,16 @@
       else if (supervisorSlimNav || (showSupervisorPortalMenu && inSupervisorPortal)) enforceSupervisorNavShell();
       else hideStudentNavShell();
 
+      // إعادة تطبيق الكثافة بعد ضبط الغلاف حتى لا تُفقد أصناف الشبكة
+      if (isStaffOpsNav && !useInstructorMore && !isStudentUi && !inSupervisorPortal && !supervisorSlimNav) {
+        let densityMode2 = 'expanded';
+        try {
+          const saved2 = localStorage.getItem(staffNavDensityStorageKey());
+          if (saved2 === 'compact' || saved2 === 'expanded') densityMode2 = saved2;
+        } catch (_e2) { /* ignore */ }
+        applyStaffNavDensity(densityMode2, false);
+      }
+
       // تفعيل الرابط الحالي (Active state) حسب المسار
       const path = (window.location.pathname || '/').toLowerCase();
       const map = [
@@ -1737,8 +1803,12 @@
         ['/supervisor_dashboard','navSupervisorPortal'],
         ['/academic_quality/supervisor/quality-hub','navSupervisorSurveys'],
         ['/academic_quality/surveys','navSupervisorSurveys'],
+        ['/academic_quality/ilo/outcomes-map','navSupCollegeStory'],
         ['/supervisor_quality_report_page','navSupQualityReport'],
+        ['/transcript_page','navSupTranscript'],
+        ['/performance_report','navSupPerformance'],
         ['/supervisors/summary.pdf','navSupSummaryPdf'],
+        ['/academic_quality/surveys','navSupSurveysFull'],
         ['/my_schedule','navInsMySchedule'],
         ['/my_exams','navInsMyExams'],
         ['/my_attendance','navInsMyAttendance'],
@@ -1752,8 +1822,8 @@
         ['/grade_drafts','navInstructorGradeDrafts'],
         ['/grade_drafts','navGradeDrafts'],
         ['/course_delivery_hod_page','navHodCourseDeliveryTop'],
-        ['/course_delivery_hod_page','navHodCourseDelivery'],
         ['/course_delivery_hod_page','navHodCourseDeliveryFaculty'],
+        ['/course_pages_hod','navHodCoursePagesFaculty'],
         ['/dashboard','navDashboard'],
         ['/analytics','navAnalytics'],
         ['/academic_calendar_page','navAcademicCalendar'],
@@ -1775,6 +1845,7 @@
         ['/exams/conflicts','navExamsConflicts'],
         ['/transcript_page','navTranscript'],
         ['/grade_drafts','navGradeDrafts'],
+        ['/department_reports','navDeptReportsHub'],
         ['/not_registered_courses_report_page','navNotRegisteredCoursesReport'],
         ['/grade_course_mapping_audit_page','navGradeCourseAudit'],
         ['/course_registration_report_page','navCourseRegistrationReport'],
@@ -1867,23 +1938,6 @@
           }
         }
       });
-
-      // تمييز الرابط النشط داخل «المزيد — إدارة» (وضع مدمج)
-      if (document.querySelector('.app-navbar.nav-staff-compact')) {
-        document.querySelectorAll('#navStaffCompactMoreMenu .dropdown-item[href]').forEach(a => {
-          const raw = (a.getAttribute('href') || '').toLowerCase();
-          if (!raw || raw === '#') return;
-          if (raw.includes('scope=prog') && !accredProgActive) return;
-          if (raw.startsWith('/academic_quality/accreditation/map') && !raw.includes('scope=prog') && accredProgActive) return;
-          const hp = raw.split('?')[0];
-          const match = path === hp || (hp !== '/' && path.startsWith(hp));
-          if (match) {
-            a.classList.add('active');
-            const moreToggle = document.querySelector('#navStaffCompactMoreWrap .dropdown-toggle');
-            if (moreToggle) moreToggle.classList.add('active');
-          }
-        });
-      }
 
       // تنبيه تغيير الجدول — غير حرج؛ يُحمَّل بعد اكتمال الشريط
       setTimeout(async () => {

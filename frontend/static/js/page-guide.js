@@ -47,6 +47,7 @@
     '/department_policy_head_page': 'department_policy_head',
     '/department_policy_approvals_page': 'department_policy_approvals',
     '/course_registration_report_page': 'course_registration_report',
+    '/department_reports': 'department_reports',
     '/grade_course_mapping_audit_page': 'grade_mapping_audit',
     '/registration_requests_page': 'registration_requests',
     '/electives_report_page': 'electives_report',

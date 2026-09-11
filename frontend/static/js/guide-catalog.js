@@ -573,6 +573,17 @@ window.PAGE_GUIDE_CATALOG = {
     ]
   },
 
+  "department_reports": {
+    roles: ["admin_main", "college_dean", "academic_vice_dean", "head_of_department", "staff"],
+    title: "تقارير القسم",
+    steps: [
+      {
+        title: "لوحة تقارير القسم",
+        body: "<p>هذه الصفحة تجمع تقارير القسم في مكان واحد، منفصلة عن <strong>السجل الأكاديمي</strong> (الكشوف والمسودات والاعتماد).</p><ul><li>متابعة الطلبة: أداء، رسوب، غير مسجّل، غير منجز</li><li>التسجيل والعرض: إضافة/إسقاط، اختيارية، أعداد التسجيل</li><li>جودة البيانات والتحليلات</li></ul><p>تظهر فقط البطاقات المسموح بها لحسابك.</p>"
+      }
+    ]
+  },
+
   "faculty_scorecards": {
     roles: ["admin_main", "head_of_department", "supervisor"],
     title: "\u0628\u0637\u0627\u0642\u0627\u062a \u0623\u062f\u0627\u0621 \u0627\u0644\u0623\u0633\u0627\u062a\u0630\u0629",

@@ -15,6 +15,7 @@ from backend.repositories import instructors_repo, students_repo, users_repo
 from backend.core.department_scope_policy import (
     assert_actor_may_manage_user_links,
     derive_users_department_id_for_storage,
+    head_home_department_id,
     resolve_hod_managed_department_id,
     resolve_users_list_scope,
     target_username_allowed_for_actor,
@@ -81,6 +82,21 @@ def _actor_is_privileged_users_admin() -> bool:
     if r == "head_of_department":
         return False
     return can_manage_users_session(session)
+
+
+def _hod_may_add_department_users(conn=None) -> bool:
+    if _normalize_role(_current_role()) != "head_of_department":
+        return False
+    from backend.core.permissions import CAN_ADD_DEPARTMENT_USERS, user_is_granted_permission
+
+    actor = _current_actor()
+    if conn is not None:
+        return user_is_granted_permission(conn, actor, CAN_ADD_DEPARTMENT_USERS)
+    try:
+        with get_connection() as c:
+            return user_is_granted_permission(c, actor, CAN_ADD_DEPARTMENT_USERS)
+    except Exception:
+        return False
 
 
 def _hide_system_accounts() -> bool:
@@ -730,6 +746,16 @@ def list_users():
             )
     items = filter_users_for_actor(session, items)
     role_norm = _normalize_role(_current_role())
+    privileged = _actor_is_privileged_users_admin()
+    if privileged:
+        from backend.core.permissions import CAN_ADD_DEPARTMENT_USERS, load_usernames_granted_permission
+
+        with get_connection() as conn:
+            granted_hods = load_usernames_granted_permission(conn, CAN_ADD_DEPARTMENT_USERS)
+        for u in items:
+            if _normalize_role(u.get("role") or "") == "head_of_department":
+                un = (u.get("username") or "").strip().lower()
+                u["can_add_department_users"] = un in granted_hods
     _diag_env = (os.environ.get("SHOW_USER_LIST_STORAGE_DIAGNOSTICS") or "").strip().lower()
     verbose_meta = _diag_env in ("1", "true", "yes") and role_norm in ("admin_main", "system_admin")
     meta = _admin_storage_meta(verbose_storage_hint=verbose_meta)
@@ -750,9 +776,11 @@ def list_users():
 
 
 @users_bp.route("/validation_report", methods=["GET"])
-@role_required("system_admin", "college_dean", "admin_main", "head_of_department")
+@role_required("system_admin", "college_dean", "admin_main")
 def users_validation_report():
     """تقرير فحص سلامة ربط المستخدمين حسب الدور (للتحقق اليدوي)."""
+    if not _actor_is_privileged_users_admin():
+        return jsonify({"status": "error", "message": "غير مسموح"}), 403
     from backend.core.user_admin_policy import filter_users_for_actor
 
     actor = _current_actor()
@@ -894,13 +922,15 @@ def add_user():
 
     actor_role = _normalize_role(_current_role())
     privileged = _actor_is_privileged_users_admin()
+    hod_can_add = (not privileged) and (actor_role == "head_of_department") and _hod_may_add_department_users()
     if not privileged:
-        # رئيس القسم: لا يعيّن أدوار إدارية ولا يغيّر تفعيل الحساب ولا كلمات المرور ولا ينشئ مستخدمين جدد
-        if role in _ELEVATED_ASSIGN_ROLES or role == "admin_main":
+        # رئيس القسم: لا يعيّن أدوار إدارية ولا يغيّر تفعيل الحساب.
+        # إنشاء حساب طالب/أستاذ مسموح فقط عند منح can_add_department_users.
+        if role in _ELEVATED_ASSIGN_ROLES or role == "admin_main" or role == "head_of_department":
             return jsonify({"status": "error", "message": "غير مسموح تعيين هذا الدور"}), 403
         if not is_active:
             return jsonify({"status": "error", "message": "غير مسموح تعطيل/تفعيل الحساب لرئيس القسم"}), 403
-        if password:
+        if not hod_can_add and password:
             return jsonify({"status": "error", "message": "غير مسموح تغيير كلمة المرور لرئيس القسم"}), 403
 
     was_created = False
@@ -933,10 +963,17 @@ def add_user():
                 if old_role in _ELEVATED_ASSIGN_ROLES and not is_system_admin_session(session):
                     return jsonify({"status": "error", "message": "لا يمكن تعديل هذا المستخدم إلا بواسطة مسؤول النظام"}), 403
                 if not privileged:
-                    # رئيس القسم يسمح فقط بتعديل الأساتذة: is_supervisor و instructor_id و role= instructor/ head_of_department
-                    if old_role not in ("instructor", "head_of_department"):
+                    # رئيس القسم يعدّل أعضاء هيئة التدريس فقط (بدون ترقية/تعديل رئيس قسم)
+                    if password:
+                        return jsonify({"status": "error", "message": "غير مسموح تغيير كلمة المرور لرئيس القسم"}), 403
+                    if old_role == "head_of_department" or role == "head_of_department":
+                        return jsonify({
+                            "status": "error",
+                            "message": "لا يمكن لرئيس القسم إنشاء أو تعديل حساب رئيس قسم",
+                        }), 403
+                    if old_role != "instructor":
                         return jsonify({"status": "error", "message": "رئيس القسم يمكنه تعديل الأساتذة فقط"}), 403
-                    if role not in ("instructor", "head_of_department"):
+                    if role != "instructor":
                         return jsonify({"status": "error", "message": "لا يمكن تغيير دور الأستاذ إلى هذا الدور من قبل رئيس القسم"}), 403
             ud_existing = (before_user.get("department_id") if before_user else None)
             ok_manage, msg_manage = assert_actor_may_manage_user_links(
@@ -972,7 +1009,7 @@ def add_user():
                     instructor_id=instructor_id,
                 )
             role_profile_id = None
-            if role_profile_code:
+            if role_profile_code and privileged:
                 from backend.core.permissions import get_profile_by_code
 
                 prof = get_profile_by_code(role_profile_code)
@@ -1038,7 +1075,24 @@ def add_user():
                         affected_rows = cur.rowcount if cur.rowcount is not None else affected_rows
                 else:
                     if not privileged:
-                        return jsonify({"status": "error", "message": "رئيس القسم لا يمكنه إنشاء مستخدم جديد"}), 403
+                        if not hod_can_add:
+                            return jsonify({"status": "error", "message": "رئيس القسم لا يمكنه إنشاء مستخدم جديد"}), 403
+                        if role not in ("student", "instructor"):
+                            return jsonify({
+                                "status": "error",
+                                "message": "رئيس القسم يمكنه إنشاء حساب طالب أو عضو هيئة تدريس فقط",
+                            }), 403
+                        home_dept = head_home_department_id(conn, actor)
+                        if home_dept is None:
+                            return jsonify({
+                                "status": "error",
+                                "message": "لا يوجد قسم مرتبط بحسابك",
+                            }), 403
+                        if dept_store is None or int(dept_store) != int(home_dept):
+                            return jsonify({
+                                "status": "error",
+                                "message": "لا يمكن إضافة مستخدم خارج قسمك",
+                            }), 403
                     if not password:
                         return (
                             jsonify(
@@ -1256,6 +1310,8 @@ def set_supervisor():
         role = _normalize_role(row[1])
         if role not in ("instructor", "head_of_department"):
             return jsonify({"status": "error", "message": "يمكن تعيين الإشراف للأستاذ/رئيس القسم فقط"}), 400
+        if _normalize_role(_current_role()) == "head_of_department" and role == "head_of_department":
+            return jsonify({"status": "error", "message": "لا يمكن لرئيس القسم تعديل حساب رئيس قسم"}), 403
         cur.execute("UPDATE users SET is_supervisor = ? WHERE username = ?", (is_sup, username))
         after = cur.execute(
             "SELECT username, role, student_id, instructor_id, COALESCE(is_supervisor,0), COALESCE(is_active,1) "
@@ -1275,9 +1331,11 @@ def set_supervisor():
 
 
 @users_bp.route("/audit_log", methods=["GET"])
-@role_required("admin_main", "system_admin", "college_dean", "head_of_department")
+@role_required("admin_main", "system_admin", "college_dean")
 def users_audit_log():
     """آخر سجلات تدقيق عمليات المستخدمين مع فلاتر بسيطة."""
+    if not _actor_is_privileged_users_admin():
+        return jsonify({"status": "error", "message": "غير مسموح"}), 403
     actor = (request.args.get("actor") or "").strip()
     username = (request.args.get("username") or "").strip()
     action = (request.args.get("action") or "").strip()

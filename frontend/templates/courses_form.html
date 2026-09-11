@@ -30,7 +30,7 @@
             <form id="courses-import-form" class="d-flex align-items-center" enctype="multipart/form-data" onsubmit="return false;">
               <label class="form-label mb-0 me-2">📂 استيراد مقررات (Excel):</label>
               <input class="form-control form-control-sm" style="max-width: 280px;" type="file" name="file" accept=".xlsx,.xls" />
-              <button type="button" class="btn btn-primary btn-sm ms-2" onclick="importCourses()">استيراد</button>
+              <button type="button" class="btn btn-primary btn-sm ms-2" id="btnImportCourses">استيراد</button>
             </form>
           </div>
           <div id="import_msg" class="mt-2"></div>
@@ -229,24 +229,36 @@ async function importCourses(){
         : '';
       const createdN = Number(j.created != null ? j.created : j.imported || 0);
       const updatedN = Number(j.updated || 0);
+      const promotedN = Number(j.promoted_shared || (j.promoted_items || []).length || 0);
       const ignoredN = Number(j.ignored_count || (j.ignored || []).length || 0);
       const parts = [];
       if (createdN) parts.push(`${createdN} جديداً`);
-      if (updatedN) parts.push(`${updatedN} محدّثاً (اسم موجود)`);
+      if (promotedN) parts.push(`${promotedN} رُقّي/رُبط كمشترك`);
+      if (updatedN - promotedN > 0) parts.push(`${updatedN - promotedN} محدّثاً (نفس القسم)`);
       if (ignoredN) parts.push(`تُجاهل ${ignoredN}`);
       const summary = parts.length ? parts.join(' — ') : `تم معالجة ${j.imported ?? 0}`;
-      const warn = updatedN > 0 || ignoredN > 0;
+      const warn = updatedN > 0 || ignoredN > 0 || promotedN > 0;
       window.showToast?.(
         `تم الاستيراد${boundMsg}: ${summary}`,
         warn ? 'warning' : 'success'
       );
       const lines = [];
-      if (updatedN > 0 && Array.isArray(j.updated_items)) {
-        lines.push('<strong>أسماء موجودة — حُدّثت واستُكمل الباقي:</strong>');
-        j.updated_items.slice(0, 8).forEach(x => {
+      if (promotedN > 0 && Array.isArray(j.promoted_items)) {
+        lines.push('<strong>ترقية/ربط مقررات مشتركة (رمز لكل قسم):</strong>');
+        j.promoted_items.slice(0, 8).forEach(x => {
           lines.push(`• ${x.message || x.course_name}`);
         });
-        if (updatedN > 8) lines.push('…');
+        if (promotedN > 8) lines.push('…');
+      }
+      if (updatedN > 0 && Array.isArray(j.updated_items)) {
+        const sameDept = j.updated_items.filter(x => !String(x.reason || '').includes('shared') && !String(x.reason || '').includes('promoted'));
+        if (sameDept.length) {
+          lines.push('<strong class="d-block mt-1">أسماء موجودة في نفس النطاق — حُدّثت:</strong>');
+          sameDept.slice(0, 8).forEach(x => {
+            lines.push(`• ${x.message || x.course_name}`);
+          });
+          if (sameDept.length > 8) lines.push('…');
+        }
       }
       if (ignoredN > 0 && Array.isArray(j.ignored)) {
         lines.push('<strong class="d-block mt-1">تُجاهلت (رمز/كلية):</strong>');
@@ -823,6 +835,7 @@ window.addEventListener('load', async ()=>{
     const importForm = document.getElementById('courses-import-form');
     if(importForm) importForm.style.display = 'none';
   } else {
+    document.getElementById('btnImportCourses')?.addEventListener('click', () => { importCourses(); });
     const bulk = document.getElementById('coursesBulkToolbar');
     if (bulk) bulk.classList.remove('d-none');
     document.getElementById('btnSelectFiltered')?.addEventListener('click', ()=>{

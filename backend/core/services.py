@@ -1058,6 +1058,12 @@ class ScheduleService:
                         dept_val = None
 
                 if is_postgresql():
+                    try:
+                        from backend.database.backfills import ensure_schedule_id_identity
+
+                        ensure_schedule_id_identity(conn)
+                    except Exception:
+                        pass
                     if has_dept and dept_val is not None:
                         row_new = cur.execute(
                             f"""INSERT INTO schedule (course_name, day, time, room, instructor, instructor_id, semester, department_id)
@@ -1075,6 +1081,18 @@ class ScheduleService:
                     except (TypeError, ValueError):
                         section_id = 0
                     if section_id <= 0:
+                        # احتياطي: صف أُدرج بلا DEFAULT قبل إصلاح التسلسل
+                        cur.execute(
+                            f"""
+                            UPDATE schedule
+                            SET id = nextval('schedule_id_seq')
+                            WHERE {SCHEDULE_PK_COL} IS NULL
+                              AND LOWER(TRIM(course_name)) = LOWER(TRIM(?))
+                              AND day = ?
+                              AND time = ?
+                              AND COALESCE(semester, '') = ?
+                            """
+                        , (name, day_val, time_val, sem_v))
                         row_last = cur.execute(
                             f"""
                             SELECT {SCHEDULE_PK_COL}
@@ -1083,7 +1101,7 @@ class ScheduleService:
                               AND day = ?
                               AND time = ?
                               AND COALESCE(semester, '') = ?
-                            ORDER BY {SCHEDULE_PK_COL} DESC
+                            ORDER BY {SCHEDULE_PK_COL} DESC NULLS LAST
                             LIMIT 1
                             """,
                             (name, day_val, time_val, sem_v),

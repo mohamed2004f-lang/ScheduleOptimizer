@@ -284,7 +284,37 @@ class TestCollegeSharedCatalog:
         assert hit2["linked_department_count"] == specialty_n
         assert hit2["department_count"] == specialty_n
 
-    def test_shared_catalog_api_save_unified(self, app, db_conn):
+    def test_course_name_options_api_lists_operational_courses(self, app, db_conn):
+        uid = uuid.uuid4().hex[:8]
+        cur = db_conn.cursor()
+        if cur.execute(
+            "SELECT id FROM departments WHERE UPPER(TRIM(code))='GENERAL' LIMIT 1"
+        ).fetchone() is None:
+            cur.execute(
+                "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES ('GENERAL','عام','Gen',1)"
+            )
+        dcode = f"PK{uid}"[:12].upper()
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (dcode, "قسم اختبار", "Pick"),
+        )
+        dept_id = int(cur.execute("SELECT id FROM departments WHERE code=?", (dcode,)).fetchone()[0])
+        cname = f"PickerCourse-{uid}"
+        cur.execute(
+            "INSERT INTO courses (course_name, course_code, units, owning_department_id) VALUES (?, ?, ?, ?)",
+            (cname, f"PC{uid[:4]}".upper(), 3, dept_id),
+        )
+        db_conn.commit()
+        with app.test_client() as c:
+            lg = c.post("/auth/login", json={"username": "admin-test", "password": "TestP@ssw0rd!"})
+            assert lg.status_code == 200
+            r = c.get("/college/catalog/shared_catalog/course_name_options")
+            assert r.status_code == 200, r.get_data(as_text=True)
+            body = r.get_json() or {}
+            assert body.get("status") == "ok"
+            names = {o.get("course_name") for o in (body.get("options") or [])}
+            assert cname in names
+
         uid = uuid.uuid4().hex[:8]
         cur = db_conn.cursor()
         cur.execute(

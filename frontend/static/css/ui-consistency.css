@@ -48,18 +48,22 @@
   align-items: center;
 }
 
-/* شريط التنقل — وضع موسع: شبكة سطرين (حتى 7 أيقونات في السطر) */
+/* شريط التنقل — دائماً شبكة متعددة الصفوف (حد أقصى 6 أعمدة) */
 .app-navbar.nav-staff-expanded .navbar-collapse,
-.app-navbar.nav-staff-expanded #mainNav {
+.app-navbar.nav-staff-expanded #mainNav,
+.app-navbar.nav-shell-supervisor .navbar-collapse,
+.app-navbar.nav-shell-supervisor #mainNav {
   width: 100% !important;
   flex-basis: 100% !important;
   max-width: 100% !important;
 }
 
 .app-navbar.nav-staff-expanded .navbar-collapse .navbar-nav,
-.app-navbar.nav-staff-expanded #mainNav .navbar-nav {
+.app-navbar.nav-staff-expanded #mainNav .navbar-nav,
+.app-navbar.nav-shell-supervisor .navbar-collapse .navbar-nav,
+.app-navbar.nav-shell-supervisor #mainNav .navbar-nav {
   display: grid !important;
-  grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
   grid-auto-flow: row !important;
   width: 100% !important;
   max-width: 100% !important;

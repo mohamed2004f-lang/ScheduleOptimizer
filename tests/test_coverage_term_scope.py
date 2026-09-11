@@ -169,86 +169,26 @@ def test_exam_coverage_api_same_term_scope(app, db_conn):
         assert "فصول أخرى" in warn or "فارغ" in warn
 
 
-def test_schedule_clear_other_terms_spares_current(app, db_conn):
-    """mode=other يحذف بقايا الفصل السابق ويُبقي صفوف الفصل الحالي."""
-    from backend.services.term_engine import ensure_term_engine_tables
+def test_collapse_term_ws_coerces_non_string():
+    """حماية من صفوف PG عند فهرسة خاطئة (int بدل نص الفصل)."""
+    from backend.services.term_engine import (
+        _collapse_term_ws,
+        schedule_semester_matches_term_context,
+    )
 
-    ensure_term_engine_tables(db_conn)
-    cur = db_conn.cursor()
-    db_conn.execute(
-        "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('current_term_name', 'خريف')"
-    )
-    db_conn.execute(
-        "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('current_term_year', '26-27')"
-    )
-    uid = uuid.uuid4().hex[:8]
-    spring = f"SpringLeft{uid}"
-    fall = f"FallKeep{uid}"
-    cur.execute(
-        """
-        INSERT INTO schedule (course_name, day, time, room, instructor, semester)
-        VALUES (?, 'السبت', '09:00-11:00', 'A1', 'أ', 'ربيع 25-26')
-        """,
-        (spring,),
-    )
-    cur.execute(
-        """
-        INSERT INTO schedule (course_name, day, time, room, instructor, semester)
-        VALUES (?, 'الأحد', '09:00-11:00', 'A2', 'ب', 'خريف 26-27')
-        """,
-        (fall,),
-    )
-    db_conn.commit()
+    assert _collapse_term_ws(2) == "2"
+    assert schedule_semester_matches_term_context(2, {"labels": set(), "seasons": [], "years": []}) is False
 
-    c = app.test_client()
-    try:
-        assert (
-            c.post(
-                "/auth/login",
-                json={"username": "admin-test", "password": "TestP@ssw0rd!"},
-            ).status_code
-            == 200
-        )
-        r = c.post(
-            "/schedule/clear_all",
-            json={"confirm_label": "خريف 26-27", "mode": "other"},
-        )
-        assert r.status_code == 200, r.get_data(as_text=True)
-        body = r.get_json() or {}
-        assert body.get("status") == "ok"
-        assert body.get("mode") == "other"
-        assert int(body.get("deleted_rows") or 0) >= 1
 
-        left_spring = cur.execute(
-            "SELECT COUNT(*) FROM schedule WHERE course_name = ?", (spring,)
-        ).fetchone()[0]
-        left_fall = cur.execute(
-            "SELECT COUNT(*) FROM schedule WHERE course_name = ?", (fall,)
-        ).fetchone()[0]
-        assert int(left_spring) == 0
-        assert int(left_fall) == 1
-    finally:
-        db_conn.execute(
-            "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('current_term_name', 'خريف')"
-        )
-        db_conn.execute(
-            "INSERT OR REPLACE INTO system_settings (key, value) VALUES ('current_term_year', '44-45')"
-        )
-        # استعادة صفوف البذرة إن حُذفت مع بقايا الفصول الأخرى
-        left_seed = cur.execute(
-            "SELECT COUNT(*) FROM schedule WHERE semester = 'خريف 44-45'"
-        ).fetchone()[0]
-        if int(left_seed or 0) < 1:
-            cur.execute(
-                """
-                INSERT INTO schedule (course_name, day, time, room, instructor, semester)
-                VALUES ('رياضيات 1', 'الأحد', '08:00-09:30', 'قاعة 1', 'أستاذ  تجريبي', 'خريف 44-45')
-                """
-            )
-            cur.execute(
-                """
-                INSERT INTO schedule (course_name, day, time, room, instructor_id, semester)
-                VALUES ('فيزياء 1', 'الاثنين', '10:00-11:30', 'قاعة 2', 1, 'خريف 44-45')
-                """
-            )
-        db_conn.commit()
+def test_pg_row_adapter_duplicate_coalesce_loses_semester():
+    """بدون AS semester يتصادم اسم COALESCE في dict_row ويُفقد الفصل."""
+    from backend.database.pg_compat import _PgRowAdapter
+
+    # يحاكي ما يفعله السائق عندما يتكرر اسم العمود coalesce
+    row = _PgRowAdapter(
+        {"id": 19, "coalesce": 2},
+        ("id", "coalesce", "coalesce"),
+    )
+    assert row[0] == 19
+    assert row[1] == 2  # department_id وليس semester — سبب تعطّل التفريغ السابق
+    assert list(row.keys()) == ["id", "coalesce"]

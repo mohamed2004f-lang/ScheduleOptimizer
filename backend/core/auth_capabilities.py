@@ -9,6 +9,7 @@ from backend.core.auth_session import (
 )
 
 _ACADEMIC_REPORT_NAV_KEYS: tuple[str, ...] = (
+    "nav_department_reports",
     "nav_academic_reports_section",
     "nav_performance_report",
     "nav_electives_report",
@@ -102,6 +103,7 @@ def compute_capabilities(
             "v": 1,
             "nav_my_assigned_courses": nav_my,
             "nav_users_admin": False,
+            "can_add_department_users": False,
             "nav_college_catalog": False,
             "nav_college_shared_catalog": True,
             "can_manage_college_shared_catalog": False,
@@ -179,6 +181,7 @@ def compute_capabilities(
         "v": 1,
         "nav_my_assigned_courses": inst_portal,
         "nav_users_admin": role in ("admin", "admin_main", "system_admin", "college_dean"),
+        "can_add_department_users": False,
         "nav_college_catalog": role in ("admin", "admin_main", "system_admin", "college_dean"),
         "nav_college_shared_catalog": role
         in (

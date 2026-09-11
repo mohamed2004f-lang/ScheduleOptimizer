@@ -26,6 +26,7 @@ def assert_schema_ready() -> None:
     """
     التشغيل لا يغيّر المخطط. يجب ``alembic upgrade head`` قبل الإقلاع.
     الاختبارات تُتخطى. الطوارئ: ALLOW_ENSURE_TABLES=1.
+    إصلاح schedule.id (NULL بلا تسلسل) آمن ومتكرر عند كل إقلاع.
     """
     if _in_pytest():
         return
@@ -34,6 +35,13 @@ def assert_schema_ready() -> None:
             "التشغيل يتطلب PostgreSQL. عيّن DATABASE_URL ثم نفّذ: alembic upgrade head"
         )
     if alembic_revision_present():
+        try:
+            from backend.database.backfills import ensure_schedule_id_identity
+
+            with get_connection() as conn:
+                ensure_schedule_id_identity(conn)
+        except Exception as e:
+            logger.warning("ensure_schedule_id_identity at boot failed: %s", e)
         return
     if allow_ensure_tables():
         logger.warning(

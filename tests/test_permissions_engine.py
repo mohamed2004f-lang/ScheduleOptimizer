@@ -119,3 +119,36 @@ def test_role_profile_seed_count():
     assert "instructor" in codes
     assert "student" in codes
     assert "head_of_department" in codes
+
+
+def test_hod_override_enables_department_user_add_caps():
+    from backend.core.auth import compute_capabilities
+    from backend.core.permissions import (
+        CAN_ADD_DEPARTMENT_USERS,
+        get_profile_by_code,
+        merge_capabilities_with_profile,
+    )
+
+    hod = get_profile_by_code("head_of_department")
+    assert hod is not None
+    base = compute_capabilities("head_of_department", 0, "head")
+    assert not base.get("nav_users_admin")
+    assert not base.get(CAN_ADD_DEPARTMENT_USERS)
+
+    out = merge_capabilities_with_profile(
+        base,
+        profile_keys=set(hod["permissions"]),
+        grant_overrides={CAN_ADD_DEPARTMENT_USERS},
+        deny_overrides=set(),
+        profile_meta=hod,
+    )
+    assert out.get(CAN_ADD_DEPARTMENT_USERS) is True
+    assert out.get("nav_users_admin") is True
+    assert not out.get("can_manage_users")
+
+
+def test_system_admin_catalog_includes_hod_add_users():
+    from backend.core.permissions import CAN_ADD_DEPARTMENT_USERS
+
+    caps = compute_system_admin_capabilities()
+    assert caps.get(CAN_ADD_DEPARTMENT_USERS) is True

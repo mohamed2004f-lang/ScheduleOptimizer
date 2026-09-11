@@ -92,7 +92,11 @@
           </div>
           <div class="col-md-4">
             <label class="form-label small">الاسم الرسمي (تشغيل)</label>
-            <input class="form-control form-control-sm" id="fName">
+            <input class="form-control form-control-sm" id="fName" list="fNameDatalist"
+                   autocomplete="off"
+                   placeholder="ابحث في مقررات الأقسام أو اكتب اسماً جديداً">
+            <datalist id="fNameDatalist"></datalist>
+            <div class="form-text small" id="fNameHint">اختر من القائمة أو اكتب اسماً جديداً غير موجود.</div>
           </div>
           <div class="col-md-2">
             <label class="form-label small">الرمز المرجعي</label>
@@ -137,6 +141,9 @@
     const IS_VIEW_ONLY = {{ 'false' if can_manage_college_shared_catalog else 'true' }};
     let ITEMS = [];
     let DEPS = [];
+    /** مقررات كل الأقسام لاختيار الاسم الرسمي */
+    let COURSE_NAME_OPTIONS = [];
+    const COURSE_BY_NAME = new Map();
 
     function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
 
@@ -315,13 +322,98 @@
       tb.querySelectorAll('.btn-del').forEach(b => b.onclick = () => deleteEntry(parseInt(b.dataset.id,10), b.dataset.name || ''));
     }
 
+    function rebuildCourseNameDatalist(){
+      const dl = document.getElementById('fNameDatalist');
+      if (!dl) return;
+      COURSE_BY_NAME.clear();
+      const frag = document.createDocumentFragment();
+      COURSE_NAME_OPTIONS.forEach(o => {
+        const name = (o.course_name || '').trim();
+        if (!name) return;
+        COURSE_BY_NAME.set(name.casefold ? name.casefold() : name.toLowerCase(), o);
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.label = o.label || name;
+        // بعض المتصفحات تعرض النص داخل option كتلميح
+        opt.textContent = o.label || name;
+        frag.appendChild(opt);
+      });
+      dl.innerHTML = '';
+      dl.appendChild(frag);
+    }
+
+    function findCourseOptionByName(name){
+      const key = String(name || '').trim().toLowerCase();
+      if (!key) return null;
+      return COURSE_BY_NAME.get(key) || null;
+    }
+
+    function applySelectedCourseName(opts = {}){
+      const nameEl = document.getElementById('fName');
+      const hint = document.getElementById('fNameHint');
+      const name = (nameEl && nameEl.value || '').trim();
+      const hit = findCourseOptionByName(name);
+      const fillEmptyOnly = !!opts.fillEmptyOnly;
+      if (!name) {
+        if (hint) hint.textContent = 'اختر من القائمة أو اكتب اسماً جديداً غير موجود.';
+        return;
+      }
+      if (!hit) {
+        if (hint) hint.textContent = 'اسم جديد — سيُنشأ سجل مشترك بهذا الاسم الرسمي.';
+        return;
+      }
+      const codeEl = document.getElementById('fCode');
+      const unitsEl = document.getElementById('fUnits');
+      if (codeEl && hit.course_code && (!fillEmptyOnly || !codeEl.value.trim())) {
+        codeEl.value = hit.course_code;
+      }
+      if (unitsEl && hit.units != null && (!fillEmptyOnly || !String(unitsEl.value || '').trim())) {
+        unitsEl.value = hit.units;
+      }
+      // عند مقرر جديد + multi_code: أدرج قسم المالك الحالي إن وُجد
+      const isNew = !(document.getElementById('fId').value || '').trim();
+      const st = document.getElementById('fShareType').value;
+      if (isNew && st === 'multi_code' && hit.owning_department_id && opts.seedOwnerDept !== false) {
+        const dr = document.getElementById('deptRows');
+        const hasOwner = [...dr.querySelectorAll('.dept-row')].some(row => {
+          const fixed = row.querySelector('.dept-id-fixed');
+          const sel = row.querySelector('.dept-id');
+          const id = parseInt((fixed && fixed.value) || (sel && sel.value) || '', 10);
+          return id === Number(hit.owning_department_id);
+        });
+        if (!hasOwner) {
+          const emptyOnly = [...dr.querySelectorAll('.dept-row')].length === 1
+            && !(dr.querySelector('.dept-id') && dr.querySelector('.dept-id').value);
+          if (emptyOnly) dr.innerHTML = '';
+          dr.appendChild(renderDeptRow({
+            department_id: hit.owning_department_id,
+            plan_course_code: hit.course_code || '',
+            plan_course_name_override: '',
+            units_override: hit.units
+          }, { lockedDept: false }));
+        }
+      }
+      if (st === 'unified') {
+        fillCanonicalToAllDepts();
+      }
+      const deptLabel = hit.department_name || hit.department_code || '';
+      if (hint) {
+        hint.textContent = hit.already_shared
+          ? `موجود مسبقاً في سجل المشترك${deptLabel ? ' — ' + deptLabel : ''}.`
+          : `من مقررات الأقسام${deptLabel ? ' (' + deptLabel + ')' : ''} — عُبئ الرمز/الوحدات المرجعية.`;
+      }
+    }
+
     async function load(){
-      const [lr, dr] = await Promise.all([
+      const [lr, dr, nr] = await Promise.all([
         apiGet('/college/catalog/shared_catalog/list?include_inactive=1'),
-        apiGet('/college/catalog/shared_catalog/departments')
+        apiGet('/college/catalog/shared_catalog/departments'),
+        apiGet('/college/catalog/shared_catalog/course_name_options')
       ]);
       ITEMS = lr.items || [];
       DEPS = dr.departments || [];
+      COURSE_NAME_OPTIONS = nr.options || [];
+      rebuildCourseNameDatalist();
       renderTable();
     }
 
@@ -360,6 +452,12 @@
         );
       }
       toggleDeptSection();
+      if (it) {
+        const hint = document.getElementById('fNameHint');
+        if (hint) hint.textContent = 'تحرير سجل موجود — الاسم الرسمي ثابت للكلية.';
+      } else {
+        applySelectedCourseName({ fillEmptyOnly: true, seedOwnerDept: true });
+      }
       if (!IS_ADMIN) {
         document.getElementById('editCard').querySelectorAll('input,select,button').forEach(el => {
           if (el.id === 'btnCancel') return;
@@ -427,6 +525,11 @@
     document.getElementById('btnSave').onclick = saveEntry;
     document.getElementById('btnCancel').onclick = () => document.getElementById('editCard').classList.add('d-none');
     document.getElementById('btnRefresh').onclick = load;
+    const fNameEl = document.getElementById('fName');
+    if (fNameEl) {
+      fNameEl.addEventListener('change', () => applySelectedCourseName({ seedOwnerDept: true }));
+      fNameEl.addEventListener('blur', () => applySelectedCourseName({ fillEmptyOnly: true, seedOwnerDept: false }));
+    }
     document.getElementById('importFile').addEventListener('change', async (e) => {
       const f = e.target.files[0];
       if (!f) return;

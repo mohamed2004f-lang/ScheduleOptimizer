@@ -292,7 +292,7 @@ def parse_ops_term(term_name: str | None, term_year: str | None) -> dict[str, st
 
 
 def _collapse_term_ws(s: str | None) -> str:
-    return re.sub(r"\s+", " ", (s or "").strip())
+    return re.sub(r"\s+", " ", str(s or "").strip())
 
 
 def current_term_match_context(conn) -> dict | None:
@@ -659,7 +659,18 @@ def upsert_term_master(
     label = (ops_label or "").strip() or f"{name_ar} {year_label}".strip()
     now = _now_iso()
     cur = conn.cursor()
+    prev_current_key = None
     if make_current:
+        try:
+            prev_row = cur.execute(
+                "SELECT term_key FROM term_master WHERE is_current = 1 LIMIT 1"
+            ).fetchone()
+            if prev_row is not None:
+                prev_current_key = str(
+                    prev_row["term_key"] if hasattr(prev_row, "keys") else prev_row[0] or ""
+                ).strip() or None
+        except Exception:
+            prev_current_key = None
         cur.execute("UPDATE term_master SET is_current = 0, updated_at = ?", (now,))
     existing = cur.execute(
         "SELECT term_key, status, is_current, ops_label FROM term_master WHERE term_key = ? LIMIT 1",
@@ -698,6 +709,14 @@ def upsert_term_master(
         """,
         (key,),
     ).fetchone()
+    # نشر الجدول مربوط بالفصل — عند تبديل الفصل الحالي يُلغى الاعتماد حتى يُعاد النشر صراحةً
+    if make_current and (prev_current_key or "") != key:
+        try:
+            from backend.services.utilities import clear_schedule_published_at
+
+            clear_schedule_published_at(conn)
+        except Exception:
+            pass
     return _row_dict(row)
 
 

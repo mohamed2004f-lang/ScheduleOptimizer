@@ -31,6 +31,15 @@ def can_manage_users_session(session_obj) -> bool:
     )
 
 
+def can_grant_hod_department_users_session(session_obj) -> bool:
+    """مدير النظام / المسؤول الرئيسي / العميد يمنحون صلاحية إضافة مستخدمي القسم."""
+    role = (session_obj.get("user_role") or "").strip().lower()
+    return is_system_admin_session(session_obj) or role in (
+        "college_dean",
+        "admin_main",
+    )
+
+
 def resolve_user_role_from_db(db_role: str | None, is_system_account: int | None = 0) -> str:
     """تحويل دور DB إلى دور الجلسة."""
     if int(is_system_account or 0) == 1:

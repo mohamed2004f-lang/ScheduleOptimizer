@@ -7,6 +7,7 @@ import os
 from backend.database.backfills import (
     backfill_academic_pathway_defaults,
     backfill_instructor_cross_department_data,
+    ensure_schedule_id_identity,
 )
 from backend.database.connection import get_connection
 from backend.database.schema_ddl import INDEXES
@@ -192,10 +193,9 @@ def _ensure_tables_postgresql() -> None:
                     conn.rollback()
                 except Exception:
                     pass
-        # مرحلة انتقالية: تعبئة id من rowid عند وجود بيانات قديمة.
+        # مرحلة انتقالية: تعبئة id (كان يُستخدم rowid خطأً على PostgreSQL فيُتخطّى بصمت)
         try:
-            cur.execute("UPDATE schedule SET id = rowid WHERE id IS NULL")
-            conn.commit()
+            ensure_schedule_id_identity(conn)
         except Exception:
             try:
                 conn.rollback()

@@ -199,6 +199,105 @@ def list_specialty_departments(conn) -> list[dict[str, Any]]:
     return out
 
 
+def list_course_name_picker_options(conn) -> list[dict[str, Any]]:
+    """
+    مقررات تشغيلية من كل الأقسام لاختيار الاسم الرسمي عند إضافة مشترك.
+    تُستثنى المؤرشفة؛ تُرتَّب بالاسم.
+    """
+    from backend.database.database import fetch_table_columns
+
+    cur = conn.cursor()
+    try:
+        cols = fetch_table_columns(conn, "courses")
+    except Exception:
+        cols = []
+    has_archived = "is_archived" in cols
+    has_owning = "owning_department_id" in cols
+    if has_owning:
+        sql = """
+            SELECT c.course_name, c.course_code, c.units, c.owning_department_id,
+                   dep.code AS department_code, dep.name_ar AS department_name
+            FROM courses c
+            LEFT JOIN departments dep ON dep.id = c.owning_department_id
+            WHERE COALESCE(TRIM(c.course_name), '') <> ''
+        """
+        if has_archived:
+            sql += " AND COALESCE(c.is_archived, 0) = 0"
+        sql += " ORDER BY c.course_name"
+    else:
+        sql = """
+            SELECT course_name, course_code, units, NULL AS owning_department_id,
+                   NULL AS department_code, NULL AS department_name
+            FROM courses
+            WHERE COALESCE(TRIM(course_name), '') <> ''
+        """
+        if has_archived:
+            sql += " AND COALESCE(is_archived, 0) = 0"
+        sql += " ORDER BY course_name"
+    rows = cur.execute(sql).fetchall()
+    shared_names: set[str] = set()
+    try:
+        for sr in cur.execute(
+            """
+            SELECT canonical_course_name FROM college_shared_catalog
+            WHERE COALESCE(is_active, 1) = 1
+            """
+        ).fetchall() or []:
+            sn = (sr[0] if not hasattr(sr, "keys") else sr["canonical_course_name"]) or ""
+            sn = str(sn).strip().casefold()
+            if sn:
+                shared_names.add(sn)
+    except Exception:
+        shared_names = set()
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for r in rows or []:
+        if hasattr(r, "keys"):
+            name = (r["course_name"] or "").strip()
+            code = (r["course_code"] or "").strip()
+            units = r["units"]
+            oid = r["owning_department_id"]
+            dcode = (r["department_code"] or "").strip() if "department_code" in r.keys() else ""
+            dname = (r["department_name"] or "").strip() if "department_name" in r.keys() else ""
+        else:
+            name = (r[0] or "").strip()
+            code = (r[1] or "").strip() if len(r) > 1 else ""
+            units = r[2] if len(r) > 2 else 0
+            oid = r[3] if len(r) > 3 else None
+            dcode = (r[4] or "").strip() if len(r) > 4 else ""
+            dname = (r[5] or "").strip() if len(r) > 5 else ""
+        key = name.casefold()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        try:
+            units_i = int(units or 0)
+        except (TypeError, ValueError):
+            units_i = 0
+        try:
+            oid_i = int(oid) if oid not in (None, "") else None
+        except (TypeError, ValueError):
+            oid_i = None
+        label_bits = [name]
+        if code:
+            label_bits.append(code)
+        if dname or dcode:
+            label_bits.append(dname or dcode)
+        out.append(
+            {
+                "course_name": name,
+                "course_code": code,
+                "units": units_i,
+                "owning_department_id": oid_i,
+                "department_code": dcode,
+                "department_name": dname,
+                "already_shared": key in shared_names,
+                "label": " — ".join(label_bits),
+            }
+        )
+    return out
+
+
 def _catalog_row_to_dict(row) -> dict[str, Any]:
     if hasattr(row, "keys"):
         d = {k: row[k] for k in row.keys()}

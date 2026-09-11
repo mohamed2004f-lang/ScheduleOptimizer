@@ -108,10 +108,11 @@
 <script nonce="{{ csp_nonce }}" src="/static/js/nav-shell-pending.js?v=20260816" data-nav-shell="instructor"></script>
 {% elif nsss %}
 <style id="navShellSupervisorCritical">
-  html.nav-shell-supervisor-pending .app-navbar .navbar-nav > .nav-item:not(#navSupervisorPortalWrap):not(#navSupervisorSurveysWrap):not(#navSupervisorMoreWrap),
+  html.nav-shell-supervisor-pending .app-navbar .navbar-nav > .nav-item:not(#navSupervisorPortalWrap):not(#navSupervisorSurveysWrap):not(#navSupCollegeStoryWrap):not(#navSupQualityReportWrap):not(#navSupTranscriptWrap):not(#navSupPerformanceWrap):not(#navSupSummaryPdfWrap):not(#navSupSurveysFullWrap),
   .nav-shell-supervisor #navDashboardWrap,
   .nav-shell-supervisor #navStudentAffairsWrap,
   .nav-shell-supervisor #navAcademicRecordsMenuWrap,
+  .nav-shell-supervisor #navDeptReportsMenuWrap,
   .nav-shell-supervisor #navPlanningMenuWrap,
   .nav-shell-supervisor #navCatalogWrap,
   .nav-shell-supervisor #navFacultySupervisionWrap,
@@ -147,7 +148,12 @@
   }
   .nav-shell-supervisor #navSupervisorPortalWrap,
   .nav-shell-supervisor #navSupervisorSurveysWrap,
-  .nav-shell-supervisor #navSupervisorMoreWrap { display: list-item !important; }
+  .nav-shell-supervisor #navSupCollegeStoryWrap,
+  .nav-shell-supervisor #navSupQualityReportWrap,
+  .nav-shell-supervisor #navSupTranscriptWrap,
+  .nav-shell-supervisor #navSupPerformanceWrap,
+  .nav-shell-supervisor #navSupSummaryPdfWrap,
+  .nav-shell-supervisor #navSupSurveysFullWrap { display: list-item !important; }
 </style>
 <script nonce="{{ csp_nonce }}" src="/static/js/nav-shell-pending.js?v=20260816" data-nav-shell="supervisor"></script>
 {% endif %}
@@ -164,18 +170,24 @@
   .app-navbar.nav-staff-expanded .nav-label-full { display: none !important; }
   .app-navbar.nav-staff-expanded .nav-label-short { display: inline !important; }
   .app-navbar.nav-staff-expanded .navbar-collapse .navbar-nav,
-  .app-navbar.nav-staff-expanded #mainNav .navbar-nav {
+  .app-navbar.nav-staff-expanded #mainNav .navbar-nav,
+  .app-navbar.nav-shell-supervisor .navbar-collapse .navbar-nav,
+  .app-navbar.nav-shell-supervisor #mainNav .navbar-nav {
     display: grid !important;
-    grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+    /* حد أقصى 6 أعمدة ⇒ صفين فأكثر عند وجود 7 عناصر فأكثر */
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
     grid-auto-flow: row !important;
     width: 100% !important;
   }
   .app-navbar.nav-staff-expanded .navbar-collapse,
-  .app-navbar.nav-staff-expanded #mainNav {
+  .app-navbar.nav-staff-expanded #mainNav,
+  .app-navbar.nav-shell-supervisor .navbar-collapse,
+  .app-navbar.nav-shell-supervisor #mainNav {
     width: 100% !important;
     flex-basis: 100% !important;
   }
-  .app-navbar.nav-staff-expanded .navbar-nav > .nav-item > .nav-link {
+  .app-navbar.nav-staff-expanded .navbar-nav > .nav-item > .nav-link,
+  .app-navbar.nav-shell-supervisor .navbar-nav > .nav-item > .nav-link {
     font-size: 0.875rem !important;
   }
   #qualityAccreditationMenuList,
@@ -245,8 +257,8 @@
       <!-- إجراءات الشريط العلوي -->
       <div class="app-actions d-flex align-items-center gap-2">
         <div class="btn-group btn-group-sm d-none nav-density-toggle" id="navDensityToggleWrap" role="group" aria-label="كثافة الشريط الرئيسي">
-          <button type="button" class="btn btn-outline-light" id="navDensityCompactBtn" title="عرض الروابط الأكثر استخداماً فقط">مدمج</button>
-          <button type="button" class="btn btn-outline-light" id="navDensityExpandedBtn" title="عرض كل القوائم في الشريط">موسع</button>
+          <button type="button" class="btn btn-outline-light" id="navDensityCompactBtn" title="عرض الروابط الأكثر استخداماً فقط + المزيد">مدمج</button>
+          <button type="button" class="btn btn-outline-light" id="navDensityExpandedBtn" title="عرض كل القوائم على صفين أو أكثر">موسع</button>
         </div>
         <a class="btn-topbar-notify position-relative" id="navNotificationsTop" href="/notifications_center" title="الإشعارات" aria-label="الإشعارات">
           <i class="fa-regular fa-bell" aria-hidden="true"></i>
@@ -377,19 +389,35 @@
             <span class="badge rounded-pill bg-warning text-dark ms-1 d-none" id="navSupervisorSurveysBadge">0</span>
           </a>
         </li>
-        <li class="nav-item dropdown" id="navSupervisorMoreWrap" style="display:none;">
-          <a class="nav-link dropdown-toggle" href="#" id="supervisorMoreMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-            <i class="fa-solid fa-ellipsis ms-1"></i> المزيد
+        <li class="nav-item" id="navSupCollegeStoryWrap" style="display:none;">
+          <a class="nav-link" id="navSupCollegeStory" href="/academic_quality/ilo/outcomes-map" title="هوية الكلية وبرنامجك">
+            <i class="fa-solid fa-building-columns ms-1"></i> هوية الكلية
           </a>
-          <ul class="dropdown-menu" aria-labelledby="supervisorMoreMenu">
-            <li><a class="dropdown-item" id="navSupCollegeStory" href="/academic_quality/ilo/outcomes-map">هوية الكلية وبرنامجك</a></li>
-            <li><a class="dropdown-item" id="navSupQualityReport" href="/supervisor_quality_report_page">تقرير الإرشاد (كمي)</a></li>
-            <li><a class="dropdown-item" id="navSupTranscript" href="/transcript_page">كشف درجات طالب</a></li>
-            <li><a class="dropdown-item" id="navSupPerformance" href="/performance_report">تقرير الأداء</a></li>
-            <li><hr class="dropdown-divider"></li>
-            <li><a class="dropdown-item" id="navSupSummaryPdf" href="/supervisors/summary.pdf" target="_blank">PDF ملخص الفصل</a></li>
-            <li><a class="dropdown-item" id="navSupSurveysFull" href="/academic_quality/surveys">صفحة التعبئة الكاملة</a></li>
-          </ul>
+        </li>
+        <li class="nav-item" id="navSupQualityReportWrap" style="display:none;">
+          <a class="nav-link" id="navSupQualityReport" href="/supervisor_quality_report_page" title="تقرير الإرشاد (كمي)">
+            <i class="fa-solid fa-chart-line ms-1"></i> تقرير الإرشاد
+          </a>
+        </li>
+        <li class="nav-item" id="navSupTranscriptWrap" style="display:none;">
+          <a class="nav-link" id="navSupTranscript" href="/transcript_page" title="كشف درجات طالب">
+            <i class="fa-regular fa-file-lines ms-1"></i> كشف طالب
+          </a>
+        </li>
+        <li class="nav-item" id="navSupPerformanceWrap" style="display:none;">
+          <a class="nav-link" id="navSupPerformance" href="/performance_report" title="تقرير الأداء">
+            <i class="fa-solid fa-user-graduate ms-1"></i> تقرير الأداء
+          </a>
+        </li>
+        <li class="nav-item" id="navSupSummaryPdfWrap" style="display:none;">
+          <a class="nav-link" id="navSupSummaryPdf" href="/supervisors/summary.pdf" target="_blank" title="PDF ملخص الفصل">
+            <i class="fa-regular fa-file-pdf ms-1"></i> PDF ملخص
+          </a>
+        </li>
+        <li class="nav-item" id="navSupSurveysFullWrap" style="display:none;">
+          <a class="nav-link" id="navSupSurveysFull" href="/academic_quality/surveys" title="صفحة التعبئة الكاملة">
+            <i class="fa-solid fa-list-check ms-1"></i> تعبئة كاملة
+          </a>
         </li>
         <li class="nav-item" id="navInstructorGradeDraftsWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
           <a class="nav-link" id="navInstructorGradeDrafts" href="/grade_drafts">
@@ -534,7 +562,7 @@
           </ul>
         </li>
 
-        <!-- السجل الأكاديمي والتقارير -->
+        <!-- السجل الأكاديمي (تشغيل الدرجات والكشوف) -->
         <li class="nav-item dropdown" id="navAcademicRecordsMenuWrap" data-nav-tier="secondary" style="display:none;">
           <a class="nav-link dropdown-toggle" href="#" id="academicRecordsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-regular fa-file-lines ms-1"></i>
@@ -544,11 +572,19 @@
             <li><a class="dropdown-item" id="navDeanFinalBatches" href="/grades_dean_final_batches" style="display:none;">اعتماد حزم الدرجات النهائية</a></li>
             <li><a class="dropdown-item" id="navHodFinalBatch" href="/grades_hod_final_batch" style="display:none;">حزمة الدرجات النهائية</a></li>
             <li><a class="dropdown-item" id="navGradeDrafts" href="/grade_drafts" style="display:none;">مسودات الدرجات</a></li>
-            <li><a class="dropdown-item" id="navHodCourseDelivery" href="/course_delivery_hod_page" style="display:none;">لوحة اعتماد رئيس القسم</a></li>
-            <li><a class="dropdown-item" id="navHodCoursePages" href="/course_pages_hod" style="display:none;">صفحات المقررات</a></li>
             <li><a class="dropdown-item" id="navTranscript" href="/transcript_page">كشف الدرجات</a></li>
-            <li><hr class="dropdown-divider" id="navAcademicRecordsGradesDivider"></li>
-            <li><h6 class="dropdown-header" id="navDeptReportsHeader">تقارير القسم</h6></li>
+          </ul>
+        </li>
+
+        <!-- تقارير القسم (قراءة وتحليل) -->
+        <li class="nav-item dropdown" id="navDeptReportsMenuWrap" data-nav-tier="secondary" style="display:none;">
+          <a class="nav-link dropdown-toggle" href="#" id="deptReportsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="fa-solid fa-chart-column ms-1"></i>
+            <span class="nav-label-full">تقارير القسم</span><span class="nav-label-short">التقارير</span>
+          </a>
+          <ul class="dropdown-menu" aria-labelledby="deptReportsMenu" id="deptReportsMenuList">
+            <li><a class="dropdown-item" id="navDeptReportsHub" href="/department_reports">لوحة التقارير</a></li>
+            <li><hr class="dropdown-divider" id="navDeptReportsHubDivider"></li>
             <li><a class="dropdown-item" id="navPerformance" href="/performance_report">تقرير الأداء</a></li>
             <li><a class="dropdown-item" id="navElectivesReport" href="/electives_report_page">تقرير المقررات الاختيارية</a></li>
             <li><a class="dropdown-item" id="navRegistrationChangesReport" href="/registration_changes_report_page">تقرير الإضافة والإسقاط</a></li>
@@ -557,7 +593,7 @@
             <li><a class="dropdown-item" id="navUncompletedCoursesReport" href="/uncompleted_courses_report_page">تقرير المقررات غير المنجزة (حسب طالب)</a></li>
             <li><a class="dropdown-item" id="navGradeCourseAudit" href="/grade_course_mapping_audit_page">تدقيق ترميز المقررات</a></li>
             <li><a class="dropdown-item" id="navCourseRegistrationReport" href="/course_registration_report_page" style="display:none;">أعداد التسجيل الفعلي بالمقررات</a></li>
-            <li><hr class="dropdown-divider" id="navAcademicRecordsReportsDivider"></li>
+            <li><hr class="dropdown-divider" id="navDeptReportsAnalyticsDivider"></li>
             <li><a class="dropdown-item" id="navAnalytics" href="/analytics">التحليلات الأكاديمية</a></li>
           </ul>
         </li>
@@ -710,4 +746,4 @@
 
 <script nonce="{{ csp_nonce }}" src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
 <script nonce="{{ csp_nonce }}" src="/static/js/nav-shell.js?v=20260816"></script>
-<script nonce="{{ csp_nonce }}" src="/static/js/nav-auth.js?v=20260816"></script>
+<script nonce="{{ csp_nonce }}" src="/static/js/nav-auth.js?v=20260910"></script>

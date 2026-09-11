@@ -126,3 +126,132 @@ def handover_permissions():
         logger.info("role handover from=%s to=%s actor=%s", from_username, to_username, actor)
 
     return jsonify({"status": "ok", "message": "تم نقل القالب والصلاحيات"})
+
+
+def _ensure_permission_definition(conn, permission_key: str) -> None:
+    from backend.core.permissions import PERMISSION_CATALOG
+
+    item = next((p for p in PERMISSION_CATALOG if p["key"] == permission_key), None)
+    if not item:
+        return
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO permission_definitions (key, group_key, group_label_ar, label_ar, sort_order)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(key) DO NOTHING
+        """,
+        (item["key"], item["group_key"], item["group_label_ar"], item["label_ar"], 0),
+    )
+
+
+@role_profiles_bp.route("/user_overrides", methods=["GET"])
+@role_required("system_admin", "college_dean", "admin_main")
+def get_user_overrides():
+    username = (request.args.get("username") or "").strip()
+    if not username:
+        return jsonify({"status": "error", "message": "username مطلوب"}), 400
+    with get_connection() as conn:
+        row = users_repo.fetch_user_row_by_username_ci(conn, username)
+        if not row:
+            return jsonify({"status": "error", "message": "المستخدم غير موجود"}), 404
+        tgt = users_repo._user_row_to_dict(row)
+        ok, err = assert_actor_may_modify_user(session, tgt)
+        if not ok:
+            return jsonify({"status": "error", "message": err or "غير مسموح"}), 403
+        grants, denies = load_user_overrides(conn, username)
+    from backend.core.permissions import CAN_ADD_DEPARTMENT_USERS
+
+    return jsonify({
+        "status": "ok",
+        "username": username,
+        "role": tgt.get("role"),
+        "grants": sorted(grants),
+        "denies": sorted(denies),
+        "can_add_department_users": CAN_ADD_DEPARTMENT_USERS in grants
+        and CAN_ADD_DEPARTMENT_USERS not in denies,
+    })
+
+
+@role_profiles_bp.route("/user_overrides", methods=["POST"])
+@role_required("system_admin", "college_dean", "admin_main")
+def set_user_override():
+    """منح أو إلغاء صلاحية إضافية لحساب معيّن (مثل إضافة مستخدمي القسم لرئيس القسم)."""
+    from backend.core.permissions import (
+        CAN_ADD_DEPARTMENT_USERS,
+        GRANTABLE_USER_OVERRIDE_KEYS,
+    )
+    from backend.core.user_admin_policy import can_grant_hod_department_users_session
+    from backend.core.auth_roles import _normalize_role
+
+    if not can_grant_hod_department_users_session(session):
+        return jsonify({"status": "error", "message": "غير مسموح"}), 403
+
+    data = request.get_json(force=True) or {}
+    username = (data.get("username") or "").strip()
+    permission_key = (data.get("permission_key") or CAN_ADD_DEPARTMENT_USERS).strip()
+    granted_raw = data.get("granted")
+    if granted_raw in (True, 1, "1", "true", "True", "yes"):
+        granted = True
+    elif granted_raw in (False, 0, "0", "false", "False", "no"):
+        granted = False
+    else:
+        return jsonify({"status": "error", "message": "granted مطلوب (true/false)"}), 400
+    if not username:
+        return jsonify({"status": "error", "message": "username مطلوب"}), 400
+    if permission_key not in GRANTABLE_USER_OVERRIDE_KEYS:
+        return jsonify({"status": "error", "message": "صلاحية غير مسموح منحها من هنا"}), 400
+
+    actor = (session.get("user") or "").strip() or "system"
+    with get_connection() as conn:
+        from backend.boot.role_profiles_seed import ensure_role_profile_tables, _is_pg
+
+        ensure_role_profile_tables(conn, pg=_is_pg(conn))
+        tgt_row = users_repo.fetch_user_row_by_username_ci(conn, username)
+        if not tgt_row:
+            return jsonify({"status": "error", "message": "المستخدم غير موجود"}), 404
+        tgt = users_repo._user_row_to_dict(tgt_row)
+        ok, err = assert_actor_may_modify_user(session, tgt)
+        if not ok:
+            return jsonify({"status": "error", "message": err or "غير مسموح"}), 403
+        if user_dict_is_protected(tgt) and not is_system_admin_session(session):
+            return jsonify({"status": "error", "message": "لا يمكن تعديل صلاحيات حساب محمي"}), 403
+        target_role = _normalize_role(tgt.get("role") or "")
+        if permission_key == CAN_ADD_DEPARTMENT_USERS and target_role != "head_of_department":
+            return jsonify({
+                "status": "error",
+                "message": "هذه الصلاحية تُمنح لرئيس القسم فقط",
+            }), 400
+
+        _ensure_permission_definition(conn, permission_key)
+        cur = conn.cursor()
+        if granted:
+            cur.execute(
+                """
+                INSERT INTO user_permission_overrides (username, permission_key, granted)
+                VALUES (?, ?, 1)
+                ON CONFLICT(username, permission_key) DO UPDATE SET granted = 1
+                """,
+                (tgt.get("username") or username, permission_key),
+            )
+        else:
+            cur.execute(
+                """
+                DELETE FROM user_permission_overrides
+                WHERE lower(username) = lower(?) AND permission_key = ?
+                """,
+                (username, permission_key),
+            )
+        conn.commit()
+        logger.info(
+            "user override username=%s key=%s granted=%s actor=%s",
+            username, permission_key, granted, actor,
+        )
+
+    return jsonify({
+        "status": "ok",
+        "username": username,
+        "permission_key": permission_key,
+        "granted": granted,
+        "message": "تم منح الصلاحية" if granted else "تم إلغاء الصلاحية",
+    })

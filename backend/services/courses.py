@@ -1804,6 +1804,178 @@ def _course_row_name(row) -> str:
     return str(row[0] or "").strip()
 
 
+def _course_row_field(row, key: str, index: int, default=None):
+    if row is None:
+        return default
+    if hasattr(row, "keys"):
+        try:
+            return row[key]
+        except Exception:
+            return default
+    try:
+        return row[index]
+    except Exception:
+        return default
+
+
+def _try_cross_department_shared_on_import(
+    conn,
+    *,
+    cname: str,
+    code: str,
+    units: int,
+    importer_dept_id: int | None,
+    name_row,
+) -> dict | None:
+    """
+    عند وجود الاسم لقسم تخصص آخر (أو في سجل المشترك):
+    ربط/ترقية multi_code بدل الكتابة فوق course_code العام.
+    يُرجع {"handled": True, "kind": "promoted"|"ignored", "item": {...}} أو None للمسار العادي.
+    """
+    if importer_dept_id is None or name_row is None:
+        return None
+    if int(_course_row_field(name_row, "is_archived", 3, 0) or 0) == 1:
+        return None
+
+    from backend.core.college_shared_catalog import (
+        find_shared_catalog_id_by_course_name,
+        save_catalog_entry,
+        set_department_plan_course_code,
+    )
+    from backend.core.department_scope_policy import resolve_college_general_department_id
+
+    existing_code = str(_course_row_field(name_row, "course_code", 1, "") or "").strip()
+    try:
+        existing_units = int(_course_row_field(name_row, "units", 2, 0) or 0)
+    except (TypeError, ValueError):
+        existing_units = 0
+    owner_raw = _course_row_field(name_row, "owning_department_id", 4, None)
+    try:
+        owner_id = int(owner_raw) if owner_raw not in (None, "") else None
+    except (TypeError, ValueError):
+        owner_id = None
+
+    cid = find_shared_catalog_id_by_course_name(conn, cname)
+    if cid is not None:
+        if not (code or "").strip():
+            return {
+                "handled": True,
+                "kind": "ignored",
+                "item": {
+                    "course_name": cname,
+                    "course_code": code,
+                    "reason": "shared_needs_plan_code",
+                    "message": (
+                        f"«{cname}» في سجل المقررات المشتركة — "
+                        "أدخل رمز الخطة لقسمك لربطه دون تغيير رموز الأقسام الأخرى."
+                    ),
+                },
+            }
+        try:
+            set_department_plan_course_code(
+                conn, cname, int(importer_dept_id), code.strip(), units=units
+            )
+        except ValueError as e:
+            return {
+                "handled": True,
+                "kind": "ignored",
+                "item": {
+                    "course_name": cname,
+                    "course_code": code,
+                    "reason": "shared_link_failed",
+                    "message": str(e),
+                },
+            }
+        return {
+            "handled": True,
+            "kind": "promoted",
+            "item": {
+                "course_name": cname,
+                "course_code": code,
+                "reason": "shared_department_linked",
+                "message": (
+                    f"«{cname}» مشترك كلية — أُضيف/حُدّث رمز قسمك ({code.strip()}) "
+                    "دون استبدال رموز الأقسام الأخرى."
+                ),
+            },
+        }
+
+    gen_id = resolve_college_general_department_id(conn)
+    if owner_id is None:
+        return None
+    if gen_id is not None and int(owner_id) == int(gen_id):
+        return None
+    if int(owner_id) == int(importer_dept_id):
+        return None
+
+    if not (code or "").strip():
+        return {
+            "handled": True,
+            "kind": "ignored",
+            "item": {
+                "course_name": cname,
+                "course_code": code,
+                "reason": "cross_dept_needs_code",
+                "message": (
+                    f"الاسم «{cname}» مملوك لقسم تخصص آخر — "
+                    "أدخل رمزاً لقسمك لترقيته إلى مقرر مشترك (رمز لكل قسم)."
+                ),
+            },
+        }
+
+    owner_code = existing_code or code.strip()
+    catalog_units = existing_units if existing_units > 0 else max(0, int(units or 0))
+    try:
+        save_catalog_entry(
+            conn,
+            {
+                "canonical_course_name": cname,
+                "canonical_course_code": owner_code,
+                "share_type": "multi_code",
+                "units": catalog_units,
+                "notes": "ترقية تلقائية عند استيراد مقررات قسم (اسم مشترك بين تخصصين)",
+                "departments": [
+                    {
+                        "department_id": int(owner_id),
+                        "plan_course_code": owner_code,
+                        "units_override": existing_units if existing_units > 0 else None,
+                    },
+                    {
+                        "department_id": int(importer_dept_id),
+                        "plan_course_code": code.strip(),
+                        "units_override": units if int(units or 0) > 0 else None,
+                    },
+                ],
+            },
+        )
+    except ValueError as e:
+        return {
+            "handled": True,
+            "kind": "ignored",
+            "item": {
+                "course_name": cname,
+                "course_code": code,
+                "reason": "promote_shared_failed",
+                "message": str(e),
+            },
+        }
+    return {
+        "handled": True,
+        "kind": "promoted",
+        "item": {
+            "course_name": cname,
+            "course_code": code,
+            "reason": "promoted_to_shared_multi_code",
+            "message": (
+                f"«{cname}» رُقّي لمشترك كلية (رمز مختلف لكل قسم): "
+                f"{owner_code} للقسم المالك سابقاً، و{code.strip()} لقسمك."
+            ),
+            "owner_department_id": int(owner_id),
+            "owner_course_code": owner_code,
+        },
+    }
+
+
 @courses_bp.route("/import/excel", methods=["POST"])
 @login_required
 def courses_import_excel():
@@ -1821,6 +1993,7 @@ def courses_import_excel():
         imported_names: list[str] = []
         created: list[str] = []
         updated: list[dict] = []
+        promoted: list[dict] = []
         ignored: list[dict] = []
         with get_connection() as conn:
             cur = conn.cursor()
@@ -1884,9 +2057,32 @@ def courses_import_excel():
                         ) == 1
                     except Exception:
                         name_archived = False
-                # نشط فقط يمنع التحديث لقفل الكلية؛ المؤرشف يُستعاد عبر ON CONFLICT
+
                 if name_exists and not name_archived:
-                    # اتجاه عام / مشترك: لا يحدّثه رئيس تخصص — تنبيه وتجاوز
+                    cross = _try_cross_department_shared_on_import(
+                        conn,
+                        cname=cname,
+                        code=code,
+                        units=units,
+                        importer_dept_id=int(dept_id) if dept_id is not None else None,
+                        name_row=name_row,
+                    )
+                    if cross and cross.get("handled"):
+                        item = cross.get("item") or {
+                            "course_name": cname,
+                            "course_code": code,
+                            "message": "تم المعالجة",
+                        }
+                        if cross.get("kind") == "promoted":
+                            promoted.append(item)
+                            updated.append(item)
+                            imported_names.append(cname)
+                        else:
+                            ignored.append(item)
+                        continue
+
+                    # اتجاه عام: لا يحدّثه رئيس تخصص — تنبيه وتجاوز
+                    # (المشترك عُالج أعلاه عبر ربط رمز القسم)
                     is_locked = course_is_college_general(conn, cname) or course_is_college_shared_catalog(
                         conn, cname, department_id=int(dept_id) if dept_id is not None else None
                     )
@@ -2013,6 +2209,8 @@ def courses_import_excel():
             "imported": len(imported_names),
             "created": len(created),
             "updated": len(updated),
+            "promoted_shared": len(promoted),
+            "promoted_items": promoted,
             "updated_items": updated,
             "ignored": ignored,
             "ignored_count": len(ignored),

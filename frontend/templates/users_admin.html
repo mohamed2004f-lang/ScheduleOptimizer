@@ -42,7 +42,10 @@
       <div class="card-body">
         <h5 class="card-title mb-3">إضافة / تعديل مستخدم (مباشرة)</h5>
         <div id="headDeptOnlyHint" class="alert alert-secondary p-2 small d-none">
-          بصلاحية <strong>رئيس القسم</strong>: يمكنك فقط <strong>تعديل</strong> حسابات <strong>عضو هيئة التدريس / رئيس القسم</strong> (إشراف، رقم مدرّس، الدور بين هذين الدورين). لا يمكن إنشاء مستخدم جديد من هنا، ولا الحذف، ولا تغيير كلمة المرور أو حالة التفعيل.
+          بصلاحية <strong>رئيس القسم</strong>: يمكنك فقط <strong>تعديل</strong> حسابات <strong>عضو هيئة التدريس</strong> (إشراف ورقم مدرّس). لا يمكن إنشاء مستخدم جديد من هنا، ولا تعديل رئيس قسم، ولا الحذف، ولا تغيير كلمة المرور أو حالة التفعيل.
+        </div>
+        <div id="headDeptAddUsersHint" class="alert alert-success p-2 small d-none">
+          فُوّضت بإضافة حسابات <strong>طالب</strong> و<strong>عضو هيئة تدريس</strong> داخل <strong>قسمك فقط</strong>. لا يمكن إنشاء أو تعديل رئيس قسم أو أدوار إدارية، ولا الحذف، ولا تعطيل الحسابات، ولا تغيير كلمة مرور حساب قائم.
         </div>
         <div id="collegeLeadRoleHint" class="alert alert-warning p-2 small d-none">
           <div class="fw-semibold mb-1">عميد / وكيل الكلية: ربط رقم عضو هيئة التدريس</div>
@@ -76,7 +79,7 @@
           </div>
         </div>
         <div class="row g-2 align-items-end mt-2">
-          <div class="col-md-4">
+          <div class="col-md-4" id="roleProfileWrap">
             <label class="form-label">قالب دور (اختياري)</label>
             <select id="roleProfileSelect" class="form-select form-select-sm">
               <option value="">— بدون قالب —</option>
@@ -196,6 +199,7 @@
             <input type="search" id="usersFilter" class="form-control form-control-sm" placeholder="ابحث باسم المستخدم…" autocomplete="off" title="إن لم يظهر مستخدم بعد إضافته، امسح هذا الحقل — التصفية تخفي غير المطابقين">
           </div>
         </div>
+        <div id="usersAdminDiagnostics">
         <div class="d-flex flex-wrap gap-2 mb-2">
           <button id="btnInviteCleanup" class="btn btn-sm btn-outline-secondary">تنظيف الدعوات القديمة</button>
           <button id="btnUsersValidationReport" class="btn btn-sm btn-outline-warning">فحص سلامة بيانات المستخدمين</button>
@@ -209,6 +213,7 @@
           <button type="button" id="btnUsersAuditExpand" class="btn btn-sm btn-outline-secondary d-none">توسيع السجل</button>
         </div>
         <div id="usersAuditList" class="small"></div>
+        </div>
         <div id="usersList" class="list-group small"></div>
       </div>
     </div>
@@ -450,7 +455,9 @@
       }
 
       const canManageSupervisor = (CURRENT_ROLE === 'admin_main' || CURRENT_ROLE === 'admin' || CURRENT_ROLE === 'college_dean' || CURRENT_ROLE === 'head_of_department');
-      const isInstructorTarget = (u.role === 'instructor' || u.role === 'head_of_department');
+      const isInstructorTarget = (CURRENT_ROLE === 'head_of_department')
+        ? (u.role === 'instructor')
+        : (u.role === 'instructor' || u.role === 'head_of_department');
       if(canManageSupervisor && isInstructorTarget){
         const supBtn = document.createElement('button');
         supBtn.className = u.is_supervisor ? 'btn btn-sm btn-outline-secondary' : 'btn btn-sm btn-outline-info';
@@ -477,6 +484,30 @@
         right.appendChild(hoBtn);
       }
 
+      if(canGrantHodAddDeptUsers() && u.role === 'head_of_department'){
+        const wrap = document.createElement('div');
+        wrap.className = 'form-check form-switch mb-0 ms-1';
+        wrap.title = 'السماح لرئيس القسم بإضافة طلبة وأعضاء هيئة تدريس لقسمه فقط';
+        const chk = document.createElement('input');
+        chk.type = 'checkbox';
+        chk.className = 'form-check-input';
+        chk.role = 'switch';
+        chk.checked = !!u.can_add_department_users;
+        chk.setAttribute('aria-label', 'إضافة مستخدمي القسم');
+        const lab = document.createElement('label');
+        lab.className = 'form-check-label small';
+        lab.textContent = 'إضافة مستخدمي القسم';
+        chk.addEventListener('click', (ev)=> ev.stopPropagation());
+        chk.addEventListener('change', async (ev)=>{
+          ev.stopPropagation();
+          await setHodAddDeptUsers(u.username, chk.checked, chk);
+        });
+        wrap.addEventListener('click', (ev)=> ev.stopPropagation());
+        wrap.appendChild(chk);
+        wrap.appendChild(lab);
+        right.appendChild(wrap);
+      }
+
       const delBtn = document.createElement('button');
       delBtn.className = 'btn btn-sm btn-danger btn-delete-user';
       delBtn.textContent = 'حذف';
@@ -485,8 +516,10 @@
       item.appendChild(left);
       item.appendChild(right);
       item.addEventListener('click', ()=>{
-        if(CURRENT_ROLE === 'head_of_department' && u.role !== 'instructor' && u.role !== 'head_of_department'){
-          setUserMsg('warning','رئيس القسم يعدّل حسابات أعضاء هيئة التدريس ورؤساء الأقسام فقط.');
+        if(CURRENT_ROLE === 'head_of_department' && u.role !== 'instructor'){
+          setUserMsg('warning', hodCanAddDeptUsers()
+            ? 'رئيس القسم يضيف حسابات الطلبة وأعضاء هيئة التدريس فقط، ولا يعدّل رئيس قسم.'
+            : 'رئيس القسم يعدّل حسابات أعضاء هيئة التدريس فقط.');
           return;
         }
         document.getElementById('usernameInput').value = u.username != null ? String(u.username) : '';
@@ -648,6 +681,10 @@
         setUserMsg('warning','يرجى إدخال اسم المستخدم.');
         return;
       }
+      if(CURRENT_ROLE === 'head_of_department' && role === 'head_of_department'){
+        setUserMsg('warning', 'لا يمكن لرئيس القسم إنشاء أو تعديل حساب رئيس قسم.');
+        return;
+      }
       if(role === 'student'){
         if(!studentId){
           setUserMsg('warning', 'يرجى إدخال الرقم الدراسي للطالب.');
@@ -684,7 +721,9 @@
       }
       body.is_supervisor = isSupervisor;
       body.is_active = isActive;
-      const rpCode = (document.getElementById('roleProfileSelect')?.value || '').trim();
+      const rpCode = (CURRENT_ROLE === 'head_of_department')
+        ? ''
+        : (document.getElementById('roleProfileSelect')?.value || '').trim();
       if(rpCode) body.role_profile_code = rpCode;
       const res = await fetchJSON('/users/add', {
         method:'POST',
@@ -844,12 +883,13 @@
 
     function syncRoleHeadHints(){
       const role = document.getElementById('roleSelect')?.value || '';
+      const actorIsHead = CURRENT_ROLE === 'head_of_department';
       const hint = document.getElementById('headDeptRoleHint');
-      if(hint) hint.classList.toggle('d-none', role !== 'head_of_department');
+      if(hint) hint.classList.toggle('d-none', actorIsHead || role !== 'head_of_department');
       const leadHint = document.getElementById('collegeLeadRoleHint');
       if(leadHint) leadHint.classList.toggle('d-none', role !== 'college_dean' && role !== 'academic_vice_dean');
       const wrap = document.getElementById('managedDeptWrap');
-      if(wrap) wrap.classList.toggle('d-none', role !== 'head_of_department');
+      if(wrap) wrap.classList.toggle('d-none', actorIsHead || role !== 'head_of_department');
       syncInviteManagedDept();
     }
 
@@ -860,7 +900,35 @@
     }
 
     let CURRENT_ROLE = null;
+    let CURRENT_CAPS = {};
     let DEPT_NAME_BY_ID = {};
+
+    function hodCanAddDeptUsers(){
+      return CURRENT_ROLE === 'head_of_department' && !!CURRENT_CAPS.can_add_department_users;
+    }
+
+    function canGrantHodAddDeptUsers(){
+      return ['admin','admin_main','system_admin','college_dean'].includes(CURRENT_ROLE || '');
+    }
+
+    async function setHodAddDeptUsers(username, granted, chkEl){
+      const res = await fetchJSON('/role_profiles/user_overrides', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          username,
+          permission_key: 'can_add_department_users',
+          granted: !!granted,
+        }),
+      });
+      if(!res.ok){
+        if(chkEl) chkEl.checked = !granted;
+        setUserMsg('danger', (res.json && res.json.message) || 'تعذر حفظ صلاحية رئيس القسم');
+        return;
+      }
+      setUserMsg('success', (res.json && res.json.message) || (granted ? 'تم منح الصلاحية' : 'تم إلغاء الصلاحية'));
+      await loadUsers();
+    }
 
     async function loadDepartmentsForHod(){
       const sels = [
@@ -933,8 +1001,10 @@
       const isPrivileged = ['admin','admin_main','system_admin','college_dean'].includes(role);
       const isAdminMain = (role === 'admin_main' || role === 'admin' || role === 'system_admin');
       const isHead = (role === 'head_of_department');
+      const hodAdd = hodCanAddDeptUsers();
 
-      document.getElementById('headDeptOnlyHint')?.classList.toggle('d-none', !isHead);
+      document.getElementById('headDeptOnlyHint')?.classList.toggle('d-none', !isHead || hodAdd);
+      document.getElementById('headDeptAddUsersHint')?.classList.toggle('d-none', !hodAdd);
       document.getElementById('inviteSection')?.classList.toggle('d-none', !isPrivileged);
 
       const roleSelect = document.getElementById('roleSelect');
@@ -942,7 +1012,11 @@
         roleSelect.querySelectorAll('option').forEach((opt)=>{
           const v = opt.value;
           if(isHead){
-            opt.disabled = (v !== 'instructor' && v !== 'head_of_department');
+            if(hodAdd){
+              opt.disabled = (v !== 'instructor' && v !== 'student');
+            } else {
+              opt.disabled = (v !== 'instructor');
+            }
           } else if(role === 'college_dean'){
             opt.disabled = (v === 'admin_main' || v === 'college_dean' || v === 'system_admin');
           } else if(!isAdminMain){
@@ -953,12 +1027,23 @@
         });
       }
 
-      // رئيس القسم: يمنع إنشاء/حذف/تعطيل/تغيير كلمة المرور؛ يسمح فقط بتعديل الأساتذة (إشراف/رقم مدرس)
+      // رئيس القسم: يمنع الحذف/التعطيل؛ كلمة المرور تُتاح فقط عند تفويض الإنشاء
       const passwordEl = document.getElementById('passwordInput');
       const activeEl = document.getElementById('isActive');
       if (isHead){
-        if(passwordEl) passwordEl.disabled = true;
+        if(passwordEl) passwordEl.disabled = !hodAdd;
         if(activeEl) activeEl.disabled = true;
+        if(roleSelect){
+          const allowed = hodAdd ? ['instructor', 'student'] : ['instructor'];
+          if(!allowed.includes(roleSelect.value)){
+            roleSelect.value = 'instructor';
+          }
+        }
+        document.getElementById('managedDeptWrap')?.classList.add('d-none');
+        document.getElementById('headDeptRoleHint')?.classList.add('d-none');
+        document.getElementById('roleProfileWrap')?.classList.add('d-none');
+        const rpSel = document.getElementById('roleProfileSelect');
+        if(rpSel) rpSel.value = '';
       } else {
         if(passwordEl) passwordEl.disabled = false;
         if(activeEl) activeEl.disabled = false;
@@ -972,9 +1057,12 @@
         btn.style.display = (isPrivileged ? '' : 'none');
       });
       document.getElementById('tab-handover-btn')?.closest('.nav-item')?.classList.toggle('d-none', !isPrivileged);
+      document.getElementById('tab-profiles-btn')?.closest('.nav-item')?.classList.toggle('d-none', !isPrivileged);
       document.getElementById('btnInviteCleanup')?.classList.toggle('d-none', !isAdminMain);
       document.getElementById('btnUsersValidationReport')?.classList.toggle('d-none', !isPrivileged);
       document.getElementById('btnUsersAuditLog')?.classList.toggle('d-none', !isPrivileged);
+      document.getElementById('usersAdminDiagnostics')?.classList.toggle('d-none', !isPrivileged);
+      document.getElementById('roleProfileWrap')?.classList.toggle('d-none', isHead);
     }
 
     async function loadRoleProfiles(){
@@ -1073,6 +1161,7 @@
         const auth = await fetchJSON('/auth/check');
         if(auth.ok){
           CURRENT_ROLE = auth.json?.role || null;
+          CURRENT_CAPS = auth.json?.capabilities || {};
           syncUsersScopeBanner(auth.json);
         }
         if(auth.ok && !['admin','admin_main','system_admin','college_dean','head_of_department'].includes(auth.json?.role)){
@@ -1125,8 +1214,10 @@
       syncInviteManagedDept();
       applyPermissions();
       await loadRoleProfiles();
-      await loadUsersValidationReport();
-      await loadUsersAuditLog();
+      if(['admin','admin_main','system_admin','college_dean'].includes(CURRENT_ROLE || '')){
+        await loadUsersValidationReport();
+        await loadUsersAuditLog();
+      }
     });
 
     async function loadUsersValidationReport(){

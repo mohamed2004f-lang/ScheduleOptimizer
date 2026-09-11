@@ -13,6 +13,7 @@ from backend.core.college_shared_catalog import (
     get_catalog_entry,
     import_catalog_workbook,
     list_catalog_entries,
+    list_course_name_picker_options,
     list_specialty_departments,
     repair_college_wide_department_links,
     save_catalog_entry,
@@ -99,6 +100,15 @@ def register_shared_catalog_routes(bp) -> None:
         with get_connection() as conn:
             deps = list_specialty_departments(conn)
         return jsonify({"status": "ok", "departments": deps})
+
+    @bp.route("/shared_catalog/course_name_options", methods=["GET"])
+    @login_required
+    @role_required(*_PLAN_VIEW)
+    def shared_catalog_course_name_options():
+        """قائمة مقررات كل الأقسام لاختيار الاسم الرسمي (أو كتابة اسم جديد في الواجهة)."""
+        with get_connection() as conn:
+            options = list_course_name_picker_options(conn)
+        return jsonify({"status": "ok", "options": options, "count": len(options)})
 
     @bp.route("/shared_catalog/get/<int:catalog_id>", methods=["GET"])
     @login_required

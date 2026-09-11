@@ -62,6 +62,120 @@ def _sync_schedule_pk_col(conn):
     except Exception:
         pass
     return SCHEDULE_PK_COL
+
+
+def _invalidate_schedule_list_cache() -> None:
+    """إبطال كاش قائمة صفوف الجدول بعد إضافة/تعديل/حذف."""
+    try:
+        from backend.core.cache_setup import invalidate_list_prefix
+
+        invalidate_list_prefix("schedule_rows")
+    except Exception:
+        pass
+
+
+def _schedule_row_get(row, *names, index=None, default=None):
+    """قراءة حقل من صف PG/SQLite بالاسم أولاً (يتجنّب تصادم COALESCE)."""
+    if row is None:
+        return default
+    if hasattr(row, "keys"):
+        keys = row.keys()
+        for name in names:
+            if name in keys:
+                try:
+                    val = row[name]
+                except Exception:
+                    continue
+                if val is not None:
+                    return val
+    if index is not None:
+        try:
+            return row[index]
+        except Exception:
+            return default
+    return default
+
+
+def _find_schedule_row_for_write(conn, data: dict, sid: int = 0):
+    """إيجاد صف الجدول للحذف/التعديل: بالمعرّف ثم بالاسم+اليوم+الوقت بعد التوحيد."""
+    _sync_schedule_pk_col(conn)
+    pk = SCHEDULE_PK_COL
+    cur = conn.cursor()
+    id_expr = pk if is_postgresql() else f"COALESCE({pk}, rowid)"
+    select_sql = (
+        f"SELECT {id_expr} AS section_id, semester, department_id, course_name, day, time, room "
+        f"FROM schedule"
+    )
+
+    def _as_found(row):
+        if row is None:
+            return None, 0
+        try:
+            found_sid = int(_schedule_row_get(row, "section_id", index=0) or 0)
+        except (TypeError, ValueError):
+            found_sid = 0
+        return row, found_sid
+
+    if sid > 0:
+        if is_postgresql():
+            row = cur.execute(f"{select_sql} WHERE {pk} = ? LIMIT 1", (int(sid),)).fetchone()
+        else:
+            row = cur.execute(
+                f"{select_sql} WHERE {pk} = ? OR rowid = ? LIMIT 1",
+                (int(sid), int(sid)),
+            ).fetchone()
+        found = _as_found(row)
+        if found[0] is not None and found[1] > 0:
+            return found
+
+    cname = str((data or {}).get("course_name") or "").strip()
+    day_raw = str((data or {}).get("day") or "").strip()
+    time_raw = str((data or {}).get("time") or "").strip()
+    if not cname:
+        return None, 0
+
+    day_c = _canonical_schedule_day_label(day_raw)
+    time_c = _canonical_time_slot_label(time_raw)
+    rows = cur.execute(
+        f"{select_sql} WHERE LOWER(TRIM(course_name)) = LOWER(TRIM(?))",
+        (cname,),
+    ).fetchall()
+    matched = []
+    for row in rows or []:
+        rday = _canonical_schedule_day_label(str(_schedule_row_get(row, "day") or "").strip())
+        rtime = _canonical_time_slot_label(str(_schedule_row_get(row, "time") or "").strip())
+        if day_c and rday != day_c:
+            continue
+        if time_c and rtime != time_c:
+            continue
+        matched.append(row)
+    if len(matched) == 1:
+        return _as_found(matched[0])
+    if len(matched) > 1 and day_c and time_c:
+        return _as_found(matched[0])
+    # صف واحد بنفس الاسم في الفصل الحالي يكفي إن لم يُرسل يوم/وقت مطابق
+    try:
+        from backend.services.term_engine import (
+            current_term_match_context,
+            schedule_semester_matches_term_context,
+        )
+
+        ctx = current_term_match_context(conn)
+        current_hits = []
+        for row in rows or []:
+            sem = str(_schedule_row_get(row, "semester") or "").strip()
+            if ctx and schedule_semester_matches_term_context(sem, ctx):
+                if (not day_c or _canonical_schedule_day_label(str(_schedule_row_get(row, "day") or "")) == day_c) and (
+                    not time_c or _canonical_time_slot_label(str(_schedule_row_get(row, "time") or "")) == time_c
+                ):
+                    current_hits.append(row)
+        if len(current_hits) == 1:
+            return _as_found(current_hits[0])
+    except Exception:
+        pass
+    return None, 0
+
+
 VALID_LECTURE_STATUS = frozenset({"planned", "done", "postponed", "compensated"})
 VALID_ANNOUNCEMENT_TYPES = frozenset({"general", "postponement", "makeup", "extra_lecture"})
 VALID_FACULTY_ASSIGNMENT_TYPES = frozenset({"course", "committee", "service", "quality", "supervision"})
@@ -82,6 +196,12 @@ def _tuples_for_current_term(tuples: list, term_label: str) -> list:
 
 def _current_term_label_safe(conn) -> str:
     try:
+        from backend.services.term_engine import current_term_match_context
+
+        ctx = current_term_match_context(conn) or {}
+        label = (ctx.get("ops_label") or ctx.get("raw_label") or "").strip()
+        if label:
+            return label
         tname, tyear = get_current_term(conn=conn)
         return f"{(tname or '').strip()} {(tyear or '').strip()}".strip() or SEMESTER_LABEL
     except Exception:
@@ -1176,8 +1296,8 @@ def list_schedule_rows():
             if cache:
                 _ck = list_cache_key(f"schedule_rows:{term_part}")
                 _hit = cache.get(_ck)
-                if _hit is not None:
-                    return _hit
+                if isinstance(_hit, list):
+                    return jsonify(_hit)
         except Exception:
             pass
 
@@ -1206,38 +1326,58 @@ def list_schedule_rows():
             )
             result = []
             for r in rows:
+                def _cell(key: str, idx: int, default=None):
+                    if hasattr(r, "keys"):
+                        try:
+                            keys = r.keys()
+                            if key in keys:
+                                return r[key]
+                        except Exception:
+                            pass
+                    try:
+                        return r[idx]
+                    except Exception:
+                        return default
+
+                try:
+                    sid_raw = _cell("section_id", 0)
+                    if sid_raw in (None, ""):
+                        sid_raw = _cell("id", 0)
+                    section_id = int(sid_raw) if sid_raw not in (None, "") else 0
+                except (TypeError, ValueError):
+                    section_id = 0
                 item = {
-                    'section_id': r[0],
-                    'course_name': r[1],
-                    'day': r[2],
-                    'time': r[3],
-                    'room': r[4],
-                    'instructor': r[5],
-                    'semester': r[6],
-                    'instructor_id': r[7],
-                    'student_count': r[8] or 0
+                    "section_id": section_id,
+                    "course_name": _cell("course_name", 1, "") or "",
+                    "day": _cell("day", 2, "") or "",
+                    "time": _cell("time", 3, "") or "",
+                    "room": _cell("room", 4, "") or "",
+                    "instructor": _cell("instructor", 5, "") or "",
+                    "semester": _cell("semester", 6, "") or "",
+                    "instructor_id": _cell("instructor_id", 7),
+                    "student_count": int(_cell("student_count", 8, 0) or 0),
                 }
-                if has_tg and len(r) > 9:
-                    item['teaching_group_id'] = r[9]
-                    item['department_id'] = r[10]
-                    item['teaching_group_label'] = tg_svc.format_teaching_group_label(
-                        course_name=str(r[1] or ""),
-                        department_name=str(r[12] or ""),
-                        group_code=str(r[11] or tg_svc.DEFAULT_GROUP_CODE),
-                        instructor_name=str(r[13] or r[5] or ""),
+                if has_tg:
+                    item["teaching_group_id"] = _cell("teaching_group_id", 9)
+                    item["department_id"] = _cell("department_id", 10)
+                    item["teaching_group_label"] = tg_svc.format_teaching_group_label(
+                        course_name=str(item.get("course_name") or ""),
+                        department_name=str(_cell("tg_department_name", 12, "") or ""),
+                        group_code=str(_cell("tg_group_code", 11, tg_svc.DEFAULT_GROUP_CODE) or tg_svc.DEFAULT_GROUP_CODE),
+                        instructor_name=str(_cell("tg_instructor_name", 13, "") or item.get("instructor") or ""),
                     )
                 if not schedule_semester_matches_term_context(item.get("semester"), ctx):
                     continue
                 result.append(item)
-            resp = jsonify(result)
             try:
                 from backend.core.cache_setup import cache, list_cache_key
 
                 if cache:
-                    cache.set(list_cache_key(f"schedule_rows:{term_part}"), resp)
+                    # خزّن القائمة (JSON) لا كائن Response — أضمن عبر العمال/Redis
+                    cache.set(list_cache_key(f"schedule_rows:{term_part}"), result)
             except Exception:
                 pass
-            return resp
+            return jsonify(result)
         except Exception as e:
             logger.error(f"Error in list_schedule_rows: {e}")
             return jsonify([])
@@ -1924,8 +2064,7 @@ def add_schedule_row():
         sem = (data.get("semester") or "").strip()
         if not sem:
             with get_connection() as conn:
-                tname, tyear = get_current_term(conn=conn)
-            sem = f"{(tname or '').strip()} {(tyear or '').strip()}".strip()
+                sem = _current_term_label_safe(conn)
         if not sem:
             return jsonify({"status": "error", "message": "يجب تحديد الفصل الحالي أولاً من الإعدادات"}), 400
 
@@ -1963,6 +2102,7 @@ def add_schedule_row():
                 touch_schedule_updated_at(conn)
         except Exception:
             pass
+        _invalidate_schedule_list_cache()
     except ValidationError as e:
         return jsonify({"status": "error", "message": str(e)}), 400
     except Exception as e:
@@ -1992,6 +2132,10 @@ def delete_schedule_row():
     data = request.get_json(force=True) or {}
     section_id = data.get("section_id")
     try:
+        sid = int(section_id) if section_id not in (None, "") else 0
+    except (TypeError, ValueError):
+        sid = 0
+    try:
         from backend.core.services import ScheduleService
         from backend.services.term_closure import TermClosedError
         from backend.services.term_engine import (
@@ -2002,25 +2146,43 @@ def delete_schedule_row():
         )
 
         with get_connection() as conn:
-            cur = conn.cursor()
-            pk = schedule_pk_column(conn)
-            row = cur.execute(
-                f"SELECT semester, department_id, course_name FROM schedule WHERE {pk} = ? LIMIT 1",
-                (int(section_id),),
-            ).fetchone()
-            sem = ""
-            dept_id = None
-            if row:
-                if hasattr(row, "keys"):
-                    sem = str(row["semester"] or "")
-                    dept_id = row["department_id"]
-                    cname = row["course_name"]
-                else:
-                    sem = str(row[0] or "")
-                    dept_id = row[1]
-                    cname = row[2]
-                if dept_id is None and cname:
-                    dept_id = _resolve_schedule_row_department_id(conn, cname)
+            row, sid = _find_schedule_row_for_write(conn, data, sid)
+            if row is None or sid <= 0:
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": "الصف غير موجود أو معرّفه غير صالح. حدّث الصفحة ثم أعد المحاولة.",
+                    }
+                ), 404
+            sem = str(_schedule_row_get(row, "semester") or "")
+            dept_id = _schedule_row_get(row, "department_id")
+            cname = _schedule_row_get(row, "course_name")
+            if dept_id is None and cname:
+                dept_id = _resolve_schedule_row_department_id(conn, cname)
+            # منع حذف صفوف فصل سابق حتى لو ظهر الصف بالخطأ في الواجهة
+            try:
+                from backend.services.term_engine import (
+                    current_term_match_context,
+                    schedule_semester_matches_term_context,
+                )
+
+                ctx = current_term_match_context(conn)
+                if ctx and sem and not schedule_semester_matches_term_context(sem, ctx):
+                    label = (ctx.get("ops_label") or ctx.get("raw_label") or "").strip()
+                    return jsonify(
+                        {
+                            "status": "error",
+                            "code": "prior_term_row",
+                            "message": (
+                                "لا يمكن حذف صف من فصل سابق. "
+                                f"عدّل جدول الفصل الحالي فقط"
+                                + (f" («{label}»)" if label else "")
+                                + ". حدّث الصفحة ثم أعد المحاولة."
+                            ),
+                        }
+                    ), 409
+            except Exception:
+                pass
             try:
                 assert_term_operation(
                     conn,
@@ -2031,14 +2193,15 @@ def delete_schedule_row():
             except (TermClosedError, TermOperationError) as exc:
                 return http_term_blocked(exc)
 
-        res = ScheduleService.delete_schedule_row(int(section_id))
+        res = ScheduleService.delete_schedule_row(int(sid))
         try:
             with get_connection() as conn:
                 touch_schedule_updated_at(conn)
         except Exception:
             pass
+        _invalidate_schedule_list_cache()
         try:
-            log_activity(action="delete_schedule_row", details=f"section_id={section_id}")
+            log_activity(action="delete_schedule_row", details=f"section_id={sid}")
         except Exception:
             pass
         return jsonify(res), 200
@@ -2096,6 +2259,30 @@ def update_schedule_row():
                     cname = fields.get("course_name") or row[2]
                 if dept_id is None and cname:
                     dept_id = _resolve_schedule_row_department_id(conn, cname)
+            # منع تعديل صفوف فصل سابق
+            try:
+                from backend.services.term_engine import (
+                    current_term_match_context,
+                    schedule_semester_matches_term_context,
+                )
+
+                ctx = current_term_match_context(conn)
+                if ctx and sem and not schedule_semester_matches_term_context(sem, ctx):
+                    label = (ctx.get("ops_label") or ctx.get("raw_label") or "").strip()
+                    return jsonify(
+                        {
+                            "status": "error",
+                            "code": "prior_term_row",
+                            "message": (
+                                "لا يمكن تعديل صف من فصل سابق. "
+                                f"عدّل جدول الفصل الحالي فقط"
+                                + (f" («{label}»)" if label else "")
+                                + "."
+                            ),
+                        }
+                    ), 409
+            except Exception:
+                pass
             try:
                 assert_term_operation(
                     conn,
@@ -2112,6 +2299,7 @@ def update_schedule_row():
                 touch_schedule_updated_at(conn)
         except Exception:
             pass
+        _invalidate_schedule_list_cache()
         try:
             log_activity(action="update_schedule_row", details=f"section_id={section_id}")
         except Exception:
@@ -2218,6 +2406,7 @@ def clear_schedule_all():
     )
 
     deleted = 0
+    remaining_other = 0
     ops_label = ""
     with get_connection() as conn:
         try:
@@ -2267,7 +2456,7 @@ def clear_schedule_all():
             )
         except Exception:
             logger.exception("schedule snapshot before clear failed")
-            return jsonify({"status": "error", "message": "تعذر حفظ نسخة قبل التفريغ."}), 500
+            # لا نمنع التفريغ بسبب فشل الأرشيف — الجدول يجب أن يُفرَّغ
 
         cur = conn.cursor()
         try:
@@ -2275,39 +2464,98 @@ def clear_schedule_all():
         except Exception:
             scols = []
         pk = SCHEDULE_PK_COL
-        id_sql = f"COALESCE({pk}, rowid)" if not is_postgresql() else pk
         has_dept = "department_id" in scols
-        if has_dept:
-            rows = cur.execute(
-                f"SELECT {id_sql}, COALESCE(semester,''), COALESCE(department_id, 0) FROM schedule"
-            ).fetchall()
-        else:
-            rows = cur.execute(
-                f"SELECT {id_sql}, COALESCE(semester,'') FROM schedule"
-            ).fetchall()
-        ids = []
-        for r in rows:
-            sem = r[1]
-            is_current = schedule_semester_matches_term_context(sem, ctx)
-            if mode == "current" and not is_current:
-                continue
-            if mode == "other" and is_current:
-                continue
-            if dept_id is not None and has_dept:
-                try:
-                    row_dept = int(r[2] or 0)
-                except (TypeError, ValueError):
-                    row_dept = 0
-                if row_dept != int(dept_id):
-                    continue
-            try:
-                ids.append(int(r[0]))
-            except (TypeError, ValueError):
-                continue
-        if ids:
-            ph = ",".join("?" * len(ids))
-            cur.execute(f"DELETE FROM schedule WHERE {id_sql} IN ({ph})", tuple(ids))
+        labels = sorted(
+            {
+                str(x).strip().lower()
+                for x in (ctx.get("labels") or set())
+                if str(x).strip()
+            }
+        )
+        dept_sql = ""
+        dept_params: tuple = ()
+        if dept_id is not None and has_dept:
+            dept_sql = " AND (department_id IS NULL OR department_id = 0 OR department_id = ?) "
+            dept_params = (int(dept_id),)
+
+        deleted = 0
+        if mode == "all":
+            cur.execute(f"DELETE FROM schedule WHERE 1=1 {dept_sql}", dept_params)
             deleted = int(cur.rowcount or 0)
+        elif labels:
+            ph = ",".join("?" * len(labels))
+            if mode == "current":
+                cur.execute(
+                    f"""
+                    DELETE FROM schedule
+                    WHERE lower(trim(coalesce(semester, ''))) IN ({ph})
+                    {dept_sql}
+                    """,
+                    tuple(labels) + dept_params,
+                )
+            else:
+                cur.execute(
+                    f"""
+                    DELETE FROM schedule
+                    WHERE (
+                        trim(coalesce(semester, '')) = ''
+                        OR lower(trim(coalesce(semester, ''))) NOT IN ({ph})
+                    )
+                    {dept_sql}
+                    """,
+                    tuple(labels) + dept_params,
+                )
+            deleted = int(cur.rowcount or 0)
+            if deleted < 0:
+                deleted = 0
+
+        # تمريرة إضافية للمطابقة المرنة (خريف 26-27 ≡ خريف 2026/2027) إن بقيت صفوف
+        if mode != "all":
+            extra_ids = []
+            id_expr = pk if is_postgresql() else f"COALESCE({pk}, rowid)"
+            if has_dept:
+                left_rows = cur.execute(
+                    f"""
+                    SELECT {id_expr} AS section_id,
+                           COALESCE(semester, '') AS semester,
+                           COALESCE(department_id, 0) AS department_id
+                    FROM schedule
+                    """
+                ).fetchall()
+            else:
+                left_rows = cur.execute(
+                    f"""
+                    SELECT {id_expr} AS section_id,
+                           COALESCE(semester, '') AS semester
+                    FROM schedule
+                    """
+                ).fetchall()
+            for r in left_rows or []:
+                sem = str(_schedule_row_get(r, "semester", index=1) or "").strip()
+                is_current = schedule_semester_matches_term_context(sem, ctx)
+                if mode == "current" and not is_current:
+                    continue
+                if mode == "other" and is_current:
+                    continue
+                if dept_id is not None and has_dept:
+                    try:
+                        row_dept = int(_schedule_row_get(r, "department_id", index=2) or 0)
+                    except (TypeError, ValueError):
+                        row_dept = 0
+                    if row_dept not in (0, int(dept_id)):
+                        continue
+                try:
+                    sid_i = int(_schedule_row_get(r, "section_id", index=0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if sid_i > 0:
+                    extra_ids.append(sid_i)
+            if extra_ids:
+                ph = ",".join("?" * len(extra_ids))
+                del_sql = pk if is_postgresql() else f"COALESCE({pk}, rowid)"
+                cur.execute(f"DELETE FROM schedule WHERE {del_sql} IN ({ph})", tuple(extra_ids))
+                extra_n = int(cur.rowcount or 0)
+                deleted += extra_n if extra_n > 0 else len(extra_ids)
         try:
             cur.execute("DELETE FROM optimized_schedule")
         except Exception:
@@ -2326,6 +2574,17 @@ def clear_schedule_all():
         except Exception:
             pass
 
+        remaining_other = 0
+        try:
+            from backend.services.coverage_insights import schedule_other_term_leftover_summary
+
+            leftover_after = schedule_other_term_leftover_summary(
+                conn, conn.cursor(), dept_scope_id=dept_id
+            )
+            remaining_other = int(leftover_after.get("row_count") or 0)
+        except Exception:
+            remaining_other = 0
+
     try:
         from backend.core.cache_setup import invalidate_list_prefix
 
@@ -2336,7 +2595,7 @@ def clear_schedule_all():
     try:
         log_activity(
             action=f"clear_schedule_{mode}",
-            details=f"deleted_rows={deleted}, term={ops_label}, mode={mode}",
+            details=f"deleted_rows={deleted}, term={ops_label}, mode={mode}, remaining_other={remaining_other}",
         )
     except Exception:
         pass
@@ -2346,11 +2605,22 @@ def clear_schedule_all():
         "other": f"تم تفريغ بقايا الفصول السابقة — جاهز للعمل على {ops_label}",
         "all": f"تم تفريغ كل صفوف الجدولة — جاهز للعمل على {ops_label}",
     }
+    msg = msg_map.get(mode, "تم التفريغ")
+    clear_incomplete = bool(mode == "other" and deleted == 0 and remaining_other > 0)
+    if clear_incomplete:
+        msg = (
+            f"لم يُحذف أي صف رغم وجود {remaining_other} بقايا. "
+            "تأكد أن الفصل الحالي في الإعدادات هو فصل العمل الجديد، ثم أعد المحاولة."
+        )
+    elif remaining_other > 0 and mode == "all":
+        msg = f"{msg} — تنبيه: ما زال {remaining_other} صفاً ضمن نطاق آخر."
     return jsonify(
         {
             "status": "ok",
-            "message": msg_map.get(mode, "تم التفريغ"),
+            "message": msg,
             "deleted_rows": int(deleted),
+            "remaining_other_rows": int(remaining_other),
+            "clear_incomplete": clear_incomplete,
             "ops_label": ops_label,
             "mode": mode,
         }
@@ -2936,10 +3206,25 @@ def proposed_move_action(section_id: int):
 def publish_status():
     """حالة نشر الجدول: هل اعتمد الأدمن الجدول ليظهر للطالب والمشرف."""
     with get_connection() as conn:
+        from backend.services.utilities import get_schedule_published_term
+
         published_at = get_schedule_published_at(conn)
+        pub_term = get_schedule_published_term(conn) if published_at else None
+        ctx = None
+        try:
+            from backend.services.term_engine import current_term_match_context
+
+            ctx = current_term_match_context(conn)
+        except Exception:
+            ctx = None
+        term_label = ""
+        if ctx:
+            term_label = (ctx.get("ops_label") or ctx.get("raw_label") or ctx.get("term_key") or "").strip()
     return jsonify({
         "published": published_at is not None,
         "published_at": published_at,
+        "published_term": pub_term,
+        "current_term_label": term_label,
     })
 
 
@@ -3003,6 +3288,17 @@ def schedule_meta():
     with get_connection() as conn:
         published_at = get_schedule_published_at(conn)
         updated_at = get_schedule_updated_at(conn)
+        pub_term = None
+        term_label = ""
+        try:
+            from backend.services.utilities import get_schedule_published_term
+            from backend.services.term_engine import current_term_match_context
+
+            pub_term = get_schedule_published_term(conn) if published_at else None
+            ctx = current_term_match_context(conn) or {}
+            term_label = (ctx.get("ops_label") or ctx.get("raw_label") or "").strip()
+        except Exception:
+            pass
     changed_since_publish = False
     if published_at and updated_at:
         # مقارنة نصية ISO بصيغة Z تعمل ترتيبياً
@@ -3010,6 +3306,8 @@ def schedule_meta():
     return jsonify({
         "published": published_at is not None,
         "published_at": published_at,
+        "published_term": pub_term,
+        "current_term_label": term_label,
         "updated_at": updated_at,
         "changed_since_publish": changed_since_publish,
     })

@@ -1313,6 +1313,21 @@ def grade_drafts_page():
     return redirect(url_for("transcript_page"))
 
 
+@app.route("/department_reports")
+@login_required
+def department_reports_page():
+    """لوحة مركزية لتقارير القسم — منفصلة عن تشغيل السجل الأكاديمي."""
+    role = (session.get("user_role") or "").strip()
+    active_m = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower()
+    if role == "instructor" and not current_supervisor_effective():
+        return redirect(url_for("my_courses_page"))
+    if role == "head_of_department" and active_m == "instructor":
+        return redirect(url_for("my_courses_page"))
+    if role == "student":
+        return redirect(url_for("dashboard_page"))
+    return render_template("department_reports.html")
+
+
 @app.route("/performance_report")
 @login_required
 def performance_report_page():

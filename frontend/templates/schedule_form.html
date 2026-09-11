@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8">
@@ -16,7 +16,7 @@
         <h1 class="page-title">محرر جدول المقررات</h1>
         <p class="page-subtitle" id="schedulePageSubtitle">إدارة جلسات المقررات ثم اعتماد/نشر الجدول ليظهر للطلبة والمشرفين</p>
       </div>
-      <button class="btn btn-outline-info btn-sm" onclick="PageGuide.open()">❓ دليل الاستخدام</button>
+      <button type="button" class="btn btn-outline-info btn-sm" id="btnSchedulePageGuide">❓ دليل الاستخدام</button>
     </div>
     <div id="schedulePublishBanner" class="alert alert-warning py-2 small d-none mb-2" role="status"></div>
     <div id="sd_msg" class="mb-2" aria-live="polite"></div>
@@ -66,7 +66,7 @@
             <form id="schedule-import-form" class="d-flex align-items-center" enctype="multipart/form-data" onsubmit="return false;">
               <label class="form-label mb-0 me-2">📂 استيراد جدول (Excel):</label>
               <input class="form-control form-control-sm" style="max-width: 280px;" type="file" name="file" accept=".xlsx,.xls" aria-label="ملف استيراد جدول" />
-              <button type="button" class="btn btn-primary btn-sm ms-2" onclick="importSchedule()">استيراد</button>
+              <button type="button" class="btn btn-primary btn-sm ms-2" id="btnImportSchedule">استيراد</button>
             </form>
           </div>
           <div id="import_msg" class="mt-2"></div>
@@ -673,8 +673,8 @@ function hideScheduleManageModalIfOpen(){
 async function loadSchedule(){
   try {
     const [r, covResp] = await Promise.all([
-      fetch('/list_schedule_rows'),
-      fetch('/schedule/registration_coverage'),
+      fetch('/list_schedule_rows', { credentials: 'include', cache: 'no-store' }),
+      fetch('/schedule/registration_coverage', { credentials: 'include', cache: 'no-store' }),
     ]);
     const list = r.ok ? await r.json() : [];
     const covJson = covResp.ok ? await covResp.json() : null;
@@ -747,7 +747,7 @@ async function loadSchedule(){
         }
         html += `</div>`;
         if (showSlotManage) {
-          html += `<button type="button" class="manage-courses-btn" onclick="openManageCourses('${escapeHtml(day)}', '${escapeHtml(time)}')">إدارة المقررات</button>`;
+          html += `<button type="button" class="manage-courses-btn" data-manage-day="${dAttr}" data-manage-time="${tAttr}">إدارة المقررات</button>`;
         } else if (!IS_ADMIN) {
           html += `<div class="small text-muted mt-1">عرض فقط</div>`;
         }
@@ -775,15 +775,29 @@ async function loadSchedule(){
       }
     } catch (e) {}
 
-    // Attach delete handlers فقط عند إظهار وضع الإدارة
+    // Attach delete / manage handlers فقط عند إظهار وضع الإدارة (بدون onclick — متوافق مع CSP)
     if (IS_ADMIN && SCHEDULE_SLOT_MANAGE_VISIBLE) {
       el.querySelectorAll('.course-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
           const sectionId = btn.dataset.sectionId;
-          if(sectionId && confirm('هل تريد حذف هذا المقرر من الجدول؟')){
-            deleteScheduleRow(Number(sectionId));
+          const cell = btn.closest('.time-slot-cell');
+          const meta = {
+            section_id: sectionId,
+            course_name: (btn.textContent || '').trim(),
+            day: cell?.dataset?.slotDay || '',
+            time: cell?.dataset?.slotTime || '',
+            room: ''
+          };
+          if(confirm('هل تريد حذف هذا المقرر من الجدول؟')){
+            deleteScheduleRow(sectionId, meta, { skipConfirm: true });
           }
+        });
+      });
+      el.querySelectorAll('button.manage-courses-btn[data-manage-day]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openManageCourses(btn.dataset.manageDay || '', btn.dataset.manageTime || '');
         });
       });
     }
@@ -874,7 +888,7 @@ function fillManageCoursesModal(day, time){
     btnDelete.className = 'btn btn-sm btn-danger';
     btnDelete.textContent = 'حذف';
     btnDelete.addEventListener('click', () => {
-      deleteScheduleRow(course.section_id);
+      deleteScheduleRow(course.section_id, course);
     });
 
     buttonsDiv.appendChild(btnEdit);
@@ -1166,17 +1180,57 @@ function showConflictsModal(conflicts, courseName, day, time, instructorConflict
 }
 
 /* ---------- CRUD actions ---------- */
-async function deleteScheduleRow(section_id){
-  if(!confirm('هل تريد حذف هذا المقرر من الجدول؟')) return;
+function resolveScheduleSectionId(courseOrId){
+  if (courseOrId != null && typeof courseOrId === 'object') {
+    const candidates = [courseOrId.section_id, courseOrId.id, courseOrId.rowid];
+    for (const c of candidates) {
+      const n = Number(c);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return 0;
+  }
+  const n = Number(courseOrId);
+  return (Number.isFinite(n) && n > 0) ? n : 0;
+}
+
+async function deleteScheduleRow(section_id, courseMeta, opts){
+  const meta = (courseMeta && typeof courseMeta === 'object') ? courseMeta : null;
+  let sid = resolveScheduleSectionId(section_id);
+  if (sid <= 0 && meta) sid = resolveScheduleSectionId(meta);
+  const payload = {};
+  if (sid > 0) payload.section_id = sid;
+  if (meta) {
+    payload.course_name = meta.course_name || '';
+    payload.day = currentModalDay || meta.day || '';
+    payload.time = currentModalTime || meta.time || '';
+    payload.room = meta.room || '';
+    payload.semester = meta.semester || '';
+  }
+  if (!(payload.section_id > 0) && !(payload.course_name && payload.day && payload.time)) {
+    showMsg('تعذّر الحذف: بيانات الصف غير مكتملة. حدّث الصفحة ثم حاول مجدداً.', 'danger', 5000, 'modalMsg');
+    return;
+  }
+  if(!(opts && opts.skipConfirm) && !confirm('هل تريد حذف هذا المقرر من الجدول؟')) return;
   try {
     const resp = await fetch('/schedule/delete_schedule_row', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({section_id})
+      credentials: 'include',
+      cache: 'no-store',
+      body: JSON.stringify(payload)
     });
     const j = await resp.json().catch(()=>null);
     if (resp.ok && j && j.status === 'ok') {
-      showMsg('تم حذف المقرر', 'success');
+      if (sid > 0) {
+        currentScheduleData = (currentScheduleData || []).filter(r => Number(r.section_id) !== sid);
+      } else if (payload.course_name) {
+        currentScheduleData = (currentScheduleData || []).filter(r => !(
+          String(r.course_name||'') === String(payload.course_name) &&
+          String(r.day||'') === String(payload.day) &&
+          String(r.time||'') === String(payload.time)
+        ));
+      }
+      showMsg('تم حذف المقرر', 'success', 2500, 'modalMsg');
       await loadSchedule();
       await resetManageCoursesAddForm();
       const modalEl = document.getElementById('manageCoursesModal');
@@ -1184,11 +1238,17 @@ async function deleteScheduleRow(section_id){
         fillManageCoursesModal(currentModalDay, currentModalTime);
       }
     } else {
-      showMsg('خطأ: ' + (j?.message || resp.statusText), 'danger');
+      const detail = (j && (j.message || j.code)) ? (j.message || j.code) : (resp.statusText || 'فشل الحذف');
+      const hint = (resp.status === 423)
+        ? ' (الفصل مغلق أو نافذة التعديل مغلقة)'
+        : (resp.status === 409 ? '' : '');
+      showMsg('خطأ: ' + detail + hint, 'danger', 8000, 'modalMsg');
+      // إن لم تظهر رسالة المودال، أظهرها أعلى الصفحة أيضاً
+      try { showMsg('خطأ الحذف: ' + detail + hint, 'danger', 8000); } catch (_) {}
     }
   } catch (err) {
     console.error(err);
-    showMsg('خطأ في الاتصال بالخادم', 'danger');
+    showMsg('خطأ في الاتصال بالخادم', 'danger', 5000, 'modalMsg');
   }
 }
 
@@ -1354,10 +1414,14 @@ async function clearScheduleAll(mode){
   });
   const j = await resp.json().catch(()=>null);
   if(resp.ok && j && j.status === 'ok'){
-    showMsg((j.message || `فُرّغ جدول ${j.ops_label || termLabel}`) + ` (${j.deleted_rows || 0} صف)`, 'success');
+    const n = Number(j.deleted_rows || 0);
+    const left = Number(j.remaining_other_rows || 0);
+    const base = j.message || `فُرّغ جدول ${j.ops_label || termLabel}`;
+    const kind = j.clear_incomplete ? 'warning' : (left > 0 && clearMode === 'other' ? 'warning' : 'success');
+    showMsg(`${base} (حُذف ${n} صف` + (left > 0 ? `، متبقّي بقايا: ${left}` : '') + ')', kind, 8000);
     await loadSchedule();
   } else {
-    showMsg('فشل تفريغ الجدول: ' + ((j && j.message) ? j.message : resp.statusText), 'danger');
+    showMsg('فشل تفريغ الجدول: ' + ((j && j.message) ? j.message : resp.statusText), 'danger', 8000);
   }
 }
 
@@ -1657,9 +1721,13 @@ async function refreshPublishStatus(){
     const st = await fetch('/schedule/publish_status').then(r=>r.json()).catch(()=>({}));
     wrap.classList.remove('d-none');
     if (st.published && st.published_at) {
-      statusEl.textContent = 'الجدول معتمد ومنشور منذ ' + (st.published_at || '').slice(0, 19).replace('T', ' ');
+      const termBit = (st.current_term_label || '').trim();
+      statusEl.textContent =
+        'الجدول معتمد ومنشور' +
+        (termBit ? (' للفصل «' + termBit + '»') : '') +
+        ' منذ ' + (st.published_at || '').slice(0, 19).replace('T', ' ');
     } else {
-      statusEl.textContent = 'الجدول غير منشور. الطالب والمشرف لن يرَوْا الجدول حتى تعتمده.';
+      statusEl.textContent = 'الجدول غير منشور لهذا الفصل. الطالب والمشرف لن يرَوْا الجدول حتى تعتمده.';
     }
   } catch (e) {
     wrap.classList.add('d-none');
@@ -1888,6 +1956,11 @@ document.addEventListener('DOMContentLoaded', () => {
   loadCourses();
   Promise.all([loadInstructors(), loadProposedInstructors()]).then(() => {
     applyProposedInstructorForSelectedCourse({ forceSelect: false });
+  });
+
+  document.getElementById('btnImportSchedule')?.addEventListener('click', () => { importSchedule(); });
+  document.getElementById('btnSchedulePageGuide')?.addEventListener('click', () => {
+    try { window.PageGuide?.open?.(); } catch (_e) {}
   });
 
   const courseSel = document.getElementById('newCourseSelect');

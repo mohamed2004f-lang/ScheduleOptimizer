@@ -15,6 +15,12 @@ PERMISSION_CATALOG: list[dict[str, Any]] = [
     {"key": "nav_dashboard", "group_key": "nav", "group_label_ar": "التنقل", "label_ar": "لوحة القيادة"},
     {"key": "nav_users_admin", "group_key": "users", "group_label_ar": "المستخدمون", "label_ar": "إدارة المستخدمين"},
     {"key": "can_manage_users", "group_key": "users", "group_label_ar": "المستخدمون", "label_ar": "إضافة وتعديل المستخدمين"},
+    {
+        "key": "can_add_department_users",
+        "group_key": "users",
+        "group_label_ar": "المستخدمون",
+        "label_ar": "إضافة طلبة وأعضاء هيئة تدريس للقسم",
+    },
     {"key": "can_view_system_accounts", "group_key": "users", "group_label_ar": "المستخدمون", "label_ar": "عرض مسؤولي النظام"},
     {"key": "can_assign_system_admin", "group_key": "users", "group_label_ar": "المستخدمون", "label_ar": "تعيين مسؤول نظام"},
     {"key": "nav_student_affairs_menu", "group_key": "students", "group_label_ar": "شؤون الطلبة", "label_ar": "قائمة شؤون الطلبة"},
@@ -27,16 +33,17 @@ PERMISSION_CATALOG: list[dict[str, Any]] = [
     {"key": "can_manage_transcript_admin", "group_key": "records", "group_label_ar": "السجل الأكademي", "label_ar": "إدارة الكشوف"},
     {"key": "nav_grade_drafts", "group_key": "records", "group_label_ar": "السجل الأكademي", "label_ar": "مسودات الدرجات"},
     {"key": "nav_academic_quality_dashboard", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "لوحة الجودة"},
-    {"key": "nav_academic_reports_section", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "قسم تقارير القسم/الكلية"},
-    {"key": "nav_performance_report", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "تقرير الأداء"},
-    {"key": "nav_electives_report", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "تقرير المقررات الاختيارية"},
-    {"key": "nav_registration_changes_report", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "تقرير الإضافة والإسقاط"},
-    {"key": "nav_failed_courses_report", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "تقرير مقررات الرسوب"},
-    {"key": "nav_not_registered_courses_report", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "تقرير المقررات غير المسجل بها"},
-    {"key": "nav_uncompleted_courses_report", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "تقرير المقررات غير المنجزة"},
-    {"key": "nav_grade_course_mapping_audit", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "تدقيق ترميز المقررات"},
-    {"key": "nav_analytics_report", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "التحليلات الأكاديمية"},
-    {"key": "nav_course_registration_report", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "أعداد التسجيل بالمقررات"},
+    {"key": "nav_department_reports", "group_key": "dept_reports", "group_label_ar": "تقارير القسم", "label_ar": "قائمة ولوحة تقارير القسم"},
+    {"key": "nav_academic_reports_section", "group_key": "dept_reports", "group_label_ar": "تقارير القسم", "label_ar": "قسم تقارير القسم/الكلية (توافق قديم)"},
+    {"key": "nav_performance_report", "group_key": "dept_reports", "group_label_ar": "تقارير القسم", "label_ar": "تقرير الأداء"},
+    {"key": "nav_electives_report", "group_key": "dept_reports", "group_label_ar": "تقارير القسم", "label_ar": "تقرير المقررات الاختيارية"},
+    {"key": "nav_registration_changes_report", "group_key": "dept_reports", "group_label_ar": "تقارير القسم", "label_ar": "تقرير الإضافة والإسقاط"},
+    {"key": "nav_failed_courses_report", "group_key": "dept_reports", "group_label_ar": "تقارير القسم", "label_ar": "تقرير مقررات الرسوب"},
+    {"key": "nav_not_registered_courses_report", "group_key": "dept_reports", "group_label_ar": "تقارير القسم", "label_ar": "تقرير المقررات غير المسجل بها"},
+    {"key": "nav_uncompleted_courses_report", "group_key": "dept_reports", "group_label_ar": "تقارير القسم", "label_ar": "تقرير المقررات غير المنجزة"},
+    {"key": "nav_grade_course_mapping_audit", "group_key": "dept_reports", "group_label_ar": "تقارير القسم", "label_ar": "تدقيق ترميز المقررات"},
+    {"key": "nav_analytics_report", "group_key": "dept_reports", "group_label_ar": "تقارير القسم", "label_ar": "التحليلات الأكاديمية"},
+    {"key": "nav_course_registration_report", "group_key": "dept_reports", "group_label_ar": "تقارير القسم", "label_ar": "أعداد التسجيل بالمقررات"},
     {"key": "nav_college_archive", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "أرشيف الكلية"},
     {"key": "nav_surveys_results", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "نتائج الاستبيانات"},
     {"key": "nav_surveys_invites", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "دعوات الاستبيانات الخارجية"},
@@ -80,7 +87,7 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
             "nav_planning_menu",
             "nav_transcript_nav",
             "nav_grade_drafts", "nav_academic_quality_dashboard",
-            "nav_academic_reports_section", "nav_performance_report",
+            "nav_department_reports", "nav_academic_reports_section", "nav_performance_report",
             "nav_electives_report", "nav_registration_changes_report",
             "nav_failed_courses_report", "nav_not_registered_courses_report",
             "nav_uncompleted_courses_report", "nav_grade_course_mapping_audit",
@@ -107,7 +114,7 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
             "nav_planning_menu",
             "nav_transcript_nav",
             "nav_grade_drafts", "nav_academic_quality_dashboard",
-            "nav_academic_reports_section", "nav_performance_report",
+            "nav_department_reports", "nav_academic_reports_section", "nav_performance_report",
             "nav_electives_report", "nav_registration_changes_report",
             "nav_failed_courses_report", "nav_not_registered_courses_report",
             "nav_uncompleted_courses_report", "nav_grade_course_mapping_audit",
@@ -128,7 +135,7 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
         "permissions": [
             "nav_dashboard", "nav_student_affairs_menu", "can_manage_students",
             "nav_transcript_nav", "can_manage_transcript_admin", "nav_planning_menu",
-            "nav_academic_reports_section", "nav_performance_report",
+            "nav_department_reports", "nav_academic_reports_section", "nav_performance_report",
             "nav_electives_report", "nav_registration_changes_report",
             "nav_failed_courses_report", "nav_not_registered_courses_report",
             "nav_uncompleted_courses_report", "nav_grade_course_mapping_audit",
@@ -143,7 +150,7 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
         "scope_mode": "department",
         "permissions": [
             "nav_dashboard", "nav_student_affairs_menu", "can_manage_students",
-            "nav_academic_reports_section", "nav_performance_report",
+            "nav_department_reports", "nav_academic_reports_section", "nav_performance_report",
             "nav_registration_changes_report", "nav_failed_courses_report",
             "nav_not_registered_courses_report", "nav_uncompleted_courses_report",
             "nav_course_registration_report",
@@ -186,7 +193,7 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
             "can_manage_schedule_edit", "nav_staff_operations_menu",
             "nav_academic_quality_dashboard", "nav_surveys_results", "nav_grade_drafts",
             "nav_supervision",
-            "nav_academic_reports_section", "nav_performance_report",
+            "nav_department_reports", "nav_academic_reports_section", "nav_performance_report",
             "nav_electives_report", "nav_registration_changes_report",
             "nav_failed_courses_report", "nav_not_registered_courses_report",
             "nav_uncompleted_courses_report", "nav_grade_course_mapping_audit",
@@ -217,6 +224,9 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
 ]
 
 _PROFILE_BY_CODE = {p["code"]: p for p in ROLE_PROFILE_SEED}
+
+CAN_ADD_DEPARTMENT_USERS = "can_add_department_users"
+GRANTABLE_USER_OVERRIDE_KEYS = frozenset({CAN_ADD_DEPARTMENT_USERS})
 
 
 def role_profiles_enabled() -> bool:
@@ -320,6 +330,37 @@ def load_user_overrides(conn, username: str) -> tuple[set[str], set[str]]:
     return grants, denies
 
 
+def user_is_granted_permission(conn, username: str, permission_key: str) -> bool:
+    """منح صريح عبر تجاوز المستخدم (وليس قالب الدور)."""
+    grants, denies = load_user_overrides(conn, username or "")
+    if permission_key in denies:
+        return False
+    return permission_key in grants
+
+
+def load_usernames_granted_permission(conn, permission_key: str) -> set[str]:
+    """أسماء المستخدمين (lowercase) الممنوحين هذه الصلاحية عبر التجاوز."""
+    out: set[str] = set()
+    if not permission_key:
+        return out
+    try:
+        cur = conn.cursor()
+        rows = cur.execute(
+            """
+            SELECT username FROM user_permission_overrides
+            WHERE permission_key = ? AND granted = 1
+            """,
+            (permission_key,),
+        ).fetchall()
+        for r in rows:
+            un = r[0] if not hasattr(r, "keys") else r["username"]
+            if un:
+                out.add(str(un).strip().lower())
+    except Exception:
+        pass
+    return out
+
+
 def apply_permissions_to_caps(caps: dict, granted: set[str]) -> dict:
     """يُفعّل/يُعطّل مفاتيح capabilities حسب مجموعة الصلاحيات."""
     if not caps or caps.get("v") != 1:
@@ -334,7 +375,10 @@ def apply_permissions_to_caps(caps: dict, granted: set[str]) -> dict:
     # مفاتيح nav مشتقة
     if "nav_planning_menu" in granted:
         out["nav_course_registration_report"] = out.get("nav_course_registration_report") or True
-    if "nav_academic_reports_section" in granted:
+    # توافق: القسم القديم أو اللوحة الجديدة يفعّلان قائمة تقارير القسم
+    if "nav_academic_reports_section" in granted or "nav_department_reports" in granted:
+        out["nav_department_reports"] = True
+        out["nav_academic_reports_section"] = True
         for rk in (
             "nav_performance_report",
             "nav_electives_report",
@@ -348,6 +392,9 @@ def apply_permissions_to_caps(caps: dict, granted: set[str]) -> dict:
         ):
             out[rk] = out.get(rk) or True
     if "can_manage_users" in granted:
+        out["nav_users_admin"] = True
+    if CAN_ADD_DEPARTMENT_USERS in granted:
+        out[CAN_ADD_DEPARTMENT_USERS] = True
         out["nav_users_admin"] = True
     if "can_edit_college_identity" in granted:
         out["nav_college_profile"] = True
@@ -394,6 +441,7 @@ TEACHING_PORTAL_ADMIN_DENY_KEYS: tuple[str, ...] = (
     "nav_admin_settings",
     "nav_users_admin",
     "can_manage_users",
+    "can_add_department_users",
     "nav_staff_operations_menu",
     "nav_college_catalog",
     "nav_supervision",
@@ -687,6 +735,9 @@ def resolve_capabilities_for_user(
     if r == "head_of_department" and am == "instructor":
         caps["nav_staff_operations_menu"] = False
         caps["nav_admin_settings"] = False
+        caps["nav_users_admin"] = False
+        caps["can_manage_users"] = False
+        caps[CAN_ADD_DEPARTMENT_USERS] = False
         caps["is_instructor_or_supervisor_nav"] = True
         if _session_has_instructor_id():
             caps["nav_instructor_portal_menu"] = True
@@ -694,6 +745,9 @@ def resolve_capabilities_for_user(
             caps["nav_instructor_quality_hub"] = True
     elif r == "head_of_department" and am == "supervisor":
         apply_supervisor_portal_caps(caps)
+        caps["nav_users_admin"] = False
+        caps["can_manage_users"] = False
+        caps[CAN_ADD_DEPARTMENT_USERS] = False
         caps["is_instructor_or_supervisor_nav"] = True
     elif r in ("college_dean", "academic_vice_dean") and am == "instructor":
         caps["nav_staff_operations_menu"] = False

@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8">
@@ -44,7 +44,7 @@
               <div class="d-flex gap-2">
                 <button type="button" class="btn btn-outline-secondary" id="btnSaveDates">حفظ التواريخ</button>
                 <button type="button" class="btn btn-outline-primary" id="btnToggleCompact">عرض مضغوط</button>
-                <button type="button" class="btn btn-primary" onclick="loadExamSchedule()">تحديث الجدول</button>
+                <button type="button" class="btn btn-primary" id="btnRefreshExamSchedule">تحديث الجدول</button>
               </div>
             </div>
           </div>
@@ -445,11 +445,17 @@ function renderExistingExamsList() {
     existingExams.forEach(exam => {
       html += `<li class="list-group-item d-flex justify-content-between align-items-center">
         ${escapeHtml(exam.course_name)}${exam.room ? ` (${escapeHtml(exam.room)})` : ''}
-        <button class="btn btn-sm btn-danger" onclick="deleteExamRow(${exam.exam_id})">حذف</button>
+        <button type="button" class="btn btn-sm btn-danger" data-delete-exam-id="${exam.exam_id}">حذف</button>
       </li>`;
     });
     html += '</ul>';
     existingDiv.innerHTML = html;
+    existingDiv.querySelectorAll('[data-delete-exam-id]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = Number(btn.getAttribute('data-delete-exam-id') || 0);
+        if (id) deleteExamRow(id);
+      });
+    });
   } else {
     existingDiv.innerHTML = '<p class="text-muted">لا توجد امتحانات في هذا التاريخ</p>';
   }
@@ -636,6 +642,7 @@ window.addEventListener('load', async () => {
   if (saveBtn) {
     saveBtn.addEventListener('click', saveExamDatesPreference);
   }
+  document.getElementById('btnRefreshExamSchedule')?.addEventListener('click', () => { loadExamSchedule(); });
 });
 
 // Make function globally available

@@ -12,6 +12,96 @@ logger = logging.getLogger("backend.database")
 HOME_ASSIGNMENT_SECTION_ID = -1
 
 
+def ensure_schedule_id_identity(conn) -> dict:
+    """
+    يضمن أن schedule.id تسلسلي صالح على PostgreSQL.
+
+    تاريخياً أُضيف العمود كـ BIGINT بلا DEFAULT/SEQUENCE، فبقيت الصفوف id=NULL
+    وتعطّل الحذف/التفريغ المعتمد على المعرّف. الدالة آمنة للتكرار.
+    """
+    out = {"ok": False, "filled": 0, "backend": "none"}
+    if not table_exists(conn, "schedule"):
+        return out
+    cols = {str(c).strip().lower() for c in (fetch_table_columns(conn, "schedule") or [])}
+    if "id" not in cols:
+        return out
+    cur = conn.cursor()
+    if is_postgresql():
+        out["backend"] = "postgresql"
+        try:
+            cur.execute("CREATE SEQUENCE IF NOT EXISTS schedule_id_seq")
+            max_row = cur.execute(
+                "SELECT COALESCE(MAX(id), 0) FROM schedule"
+            ).fetchone()
+            try:
+                max_id = int(max_row[0] if max_row is not None else 0)
+            except (TypeError, ValueError, KeyError):
+                max_id = 0
+            if max_id <= 0:
+                # nextval التالي = 1
+                cur.execute("SELECT setval('schedule_id_seq', 1, false)")
+            else:
+                cur.execute("SELECT setval('schedule_id_seq', ?)", (max_id,))
+            cur.execute(
+                """
+                UPDATE schedule
+                SET id = nextval('schedule_id_seq')
+                WHERE id IS NULL
+                """
+            )
+            filled = int(getattr(cur, "rowcount", 0) or 0)
+            if filled < 0:
+                filled = 0
+            out["filled"] = filled
+            cur.execute(
+                """
+                ALTER TABLE schedule
+                ALTER COLUMN id SET DEFAULT nextval('schedule_id_seq')
+                """
+            )
+            try:
+                cur.execute("ALTER SEQUENCE schedule_id_seq OWNED BY schedule.id")
+            except Exception:
+                pass
+            try:
+                cur.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_schedule_id ON schedule(id)"
+                )
+            except Exception:
+                pass
+            conn.commit()
+            out["ok"] = True
+            if filled:
+                logger.warning("schedule.id backfill: filled %s null id rows", filled)
+            return out
+        except Exception as e:
+            logger.warning("ensure_schedule_id_identity (postgresql) failed: %s", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            return out
+
+    # SQLite اختباري: id قد يكون NULL بينما rowid موجود
+    out["backend"] = "sqlite"
+    try:
+        cur.execute("UPDATE schedule SET id = rowid WHERE id IS NULL")
+        filled = int(getattr(cur, "rowcount", 0) or 0)
+        if filled < 0:
+            filled = 0
+        out["filled"] = filled
+        conn.commit()
+        out["ok"] = True
+        return out
+    except Exception as e:
+        logger.warning("ensure_schedule_id_identity (sqlite) failed: %s", e)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return out
+
+
 def backfill_instructor_cross_department_data(conn) -> None:
     """
     ترحيل توافقي لجدول instructor_department_assignments:
