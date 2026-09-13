@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>لوحة القيادة — Schedule Optimizer</title>
+  <title>لوحة القيادة — منظومة الإدارة الأكاديمية</title>
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css?v=20260604">
   <script src="/static/vendor/chartjs/chart.umd.min.js"></script>
@@ -180,6 +180,7 @@
       </div>
     </section>
   </main>
+  {% include "partials/product_home_credit.html" %}
 
 <script>
 const DASHBOARD_USER_ROLE = {{ (user_role or '')|tojson }};

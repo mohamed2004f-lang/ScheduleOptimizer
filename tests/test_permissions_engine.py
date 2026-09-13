@@ -27,6 +27,7 @@ def test_college_dean_lacks_system_admin_caps():
     assert caps.get("nav_admin_settings") is True
     assert caps.get("can_manage_users") is True
     assert caps.get("nav_users_admin") is True
+    assert caps.get("nav_academic_rules") is True
     assert caps.get("can_manage_schedule_edit") is False
     assert caps.get("nav_grade_drafts") is True
 

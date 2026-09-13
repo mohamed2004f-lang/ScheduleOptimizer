@@ -814,16 +814,33 @@ def _registration_changes_report_items(
     student_ids=None,
     action=None,
     course_name_like=None,
+    include_hidden=False,
+    ids=None,
 ):
     """استعلام registration_changes_log مع فلترة اختيارية. يرجع قائمة قامات."""
     cur = conn.cursor()
     sql = """
         SELECT id, student_id, student_name, term, course_name, course_code, units,
-               action, action_phase, action_time, performed_by, reason, notes
+               action, action_phase, action_time, performed_by, reason, notes,
+               COALESCE(is_hidden, 0) AS is_hidden
         FROM registration_changes_log
         WHERE 1=1
     """
     params = []
+    if ids:
+        id_list = []
+        for raw in ids:
+            try:
+                id_list.append(int(raw))
+            except (TypeError, ValueError):
+                continue
+        if not id_list:
+            return []
+        placeholders = ",".join("?" for _ in id_list)
+        sql += f" AND id IN ({placeholders})"
+        params.extend(id_list)
+    if not include_hidden:
+        sql += " AND COALESCE(is_hidden, 0) = 0"
     if date_from:
         sql += " AND date(action_time) >= date(?)"
         params.append(date_from)
@@ -835,11 +852,11 @@ def _registration_changes_report_items(
         params.append(student_id.strip())
     elif student_ids:
         # فلترة حسب مجموعة طلاب (يُستخدم لتقييد الوصول حسب الدور)
-        ids = [normalize_sid(sid) for sid in (student_ids or []) if normalize_sid(sid)]
-        if ids:
-            placeholders = ",".join("?" for _ in ids)
+        ids_scope = [normalize_sid(sid) for sid in (student_ids or []) if normalize_sid(sid)]
+        if ids_scope:
+            placeholders = ",".join("?" for _ in ids_scope)
             sql += f" AND student_id IN ({placeholders})"
-            params.extend(ids)
+            params.extend(ids_scope)
     if action and str(action).lower() in ("add", "drop", "change"):
         sql += " AND action = ?"
         params.append(str(action).lower())
@@ -881,6 +898,7 @@ def registration_changes_report_api():
     student_id = request.args.get("student_id", "").strip() or None
     action = request.args.get("action", "").strip() or None
     course_name = request.args.get("course_name", "").strip() or None
+    include_hidden = str(request.args.get("include_hidden") or "").strip().lower() in ("1", "true", "yes")
     with get_connection() as conn:
         # Scope: تقييد الوصول حسب الدور
         allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
@@ -903,7 +921,8 @@ def registration_changes_report_api():
         items = _registration_changes_report_items(
             conn, date_from=date_from, date_to=date_to,
             student_id=student_id, student_ids=student_ids,
-            action=action, course_name_like=course_name
+            action=action, course_name_like=course_name,
+            include_hidden=include_hidden,
         )
     return jsonify({"status": "ok", "items": items})
 
@@ -917,6 +936,7 @@ def registration_changes_report_excel():
     student_id = request.args.get("student_id", "").strip() or None
     action = request.args.get("action", "").strip() or None
     course_name = request.args.get("course_name", "").strip() or None
+    include_hidden = str(request.args.get("include_hidden") or "").strip().lower() in ("1", "true", "yes")
     with get_connection() as conn:
         # Scope: تقييد الوصول حسب الدور
         allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
@@ -939,7 +959,8 @@ def registration_changes_report_excel():
         items = _registration_changes_report_items(
             conn, date_from=date_from, date_to=date_to,
             student_id=student_id, student_ids=student_ids,
-            action=action, course_name_like=course_name
+            action=action, course_name_like=course_name,
+            include_hidden=include_hidden,
         )
     df = pd.DataFrame(items or [])
     if not df.empty and "action_time" in df.columns:
@@ -956,6 +977,7 @@ def registration_changes_report_pdf():
     student_id = request.args.get("student_id", "").strip() or None
     action = request.args.get("action", "").strip() or None
     course_name = request.args.get("course_name", "").strip() or None
+    include_hidden = str(request.args.get("include_hidden") or "").strip().lower() in ("1", "true", "yes")
     with get_connection() as conn:
         # Scope: تقييد الوصول حسب الدور
         allowed_student_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
@@ -982,7 +1004,8 @@ def registration_changes_report_pdf():
         items = _registration_changes_report_items(
             conn, date_from=date_from, date_to=date_to,
             student_id=student_id, student_ids=student_ids,
-            action=action, course_name_like=course_name
+            action=action, course_name_like=course_name,
+            include_hidden=include_hidden,
         )
     action_labels = {"add": "إضافة", "drop": "إسقاط", "change": "تعديل"}
     rows_html = ""
@@ -1890,14 +1913,36 @@ def failed_courses_report_pdf():
 
 
 @students_bp.route("/registration_changes_report/delete", methods=["POST"])
-@role_required("admin")
+@role_required(*ACADEMIC_REPORT_STAFF_ROLES)
 def registration_changes_report_delete():
     """
-    حذف سجلات من registration_changes_log بناءً على نفس الفلاتر المستخدمة في التقرير.
-    مخصص لحذف العمليات التجريبية (ينصح بالحذر لأنه لا يمكن التراجع).
-    يقبل في الجسم JSON نفس الحقول: date_from, date_to, student_id, action, course_name.
+    حذف سجلات من registration_changes_log.
+    - إن وُجدت ids: حذف المحدّد فقط (ضمن نطاق الدور).
+    - وإلا: حذف حسب الفلاتر — أدمن فقط.
     """
     data = request.get_json(force=True) or {}
+    id_list = _parse_change_ids(data)
+    if id_list:
+        with get_connection() as conn:
+            items = _registration_changes_report_items(conn, ids=id_list, include_hidden=True)
+            items = _scope_filter_change_items(conn, items)
+            scoped_ids = [it["id"] for it in items if it.get("id") is not None]
+            if not scoped_ids:
+                return jsonify({"status": "error", "message": "لا توجد سجلات ضمن نطاقك"}), 403
+            cur = conn.cursor()
+            placeholders = ",".join("?" for _ in scoped_ids)
+            cur.execute(
+                f"DELETE FROM registration_changes_log WHERE id IN ({placeholders})",
+                tuple(scoped_ids),
+            )
+            conn.commit()
+            deleted_count = cur.rowcount if cur.rowcount is not None else len(scoped_ids)
+        return jsonify({"status": "ok", "deleted": int(deleted_count)}), 200
+
+    role = _normalize_role((session.get("user_role") or "").strip())
+    if role not in ("admin", "admin_main", "system_admin"):
+        return jsonify({"status": "error", "message": "حذف حسب الفلتر متاح للأدمن فقط. استخدم تحديد الصفوف."}), 403
+
     date_from = (data.get("date_from") or "").strip() or None
     date_to = (data.get("date_to") or "").strip() or None
     student_id = (data.get("student_id") or "").strip() or None
@@ -1905,10 +1950,10 @@ def registration_changes_report_delete():
     course_name = (data.get("course_name") or "").strip() or None
 
     with get_connection() as conn:
-        # نجلب أولاً المعرفات المطابقة ثم نحذفها
         items = _registration_changes_report_items(
             conn, date_from=date_from, date_to=date_to,
-            student_id=student_id, action=action, course_name_like=course_name
+            student_id=student_id, action=action, course_name_like=course_name,
+            include_hidden=True,
         )
         ids = [it.get("id") for it in items if it.get("id") is not None]
         deleted_count = 0
@@ -1919,6 +1964,191 @@ def registration_changes_report_delete():
             conn.commit()
             deleted_count = cur.rowcount if cur.rowcount is not None else len(ids)
     return jsonify({"status": "ok", "deleted": int(deleted_count)}), 200
+
+
+def _parse_change_ids(data) -> list[int]:
+    raw_ids = (data or {}).get("ids") if isinstance(data, dict) else None
+    if not isinstance(raw_ids, list):
+        return []
+    out = []
+    for raw in raw_ids:
+        try:
+            out.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _scope_filter_change_items(conn, items: list[dict]) -> list[dict]:
+    allowed = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+    if allowed is None:
+        return items
+    allowed_set = set(allowed or [])
+    return [it for it in items if normalize_sid(it.get("student_id")) in allowed_set]
+
+
+@students_bp.route("/registration_changes_report/hide", methods=["POST"])
+@role_required(*ACADEMIC_REPORT_STAFF_ROLES)
+def registration_changes_report_hide():
+    """إخفاء حركات (خطأ/تراجع) من التقرير الرسمي دون حذف نهائي."""
+    data = request.get_json(force=True) or {}
+    id_list = _parse_change_ids(data)
+    if not id_list:
+        return jsonify({"status": "error", "message": "حدّد سجلاً واحداً على الأقل"}), 400
+    hidden = bool(data.get("hidden", True))
+    with get_connection() as conn:
+        items = _registration_changes_report_items(conn, ids=id_list, include_hidden=True)
+        items = _scope_filter_change_items(conn, items)
+        scoped_ids = [it["id"] for it in items if it.get("id") is not None]
+        if not scoped_ids:
+            return jsonify({"status": "error", "message": "لا توجد سجلات ضمن نطاقك"}), 403
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in scoped_ids)
+        cur.execute(
+            f"UPDATE registration_changes_log SET is_hidden = ? WHERE id IN ({placeholders})",
+            (1 if hidden else 0, *scoped_ids),
+        )
+        conn.commit()
+        n = cur.rowcount if cur.rowcount is not None else len(scoped_ids)
+    return jsonify({"status": "ok", "updated": int(n), "hidden": hidden}), 200
+
+
+@students_bp.route("/registration_changes_report/print_form", methods=["POST"])
+@role_required(*ACADEMIC_REPORT_VIEW_ROLES)
+def registration_changes_report_print_form():
+    """
+    نموذج طباعة رسمي لطالب واحد:
+    - form_type: add | drop | final
+    - مصدر الصفوف: ids محدّدة، أو كل الظاهر للطالب (مع فلاتر اختيارية).
+    """
+    data = request.get_json(force=True) or {}
+    form_type = str(data.get("form_type") or "final").strip().lower()
+    if form_type not in ("add", "drop", "final"):
+        return jsonify({"status": "error", "message": "نوع النموذج غير صالح"}), 400
+
+    student_id = normalize_sid(data.get("student_id"))
+    if not student_id:
+        return jsonify({"status": "error", "message": "اختر طالباً واحداً للطباعة"}), 400
+
+    id_list = _parse_change_ids(data)
+    date_from = (data.get("date_from") or "").strip() or None
+    date_to = (data.get("date_to") or "").strip() or None
+    course_name = (data.get("course_name") or "").strip() or None
+    # عند الطباعة من «كل الظاهر» لا نُدرج المخفي إلا بطلب صريح
+    include_hidden = bool(data.get("include_hidden"))
+
+    with get_connection() as conn:
+        allowed = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        if allowed is not None and student_id not in set(allowed or []):
+            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+        if id_list:
+            items = _registration_changes_report_items(conn, ids=id_list, include_hidden=True)
+            items = [it for it in items if normalize_sid(it.get("student_id")) == student_id]
+        else:
+            items = _registration_changes_report_items(
+                conn,
+                student_id=student_id,
+                date_from=date_from,
+                date_to=date_to,
+                course_name_like=course_name,
+                include_hidden=include_hidden,
+            )
+        items = _scope_filter_change_items(conn, items)
+
+    if form_type == "add":
+        items = [it for it in items if (it.get("action") or "").lower() == "add"]
+    elif form_type == "drop":
+        items = [it for it in items if (it.get("action") or "").lower() == "drop"]
+    else:
+        items = [it for it in items if (it.get("action") or "").lower() in ("add", "drop")]
+
+    if not items:
+        return jsonify({"status": "error", "message": "لا توجد مقررات مطابقة لهذا النموذج"}), 404
+
+    for it in items:
+        it["action_time_display"] = _format_reg_change_time(it.get("action_time"))
+        it["notes_display"] = _sanitize_reg_change_note(it.get("reason") or it.get("notes"))
+
+    student_name = next((it.get("student_name") or "" for it in items if it.get("student_name")), "")
+    terms: dict[str, list] = {}
+    for it in items:
+        term = (it.get("term") or "").strip() or "—"
+        terms.setdefault(term, []).append(it)
+
+    term_blocks = []
+    for term, rows in terms.items():
+        adds = [r for r in rows if (r.get("action") or "").lower() == "add"]
+        drops = [r for r in rows if (r.get("action") or "").lower() == "drop"]
+        term_blocks.append({"term": term, "adds": adds, "drops": drops})
+
+    titles = {
+        "add": "نموذج إضافة مقررات",
+        "drop": "نموذج إسقاط مقررات",
+        "final": "نموذج نهائي — إضافة وإسقاط مقررات",
+    }
+    subtitles = {
+        "add": "نموذج رسمي — المقررات المضافة",
+        "drop": "نموذج رسمي — المقررات المسقطة",
+        "final": "نموذج رسمي — بعد الإضافة والإسقاط",
+    }
+
+    return render_template(
+        "registration_changes_print.html",
+        form_type=form_type,
+        form_title=titles[form_type],
+        form_subtitle=subtitles[form_type],
+        show_adds=form_type in ("add", "final"),
+        show_drops=form_type in ("drop", "final"),
+        student_id=student_id,
+        student_name=student_name,
+        term_blocks=term_blocks,
+        printed_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        printed_by=(session.get("user") or session.get("username") or ""),
+    )
+
+
+_TECHNICAL_REG_NOTES = frozenset(
+    {
+        "bulk_save",
+        "bulk_delete",
+        "save_registrations",
+        "delete_registrations",
+        "system",
+        "auto",
+        "n/a",
+        "na",
+        "-",
+        "—",
+    }
+)
+
+
+def _format_reg_change_time(raw) -> str:
+    """تاريخ مقروء للورقة الرسمية (بدون كسور ثوانٍ)."""
+    if raw is None:
+        return ""
+    s = str(raw).strip()
+    if not s:
+        return ""
+    s = s.replace("T", " ").replace("Z", "")
+    if "." in s:
+        s = s.split(".", 1)[0]
+    # قص الثواني إن وُجدت HH:MM:SS → HH:MM
+    parts = s.split(" ")
+    if len(parts) == 2 and parts[1].count(":") == 2:
+        hh, mm, _ss = parts[1].split(":")
+        s = f"{parts[0]} {hh}:{mm}"
+    return s
+
+
+def _sanitize_reg_change_note(raw) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if text.lower() in _TECHNICAL_REG_NOTES:
+        return ""
+    return text
 
 
 # -----------------------------

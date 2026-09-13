@@ -145,6 +145,30 @@ class TestUsersAuditAndReport:
         assert "total_users" in data
         assert "invalid_count" in data
         assert isinstance(data.get("invalid_users"), list)
+        assert "UNKNOWN_ROLE" in (data.get("issue_labels_ar") or {})
+
+    def test_validation_report_accepts_dean_vice_dean_and_staff(self, auth_client, db_conn):
+        from backend.core.auth import hash_password
+
+        pw = hash_password("TestP@ssw0rd!")
+        cur = db_conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (username, password_hash, role, is_active)
+            VALUES (?, ?, 'college_dean', 1), (?, ?, 'academic_vice_dean', 1), (?, ?, 'staff', 1)
+            """,
+            ("val-dean", pw, "val-vice", pw, "val-staff", pw),
+        )
+        db_conn.commit()
+        resp = auth_client.get("/users/validation_report")
+        assert resp.status_code == 200
+        flagged = {
+            (u.get("username") or ""): set(u.get("issues") or [])
+            for u in ((resp.get_json() or {}).get("invalid_users") or [])
+        }
+        assert "UNKNOWN_ROLE" not in flagged.get("val-dean", set())
+        assert "UNKNOWN_ROLE" not in flagged.get("val-vice", set())
+        assert "UNKNOWN_ROLE" not in flagged.get("val-staff", set())
 
     def test_audit_log_endpoint_returns_items(self, auth_client):
         resp = auth_client.get("/users/audit_log?limit=10")
@@ -211,3 +235,13 @@ def test_admin_main_clears_instructor_id_on_normalize():
     assert sid is None
     assert iid is None
     assert sup == 0
+
+
+def test_integrity_issues_accept_college_roles_and_staff():
+    from backend.services.users import _user_integrity_issues
+
+    assert _user_integrity_issues("college_dean", None, 12, 1) == []
+    assert _user_integrity_issues("academic_vice_dean", None, None, 0) == []
+    assert _user_integrity_issues("staff", None, None, 0) == []
+    assert _user_integrity_issues("staff", "S001", None, 0) == ["UNEXPECTED_STUDENT_ID_FOR_STAFF"]
+    assert _user_integrity_issues("ghost_role", None, None, 0) == ["UNKNOWN_ROLE"]

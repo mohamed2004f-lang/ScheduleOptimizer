@@ -111,11 +111,11 @@ WINDOW_CATALOG: tuple[WindowSpec, ...] = (
     ),
     WindowSpec(
         "drop_courses",
-        "آخر موعد لإسقاط المواد",
+        "آخر موعد لإسقاط المقررات",
         "registrations",
         fall_end_item=7,
         spring_end_item=7,
-        title_hints=("آخر موعد لإسقاط",),
+        title_hints=("آخر موعد لإسقاط المقررات", "آخر موعد لإسقاط المواد", "آخر موعد لإسقاط"),
     ),
     WindowSpec(
         "instruction_end",

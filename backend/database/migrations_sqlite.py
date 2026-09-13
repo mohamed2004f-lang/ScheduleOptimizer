@@ -101,6 +101,18 @@ def ensure_sqlite_tables(db_file=None):
                 cur.execute("ALTER TABLE academic_calendar ADD COLUMN event_date_start TEXT")
             except Exception:
                 pass
+
+        try:
+            rcl_cols = [r[1] for r in cur.execute("PRAGMA table_info(registration_changes_log)").fetchall()]
+        except Exception:
+            rcl_cols = []
+        if rcl_cols and "is_hidden" not in rcl_cols:
+            try:
+                cur.execute(
+                    "ALTER TABLE registration_changes_log ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0"
+                )
+            except Exception:
+                pass
         try:
             cur.execute("ALTER TABLE term_windows ADD COLUMN grace_until TEXT")
         except Exception:

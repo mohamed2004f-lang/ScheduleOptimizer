@@ -18,6 +18,23 @@
 7. **استيراد Excel:** إن وُجد نفس `course_code` لمقرر باسم آخر (مثل `GS 201`) يُتجاهل الصف ويُعاد في `ignored` دون إيقاف بقية الاستيراد.
 8. **توجيه التقارير والاستبيانات** — `resolve_course_responsible_department_id`: قسم **عرض المقرر** (جدول/مجموعة تدريس) وليس قسم منزل الأستاذ.
 
+## الأساتذة متعددو الأقسام (متعاونو التدريس)
+
+عند تفعيل `ENABLE_MULTI_DEPT_INSTRUCTOR` (افتراضي):
+
+1. **الظهور في القوائم/الاختيار** = قسم المنزل ∪ تعيين نشط في `instructor_department_assignments`.
+2. **إدارة الهوية** (تعديل/حذف السجل) = قسم المنزل فقط ضمن نطاق المنفّذ.
+3. **ربط/فك المستضيف** = `POST /instructors/<id>/link_department` و`unlink_department` ضمن نطاق القسم.
+4. **حفظ الجدول** (`ENABLE_SCHEDULE_ASSIGNMENT_UPSERT`، افتراضي on): إن درّس أستاذ قسماً غير منزله يُنشأ/يُفعَّل تعيين مستوى القسم (`schedule_section_id=-1`, `semester=''`, مصدر `schedule_save`). حذف صف الجدول **لا** يعطّل التعيين تلقائياً.
+5. **التقارير/الاستبيانات** تبقى على قسم مسؤولية المقرر/الشعبة — لا على منزل الأستاذ.
+
+ترحيل تاريخي:
+
+```bash
+# يُستدعى عادة ضمن تهيئة القاعدة؛ أو يدوياً عبر مسار يمرّ بـ
+# backend.database.backfills.backfill_instructor_cross_department_data
+```
+
 ## الدوال المركزية
 
 في `backend/core/department_scope_policy.py`:

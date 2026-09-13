@@ -750,7 +750,7 @@ def _offered_map(
 
 
 def _list_offering_instructors(conn, department_id: int | None) -> list[dict]:
-    """أساتذة نشطون لاختيار المقترح (نطاق القسم إن وُجد، وإلا الكل)."""
+    """أساتذة نشطون لاختيار المقترح (منزل القسم أو متعاونون بتعيين نشط)."""
     if not table_exists(conn, "instructors"):
         return []
     cols = {c.lower() for c in (fetch_table_columns(conn, "instructors") or [])}
@@ -759,12 +759,38 @@ def _list_offering_instructors(conn, department_id: int | None) -> list[dict]:
     active_sql = "COALESCE(is_active, 1) = 1" if "is_active" in cols else "1=1"
     params: list = []
     dept_sql = ""
-    if department_id is not None and int(department_id) != COLLEGE_LIST_DEPT_ID and "department_id" in cols:
-        dept_sql = " AND department_id = ?"
-        params.append(int(department_id))
+    scoped = (
+        department_id is not None
+        and int(department_id) != COLLEGE_LIST_DEPT_ID
+        and "department_id" in cols
+    )
+    if scoped:
+        try:
+            from backend.core.feature_flags import is_multi_dept_instructor_enabled
+            from backend.repositories.instructor_assignments_repo import assignments_table_ready
+
+            multi = is_multi_dept_instructor_enabled() and assignments_table_ready(conn)
+        except Exception:
+            multi = False
+        if multi:
+            dept_sql = """ AND (
+                department_id = ?
+                OR EXISTS (
+                    SELECT 1 FROM instructor_department_assignments a
+                    WHERE a.instructor_id = instructors.id
+                      AND a.department_id = ?
+                      AND a.is_active = 1
+                )
+            )"""
+            params.extend([int(department_id), int(department_id)])
+        else:
+            dept_sql = " AND department_id = ?"
+            params.append(int(department_id))
+    has_home = "department_id" in cols
+    home_sel = "department_id" if has_home else "NULL AS department_id"
     rows = conn.cursor().execute(
         f"""
-        SELECT id, COALESCE(TRIM(name), '') AS name
+        SELECT id, COALESCE(TRIM(name), '') AS name, {home_sel}
         FROM instructors
         WHERE {active_sql}{dept_sql}
         ORDER BY name, id
@@ -773,14 +799,32 @@ def _list_offering_instructors(conn, department_id: int | None) -> list[dict]:
     ).fetchall()
     out = []
     for row in rows or []:
-        d = dict(row) if hasattr(row, "keys") else {"id": row[0], "name": row[1]}
+        d = dict(row) if hasattr(row, "keys") else {"id": row[0], "name": row[1], "department_id": row[2] if len(row) > 2 else None}
         iid = int(d.get("id") or 0)
         if iid <= 0:
             continue
         name = (d.get("name") or "").strip() or f"أستاذ #{iid}"
-        out.append({"id": iid, "name": name})
+        home_id = None
+        raw_home = d.get("department_id")
+        if raw_home not in (None, ""):
+            try:
+                home_id = int(raw_home)
+            except (TypeError, ValueError):
+                home_id = None
+        relation = "home"
+        if scoped and home_id is not None and int(home_id) != int(department_id):
+            relation = "collaborator"
+        elif scoped and home_id is None:
+            relation = "collaborator"
+        out.append(
+            {
+                "id": iid,
+                "name": name,
+                "relation": relation if scoped else "home",
+                "home_department_id": home_id,
+            }
+        )
     return out
-
 
 def _instructor_names_by_id(conn, instructor_ids: list[int] | set[int]) -> dict[int, str]:
     ids = sorted({int(i) for i in (instructor_ids or []) if i and int(i) > 0})

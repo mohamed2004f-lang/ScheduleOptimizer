@@ -640,6 +640,89 @@ def _normalize_role(role: str) -> str:
     return r
 
 
+_KNOWN_USER_ROLES = frozenset(
+    {
+        "student",
+        "instructor",
+        "head_of_department",
+        "staff",
+        "admin_main",
+        "system_admin",
+        "college_dean",
+        "academic_vice_dean",
+    }
+)
+
+_USER_INTEGRITY_ISSUE_LABELS_AR = {
+    "UNKNOWN_ROLE": "دور غير معروف",
+    "MISSING_STUDENT_ID_FOR_STUDENT": "حساب طالب بلا رقم دراسي",
+    "UNEXPECTED_INSTRUCTOR_ID_FOR_STUDENT": "حساب طالب مربوط بعضو هيئة تدريس",
+    "UNEXPECTED_SUPERVISOR_FLAG_FOR_STUDENT": "حساب طالب معلَّم كمشرف أكاديمي",
+    "MISSING_INSTRUCTOR_ID_FOR_STAFF": "حساب تدريس/رئاسة قسم بلا رقم عضو هيئة تدريس",
+    "UNEXPECTED_STUDENT_ID_FOR_STAFF": "حساب موظفين مربوط برقم دراسي",
+    "UNEXPECTED_STUDENT_ID_FOR_LEADERSHIP": "حساب قيادة الكلية مربوط برقم دراسي",
+    "UNEXPECTED_STUDENT_ID_FOR_ADMIN_MAIN": "حساب إداري مربوط برقم دراسي",
+    "UNEXPECTED_INSTRUCTOR_ID_FOR_ADMIN_MAIN": "حساب إداري مربوط بعضو هيئة تدريس",
+    "UNEXPECTED_SUPERVISOR_FLAG_FOR_ADMIN_MAIN": "حساب إداري معلَّم كمشرف أكاديمي",
+}
+
+
+def _user_integrity_issues(
+    role: str,
+    student_id: Optional[str],
+    instructor_id: Optional[int],
+    is_supervisor: int,
+) -> list[str]:
+    """قواعد سلامة الربط حسب الدور — لا تُعدّ الأدوار المعتمدة مجهولة."""
+    role_n = (_normalize_role(role) or "").strip().lower()
+    if role_n == "admin":
+        role_n = "admin_main"
+    sid = (student_id or "").strip()
+    has_instructor = instructor_id is not None
+    sup = int(bool(is_supervisor))
+    issues: list[str] = []
+
+    if role_n not in _KNOWN_USER_ROLES:
+        return ["UNKNOWN_ROLE"]
+
+    if role_n == "student":
+        if not sid:
+            issues.append("MISSING_STUDENT_ID_FOR_STUDENT")
+        if has_instructor:
+            issues.append("UNEXPECTED_INSTRUCTOR_ID_FOR_STUDENT")
+        if sup:
+            issues.append("UNEXPECTED_SUPERVISOR_FLAG_FOR_STUDENT")
+        return issues
+
+    if role_n in ("instructor", "head_of_department"):
+        if not has_instructor:
+            issues.append("MISSING_INSTRUCTOR_ID_FOR_STAFF")
+        if sid:
+            issues.append("UNEXPECTED_STUDENT_ID_FOR_STAFF")
+        return issues
+
+    if role_n in ("college_dean", "academic_vice_dean"):
+        if sid:
+            issues.append("UNEXPECTED_STUDENT_ID_FOR_LEADERSHIP")
+        return issues
+
+    if role_n in ("admin_main", "system_admin"):
+        if sid:
+            issues.append("UNEXPECTED_STUDENT_ID_FOR_ADMIN_MAIN")
+        if has_instructor:
+            issues.append("UNEXPECTED_INSTRUCTOR_ID_FOR_ADMIN_MAIN")
+        if sup:
+            issues.append("UNEXPECTED_SUPERVISOR_FLAG_FOR_ADMIN_MAIN")
+        return issues
+
+    if role_n == "staff":
+        if sid:
+            issues.append("UNEXPECTED_STUDENT_ID_FOR_STAFF")
+        return issues
+
+    return ["UNKNOWN_ROLE"]
+
+
 def _current_role() -> str:
     # Prefer Flask-Login user, fall back to session role
     try:
@@ -809,28 +892,7 @@ def users_validation_report():
         is_supervisor = int(u["is_supervisor"] or 0)
         is_active = int(u["is_active"] or 1)
 
-        row_issues = []
-        if role == "student":
-            if not student_id:
-                row_issues.append("MISSING_STUDENT_ID_FOR_STUDENT")
-            if instructor_id is not None:
-                row_issues.append("UNEXPECTED_INSTRUCTOR_ID_FOR_STUDENT")
-            if is_supervisor:
-                row_issues.append("UNEXPECTED_SUPERVISOR_FLAG_FOR_STUDENT")
-        elif role in ("instructor", "head_of_department"):
-            if instructor_id is None:
-                row_issues.append("MISSING_INSTRUCTOR_ID_FOR_STAFF")
-            if student_id:
-                row_issues.append("UNEXPECTED_STUDENT_ID_FOR_STAFF")
-        elif role == "admin_main":
-            if student_id:
-                row_issues.append("UNEXPECTED_STUDENT_ID_FOR_ADMIN_MAIN")
-            if instructor_id is not None:
-                row_issues.append("UNEXPECTED_INSTRUCTOR_ID_FOR_ADMIN_MAIN")
-            if is_supervisor:
-                row_issues.append("UNEXPECTED_SUPERVISOR_FLAG_FOR_ADMIN_MAIN")
-        else:
-            row_issues.append("UNKNOWN_ROLE")
+        row_issues = _user_integrity_issues(role, student_id, instructor_id, is_supervisor)
 
         if row_issues:
             issues.append(
@@ -851,6 +913,7 @@ def users_validation_report():
             "total_users": len(rows),
             "invalid_count": len(issues),
             "invalid_users": issues,
+            "issue_labels_ar": _USER_INTEGRITY_ISSUE_LABELS_AR,
         }
     ), 200
 

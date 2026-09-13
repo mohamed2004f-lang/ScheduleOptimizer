@@ -14,6 +14,17 @@ def is_multi_dept_instructor_enabled() -> bool:
     return v not in ("0", "false", "no", "off")
 
 
+def is_schedule_assignment_upsert_enabled() -> bool:
+    """
+    عند حفظ/تحديث صف جدول بأستاذ من قسم آخر: إنشاء/تفعيل تعيين متعاون للقسم.
+    يتطلب ENABLE_MULTI_DEPT_INSTRUCTOR. عطّل بـ ENABLE_SCHEDULE_ASSIGNMENT_UPSERT=0.
+    """
+    if not is_multi_dept_instructor_enabled():
+        return False
+    v = (os.environ.get("ENABLE_SCHEDULE_ASSIGNMENT_UPSERT") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
 def registration_program_course_mode() -> str:
     """
     ربط التسجيلات بـ program_courses:

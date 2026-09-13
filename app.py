@@ -23,12 +23,12 @@ from backend.services.notifications import notifications_bp
 from backend.services.users import users_bp
 from backend.services.role_profiles import role_profiles_bp
 from backend.services.academic_calendar import academic_calendar_bp
-from backend.services.academic_rules import academic_rules_bp
+from backend.services.academic_rules import ACADEMIC_RULES_ROLES, academic_rules_bp
 from backend.services.instructors import instructors_bp
 from backend.services.instructor_portal import instructor_portal_bp
 from backend.services.supervisor_portal import supervisor_portal_bp
 from backend.services.course_equivalences import course_equivalence_bp
-from backend.services.department_policies import department_policies_bp
+from backend.services.department_policies import POLICY_APPROVAL_ROLES, department_policies_bp
 from backend.services.college_catalog import college_catalog_bp
 from backend.services.performance import performance_bp
 from backend.api.students_api import students_api_bp
@@ -440,6 +440,8 @@ def inject_ui_context():
     ctx = {
         "college_name_ar": "كلية الهندسة",
         "university_name_ar": "جامعة درنة",
+        "product_name_ar": "منظومة الإدارة الأكاديمية",
+        "product_credit_ar": "تطوير: أ. محمد الحاسي — كلية الهندسة، جامعة درنة",
         "department_name_ar": "كل الأقسام",
         "department_scope_label_ar": "نطاق العرض: كل الأقسام",
         "actor_display_ar": "",
@@ -1145,7 +1147,7 @@ def academic_calendar_page():
 
 @app.route("/academic_rules_page")
 @login_required
-@role_required("admin", "admin_main", "system_admin", "college_dean", "head_of_department")
+@role_required(*ACADEMIC_RULES_ROLES)
 def academic_rules_page():
     return render_template("academic_rules.html")
 
@@ -1201,7 +1203,7 @@ def department_policy_head_page():
 
 @app.route("/department_policy_approvals_page")
 @login_required
-@role_required("admin_main", "system_admin", "college_dean")
+@role_required(*POLICY_APPROVAL_ROLES)
 def department_policy_approvals_page():
     return render_template("department_policy_approvals.html")
 

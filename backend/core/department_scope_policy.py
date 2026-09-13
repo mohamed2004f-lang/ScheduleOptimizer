@@ -387,7 +387,8 @@ def resolve_scope_sql_for_aliased_student(conn, actor_username: str | None, alia
     return sql_aliased_student_belongs_to_department(alias, int(dept_id))
 
 
-def instructor_matches_department(conn, instructor_id: int | None, dept_id: int) -> bool:
+def instructor_is_home_in_department(conn, instructor_id: int | None, dept_id: int) -> bool:
+    """True فقط إذا كان القسم المنزلي للأستاذ = dept_id."""
     if instructor_id is None:
         return False
     cur = conn.cursor()
@@ -404,6 +405,160 @@ def instructor_matches_department(conn, instructor_id: int | None, dept_id: int)
         return int(d_raw) == int(dept_id)
     except (TypeError, ValueError):
         return False
+
+
+def instructor_matches_department(conn, instructor_id: int | None, dept_id: int) -> bool:
+    """توافق خلفي: مطابقة قسم المنزل فقط (إدارة الهوية)."""
+    return instructor_is_home_in_department(conn, instructor_id, dept_id)
+
+
+def instructor_has_active_assignment_in_department(
+    conn, instructor_id: int | None, dept_id: int
+) -> bool:
+    """True إذا وُجد تعيين نشط للقسم (يتطلب الميزة + الجدول)."""
+    if instructor_id is None:
+        return False
+    try:
+        from backend.core.feature_flags import is_multi_dept_instructor_enabled
+        from backend.database.database import table_exists
+    except Exception:
+        return False
+    if not is_multi_dept_instructor_enabled():
+        return False
+    if not table_exists(conn, "instructor_department_assignments"):
+        return False
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT 1 FROM instructor_department_assignments
+        WHERE instructor_id = ? AND department_id = ? AND is_active = 1
+        LIMIT 1
+        """,
+        (int(instructor_id), int(dept_id)),
+    ).fetchone()
+    return bool(row)
+
+
+def instructor_visible_in_department_scope(
+    conn, instructor_id: int | None, dept_id: int
+) -> bool:
+    """ظهور القوائم/الاختيار: منزل أو تعيين نشط (بدون الاعتماد على صف الجدول وحده)."""
+    if instructor_is_home_in_department(conn, instructor_id, dept_id):
+        return True
+    return instructor_has_active_assignment_in_department(conn, instructor_id, dept_id)
+
+
+def instructor_relation_to_department(
+    conn, instructor_id: int | None, dept_id: int
+) -> str:
+    """يعيد: home | collaborator | none."""
+    if instructor_is_home_in_department(conn, instructor_id, dept_id):
+        return "home"
+    if instructor_has_active_assignment_in_department(conn, instructor_id, dept_id):
+        return "collaborator"
+    return "none"
+
+
+def actor_can_manage_instructor_identity(
+    conn, actor_username: str | None, instructor_id: int
+) -> bool:
+    """تعديل/حذف سجل المحاضر: ضمن النطاق فقط إن كان منزله = قسم النطاق."""
+    mode, dept_id = resolve_users_list_scope(conn, actor_username)
+    if mode == "empty":
+        return False
+    if mode != "department" or dept_id is None:
+        return True
+    return instructor_is_home_in_department(conn, instructor_id, int(dept_id))
+
+
+def actor_can_link_instructor_to_scoped_department(
+    conn,
+    actor_username: str | None,
+    instructor_id: int,
+    department_id: int,
+) -> tuple[bool, str | None]:
+    """هل يجوز إنشاء/تفعيل تعيين متعاون للقسم؟"""
+    try:
+        from backend.core.feature_flags import is_multi_dept_instructor_enabled
+        from backend.database.database import table_exists
+    except Exception:
+        return False, "الميزة غير متاحة."
+    if not is_multi_dept_instructor_enabled():
+        return False, "ميزة الإسناد متعدد الأقسام غير مفعّلة."
+    if not table_exists(conn, "instructor_department_assignments"):
+        return False, "جدول الإسنادات غير جاهز."
+
+    mode, scope_dep = resolve_users_list_scope(conn, actor_username)
+    if mode == "empty":
+        return False, "لا يوجد نطاق قسم صالح للمنفّذ."
+    if mode == "department" and scope_dep is not None:
+        try:
+            if int(department_id) != int(scope_dep):
+                return False, "يمكن الربط بقسم نطاقك فقط."
+        except (TypeError, ValueError):
+            return False, "department_id غير صالح."
+
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT department_id, COALESCE(is_active, 1) FROM instructors WHERE id = ? LIMIT 1",
+        (int(instructor_id),),
+    ).fetchone()
+    if not row:
+        return False, "الأستاذ غير موجود."
+    home_raw = row[0] if not hasattr(row, "keys") else row["department_id"]
+    active_raw = row[1] if not hasattr(row, "keys") else row[1]
+    try:
+        if int(active_raw) != 1:
+            return False, "الأستاذ غير نشط."
+    except (TypeError, ValueError):
+        pass
+    if home_raw not in (None, ""):
+        try:
+            if int(home_raw) == int(department_id):
+                return False, "القسم هو المنزل الرئيسي؛ لا يُنشأ تعيين متعاون له."
+        except (TypeError, ValueError):
+            pass
+    return True, None
+
+
+def actor_can_unlink_instructor_from_scoped_department(
+    conn,
+    actor_username: str | None,
+    instructor_id: int,
+    department_id: int,
+) -> tuple[bool, str | None]:
+    """فك ربط المستضيف لتعيين غير منزلي ضمن نطاقه."""
+    try:
+        from backend.core.feature_flags import is_multi_dept_instructor_enabled
+        from backend.database.database import table_exists
+    except Exception:
+        return False, "الميزة غير متاحة."
+    if not is_multi_dept_instructor_enabled():
+        return False, "ميزة الإسناد متعدد الأقسام غير مفعّلة."
+    if not table_exists(conn, "instructor_department_assignments"):
+        return False, "جدول الإسنادات غير جاهز."
+
+    mode, scope_dep = resolve_users_list_scope(conn, actor_username)
+    if mode == "empty":
+        return False, "لا يوجد نطاق قسم صالح للمنفّذ."
+    if mode == "department" and scope_dep is not None:
+        try:
+            if int(department_id) != int(scope_dep):
+                return False, "يمكن فك الربط عن قسم نطاقك فقط."
+        except (TypeError, ValueError):
+            return False, "department_id غير صالح."
+
+    if instructor_is_home_in_department(conn, instructor_id, int(department_id)):
+        return False, "لا يمكن فك ربط القسم المنزلي للأستاذ."
+
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT 1 FROM instructors WHERE id = ? LIMIT 1",
+        (int(instructor_id),),
+    ).fetchone()
+    if not row:
+        return False, "الأستاذ غير موجود."
+    return True, None
 
 
 def user_row_matches_department(
@@ -613,13 +768,8 @@ def target_username_allowed_for_actor(conn, actor_username: str | None, target_u
     )
 
 def actor_can_manage_existing_instructor(conn, actor_username: str | None, instructor_id: int) -> bool:
-    """هل يجوز تعديل/حذف سجل محاضر موجود ضمن نطاق المنفّذ؟"""
-    mode, dept_id = resolve_users_list_scope(conn, actor_username)
-    if mode == "empty":
-        return False
-    if mode != "department" or dept_id is None:
-        return True
-    return instructor_matches_department(conn, instructor_id, int(dept_id))
+    """هل يجوز تعديل/حذف سجل محاضر موجود ضمن نطاق المنفّذ؟ (قسم المنزل فقط)."""
+    return actor_can_manage_instructor_identity(conn, actor_username, instructor_id)
 
 
 def finalize_instructor_department_id_for_write(

@@ -44,6 +44,7 @@ def _ensure_tables_postgresql() -> None:
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS graduation_plan TEXT DEFAULT ''",
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS join_term TEXT DEFAULT ''",
         "ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_archived INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE registration_changes_log ADD COLUMN IF NOT EXISTS is_hidden INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_master_id BIGINT",
         "ALTER TABLE courses ADD COLUMN IF NOT EXISTS owning_department_id BIGINT",
         "ALTER TABLE academic_calendar ADD COLUMN IF NOT EXISTS is_deleted INTEGER NOT NULL DEFAULT 0",

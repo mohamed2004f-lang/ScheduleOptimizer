@@ -1136,6 +1136,27 @@ class ScheduleService:
                 except Exception:
                     pass
 
+                # تعيين متعاون على مستوى القسم عند تدريس قسم غير المنزل
+                try:
+                    from backend.core.feature_flags import is_schedule_assignment_upsert_enabled
+                    from backend.repositories.instructor_assignments_repo import (
+                        upsert_schedule_derived_assignment,
+                    )
+
+                    if (
+                        is_schedule_assignment_upsert_enabled()
+                        and iid is not None
+                        and dept_val is not None
+                    ):
+                        upsert_schedule_derived_assignment(
+                            conn,
+                            instructor_id=int(iid),
+                            department_id=int(dept_val),
+                            source="schedule_save",
+                        )
+                except Exception as _assign_err:
+                    logger.warning("schedule assignment upsert skipped: %s", _assign_err)
+
                 conn.commit()
                 logger.info(f"Schedule row added: {name} on {day_val}")
                 return {'status': 'ok', 'message': 'تم إضافة الصف للجدول الدراسي', 'section_id': section_id}
@@ -1211,6 +1232,37 @@ class ScheduleService:
                     cur.execute("DELETE FROM conflict_report")
                 except Exception:
                     pass
+
+                # عند تحديث instructor_id: اربط التعيين بقسم صف الجدول إن وُجد
+                try:
+                    from backend.core.feature_flags import is_schedule_assignment_upsert_enabled
+                    from backend.repositories.instructor_assignments_repo import (
+                        upsert_schedule_derived_assignment,
+                    )
+                    from backend.database.database import fetch_table_columns
+
+                    if is_schedule_assignment_upsert_enabled() and updates.get("instructor_id") is not None:
+                        scols = fetch_table_columns(conn, "schedule")
+                        dept_for_row = None
+                        if "department_id" in scols:
+                            drow = cur.execute(
+                                f"SELECT department_id FROM schedule WHERE {SCHEDULE_PK_COL} = ? LIMIT 1",
+                                (int(section_id),),
+                            ).fetchone()
+                            if drow and drow[0] not in (None, ""):
+                                try:
+                                    dept_for_row = int(drow[0])
+                                except (TypeError, ValueError):
+                                    dept_for_row = None
+                        if dept_for_row is not None:
+                            upsert_schedule_derived_assignment(
+                                conn,
+                                instructor_id=int(updates["instructor_id"]),
+                                department_id=int(dept_for_row),
+                                source="schedule_save",
+                            )
+                except Exception as _assign_err:
+                    logger.warning("schedule assignment upsert on update skipped: %s", _assign_err)
 
                 conn.commit()
                 return {'status': 'ok', 'message': 'تم تحديث الصف'}

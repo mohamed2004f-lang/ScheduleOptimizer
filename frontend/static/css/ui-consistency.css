@@ -40,15 +40,6 @@
   border: 1px solid #f1aeb5;
 }
 
-.app-navbar.nav-staff-compact .navbar-collapse .navbar-nav,
-.app-navbar.nav-staff-compact #mainNav .navbar-nav {
-  display: flex !important;
-  flex-wrap: wrap !important;
-  width: 100% !important;
-  align-items: center;
-}
-
-/* شريط التنقل — دائماً شبكة متعددة الصفوف (حد أقصى 6 أعمدة) */
 .app-navbar.nav-staff-expanded .navbar-collapse,
 .app-navbar.nav-staff-expanded #mainNav,
 .app-navbar.nav-shell-supervisor .navbar-collapse,
@@ -96,7 +87,6 @@
   align-items: center !important;
   justify-content: center !important;
   text-align: center !important;
-  /* ~14px: أوضح من 0.72rem دون كسر شبكة 7 أعمدة */
   font-size: 0.875rem !important;
   font-weight: 700 !important;
   line-height: 1.2 !important;
@@ -127,29 +117,59 @@
   font-size: 0.65rem;
 }
 
+/* جوال/تابلت: قائمة رأسية داخل الهامبرغر (نفس عناصر الموسع) */
 @media (max-width: 991.98px) {
   .app-navbar.nav-staff-expanded .navbar-collapse .navbar-nav,
-  .app-navbar.nav-staff-expanded #mainNav .navbar-nav {
-    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  .app-navbar.nav-staff-expanded #mainNav .navbar-nav,
+  .app-navbar.nav-shell-supervisor .navbar-collapse .navbar-nav,
+  .app-navbar.nav-shell-supervisor #mainNav .navbar-nav {
+    display: flex !important;
+    flex-direction: column !important;
+    flex-wrap: nowrap !important;
+    grid-template-columns: none !important;
+    grid-auto-flow: unset !important;
+    align-items: stretch !important;
+    gap: 0 !important;
+    padding: 0.35rem 0 !important;
+  }
+
+  .app-navbar.nav-staff-expanded .navbar-nav > .nav-item,
+  .app-navbar.nav-shell-supervisor .navbar-nav > .nav-item {
+    display: block !important;
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .app-navbar.nav-staff-expanded .navbar-nav > .nav-item > .nav-link,
+  .app-navbar.nav-shell-supervisor .navbar-nav > .nav-item > .nav-link {
+    flex-direction: row !important;
+    justify-content: flex-start !important;
+    align-items: center !important;
+    text-align: start !important;
+    min-height: 44px;
+    padding: 0.55rem 0.75rem !important;
+    margin: 0 !important;
+    white-space: nowrap !important;
+  }
+
+  .app-navbar.nav-staff-expanded .nav-link .fa-solid,
+  .app-navbar.nav-staff-expanded .nav-link .fa-regular,
+  .app-navbar.nav-shell-supervisor .nav-link .fa-solid,
+  .app-navbar.nav-shell-supervisor .nav-link .fa-regular {
+    font-size: 1rem;
+    margin: 0 0 0 0.45rem !important;
+    display: inline-block !important;
+  }
+
+  .app-navbar.nav-staff-expanded .nav-link.dropdown-toggle::after,
+  .app-navbar.nav-shell-supervisor .nav-link.dropdown-toggle::after {
+    margin: 0 0.35rem 0 auto !important;
   }
 }
 
-#navStaffCompactMoreMenu {
-  max-height: min(70vh, 28rem);
-  overflow-y: auto;
-  min-width: 16rem;
-}
-
-#navStaffCompactMoreMenu .dropdown-header {
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: var(--bs-secondary-color, #6c757d);
-}
-
-/* قوائم طويلة (الجودة / السجل / المزيد): شريط تمرير عمودي */
+/* قوائم طويلة (الجودة / السجل): شريط تمرير عمودي */
 #qualityAccreditationMenuList,
-#academicRecordsMenuList,
-#navStaffCompactMoreMenu {
+#academicRecordsMenuList {
   max-height: min(70vh, 32rem);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -160,31 +180,11 @@
   min-width: 17rem;
 }
 
-#navDensityToggleWrap .btn.active {
-  font-weight: 700;
-}
-
-.app-topbar #navDensityToggleWrap:not(.d-none) {
-  display: inline-flex !important;
-}
-
-/* تسميات: كاملة افتراضياً / قصيرة في الموسع — !important لمنع تجاوز Bootstrap */
-.app-navbar .nav-label-short {
-  display: none !important;
-}
+/* تسميات قصيرة دائماً في شريط الإدارة (الموسع) */
 .app-navbar .nav-label-full {
-  display: inline !important;
-}
-.app-navbar.nav-staff-expanded .nav-label-full {
   display: none !important;
 }
-.app-navbar.nav-staff-expanded .nav-label-short {
-  display: inline !important;
-}
-.app-navbar.nav-staff-compact .nav-label-short {
-  display: none !important;
-}
-.app-navbar.nav-staff-compact .nav-label-full {
+.app-navbar .nav-label-short {
   display: inline !important;
 }
 

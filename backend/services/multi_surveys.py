@@ -666,6 +666,16 @@ def list_pending_for_user(
 ) -> list[dict]:
     """استبيانات مطلوبة من المستخدم (غير المكتملة وغير المسار القديم للمقرر)."""
     resp_role = survey_respondent_role(user_role, active_mode)
+    if resp_role == "student":
+        try:
+            from backend.services.student_survey_window import student_survey_fill_gate
+
+            gate = student_survey_fill_gate(conn, semester)
+            if not gate.get("open"):
+                return []
+        except Exception:
+            logger.exception("student survey fill gate failed for platform pending")
+            return []
     return list_pending_for_respondent_role(
         conn,
         respondent_role=resp_role,

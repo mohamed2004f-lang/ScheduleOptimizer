@@ -6,6 +6,17 @@ from typing import Any
 
 PROTECTED_ROLES = frozenset({"system_admin"})
 DEAN_PROTECTED_TARGET_ROLES = frozenset({"system_admin", "admin_main", "college_dean"})
+HANDOVER_OFFICE_ROLES = frozenset(
+    {
+        "college_dean",
+        "academic_vice_dean",
+        "head_of_department",
+        "staff",
+        "admin_main",
+    }
+)
+ADMIN_ONLY_HANDOVER_OFFICES = frozenset({"college_dean", "admin_main", "system_admin"})
+HANDOVER_EXCLUDED_ROLES = frozenset({"student"})
 
 
 def is_system_admin_session(session_obj) -> bool:
@@ -16,6 +27,14 @@ def is_system_admin_session(session_obj) -> bool:
         pass
     role = (session_obj.get("user_role") or "").strip().lower()
     return role == "system_admin"
+
+
+def is_principal_admin_session(session_obj) -> bool:
+    """مسؤول النظام أو الأدمن الرئيسي — يحق لهم نقل منصب العميد."""
+    if is_system_admin_session(session_obj):
+        return True
+    role = (session_obj.get("user_role") or "").strip().lower()
+    return role in ("admin_main", "admin")
 
 
 def is_college_dean_session(session_obj) -> bool:

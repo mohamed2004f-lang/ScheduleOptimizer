@@ -233,7 +233,10 @@
       <div class="card mb-3">
         <div class="card-body">
           <h5 class="card-title">نقل قالب الدور والصلاحيات</h5>
-          <p class="text-muted small mb-2">اختر حسابين من القائمة المسجّلة في النظام — ينسخ قالب الدور والاستثناءات من المصدر إلى الهدف (مثلاً عند تسليم مهمة).</p>
+          <p class="text-muted small mb-2">
+            تسليم منصب إداري من حساب إلى آخر (رئيس قسم، مسجّل، رئيس جودة، وكيل…).
+            حسابات الطلبة مستثناة. نقل منصب عميد الكلية مقصور على الأدمن الرئيسي.
+          </p>
           <div class="row g-2 align-items-end">
             <div class="col-md-4">
               <label class="form-label" for="handoverFrom">من المستخدم (المصدر)</label>
@@ -251,6 +254,10 @@
               <button type="button" id="btnHandover" class="btn btn-warning btn-sm mt-3">تنفيذ النقل</button>
             </div>
           </div>
+          <div id="handoverItemsBox" class="border rounded p-2 mt-3 d-none">
+            <div class="fw-semibold mb-2">ما الذي يُنقل؟</div>
+            <div id="handoverItems"></div>
+          </div>
           <div id="handoverPreview" class="alert alert-light border small mt-3 mb-0 d-none" role="status"></div>
           <div id="handoverMsg" class="mt-2"></div>
         </div>
@@ -264,9 +271,29 @@
     let VALID_STUDENT_IDS = new Set();
     let VALID_INSTRUCTOR_IDS = new Set();
     let CACHED_USERS = [];
+    let HANDOVER_OPTION_ITEMS = [];
 
     function escHtml(s){
       return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function isStudentUser(u){
+      return String(u?.role || '').trim().toLowerCase() === 'student';
+    }
+
+    function isDeanProtectedHandoverRole(role){
+      const r = String(role || '').trim().toLowerCase();
+      return r === 'college_dean' || r === 'admin_main' || r === 'system_admin' || r === 'admin';
+    }
+
+    function handoverEligibleUsers(users){
+      const actorIsDean = (CURRENT_ROLE || '') === 'college_dean';
+      return (users || []).filter(u => {
+        if(!u || u.username == null) return false;
+        if(isStudentUser(u)) return false;
+        if(actorIsDean && isDeanProtectedHandoverRole(u.role)) return false;
+        return true;
+      });
     }
 
     function userHandoverOptionLabel(u){
@@ -284,19 +311,78 @@
       return CACHED_USERS.find(u => String(u.username || '').toLowerCase() === q) || null;
     }
 
+    function selectedHandoverFlags(){
+      const flags = { transfer_office: false, transfer_overrides: false, transfer_department: false, revert_source: false };
+      document.querySelectorAll('#handoverItems input[data-handover-key]').forEach(el => {
+        const key = el.getAttribute('data-handover-key');
+        if(key === 'office') flags.transfer_office = !!el.checked;
+        else if(key === 'overrides') flags.transfer_overrides = !!el.checked;
+        else if(key === 'department') flags.transfer_department = !!el.checked;
+        else if(key === 'revert_source') flags.revert_source = !!el.checked;
+      });
+      return flags;
+    }
+
+    function renderHandoverItems(items, blockedReason){
+      const wrap = document.getElementById('handoverItemsBox');
+      const box = document.getElementById('handoverItems');
+      if(!wrap || !box) return;
+      HANDOVER_OPTION_ITEMS = Array.isArray(items) ? items : [];
+      if(!HANDOVER_OPTION_ITEMS.length){
+        wrap.classList.remove('d-none');
+        box.innerHTML = `<div class="text-muted small">${escHtml(blockedReason || 'لا توجد عناصر للنقل من هذا الحساب.')}</div>`;
+        return;
+      }
+      wrap.classList.remove('d-none');
+      box.innerHTML = HANDOVER_OPTION_ITEMS.map((it, idx) => {
+        const disabled = it.enabled === false;
+        const checked = it.default !== false && !disabled;
+        const note = it.note_ar ? `<div class="form-text text-danger">${escHtml(it.note_ar)}</div>` : '';
+        return `<div class="form-check mb-1">
+          <input class="form-check-input" type="checkbox" id="handoverItem${idx}" data-handover-key="${escHtml(it.key)}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+          <label class="form-check-label" for="handoverItem${idx}">${escHtml(it.label_ar || it.key)}</label>
+          ${note}
+        </div>`;
+      }).join('');
+      box.querySelectorAll('input[data-handover-key]').forEach(el => {
+        el.addEventListener('change', syncHandoverPreview);
+      });
+    }
+
+    async function loadHandoverOptions(){
+      const fromU = (document.getElementById('handoverFrom')?.value || '').trim();
+      const wrap = document.getElementById('handoverItemsBox');
+      const box = document.getElementById('handoverItems');
+      if(!fromU){
+        HANDOVER_OPTION_ITEMS = [];
+        if(wrap) wrap.classList.add('d-none');
+        if(box) box.innerHTML = '';
+        syncHandoverPreview();
+        return;
+      }
+      const res = await fetchJSON('/role_profiles/handover_options?from_username=' + encodeURIComponent(fromU));
+      if(!res.ok){
+        renderHandoverItems([], (res.json && res.json.message) || 'تعذر تحميل عناصر النقل');
+        syncHandoverPreview();
+        return;
+      }
+      renderHandoverItems(res.json?.items || [], res.json?.blocked_reason);
+      syncHandoverPreview();
+    }
+
     function populateHandoverSelects(users){
       const fromSel = document.getElementById('handoverFrom');
       const toSel = document.getElementById('handoverTo');
       if(!fromSel || !toSel) return;
       const prevFrom = fromSel.value;
       const prevTo = toSel.value;
-      const fill = (sel, placeholder)=>{
+      const fill = (sel, list, placeholder)=>{
         sel.innerHTML = '';
         const empty = document.createElement('option');
         empty.value = '';
         empty.textContent = placeholder;
         sel.appendChild(empty);
-        (users || []).forEach(u=>{
+        (list || []).forEach(u=>{
           if(!u || u.username == null) return;
           const opt = document.createElement('option');
           opt.value = String(u.username);
@@ -304,11 +390,11 @@
           sel.appendChild(opt);
         });
       };
-      fill(fromSel, '— اختر المستخدم المصدر —');
-      fill(toSel, '— اختر المستخدم الهدف —');
+      fill(fromSel, handoverEligibleUsers(users, { asSource: true }), '— اختر المستخدم المصدر —');
+      fill(toSel, handoverEligibleUsers(users), '— اختر المستخدم الهدف —');
       if(prevFrom && [...fromSel.options].some(o => o.value === prevFrom)) fromSel.value = prevFrom;
       if(prevTo && [...toSel.options].some(o => o.value === prevTo)) toSel.value = prevTo;
-      syncHandoverPreview();
+      loadHandoverOptions();
     }
 
     function describeUserForHandover(u){
@@ -333,14 +419,27 @@
       }
       const src = findCachedUser(fromU);
       const tgt = findCachedUser(toU);
+      const flags = selectedHandoverFlags();
+      const selectedLabels = HANDOVER_OPTION_ITEMS
+        .filter(it => {
+          if(it.key === 'office') return flags.transfer_office;
+          if(it.key === 'overrides') return flags.transfer_overrides;
+          if(it.key === 'department') return flags.transfer_department;
+          if(it.key === 'revert_source') return flags.revert_source;
+          return false;
+        })
+        .map(it => it.label_ar);
       let html = '<div class="fw-semibold mb-1">معاينة النقل</div><ul class="mb-0 ps-3">';
       html += `<li><span class="text-muted">من:</span> ${describeUserForHandover(src)}</li>`;
       html += `<li><span class="text-muted">إلى:</span> ${describeUserForHandover(tgt)}</li>`;
       html += '</ul>';
+      if(selectedLabels.length){
+        html += '<div class="mt-2 mb-0">سيتم نقل: ' + selectedLabels.map(escHtml).join('؛ ') + '</div>';
+      }
       if(fromU && toU && fromU.toLowerCase() === toU.toLowerCase()){
         html += '<div class="text-danger mt-2 mb-0">لا يمكن النقل إلى نفس الحساب.</div>';
-      } else if(fromU && toU){
-        html += '<div class="text-warning mt-2 mb-0">سيُستبدَل دور الهدف وقالبه واستثناءات صلاحياته بما لدى المصدر.</div>';
+      } else if(fromU && toU && !selectedLabels.length){
+        html += '<div class="text-warning mt-2 mb-0">حدّد عنصراً واحداً على الأقل للنقل.</div>';
       }
       box.innerHTML = html;
       box.classList.remove('d-none');
@@ -352,7 +451,7 @@
       const toSel = document.getElementById('handoverTo');
       if(fromUsername && fromSel) fromSel.value = String(fromUsername);
       if(toUsername && toSel) toSel.value = String(toUsername);
-      syncHandoverPreview();
+      loadHandoverOptions();
       const tabBtn = document.getElementById('tab-handover-btn');
       if(tabBtn){
         if(typeof bootstrap !== 'undefined' && bootstrap.Tab){
@@ -471,7 +570,7 @@
       }
 
       const canHandover = ['admin','admin_main','system_admin','college_dean'].includes(CURRENT_ROLE || '');
-      if(canHandover){
+      if(canHandover && !isStudentUser(u)){
         const hoBtn = document.createElement('button');
         hoBtn.type = 'button';
         hoBtn.className = 'btn btn-sm btn-outline-warning btn-handover-from-user';
@@ -1101,6 +1200,7 @@
       const fromU = (document.getElementById('handoverFrom')?.value || '').trim();
       const toU = (document.getElementById('handoverTo')?.value || '').trim();
       const msg = document.getElementById('handoverMsg');
+      const flags = selectedHandoverFlags();
       if(!fromU || !toU){
         if(msg) msg.innerHTML = '<div class="alert alert-warning p-2 mb-0">اختر المستخدم المصدر والهدف من القائمة.</div>';
         return;
@@ -1109,21 +1209,35 @@
         if(msg) msg.innerHTML = '<div class="alert alert-warning p-2 mb-0">لا يمكن النقل إلى نفس الحساب.</div>';
         return;
       }
+      if(!flags.transfer_office && !flags.transfer_overrides && !flags.transfer_department){
+        if(msg) msg.innerHTML = '<div class="alert alert-warning p-2 mb-0">حدّد ما الذي تريد نقله (المنصب و/أو الصلاحيات الإضافية).</div>';
+        return;
+      }
       syncHandoverPreview();
       const src = findCachedUser(fromU);
       const tgt = findCachedUser(toU);
       const confirmLines = [
-        `نقل القالب والصلاحيات من «${fromU}» إلى «${toU}»؟`,
+        `نقل الصلاحيات المحددة من «${fromU}» إلى «${toU}»؟`,
         src ? `المصدر: ${userHandoverOptionLabel(src)}` : '',
         tgt ? `الهدف (حالياً): ${userHandoverOptionLabel(tgt)}` : '',
-        'سيُستبدَل دور الهدف وقالبه واستثناءات صلاحياته.',
+        flags.transfer_office ? '• نقل المنصب الإداري وقالبه' : '',
+        flags.transfer_overrides ? '• نقل الصلاحيات الإضافية' : '',
+        flags.transfer_department ? '• نقل ارتباط القسم' : '',
+        flags.revert_source ? '• إعادة المصدر إلى دور تدريسي/موظف بعد النقل' : '',
       ].filter(Boolean).join('\n');
       if(!confirm(confirmLines)) return;
       if(msg) msg.innerHTML = '<div class="alert alert-info p-2 mb-0">جاري النقل...</div>';
       const res = await fetchJSON('/role_profiles/handover', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({from_username: fromU, to_username: toU})
+        body: JSON.stringify({
+          from_username: fromU,
+          to_username: toU,
+          transfer_office: flags.transfer_office,
+          transfer_overrides: flags.transfer_overrides,
+          transfer_department: flags.transfer_department,
+          revert_source: flags.revert_source,
+        })
       });
       if(msg){
         msg.innerHTML = res.ok
@@ -1133,7 +1247,7 @@
       if(res.ok){
         document.getElementById('handoverFrom').value = '';
         document.getElementById('handoverTo').value = '';
-        syncHandoverPreview();
+        await loadHandoverOptions();
         await loadUsers();
       }
     }
@@ -1174,7 +1288,7 @@
       }
       document.getElementById('btnSaveUser').addEventListener('click', saveUser);
       document.getElementById('btnHandover')?.addEventListener('click', runHandover);
-      document.getElementById('handoverFrom')?.addEventListener('change', syncHandoverPreview);
+      document.getElementById('handoverFrom')?.addEventListener('change', () => { loadHandoverOptions(); });
       document.getElementById('handoverTo')?.addEventListener('change', syncHandoverPreview);
       document.getElementById('btnSendInvite').addEventListener('click', sendInvite);
       document.getElementById('btnInviteCleanup').addEventListener('click', cleanupInvites);
@@ -1240,8 +1354,11 @@
         return;
       }
       const items = Array.isArray(j.invalid_users) ? j.invalid_users : [];
+      const labels = j.issue_labels_ar || {};
       const lis = items.slice(0, 30).map((u)=>{
-        const issues = Array.isArray(u.issues) ? u.issues.join(', ') : '';
+        const issues = Array.isArray(u.issues)
+          ? u.issues.map((code) => labels[code] || code).join('، ')
+          : '';
         return `<li><strong>${u.username || '—'}</strong> (${u.role || '—'}) — ${issues}</li>`;
       }).join('');
       const more = items.length > 30 ? `<div class="small text-muted mt-1">... ويوجد ${items.length - 30} حالة إضافية.</div>` : '';

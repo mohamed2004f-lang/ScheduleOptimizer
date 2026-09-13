@@ -409,10 +409,23 @@ def build_survey_hub_status(
                 "لم يُربط رقم الطالب بحسابك — لن تظهر تقييمات المقررات حتى يُصحَّح الربط في شؤون الطلبة."
             )
         else:
+            from backend.services.student_survey_window import student_survey_fill_gate
             from backend.services.course_evaluations import (
                 _student_evaluable_sections,
                 list_pending_course_evaluations,
             )
+
+            gate = student_survey_fill_gate(conn, semester)
+            details["survey_window"] = {
+                "open": bool(gate.get("open")),
+                "reason": gate.get("reason"),
+                "drop_ends_at": gate.get("drop_ends_at"),
+                "closes_at": gate.get("closes_at"),
+            }
+            if not gate.get("open"):
+                level = "warning"
+                messages.append(gate.get("message_ar") or "ملء الاستبيانات مغلق حالياً.")
+                return {"show": show, "level": level, "title": title, "messages": messages, "details": details}
 
             reg_diag = _student_registration_diag(conn, student_id)
             details.update(reg_diag)
@@ -636,6 +649,22 @@ def register_survey_platform_routes(bp) -> None:
             if eff != allowed and not (role in ("admin", "admin_main") and request.args.get("preview")):
                 return jsonify({"status": "error", "message": "غير مصرح بهذا الاستبيان"}), 403
             sem = (request.args.get("semester") or "").strip() or term_label_from_conn(conn)
+            if eff == "student":
+                from backend.services.student_survey_window import student_survey_fill_gate
+
+                gate = student_survey_fill_gate(conn, sem)
+                if not gate.get("open"):
+                    return render_template(
+                        "survey_fill.html",
+                        error=gate.get("message_ar") or "ملء الاستبيانات مغلق حالياً.",
+                        template=template,
+                        questions=[],
+                        question_sections=[],
+                        semester=sem,
+                        subject_type="",
+                        subject_id=0,
+                        department_id=None,
+                    )
             dept_id = _user_department_id(conn)
             if eff == "instructor":
                 iid = session.get("instructor_id")
@@ -715,6 +744,18 @@ def register_survey_platform_routes(bp) -> None:
             eff = survey_respondent_role(role, active_mode)
             if eff != (template.get("respondent_role") or "").strip():
                 return jsonify({"status": "error", "message": "غير مصرح"}), 403
+            if eff == "student":
+                from backend.services.student_survey_window import student_survey_fill_gate
+
+                gate = student_survey_fill_gate(conn, sem)
+                if not gate.get("open"):
+                    return jsonify(
+                        {
+                            "status": "error",
+                            "message": gate.get("message_ar") or "ملء الاستبيانات مغلق حالياً.",
+                            "code": "SURVEY_WINDOW_CLOSED",
+                        }
+                    ), 403
             dept_id = _user_department_id(conn)
             if not subj_type:
                 subj_type, subj_id = _resolve_subject(

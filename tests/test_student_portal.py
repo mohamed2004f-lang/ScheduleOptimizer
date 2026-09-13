@@ -49,6 +49,10 @@ class TestStudentPortalAPI:
         assert data.get("status") == "ok"
         assert "student_id" in data
         assert "action_items" in data
+        assert "academic_status" in data
+        assert "status_code" in (data.get("academic_status") or {})
+        assert "department_top_students" in data
+        assert isinstance(data.get("department_top_students"), list)
 
     def test_student_me(self, student_auth_client):
         resp = student_auth_client.get(

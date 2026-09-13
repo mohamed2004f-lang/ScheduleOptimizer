@@ -15,8 +15,6 @@
   .nav-shell-student #navAdminSettingsWrap,
   .nav-shell-student #navQualityAccreditationWrap,
   .nav-shell-student #navArchivesMenuWrap,
-  .nav-shell-student #navStaffCompactMoreWrap,
-  .nav-shell-student #navDensityToggleWrap,
   .nav-shell-student #navMyCoursesWrap,
   .nav-shell-student #navInstructorMoreWrap,
   .nav-shell-student #navInstructorGradeDraftsWrap,
@@ -54,8 +52,6 @@
   .nav-shell-instructor #navFacultySupervisionWrap,
   .nav-shell-instructor #navAdminSettingsWrap,
   .nav-shell-instructor #navQualityAccreditationWrap,
-  .nav-shell-instructor #navStaffCompactMoreWrap,
-  .nav-shell-instructor #navDensityToggleWrap,
   .nav-shell-instructor #navSupervisorPortalWrap,
   .nav-shell-instructor #navHodCourseDeliveryWrap,
   .nav-shell-instructor #navStudentPortalWrap,
@@ -119,8 +115,6 @@
   .nav-shell-supervisor #navAdminSettingsWrap,
   .nav-shell-supervisor #navQualityAccreditationWrap,
   .nav-shell-supervisor #navArchivesMenuWrap,
-  .nav-shell-supervisor #navStaffCompactMoreWrap,
-  .nav-shell-supervisor #navDensityToggleWrap,
   .nav-shell-supervisor #navMyCoursesWrap,
   .nav-shell-supervisor #navInstructorMoreWrap,
   .nav-shell-supervisor #navInstructorGradeDraftsWrap,
@@ -157,24 +151,21 @@
 </style>
 <script nonce="{{ csp_nonce }}" src="/static/js/nav-shell-pending.js?v=20260816" data-nav-shell="supervisor"></script>
 {% endif %}
-<link rel="stylesheet" href="/static/styles.css?v=20260604">
+<link rel="stylesheet" href="/static/styles.css?v=20260912b">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/css/theme-mechanical-engineering.css">
-<link rel="stylesheet" href="/static/css/ui-consistency.css?v=20260716a">
+<link rel="stylesheet" href="/static/css/ui-consistency.css?v=20260912a">
 <style id="navLabelCritical">
-  /* منع تكرار التسميات قبل/بدون تحميل ورقة الأنماط */
-  .app-navbar .nav-label-short { display: none !important; }
-  .app-navbar .nav-label-full { display: inline !important; }
-  .app-navbar.nav-staff-expanded .nav-label-full { display: none !important; }
-  .app-navbar.nav-staff-expanded .nav-label-short { display: inline !important; }
+  /* منع تكرار التسميات قبل/بدون تحميل ورقة الأنماط — الموسع دائماً */
+  .app-navbar .nav-label-full { display: none !important; }
+  .app-navbar .nav-label-short { display: inline !important; }
   .app-navbar.nav-staff-expanded .navbar-collapse .navbar-nav,
   .app-navbar.nav-staff-expanded #mainNav .navbar-nav,
   .app-navbar.nav-shell-supervisor .navbar-collapse .navbar-nav,
   .app-navbar.nav-shell-supervisor #mainNav .navbar-nav {
     display: grid !important;
-    /* حد أقصى 6 أعمدة ⇒ صفين فأكثر عند وجود 7 عناصر فأكثر */
     grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
     grid-auto-flow: row !important;
     width: 100% !important;
@@ -189,6 +180,20 @@
   .app-navbar.nav-staff-expanded .navbar-nav > .nav-item > .nav-link,
   .app-navbar.nav-shell-supervisor .navbar-nav > .nav-item > .nav-link {
     font-size: 0.875rem !important;
+  }
+  @media (max-width: 991.98px) {
+    .app-navbar.nav-staff-expanded .navbar-collapse .navbar-nav,
+    .app-navbar.nav-staff-expanded #mainNav .navbar-nav,
+    .app-navbar.nav-shell-supervisor .navbar-collapse .navbar-nav,
+    .app-navbar.nav-shell-supervisor #mainNav .navbar-nav {
+      display: flex !important;
+      flex-direction: column !important;
+      flex-wrap: nowrap !important;
+      grid-template-columns: none !important;
+      align-items: stretch !important;
+      gap: 0 !important;
+      padding: 0.25rem 0 !important;
+    }
   }
   #qualityAccreditationMenuList,
   #academicRecordsMenuList {
@@ -240,7 +245,7 @@
         <a href="/schedule_form" class="btn btn-sm btn-outline-dark">عرض الجدول</a>
       </div>
     </div>
-    <div class="app-topbar-inner d-flex align-items-center justify-content-between">
+    <div class="app-topbar-inner">
       <a class="app-brand" href="/">
         <!-- college logo (1x + 2x) -->
         <img
@@ -255,11 +260,7 @@
       </a>
 
       <!-- إجراءات الشريط العلوي -->
-      <div class="app-actions d-flex align-items-center gap-2">
-        <div class="btn-group btn-group-sm d-none nav-density-toggle" id="navDensityToggleWrap" role="group" aria-label="كثافة الشريط الرئيسي">
-          <button type="button" class="btn btn-outline-light" id="navDensityCompactBtn" title="عرض الروابط الأكثر استخداماً فقط + المزيد">مدمج</button>
-          <button type="button" class="btn btn-outline-light" id="navDensityExpandedBtn" title="عرض كل القوائم على صفين أو أكثر">موسع</button>
-        </div>
+      <div class="app-actions">
         <a class="btn-topbar-notify position-relative" id="navNotificationsTop" href="/notifications_center" title="الإشعارات" aria-label="الإشعارات">
           <i class="fa-regular fa-bell" aria-hidden="true"></i>
           <span class="badge rounded-pill bg-danger position-absolute top-0 start-100 translate-middle d-none" id="navNotificationsBadge" style="font-size:0.65rem;">0</span>
@@ -267,20 +268,36 @@
         <button type="button" class="btn-theme-toggle" id="themeToggleBtn" aria-label="تبديل الوضع الليلي" title="الوضع الليلي">
           <i class="fa-solid fa-moon" aria-hidden="true"></i>
         </button>
-        <a class="btn-topbar-logout" href="/change_password" aria-label="تغيير كلمة المرور" title="تغيير كلمة المرور">
+        <!-- سطح المكتب: روابط مباشرة -->
+        <a class="btn-topbar-logout d-none d-md-inline-flex" href="/change_password" aria-label="تغيير كلمة المرور" title="تغيير كلمة المرور">
           <i class="fa-solid fa-key" aria-hidden="true"></i>
           <span class="btn-topbar-logout-label">كلمة المرور</span>
         </a>
         {% if session.get('user_role') in ['system_admin', 'college_dean'] %}
-        <a class="btn-topbar-logout" href="/mfa/setup" aria-label="التحقق بخطوتين" title="التحقق بخطوتين">
+        <a class="btn-topbar-logout d-none d-md-inline-flex" href="/mfa/setup" aria-label="التحقق بخطوتين" title="التحقق بخطوتين">
           <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
           <span class="btn-topbar-logout-label">خطوتين</span>
         </a>
         {% endif %}
-        <a class="btn-topbar-logout" id="logoutBtn" href="/logout" aria-label="تسجيل الخروج" title="تسجيل الخروج">
+        <a class="btn-topbar-logout d-none d-md-inline-flex" id="logoutBtn" href="/logout" aria-label="تسجيل الخروج" title="تسجيل الخروج">
           <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i>
           <span class="btn-topbar-logout-label">خروج</span>
         </a>
+        <!-- الجوال: قائمة حساب مضغوطة -->
+        <div class="dropdown d-md-none" id="navAccountMenuWrap">
+          <button type="button" class="btn-topbar-account dropdown-toggle" id="navAccountMenuBtn"
+            data-bs-toggle="dropdown" aria-expanded="false" aria-label="الحساب" title="الحساب">
+            <i class="fa-solid fa-user" aria-hidden="true"></i>
+          </button>
+          <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="navAccountMenuBtn">
+            <li><a class="dropdown-item" href="/change_password"><i class="fa-solid fa-key ms-1" aria-hidden="true"></i> كلمة المرور</a></li>
+            {% if session.get('user_role') in ['system_admin', 'college_dean'] %}
+            <li><a class="dropdown-item" href="/mfa/setup"><i class="fa-solid fa-shield-halved ms-1" aria-hidden="true"></i> التحقق بخطوتين</a></li>
+            {% endif %}
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item text-danger" id="logoutBtnMobile" href="/logout"><i class="fa-solid fa-right-from-bracket ms-1" aria-hidden="true"></i> خروج</a></li>
+          </ul>
+        </div>
       </div>
     </div>
   </div>
@@ -370,7 +387,7 @@
         <li class="nav-item" id="navDashboardWrap" style="display:{% if nss or nis %}none{% elif nstaff %}list-item{% else %}none{% endif %};">
           <a class="nav-link" id="navDashboard" href="/dashboard">
             <i class="fa-solid fa-gauge-high ms-1"></i>
-            <span class="nav-label-full">لوحة القيادة</span><span class="nav-label-short">لوحة</span>
+            <span class="nav-label-full">لوحة القيادة</span><span class="nav-label-short">لوحة القيادة</span>
           </a>
         </li>
         <li class="nav-item" id="navMyCoursesWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
@@ -548,7 +565,7 @@
         <li class="nav-item dropdown" id="navStudentAffairsWrap" data-nav-tier="primary" style="display:{% if nss or nis %}none{% elif nstaff %}list-item{% else %}none{% endif %};">
           <a class="nav-link dropdown-toggle" href="#" id="studentAffairsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-user-graduate ms-1"></i>
-            <span class="nav-label-full">شؤون الطلبة</span><span class="nav-label-short">شؤون</span>
+            <span class="nav-label-full">شؤون الطلبة</span><span class="nav-label-short">شؤون الطلبة</span>
           </a>
           <ul class="dropdown-menu" aria-labelledby="studentAffairsMenu" id="studentAffairsMenuList">
             <li><a class="dropdown-item" id="navStudents" href="/students_form">بيانات الطلبة</a></li>
@@ -566,7 +583,7 @@
         <li class="nav-item dropdown" id="navAcademicRecordsMenuWrap" data-nav-tier="secondary" style="display:none;">
           <a class="nav-link dropdown-toggle" href="#" id="academicRecordsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-regular fa-file-lines ms-1"></i>
-            <span class="nav-label-full">السجل الأكاديمي</span><span class="nav-label-short">السجل</span>
+            <span class="nav-label-full">السجل الأكاديمي</span><span class="nav-label-short">السجل الأكاديمي</span>
           </a>
           <ul class="dropdown-menu" aria-labelledby="academicRecordsMenu" id="academicRecordsMenuList">
             <li><a class="dropdown-item" id="navDeanFinalBatches" href="/grades_dean_final_batches" style="display:none;">اعتماد حزم الدرجات النهائية</a></li>
@@ -580,7 +597,7 @@
         <li class="nav-item dropdown" id="navDeptReportsMenuWrap" data-nav-tier="secondary" style="display:none;">
           <a class="nav-link dropdown-toggle" href="#" id="deptReportsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-chart-column ms-1"></i>
-            <span class="nav-label-full">تقارير القسم</span><span class="nav-label-short">التقارير</span>
+            <span class="nav-label-full">تقارير القسم</span><span class="nav-label-short">تقارير القسم</span>
           </a>
           <ul class="dropdown-menu" aria-labelledby="deptReportsMenu" id="deptReportsMenuList">
             <li><a class="dropdown-item" id="navDeptReportsHub" href="/department_reports">لوحة التقارير</a></li>
@@ -602,7 +619,7 @@
         <li class="nav-item dropdown" id="navPlanningMenuWrap" data-nav-tier="primary" style="display:{% if nss or nis %}none{% elif nstaff %}list-item{% else %}none{% endif %};">
           <a class="nav-link dropdown-toggle" href="#" id="planningMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-calendar-check ms-1"></i>
-            <span class="nav-label-full">التخطيط والجدولة</span><span class="nav-label-short">التخطيط</span>
+            <span class="nav-label-full">التخطيط والجدولة</span><span class="nav-label-short">التخطيط والجدولة</span>
           </a>
           <ul class="dropdown-menu" aria-labelledby="planningMenu">
             <li><a class="dropdown-item" id="navAcademicCalendar" href="/academic_calendar_page">التقويم الأكاديمي</a></li>
@@ -619,20 +636,11 @@
           </ul>
         </li>
 
-        <!-- المزيد — إدارة (وضع الشريط المدمج) -->
-        <li class="nav-item dropdown d-none" id="navStaffCompactMoreWrap" data-nav-tier="primary">
-          <a class="nav-link dropdown-toggle" href="#" id="staffCompactMoreMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-            <i class="fa-solid fa-layer-group ms-1"></i>
-            <span class="nav-label-full">المزيد — إدارة</span><span class="nav-label-short">المزيد</span>
-          </a>
-          <ul class="dropdown-menu dropdown-menu-lg-end" id="navStaffCompactMoreMenu" aria-labelledby="staffCompactMoreMenu"></ul>
-        </li>
-
         <!-- المقررات الدراسية ومتطلباتها -->
         <li class="nav-item dropdown" id="navCatalogWrap" data-nav-tier="secondary" style="display:none;">
           <a class="nav-link dropdown-toggle" href="#" id="catalogMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-book ms-1"></i>
-            <span class="nav-label-full">المقررات الدراسية ومتطلباتها</span><span class="nav-label-short">المقررات</span>
+            <span class="nav-label-full">المقررات الدراسية ومتطلباتها</span><span class="nav-label-short">المقررات والمتطلبات</span>
           </a>
           <ul class="dropdown-menu" aria-labelledby="catalogMenu">
             <li><a class="dropdown-item" id="navCollegeCatalogCourses" href="/college_catalog_page" style="display:none;">كتالوج الأقسام والخطط (إداري)</a></li>
@@ -648,7 +656,7 @@
         <li class="nav-item dropdown" id="navFacultySupervisionWrap" data-nav-tier="secondary" style="display:none;">
           <a class="nav-link dropdown-toggle" href="#" id="facultySupervisionMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-user-tie ms-1"></i>
-            <span class="nav-label-full">الأساتذة والإشراف</span><span class="nav-label-short">الأساتذة</span>
+            <span class="nav-label-full">الأساتذة والإشراف</span><span class="nav-label-short">الأساتذة والإشراف</span>
           </a>
           <ul class="dropdown-menu" aria-labelledby="facultySupervisionMenu">
             <li><a class="dropdown-item" id="navInstructors" href="/instructors_form">أعضاء هيئة التدريس</a></li>
@@ -668,7 +676,7 @@
         <li class="nav-item dropdown d-none" id="navQualityAccreditationWrap" style="display:none;" data-nav-tier="secondary">
           <a class="nav-link dropdown-toggle" href="#" id="qualityAccreditationMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-award ms-1"></i>
-            <span class="nav-label-full">ضمان الجودة والاعتماد</span><span class="nav-label-short">الجودة</span>
+            <span class="nav-label-full">ضمان الجودة والاعتماد</span><span class="nav-label-short">ضمان الجودة</span>
           </a>
           <ul class="dropdown-menu" aria-labelledby="qualityAccreditationMenu" id="qualityAccreditationMenuList">
             <li><h6 class="dropdown-header qa-nav-group" data-qa-group="overview">نظرة عامة</h6></li>
@@ -707,7 +715,7 @@
         <li class="nav-item dropdown d-none" id="navArchivesMenuWrap" style="display:none;" data-nav-tier="primary">
           <a class="nav-link dropdown-toggle" href="#" id="archivesMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-box-archive ms-1"></i>
-            <span class="nav-label-full">الأرشيف</span><span class="nav-label-short">أرشيف</span>
+            <span class="nav-label-full">الأرشيف</span><span class="nav-label-short">أرشيف الوثائق</span>
           </a>
           <ul class="dropdown-menu" aria-labelledby="archivesMenu" id="archivesMenuList">
             <li><h6 class="dropdown-header">ضمان الجودة</h6></li>
@@ -725,7 +733,7 @@
           <a class="nav-link dropdown-toggle" href="#" id="adminSettingsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="fa-solid fa-gear ms-1"></i>
             <span class="nav-label-full" id="adminSettingsMenuLabelFull">الإدارة والإعدادات</span>
-            <span class="nav-label-short" id="adminSettingsMenuLabelShort">إدارة</span>
+            <span class="nav-label-short" id="adminSettingsMenuLabelShort">الإدارة والإعدادات</span>
           </a>
           <ul class="dropdown-menu" aria-labelledby="adminSettingsMenu" id="adminSettingsMenuList">
             <li><a class="dropdown-item" id="navUsersAdmin" href="/users_admin">المستخدمون</a></li>
@@ -746,4 +754,4 @@
 
 <script nonce="{{ csp_nonce }}" src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
 <script nonce="{{ csp_nonce }}" src="/static/js/nav-shell.js?v=20260816"></script>
-<script nonce="{{ csp_nonce }}" src="/static/js/nav-auth.js?v=20260910"></script>
+<script nonce="{{ csp_nonce }}" src="/static/js/nav-auth.js?v=20260912a"></script>

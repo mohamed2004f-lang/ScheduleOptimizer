@@ -6,8 +6,17 @@ from backend.database.database import fetch_table_columns, is_postgresql, table_
 from backend.repositories.course_equivalence_repo import expand_course_names_for_department
 
 
-def instructor_linked_to_department(conn, instructor_id: int, department_id: int) -> bool:
-    """هل يُعتبر الأستاذ مرتبطاً بهذا القسم (قسم رئيسي، إسناد، أو صف جدول)؟"""
+def instructor_linked_to_department(
+    conn, instructor_id: int, department_id: int, *, include_schedule: bool = True
+) -> bool:
+    """
+    هل يُعتبر الأستاذ مرتبطاً بهذا القسم؟
+
+    الافتراضي (طلاب الأستاذ): منزل ∪ تعيين نشط ∪ صف جدول.
+    لظهور القوائم/الاختيار استخدم
+    ``instructor_visible_in_department_scope`` في department_scope_policy
+    (منزل ∪ تعيين فقط، بدون صف الجدول وحده).
+    """
     did = int(department_id)
     iid = int(instructor_id)
     cur = conn.cursor()
@@ -32,6 +41,8 @@ def instructor_linked_to_department(conn, instructor_id: int, department_id: int
         ).fetchone()
         if r2:
             return True
+    if not include_schedule:
+        return False
     scols = fetch_table_columns(conn, "schedule")
     if "instructor_id" in scols and "department_id" in scols:
         r3 = cur.execute(

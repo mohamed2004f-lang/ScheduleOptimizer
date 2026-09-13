@@ -133,3 +133,105 @@ class TestInstructorCrossDepartmentApi:
         assert "S001" in ids
         crs = j.get("course_names_resolved") or []
         assert "رياضيات 1" in crs and "رياضيات موازي" in crs
+
+
+class TestInstructorLinkUnlinkAndListFields:
+    def test_list_includes_relation_fields(self, auth_client):
+        r = auth_client.get("/instructors/list")
+        assert r.status_code == 200
+        insts = r.get_json().get("instructors") or []
+        assert isinstance(insts, list)
+        for x in insts:
+            assert "relation_to_scope" in x
+            assert "can_manage_identity" in x
+            assert "can_unlink_from_scope" in x
+
+    def test_offering_instructors_include_collaborator(self, db_conn):
+        from backend.services.term_offerings import _list_offering_instructors
+        from backend.repositories.instructor_assignments_repo import upsert_user_assignment
+
+        uid = uuid.uuid4().hex[:8]
+        cur = db_conn.cursor()
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (f"OA{uid}".upper()[:12], "عرض1", "O1"),
+        )
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (f"OB{uid}".upper()[:12], "عرض2", "O2"),
+        )
+        d1 = cur.execute("SELECT id FROM departments WHERE code = ?", (f"OA{uid}".upper()[:12],)).fetchone()[0]
+        d2 = cur.execute("SELECT id FROM departments WHERE code = ?", (f"OB{uid}".upper()[:12],)).fetchone()[0]
+        cur.execute(
+            "INSERT INTO instructors (name, type, is_active, department_id) VALUES (?, 'internal', 1, ?)",
+            (f"OfferCollab {uid}", d1),
+        )
+        iid = int(cur.lastrowid)
+        upsert_user_assignment(db_conn, instructor_id=iid, department_id=int(d2))
+        db_conn.commit()
+        rows = _list_offering_instructors(db_conn, int(d2))
+        found = next((r for r in rows if int(r["id"]) == iid), None)
+        assert found is not None
+        assert found.get("relation") == "collaborator"
+
+    def test_hod_sees_collaborator_and_can_unlink(self, app, db_conn):
+        uid = uuid.uuid4().hex[:8]
+        cur = db_conn.cursor()
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (f"LA{uid}".upper()[:12], "منزل ربط", "HomeL"),
+        )
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (f"LB{uid}".upper()[:12], "مضيف ربط", "HostL"),
+        )
+        d1 = cur.execute("SELECT id FROM departments WHERE code = ?", (f"LA{uid}".upper()[:12],)).fetchone()[0]
+        d2 = cur.execute("SELECT id FROM departments WHERE code = ?", (f"LB{uid}".upper()[:12],)).fetchone()[0]
+        cur.execute(
+            "INSERT INTO instructors (name, type, is_active, department_id) VALUES (?, 'internal', 1, ?)",
+            (f"Collab {uid}", d1),
+        )
+        iid = int(cur.lastrowid)
+        pw = cur.execute(
+            "SELECT password_hash FROM users WHERE username = 'admin-test' LIMIT 1"
+        ).fetchone()[0]
+        host_user = f"hod_link_{uid}"
+        cur.execute(
+            "INSERT INTO users (username, password_hash, role, department_id) VALUES (?, ?, 'head_of_department', ?)",
+            (host_user, pw, d2),
+        )
+        db_conn.commit()
+
+        with app.test_client() as c:
+            assert c.post("/auth/login", json={"username": host_user, "password": "TestP@ssw0rd!"}).status_code == 200
+            link = c.post(
+                f"/instructors/{iid}/link_department",
+                json={},
+                headers={"Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest"},
+            )
+            assert link.status_code == 200, link.get_data(as_text=True)
+
+            lst = c.get("/instructors/list")
+            assert lst.status_code == 200
+            found = next((x for x in (lst.get_json().get("instructors") or []) if int(x["id"]) == iid), None)
+            assert found is not None
+            assert found.get("relation_to_scope") == "collaborator"
+            assert found.get("can_manage_identity") is False
+            assert found.get("can_unlink_from_scope") is True
+
+            bad_del = c.post(
+                "/instructors/delete",
+                json={"id": iid},
+                headers={"Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest"},
+            )
+            assert bad_del.status_code == 403
+
+            un = c.post(
+                f"/instructors/{iid}/unlink_department",
+                json={},
+                headers={"Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest"},
+            )
+            assert un.status_code == 200
+            lst2 = c.get("/instructors/list")
+            ids = {int(x["id"]) for x in (lst2.get_json().get("instructors") or [])}
+            assert iid not in ids

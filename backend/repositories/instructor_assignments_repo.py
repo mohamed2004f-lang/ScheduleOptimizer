@@ -4,6 +4,8 @@ from __future__ import annotations
 from backend.database.database import HOME_ASSIGNMENT_SECTION_ID, fetch_table_columns, is_postgresql, table_exists
 
 _USER_SOURCES = ("user_ui", "manual")
+_SCHEDULE_SOURCES = ("schedule_save", "schedule_backfill")
+_PROTECTED_SOURCES = _USER_SOURCES  # لا تُستبدل بمصدر جدول عند التعارض
 
 
 def list_assignments_for_instructor(conn, instructor_id: int) -> list[dict]:
@@ -136,6 +138,142 @@ def upsert_user_assignment(
             """,
             (iid, did, sid, sem, ip, src),
         )
+
+
+def upsert_schedule_derived_assignment(
+    conn,
+    *,
+    instructor_id: int,
+    department_id: int,
+    source: str = "schedule_save",
+) -> None:
+    """
+    تعيين مستوى القسم من الجدول (مفتاح section=-1, semester='').
+    لا يُنشأ إن كان القسم هو منزل الأستاذ.
+    لا يستبدل migration_source لتعيينات user_ui/manual الموجودة.
+    """
+    if not table_exists(conn, "instructor_department_assignments"):
+        return
+    try:
+        iid = int(instructor_id)
+        did = int(department_id)
+    except (TypeError, ValueError):
+        return
+    if iid <= 0 or did <= 0:
+        return
+
+    src = source if source in _SCHEDULE_SOURCES else "schedule_save"
+    cur = conn.cursor()
+    home_row = cur.execute(
+        "SELECT department_id FROM instructors WHERE id = ? LIMIT 1",
+        (iid,),
+    ).fetchone()
+    if not home_row:
+        return
+    home_raw = home_row[0] if not hasattr(home_row, "keys") else home_row["department_id"]
+    if home_raw not in (None, ""):
+        try:
+            if int(home_raw) == did:
+                return
+        except (TypeError, ValueError):
+            pass
+
+    sid = int(HOME_ASSIGNMENT_SECTION_ID)
+    sem = ""
+    ph = "%s" if is_postgresql() else "?"
+    existing = cur.execute(
+        f"""
+        SELECT migration_source, is_active
+        FROM instructor_department_assignments
+        WHERE instructor_id = {ph} AND department_id = {ph}
+          AND schedule_section_id = {ph} AND semester = {ph}
+        LIMIT 1
+        """,
+        (iid, did, sid, sem),
+    ).fetchone()
+
+    if existing:
+        prev_src = (existing[0] if not hasattr(existing, "keys") else existing["migration_source"]) or ""
+        if prev_src in _PROTECTED_SOURCES:
+            if is_postgresql():
+                cur.execute(
+                    """
+                    UPDATE instructor_department_assignments
+                    SET is_active = 1, updated_at = CURRENT_TIMESTAMP
+                    WHERE instructor_id = %s AND department_id = %s
+                      AND schedule_section_id = %s AND semester = %s
+                    """,
+                    (iid, did, sid, sem),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE instructor_department_assignments
+                    SET is_active = 1, updated_at = CURRENT_TIMESTAMP
+                    WHERE instructor_id = ? AND department_id = ?
+                      AND schedule_section_id = ? AND semester = ?
+                    """,
+                    (iid, did, sid, sem),
+                )
+            return
+
+    if is_postgresql():
+        cur.execute(
+            """
+            INSERT INTO instructor_department_assignments
+            (instructor_id, department_id, schedule_section_id, semester,
+             is_primary, is_active, migration_source)
+            VALUES (%s, %s, %s, %s, 0, 1, %s)
+            ON CONFLICT (instructor_id, department_id, schedule_section_id, semester)
+            DO UPDATE SET is_active = 1,
+                          migration_source = EXCLUDED.migration_source,
+                          updated_at = CURRENT_TIMESTAMP
+            """,
+            (iid, did, sid, sem, src),
+        )
+    else:
+        cur.execute(
+            """
+            INSERT INTO instructor_department_assignments
+            (instructor_id, department_id, schedule_section_id, semester,
+             is_primary, is_active, migration_source)
+            VALUES (?, ?, ?, ?, 0, 1, ?)
+            ON CONFLICT (instructor_id, department_id, schedule_section_id, semester)
+            DO UPDATE SET is_active = 1,
+                          migration_source = excluded.migration_source,
+                          updated_at = CURRENT_TIMESTAMP
+            """,
+            (iid, did, sid, sem, src),
+        )
+
+
+def deactivate_assignments_for_department(conn, instructor_id: int, department_id: int) -> int:
+    """تعطيل كل تعيينات الأستاذ لهذا القسم. يُرجع عدد الصفوف المتأثرة."""
+    if not table_exists(conn, "instructor_department_assignments"):
+        return 0
+    cur = conn.cursor()
+    if is_postgresql():
+        cur.execute(
+            """
+            UPDATE instructor_department_assignments
+            SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+            WHERE instructor_id = %s AND department_id = %s AND is_active = 1
+            """,
+            (int(instructor_id), int(department_id)),
+        )
+    else:
+        cur.execute(
+            """
+            UPDATE instructor_department_assignments
+            SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+            WHERE instructor_id = ? AND department_id = ? AND is_active = 1
+            """,
+            (int(instructor_id), int(department_id)),
+        )
+    try:
+        return int(cur.rowcount or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def replace_user_assignments_from_payload(conn, instructor_id: int, assignments: list[dict]) -> None:

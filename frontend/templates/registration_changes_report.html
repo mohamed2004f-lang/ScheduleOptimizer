@@ -14,13 +14,13 @@
   <div class="page-header">
     <div>
       <h1 class="page-title">تقرير الإضافة والإسقاط</h1>
-      <p class="page-subtitle">سجل المواد المضافة والمسقطة مع تواريخ الإضافة والإسقاط ومنفّذ العملية</p>
+      <p class="page-subtitle">طباعة نموذج لطالب واحد (إضافة / إسقاط / نهائي)، مع إخفاء أو حذف الحركات الخاطئة</p>
     </div>
     <div class="d-flex gap-2 flex-wrap">
       <button type="button" class="btn btn-primary btn-sm" id="btnApplyFilters">تطبيق الفلتر</button>
       <a class="btn btn-outline-success btn-sm" id="btnExportExcel" href="#">تصدير Excel</a>
       <a class="btn btn-outline-danger btn-sm" id="btnExportPdf" href="#" target="_blank">تصدير PDF</a>
-      <button type="button" class="btn btn-outline-danger btn-sm" id="btnDeleteByFilter" title="أدمن فقط">حذف السجلات المطابقة للفلتر</button>
+      <button type="button" class="btn btn-outline-danger btn-sm" id="btnDeleteByFilter" title="أدمن فقط">حذف المطابق للفلتر</button>
     </div>
   </div>
 
@@ -53,17 +53,80 @@
           <label class="form-label small mb-0">المقرر (بحث)</label>
           <input type="text" id="filterCourseName" class="form-control form-control-sm" placeholder="اسم أو رمز">
         </div>
+        <div class="col-md-2">
+          <div class="form-check mt-3">
+            <input class="form-check-input" type="checkbox" id="filterIncludeHidden">
+            <label class="form-check-label small" for="filterIncludeHidden">إظهار المخفي</label>
+          </div>
+        </div>
       </div>
+    </div>
+  </div>
+
+  <div class="card mb-3 border-success">
+    <div class="card-body">
+      <h6 class="card-title mb-2">طباعة نموذج رسمي (طالب واحد)</h6>
+      <div class="row g-2 align-items-end">
+        <div class="col-md-4">
+          <label class="form-label small mb-0" for="printStudent">اسم الطالب</label>
+          <select id="printStudent" class="form-select form-select-sm">
+            <option value="">— اختر طالباً —</option>
+          </select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small mb-0 d-block">نوع النموذج</label>
+          <div class="d-flex flex-wrap gap-3 mt-1">
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="printFormType" id="formTypeAdd" value="add">
+              <label class="form-check-label small" for="formTypeAdd">إضافة</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="printFormType" id="formTypeDrop" value="drop">
+              <label class="form-check-label small" for="formTypeDrop">إسقاط</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="printFormType" id="formTypeFinal" value="final" checked>
+              <label class="form-check-label small" for="formTypeFinal">نهائي</label>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small mb-0 d-block">مصدر المقررات</label>
+          <div class="d-flex flex-wrap gap-3 mt-1">
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="printSource" id="printSrcSelected" value="selected" checked>
+              <label class="form-check-label small" for="printSrcSelected">المحدَّد فقط</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="radio" name="printSource" id="printSrcVisible" value="visible">
+              <label class="form-check-label small" for="printSrcVisible">كل الظاهر للطالب</label>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-1">
+          <button type="button" class="btn btn-success btn-sm w-100" id="btnPrintForm">طباعة</button>
+        </div>
+      </div>
+      <p class="small text-muted mb-0 mt-2">حدّد صفوف هذا الطالب في الجدول لاستبعاد الخطأ/التراجع، أو اختر «كل الظاهر للطالب» بعد الفلتر.</p>
     </div>
   </div>
 
   <div class="card">
     <div class="card-body">
+      <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="btnHideSelected">إخفاء المحدّد</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="btnUnhideSelected">إظهار المحدّد</button>
+        <button type="button" class="btn btn-outline-danger btn-sm" id="btnDeleteSelected">حذف المحدّد</button>
+        <span class="small text-muted" id="selCount">لم يُحدَّد شيء</span>
+      </div>
       <div id="msg" class="mb-2"></div>
       <div class="table-responsive">
         <table class="table table-sm table-bordered mb-0" id="tbl">
           <thead class="table-light">
             <tr>
+              <th class="text-center" style="width:2.2rem;">
+                <input type="checkbox" id="chkAll" title="تحديد الكل">
+              </th>
               <th>#</th>
               <th>التاريخ والوقت</th>
               <th>رقم الطالب</th>
@@ -85,6 +148,8 @@
 </main>
 
 <script>
+let lastItems = [];
+
 async function fetchJSON(url, opts){
   const r = await fetch(url, opts);
   const j = await r.json().catch(()=>null);
@@ -96,6 +161,18 @@ function setMsg(kind, text){
 }
 function escapeHtml(s){ if(s==null||s===undefined) return ''; const t=document.createElement('div'); t.textContent=s; return t.innerHTML; }
 
+function formatDisplayTime(raw){
+  if (!raw) return '';
+  let s = String(raw).trim().replace('T', ' ').replace('Z', '');
+  if (s.includes('.')) s = s.split('.')[0];
+  const parts = s.split(' ');
+  if (parts.length === 2 && (parts[1].match(/:/g) || []).length === 2) {
+    const [hh, mm] = parts[1].split(':');
+    s = parts[0] + ' ' + hh + ':' + mm;
+  }
+  return s;
+}
+
 function buildQueryParams(){
   const p = new URLSearchParams();
   const dateFrom = document.getElementById('filterDateFrom')?.value?.trim();
@@ -103,12 +180,70 @@ function buildQueryParams(){
   const studentId = document.getElementById('filterStudentId')?.value?.trim();
   const action = document.getElementById('filterAction')?.value?.trim();
   const courseName = document.getElementById('filterCourseName')?.value?.trim();
+  const includeHidden = document.getElementById('filterIncludeHidden')?.checked;
   if(dateFrom) p.set('date_from', dateFrom);
   if(dateTo) p.set('date_to', dateTo);
   if(studentId) p.set('student_id', studentId);
   if(action) p.set('action', action);
   if(courseName) p.set('course_name', courseName);
+  if(includeHidden) p.set('include_hidden', '1');
   return p.toString();
+}
+
+function selectedIds(){
+  return Array.from(document.querySelectorAll('.row-chk:checked'))
+    .map(el => Number(el.value))
+    .filter(n => Number.isFinite(n) && n > 0);
+}
+
+function selectedRowsMeta(){
+  return Array.from(document.querySelectorAll('.row-chk:checked')).map(el => ({
+    id: Number(el.value),
+    studentId: el.getAttribute('data-student-id') || '',
+  })).filter(x => Number.isFinite(x.id) && x.id > 0);
+}
+
+function updateSelCount(){
+  const n = selectedIds().length;
+  const el = document.getElementById('selCount');
+  el.textContent = n ? `محدد: ${n}` : 'لم يُحدَّد شيء';
+  const all = document.querySelectorAll('.row-chk');
+  const chkAll = document.getElementById('chkAll');
+  if (chkAll) {
+    chkAll.checked = all.length > 0 && n === all.length;
+    chkAll.indeterminate = n > 0 && n < all.length;
+  }
+  // إن كان كل التحديد لطالب واحد → املأ قائمة الطباعة تلقائياً
+  const metas = selectedRowsMeta();
+  const sids = [...new Set(metas.map(m => m.studentId).filter(Boolean))];
+  if (sids.length === 1) {
+    const sel = document.getElementById('printStudent');
+    if (sel && [...sel.options].some(o => o.value === sids[0])) {
+      sel.value = sids[0];
+    }
+  }
+}
+
+function rebuildPrintStudentOptions(items){
+  const sel = document.getElementById('printStudent');
+  const prev = sel.value;
+  const map = new Map();
+  (items || []).forEach(it => {
+    const sid = String(it.student_id || '').trim();
+    if (!sid) return;
+    if (!map.has(sid)) {
+      map.set(sid, String(it.student_name || '').trim() || sid);
+    }
+  });
+  const entries = [...map.entries()].sort((a, b) => a[1].localeCompare(b[1], 'ar'));
+  sel.innerHTML = '<option value="">— اختر طالباً —</option>';
+  entries.forEach(([sid, name]) => {
+    const opt = document.createElement('option');
+    opt.value = sid;
+    opt.textContent = name + ' (' + sid + ')';
+    sel.appendChild(opt);
+  });
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
 }
 
 async function load(){
@@ -117,30 +252,43 @@ async function load(){
   const r = await fetchJSON(url);
   const tb = document.querySelector('#tbl tbody');
   tb.innerHTML = '';
+  document.getElementById('chkAll').checked = false;
+  document.getElementById('chkAll').indeterminate = false;
   const excelLink = document.getElementById('btnExportExcel');
   const pdfLink = document.getElementById('btnExportPdf');
   excelLink.href = '/students/registration_changes_report/excel' + (qs ? '?' + qs : '');
   if (pdfLink) pdfLink.href = '/students/registration_changes_report/pdf' + (qs ? '?' + qs : '');
 
   if(!r.ok){
+    lastItems = [];
+    rebuildPrintStudentOptions([]);
     setMsg('danger', r.json?.message || 'فشل تحميل التقرير');
+    updateSelCount();
     return;
   }
   const items = r.json?.items || [];
+  lastItems = items;
+  rebuildPrintStudentOptions(items);
   if(!items.length){
-    tb.innerHTML = '<tr><td colspan="11" class="text-center text-muted">لا توجد سجلات تطابق الفلتر</td></tr>';
+    tb.innerHTML = '<tr><td colspan="12" class="text-center text-muted">لا توجد سجلات تطابق الفلتر</td></tr>';
     setMsg('info', 'لا توجد بيانات. جرّب توسيع نطاق التاريخ أو إزالة الفلاتر.');
+    updateSelCount();
     return;
   }
   setMsg('', '');
   const actionLabels = { add: 'إضافة', drop: 'إسقاط', change: 'تعديل' };
   items.forEach((it, idx)=>{
     const tr = document.createElement('tr');
+    const hidden = Number(it.is_hidden) === 1;
+    if (hidden) tr.classList.add('table-secondary');
     const actionLabel = actionLabels[it.action] || it.action || '';
     const actionClass = it.action === 'add' ? 'text-success' : (it.action === 'drop' ? 'text-danger' : 'text-secondary');
+    const id = it.id != null ? String(it.id) : '';
+    const sid = String(it.student_id || '');
     tr.innerHTML = `
-      <td>${idx+1}</td>
-      <td class="small">${escapeHtml(it.action_time || '')}</td>
+      <td class="text-center"><input type="checkbox" class="row-chk" value="${escapeHtml(id)}" data-student-id="${escapeHtml(sid)}" ${id ? '' : 'disabled'}></td>
+      <td>${idx+1}${hidden ? ' <span class="badge text-bg-secondary">مخفي</span>' : ''}</td>
+      <td class="small">${escapeHtml(formatDisplayTime(it.action_time))}</td>
       <td>${escapeHtml(it.student_id || '')}</td>
       <td>${escapeHtml(it.student_name || '')}</td>
       <td class="small">${escapeHtml(it.term || '')}</td>
@@ -153,9 +301,101 @@ async function load(){
     `;
     tb.appendChild(tr);
   });
+  tb.querySelectorAll('.row-chk').forEach(chk => chk.addEventListener('change', updateSelCount));
+  updateSelCount();
 }
 
 document.getElementById('btnApplyFilters').addEventListener('click', function(){ load(); });
+document.getElementById('filterIncludeHidden').addEventListener('change', function(){ load(); });
+
+document.getElementById('chkAll').addEventListener('change', function(){
+  const on = this.checked;
+  document.querySelectorAll('.row-chk').forEach(chk => { if (!chk.disabled) chk.checked = on; });
+  updateSelCount();
+});
+
+document.getElementById('btnPrintForm').addEventListener('click', async function(){
+  const studentId = document.getElementById('printStudent')?.value?.trim();
+  if (!studentId) { setMsg('warning', 'اختر اسم طالب واحد للطباعة.'); return; }
+
+  const formType = document.querySelector('input[name="printFormType"]:checked')?.value || 'final';
+  const source = document.querySelector('input[name="printSource"]:checked')?.value || 'selected';
+
+  const body = {
+    student_id: studentId,
+    form_type: formType,
+    include_hidden: !!document.getElementById('filterIncludeHidden')?.checked,
+  };
+
+  if (source === 'selected') {
+    const metas = selectedRowsMeta().filter(m => m.studentId === studentId);
+    if (!metas.length) {
+      setMsg('warning', 'حدّد صفوفاً لهذا الطالب، أو اختر «كل الظاهر للطالب».');
+      return;
+    }
+    body.ids = metas.map(m => m.id);
+  } else {
+    const qs = new URLSearchParams(buildQueryParams());
+    body.date_from = qs.get('date_from') || '';
+    body.date_to = qs.get('date_to') || '';
+    body.course_name = qs.get('course_name') || '';
+  }
+
+  const r = await fetch('/students/registration_changes_report/print_form', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const j = await r.json().catch(()=>null);
+    setMsg('danger', j?.message || 'فشل إنشاء نموذج الطباعة');
+    return;
+  }
+  const html = await r.text();
+  const w = window.open('', '_blank');
+  if (!w) { setMsg('warning', 'اسمح بالنوافذ المنبثقة لفتح نموذج الطباعة.'); return; }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+});
+
+async function setHidden(hidden){
+  const ids = selectedIds();
+  if (!ids.length) { setMsg('warning', 'حدّد صفوفاً أولاً.'); return; }
+  const label = hidden ? 'إخفاء' : 'إظهار';
+  if (!confirm(`هل تريد ${label} ${ids.length} سجل/سجلات من التقرير؟`)) return;
+  const r = await fetchJSON('/students/registration_changes_report/hide', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ ids, hidden }),
+  });
+  if (!r.ok) {
+    setMsg('danger', r.json?.message || `فشل ${label}`);
+    return;
+  }
+  setMsg('success', `تم ${label} ${r.json?.updated ?? ids.length} سجل/سجلات.`);
+  await load();
+}
+
+document.getElementById('btnHideSelected').addEventListener('click', () => setHidden(true));
+document.getElementById('btnUnhideSelected').addEventListener('click', () => setHidden(false));
+
+document.getElementById('btnDeleteSelected').addEventListener('click', async function(){
+  const ids = selectedIds();
+  if (!ids.length) { setMsg('warning', 'حدّد صفوفاً للحذف.'); return; }
+  if (!confirm(`حذف نهائي لـ ${ids.length} سجل/سجلات من سجل الإضافة والإسقاط. لا يمكن التراجع. هل أنت متأكد؟`)) return;
+  const r = await fetchJSON('/students/registration_changes_report/delete', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ ids }),
+  });
+  if (!r.ok) {
+    setMsg('danger', r.json?.message || 'فشل الحذف');
+    return;
+  }
+  setMsg('success', `تم حذف ${r.json?.deleted ?? 0} سجل/سجلات.`);
+  await load();
+});
 
 document.getElementById('btnDeleteByFilter').addEventListener('click', async function(){
   if(!confirm('سيتم حذف كل السجلات المطابقة للفلتر الحالي من التقرير بشكل نهائي. هل أنت متأكد؟')) return;

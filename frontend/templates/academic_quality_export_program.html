@@ -61,7 +61,7 @@
   <table class="table table-sm table-bordered"><thead><tr><th>المقرر</th><th>الأستاذ</th><th>رسوب %</th></tr></thead>
   <tbody>{% for c in critical_courses %}<tr><td>{{ c.course_name }}</td><td>{{ c.instructor_name }}</td><td>{{ c.student_failure_rate }}</td></tr>{% endfor %}</tbody></table>
   {% endif %}
-  <p class="text-muted small">أُنشئ من نظام ScheduleOptimizer — ضمان الجودة</p>
+  <p class="text-muted small">أُنشئ من منظومة الإدارة الأكاديمية — ضمان الجودة</p>
   {% if not for_pdf %}<button class="btn btn-primary no-print" onclick="window.print()">طباعة</button>{% endif %}
 </body>
 </html>

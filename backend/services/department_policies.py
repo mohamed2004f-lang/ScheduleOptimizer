@@ -12,6 +12,8 @@ from .utilities import get_connection, get_current_term, log_activity
 
 department_policies_bp = Blueprint("department_policies", __name__)
 
+POLICY_APPROVAL_ROLES = ("admin", "admin_main", "system_admin", "college_dean")
+
 _ALLOWED_PLAN_CODES = {"150", "155"}
 _ALLOWED_STATUS = {"draft", "pending_approval", "approved", "rejected"}
 
@@ -234,7 +236,7 @@ def head_submit_policy(policy_id: int):
 
 
 @department_policies_bp.route("/department_policies/admin/pending", methods=["GET"])
-@role_required("admin_main", "system_admin", "college_dean")
+@role_required(*POLICY_APPROVAL_ROLES)
 def admin_list_pending():
     with get_connection() as conn:
         _ensure_table(conn)
@@ -253,7 +255,7 @@ def admin_list_pending():
 
 
 @department_policies_bp.route("/department_policies/admin/approve/<int:policy_id>", methods=["POST"])
-@role_required("admin_main", "system_admin", "college_dean")
+@role_required(*POLICY_APPROVAL_ROLES)
 def admin_approve(policy_id: int):
     body = request.get_json(force=True) or {}
     activate_now = bool(body.get("activate_now"))
@@ -323,7 +325,7 @@ def admin_approve(policy_id: int):
 
 
 @department_policies_bp.route("/department_policies/admin/reject/<int:policy_id>", methods=["POST"])
-@role_required("admin_main", "system_admin", "college_dean")
+@role_required(*POLICY_APPROVAL_ROLES)
 def admin_reject(policy_id: int):
     body = request.get_json(force=True) or {}
     reason = (body.get("reason") or "").strip()

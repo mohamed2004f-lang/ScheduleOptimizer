@@ -26,7 +26,7 @@ def test_nav_core_ids_preserved():
         "navFacultySupervisionWrap",
         "navQualityAccreditationWrap",
         "navAdminSettingsWrap",
-        "navStaffCompactMoreWrap",
+        "navAccountMenuWrap",
         "navTermClosure",
         "navHodCourseDeliveryTop",
         "navDeanFinalBatches",
@@ -58,18 +58,19 @@ def test_supervisor_nav_shell_keeps_quality_admin_out():
 def test_nav_role_secondary_and_expanded_order_config():
     assert "STAFF_NAV_SECONDARY_BY_ROLE" in NAV_JS
     assert "QUALITY_PRIMARY_ROLES" in NAV_JS
-    assert "COMPACT_PRIMARY_ORDER" in NAV_JS
+    assert "EXPANDED_NAV_ORDER" in NAV_JS
     assert "applyQualityNavTier" in NAV_JS
     assert "applyRoleDropdownOrders" in NAV_JS
-    assert "applyCompactNavOrder" in NAV_JS
+    assert "applyStaffExpandedNav" in NAV_JS
+    assert "COMPACT_PRIMARY_ORDER" not in NAV_JS
+    assert "navDensityToggleWrap" not in NAV
+    assert "navStaffCompactMoreWrap" not in NAV
     assert "nav-staff-expanded" in NAV
     # رئيس القسم: الجودة primary مثل القيادات + اعتماد القسم في الترتيب
     assert "'head_of_department'" in NAV_CODE
     assert "navHodCourseDeliveryWrap" in NAV
-    # الجودة لم تعد ضمن secondary لرئيس القسم (خرجت من «المزيد»)
     hod_block_start = NAV_JS.find("head_of_department: [")
     assert hod_block_start > 0
-    # أول ظهور بعد secondary roles — تحقق من COMPACT و EXPANDED
     assert "navHodCourseDeliveryWrap" in NAV_JS[hod_block_start : hod_block_start + 2500]
 
 

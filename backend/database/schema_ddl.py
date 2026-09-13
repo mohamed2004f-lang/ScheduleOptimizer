@@ -444,6 +444,7 @@ TABLES_SCHEMA = {
             notes TEXT,
             prev_state TEXT,
             new_state TEXT,
+            is_hidden INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (student_id) REFERENCES students(student_id)
                 ON DELETE CASCADE ON UPDATE CASCADE,
             FOREIGN KEY (course_name) REFERENCES courses(course_name)

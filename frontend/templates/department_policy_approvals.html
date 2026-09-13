@@ -13,7 +13,7 @@
     <div class="page-header mb-3">
       <div>
         <h1 class="page-title">اعتماد سياسات نظم التخرج</h1>
-        <p class="page-subtitle">الأدمن الرئيسي: مراجعة واعتماد/رفض مقترحات رؤساء الأقسام</p>
+        <p class="page-subtitle">عميد الكلية ومسؤول النظام: مراجعة واعتماد أو رفض مقترحات رؤساء الأقسام</p>
       </div>
     </div>
 
@@ -49,95 +49,87 @@
     function showMsg(text, kind='info'){
       const box = document.getElementById('msgBox');
       if(!box) return;
-      box.innerHTML = `<div class="alert alert-${kind} p-2 mb-0">${text}</div>`;
-      setTimeout(()=>{ box.innerHTML=''; }, 5000);
+      box.innerHTML = text ? `<div class="alert alert-${kind} py-1 px-2 mb-0">${text}</div>` : '';
+    }
+
+    function escapeHtml(value){
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function renderEmpty(body, text){
+      body.innerHTML = `<tr><td colspan="7" class="text-center text-muted">${escapeHtml(text)}</td></tr>`;
     }
 
     async function loadRows(){
-      const r = await fetch('/department_policies/admin/pending', { credentials:'include' });
-      const j = await r.json().catch(()=>null);
       const body = document.getElementById('rowsBody');
       if(!body) return;
-      body.innerHTML = '';
-      if(!r.ok){
-        showMsg((j && j.message) ? j.message : 'تعذر تحميل الطلبات', 'danger');
-        return;
+      showMsg('جارٍ تحميل الطلبات قيد المراجعة...', 'info');
+      try {
+        const j = await apiGet('/department_policies/admin/pending');
+        const items = (j && j.items) || [];
+        body.innerHTML = '';
+        if(!items.length){
+          renderEmpty(body, 'لا توجد طلبات قيد المراجعة حالياً.');
+          showMsg('لا توجد طلبات قيد المراجعة حالياً.', 'info');
+          return;
+        }
+        items.forEach(it=>{
+          const effFrom = [it.effective_from_term || '', it.effective_from_year || ''].filter(Boolean).join(' ') || 'فوري';
+          body.insertAdjacentHTML(
+            'beforeend',
+            `<tr>
+              <td>${escapeHtml(it.id)}</td>
+              <td>${escapeHtml(it.department_code || '')} — ${escapeHtml(it.department_name_ar || '')}</td>
+              <td>${escapeHtml(it.plan_code || '')}</td>
+              <td>${escapeHtml(it.min_total_units || 0)}</td>
+              <td>${escapeHtml(effFrom)}</td>
+              <td>${escapeHtml(it.notes || '')}</td>
+              <td>
+                <button class="btn btn-sm btn-success btn-approve" data-id="${escapeHtml(it.id)}">اعتماد</button>
+                <button class="btn btn-sm btn-primary btn-approve-now" data-id="${escapeHtml(it.id)}">اعتماد وتفعيل الآن</button>
+                <button class="btn btn-sm btn-danger btn-reject" data-id="${escapeHtml(it.id)}">رفض</button>
+              </td>
+            </tr>`
+          );
+        });
+        showMsg(`تم تحميل ${items.length} طلب/طلبات قيد المراجعة.`, 'success');
+
+        body.querySelectorAll('.btn-approve').forEach(btn=>{
+          btn.addEventListener('click', () => decidePolicy(btn.dataset.id, 'approve', false));
+        });
+        body.querySelectorAll('.btn-approve-now').forEach(btn=>{
+          btn.addEventListener('click', () => decidePolicy(btn.dataset.id, 'approve', true));
+        });
+        body.querySelectorAll('.btn-reject').forEach(btn=>{
+          btn.addEventListener('click', () => decidePolicy(btn.dataset.id, 'reject'));
+        });
+      } catch (e) {
+        console.error(e);
+        renderEmpty(body, 'تعذر تحميل الطلبات.');
+        showMsg((e && e.message) ? e.message : 'تعذر تحميل الطلبات', 'danger');
       }
-      const items = (j && j.items) || [];
-      items.forEach(it=>{
-        const effFrom = [it.effective_from_term || '', it.effective_from_year || ''].filter(Boolean).join(' ') || 'فوري';
-        body.insertAdjacentHTML(
-          'beforeend',
-          `<tr>
-            <td>${it.id}</td>
-            <td>${(it.department_code || '')} — ${(it.department_name_ar || '')}</td>
-            <td>${it.plan_code || ''}</td>
-            <td>${it.min_total_units || 0}</td>
-            <td>${effFrom}</td>
-            <td>${it.notes || ''}</td>
-            <td>
-              <button class="btn btn-sm btn-success btn-approve" data-id="${it.id}">اعتماد</button>
-              <button class="btn btn-sm btn-primary btn-approve-now" data-id="${it.id}">اعتماد وتفعيل الآن</button>
-              <button class="btn btn-sm btn-danger btn-reject" data-id="${it.id}">رفض</button>
-            </td>
-          </tr>`
-        );
-      });
-      body.querySelectorAll('.btn-approve').forEach(btn=>{
-        btn.addEventListener('click', async ()=>{
-          const id = btn.dataset.id;
-          const rr = await fetch(`/department_policies/admin/approve/${encodeURIComponent(id)}`, {
-            method:'POST',
-            credentials:'include',
-            headers:{ 'Content-Type':'application/json' },
-            body: JSON.stringify({ activate_now: false })
-          });
-          const jj = await rr.json().catch(()=>null);
-          if(rr.ok){
-            showMsg('تم اعتماد السياسة بنجاح', 'success');
-            loadRows();
-          }else{
-            showMsg((jj && jj.message) ? jj.message : 'فشل الاعتماد', 'danger');
-          }
-        });
-      });
-      body.querySelectorAll('.btn-approve-now').forEach(btn=>{
-        btn.addEventListener('click', async ()=>{
-          const id = btn.dataset.id;
-          const rr = await fetch(`/department_policies/admin/approve/${encodeURIComponent(id)}`, {
-            method:'POST',
-            credentials:'include',
-            headers:{ 'Content-Type':'application/json' },
-            body: JSON.stringify({ activate_now: true })
-          });
-          const jj = await rr.json().catch(()=>null);
-          if(rr.ok){
-            showMsg('تم اعتماد السياسة وتفعيلها على الفصل الحالي', 'success');
-            loadRows();
-          }else{
-            showMsg((jj && jj.message) ? jj.message : 'فشل الاعتماد الفوري', 'danger');
-          }
-        });
-      });
-      body.querySelectorAll('.btn-reject').forEach(btn=>{
-        btn.addEventListener('click', async ()=>{
-          const id = btn.dataset.id;
+    }
+
+    async function decidePolicy(id, action, activateNow){
+      if(!id) return;
+      try {
+        if(action === 'reject'){
           const reason = prompt('سبب الرفض (اختياري):', '') || '';
-          const rr = await fetch(`/department_policies/admin/reject/${encodeURIComponent(id)}`, {
-            method:'POST',
-            credentials:'include',
-            headers:{ 'Content-Type':'application/json' },
-            body: JSON.stringify({ reason: reason.trim() })
-          });
-          const jj = await rr.json().catch(()=>null);
-          if(rr.ok){
-            showMsg('تم رفض السياسة', 'warning');
-            loadRows();
-          }else{
-            showMsg((jj && jj.message) ? jj.message : 'فشل الرفض', 'danger');
-          }
-        });
-      });
+          await apiPost(`/department_policies/admin/reject/${encodeURIComponent(id)}`, { reason: reason.trim() });
+          showMsg('تم رفض السياسة', 'warning');
+        } else {
+          await apiPost(`/department_policies/admin/approve/${encodeURIComponent(id)}`, { activate_now: !!activateNow });
+          showMsg(activateNow ? 'تم اعتماد السياسة وتفعيلها على الفصل الحالي' : 'تم اعتماد السياسة بنجاح', 'success');
+        }
+        loadRows();
+      } catch (e) {
+        console.error(e);
+        showMsg((e && e.message) ? e.message : 'فشل تنفيذ الإجراء', 'danger');
+      }
     }
 
     document.getElementById('btnReload').addEventListener('click', loadRows);

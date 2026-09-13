@@ -238,6 +238,95 @@ def _upcoming_exams_count(conn, sid: str) -> int:
         return 0
 
 
+def _resolve_portal_department_id(conn, stu: dict) -> int | None:
+    """قسم الطالب للبوابة: students.department_id ثم الاستنتاج من البرنامج."""
+    raw = stu.get("department_id")
+    if raw not in (None, ""):
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    try:
+        from backend.core.department_scope_policy import resolve_student_department_id
+
+        return resolve_student_department_id(conn, stu.get("student_id") or "")
+    except Exception:
+        return None
+
+
+def _department_top_students(
+    conn,
+    department_id: int | None,
+    *,
+    viewer_sid: str = "",
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """أفضل طلاب القسم حسب المعدل التراكمي (نشطون ولديهم درجات)."""
+    if department_id is None:
+        return []
+    cur = conn.cursor()
+    cols = {c.lower() for c in fetch_table_columns(conn, "students")}
+    if "department_id" not in cols:
+        return []
+    enroll_sql = ""
+    if "enrollment_status" in cols:
+        enroll_sql = " AND COALESCE(enrollment_status, 'active') = 'active'"
+    rows = cur.execute(
+        f"""
+        SELECT student_id, COALESCE(student_name, '') AS student_name
+        FROM students
+        WHERE department_id = ?
+        {enroll_sql}
+        """,
+        (int(department_id),),
+    ).fetchall()
+    if not rows:
+        return []
+    sid_list = []
+    names: dict[str, str] = {}
+    for r in rows:
+        if hasattr(r, "keys"):
+            sid = normalize_sid(r["student_id"])
+            names[sid] = (r["student_name"] or "").strip() or sid
+        else:
+            sid = normalize_sid(r[0])
+            names[sid] = (r[1] or "").strip() or sid
+        if sid:
+            sid_list.append(sid)
+    if not sid_list:
+        return []
+    try:
+        from backend.services.grades import _load_all_transcripts_bulk
+
+        bulk = _load_all_transcripts_bulk(sid_list)
+    except Exception:
+        logger.exception("department top students bulk transcript failed")
+        return []
+    ranked: list[dict[str, Any]] = []
+    for sid in sid_list:
+        tr = bulk.get(sid) or {}
+        try:
+            gpa = float(tr.get("cumulative_gpa") or 0.0)
+        except (TypeError, ValueError):
+            gpa = 0.0
+        units = int(tr.get("completed_units") or 0)
+        ordered = tr.get("ordered_semesters") or []
+        if not ordered or gpa <= 0:
+            continue
+        ranked.append({
+            "student_id": sid,
+            "student_name": names.get(sid) or sid,
+            "cumulative_gpa": round(gpa, 2),
+            "completed_units": units,
+            "is_self": normalize_sid(viewer_sid) == sid,
+        })
+    ranked.sort(key=lambda x: (-float(x["cumulative_gpa"]), x["student_name"]))
+    out = ranked[: max(1, int(limit))]
+    for i, row in enumerate(out, start=1):
+        row["rank"] = i
+    return out
+
+
 def build_portal_summary(conn, sid: str) -> dict[str, Any]:
     from backend.core.enrollment_status_policy import is_alumni_enrollment, normalize_enrollment_status
 
@@ -248,14 +337,74 @@ def build_portal_summary(conn, sid: str) -> dict[str, Any]:
     plan = {} if alumni else _enrollment_plan_status(conn, sid, term_label)
     gpa = None
     completed_units = None
+    academic_status: dict[str, Any] = {
+        "status_code": "no_data",
+        "status_label": "لا توجد بيانات درجات",
+        "extra_chance": False,
+        "extra_chance_note": "",
+    }
+    tr = None
     try:
         tr = _load_transcript_data(sid)
         if tr:
             gpa = tr.get("cumulative_gpa")
             completed_units = tr.get("completed_units")
+            from backend.services.grades import _academic_status_payload_from_transcript
+
+            academic_status = _academic_status_payload_from_transcript(sid, tr)
+            # وحّد المعدل/الوحدات مع حمولة الحالة إن وُجدت
+            if academic_status.get("cumulative_gpa") is not None:
+                gpa = academic_status.get("cumulative_gpa")
+            if academic_status.get("completed_units") is not None:
+                completed_units = academic_status.get("completed_units")
     except Exception:
         pass
+
+    dept_id = _resolve_portal_department_id(conn, {**stu, "student_id": sid})
+    if dept_id and not stu.get("department_id"):
+        stu["department_id"] = dept_id
+        try:
+            dr = conn.cursor().execute(
+                "SELECT COALESCE(name_ar, code, '') FROM departments WHERE id = ? LIMIT 1",
+                (int(dept_id),),
+            ).fetchone()
+            if dr and (dr[0] or "").strip():
+                stu["department_name"] = (dr[0] or "").strip()
+        except Exception:
+            pass
+
+    top_students = _department_top_students(
+        conn, dept_id, viewer_sid=sid, limit=5,
+    ) if dept_id else []
+
     sem = term_label_from_conn(conn)
+    survey_window: dict[str, Any] = {
+        "open": False,
+        "reason": "alumni" if alumni else "unknown",
+        "message_ar": "",
+        "drop_ends_at": None,
+        "closes_at": None,
+    }
+    if not alumni:
+        try:
+            from backend.services.student_survey_window import student_survey_fill_gate
+
+            gate = student_survey_fill_gate(conn, sem)
+            survey_window = {
+                "open": bool(gate.get("open")),
+                "reason": gate.get("reason") or "",
+                "message_ar": gate.get("message_ar") or "",
+                "drop_ends_at": gate.get("drop_ends_at"),
+                "closes_at": gate.get("closes_at"),
+            }
+        except Exception:
+            survey_window = {
+                "open": False,
+                "reason": "gate_error",
+                "message_ar": "تعذر التحقق من نافذة الاستبيانات.",
+                "drop_ends_at": None,
+                "closes_at": None,
+            }
     eval_pending = [] if alumni else list_pending_course_evaluations(conn, sid, semester=sem)
     surveys_pending = [] if alumni else list_pending_for_user(
         conn,
@@ -270,6 +419,16 @@ def build_portal_summary(conn, sid: str) -> dict[str, Any]:
     exam_pub = get_exam_schedule_published_at("midterm", conn=conn) or get_exam_schedule_published_at("final", conn=conn)
 
     action_items: list[dict] = []
+    status_code = (academic_status.get("status_code") or "").strip().lower()
+    status_label = academic_status.get("status_label") or ""
+    if status_code.startswith("warning") or "فصل" in status_label:
+        action_items.append({
+            "type": "academic_warning",
+            "tab": "transcript",
+            "focus": "status",
+            "message": status_label or "راجع وضعك الأكاديمي في كشف الدرجات",
+            "href": "/my_transcript",
+        })
     if not alumni:
         for ev in eval_pending[:5]:
             action_items.append({
@@ -340,6 +499,13 @@ def build_portal_summary(conn, sid: str) -> dict[str, Any]:
         "registrations_preview": regs["courses"],
         "gpa": gpa,
         "completed_units": completed_units,
+        "academic_status": {
+            "status_code": academic_status.get("status_code") or "no_data",
+            "status_label": academic_status.get("status_label") or "",
+            "extra_chance": bool(academic_status.get("extra_chance")),
+            "extra_chance_note": academic_status.get("extra_chance_note") or "",
+        },
+        "department_top_students": top_students,
         "enrollment_plan_status": plan.get("status"),
         "enrollment_plan_rejection": plan.get("rejection_reason") or "",
         "quality_counts": {
@@ -347,6 +513,7 @@ def build_portal_summary(conn, sid: str) -> dict[str, Any]:
             "surveys_pending": len(surveys_pending),
             "identity_available": bool(stu.get("program_id") or stu.get("department_id")),
         },
+        "survey_window": survey_window,
         "announcements_total": ann_total,
         "announcements_recent": ann_recent,
         "exams_upcoming": exams_count,

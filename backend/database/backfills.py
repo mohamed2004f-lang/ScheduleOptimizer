@@ -201,6 +201,40 @@ def backfill_instructor_cross_department_data(conn) -> None:
         except Exception as e:
             logger.warning("backfill instructor_department_assignments from instructors home dept: %s", e)
 
+    # مستوى القسم (section=-1, semester='') لكل زوج مخالف للمنزل — للظهور في القوائم
+    if "instructor_id" in scols and "department_id" in scols:
+        try:
+            from backend.repositories.instructor_assignments_repo import (
+                upsert_schedule_derived_assignment,
+            )
+
+            rows = cur.execute(
+                """
+                SELECT DISTINCT s.instructor_id, s.department_id, i.department_id
+                FROM schedule s
+                JOIN instructors i ON i.id = s.instructor_id
+                WHERE s.instructor_id IS NOT NULL AND s.department_id IS NOT NULL
+                """
+            ).fetchall()
+            for r in rows:
+                iid = int(r[0])
+                did = int(r[1])
+                home = r[2]
+                if home not in (None, ""):
+                    try:
+                        if int(home) == did:
+                            continue
+                    except (TypeError, ValueError):
+                        pass
+                upsert_schedule_derived_assignment(
+                    conn,
+                    instructor_id=iid,
+                    department_id=did,
+                    source="schedule_backfill",
+                )
+        except Exception as e:
+            logger.warning("backfill dept-level instructor_department_assignments: %s", e)
+
 
 def backfill_academic_pathway_defaults(conn) -> None:
     """

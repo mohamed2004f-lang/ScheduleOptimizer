@@ -231,6 +231,7 @@ def _admin_settings_blocked_prefixes() -> tuple[str, ...]:
         "/college/catalog",
         "/department_policy_approvals",
         "/department_policy_approvals_page",
+        "/department_policies/admin",
         "/course_equivalences",
         "/course_equivalences_page",
         "/system_docs",

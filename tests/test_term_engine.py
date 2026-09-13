@@ -76,7 +76,7 @@ def test_windows_map_fall_item_numbers_and_duration(db_conn):
         {"item_no": 4, "title": "آخر موعد لإضافة المقررات الدراسية", "event_date": "2025-09-21"},
         {"item_no": 5, "title": "بداية الامتحانات الجزئية (التصفية)", "event_date": "2025-11-01"},
         {"item_no": 6, "title": "نهاية الامتحانات الجزئية (التصفية)", "event_date": "2025-11-12"},
-        {"item_no": 7, "title": "آخر موعد لإسقاط المواد", "event_date": "2025-12-01"},
+        {"item_no": 7, "title": "آخر موعد لإسقاط المقررات", "event_date": "2025-12-01"},
     ]
     sync_windows_from_calendar_items(
         db_conn, term_key=master["term_key"], season="fall", items=items

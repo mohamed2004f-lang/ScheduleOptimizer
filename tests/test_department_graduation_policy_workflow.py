@@ -82,6 +82,88 @@ class TestDepartmentGraduationPolicyWorkflow:
             assert int(item.get("min_total_units") or 0) == 155
             assert (item.get("effective_from_term") or "").strip() != ""
 
+    def test_dean_can_list_and_approve_pending_policy(self, app, db_conn):
+        cur = db_conn.cursor()
+        uid = uuid.uuid4().hex[:8]
+        dep_code = f"DD{uid}".upper()[:12]
+        head_user = f"head_d_{uid}"
+        dean_user = f"dean_d_{uid}"
+        pw_hash = generate_password_hash("TestP@ssw0rd!")
+
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (dep_code, "قسم اعتماد العميد", "Dean Policy Dept"),
+        )
+        dep_id = cur.execute("SELECT id FROM departments WHERE code = ?", (dep_code,)).fetchone()[0]
+        cur.execute(
+            """
+            INSERT INTO instructors (name, department_id, type, email, is_active)
+            VALUES (?, ?, 'internal', ?, 1)
+            """,
+            ("رئيس قسم للعميد", dep_id, f"head_d_{uid}@example.com"),
+        )
+        inst_id = cur.execute(
+            "SELECT id FROM instructors WHERE email = ? LIMIT 1",
+            (f"head_d_{uid}@example.com",),
+        ).fetchone()[0]
+        cur.execute(
+            """
+            INSERT INTO users (username, password_hash, role, instructor_id, department_id)
+            VALUES (?, ?, 'head_of_department', ?, ?)
+            """,
+            (head_user, pw_hash, inst_id, dep_id),
+        )
+        cur.execute(
+            """
+            INSERT INTO users (username, password_hash, role)
+            VALUES (?, ?, 'college_dean')
+            """,
+            (dean_user, pw_hash),
+        )
+        db_conn.commit()
+
+        with app.test_client() as c:
+            assert c.post("/auth/login", json={"username": head_user, "password": "TestP@ssw0rd!"}).status_code == 200
+            rp = c.post(
+                "/department_policies/head/propose",
+                json={
+                    "plan_code": "150",
+                    "min_total_units": 150,
+                    "notes": "مقترح للعميد",
+                },
+            )
+            assert rp.status_code == 200
+            pid = int((rp.get_json() or {}).get("id") or 0)
+            assert pid > 0
+            assert c.post(f"/department_policies/head/submit/{pid}").status_code == 200
+
+            c.post("/auth/logout")
+            assert c.post("/auth/login", json={"username": dean_user, "password": "TestP@ssw0rd!"}).status_code == 200
+            page = c.get("/department_policy_approvals_page")
+            assert page.status_code == 200
+
+            pending = c.get(
+                "/department_policies/admin/pending",
+                headers={"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
+            )
+            assert pending.status_code == 200
+            items = (pending.get_json() or {}).get("items") or []
+            assert any(int(it.get("id") or 0) == pid for it in items)
+
+            approved = c.post(
+                f"/department_policies/admin/approve/{pid}",
+                json={"activate_now": False},
+            )
+            assert approved.status_code == 200
+            assert (approved.get_json() or {}).get("status") == "ok"
+
+            pending_after = c.get(
+                "/department_policies/admin/pending",
+                headers={"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
+            )
+            leftover = (pending_after.get_json() or {}).get("items") or []
+            assert all(int(it.get("id") or 0) != pid for it in leftover)
+
     def test_student_plan_falls_back_to_department_approved_policy(self, db_conn):
         cur = db_conn.cursor()
         uid = uuid.uuid4().hex[:8]

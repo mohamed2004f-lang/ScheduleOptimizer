@@ -56,6 +56,7 @@ PERMISSION_CATALOG: list[dict[str, Any]] = [
     {"key": "can_edit_accreditation_catalog", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "تعديل كتalog الاعتماد"},
     {"key": "nav_admin_settings", "group_key": "settings", "group_label_ar": "الإعدادات", "label_ar": "الإدارة والإعدادات"},
     {"key": "nav_college_catalog", "group_key": "settings", "group_label_ar": "الإعدادات", "label_ar": "كتalog الأقسام"},
+    {"key": "nav_academic_rules", "group_key": "settings", "group_label_ar": "الإعدادات", "label_ar": "لائحة الإنذارات والفصل"},
     {"key": "can_switch_department_scope", "group_key": "settings", "group_label_ar": "الإعدادات", "label_ar": "تصفية نطاق القسم"},
     {"key": "nav_supervision", "group_key": "nav", "group_label_ar": "التنقل", "label_ar": "إسناد الطلبة للمشرفين"},
     {"key": "nav_staff_operations_menu", "group_key": "nav", "group_label_ar": "التنقل", "label_ar": "شريط الإدارة الكامل"},
@@ -99,6 +100,7 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
             "can_switch_department_scope",
             "can_transfer_student_department",
             "nav_staff_operations_menu", "nav_college_catalog",
+            "nav_academic_rules",
         ],
     },
     {
@@ -568,6 +570,7 @@ def compute_college_dean_capabilities(
     out["can_assign_system_admin"] = False
     out["can_manage_users"] = True
     out["nav_users_admin"] = True
+    out["nav_academic_rules"] = True
     out["nav_admin_settings"] = bool(
         out.get("nav_users_admin")
         or out.get("nav_college_catalog")

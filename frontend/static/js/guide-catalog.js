@@ -686,7 +686,7 @@ window.PAGE_GUIDE_CATALOG = {
   },
 
   "department_policy_approvals": {
-    roles: ["admin_main"],
+    roles: ["admin_main", "college_dean"],
     title: "\u0627\u0639\u062a\u0645\u0627\u062f \u0627\u0644\u0633\u064a\u0627\u0633\u0627\u062a",
     steps: [
       {
@@ -780,11 +780,11 @@ window.PAGE_GUIDE_CATALOG = {
 
   "registration_changes_report": {
     roles: ["admin_main", "head_of_department"],
-    title: "\u062a\u0642\u0631\u064a\u0631 \u0627\u0644\u062a\u063a\u064a\u064a\u0631\u0627\u062a",
+    title: "تقرير الإضافة والإسقاط",
     steps: [
       {
-        title: "\u062a\u063a\u064a\u064a\u0631\u0627\u062a \u0627\u0644\u062a\u0633\u062c\u064a\u0644",
-        body: "<p>\u0633\u062c\u0644 \u0639\u0645\u0644\u064a\u0627\u062a \u0627\u0644\u062d\u0630\u0641 \u0648\u0627\u0644\u0625\u0636\u0627\u0641\u0629:</p><ul><li>\u0627\u0644\u0641\u0644\u062a\u0631\u0629 \u062d\u0633\u0628 \u0627\u0644\u062a\u0627\u0631\u064a\u062e</li><li>\u0639\u0631\u0636 \u0627\u0644\u062a\u0641\u0627\u0635\u064a\u0644 (\u0645\u0646\u060c \u0645\u062a\u0649\u060c \u0644\u0645\u0627\u0630\u0627)</li><li>\u0627\u0644\u062a\u0635\u062f\u064a\u0631</li></ul>"
+        title: "طباعة نموذج لطالب واحد",
+        body: "<p>من شريط الطباعة اختر <strong>طالباً واحداً</strong> ونوع النموذج:</p><ul><li><strong>إضافة</strong> أو <strong>إسقاط</strong> أو <strong>نهائي</strong></li><li>مصدر المقررات: المحدَّد فقط أو كل الظاهر للطالب</li><li>الإخفاء/الحذف من الجدول لاستبعاد الخطأ والتراجع عن الورقة الرسمية</li></ul>"
       }
     ]
   },

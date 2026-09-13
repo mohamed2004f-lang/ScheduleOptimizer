@@ -197,6 +197,15 @@ def list_pending_course_evaluations(
     if not sid:
         return []
     sem = (semester or "").strip() or term_label_from_conn(conn)
+    try:
+        from backend.services.student_survey_window import student_survey_fill_gate
+
+        gate = student_survey_fill_gate(conn, sem)
+        if not gate.get("open"):
+            return []
+    except Exception:
+        logger.exception("student survey fill gate failed for course evaluations")
+        return []
     sections = _student_evaluable_sections(conn, sid, sem)
     cur = conn.cursor()
     pending: list[dict] = []
@@ -291,8 +300,29 @@ def _already_evaluated(
     return False
 
 
+def _student_fill_blocked_message(conn, semester: str | None = None) -> str | None:
+    """رسالة إغلاق ملء تقييم المقرر للطالب، أو None إن كان مفتوحاً."""
+    try:
+        from backend.services.student_survey_window import student_survey_fill_gate
+
+        gate = student_survey_fill_gate(conn, semester)
+        if gate.get("open"):
+            return None
+        return gate.get("message_ar") or "ملء الاستبيانات مغلق حالياً."
+    except Exception:
+        logger.exception("student survey fill gate check failed")
+        return "تعذر التحقق من نافذة الاستبيانات."
+
+
 def _render_evaluation_form(conn, sid: str, match: dict, *, section_id: int, teaching_group_id: int | None):
     sem = term_label_from_conn(conn)
+    blocked = _student_fill_blocked_message(conn, sem)
+    if blocked:
+        return render_template(
+            "student_course_evaluation.html",
+            error=blocked,
+            course=match,
+        )
     cur = conn.cursor()
     tgid = int(teaching_group_id or match.get("teaching_group_id") or 0)
     if _already_evaluated(
@@ -446,6 +476,9 @@ def submit_evaluation():
             except ValueError as ve:
                 return jsonify({"status": "error", "message": str(ve)}), 400
             sem = (data.get("semester") or "").strip() or term_label_from_conn(conn)
+            blocked = _student_fill_blocked_message(conn, sem)
+            if blocked:
+                return jsonify({"status": "error", "message": blocked, "code": "SURVEY_WINDOW_CLOSED"}), 403
             sections = _student_evaluable_sections(conn, sid, sem)
             match = _find_evaluable_item(
                 sections,

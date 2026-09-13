@@ -6,6 +6,15 @@ from .utilities import get_connection
 
 academic_rules_bp = Blueprint("academic_rules", __name__)
 
+# نفس أدوار صفحة اللائحة: العميد ورئيس القسم يريان الصفحة، لكن الـ API كان محصوراً على admin فقط.
+ACADEMIC_RULES_ROLES = (
+    "admin",
+    "admin_main",
+    "system_admin",
+    "college_dean",
+    "head_of_department",
+)
+
 
 DEFAULT_RULES = [
     {
@@ -111,7 +120,7 @@ def _ensure_default_rules(conn):
 
 
 @academic_rules_bp.route("/list")
-@role_required("admin")
+@role_required(*ACADEMIC_RULES_ROLES)
 def list_rules():
     """إرجاع جميع بنود لائحة الإنذارات والفصل (للاستخدام في لوحة الإعدادات)."""
     with get_connection() as conn:
@@ -154,7 +163,7 @@ def list_rules():
 
 
 @academic_rules_bp.route("/save", methods=["POST"])
-@role_required("admin")
+@role_required(*ACADEMIC_RULES_ROLES)
 def save_rule():
     """
     تحديث بند واحد من بنود اللائحة.

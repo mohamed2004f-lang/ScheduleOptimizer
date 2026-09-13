@@ -219,30 +219,28 @@ html[data-theme="dark"] .bg-body-tertiary{
   .app-topbar-inner .app-actions {
     grid-column: 2;
     justify-self: end;
-    gap: 6px;
+    gap: 4px;
+    max-width: 46vw;
   }
   .app-brand-title .t1 {
     font-size: 13px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 52vw;
+    max-width: 42vw;
   }
   .app-brand-title .t2 {
     font-size: 10px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 52vw;
+    max-width: 42vw;
   }
   .btn-theme-toggle,
   .btn-topbar-notify,
-  .btn-topbar-logout {
-    padding: 0.2rem 0.5rem;
-    font-size: 0.8rem;
-  }
-  .btn-topbar-logout .btn-topbar-logout-label {
-    display: inline;
+  .btn-topbar-account {
+    padding: 0.35rem 0.55rem;
+    font-size: 0.9rem;
   }
 }
 
@@ -252,30 +250,33 @@ html[data-theme="dark"] .bg-body-tertiary{
   }
 }
 
-.app-actions{ display:flex; align-items:center; gap:10px; flex-shrink: 0; }
+.app-actions{ display:flex; align-items:center; gap:10px; flex-shrink: 0; flex-wrap: nowrap; }
 
-/* تبديل كثافة الشريط — في الشريط العلوي */
-.app-topbar .nav-density-toggle .btn{
-  font-size: 0.72rem;
+/* قائمة الحساب — جوال */
+.btn-topbar-account {
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+  padding: 0.3rem 0.65rem;
   font-weight: 700;
-  padding: 0.22rem 0.5rem;
-  border-color: rgba(255, 255, 255, 0.5);
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.btn-topbar-account::after {
+  margin-inline-start: 0.35rem;
+}
+.btn-topbar-account:hover,
+.btn-topbar-account:focus {
+  background: rgba(255, 255, 255, 0.24);
   color: #fff;
-  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.7);
 }
-.app-topbar .nav-density-toggle .btn:hover,
-.app-topbar .nav-density-toggle .btn:focus{
-  color: #fff;
-  background: rgba(255, 255, 255, 0.2);
-  border-color: rgba(255, 255, 255, 0.75);
-}
-.app-topbar .nav-density-toggle .btn.active{
-  color: var(--brand-900);
-  background: #fff;
-  border-color: #fff;
-}
-@media (max-width: 575.98px){
-  .app-topbar .nav-density-toggle{ display: none !important; }
+#navAccountMenuWrap .dropdown-menu {
+  min-width: 11rem;
+  z-index: 1080;
 }
 
 /* خروج — نفس أسلوب الإشعارات (أبيض على الشريط الأزرق) */
@@ -598,6 +599,19 @@ a.btn-topbar-logout:focus {
   color: var(--muted);
   text-align:center;
   font-size: 13px;
+}
+.product-home-credit{
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--muted, #6c757d);
+  padding: 1rem 1rem 1.5rem;
+  margin-top: 0.5rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+html[data-theme="dark"] .product-home-credit,
+[data-bs-theme="dark"] .product-home-credit {
+  border-top-color: rgba(255, 255, 255, 0.08);
+  color: rgba(222, 226, 230, 0.65);
 }
 .auth-logo{
   display:flex;

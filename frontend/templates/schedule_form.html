@@ -456,6 +456,8 @@ function rebuildInstructorSelect(preferredId){
     o.setAttribute('data-inst-name', (inst.name || '').trim());
     if (proposedMark) o.setAttribute('data-proposed', '1');
     const typeLabel = inst.type === 'external' ? ' (متعاون)' : '';
+    const scopeCollab =
+      inst.relation_to_scope === 'collaborator' ? ' (متعاون-قسم)' : '';
     const primaryDept =
       (inst.department_name_ar && String(inst.department_name_ar).trim()) ||
       (inst.department_code && String(inst.department_code).trim()) ||
@@ -468,7 +470,7 @@ function rebuildInstructorSelect(preferredId){
     const coopLabel = coopParts.length ? ` | متعاون: ${coopParts.join('، ')}` : '';
     const primaryLabel = primaryDept ? ` | رئيسي: ${primaryDept}` : '';
     const mark = proposedMark ? '★ مقترح — ' : '';
-    o.text = mark + (inst.name || '') + typeLabel + primaryLabel + coopLabel;
+    o.text = mark + (inst.name || '') + typeLabel + scopeCollab + primaryLabel + coopLabel;
     sel.appendChild(o);
   };
 

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>بوابتي</title>
+  <title>بوابتي — منظومة الإدارة الأكاديمية</title>
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
   <style>
@@ -15,6 +15,11 @@
     .hub-icon { font-size:1.5rem; line-height:1; margin-bottom:.25rem; }
     .stat-pill { border-radius:.75rem; padding:.75rem; text-align:center; background:var(--bs-light); }
     .stat-pill .val { font-size:1.35rem; font-weight:700; }
+    .academic-status-card { border-radius:.75rem; border:1px solid var(--bs-border-color); padding:.85rem 1rem; }
+    .academic-status-card .status-badge { font-size:.9rem; font-weight:700; }
+    .top-students-table thead th { background: var(--brand-900, #0b3d5c); color:#fff; font-weight:700; border:none; }
+    .top-students-table tbody tr.is-self { background: rgba(13, 110, 253, 0.08); font-weight:600; }
+    .top-students-table { border-radius:.5rem; overflow:hidden; }
     .skeleton { background:linear-gradient(90deg,#eee 25%,#f5f5f5 50%,#eee 75%); background-size:200% 100%; animation:sh 1.2s infinite; border-radius:.5rem; min-height:1rem; }
     @keyframes sh { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
   </style>
@@ -28,6 +33,7 @@
         <p class="page-subtitle mb-0" id="welcomeLine">جاري التحميل…</p>
         <p class="small text-muted mb-0 d-none" id="termLine"></p>
         <div class="alert alert-info py-2 px-3 mt-2 mb-0 d-none" id="alumniBanner">حساب خريج — يمكنك الاطلاع على كشف الدرجات والسجل الأكاديمي. التسجيل الفصلي مغلق.</div>
+        <div class="alert alert-warning py-2 px-3 mt-2 mb-0 d-none" id="surveyWindowBanner"></div>
       </div>
       <button type="button" class="btn btn-outline-secondary btn-sm" id="btnRefresh">تحديث</button>
     </div>
@@ -40,6 +46,21 @@
     </div>
 
     <div id="mainWrap" class="d-none">
+      <div class="academic-status-card mb-3 d-none" id="academicStatusCard">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+          <div>
+            <div class="small text-muted mb-1">الحالة الأكاديمية</div>
+            <div class="status-badge" id="academicStatusBadge">—</div>
+            <div class="small text-muted mt-1 d-none" id="academicStatusExtra"></div>
+          </div>
+          <div class="text-start small">
+            <div>المعدل التراكمي: <strong id="academicStatusGpa">—</strong></div>
+            <div>الوحدات المنجزة: <strong id="academicStatusUnits">—</strong></div>
+            <a href="/my_transcript" class="small">عرض كشف الدرجات</a>
+          </div>
+        </div>
+      </div>
+
       <div class="row g-3 mb-3" id="statsBar">
         <div class="col-6 col-md-3"><div class="stat-pill"><div class="val text-primary" id="statRegs">0</div><div class="small text-muted">مقررات مسجّلة</div></div></div>
         <div class="col-6 col-md-3"><div class="stat-pill"><div class="val text-success" id="statUnits">0</div><div class="small text-muted">وحدات</div></div></div>
@@ -58,6 +79,29 @@
         <div class="card-footer py-2"><a href="/my_announcements" class="small">عرض الكل</a></div>
       </div>
 
+      <div class="card mb-3" id="topStudentsCard">
+        <div class="card-header fw-semibold d-flex align-items-center gap-2">
+          <span aria-hidden="true">★</span>
+          <span id="topStudentsTitle">أفضل طلاب القسم (حسب البيانات المتاحة)</span>
+        </div>
+        <div class="card-body py-2">
+          <div class="table-responsive">
+            <table class="table table-sm mb-0 top-students-table">
+              <thead>
+                <tr>
+                  <th style="width:18%;">الترتيب</th>
+                  <th>اسم الطالب</th>
+                  <th style="width:22%;" class="text-start">المعدل التراكمي</th>
+                </tr>
+              </thead>
+              <tbody id="topStudentsBody">
+                <tr><td colspan="3" class="text-center text-muted small">جاري التحميل…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <div class="card mb-3">
         <div class="card-header fw-semibold">اختصارات أكاديمية</div>
         <div class="card-body"><div class="row g-2" id="hubAcademic"></div></div>
@@ -73,8 +117,9 @@
       </div>
     </div>
   </main>
+  {% include "partials/product_home_credit.html" %}
   <script>
-    const CACHE_KEY = 'stu_portal_v2';
+    const CACHE_KEY = 'stu_portal_v4';
     const CACHE_TTL = 5 * 60 * 1000;
     let G_SUMMARY = {};
 
@@ -95,6 +140,66 @@
     function planLabel(st) {
       const m = { Draft: 'مسودة', Submitted: 'مرسلة', Approved: 'معتمدة', Rejected: 'مرفوضة', Archived: 'مؤرشفة' };
       return m[st] || st || '—';
+    }
+
+    function statusBadgeClass(code) {
+      const c = String(code || '').toLowerCase();
+      if (c === 'good') return 'text-success';
+      if (c === 'warning_1') return 'text-warning';
+      if (c === 'warning_2') return 'text-warning';
+      if (c === 'warning_3') return 'text-danger';
+      if (c === 'graduated') return 'text-primary';
+      if (c === 'withdrawn' || c === 'suspended') return 'text-secondary';
+      return 'text-muted';
+    }
+
+    function renderAcademicStatus(d) {
+      const card = document.getElementById('academicStatusCard');
+      const st = d.academic_status || {};
+      if (!card) return;
+      card.classList.remove('d-none');
+      const badge = document.getElementById('academicStatusBadge');
+      badge.textContent = st.status_label || 'لا توجد بيانات درجات';
+      badge.className = 'status-badge ' + statusBadgeClass(st.status_code);
+      document.getElementById('academicStatusGpa').textContent =
+        d.gpa != null ? Number(d.gpa).toFixed(2) : '—';
+      document.getElementById('academicStatusUnits').textContent =
+        d.completed_units != null ? d.completed_units : '—';
+      const extra = document.getElementById('academicStatusExtra');
+      if (st.extra_chance) {
+        extra.textContent = 'فرصة استثنائية مفعّلة' + (st.extra_chance_note ? ': ' + st.extra_chance_note : '');
+        extra.classList.remove('d-none');
+      } else {
+        extra.classList.add('d-none');
+      }
+    }
+
+    function renderTopStudents(d) {
+      const body = document.getElementById('topStudentsBody');
+      const title = document.getElementById('topStudentsTitle');
+      const dept = (d.department_name || '').trim();
+      if (title) {
+        title.textContent = dept
+          ? ('أفضل طلاب ' + dept + ' (حسب البيانات المتاحة)')
+          : 'أفضل طلاب القسم (حسب البيانات المتاحة)';
+      }
+      const rows = d.department_top_students || [];
+      if (!body) return;
+      if (!d.department_id) {
+        body.innerHTML = '<tr><td colspan="3" class="text-center text-muted small">لم يُربط حسابك بقسم بعد.</td></tr>';
+        return;
+      }
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="3" class="text-center text-muted small">لا تتوفر بيانات كافية بعد.</td></tr>';
+        return;
+      }
+      body.innerHTML = rows.map(r =>
+        '<tr class="' + (r.is_self ? 'is-self' : '') + '">' +
+        '<td>' + esc(r.rank) + (r.is_self ? ' <span class="badge text-bg-primary">أنت</span>' : '') + '</td>' +
+        '<td>' + esc(r.student_name || '') + '</td>' +
+        '<td class="text-start"><strong>' + Number(r.cumulative_gpa || 0).toFixed(2) + '</strong></td>' +
+        '</tr>'
+      ).join('');
     }
 
     function renderHubs(d) {
@@ -146,11 +251,23 @@
       if (d.term_label) { tl.textContent = 'الفصل: ' + d.term_label; tl.classList.remove('d-none'); }
       document.getElementById('statRegs').textContent = d.registrations_count || 0;
       document.getElementById('statUnits').textContent = d.units_registered || 0;
-      document.getElementById('statGpa').textContent = d.gpa != null ? d.gpa : '—';
+      document.getElementById('statGpa').textContent = d.gpa != null ? Number(d.gpa).toFixed(2) : '—';
       const alumni = !!d.alumni_mode;
       document.getElementById('statPlan').textContent = alumni ? 'خريج' : planLabel(d.enrollment_plan_status);
       const alumniBanner = document.getElementById('alumniBanner');
       if (alumniBanner) alumniBanner.classList.toggle('d-none', !alumni);
+      const swBanner = document.getElementById('surveyWindowBanner');
+      if (swBanner) {
+        const sw = d.survey_window || {};
+        const showSw = !alumni && sw.open === false && (sw.message_ar || '').trim();
+        if (showSw) {
+          swBanner.textContent = sw.message_ar;
+          swBanner.classList.remove('d-none');
+        } else {
+          swBanner.classList.add('d-none');
+          swBanner.textContent = '';
+        }
+      }
       const weeklyCard = document.getElementById('weeklyWrap')?.closest('.card');
       if (weeklyCard) weeklyCard.classList.toggle('d-none', alumni);
       const statsBar = document.getElementById('statsBar');
@@ -158,6 +275,8 @@
         document.getElementById('statRegs').closest('.col-6')?.classList.add('d-none');
         document.getElementById('statUnits').closest('.col-6')?.classList.add('d-none');
       }
+      renderAcademicStatus(d);
+      renderTopStudents(d);
       renderHubs(d);
       const items = d.action_items || [];
       const ac = document.getElementById('actionCard');

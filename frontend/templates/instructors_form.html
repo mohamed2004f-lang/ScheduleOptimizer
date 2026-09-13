@@ -96,6 +96,14 @@
         <h2 class="h6 mb-3">قائمة أعضاء هيئة التدريس</h2>
         <div class="row g-2 mb-2">
           <div class="col-md-4">
+            <label class="form-label small mb-1" for="inst-filter-relation">عضوية النطاق</label>
+            <select id="inst-filter-relation" class="form-select form-select-sm">
+              <option value="">الكل</option>
+              <option value="home">أعضاء القسم</option>
+              <option value="collaborator">متعاونون</option>
+            </select>
+          </div>
+          <div class="col-md-4">
             <label class="form-label small mb-1" for="inst-filter-scope">فلترة نطاق التعاون</label>
             <select id="inst-filter-scope" class="form-select form-select-sm">
               <option value="">الكل</option>
@@ -525,7 +533,9 @@
         const tbody = document.querySelector("#instructors-table tbody");
         tbody.innerHTML = "";
         const scopeFilter = (document.getElementById("inst-filter-scope")?.value || "").trim();
+        const relationFilter = (document.getElementById("inst-filter-relation")?.value || "").trim();
         (data.instructors || []).forEach((inst) => {
+          if (relationFilter && String(inst.relation_to_scope || "") !== relationFilter) return;
           if (scopeFilter === "internal_only" && inst.type !== "internal") return;
           if (
             scopeFilter &&
@@ -544,9 +554,11 @@
             "—";
           let extraLn = "";
           let primaryBadge = "";
+          const isCollaborator = inst.relation_to_scope === "collaborator";
           if (deptLabel && deptLabel !== "—") {
-            primaryBadge =
-              '<div class="small mt-1"><span class="badge text-bg-primary">قسم رئيسي</span></div>';
+            primaryBadge = isCollaborator
+              ? '<div class="small mt-1"><span class="badge text-bg-secondary">متعاون — قسمه المنزلي</span></div>'
+              : '<div class="small mt-1"><span class="badge text-bg-primary">قسم رئيسي</span></div>';
           }
           if (Array.isArray(inst.departments) && inst.departments.length) {
             const parts = inst.departments
@@ -566,11 +578,28 @@
                 "</div>";
             }
           }
+          const canManage = inst.can_manage_identity !== false;
+          const canUnlink = !!inst.can_unlink_from_scope;
+          let actionsHtml = "";
+          if (canManage) {
+            actionsHtml +=
+              '<button type="button" class="btn btn-sm btn-outline-primary me-1" data-action="edit">تعديل</button>' +
+              '<button type="button" class="btn btn-sm btn-outline-secondary me-1" data-action="manage-depts">الأقسام المتعاونة</button>' +
+              '<button type="button" class="btn btn-sm btn-outline-danger" data-action="delete">حذف</button>';
+          } else if (canUnlink) {
+            actionsHtml +=
+              '<span class="small text-muted me-2">عرض فقط</span>' +
+              '<button type="button" class="btn btn-sm btn-outline-warning" data-action="unlink">فك الربط من قسمي</button>';
+          } else {
+            actionsHtml += '<span class="small text-muted">عرض فقط</span>';
+          }
           const tr = document.createElement("tr");
           const typeText =
             inst.type === "external"
               ? "متعاون خارجي — " + externalScopeLabel(inst.external_scope)
-              : "من داخل القسم";
+              : isCollaborator
+                ? "متعاون من قسم آخر"
+                : "من داخل القسم";
           tr.innerHTML = `
             <td>${inst.id ?? ""}</td>
             <td>${escapeHtml(inst.name || "")}</td>
@@ -578,11 +607,7 @@
             <td>${escapeHtml(inst.email || "")}</td>
             <td>${escapeHtml(deptLabel)}${primaryBadge}${extraLn}</td>
             <td>${inst.is_active ? "نشط" : "موقوف"}</td>
-            <td>
-              <button type="button" class="btn btn-sm btn-outline-primary me-1" data-action="edit">تعديل</button>
-              <button type="button" class="btn btn-sm btn-outline-secondary me-1" data-action="manage-depts">الأقسام المتعاونة</button>
-              <button type="button" class="btn btn-sm btn-outline-danger" data-action="delete">حذف</button>
-            </td>
+            <td>${actionsHtml}</td>
           `;
           tr.dataset.id = inst.id;
           tr.dataset.name = inst.name || "";
@@ -595,6 +620,7 @@
               ? String(inst.department_id)
               : "";
           tr.dataset.departmentLabel = deptLabel || "";
+          tr.dataset.relation = inst.relation_to_scope || "";
           tbody.appendChild(tr);
         });
       } catch (e) {
@@ -735,6 +761,25 @@
           console.error(e);
           uiToast("حدث خطأ غير متوقع أثناء الحذف", "danger");
         }
+      } else if (action === "unlink") {
+        if (!confirm("فك ربط هذا المتعاون من قسمك؟ لن يُحذف سجله من قسمه المنزلي.")) return;
+        try {
+          const resp = await fetch(`/instructors/${encodeURIComponent(id)}/unlink_department`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest"},
+            body: JSON.stringify({}),
+          });
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) {
+            uiToast(data.message || "فشل فك الربط", "danger");
+            return;
+          }
+          uiToast("تم فك الربط من قسمك", "success");
+          await loadInstructors();
+        } catch (e) {
+          console.error(e);
+          uiToast("حدث خطأ غير متوقع أثناء فك الربط", "danger");
+        }
       }
     });
 
@@ -813,6 +858,12 @@
       const scopeFilterEl = document.getElementById("inst-filter-scope");
       if (scopeFilterEl) {
         scopeFilterEl.addEventListener("change", async () => {
+          await loadInstructors();
+        });
+      }
+      const relationFilterEl = document.getElementById("inst-filter-relation");
+      if (relationFilterEl) {
+        relationFilterEl.addEventListener("change", async () => {
           await loadInstructors();
         });
       }

@@ -2,8 +2,11 @@ from flask import Blueprint, request, jsonify, session
 
 from backend.core.auth import current_supervisor_effective, login_required, role_required
 from backend.core.department_scope_policy import (
+    actor_can_link_instructor_to_scoped_department,
     actor_can_manage_existing_instructor,
+    actor_can_unlink_instructor_from_scoped_department,
     finalize_instructor_department_id_for_write,
+    instructor_relation_to_department,
     proposed_department_allowed_for_scope,
     resolve_scope_sql_for_aliased_student,
     resolve_users_list_scope,
@@ -14,9 +17,11 @@ from backend.core.feature_flags import is_multi_dept_instructor_enabled
 from backend.database.database import fetch_table_columns
 from backend.repositories.instructor_assignments_repo import (
     assignments_table_ready,
+    deactivate_assignments_for_department,
     list_assignment_department_details,
     list_assignments_for_instructor,
     replace_user_assignments_from_payload,
+    upsert_user_assignment,
 )
 from backend.repositories.instructor_students_repo import (
     instructor_linked_to_department,
@@ -53,9 +58,16 @@ def _normalize_role_local(raw: str | None) -> str:
 def _can_access_instructor_admin_endpoint(conn, actor_username: str, instructor_db_id: int) -> bool:
     """صلاحية الوصول لمسارات إدارة الأستاذ (حسب الدور ونطاق القسم)."""
     role = _normalize_role_local(session.get("user_role"))
-    if role in ("admin_main", "admin"):
+    if role in ("admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean"):
         return actor_can_manage_existing_instructor(conn, actor_username, int(instructor_db_id))
     if role == "head_of_department":
+        # المضيف يرى المسارات للقراءة إن كان ظاهراً في النطاق؛ الكتابة تُحسم لاحقاً
+        mode, dep_id = resolve_users_list_scope(conn, actor_username)
+        if mode == "department" and dep_id is not None:
+            from backend.core.department_scope_policy import instructor_visible_in_department_scope
+
+            if instructor_visible_in_department_scope(conn, int(instructor_db_id), int(dep_id)):
+                return True
         return actor_can_manage_existing_instructor(conn, actor_username, int(instructor_db_id))
     if role == "instructor":
         try:
@@ -203,6 +215,24 @@ def list_instructors():
                     }
                 )
             it["departments"] = uniq
+
+        # علاقة النطاق + صلاحيات العرض (مرحلة B/E)
+        scope_dept = int(dep_id) if mode == "department" and dep_id is not None else None
+        for it in items:
+            if scope_dept is None:
+                it["relation_to_scope"] = None
+                it["can_manage_identity"] = True
+                it["can_unlink_from_scope"] = False
+                continue
+            iid = int(it["id"])
+            rel = instructor_relation_to_department(conn, iid, scope_dept)
+            it["relation_to_scope"] = rel if rel != "none" else None
+            can_manage = actor_can_manage_existing_instructor(conn, actor, iid)
+            it["can_manage_identity"] = bool(can_manage)
+            can_unlink, _ = actor_can_unlink_instructor_from_scoped_department(
+                conn, actor, iid, scope_dept
+            )
+            it["can_unlink_from_scope"] = bool(can_unlink) and rel == "collaborator"
 
     return jsonify({"instructors": items})
 
@@ -490,6 +520,64 @@ def save_instructor_department_assignments(instructor_id: int):
         conn.commit()
     return jsonify({"status": "ok"})
 
+
+@instructors_bp.route("/<int:instructor_id>/link_department", methods=["POST"])
+@login_required
+@role_required(*_MANAGE_ROLES)
+def link_instructor_department(instructor_id: int):
+    """ربط أستاذ كمتعاون بقسم النطاق (أو department_id في الجسم للأدمن بلا نطاق)."""
+    actor = _current_actor_username()
+    data = request.get_json(force=True) or {}
+    with get_connection() as conn:
+        mode, scope_dep = resolve_users_list_scope(conn, actor)
+        dept_raw = data.get("department_id")
+        if mode == "department" and scope_dep is not None:
+            dept_id = int(scope_dep)
+        else:
+            try:
+                dept_id = int(dept_raw)
+            except (TypeError, ValueError):
+                return jsonify({"status": "error", "message": "department_id مطلوب"}), 400
+        ok, msg = actor_can_link_instructor_to_scoped_department(
+            conn, actor, int(instructor_id), int(dept_id)
+        )
+        if not ok:
+            return jsonify({"status": "error", "message": msg or "غير مسموح"}), 403
+        upsert_user_assignment(
+            conn,
+            instructor_id=int(instructor_id),
+            department_id=int(dept_id),
+            source="user_ui",
+        )
+        conn.commit()
+    return jsonify({"status": "ok", "department_id": int(dept_id)})
+
+
+@instructors_bp.route("/<int:instructor_id>/unlink_department", methods=["POST"])
+@login_required
+@role_required(*_MANAGE_ROLES)
+def unlink_instructor_department(instructor_id: int):
+    """فك ربط متعاون من قسم النطاق (تعطيل التعيينات؛ لا يمس القسم المنزلي)."""
+    actor = _current_actor_username()
+    data = request.get_json(force=True) or {}
+    with get_connection() as conn:
+        mode, scope_dep = resolve_users_list_scope(conn, actor)
+        dept_raw = data.get("department_id")
+        if mode == "department" and scope_dep is not None:
+            dept_id = int(scope_dep)
+        else:
+            try:
+                dept_id = int(dept_raw)
+            except (TypeError, ValueError):
+                return jsonify({"status": "error", "message": "department_id مطلوب"}), 400
+        ok, msg = actor_can_unlink_instructor_from_scoped_department(
+            conn, actor, int(instructor_id), int(dept_id)
+        )
+        if not ok:
+            return jsonify({"status": "error", "message": msg or "غير مسموح"}), 403
+        n = deactivate_assignments_for_department(conn, int(instructor_id), int(dept_id))
+        conn.commit()
+    return jsonify({"status": "ok", "department_id": int(dept_id), "deactivated": n})
 
 @instructors_bp.route("/<int:instructor_id>/students_by_department", methods=["GET"])
 @login_required
