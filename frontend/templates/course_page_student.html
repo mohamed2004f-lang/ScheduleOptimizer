@@ -19,6 +19,12 @@
   </div>
   <div id="loadMsg" class="text-muted small">جاري التحميل…</div>
   <div id="mainPanel" class="d-none">
+    <div id="contactBar" class="card mb-3">
+      <div class="card-body py-2">
+        <div class="fw-semibold mb-1">تواصل المقرر</div>
+        <div id="contactBody" class="small text-muted">لم يُنشَر تواصل لهذه المجموعة بعد.</div>
+      </div>
+    </div>
     <ul class="nav nav-tabs mb-3" id="stTabs">
       <li class="nav-item"><button class="nav-link active" data-tab="overview" type="button">نظرة عامة</button></li>
       <li class="nav-item"><button class="nav-link" data-tab="assess" type="button">التقويم والمراجع</button></li>
@@ -76,6 +82,48 @@
     document.getElementById('loadMsg').classList.add('d-none');
     document.getElementById('mainPanel').classList.remove('d-none');
     document.getElementById('courseTitle').textContent = courseName;
+    const contact = j.contact || {};
+    const contactBody = document.getElementById('contactBody');
+    const parts = [];
+    if (contact.instructor_name) {
+      parts.push('<div class="mb-1">الأستاذ: <strong>'+esc(contact.instructor_name)+'</strong></div>');
+    }
+    const actions = [];
+    if (contact.email) {
+      actions.push('<a class="btn btn-sm btn-outline-primary" href="mailto:'+esc(contact.email)+'">بريد</a>');
+      actions.push('<button type="button" class="btn btn-sm btn-outline-secondary" data-copy="'+esc(contact.email)+'">نسخ البريد</button>');
+    }
+    if (contact.whatsapp_phone_link) {
+      actions.push('<a class="btn btn-sm btn-outline-success" href="'+esc(contact.whatsapp_phone_link)+'" target="_blank" rel="noopener">واتساب</a>');
+    }
+    if (contact.whatsapp_username) {
+      let tip = 'ابحث داخل واتساب عن: '+contact.whatsapp_username;
+      if (contact.whatsapp_username_key) tip += ' (المفتاح: '+contact.whatsapp_username_key+')';
+      actions.push('<button type="button" class="btn btn-sm btn-outline-success" data-copy="'+esc(contact.whatsapp_username)+'" title="'+esc(tip)+'">نسخ '+esc(contact.whatsapp_username)+'</button>');
+      if (contact.whatsapp_username_key) {
+        actions.push('<button type="button" class="btn btn-sm btn-outline-secondary" data-copy="'+esc(contact.whatsapp_username_key)+'">نسخ المفتاح</button>');
+      }
+    }
+    (contact.group_links || []).forEach(gl => {
+      actions.push('<a class="btn btn-sm btn-outline-dark" href="'+esc(gl.url)+'" target="_blank" rel="noopener">'+esc(gl.label_ar || gl.platform)+'</a>');
+    });
+    if (actions.length) {
+      parts.push('<div class="d-flex flex-wrap gap-1">'+actions.join('')+'</div>');
+      if (contact.whatsapp_username) {
+        parts.push('<div class="text-muted mt-1">اسم مستخدم واتساب للنسخ والبحث داخل التطبيق (لا رابط مباشر حالياً).</div>');
+      }
+      contactBody.innerHTML = parts.join('');
+      contactBody.querySelectorAll('button[data-copy]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(btn.getAttribute('data-copy') || '');
+            btn.textContent = 'تم النسخ';
+          } catch (e) {}
+        });
+      });
+    } else {
+      contactBody.innerHTML = '<span class="text-muted">لم يُنشَر تواصل لهذه المجموعة بعد.</span>';
+    }
     const cat = j.catalog || {};
     document.getElementById('objBox').innerHTML = listHtml(cat.objectives, 'objectives');
     document.getElementById('outBox').innerHTML = listHtml(cat.outcomes, 'outcomes');

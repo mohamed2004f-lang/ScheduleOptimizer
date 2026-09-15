@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>تواصلي — منظومة الإدارة الأكاديمية</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal">
+    <div class="page-header d-flex justify-content-between align-items-start flex-wrap gap-2">
+      <div>
+        <h1 class="page-title">تواصلي مع الطلبة</h1>
+        <p class="page-subtitle">أنت تتحكم بظهور واتساب و`@`. ظهور الإيميل يمكن أن يضبطه أيضاً رئيس القسم.</p>
+      </div>
+      <div class="d-flex gap-2 flex-wrap">
+        <a class="btn btn-outline-secondary btn-sm" href="/my_courses">← مقرراتي</a>
+      </div>
+    </div>
+
+    <div id="loadMsg" class="text-muted small">جاري التحميل…</div>
+    <div id="mainPanel" class="d-none">
+      <form autocomplete="off" onsubmit="return false;">
+      <div class="card mb-3">
+        <div class="card-header fw-semibold">معلومات تظهر للطالب (اختياري)</div>
+        <div class="card-body">
+          <p class="small text-muted">
+            يظهر للطالب المرتبط بمقررك فقط. اسم مستخدم واتساب يُنسخ للبحث داخل التطبيق (لا رابط مباشر حالياً).
+            روابط مجموعات المقرر (واتساب/تيليغرام) تُدار من <strong>صفحة المقرر ← تواصل الطلبة</strong> لكل مجموعة.
+          </p>
+          <div class="row g-3">
+            <div class="col-md-6">
+              <div class="mb-2">
+                <span class="small text-muted">البريد المسجّل</span>
+                <div class="fw-semibold" id="myEmailDisp">—</div>
+              </div>
+              <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" id="myEmailVis">
+                <label class="form-check-label" for="myEmailVis">إظهار البريد الإلكتروني للطلبة</label>
+              </div>
+              <label class="form-label" for="myWaPhone">رقم واتساب</label>
+              <input id="myWaPhone" name="wa_public_phone" class="form-control mb-1" dir="ltr" placeholder="9647xxxxxxxx" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other">
+              <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" id="myWaPhoneVis">
+                <label class="form-check-label" for="myWaPhoneVis">إظهار الرقم (يفتح محادثة واتساب)</label>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="myWaUser">اسم مستخدم واتساب</label>
+              <input id="myWaUser" name="wa_public_handle" class="form-control mb-1" dir="ltr" placeholder="@handle" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other">
+              <label class="form-label" for="myWaKey">مفتاح Username Key (اختياري)</label>
+              <input id="myWaKey" name="wa_public_key" class="form-control mb-1" dir="ltr" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other">
+              <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" id="myWaUserVis">
+                <label class="form-check-label" for="myWaUserVis">إظهار الاسم للطلبة (نسخ/بحث داخل واتساب)</label>
+              </div>
+            </div>
+          </div>
+          <button type="button" class="btn btn-primary" id="btnSaveMyContact">حفظ إعداداتي</button>
+          <span class="small text-muted ms-2" id="saveHint"></span>
+        </div>
+      </div>
+      </form>
+    </div>
+    <div id="toast" class="alert d-none mt-3"></div>
+  </main>
+  <script>
+  (function(){
+    function toast(msg, ok){
+      const el = document.getElementById('toast');
+      el.className = 'alert mt-3 alert-' + (ok ? 'success' : 'danger');
+      el.textContent = msg;
+      el.classList.remove('d-none');
+      setTimeout(() => el.classList.add('d-none'), 4000);
+    }
+    function csrfHeaders(){
+      const h = {'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'};
+      if (typeof jsonApiHeaders === 'function') Object.assign(h, jsonApiHeaders(h));
+      return h;
+    }
+    function apply(c){
+      document.getElementById('myEmailDisp').textContent = (c.email && String(c.email).trim()) || '— غير مسجّل (حدّثه عبر الإدارة إن لزم)';
+      document.getElementById('myEmailVis').checked = !!c.contact_email_visible;
+      document.getElementById('myWaPhone').value = c.whatsapp_phone || '';
+      document.getElementById('myWaPhoneVis').checked = !!c.whatsapp_phone_visible;
+      document.getElementById('myWaUser').value = c.whatsapp_username ? ('@' + c.whatsapp_username) : '';
+      document.getElementById('myWaKey').value = c.whatsapp_username_key || '';
+      document.getElementById('myWaUserVis').checked = !!c.whatsapp_username_visible;
+    }
+    async function load(){
+      try{
+        const r = await fetch('/instructors/me/contact_settings', {credentials:'include'});
+        const j = await r.json().catch(()=>({}));
+        document.getElementById('loadMsg').classList.add('d-none');
+        if (!r.ok) {
+          document.getElementById('loadMsg').classList.remove('d-none');
+        document.getElementById('loadMsg').textContent = j.message || 'تعذر التحميل — تأكد أن حسابك مربوط بأستاذ، وأن الخدمة محدّثة.';
+          return;
+        }
+        document.getElementById('mainPanel').classList.remove('d-none');
+        apply(j.contact || {});
+      } catch(e){
+        document.getElementById('loadMsg').textContent = 'تعذر التحميل.';
+      }
+    }
+    document.getElementById('btnSaveMyContact').addEventListener('click', async () => {
+      const body = {
+        contact_email_visible: document.getElementById('myEmailVis').checked,
+        whatsapp_phone: document.getElementById('myWaPhone').value.trim(),
+        whatsapp_phone_visible: document.getElementById('myWaPhoneVis').checked,
+        whatsapp_username: document.getElementById('myWaUser').value.trim(),
+        whatsapp_username_key: document.getElementById('myWaKey').value.trim(),
+        whatsapp_username_visible: document.getElementById('myWaUserVis').checked
+      };
+      const r = await fetch('/instructors/me/contact_settings', {
+        method:'POST', credentials:'include', headers: csrfHeaders(), body: JSON.stringify(body)
+      });
+      const j = await r.json().catch(()=>({}));
+      if (!r.ok) return toast(j.message || 'فشل الحفظ', false);
+      apply(j.contact || {});
+      toast('تم حفظ إعدادات التواصل', true);
+      document.getElementById('saveHint').textContent = 'محفوظ';
+    });
+    load();
+  })();
+  </script>
+</body>
+</html>

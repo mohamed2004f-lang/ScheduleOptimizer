@@ -319,6 +319,42 @@ def ensure_sqlite_tables(db_file=None):
                 cur.execute("ALTER TABLE instructors ADD COLUMN external_scope TEXT NOT NULL DEFAULT 'within_college'")
             except Exception:
                 pass
+        for col, stmt in (
+            ("contact_email_visible", "ALTER TABLE instructors ADD COLUMN contact_email_visible INTEGER NOT NULL DEFAULT 0"),
+            ("whatsapp_phone", "ALTER TABLE instructors ADD COLUMN whatsapp_phone TEXT"),
+            ("whatsapp_phone_visible", "ALTER TABLE instructors ADD COLUMN whatsapp_phone_visible INTEGER NOT NULL DEFAULT 0"),
+            ("whatsapp_username", "ALTER TABLE instructors ADD COLUMN whatsapp_username TEXT"),
+            ("whatsapp_username_key", "ALTER TABLE instructors ADD COLUMN whatsapp_username_key TEXT"),
+            ("whatsapp_username_visible", "ALTER TABLE instructors ADD COLUMN whatsapp_username_visible INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if col not in icols:
+                try:
+                    cur.execute(stmt)
+                except Exception:
+                    pass
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS course_group_links (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    teaching_group_id INTEGER NOT NULL,
+                    semester TEXT NOT NULL DEFAULT '',
+                    platform TEXT NOT NULL DEFAULT 'other'
+                        CHECK (platform IN ('whatsapp', 'telegram', 'other')),
+                    label_ar TEXT NOT NULL DEFAULT '',
+                    url TEXT NOT NULL,
+                    is_visible INTEGER NOT NULL DEFAULT 0 CHECK (is_visible IN (0, 1)),
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    created_by_instructor_id INTEGER,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cgl_tg_vis ON course_group_links(teaching_group_id, is_visible)"
+            )
+        except Exception as e:
+            logger.warning("course_group_links schema (sqlite): %s", e)
 
         try:
             ccr_cols = [r[1] for r in cur.execute("PRAGMA table_info(course_closure_reports)").fetchall()]
@@ -358,6 +394,13 @@ def ensure_sqlite_tables(db_file=None):
             from backend.services.pathway_regulations import ensure_pathway_regulation_defaults
 
             ensure_pathway_regulation_defaults(conn)
+            try:
+                from backend.core.graduation_targets import sync_program_major_min_units
+
+                sync_program_major_min_units(conn)
+                conn.commit()
+            except Exception as e:
+                logger.warning("Could not sync PROG_MAJOR min_total_units: %s", e)
         except Exception as e:
             logger.warning("ensure pathway regulations (sqlite): %s", e)
         try:

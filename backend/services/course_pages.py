@@ -29,6 +29,13 @@ from backend.core.department_scope_policy import (
     course_writable_by_actor,
     resolve_effective_department_scope_id,
 )
+from backend.core.instructor_contact_policy import (
+    build_student_visible_contact,
+    course_has_visible_contact,
+    ensure_instructor_contact_schema,
+    list_group_links,
+    replace_group_links,
+)
 from backend.database.database import fetch_table_columns, is_postgresql, table_exists
 from backend.services.utilities import get_connection, get_current_term
 
@@ -253,6 +260,20 @@ def ensure_course_pages_schema(conn) -> None:
             UNIQUE (teaching_group_id, instructor_id, semester, method_id)
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS course_group_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            teaching_group_id INTEGER NOT NULL,
+            semester TEXT NOT NULL DEFAULT '',
+            platform TEXT NOT NULL DEFAULT 'other',
+            label_ar TEXT NOT NULL DEFAULT '',
+            url TEXT NOT NULL,
+            is_visible INTEGER NOT NULL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_by_instructor_id INTEGER,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
     ]
     if is_postgresql():
         stmts = [
@@ -281,6 +302,9 @@ def ensure_course_pages_schema(conn) -> None:
         )
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_csa_tg ON course_section_assessments(teaching_group_id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cgl_tg_vis ON course_group_links(teaching_group_id, is_visible)"
         )
     except Exception:
         pass
@@ -3000,6 +3024,64 @@ def api_materials_file(mid: int):
         )
 
 
+# ─── Instructor contact / group links ─────────────────────────────
+
+
+@course_pages_bp.route("/instructor/group_links", methods=["GET"])
+@login_required
+@role_required("instructor", "head_of_department", "admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
+def api_instructor_group_links_get():
+    tgid = request.args.get("teaching_group_id", type=int)
+    if not tgid:
+        return jsonify({"status": "error", "message": "teaching_group_id مطلوب"}), 400
+    iid = _session_instructor_id()
+    with get_connection() as conn:
+        ensure_course_pages_schema(conn)
+        ensure_instructor_contact_schema(conn)
+        if not _is_hod_or_admin():
+            if not iid or not _instructor_owns_group(conn, iid, tgid, None):
+                return jsonify({"status": "error", "message": "غير مصرّح لهذه المجموعة"}), 403
+        links = list_group_links(conn, int(tgid), visible_only=False)
+        sem = _current_semester_label(conn)
+        return jsonify({"status": "ok", "teaching_group_id": int(tgid), "semester": sem, "links": links})
+
+
+@course_pages_bp.route("/instructor/group_links/save", methods=["POST"])
+@login_required
+@role_required("instructor", "head_of_department", "admin_main", "admin", "system_admin", "college_dean", "academic_vice_dean")
+def api_instructor_group_links_save():
+    data = request.get_json(force=True) or {}
+    try:
+        tgid = int(data.get("teaching_group_id"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "teaching_group_id مطلوب"}), 400
+    links = data.get("links")
+    if not isinstance(links, list):
+        return jsonify({"status": "error", "message": "links يجب أن تكون قائمة"}), 400
+    iid = _session_instructor_id()
+    with get_connection() as conn:
+        ensure_course_pages_schema(conn)
+        ensure_instructor_contact_schema(conn)
+        if not _is_hod_or_admin():
+            if not iid or not _instructor_owns_group(conn, iid, tgid, None):
+                return jsonify({"status": "error", "message": "غير مصرّح لهذه المجموعة"}), 403
+        sem = (data.get("semester") or "").strip() or _current_semester_label(conn)
+        try:
+            saved = replace_group_links(
+                conn,
+                teaching_group_id=int(tgid),
+                semester=sem,
+                links=links,
+                created_by_instructor_id=iid,
+            )
+        except ValueError as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
+        except RuntimeError as e:
+            return jsonify({"status": "error", "message": str(e)}), 503
+        conn.commit()
+        return jsonify({"status": "ok", "links": saved})
+
+
 # ─── Student ─────────────────────────────────────────────────────
 
 
@@ -3029,15 +3111,24 @@ def api_student_my_courses():
             d = _row_dict(r)
             cn = d.get("course_name") or ""
             cat = _get_or_create_catalog(conn, cn)
+            tgid_raw = d.get("teaching_group_id")
+            try:
+                tgid_i = int(tgid_raw) if tgid_raw not in (None, "") else None
+            except (TypeError, ValueError):
+                tgid_i = None
+            contact_available = course_has_visible_contact(
+                conn, course_name=cn, teaching_group_id=tgid_i
+            )
             items.append(
                 {
                     "course_name": cn,
-                    "teaching_group_id": d.get("teaching_group_id"),
+                    "teaching_group_id": tgid_i,
                     "has_objectives": (cat.get("objectives_status") == STATUS_LOCKED),
                     "has_outcomes": (cat.get("outcomes_status") == STATUS_LOCKED),
                     "has_topics": (cat.get("topics_status") == STATUS_LOCKED),
+                    "contact_available": contact_available,
                     "page_url": "/my_course_page?"
-                    + urlencode({"course_name": cn, "teaching_group_id": d.get("teaching_group_id") or ""}),
+                    + urlencode({"course_name": cn, "teaching_group_id": tgid_i or ""}),
                 }
             )
         return jsonify({"status": "ok", "items": items})
@@ -3137,6 +3228,9 @@ def api_student_course():
                 anns = [_row_dict(a) for a in arows or []]
         except Exception:
             pass
+        contact = build_student_visible_contact(
+            conn, course_name=course_name, teaching_group_id=tgid
+        )
         return jsonify(
             {
                 "status": "ok",
@@ -3149,6 +3243,7 @@ def api_student_course():
                 "assessment_methods": assessments,
                 "materials": materials,
                 "announcements": anns,
+                "contact": contact,
             }
         )
 

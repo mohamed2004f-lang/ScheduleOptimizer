@@ -14,7 +14,8 @@ department_policies_bp = Blueprint("department_policies", __name__)
 
 POLICY_APPROVAL_ROLES = ("admin", "admin_main", "system_admin", "college_dean")
 
-_ALLOWED_PLAN_CODES = {"150", "155"}
+# 150/155 = تراثي MECH؛ DEPT = هدف وحدات القسم الرسمي
+_ALLOWED_PLAN_CODES = {"150", "155", "DEPT"}
 _ALLOWED_STATUS = {"draft", "pending_approval", "approved", "rejected"}
 
 
@@ -31,12 +32,61 @@ def _role() -> str:
 
 
 def _ensure_table(conn) -> None:
-    if table_exists(conn, "department_graduation_policies"):
+    if not table_exists(conn, "department_graduation_policies"):
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS department_graduation_policies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                department_id INTEGER NOT NULL,
+                plan_code TEXT NOT NULL,
+                min_total_units INTEGER NOT NULL DEFAULT 0,
+                effective_from_term TEXT DEFAULT '',
+                effective_from_year TEXT DEFAULT '',
+                notes TEXT DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'draft',
+                submitted_at TEXT,
+                approved_at TEXT,
+                rejected_at TEXT,
+                rejection_reason TEXT DEFAULT '',
+                created_by TEXT DEFAULT '',
+                approved_by TEXT DEFAULT '',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                CHECK (plan_code IN ('150','155','DEPT')),
+                CHECK (status IN ('draft','pending_approval','approved','rejected'))
+            )
+            """
+        )
+        conn.commit()
         return
+    _relax_plan_code_check(conn)
+
+
+def _relax_plan_code_check(conn) -> None:
+    """توسيع CHECK ليشمل DEPT دون كسر الصفوف القديمة (SQLite)."""
     cur = conn.cursor()
+    try:
+        row = cur.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='department_graduation_policies'"
+        ).fetchone()
+    except Exception:
+        return
+    if not row:
+        return
+    ddl = (row[0] if not hasattr(row, "keys") else row["sql"]) or ""
+    if "DEPT" in ddl.upper():
+        return
+    if "plan_code IN ('150','155')" not in ddl and 'plan_code IN ("150","155")' not in ddl:
+        # قد لا يوجد CHECK أو محرك آخر
+        if "CHECK (plan_code" in ddl and "DEPT" not in ddl:
+            pass
+        else:
+            return
+    cur.execute("ALTER TABLE department_graduation_policies RENAME TO department_graduation_policies_old")
     cur.execute(
         """
-        CREATE TABLE IF NOT EXISTS department_graduation_policies (
+        CREATE TABLE department_graduation_policies (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             department_id INTEGER NOT NULL,
             plan_code TEXT NOT NULL,
@@ -53,11 +103,26 @@ def _ensure_table(conn) -> None:
             approved_by TEXT DEFAULT '',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            CHECK (plan_code IN ('150','155')),
+            CHECK (plan_code IN ('150','155','DEPT')),
             CHECK (status IN ('draft','pending_approval','approved','rejected'))
         )
         """
     )
+    cur.execute(
+        """
+        INSERT INTO department_graduation_policies (
+            id, department_id, plan_code, min_total_units, effective_from_term, effective_from_year,
+            notes, status, submitted_at, approved_at, rejected_at, rejection_reason,
+            created_by, approved_by, created_at, updated_at
+        )
+        SELECT
+            id, department_id, plan_code, min_total_units, effective_from_term, effective_from_year,
+            notes, status, submitted_at, approved_at, rejected_at, rejection_reason,
+            created_by, approved_by, created_at, updated_at
+        FROM department_graduation_policies_old
+        """
+    )
+    cur.execute("DROP TABLE department_graduation_policies_old")
     conn.commit()
 
 
@@ -128,6 +193,8 @@ def head_list_policies():
         dep_id = _head_department_id_or_403(conn)
         if dep_id is None:
             return jsonify({"status": "error", "message": "لا يوجد قسم مرتبط بحساب رئيس القسم"}), 403
+        from backend.core.graduation_targets import build_graduation_plan_options
+
         cur = conn.cursor()
         rows = cur.execute(
             """
@@ -139,16 +206,27 @@ def head_list_policies():
             (dep_id,),
         ).fetchall()
         items = [dict(r) for r in rows]
-    return jsonify({"status": "ok", "department_id": dep_id, "items": items}), 200
+        grad = build_graduation_plan_options(conn, department_id=dep_id, actor_username=_actor())
+    return jsonify({
+        "status": "ok",
+        "department_id": dep_id,
+        "items": items,
+        "graduation": grad,
+    }), 200
 
 
 @department_policies_bp.route("/department_policies/head/propose", methods=["POST"])
 @role_required("head_of_department")
 def head_propose_policy():
     body = request.get_json(force=True) or {}
-    plan_code = (body.get("plan_code") or "").strip()
+    plan_code = (body.get("plan_code") or "").strip().upper()
+    if not plan_code:
+        plan_code = "DEPT"
     if plan_code not in _ALLOWED_PLAN_CODES:
-        return jsonify({"status": "error", "message": "plan_code يجب أن يكون 150 أو 155"}), 400
+        return jsonify({
+            "status": "error",
+            "message": "plan_code يجب أن يكون 150 أو 155 (ميكانيكا) أو DEPT (هدف القسم)",
+        }), 400
     try:
         min_total_units = int(body.get("min_total_units") or 0)
     except (TypeError, ValueError):
@@ -163,7 +241,22 @@ def head_propose_policy():
         dep_id = _head_department_id_or_403(conn)
         if dep_id is None:
             return jsonify({"status": "error", "message": "لا يوجد قسم مرتبط بحساب رئيس القسم"}), 403
+        from backend.core.graduation_targets import (
+            department_code_for_id,
+            graduation_target_units_for_department,
+        )
         cur = conn.cursor()
+        dept_code = department_code_for_id(cur, dep_id) or ""
+        if dept_code == "MECH":
+            if plan_code == "DEPT":
+                plan_code = "155"
+            if plan_code not in ("150", "155"):
+                return jsonify({"status": "error", "message": "لقسم الميكانيكا استخدم 150 أو 155"}), 400
+        else:
+            plan_code = "DEPT"
+            target = graduation_target_units_for_department(cur, dep_id, dept_code)
+            if not min_total_units and target:
+                min_total_units = int(target)
         cur.execute(
             """
             INSERT INTO department_graduation_policies

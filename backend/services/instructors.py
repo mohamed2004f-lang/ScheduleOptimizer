@@ -13,6 +13,13 @@ from backend.core.department_scope_policy import (
     sql_student_row_belongs_to_department,
     student_in_actor_scope,
 )
+from backend.core.instructor_contact_policy import (
+    ensure_instructor_contact_schema,
+    instructor_contact_columns_ready,
+    load_instructor_contact_row,
+    parse_contact_settings_payload,
+    save_instructor_contact_settings,
+)
 from backend.core.feature_flags import is_multi_dept_instructor_enabled
 from backend.database.database import fetch_table_columns
 from backend.repositories.instructor_assignments_repo import (
@@ -79,11 +86,74 @@ def _can_access_instructor_admin_endpoint(conn, actor_username: str, instructor_
 
 def _can_bypass_scope_for_cross_department_assignments() -> bool:
     """
-    السماح للمسؤول الرئيسي بإدارة الأقسام المتعاونة عبر الأقسام
+    السماح لقيادة الكلية/المسؤول بإدارة الأقسام المتعاونة عبر الأقسام
     حتى عند تفعيل نطاق عرض مؤقت في الجلسة.
     """
     role = _normalize_role_local(session.get("user_role"))
-    return role in ("admin_main", "admin")
+    return role in (
+        "admin_main",
+        "admin",
+        "system_admin",
+        "college_dean",
+        "academic_vice_dean",
+    )
+
+
+def _validate_coop_assignment_targets(
+    conn,
+    actor: str,
+    instructor_id: int,
+    assignments: list,
+) -> tuple[bool, str | None]:
+    """
+    التحقق من أهداف الأقسام المتعاونة عند الحفظ.
+
+    رئيس قسم يملك هوية الأستاذ (قسمه الرئيسي) يجوز له إسناد التعاون لأي قسم
+    نشط آخر — هذا جوهر الميزة. تقييد النطاق ينطبق على تغيير القسم الرئيسي فقط.
+    """
+    if _can_bypass_scope_for_cross_department_assignments():
+        return True, None
+
+    home_owner = actor_can_manage_existing_instructor(conn, actor, int(instructor_id))
+    cur = conn.cursor()
+    home_dept = None
+    row = cur.execute(
+        "SELECT department_id FROM instructors WHERE id = ? LIMIT 1",
+        (int(instructor_id),),
+    ).fetchone()
+    if row:
+        raw = row["department_id"] if hasattr(row, "keys") else row[0]
+        if raw not in (None, ""):
+            try:
+                home_dept = int(raw)
+            except (TypeError, ValueError):
+                home_dept = None
+
+    for a in assignments or []:
+        try:
+            pd = int(a.get("department_id"))
+        except (TypeError, ValueError):
+            continue
+        drow = cur.execute(
+            "SELECT id, COALESCE(is_active, 1) FROM departments WHERE id = ? LIMIT 1",
+            (pd,),
+        ).fetchone()
+        if not drow:
+            return False, f"قسم غير موجود (id={pd})."
+        active = drow[1] if not hasattr(drow, "keys") else drow[1]
+        try:
+            if int(active) != 1:
+                return False, "لا يمكن الإسناد إلى قسم غير نشط."
+        except (TypeError, ValueError):
+            pass
+        if home_dept is not None and pd == home_dept:
+            return False, "لا يمكن إضافة القسم الرئيسي ضمن الأقسام المتعاونة."
+        if home_owner:
+            continue
+        ok_pd, msg_pd = proposed_department_allowed_for_scope(conn, actor, pd)
+        if not ok_pd:
+            return False, msg_pd
+    return True, None
 
 
 @instructors_bp.route("/list")
@@ -422,19 +492,48 @@ def save_instructor():
             and isinstance(data.get("department_assignments"), list)
             and actor_can_manage_existing_instructor(conn, actor, int(resolved_id))
         ):
-            for a in data.get("department_assignments") or []:
-                try:
-                    pd = int(a.get("department_id"))
-                except (TypeError, ValueError):
-                    continue
-                if not _can_bypass_scope_for_cross_department_assignments():
-                    ok_pd, msg_pd = proposed_department_allowed_for_scope(conn, actor, pd)
-                    if not ok_pd:
-                        conn.rollback()
-                        return jsonify({"status": "error", "message": msg_pd}), 400
+            ok_asg, msg_asg = _validate_coop_assignment_targets(
+                conn, actor, int(resolved_id), data.get("department_assignments") or []
+            )
+            if not ok_asg:
+                conn.rollback()
+                return jsonify({"status": "error", "message": msg_asg}), 400
             replace_user_assignments_from_payload(
                 conn, int(resolved_id), data.get("department_assignments") or []
             )
+
+        # إعدادات تواصل اختيارية عند الحفظ إن وُجدت مفاتيحها
+        contact_keys_present = any(
+            k in data
+            for k in (
+                "contact_email_visible",
+                "whatsapp_phone",
+                "whatsapp_phone_visible",
+                "whatsapp_username",
+                "whatsapp_username_key",
+                "whatsapp_username_visible",
+            )
+        )
+        if (
+            resolved_id
+            and contact_keys_present
+            and actor_can_manage_existing_instructor(conn, actor, int(resolved_id))
+        ):
+            if not ensure_instructor_contact_schema(conn):
+                conn.rollback()
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": "تعذر تجهيز أعمدة التواصل في قاعدة البيانات. أعد تشغيل الخدمة أو راجع الترحيلات.",
+                    }
+                ), 503
+            fields, err = parse_contact_settings_payload(
+                data, visibility_scope=_contact_visibility_scope_for_actor(int(resolved_id))
+            )
+            if err:
+                conn.rollback()
+                return jsonify({"status": "error", "message": err}), 400
+            save_instructor_contact_settings(conn, int(resolved_id), fields)
 
         conn.commit()
 
@@ -507,18 +606,146 @@ def save_instructor_department_assignments(instructor_id: int):
             return jsonify({"status": "error", "message": "الميزة غير مفعّلة"}), 400
         if not actor_can_manage_existing_instructor(conn, actor, instructor_id):
             return jsonify({"status": "error", "message": "لا يمكن التعديل خارج نطاق قسمك."}), 403
-        for a in assignments:
-            try:
-                pd = int(a.get("department_id"))
-            except (TypeError, ValueError):
-                continue
-            if not _can_bypass_scope_for_cross_department_assignments():
-                ok_pd, msg_pd = proposed_department_allowed_for_scope(conn, actor, pd)
-                if not ok_pd:
-                    return jsonify({"status": "error", "message": msg_pd}), 400
+        ok_asg, msg_asg = _validate_coop_assignment_targets(
+            conn, actor, int(instructor_id), assignments
+        )
+        if not ok_asg:
+            return jsonify({"status": "error", "message": msg_asg}), 400
         replace_user_assignments_from_payload(conn, instructor_id, assignments)
+        saved = list_assignment_department_details(conn, [int(instructor_id)]).get(
+            int(instructor_id), []
+        )
         conn.commit()
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "assignments": saved})
+
+
+def _session_instructor_id() -> int:
+    try:
+        return int(session.get("instructor_id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _contact_visibility_scope_for_actor(instructor_id: int) -> str:
+    """الأستاذ نفسه: full — غير ذلك (رئيس قسم/إدارة): email_only."""
+    return "full" if _session_instructor_id() == int(instructor_id) else "email_only"
+
+
+def _actor_can_edit_instructor_contact(conn, actor: str | None, instructor_id: int) -> bool:
+    """إدارة الهوية أو الأستاذ نفسه."""
+    if actor_can_manage_existing_instructor(conn, actor, int(instructor_id)):
+        return True
+    return _session_instructor_id() > 0 and _session_instructor_id() == int(instructor_id)
+
+
+@instructors_bp.route("/me/contact_settings", methods=["GET", "POST"])
+@login_required
+def my_contact_settings():
+    """إعدادات تواصل الأستاذ المسجّل دخوله."""
+    try:
+        iid = int(session.get("instructor_id") or 0)
+    except (TypeError, ValueError):
+        iid = 0
+    if iid <= 0:
+        return jsonify({"status": "error", "message": "لا يوجد ربط بأستاذ في الجلسة"}), 403
+    if request.method == "GET":
+        with get_connection() as conn:
+            if not ensure_instructor_contact_schema(conn):
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": "تعذر تجهيز أعمدة التواصل. أعد تشغيل الخدمة أو تواصل مع الإدارة التقنية.",
+                    }
+                ), 503
+            row = load_instructor_contact_row(conn, iid)
+            if not row:
+                return jsonify({"status": "error", "message": "الأستاذ غير موجود"}), 404
+            return jsonify({"status": "ok", "contact": row})
+    data = request.get_json(force=True) or {}
+    fields, err = parse_contact_settings_payload(data, visibility_scope="full")
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
+    with get_connection() as conn:
+        if not ensure_instructor_contact_schema(conn):
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "تعذر تجهيز أعمدة التواصل. أعد تشغيل الخدمة أو تواصل مع الإدارة التقنية.",
+                }
+            ), 503
+        if not load_instructor_contact_row(conn, iid):
+            return jsonify({"status": "error", "message": "الأستاذ غير موجود"}), 404
+        save_instructor_contact_settings(conn, iid, fields)
+        conn.commit()
+        return jsonify({"status": "ok", "contact": load_instructor_contact_row(conn, iid)})
+
+
+@instructors_bp.route("/<int:instructor_id>/contact_settings", methods=["GET", "POST"])
+@login_required
+def instructor_contact_settings(instructor_id: int):
+    """قراءة/حفظ إعدادات التواصل (إدارة أو صاحب الحساب)."""
+    actor = _current_actor_username()
+    with get_connection() as conn:
+        if not _actor_can_edit_instructor_contact(conn, actor, instructor_id):
+            return jsonify({"status": "error", "message": "غير مصرّح"}), 403
+        if not ensure_instructor_contact_schema(conn):
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "تعذر تجهيز أعمدة التواصل. أعد تشغيل الخدمة أو تواصل مع الإدارة التقنية.",
+                }
+            ), 503
+        if request.method == "GET":
+            row = load_instructor_contact_row(conn, instructor_id)
+            if not row:
+                return jsonify({"status": "error", "message": "الأستاذ غير موجود"}), 404
+            return jsonify(
+                {
+                    "status": "ok",
+                    "contact": row,
+                    "visibility_scope": _contact_visibility_scope_for_actor(instructor_id),
+                }
+            )
+        data = request.get_json(force=True) or {}
+        fields, err = parse_contact_settings_payload(
+            data, visibility_scope=_contact_visibility_scope_for_actor(instructor_id)
+        )
+        if err:
+            return jsonify({"status": "error", "message": err}), 400
+        if not load_instructor_contact_row(conn, instructor_id):
+            return jsonify({"status": "error", "message": "الأستاذ غير موجود"}), 404
+        save_instructor_contact_settings(conn, instructor_id, fields)
+        conn.commit()
+        return jsonify({"status": "ok", "contact": load_instructor_contact_row(conn, instructor_id)})
+
+
+@instructors_bp.route("/department/options", methods=["GET"])
+@login_required
+@role_required(*_MANAGE_ROLES)
+def instructor_department_options():
+    """قائمة الأقسام النشطة لاختيار الأقسام المتعاونة (متاحة لرئيس القسم أيضاً)."""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        rows = cur.execute(
+            """
+            SELECT id, COALESCE(code, '') AS code,
+                   COALESCE(name_ar, name_en, code, '') AS label
+            FROM departments
+            WHERE COALESCE(is_active, 1) = 1
+            ORDER BY COALESCE(name_ar, code, '')
+            """
+        ).fetchall()
+    items = []
+    for r in rows or []:
+        items.append(
+            {
+                "id": int(r[0] if not hasattr(r, "keys") else r["id"]),
+                "code": (r[1] if not hasattr(r, "keys") else r["code"]) or "",
+                "label": (r[2] if not hasattr(r, "keys") else r["label"]) or "",
+                "name_ar": (r[2] if not hasattr(r, "keys") else r["label"]) or "",
+            }
+        )
+    return jsonify({"status": "ok", "items": items}), 200
 
 
 @instructors_bp.route("/<int:instructor_id>/link_department", methods=["POST"])

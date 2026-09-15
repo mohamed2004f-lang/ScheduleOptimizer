@@ -23,9 +23,14 @@
 
   <div class="card mb-3 filter-section">
     <div class="card-body row g-2 align-items-end">
-      <div class="col-md-4">
+      <div class="col-md-5">
         <label class="form-label mb-1 small">الفصل</label>
-        <input id="semesterInput" class="form-control form-control-sm" placeholder="مثال: خريف 2025">
+        {% set typ_id = 'svTermPicker' %}
+        {% set typ_season_id = 'svSeason' %}
+        {% set typ_year_id = 'svYear' %}
+        {% include "partials/term_year_picker.html" %}
+        <input type="hidden" id="semesterInput" value="">
+        <div class="form-text">فارغ = الكل</div>
       </div>
       <div class="col-md-3">
         <label class="form-label mb-1 small">نوع الحدث</label>
@@ -70,6 +75,7 @@
   </div>
 </main>
 
+<script src="/static/js/term-year-picker.js"></script>
 <script>
 async function fetchJSON(url, opts){
   const r = await fetch(url, { credentials: 'include', ...(opts || {}) });
@@ -193,12 +199,26 @@ async function loadVersions(){
 
 document.getElementById('btnSearch').addEventListener('click', loadVersions);
 document.getElementById('btnReset').addEventListener('click', () => {
-  const sem = document.getElementById('semesterInput');
+  if (window.__svTermPicker) window.__svTermPicker.setValue('', '');
+  else {
+    const sem = document.getElementById('semesterInput');
+    if (sem) sem.value = '';
+  }
   const ev = document.getElementById('eventType');
-  if (sem) sem.value = '';
   if (ev) ev.value = '';
   loadVersions();
 });
+(async function initSvTerm(){
+  if (window.TermYearPicker) {
+    try {
+      window.__svTermPicker = await window.TermYearPicker.mount({
+        rootId: 'svTermPicker', seasonId: 'svSeason', yearId: 'svYear',
+        hiddenId: 'semesterInput', allowEmpty: true,
+      });
+    } catch (e) { console.warn(e); }
+  }
+  loadVersions();
+})();
 document.getElementById('btnPurgeUnusable').addEventListener('click', async () => {
   const sem = (document.getElementById('semesterInput')?.value || '').trim();
   const scope = sem ? `للفصل «${sem}»` : 'لكل الفصول';
@@ -216,7 +236,6 @@ document.getElementById('btnPurgeUnusable').addEventListener('click', async () =
   setMsg('success', r.json?.message || 'تم التنظيف.');
   await loadVersions();
 });
-loadVersions();
 </script>
 </body>
 </html>

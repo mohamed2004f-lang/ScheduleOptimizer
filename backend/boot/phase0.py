@@ -54,7 +54,7 @@ PHASE0_PROGRAMS = [
         '{"note_ar":"تهيئة مرحلة 0: قبل التنسيب من الاتجاه العام إلى الأقسام العلمية."}',
     ),
     ("MECH", "PROG_MAJOR", "هندسة ميكانيكية — خطة القسم (بدون شعبة)", "major", 155, ""),
-    ("CIVIL", "PROG_MAJOR", "بكالوريوس الهندسة المدنية", "major", 160, ""),
+    ("CIVIL", "PROG_MAJOR", "بكالوريوس الهندسة المدنية", "major", 161, ""),
     ("ELEC", "PROG_MAJOR", "بكالوريوس الهندسة الكهربائية", "major", 160, ""),
     ("RENEW", "PROG_MAJOR", "بكالوريوس هندسة الطاقات المتجددة", "major", 160, ""),
 ]
@@ -122,6 +122,15 @@ def _ensure_program(
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         (department_id, code, name_ar, phase, min_total_units, rules_json or None),
+    )
+    cur.execute(
+        """
+        UPDATE programs
+        SET name_ar = ?, phase = ?, min_total_units = ?,
+            rules_json = COALESCE(?, rules_json)
+        WHERE department_id = ? AND code = ?
+        """,
+        (name_ar, phase, min_total_units, rules_json or None, department_id, code),
     )
     cur.execute(
         "SELECT id FROM programs WHERE department_id = ? AND code = ?",

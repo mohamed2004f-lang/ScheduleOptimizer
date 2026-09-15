@@ -22,9 +22,14 @@
         <label class="form-label">رقم الطالب</label>
         <input id="fStudent" class="form-control form-control-sm">
       </div>
-      <div class="col-md-3">
+      <div class="col-md-4">
         <label class="form-label">الفصل</label>
-        <input id="fTerm" class="form-control form-control-sm" placeholder="مثال: خريف 25-26">
+        {% set typ_id = 'reqTermPicker' %}
+        {% set typ_season_id = 'fTermSeason' %}
+        {% set typ_year_id = 'fTermYear' %}
+        {% include "partials/term_year_picker.html" %}
+        <input type="hidden" id="fTerm" value="">
+        <div class="form-text">فارغ = الكل</div>
       </div>
       <div class="col-md-2">
         <label class="form-label">العملية</label>
@@ -75,6 +80,7 @@
   </div>
 </main>
 
+<script src="/static/js/term-year-picker.js"></script>
 <script>
 async function fetchJSON(url, opts){
   const r = await fetch(url, opts);
@@ -186,7 +192,20 @@ async function rejectRequest(id){
 }
 
 document.getElementById('btnLoad').addEventListener('click', loadRequests);
-loadRequests();
+(async function initReqTerm(){
+  if (window.TermYearPicker) {
+    try {
+      await window.TermYearPicker.mount({
+        rootId: 'reqTermPicker',
+        seasonId: 'fTermSeason',
+        yearId: 'fTermYear',
+        hiddenId: 'fTerm',
+        allowEmpty: true,
+      });
+    } catch (e) { console.warn(e); }
+  }
+  loadRequests();
+})();
 </script>
 </body>
 </html>

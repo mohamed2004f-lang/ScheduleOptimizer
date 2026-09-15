@@ -26,20 +26,15 @@
     <div class="card mb-3">
       <div class="card-body">
         <h6 class="mb-2">تعيين الفصل الحالي</h6>
-        <p class="small text-muted mb-2">هذا ما تعرضه اللوحة والتقويم عند التحميل. حفظ تقويم الخريف لا يغيّر الفصل الحالي إن بقي ربيعاً.</p>
+        <p class="small text-muted mb-2">هذا ما تعرضه اللوحة والتقويم عند التحميل. احفظ عبر القوائم المنسدلة (خريف/ربيع + 2025/2026).</p>
         <div class="row g-2 align-items-end">
-          <div class="col-md-3">
-            <label class="form-label small mb-0" for="opsSetSeason">الفصل</label>
-            <select id="opsSetSeason" class="form-select form-select-sm">
-              <option value="خريف">خريف</option>
-              <option value="ربيع">ربيع</option>
-            </select>
+          <div class="col-md-8">
+            {% set typ_id = 'opsTermPicker' %}
+            {% set typ_season_id = 'opsSetSeason' %}
+            {% set typ_year_id = 'opsSetYear' %}
+            {% include "partials/term_year_picker.html" %}
           </div>
-          <div class="col-md-3">
-            <label class="form-label small mb-0" for="opsSetYear">السنة</label>
-            <input id="opsSetYear" class="form-control form-control-sm" placeholder="26-27" dir="ltr">
-          </div>
-          <div class="col-md-3">
+          <div class="col-md-4">
             <button type="button" class="btn btn-sm btn-primary" id="btnSetCurrentTerm">حفظ الفصل الحالي</button>
           </div>
         </div>
@@ -209,10 +204,28 @@
       </div>
     </div>
   </main>
+<script src="/static/js/term-year-picker.js"></script>
 <script>
 (function(){
   const elMsg = document.getElementById('opsMsg');
   let STATE = null;
+  let OPS_PICKER = null;
+  async function ensureOpsPicker(termName, termYear){
+    if (!window.TermYearPicker) return;
+    try {
+      OPS_PICKER = await window.TermYearPicker.mount({
+        rootId: 'opsTermPicker',
+        seasonId: 'opsSetSeason',
+        yearId: 'opsSetYear',
+        termName: termName,
+        termYear: termYear,
+        useCurrent: !(termName || termYear),
+      });
+    } catch (e) {
+      console.warn(e);
+    }
+  }
+
   function setMsg(t,k){ elMsg.innerHTML = t ? `<div class="alert alert-${k||'info'} py-2">${t}</div>` : ''; }
   function csrfToken(){
     return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
@@ -263,6 +276,7 @@
     else if (setSeason && /خريف/.test(ct.term_name||'')) setSeason.value = 'خريف';
     else if (setSeason && /ربيع/.test(ct.term_name||'')) setSeason.value = 'ربيع';
     if (setYear && ct.term_year) setYear.value = ct.term_year;
+    ensureOpsPicker(ct.term_name, ct.term_year);
     const m = STATE.term_master || {};
     const statusAr = (STATE.lifecycle_statuses || []).reduce((acc, x) => {
       acc[x.value] = x.label_ar; return acc;
@@ -469,7 +483,7 @@
   document.getElementById('btnSetCurrentTerm').addEventListener('click', async ()=>{
     const term_name = (document.getElementById('opsSetSeason').value||'').trim();
     const term_year = (document.getElementById('opsSetYear').value||'').trim();
-    if (!term_name || !term_year) { setMsg('اختر الفصل والسنة (مثال: خريف و 26-27)','warning'); return; }
+    if (!term_name || !term_year) { setMsg('اختر الفصل والعام الدراسي من القوائم','warning'); return; }
     async function send(extra){
       return fetchJSON('/admin/settings/current_term', {
         method:'POST',
@@ -484,7 +498,8 @@
       r = await send({ archive_basket: true, archive_reason: reason.trim() });
     }
     if (!r.ok) { setMsg(apiErr(r),'danger'); return; }
-    setMsg('تم تعيين الفصل الحالي: ' + term_name + ' ' + term_year,'success');
+    const saved = (r.json && (r.json.ops_label || r.json.term_label)) || (term_name + ' ' + term_year);
+    setMsg('تم تعيين الفصل الحالي: ' + saved,'success');
     await load();
   });
   document.getElementById('btnSim').addEventListener('click', async ()=>{

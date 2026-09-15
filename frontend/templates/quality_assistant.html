@@ -80,9 +80,13 @@
     </div>
 
     <div class="row g-3 mb-3">
-      <div class="col-md-4">
+      <div class="col-md-5">
         <label class="form-label small">الفصل</label>
-        <input type="text" class="form-control form-control-sm" id="qaSemester" value="{{ semester }}">
+        {% set typ_id = 'qaTermPicker' %}
+        {% set typ_season_id = 'qaSeason' %}
+        {% set typ_year_id = 'qaYear' %}
+        {% include "partials/term_year_picker.html" %}
+        <input type="hidden" id="qaSemester" value="{{ semester }}">
       </div>
       <div class="col-md-5">
         <label class="form-label small">القسم / البرنامج</label>
@@ -222,6 +226,7 @@
     </div>
   </main>
 
+  <script src="/static/js/term-year-picker.js"></script>
   <script>
   (function () {
     var boot = {{ bootstrap | tojson }};
@@ -748,6 +753,19 @@
         mode: activeMode
       });
     }
+  })();
+  (async function initQaTerm(){
+    if (!window.TermYearPicker) return;
+    try {
+      await window.TermYearPicker.mount({
+        rootId: 'qaTermPicker',
+        seasonId: 'qaSeason',
+        yearId: 'qaYear',
+        hiddenId: 'qaSemester',
+        opsLabel: document.getElementById('qaSemester')?.value || '',
+        useCurrent: !(document.getElementById('qaSemester')?.value || '').trim(),
+      });
+    } catch (e) { console.warn(e); }
   })();
   </script>
 </body>

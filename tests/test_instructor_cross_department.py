@@ -235,3 +235,62 @@ class TestInstructorLinkUnlinkAndListFields:
             lst2 = c.get("/instructors/list")
             ids = {int(x["id"]) for x in (lst2.get_json().get("instructors") or [])}
             assert iid not in ids
+
+    def test_hod_can_save_cross_department_coop_for_home_instructor(self, app, db_conn):
+        """رئيس القسم يملك هوية الأستاذ يجوز إسناد أقسام متعاونة خارج نطاقه."""
+        uid = uuid.uuid4().hex[:8]
+        cur = db_conn.cursor()
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (f"HA{uid}".upper()[:12], "منزل حفظ", "HomeS"),
+        )
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (f"HB{uid}".upper()[:12], "تعاون حفظ", "CoopS"),
+        )
+        d_home = cur.execute(
+            "SELECT id FROM departments WHERE code = ?", (f"HA{uid}".upper()[:12],)
+        ).fetchone()[0]
+        d_coop = cur.execute(
+            "SELECT id FROM departments WHERE code = ?", (f"HB{uid}".upper()[:12],)
+        ).fetchone()[0]
+        cur.execute(
+            "INSERT INTO instructors (name, type, is_active, department_id) VALUES (?, 'internal', 1, ?)",
+            (f"HomeInst {uid}", d_home),
+        )
+        iid = int(cur.lastrowid)
+        pw = cur.execute(
+            "SELECT password_hash FROM users WHERE username = 'admin-test' LIMIT 1"
+        ).fetchone()[0]
+        hod = f"hod_save_{uid}"
+        cur.execute(
+            "INSERT INTO users (username, password_hash, role, department_id) VALUES (?, ?, 'head_of_department', ?)",
+            (hod, pw, d_home),
+        )
+        db_conn.commit()
+
+        with app.test_client() as c:
+            assert c.post("/auth/login", json={"username": hod, "password": "TestP@ssw0rd!"}).status_code == 200
+            save = c.post(
+                f"/instructors/{iid}/department_assignments/save",
+                json={"assignments": [{"department_id": int(d_coop)}]},
+                headers={"Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest"},
+            )
+            assert save.status_code == 200, save.get_data(as_text=True)
+            assert (save.get_json() or {}).get("status") == "ok"
+            saved = (save.get_json() or {}).get("assignments") or []
+            assert any(int(a["department_id"]) == int(d_coop) for a in saved)
+
+            opts = c.get("/instructors/department/options")
+            assert opts.status_code == 200, opts.get_data(as_text=True)
+            opt_ids = {int(x["id"]) for x in (opts.get_json().get("items") or [])}
+            assert int(d_coop) in opt_ids
+            assert int(d_home) in opt_ids
+
+            # إزالة قسم متعاون (قائمة فارغة) يجب أن تنجح أيضاً
+            clear = c.post(
+                f"/instructors/{iid}/department_assignments/save",
+                json={"assignments": []},
+                headers={"Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest"},
+            )
+            assert clear.status_code == 200, clear.get_data(as_text=True)

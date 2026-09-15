@@ -1078,7 +1078,26 @@ CREATE TABLE IF NOT EXISTS instructors (
     email TEXT,
     department_id INTEGER,
     external_scope TEXT NOT NULL DEFAULT 'within_college',
-    is_active INTEGER NOT NULL DEFAULT 1
+    is_active INTEGER NOT NULL DEFAULT 1,
+    contact_email_visible INTEGER NOT NULL DEFAULT 0,
+    whatsapp_phone TEXT,
+    whatsapp_phone_visible INTEGER NOT NULL DEFAULT 0,
+    whatsapp_username TEXT,
+    whatsapp_username_key TEXT,
+    whatsapp_username_visible INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS course_group_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    teaching_group_id INTEGER NOT NULL,
+    semester TEXT NOT NULL DEFAULT '',
+    platform TEXT NOT NULL DEFAULT 'other',
+    label_ar TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL,
+    is_visible INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_by_instructor_id INTEGER,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS instructor_department_assignments (

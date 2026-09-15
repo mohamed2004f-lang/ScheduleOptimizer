@@ -486,6 +486,7 @@
       const links = document.getElementById('hubLinks');
       const deptLbl = document.getElementById('hubDeptLabel');
       const tiles = [
+        { href: '/my_contact', icon: '📇', label: 'تواصلي', badge: 0 },
         { href: '/instructor_library', icon: '📁', label: 'مكتبي', badge: d.library_files_count || 0 },
         { href: '/grade_drafts', icon: '📝', label: 'مسودات الدرجات', badge: d.grade_drafts_draft || 0 },
         { href: '/academic_quality/instructor/quality-hub', icon: '🛡️', label: 'ضمان الجودة', badge: 0 },
@@ -495,7 +496,7 @@
         const badge = t.badge > 0 ? '<span class="badge bg-danger hub-badge">' + t.badge + '</span>' : '';
         const cls = t.tab ? 'hub-tile hub-open-tab' : 'hub-tile';
         const extra = t.tab ? ' data-tab="#tabDeptSchedule"' : '';
-        return '<div class="col-6 col-md-3"><a class="' + cls + '" href="' + t.href + '"' + extra + '>' + badge +
+        return '<div class="col-6 col-md-4 col-lg"><a class="' + cls + '" href="' + t.href + '"' + extra + '>' + badge +
           '<span class="hub-icon">' + t.icon + '</span><span class="small fw-semibold">' + esc(t.label) + '</span></a></div>';
       }).join('');
       hub.classList.remove('d-none');

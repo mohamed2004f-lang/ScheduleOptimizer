@@ -28,6 +28,7 @@
       <li class="nav-item"><button class="nav-link" data-tab="weekly" type="button">الخطة الأسبوعية</button></li>
       <li class="nav-item"><button class="nav-link" data-tab="assess" type="button">التقييم والمراجع</button></li>
       <li class="nav-item"><button class="nav-link" data-tab="materials" type="button">المواد والمحاضرات</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="contact" type="button">تواصل الطلبة</button></li>
     </ul>
 
     <div id="tab-overview">
@@ -222,6 +223,79 @@
       </div>
       <div id="matList" class="list-group"></div>
     </div>
+
+    <div id="tab-contact" class="d-none">
+      <div class="row g-3">
+        <div class="col-lg-6">
+          <div class="card h-100">
+            <div class="card-header fw-semibold d-flex justify-content-between align-items-center flex-wrap gap-1">
+              <span>تواصلي الشخصي (اختياري)</span>
+              <a class="small" href="/my_contact">فتح صفحة تواصلي ←</a>
+            </div>
+            <div class="card-body">
+              <p class="small text-muted">يمكنك أيضاً إدارة هذه الإعدادات من صفحة <a href="/my_contact">تواصلي</a>. يظهر لطلبة مقرراتك فقط بعد التفعيل.</p>
+              <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" id="cpEmailVis">
+                <label class="form-check-label" for="cpEmailVis">إظهار بريدي الإلكتروني</label>
+              </div>
+              <label class="form-label small" for="cpWaPhone">رقم واتساب</label>
+              <input id="cpWaPhone" class="form-control form-control-sm mb-1" dir="ltr" placeholder="9647xxxxxxxx">
+              <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" id="cpWaPhoneVis">
+                <label class="form-check-label" for="cpWaPhoneVis">إظهار الرقم</label>
+              </div>
+              <label class="form-label small" for="cpWaUser">اسم مستخدم واتساب</label>
+              <input id="cpWaUser" name="wa_public_handle" class="form-control form-control-sm mb-1" dir="ltr" placeholder="@handle" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other">
+              <label class="form-label small" for="cpWaKey">Username Key (اختياري)</label>
+              <input id="cpWaKey" name="wa_public_key" class="form-control form-control-sm mb-1" dir="ltr" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other">
+              <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" id="cpWaUserVis">
+                <label class="form-check-label" for="cpWaUserVis">إظهار الاسم للطلبة</label>
+              </div>
+              <button type="button" class="btn btn-sm btn-primary" id="btnSaveMyContact">حفظ إعدادات التواصل</button>
+            </div>
+          </div>
+        </div>
+        <div class="col-lg-6">
+          <div class="card h-100">
+            <div class="card-header fw-semibold">روابط مجموعة المقرر</div>
+            <div class="card-body">
+              <p class="small text-muted mb-2" id="cpGroupLinksHint">أضف روابط واتساب/تيليغرام/أخرى لهذه المجموعة التدريسية.</p>
+              <div id="cpGroupLinksEmpty" class="alert alert-warning small d-none">افتح صفحة المقرر من مجموعة تدريس محددة لإدارة روابط المجموعة.</div>
+              <div id="cpGroupLinksWrap" class="d-none">
+                <ul class="list-group mb-2" id="cpGroupLinksList"></ul>
+                <div class="row g-2 align-items-end">
+                  <div class="col-md-3">
+                    <label class="form-label small" for="cpLinkPlatform">المنصة</label>
+                    <select id="cpLinkPlatform" class="form-select form-select-sm">
+                      <option value="whatsapp">واتساب</option>
+                      <option value="telegram">تيليغرام</option>
+                      <option value="other">أخرى</option>
+                    </select>
+                  </div>
+                  <div class="col-md-4">
+                    <label class="form-label small" for="cpLinkLabel">التسمية</label>
+                    <input id="cpLinkLabel" class="form-control form-control-sm" placeholder="مجموعة واتساب المقرر">
+                  </div>
+                  <div class="col-md-5">
+                    <label class="form-label small" for="cpLinkUrl">الرابط</label>
+                    <input id="cpLinkUrl" class="form-control form-control-sm" dir="ltr" placeholder="https://chat.whatsapp.com/...">
+                  </div>
+                  <div class="col-12 d-flex gap-2 flex-wrap">
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" id="cpLinkVisible" checked>
+                      <label class="form-check-label small" for="cpLinkVisible">ظاهر للطلبة</label>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="btnAddGroupLink">إضافة للقائمة</button>
+                    <button type="button" class="btn btn-sm btn-success" id="btnSaveGroupLinks">حفظ الروابط</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
   <div id="toast" class="alert d-none mt-3"></div>
 </main>
@@ -233,7 +307,7 @@
   const sectionId = params.get('section_id') || '';
   const state = {
     catalog: null, section: null, assessmentSchema: null, assessmentPlan: null,
-    programContext: null, weekly: null, weeksDraft: []
+    programContext: null, weekly: null, weeksDraft: [], groupLinks: []
   };
 
   function toast(msg, ok){
@@ -759,13 +833,116 @@
     btn.addEventListener('click', () => {
       document.querySelectorAll('#cpTabs .nav-link').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      ['overview','links','weekly','assess','materials'].forEach(t => {
+      ['overview','links','weekly','assess','materials','contact'].forEach(t => {
         const el = document.getElementById('tab-'+t);
         if (el) el.classList.toggle('d-none', t !== btn.getAttribute('data-tab'));
       });
       if (btn.getAttribute('data-tab') === 'links') renderOutcomeLinks();
       if (btn.getAttribute('data-tab') === 'weekly') renderWeeklyUI();
+      if (btn.getAttribute('data-tab') === 'contact') loadContactTab();
     });
+  });
+
+  function renderGroupLinksList() {
+    const ul = document.getElementById('cpGroupLinksList');
+    if (!ul) return;
+    ul.innerHTML = '';
+    (state.groupLinks || []).forEach((row, idx) => {
+      const li = document.createElement('li');
+      li.className = 'list-group-item d-flex justify-content-between align-items-start gap-2';
+      li.innerHTML =
+        '<div><strong>'+esc(row.label_ar)+'</strong> <span class="badge bg-light text-dark">'+esc(row.platform)+'</span>' +
+        (row.is_visible ? ' <span class="badge text-bg-success">ظاهر</span>' : ' <span class="badge text-bg-secondary">مخفي</span>') +
+        '<div class="small text-break" dir="ltr">'+esc(row.url)+'</div></div>' +
+        '<button type="button" class="btn btn-sm btn-outline-danger" data-gidx="'+idx+'">إزالة</button>';
+      ul.appendChild(li);
+    });
+    ul.querySelectorAll('button[data-gidx]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.groupLinks.splice(Number(btn.getAttribute('data-gidx')), 1);
+        renderGroupLinksList();
+      });
+    });
+  }
+
+  async function loadContactTab() {
+    try {
+      const r = await fetch('/instructors/me/contact_settings', {credentials:'include'});
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.contact) {
+        const c = j.contact;
+        document.getElementById('cpEmailVis').checked = !!c.contact_email_visible;
+        document.getElementById('cpWaPhone').value = c.whatsapp_phone || '';
+        document.getElementById('cpWaPhoneVis').checked = !!c.whatsapp_phone_visible;
+        document.getElementById('cpWaUser').value = c.whatsapp_username ? ('@' + c.whatsapp_username) : '';
+        document.getElementById('cpWaKey').value = c.whatsapp_username_key || '';
+        document.getElementById('cpWaUserVis').checked = !!c.whatsapp_username_visible;
+      }
+    } catch (e) { console.error(e); }
+
+    const empty = document.getElementById('cpGroupLinksEmpty');
+    const wrap = document.getElementById('cpGroupLinksWrap');
+    if (!tgid) {
+      empty.classList.remove('d-none');
+      wrap.classList.add('d-none');
+      return;
+    }
+    empty.classList.add('d-none');
+    wrap.classList.remove('d-none');
+    try {
+      const r = await fetch('/course_pages/instructor/group_links?teaching_group_id=' + encodeURIComponent(tgid), {credentials:'include'});
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        toast(j.message || 'تعذر تحميل روابط المجموعة', false);
+        return;
+      }
+      state.groupLinks = j.links || [];
+      renderGroupLinksList();
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  document.getElementById('btnSaveMyContact')?.addEventListener('click', async () => {
+    const body = {
+      contact_email_visible: document.getElementById('cpEmailVis').checked,
+      whatsapp_phone: document.getElementById('cpWaPhone').value.trim(),
+      whatsapp_phone_visible: document.getElementById('cpWaPhoneVis').checked,
+      whatsapp_username: document.getElementById('cpWaUser').value.trim(),
+      whatsapp_username_key: document.getElementById('cpWaKey').value.trim(),
+      whatsapp_username_visible: document.getElementById('cpWaUserVis').checked
+    };
+    const r = await fetch('/instructors/me/contact_settings', {
+      method:'POST', credentials:'include', headers: csrfHeaders(), body: JSON.stringify(body)
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return toast(j.message || 'فشل حفظ التواصل', false);
+    toast('تم حفظ إعدادات التواصل', true);
+  });
+
+  document.getElementById('btnAddGroupLink')?.addEventListener('click', () => {
+    const platform = document.getElementById('cpLinkPlatform').value;
+    const label_ar = document.getElementById('cpLinkLabel').value.trim();
+    const url = document.getElementById('cpLinkUrl').value.trim();
+    const is_visible = document.getElementById('cpLinkVisible').checked ? 1 : 0;
+    if (!label_ar || !url) return toast('التسمية والرابط مطلوبان', false);
+    state.groupLinks.push({ platform, label_ar, url, is_visible });
+    document.getElementById('cpLinkLabel').value = '';
+    document.getElementById('cpLinkUrl').value = '';
+    renderGroupLinksList();
+  });
+
+  document.getElementById('btnSaveGroupLinks')?.addEventListener('click', async () => {
+    if (!tgid) return toast('لا توجد مجموعة تدريس في الرابط', false);
+    const r = await fetch('/course_pages/instructor/group_links/save', {
+      method:'POST', credentials:'include', headers: csrfHeaders(),
+      body: JSON.stringify({ teaching_group_id: Number(tgid), links: state.groupLinks || [] })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return toast(j.message || 'فشل حفظ الروابط', false);
+    state.groupLinks = j.links || [];
+    renderGroupLinksList();
+    toast('تم حفظ روابط المجموعة', true);
   });
 
   load();

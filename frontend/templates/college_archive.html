@@ -48,9 +48,13 @@
       {% else %}
       <input type="hidden" name="cabinet" value="{{ cabinet }}">
       {% endif %}
-      <div class="col-md-3">
+      <div class="col-md-5">
         <label class="form-label small">الفصل</label>
-        <input class="form-control form-control-sm" name="semester" value="{{ semester }}">
+        {% set typ_id = 'caTermPicker' %}
+        {% set typ_season_id = 'caSeason' %}
+        {% set typ_year_id = 'caYear' %}
+        {% include "partials/term_year_picker.html" %}
+        <input type="hidden" name="semester" id="caSemester" value="{{ semester }}">
       </div>
       <div class="col-md-2">
         <button class="btn btn-primary btn-sm w-100" type="submit">عرض</button>
@@ -205,9 +209,20 @@
       </div>
     </div>
   </div>
-
-  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+  <script src="/static/js/term-year-picker.js"></script>
   <script>
+  (async function () {
+    if (window.TermYearPicker) {
+      try {
+        await window.TermYearPicker.mount({
+          rootId: 'caTermPicker', seasonId: 'caSeason', yearId: 'caYear',
+          hiddenId: 'caSemester',
+          opsLabel: document.getElementById('caSemester')?.value || '',
+          useCurrent: !(document.getElementById('caSemester')?.value || '').trim(),
+        });
+      } catch (e) { console.warn(e); }
+    }
+  })();
   (function () {
     const leadership = [
       { code: 'college_dean', label: 'عميد الكلية' },

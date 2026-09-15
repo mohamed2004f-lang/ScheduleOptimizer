@@ -35,9 +35,13 @@
     <div class="card shadow-sm mb-4">
       <div class="card-body">
         <form class="row g-2 align-items-end" method="get" action="/academic_quality/surveys/completion">
-          <div class="col-sm-4 col-md-3">
-            <label class="form-label small mb-1" for="semesterInput">الفصل</label>
-            <input type="text" class="form-control form-control-sm" id="semesterInput" name="semester" value="{{ semester }}" required>
+          <div class="col-sm-5 col-md-4">
+            <label class="form-label small mb-1">الفصل</label>
+            {% set typ_id = 'scTermPicker' %}
+            {% set typ_season_id = 'scSeason' %}
+            {% set typ_year_id = 'scYear' %}
+            {% include "partials/term_year_picker.html" %}
+            <input type="hidden" id="semesterInput" name="semester" value="{{ semester }}" required>
           </div>
           {% if can_pick_department %}
           <div class="col-sm-5 col-md-4">
@@ -180,5 +184,21 @@
     </div>
     {% endif %}
   </main>
+  <script src="/static/js/term-year-picker.js"></script>
+  <script>
+    (async function () {
+      if (!window.TermYearPicker) return;
+      try {
+        await window.TermYearPicker.mount({
+          rootId: 'scTermPicker',
+          seasonId: 'scSeason',
+          yearId: 'scYear',
+          hiddenId: 'semesterInput',
+          opsLabel: document.getElementById('semesterInput')?.value || '',
+          useCurrent: !(document.getElementById('semesterInput')?.value || '').trim(),
+        });
+      } catch (e) { console.warn(e); }
+    })();
+  </script>
 </body>
 </html>

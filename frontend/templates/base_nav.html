@@ -447,6 +447,11 @@
             <i class="fa-solid fa-folder-open ms-1"></i> مكتبي
           </a>
         </li>
+        <li class="nav-item" id="navInsMyContactWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
+          <a class="nav-link" id="navInsMyContact" href="/my_contact">
+            <i class="fa-solid fa-address-card ms-1"></i> تواصلي
+          </a>
+        </li>
         <li class="nav-item" id="navInsQualityHubWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
           <a class="nav-link" id="navInsQualityHub" href="/academic_quality/instructor/quality-hub">
             <i class="fa-solid fa-shield-halved ms-1"></i> ضمان الجودة
@@ -753,5 +758,5 @@
 </nav>
 
 <script nonce="{{ csp_nonce }}" src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
-<script nonce="{{ csp_nonce }}" src="/static/js/nav-shell.js?v=20260816"></script>
+<script nonce="{{ csp_nonce }}" src="/static/js/nav-shell.js?v=20260914a"></script>
 <script nonce="{{ csp_nonce }}" src="/static/js/nav-auth.js?v=20260912a"></script>

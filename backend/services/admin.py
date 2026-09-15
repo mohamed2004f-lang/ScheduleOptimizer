@@ -26,8 +26,60 @@ def _sync_term_engine_current(conn, name: str, year: str):
 @login_required
 def get_current_term_api():
     """قراءة الفصل الحالي (اسم + سنة) للعرض أو التعيين الافتراضي."""
-    name, year = get_current_term()
-    return jsonify({"status": "ok", "term_name": name, "term_year": year})
+    with get_connection() as conn:
+        name, year = get_current_term(conn=conn)
+        from backend.services.term_engine import parse_ops_term, normalize_academic_year
+
+        parsed = parse_ops_term(name, year)
+        term_year = (parsed or {}).get("academic_year") or normalize_academic_year(year) or year
+        term_name = (parsed or {}).get("term_name_ar") or name
+        label = (parsed or {}).get("ops_label") or f"{(name or '').strip()} {(year or '').strip()}".strip()
+        return jsonify(
+            {
+                "status": "ok",
+                "term_name": term_name,
+                "term_year": term_year,
+                "term_label": label,
+                "ops_label": label,
+                "term_key": (parsed or {}).get("term_key") or "",
+                "season": (parsed or {}).get("season") or "",
+            }
+        )
+
+
+@admin_bp.route("/settings/term_options", methods=["GET"])
+@login_required
+def get_term_options_api():
+    """قوائم الفصل/العام الدراسي للمكوّن الموحّد."""
+    with get_connection() as conn:
+        from backend.services.term_engine import term_picker_payload
+
+        payload = term_picker_payload(conn)
+    return jsonify({"status": "ok", **payload})
+
+
+@admin_bp.route("/settings/parse_term", methods=["POST"])
+@login_required
+def parse_term_api():
+    """تحقق/تطبيع زوج فصل+عام إلى التسمية التشغيلية الموحّدة."""
+    data = request.get_json(force=True) or {}
+    name = (data.get("term_name") or data.get("season") or "").strip()
+    year = (data.get("term_year") or data.get("academic_year") or "").strip()
+    from backend.services.term_engine import parse_ops_term
+
+    parsed = parse_ops_term(name, year)
+    if not parsed:
+        return jsonify({"status": "error", "message": "فصل أو عام دراسي غير صالح"}), 400
+    return jsonify(
+        {
+            "status": "ok",
+            "term_name": parsed["term_name_ar"],
+            "term_year": parsed["academic_year"],
+            "ops_label": parsed["ops_label"],
+            "term_key": parsed["term_key"],
+            "season": parsed["season"],
+        }
+    )
 
 
 @admin_bp.route("/settings/current_term", methods=["POST"])
@@ -41,10 +93,22 @@ def get_current_term_api():
 def set_current_term():
     """حفظ اسم الفصل الحالي وسنة الفصل في system_settings."""
     data = request.get_json(force=True) or {}
-    name = (data.get("term_name") or "").strip()
-    year = (data.get("term_year") or "").strip()
-    if not name:
+    raw_name = (data.get("term_name") or "").strip()
+    raw_year = (data.get("term_year") or "").strip()
+    if not raw_name:
         return jsonify({"status": "error", "message": "term_name مطلوب"}), 400
+    from backend.services.term_engine import parse_ops_term
+
+    parsed = parse_ops_term(raw_name, raw_year)
+    if not parsed:
+        return jsonify(
+            {
+                "status": "error",
+                "message": "اختر فصلاً (خريف/ربيع) وعاماً دراسياً بصيغة 2025/2026 أو 25-26",
+            }
+        ), 400
+    name = parsed["term_name_ar"]
+    year = parsed["academic_year"]
     extra = None
     archived = None
     with get_connection() as conn:
@@ -119,6 +183,8 @@ def set_current_term():
         "term_name": name,
         "term_year": year,
         "term_label": label,
+        "ops_label": label,
+        "season": parsed["season"],
     }
     if extra:
         payload["term_key"] = extra.get("term_key")

@@ -114,7 +114,18 @@
             </div>
             <div class="col-md-3">
               <label class="form-label small mb-0">الفصل (اختياري)</label>
-              <input type="text" id="isdSemester" class="form-control form-control-sm" placeholder="مثال: خريف 44-45">
+              <label class="form-label small mb-0" for="isdSemesterSeason">الفصل (اختياري)</label>
+              <div class="d-flex gap-1">
+                <select id="isdSemesterSeason" class="form-select form-select-sm" style="max-width:6.5rem">
+                  <option value="">—</option>
+                  <option value="خريف">خريف</option>
+                  <option value="ربيع">ربيع</option>
+                </select>
+                <select id="isdSemesterYear" class="form-select form-select-sm" dir="ltr" style="min-width:8rem">
+                  <option value="">العام</option>
+                </select>
+              </div>
+              <input type="hidden" id="isdSemester" value="">
             </div>
             <div class="col-md-3">
               <button type="button" class="btn btn-primary btn-sm" id="btnIsdLoad">عرض الطلاب</button>
@@ -263,6 +274,7 @@
 
   </main>
 
+<script src="/static/js/term-year-picker.js"></script>
 <script>
 /* ---------- Helpers ---------- */
 function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
@@ -1894,6 +1906,23 @@ async function setupInstructorDeptStudentPanel(auth) {
     });
   };
   fillI();
+  const seasonEl = document.getElementById('isdSemesterSeason');
+  const yearEl = document.getElementById('isdSemesterYear');
+  const semHidden = document.getElementById('isdSemester');
+  function syncIsdSemester(){
+    const s = (seasonEl && seasonEl.value) || '';
+    const y = (yearEl && yearEl.value) || '';
+    if (semHidden) semHidden.value = [s, y].filter(Boolean).join(' ').trim();
+  }
+  if (yearEl && window.TermYearPicker) {
+    window.TermYearPicker.fetchOptions().then((j) => {
+      const years = j.academic_years || [];
+      yearEl.innerHTML = '<option value=\"\">العام</option>' +
+        years.map((y) => `<option value=\"${y}\">${y}</option>`).join('');
+    }).catch(() => {});
+  }
+  seasonEl?.addEventListener('change', syncIsdSemester);
+  yearEl?.addEventListener('change', syncIsdSemester);
   if (selD) {
     selD.innerHTML = '<option value=\"\">—</option>';
     try {
@@ -1919,6 +1948,12 @@ async function setupInstructorDeptStudentPanel(auth) {
       const iid = selI && selI.value;
       const did = selD && selD.value;
       const semEl = document.getElementById('isdSemester');
+      if (typeof syncIsdSemester === 'function') syncIsdSemester();
+      else {
+        const s = (document.getElementById('isdSemesterSeason')||{}).value || '';
+        const y = (document.getElementById('isdSemesterYear')||{}).value || '';
+        if (semEl) semEl.value = [s, y].filter(Boolean).join(' ').trim();
+      }
       const sem = semEl && semEl.value.trim();
       const out = document.getElementById('isdOut');
       if (!iid || !did) {

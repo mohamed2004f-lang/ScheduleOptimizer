@@ -44,9 +44,13 @@
         </select>
         {% if scoped_locked %}<input type="hidden" name="department_id" value="{{ department_id }}">{% endif %}
       </div>
-      <div class="col-md-3">
+      <div class="col-md-4">
         <label class="form-label small">الفصل</label>
-        <input class="form-control form-control-sm" name="semester" value="{{ semester }}">
+        {% set typ_id = 'daTermPicker' %}
+        {% set typ_season_id = 'daSeason' %}
+        {% set typ_year_id = 'daYear' %}
+        {% include "partials/term_year_picker.html" %}
+        <input type="hidden" class="form-control form-control-sm" name="semester" id="daSemester" value="{{ semester }}">
       </div>
       <div class="col-md-2">
         <button class="btn btn-primary btn-sm w-100" type="submit">عرض</button>
@@ -248,7 +252,20 @@
     </div>
   </div>
 
+  <script src="/static/js/term-year-picker.js"></script>
   <script>
+  (async function () {
+    if (window.TermYearPicker) {
+      try {
+        await window.TermYearPicker.mount({
+          rootId: 'daTermPicker', seasonId: 'daSeason', yearId: 'daYear',
+          hiddenId: 'daSemester',
+          opsLabel: document.getElementById('daSemester')?.value || '',
+          useCurrent: !(document.getElementById('daSemester')?.value || '').trim(),
+        });
+      } catch (e) { console.warn(e); }
+    }
+  })();
   (function () {
     const deptId = {{ department_id | tojson }};
     const semester = {{ semester | tojson }};

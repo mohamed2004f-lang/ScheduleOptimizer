@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8" />
@@ -24,15 +24,17 @@
       <div class="card-body">
         <div class="row g-2 align-items-end">
           <div class="col-md-3">
-            <label class="form-label">النظام</label>
+            <label class="form-label" id="planCodeLabel">النظام / هدف القسم</label>
             <select id="planCode" class="form-select">
-              <option value="150">150 وحدة</option>
-              <option value="155">155 وحدة</option>
+              <option value="DEPT">هدف تخرج القسم</option>
+              <option value="150">150 وحدة (تراثي ميكانيكا)</option>
+              <option value="155">155 وحدة (تراثي ميكانيكا)</option>
             </select>
+            <div id="planCodeHelp" class="form-text small"></div>
           </div>
           <div class="col-md-3">
             <label class="form-label">الحد الأدنى للوحدات</label>
-            <input id="minUnits" type="number" min="0" class="form-control" value="150">
+            <input id="minUnits" type="number" min="0" class="form-control" value="">
           </div>
           <div class="col-md-2">
             <label class="form-label">فصل السريان</label>
@@ -100,6 +102,29 @@
       return '<span class="badge bg-secondary">مسودة</span>';
     }
 
+    function applyGraduationMeta(grad){
+      const g = grad || {};
+      const legacy = g.legacy_unit_system || {};
+      const sel = document.getElementById('planCode');
+      const help = document.getElementById('planCodeHelp');
+      const minEl = document.getElementById('minUnits');
+      const target = g.graduation_target_units;
+      if (help) help.textContent = g.label_ar || '';
+      if (minEl && target != null && !minEl.value) minEl.value = String(target);
+      if (!sel) return;
+      if (legacy.applicable) {
+        sel.innerHTML =
+          '<option value="155">155 وحدة (نظام جديد)</option>' +
+          '<option value="150">150 وحدة (نظام قديم)</option>';
+        sel.value = '155';
+        if (minEl && !minEl.value) minEl.value = '155';
+      } else {
+        sel.innerHTML = '<option value="DEPT">هدف تخرج القسم' +
+          (target != null ? ' (' + target + ')' : '') + '</option>';
+        sel.value = 'DEPT';
+      }
+    }
+
     async function loadRows(){
       const r = await fetch('/department_policies/head/list', { credentials:'include' });
       const j = await r.json().catch(()=>null);
@@ -110,6 +135,7 @@
         showMsg((j && j.message) ? j.message : 'تعذر تحميل البيانات', 'danger');
         return;
       }
+      applyGraduationMeta(j && j.graduation);
       const items = (j && j.items) || [];
       items.forEach(it=>{
         const canSubmit = (it.status === 'draft' || it.status === 'rejected');

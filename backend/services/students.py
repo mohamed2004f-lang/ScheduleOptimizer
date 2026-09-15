@@ -2216,8 +2216,12 @@ def _bind_imported_students_department(
     sets = ["department_id = COALESCE(department_id, ?)"]
     params: list = [int(dept_id)]
     if prog_id is not None:
-        sets.append("current_program_id = COALESCE(current_program_id, ?)")
-        params.append(int(prog_id))
+        if "admission_program_id" in cols:
+            sets.append("admission_program_id = COALESCE(admission_program_id, ?)")
+            params.append(int(prog_id))
+        if "current_program_id" in cols:
+            sets.append("current_program_id = COALESCE(current_program_id, ?)")
+            params.append(int(prog_id))
     if has_pathway:
         sets.append(
             """pathway_stage = CASE
@@ -2638,6 +2642,51 @@ def add_student():
             join_term=join_term,
             join_year=join_year,
         )
+        # ربط القسم تلقائياً لنطاق المنفّذ (رئيس قسم / نطاق أدمن مفعّل)
+        # بنفس منطق استيراد Excel — دون الكتابة فوق قسم موجود
+        bound_sid = (result or {}).get("student_id") or normalize_sid(sid)
+        if bound_sid:
+            with get_connection() as conn:
+                dept_id, prog_id = _resolve_student_import_department_binding(conn)
+                if dept_id is not None:
+                    _bind_imported_students_department(conn, [bound_sid], dept_id, prog_id)
+                    conn.commit()
+                    result = dict(result or {})
+                    result["department_id"] = int(dept_id)
+                # نظام الوحدات التراثي 150/155 لـ MECH فقط — امسح القيمة لغير الميكانيكا
+                from backend.core.graduation_targets import (
+                    build_graduation_plan_options,
+                    is_legacy_unit_system_code,
+                )
+                opts = build_graduation_plan_options(
+                    conn,
+                    student_id=bound_sid,
+                    actor_username=(session.get("user") or session.get("username") or "").strip() or None,
+                )
+                plan_in = (graduation_plan or "").strip()
+                if not opts.get("legacy_unit_system", {}).get("applicable"):
+                    if is_legacy_unit_system_code(plan_in) or plan_in:
+                        cur = conn.cursor()
+                        cur.execute(
+                            "UPDATE students SET graduation_plan = '' WHERE student_id = ?",
+                            (bound_sid,),
+                        )
+                        conn.commit()
+                        result = dict(result or {})
+                        result["graduation_plan"] = ""
+                elif plan_in and not is_legacy_unit_system_code(plan_in):
+                    cur = conn.cursor()
+                    cur.execute(
+                        "UPDATE students SET graduation_plan = '' WHERE student_id = ?",
+                        (bound_sid,),
+                    )
+                    conn.commit()
+                    result = dict(result or {})
+                    result["graduation_plan"] = ""
+                result = dict(result or {})
+                result["graduation_target_units"] = opts.get("graduation_target_units")
+                result["graduation_plan_label"] = opts.get("label_ar")
+            _invalidate_students_list_cache()
         return jsonify(result), 200
     except AppException:
         # يتم التعامل مع AppException تلقائياً من خلال error handlers
@@ -2705,6 +2754,32 @@ def student_department_options():
             }
         )
     return jsonify({"status": "ok", "items": items}), 200
+
+
+@students_bp.route("/graduation_plan/options", methods=["GET"])
+@login_required
+def graduation_plan_options():
+    """هدف تخرج القسم + خيارات نظام الوحدات التراثي (150/155 لـ MECH فقط)."""
+    from backend.core.graduation_targets import build_graduation_plan_options
+
+    student_id = (request.args.get("student_id") or "").strip()
+    dept_raw = (request.args.get("department_id") or "").strip()
+    dept_id = None
+    if dept_raw:
+        try:
+            dept_id = int(dept_raw)
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "department_id غير صالح"}), 400
+    actor = (session.get("user") or session.get("username") or "").strip()
+    with get_connection() as conn:
+        payload = build_graduation_plan_options(
+            conn,
+            student_id=student_id or None,
+            department_id=dept_id,
+            actor_username=actor or None,
+        )
+    payload["status"] = "ok"
+    return jsonify(payload), 200
 
 
 @students_bp.route("/department/transfer", methods=["POST"])
@@ -5349,32 +5424,45 @@ def students_export_excel():
         students = students_filtered_from_request(request)
         if allowed_student_ids is not None:
             students = [s for s in students if normalize_sid(s.get("student_id")) in allowed_student_ids]
+        from backend.core.graduation_targets import build_graduation_plan_options
+
         rows_out = []
-        for s in students:
-            rows_out.append(
-                {
-                    "الرقم الدراسي": s.get("student_id"),
-                    "اسم الطالب": s.get("student_name") or "",
-                    "فصل الالتحاق": (s.get("join_term") or "").strip(),
-                    "سنة الالتحاق": (s.get("join_year") or "").strip(),
-                    "خطة التخرج": (s.get("graduation_plan") or "").strip(),
-                    "مرحلة المسار": (s.get("pathway_stage") or "").strip(),
-                    "رمز الشعبة": (s.get("track_code") or "").strip(),
-                    "حالة القيد": _enrollment_label_ar(s.get("enrollment_status")),
-                    "فصل وسنة الإجراء": _format_status_action_period(
-                        s.get("status_changed_term"), s.get("status_changed_year")
-                    )
-                    or "—",
-                    "ملاحظة القيد": (s.get("status_reason") or "").strip(),
-                    "تاريخ آخر تغيير للحالة": (s.get("status_changed_at") or "") or "—",
-                }
-            )
+        with get_connection() as conn:
+            for s in students:
+                opts = build_graduation_plan_options(
+                    conn,
+                    student_id=s.get("student_id"),
+                    department_id=s.get("department_id"),
+                    current_legacy_plan=(s.get("graduation_plan") or "").strip(),
+                )
+                rows_out.append(
+                    {
+                        "الرقم الدراسي": s.get("student_id"),
+                        "اسم الطالب": s.get("student_name") or "",
+                        "فصل الالتحاق": (s.get("join_term") or "").strip(),
+                        "سنة الالتحاق": (s.get("join_year") or "").strip(),
+                        "خطة التخرج (تراثي)": (s.get("graduation_plan") or "").strip(),
+                        "هدف وحدات القسم": opts.get("graduation_target_units")
+                        if opts.get("graduation_target_units") is not None
+                        else "",
+                        "مرحلة المسار": (s.get("pathway_stage") or "").strip(),
+                        "رمز الشعبة": (s.get("track_code") or "").strip(),
+                        "حالة القيد": _enrollment_label_ar(s.get("enrollment_status")),
+                        "فصل وسنة الإجراء": _format_status_action_period(
+                            s.get("status_changed_term"), s.get("status_changed_year")
+                        )
+                        or "—",
+                        "ملاحظة القيد": (s.get("status_reason") or "").strip(),
+                        "تاريخ آخر تغيير للحالة": (s.get("status_changed_at") or "") or "—",
+                    }
+                )
         _cols = [
             "الرقم الدراسي",
             "اسم الطالب",
             "فصل الالتحاق",
             "سنة الالتحاق",
-            "خطة التخرج",
+            "خطة التخرج (تراثي)",
+            "هدف وحدات القسم",
             "مرحلة المسار",
             "رمز الشعبة",
             "حالة القيد",

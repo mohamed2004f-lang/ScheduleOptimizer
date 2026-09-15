@@ -29,7 +29,7 @@
   // التحقق من حالة تسجيل الدخول وتطبيق الشريط — DOMContentLoaded (وليس load) لتجنب وميض القائمة
   async function runNavAuthCheck() {
     const INSTRUCTOR_FLAT_WRAP_IDS = [
-      'navInsLibraryWrap', 'navInsQualityHubWrap', 'navInsIloCatalogWrap', 'navInstructorRowBreak',
+      'navInsLibraryWrap', 'navInsMyContactWrap', 'navInsQualityHubWrap', 'navInsIloCatalogWrap', 'navInstructorRowBreak',
       'navInsMyScheduleWrap', 'navInsMyExamsWrap', 'navInsMyAttendanceWrap',
       'navInsScheduleWrap', 'navInsCalendarWrap', 'navInsMidtermsWrap', 'navInsFinalsWrap',
       'navInsAttendanceWrap', 'navInsSupervisorWrap', 'navInsQualityAssistantWrap', 'navInsStudentLoWrap',
@@ -91,7 +91,7 @@
       });
       const showIds = [
         'navMyCoursesWrap', 'navInstructorGradeDraftsWrap',
-        'navInsLibraryWrap', 'navInsQualityHubWrap', 'navInsIloCatalogWrap', 'navInstructorRowBreak',
+        'navInsLibraryWrap', 'navInsMyContactWrap', 'navInsQualityHubWrap', 'navInsIloCatalogWrap', 'navInstructorRowBreak',
         'navInsMyScheduleWrap', 'navInsMyExamsWrap', 'navInsMyAttendanceWrap',
         'navInsScheduleWrap', 'navInsCalendarWrap', 'navInsMidtermsWrap', 'navInsFinalsWrap',
         'navInsAttendanceWrap', 'navArchivesMenuWrap',
@@ -763,7 +763,7 @@
       if (wrapInsGd) wrapInsGd.style.display = useInstructorMore ? '' : 'none';
       if (wrapInsMore) { wrapInsMore.style.display = 'none'; wrapInsMore.classList.add('d-none'); }
       const instructorAlwaysFlat = [
-        'navInsLibraryWrap', 'navInsQualityHubWrap', 'navInsIloCatalogWrap', 'navInstructorRowBreak',
+        'navInsLibraryWrap', 'navInsMyContactWrap', 'navInsQualityHubWrap', 'navInsIloCatalogWrap', 'navInstructorRowBreak',
         'navInsMyScheduleWrap', 'navInsMyExamsWrap', 'navInsMyAttendanceWrap',
         'navInsScheduleWrap', 'navInsCalendarWrap', 'navInsMidtermsWrap', 'navInsFinalsWrap',
         'navInsAttendanceWrap',
@@ -903,7 +903,7 @@
         [
           'navInsMySchedule', 'navInsMyExams', 'navInsMyAttendance',
           'navInsSupervisor', 'navInsQualityHub', 'navInsQualityAssistant', 'navInsIloCatalog', 'navInsStudentLo',
-          'navInsLibrary', 'navInsSchedule', 'navInsCalendar', 'navInsMidterms', 'navInsFinals', 'navInsAttendance',
+          'navInsLibrary', 'navInsMyContact', 'navInsSchedule', 'navInsCalendar', 'navInsMidterms', 'navInsFinals', 'navInsAttendance',
         ].forEach(id => {
           const el = document.getElementById(id);
           if (el) el.style.display = 'none';
@@ -1665,6 +1665,7 @@
         ['/my_exams','navInsMyExams'],
         ['/my_attendance','navInsMyAttendance'],
         ['/instructor_library','navInsLibrary'],
+        ['/my_contact','navInsMyContact'],
         ['/schedule_form','navInsSchedule'],
         ['/academic_calendar_page','navInsCalendar'],
         ['/exams/midterms','navInsMidterms'],

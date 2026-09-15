@@ -42,7 +42,8 @@ def test_normalize_year_and_ops_label():
     assert normalize_academic_year("44-45") == "2044/2045"
     parsed = parse_ops_term("خريف", "25-26")
     assert parsed["term_key"] == "fall:2025/2026"
-    assert parsed["ops_label"] == "خريف 25-26"
+    assert parsed["ops_label"] == "خريف 2025/2026"
+    assert parsed["ops_year_label"] == "2025/2026"
     assert canonical_term_key("fall", "2025/2026") == "fall:2025/2026"
 
 
@@ -51,7 +52,7 @@ def test_sync_current_term_sets_is_current(db_conn):
     row = sync_current_term_from_settings(db_conn, term_name="خريف", term_year="44-45")
     assert row["term_key"] == "fall:2044/2045"
     assert int(row["is_current"]) == 1
-    assert row["ops_label"] == "خريف 44-45"
+    assert row["ops_label"] == "خريف 2044/2045"
     other = upsert_term_master(
         db_conn,
         season="spring",

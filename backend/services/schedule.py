@@ -3717,6 +3717,10 @@ def student_timetable():
 
         _sync_schedule_pk_col(conn)
         cur = conn.cursor()
+        reg_cols = set(fetch_table_columns(conn, "registrations") or [])
+        sch_cols = set(fetch_table_columns(conn, "schedule") or [])
+        tg_reg = "r.teaching_group_id" if "teaching_group_id" in reg_cols else "NULL"
+        tg_sch = "s.teaching_group_id" if "teaching_group_id" in sch_cols else "NULL"
         q = f"""
         SELECT s.{SCHEDULE_PK_COL} AS section_id,
                s.course_name,
@@ -3724,24 +3728,43 @@ def student_timetable():
                s.time,
                s.room,
                s.instructor,
-               s.semester
+               s.semester,
+               COALESCE({tg_reg}, {tg_sch}) AS teaching_group_id
         FROM schedule s
         JOIN registrations r ON LOWER(TRIM(r.course_name)) = LOWER(TRIM(s.course_name))
         WHERE r.student_id = ?
         ORDER BY s.day, s.time, s.course_name
         """
         rows = cur.execute(q, (sid,)).fetchall()
+        from backend.core.instructor_contact_policy import course_has_visible_contact
+        from urllib.parse import urlencode
+
         out = []
         for r in rows:
+            tgid = r[7] if len(r) > 7 else None
+            try:
+                tgid_i = int(tgid) if tgid not in (None, "") else None
+            except (TypeError, ValueError):
+                tgid_i = None
+            cn = r[1]
+            contact_available = course_has_visible_contact(
+                conn, course_name=cn or "", teaching_group_id=tgid_i
+            )
+            page_url = "/my_course_page?" + urlencode(
+                {"course_name": cn or "", "teaching_group_id": tgid_i or ""}
+            )
             out.append(
                 {
                     "section_id": r[0],
-                    "course_name": r[1],
+                    "course_name": cn,
                     "day": r[2],
                     "time": r[3],
                     "room": r[4],
                     "instructor": r[5],
                     "semester": r[6],
+                    "teaching_group_id": tgid_i,
+                    "contact_available": contact_available,
+                    "course_page_url": page_url,
                 }
             )
     return jsonify({"rows": out, "published": True})

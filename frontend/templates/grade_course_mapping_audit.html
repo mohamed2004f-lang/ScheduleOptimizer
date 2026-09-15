@@ -25,9 +25,13 @@
     <div class="card mb-3">
       <div class="card-body">
         <div class="row g-2 align-items-end">
-          <div class="col-md-3">
+          <div class="col-md-5">
             <label class="form-label small">الفصل (اختياري)</label>
-            <input id="qSemester" class="form-control form-control-sm" placeholder="مثال: خريف 2025">
+            {% set typ_id = 'gcmTermPicker' %}
+            {% set typ_season_id = 'gcmSeason' %}
+            {% set typ_year_id = 'gcmYear' %}
+            {% include "partials/term_year_picker.html" %}
+            <input type="hidden" id="qSemester" value="">
           </div>
           <div class="col-md-3">
             <label class="form-label small">رقم الطالب (اختياري)</label>
@@ -72,6 +76,7 @@
     </div>
   </main>
 
+  <script src="/static/js/term-year-picker.js"></script>
   <script>
     async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok,status:r.status,json:j}; }
     function esc(s){ return (s==null?'':String(s)).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'); }
@@ -178,7 +183,18 @@
     }
 
     document.getElementById('btnLoad').addEventListener('click', loadIssues);
-    loadCourses().then(loadIssues);
+    (async function initGcm(){
+      if (window.TermYearPicker) {
+        try {
+          await window.TermYearPicker.mount({
+            rootId: 'gcmTermPicker', seasonId: 'gcmSeason', yearId: 'gcmYear',
+            hiddenId: 'qSemester', allowEmpty: true,
+          });
+        } catch (e) { console.warn(e); }
+      }
+      await loadCourses();
+      await loadIssues();
+    })();
   </script>
 </body>
 </html>

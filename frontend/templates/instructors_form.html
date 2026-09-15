@@ -6,6 +6,10 @@
   <title>أعضاء هيئة التدريس</title>
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    .inst-dept-cell { min-width: 11rem; max-width: 18rem; }
+    .inst-dept-cell .badge { font-weight: 600; }
+  </style>
 </head>
 <body>
   {% include "base_nav.html" %}
@@ -65,6 +69,35 @@
               </label>
             </div>
           </div>
+          <div class="col-12">
+            <div class="border rounded p-3 bg-light-subtle" id="inst-contact-card">
+              <h2 class="h6 mb-1">تواصل يظهر للطلبة (اختياري)</h2>
+              <p class="small text-muted mb-2">
+                رئيس القسم يضبط <strong>ظهور الإيميل فقط</strong>. ظهور واتساب/`@` يفعّله الأستاذ من
+                <strong>تواصلي</strong>. يمكن تعبئة الرقم/الاسم هنا دون إظهارهما للطالب حتى يفعّلهما الأستاذ.
+              </p>
+              <div class="row g-2">
+                <div class="col-md-4">
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="inst-contact-email-vis">
+                    <label class="form-check-label" for="inst-contact-email-vis">إظهار البريد الإلكتروني</label>
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label small mb-0" for="inst-wa-phone">رقم واتساب</label>
+                  <input type="text" id="inst-wa-phone" class="form-control form-control-sm" placeholder="9647xxxxxxxx" dir="ltr" autocomplete="off">
+                  <div class="small text-muted mt-1" id="inst-wa-phone-vis-status">ظهور الرقم: يحدده الأستاذ</div>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label small mb-0" for="inst-wa-user">اسم مستخدم واتساب</label>
+                  <input type="text" id="inst-wa-user" name="wa_public_handle" class="form-control form-control-sm" placeholder="@handle" dir="ltr" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other">
+                  <label class="form-label small mb-0 mt-1" for="inst-wa-key">مفتاح Username Key (اختياري)</label>
+                  <input type="text" id="inst-wa-key" name="wa_public_key" class="form-control form-control-sm" dir="ltr" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other">
+                  <div class="small text-muted mt-1" id="inst-wa-user-vis-status">ظهور الاسم: يحدده الأستاذ</div>
+                </div>
+              </div>
+            </div>
+          </div>
           <div class="col-12 d-flex gap-2">
             <button type="submit" class="btn btn-primary">حفظ</button>
             <button type="button" id="btn-reset" class="btn btn-outline-secondary">تفريغ الحقول</button>
@@ -122,7 +155,7 @@
                 <th>الاسم</th>
                 <th>النوع</th>
                 <th>البريد الإلكتروني</th>
-                <th>القسم</th>
+                <th>القسم الرئيسي</th>
                 <th>الحالة</th>
                 <th style="width:15%;">إجراءات</th>
               </tr>
@@ -288,6 +321,40 @@
       }
     }
 
+    async function fetchActiveDepartmentOptions() {
+      // متاح لرئيس القسم — بخلاف /college/catalog/departments المحصور على الإدارة.
+      const resp = await fetch("/instructors/department/options", {
+        headers: { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" },
+      });
+      if (!resp.ok) {
+        const err = new Error("department_options_failed");
+        err.status = resp.status;
+        throw err;
+      }
+      const data = await resp.json();
+      return (data && data.items) || [];
+    }
+
+    function deptOptionLabel(d) {
+      return (
+        (d.name_ar && String(d.name_ar).trim()) ||
+        (d.label && String(d.label).trim()) ||
+        (d.code && String(d.code).trim()) ||
+        String(d.id)
+      );
+    }
+
+    function fillSelectWithDepartments(sel, items, emptyLabel) {
+      if (!sel) return;
+      sel.innerHTML = `<option value="">${emptyLabel || "— اختر قسم —"}</option>`;
+      (items || []).forEach((d) => {
+        const opt = document.createElement("option");
+        opt.value = String(d.id);
+        opt.textContent = deptOptionLabel(d);
+        sel.appendChild(opt);
+      });
+    }
+
     async function maybeLoadDepartmentCatalog(authJson) {
       const wrap = document.getElementById("inst-dept-wrap");
       const sel = document.getElementById("inst-dept");
@@ -300,28 +367,8 @@
       }
       wrap.classList.remove("d-none");
       try {
-        const resp = await fetch("/college/catalog/departments", {
-          headers: { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" },
-        });
-        if (!resp.ok) {
-          wrap.classList.remove("d-none");
-          sel.innerHTML = '<option value="">— تعذر تحميل الأقسام —</option>';
-          const hint = document.getElementById("inst-dept-hint");
-          if (hint) hint.textContent = "تعذر جلب قائمة الأقسام؛ أعد تحميل الصفحة أو راجع الصلاحيات.";
-          syncDeptRequiredMarker();
-          return;
-        }
-        const data = await resp.json();
-        const items = (data && data.items) || [];
-        sel.innerHTML = '<option value="">— اختر القسم —</option>';
-        items.forEach((d) => {
-          const id = d.id;
-          const label = (d.name_ar || d.code || "").trim() || String(id);
-          const opt = document.createElement("option");
-          opt.value = String(id);
-          opt.textContent = label;
-          sel.appendChild(opt);
-        });
+        const items = await fetchActiveDepartmentOptions();
+        fillSelectWithDepartments(sel, items, "— اختر القسم —");
         const scoped = authJson && authJson.admin_department_scope;
         if (scoped && scoped.id != null) {
           const sid = String(scoped.id);
@@ -332,7 +379,9 @@
       } catch (e) {
         console.error(e);
         wrap.classList.remove("d-none");
-        sel.innerHTML = '<option value="">— خطأ في التحميل —</option>';
+        sel.innerHTML = '<option value="">— تعذر تحميل الأقسام —</option>';
+        const hint = document.getElementById("inst-dept-hint");
+        if (hint) hint.textContent = "تعذر جلب قائمة الأقسام؛ أعد تحميل الصفحة أو راجع الصلاحيات.";
         syncDeptRequiredMarker();
       }
     }
@@ -341,20 +390,11 @@
       const pick = document.getElementById("extra-dept-pick");
       if (!pick) return;
       try {
-        const resp = await fetch("/college/catalog/departments", {
-          headers: { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" },
-        });
-        if (!resp.ok) return;
-        const data = await resp.json();
-        pick.innerHTML = '<option value="">— اختر قسم —</option>';
-        (data.items || []).forEach((d) => {
-          const opt = document.createElement("option");
-          opt.value = String(d.id);
-          opt.textContent = (d.name_ar || d.code || "").trim() || String(d.id);
-          pick.appendChild(opt);
-        });
+        const items = await fetchActiveDepartmentOptions();
+        fillSelectWithDepartments(pick, items, "— اختر قسم —");
       } catch (e) {
         console.error(e);
+        pick.innerHTML = '<option value="">— تعذر تحميل الأقسام —</option>';
       }
     }
 
@@ -362,21 +402,37 @@
       const pick = document.getElementById("mcdDeptPick");
       if (!pick) return;
       try {
-        const resp = await fetch("/college/catalog/departments", {
-          headers: { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" },
-        });
-        if (!resp.ok) return;
-        const data = await resp.json();
-        pick.innerHTML = '<option value="">— اختر قسم —</option>';
-        (data.items || []).forEach((d) => {
-          const opt = document.createElement("option");
-          opt.value = String(d.id);
-          opt.textContent = (d.name_ar || d.code || "").trim() || String(d.id);
-          pick.appendChild(opt);
-        });
+        const items = await fetchActiveDepartmentOptions();
+        fillSelectWithDepartments(pick, items, "— اختر قسم —");
+        if (!items.length) {
+          uiToast("لا توجد أقسام نشطة متاحة للإضافة.", "warning");
+        }
       } catch (e) {
         console.error(e);
+        pick.innerHTML = '<option value="">— تعذر تحميل الأقسام —</option>';
+        uiToast("تعذر تحميل قائمة الأقسام لرئيس القسم/المدير. أعد المحاولة.", "danger");
       }
+    }
+
+    function coopAssignmentsFromApi(assignments, primaryDeptId) {
+      const seen = new Set();
+      const rows = [];
+      (assignments || []).forEach((a) => {
+        if (a && (a.is_active === false || a.is_active === 0)) return;
+        if (a && (a.is_primary === true || a.is_primary === 1)) return;
+        const did = parseInt(a.department_id, 10);
+        if (Number.isNaN(did) || seen.has(did)) return;
+        if (primaryDeptId !== null && did === primaryDeptId) return;
+        seen.add(did);
+        rows.push({
+          department_id: did,
+          label:
+            (a.department_name_ar && String(a.department_name_ar).trim()) ||
+            (a.department_code && String(a.department_code).trim()) ||
+            String(a.department_id),
+        });
+      });
+      return rows;
     }
 
     async function syncExtraDeptAssignCard(authJson) {
@@ -464,16 +520,8 @@
         const r = await fetch(`/instructors/${inst.id}/department_assignments`);
         if (r.ok) {
           const data = await r.json();
-          const rows = (data.assignments || []).filter((a) => a.migration_source === "user_ui");
-          MCD_STATE.rows = rows
-            .map((a) => ({
-              department_id: parseInt(a.department_id, 10),
-              label:
-                (a.department_name_ar && String(a.department_name_ar).trim()) ||
-                (a.department_code && String(a.department_code).trim()) ||
-                String(a.department_id),
-            }))
-            .filter((a) => !Number.isNaN(a.department_id));
+          // كل المصادر النشطة (user_ui / schedule / …) — ما يظهر في القائمة يجب أن يُحرَّر هنا
+          MCD_STATE.rows = coopAssignmentsFromApi(data.assignments || [], MCD_STATE.primaryDeptId);
         }
       } catch (e) {
         console.error(e);
@@ -499,27 +547,22 @@
       return Number.isNaN(id) ? null : id;
     }
 
-    async function loadExtraAssignmentsForEdit(instId) {
+    async function loadExtraAssignmentsForEdit(instId, primaryDeptIdHint) {
       EXTRA_DEPT_ROWS = [];
       try {
         const r = await fetch(`/instructors/${instId}/department_assignments`);
         if (!r.ok) return;
         const data = await r.json();
-        const rows = (data.assignments || []).filter((a) => a.migration_source === "user_ui");
-        rows.forEach((a) => {
-          const label =
-            (a.department_name_ar && String(a.department_name_ar).trim()) ||
-            (a.department_code && String(a.department_code).trim()) ||
-            String(a.department_id);
-          EXTRA_DEPT_ROWS.push({
-            department_id: a.department_id,
-            label,
-          });
-        });
-        renderExtraDeptList();
+        let primaryId = getPrimaryDepartmentId();
+        if (primaryId === null && primaryDeptIdHint != null && String(primaryDeptIdHint).trim()) {
+          const parsed = parseInt(primaryDeptIdHint, 10);
+          if (!Number.isNaN(parsed)) primaryId = parsed;
+        }
+        EXTRA_DEPT_ROWS = coopAssignmentsFromApi(data.assignments || [], primaryId);
       } catch (e) {
         console.error(e);
       }
+      renderExtraDeptList();
     }
 
     async function loadInstructors() {
@@ -552,31 +595,45 @@
             (inst.department_name_ar && String(inst.department_name_ar).trim()) ||
             (inst.department_code && String(inst.department_code).trim()) ||
             "—";
-          let extraLn = "";
-          let primaryBadge = "";
           const isCollaborator = inst.relation_to_scope === "collaborator";
+          const coopParts = Array.isArray(inst.departments)
+            ? inst.departments
+                .filter((d) => String(d.department_id || "") !== String(inst.department_id || ""))
+                .map((d) =>
+                  (d.department_name_ar || d.department_code || d.department_id || "").toString().trim()
+                )
+                .filter(Boolean)
+            : [];
+          // تنظيم حسب الدور: الاسم = معلومة، شارة قصيرة = الدور، بلا تكرار مع عمود النوع
+          let deptCellHtml = "";
           if (deptLabel && deptLabel !== "—") {
-            primaryBadge = isCollaborator
-              ? '<div class="small mt-1"><span class="badge text-bg-secondary">متعاون — قسمه المنزلي</span></div>'
-              : '<div class="small mt-1"><span class="badge text-bg-primary">قسم رئيسي</span></div>';
+            const roleBadge = isCollaborator
+              ? '<span class="badge rounded-pill bg-secondary-subtle text-secondary border">قسمه الرئيسي</span>'
+              : '<span class="badge rounded-pill text-bg-primary">رئيسي</span>';
+            deptCellHtml =
+              '<div class="fw-semibold">' +
+              escapeHtml(deptLabel) +
+              "</div>" +
+              '<div class="mt-1">' +
+              roleBadge +
+              "</div>";
+          } else {
+            deptCellHtml = '<span class="text-muted">—</span>';
           }
-          if (Array.isArray(inst.departments) && inst.departments.length) {
-            const parts = inst.departments
-              .filter((d) => String(d.department_id || "") !== String(inst.department_id || ""))
-              .map((d) =>
-                (d.department_name_ar || d.department_code || d.department_id || "").toString()
-              );
-            const coopBadges = parts
-              .filter(Boolean)
-              .map((p) => `<span class="badge text-bg-secondary me-1">${escapeHtml(p)}</span>`)
+          if (coopParts.length) {
+            const coopBadges = coopParts
+              .map(
+                (p) =>
+                  '<span class="badge rounded-pill text-bg-light border text-dark">' +
+                  escapeHtml(p) +
+                  "</span>"
+              )
               .join("");
-            if (coopBadges) {
-              extraLn =
-                '<div class="small text-muted mt-1">' +
-                '<span class="me-1">أقسام متعاونة:</span>' +
-                coopBadges +
-                "</div>";
-            }
+            deptCellHtml +=
+              '<div class="d-flex flex-wrap gap-1 mt-1 align-items-center">' +
+              '<span class="small text-muted">متعاون مع</span>' +
+              coopBadges +
+              "</div>";
           }
           const canManage = inst.can_manage_identity !== false;
           const canUnlink = !!inst.can_unlink_from_scope;
@@ -605,7 +662,7 @@
             <td>${escapeHtml(inst.name || "")}</td>
             <td>${escapeHtml(typeText)}</td>
             <td>${escapeHtml(inst.email || "")}</td>
-            <td>${escapeHtml(deptLabel)}${primaryBadge}${extraLn}</td>
+            <td class="inst-dept-cell">${deptCellHtml}</td>
             <td>${inst.is_active ? "نشط" : "موقوف"}</td>
             <td>${actionsHtml}</td>
           `;
@@ -628,6 +685,76 @@
       }
     }
 
+    function resetContactFields() {
+      const emailVis = document.getElementById("inst-contact-email-vis");
+      const phone = document.getElementById("inst-wa-phone");
+      const user = document.getElementById("inst-wa-user");
+      const key = document.getElementById("inst-wa-key");
+      if (emailVis) emailVis.checked = false;
+      if (phone) phone.value = "";
+      if (user) user.value = "";
+      if (key) key.value = "";
+      const phoneSt = document.getElementById("inst-wa-phone-vis-status");
+      const userSt = document.getElementById("inst-wa-user-vis-status");
+      if (phoneSt) phoneSt.textContent = "ظهور الرقم: يحدده الأستاذ";
+      if (userSt) userSt.textContent = "ظهور الاسم: يحدده الأستاذ";
+    }
+
+    function applyContactFields(c) {
+      resetContactFields();
+      if (!c) return;
+      const emailVis = document.getElementById("inst-contact-email-vis");
+      const phone = document.getElementById("inst-wa-phone");
+      const user = document.getElementById("inst-wa-user");
+      const key = document.getElementById("inst-wa-key");
+      if (emailVis) emailVis.checked = !!c.contact_email_visible;
+      if (phone) phone.value = c.whatsapp_phone || "";
+      if (user) user.value = c.whatsapp_username ? "@" + c.whatsapp_username : "";
+      if (key) key.value = c.whatsapp_username_key || "";
+      const phoneSt = document.getElementById("inst-wa-phone-vis-status");
+      const userSt = document.getElementById("inst-wa-user-vis-status");
+      if (phoneSt) {
+        phoneSt.textContent = c.whatsapp_phone_visible
+          ? "ظهور الرقم: مفعّل من الأستاذ"
+          : "ظهور الرقم: مخفي (يحدده الأستاذ)";
+      }
+      if (userSt) {
+        userSt.textContent = c.whatsapp_username_visible
+          ? "ظهور الاسم: مفعّل من الأستاذ"
+          : "ظهور الاسم: مخفي (يحدده الأستاذ)";
+      }
+    }
+
+    function contactPayloadFromForm() {
+      return {
+        contact_email_visible: !!(document.getElementById("inst-contact-email-vis") || {}).checked,
+        whatsapp_phone: ((document.getElementById("inst-wa-phone") || {}).value || "").trim(),
+        whatsapp_username: ((document.getElementById("inst-wa-user") || {}).value || "").trim(),
+        whatsapp_username_key: ((document.getElementById("inst-wa-key") || {}).value || "").trim(),
+      };
+    }
+
+    async function loadContactForEdit(instId) {
+      if (!instId) {
+        resetContactFields();
+        return;
+      }
+      try {
+        const r = await fetch(`/instructors/${instId}/contact_settings`, {
+          headers: { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" },
+        });
+        if (!r.ok) {
+          resetContactFields();
+          return;
+        }
+        const data = await r.json();
+        applyContactFields(data.contact || {});
+      } catch (e) {
+        console.error(e);
+        resetContactFields();
+      }
+    }
+
     function resetForm() {
       document.getElementById("inst-id").value = "";
       document.getElementById("inst-name").value = "";
@@ -641,6 +768,7 @@
       EXTRA_DEPT_ROWS = [];
       renderExtraDeptList();
       syncExternalScopeField();
+      resetContactFields();
     }
 
     document.getElementById("btn-reset").addEventListener("click", () => {
@@ -670,7 +798,7 @@
         return;
       }
 
-      const payload = { id, name, type, email, is_active };
+      const payload = { id, name, type, email, is_active, ...contactPayloadFromForm() };
       if (type === "external") {
         payload.external_scope = external_scope;
       }
@@ -733,7 +861,8 @@
         if (deptSel && deptWrap && !deptWrap.classList.contains("d-none")) {
           deptSel.value = tr.dataset.departmentId || "";
         }
-        loadExtraAssignmentsForEdit(id);
+        loadExtraAssignmentsForEdit(id, tr.dataset.departmentId || "");
+        loadContactForEdit(id);
         window.scrollTo({ top: 0, behavior: "smooth" });
       } else if (action === "manage-depts") {
         await openManageCoopModalForInstructor({
@@ -762,7 +891,7 @@
           uiToast("حدث خطأ غير متوقع أثناء الحذف", "danger");
         }
       } else if (action === "unlink") {
-        if (!confirm("فك ربط هذا المتعاون من قسمك؟ لن يُحذف سجله من قسمه المنزلي.")) return;
+        if (!confirm("فك ربط هذا المتعاون من قسمك؟ لن يُحذف سجله من قسمه الرئيسي.")) return;
         try {
           const resp = await fetch(`/instructors/${encodeURIComponent(id)}/unlink_department`, {
             method: "POST",
@@ -835,9 +964,13 @@
         })),
       };
       try {
+        const headers =
+          typeof jsonApiHeaders === "function"
+            ? jsonApiHeaders({ "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" })
+            : { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" };
         const r = await fetch(`/instructors/${MCD_STATE.instructorId}/department_assignments/save`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers,
           body: JSON.stringify(payload),
         });
         const data = await r.json().catch(() => ({}));
@@ -845,7 +978,24 @@
           uiToast(data.message || "فشل حفظ الأقسام المتعاونة", "danger");
           return;
         }
-        uiToast("تم حفظ الأقسام المتعاونة", "success");
+        const n = Array.isArray(data.assignments)
+          ? data.assignments.filter((a) => {
+              try {
+                return (
+                  MCD_STATE.primaryDeptId === null ||
+                  parseInt(a.department_id, 10) !== MCD_STATE.primaryDeptId
+                );
+              } catch (e) {
+                return true;
+              }
+            }).length
+          : MCD_STATE.rows.length;
+        uiToast(
+          n > 0
+            ? `تم حفظ الأقسام المتعاونة (${n})`
+            : "تم حفظ الأقسام المتعاونة (بدون أقسام إضافية)",
+          "success"
+        );
         hideManageModalElement();
         await loadInstructors();
       } catch (e) {

@@ -2275,16 +2275,28 @@ def migrate_registrations_to_transcript():
     if not student_id:
         return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
     with get_connection() as conn:
-        # إذا لم يُمرّر الفصل أو السنة، نستخدم الفصل الحالي من الإعدادات
-        if not semester or not year:
-            def_term_name, def_term_year = get_current_term(conn=conn)
+        from backend.services.term_engine import parse_ops_term
+
+        def_term_name, def_term_year = get_current_term(conn=conn)
+        role = _session_role()
+        # غير الأدمن الرئيسي: الترحيل دائماً إلى الفصل الجاري فقط
+        if role != "admin_main":
+            semester = def_term_name
+            year = def_term_year
+        elif not semester or not year:
             if not semester:
                 semester = def_term_name
             if not year:
                 year = def_term_year
-        semester_label = f"{semester} {year}".strip()
-        if not semester_label:
-            return jsonify({"status": "error", "message": "الفصل والسنة مطلوبان (أدخلهما أو اضبط الفصل الحالي في الصفحة)"}), 400
+        parsed = parse_ops_term(semester, year)
+        if not parsed:
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "فصل أو عام دراسي غير صالح — استخدم خريف/ربيع و 2025/2026",
+                }
+            ), 400
+        semester_label = parsed["ops_label"]
         cur = conn.cursor()
         # registrations table schema may vary across installs. Try to select course_code/units
         # if present; otherwise select only course_name and look up code/units from `courses`.
@@ -2609,10 +2621,29 @@ def _load_transcript_data(student_id: str):
     transcript = _reorder_transcript_dict(transcript)
     ordered_semesters = list(transcript.keys())
 
+    graduation_target_units = None
+    graduation_plan_label = ""
+    try:
+        from backend.core.graduation_targets import build_graduation_plan_options
+
+        with get_connection() as conn:
+            opts = build_graduation_plan_options(
+                conn,
+                student_id=student_id,
+                current_legacy_plan=graduation_plan,
+            )
+            graduation_target_units = opts.get("graduation_target_units")
+            graduation_plan_label = (opts.get("label_ar") or "").strip()
+    except Exception:
+        graduation_target_units = None
+        graduation_plan_label = ""
+
     return {
         "student_id": student_id,
         "student_name": student_name,
         "graduation_plan": graduation_plan,
+        "graduation_target_units": graduation_target_units,
+        "graduation_plan_label": graduation_plan_label,
         "join_term": join_term,
         "join_year": join_year,
         "transcript": transcript,
@@ -3414,18 +3445,34 @@ def course_mapping_fix():
 
 
 @grades_bp.route("/rename_semester", methods=["POST"])
-@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+@role_required("admin_main")
 def rename_semester():
     """
-    تعديل اسم فصل (مثلاً من \"خريف 24-25\" إلى \"خريف 25-26\").
-    التعديل يؤثر على جميع الدرجات في جدول grades (و grade_audit) التي تحمل هذا الاسم.
-    مخصص للأدمن فقط.
+    تعديل اسم فصل في كشف الدرجات — للأدمن الرئيسي فقط.
+    الاسم الجديد يُطبَّع إلى خريف/ربيع + YYYY/YYYY+1.
     """
     data = request.get_json(force=True) or {}
     old_sem = (data.get("old_semester") or "").strip()
     new_sem = (data.get("new_semester") or "").strip()
-    if not old_sem or not new_sem:
-        return jsonify({"status": "error", "message": "old_semester و new_semester مطلوبة"}), 400
+    term_name = (data.get("term_name") or "").strip()
+    term_year = (data.get("term_year") or "").strip()
+    if not old_sem:
+        return jsonify({"status": "error", "message": "old_semester مطلوب"}), 400
+    from backend.services.term_engine import parse_ops_term
+
+    if term_name or term_year:
+        parsed = parse_ops_term(term_name or new_sem.split()[0] if new_sem else term_name, term_year or (new_sem.split()[-1] if new_sem else ""))
+    else:
+        parts = new_sem.split(None, 1)
+        parsed = parse_ops_term(parts[0], parts[1]) if len(parts) == 2 else parse_ops_term(new_sem, "")
+    if not parsed:
+        return jsonify(
+            {
+                "status": "error",
+                "message": "الفصل الجديد غير صالح — اختر خريف/ربيع وعاماً بصيغة 2025/2026",
+            }
+        ), 400
+    new_sem = parsed["ops_label"]
     if old_sem == new_sem:
         return jsonify({"status": "error", "message": "لا يوجد تغيير في اسم الفصل"}), 400
 

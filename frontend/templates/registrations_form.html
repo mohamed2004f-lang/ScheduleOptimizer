@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8"/>
@@ -71,22 +71,34 @@ const WITHDRAWN_MODE = {{ 'true' if withdrawn_mode else 'false' }};
 
   <span data-hint="يمكنك استيراد ملف Excel للتسجيل الجماعي، أو إضافة تسجيلات يدوياً لكل طالب. استخدم البحث والتصفية للوصول السريع لأي طالب." data-hint-id="reg_admin" data-hint-icon="💡" data-for-role="admin_main,head_of_department,staff"></span>
   <div id="registrationsAdmin">
-    <!-- الفصل الحالي (للتسجيلات والترحيل) -->
-    <div class="card mb-3">
+    <!-- الفصل الحالي (عرض فقط — التعيين من لوحة تشغيل الفصل) -->
+    <div class="card mb-3" id="currentTermCard">
       <div class="card-body">
         <h6 class="card-title mb-2">الفصل الحالي (للتسجيلات والترحيل)</h6>
-        <p class="small text-muted mb-2">يُفضّل تعيينه من لوحة تشغيل الفصل. الاسم: خريف أو ربيع. السنة: 26-27.</p>
+        <p class="small text-muted mb-2">يُعيَّن من <a href="/term_ops">لوحة تشغيل الفصل</a> بقوائم خريف/ربيع + العام الدراسي.</p>
         <div class="d-flex flex-wrap align-items-end gap-2">
-          <div>
-            <label class="form-label mb-1 small">اسم الفصل</label>
-            <input id="currentRegistrationTerm" type="text" class="form-control form-control-sm" placeholder="خريف" style="min-width:140px">
+          <div style="min-width:280px;max-width:420px;flex:1;">
+            {% set typ_id = 'regTermPicker' %}
+            {% set typ_season_id = 'currentRegistrationTerm' %}
+            {% set typ_year_id = 'currentRegistrationYear' %}
+            {% set typ_disabled = true %}
+            {% include "partials/term_year_picker.html" %}
           </div>
-          <div>
-            <label class="form-label mb-1 small">سنة الفصل</label>
-            <input id="currentRegistrationYear" type="text" class="form-control form-control-sm" placeholder="26-27" style="min-width:100px">
+          <span id="currentTermMsg" class="small text-muted ms-2"></span>
+          <a href="/term_ops" class="btn btn-outline-primary btn-sm">تعيين الفصل</a>
+        </div>
+        <div class="mt-3 border-top pt-3 d-none" id="regMigrateTermWrap">
+          <div class="small fw-semibold mb-1">ترحيل إلى كشف الدرجات — اختيار فصل (أدمن رئيسي)</div>
+          <div class="d-flex flex-wrap align-items-end gap-2">
+            <div style="min-width:280px;max-width:420px;flex:1;">
+              {% set typ_id = 'regMigratePicker' %}
+              {% set typ_season_id = 'migrateTermSeason' %}
+              {% set typ_year_id = 'migrateTermYear' %}
+              {% set typ_disabled = false %}
+              {% include "partials/term_year_picker.html" %}
+            </div>
+            <span class="small text-muted">يُستخدم عند ترحيل تسجيلات طالب إن اخترت فصلاً غير الجاري.</span>
           </div>
-          <button id="btnSaveRegistrationTerm" type="button" class="btn btn-primary btn-sm">حفظ</button>
-          <span id="currentTermMsg" class="small text-success ms-2"></span>
         </div>
       </div>
     </div>
@@ -220,7 +232,11 @@ const WITHDRAWN_MODE = {{ 'true' if withdrawn_mode else 'false' }};
               </div>
               <div class="col-md-4">
                 <label class="form-label small mb-1">فصل التخصص</label>
-                <input id="specAtTerm" class="form-control form-control-sm" placeholder="مثال: خريف 25-26">
+                {% set typ_id = 'specTermPicker' %}
+                {% set typ_season_id = 'specAtTermSeason' %}
+                {% set typ_year_id = 'specAtTermYear' %}
+                {% include "partials/term_year_picker.html" %}
+                <input type="hidden" id="specAtTerm" value="">
               </div>
             </div>
           </div>
@@ -311,6 +327,7 @@ const WITHDRAWN_MODE = {{ 'true' if withdrawn_mode else 'false' }};
   </div>
 </div>
 
+<script src="/static/js/term-year-picker.js"></script>
 <script>
 /* state */
 let STUDENTS = []; // {student_id, student_name, university_number, enrollment_status, registrations: [...]}
@@ -788,8 +805,41 @@ async function loadCurrentTerm(){
   if (r.ok && r.json) {
     const elTerm = document.getElementById('currentRegistrationTerm');
     const elYear = document.getElementById('currentRegistrationYear');
-    if (elTerm) elTerm.value = r.json.term_name || '';
-    if (elYear) elYear.value = r.json.term_year || '';
+    if (window.TermYearPicker) {
+      try {
+        await window.TermYearPicker.mount({
+          rootId: 'regTermPicker',
+          seasonId: 'currentRegistrationTerm',
+          yearId: 'currentRegistrationYear',
+          termName: r.json.term_name,
+          termYear: r.json.term_year,
+          disabled: true,
+        });
+      } catch (_e) {
+        if (elTerm) elTerm.value = r.json.term_name || '';
+        if (elYear) elYear.value = r.json.term_year || '';
+      }
+    } else {
+      if (elTerm) elTerm.value = r.json.term_name || '';
+      if (elYear) elYear.value = r.json.term_year || '';
+    }
+    const msg = document.getElementById('currentTermMsg');
+    if (msg) msg.textContent = r.json.ops_label || r.json.term_label || '';
+  }
+  if (String(CURRENT_ROLE || '').toLowerCase() === 'admin_main') {
+    const wrap = document.getElementById('regMigrateTermWrap');
+    if (wrap) wrap.classList.remove('d-none');
+    if (window.TermYearPicker) {
+      try {
+        await window.TermYearPicker.mount({
+          rootId: 'regMigratePicker',
+          seasonId: 'migrateTermSeason',
+          yearId: 'migrateTermYear',
+          useCurrent: true,
+          disabled: false,
+        });
+      } catch (_e) {}
+    }
   }
 }
 
@@ -965,6 +1015,22 @@ async function openEditModal(student){
   }
   if (specTrackEl) specTrackEl.value = student.track_code || '';
   if (specAtTermEl) specAtTermEl.value = student.specialized_at_term || '';
+  if (window.TermYearPicker) {
+    try {
+      if (!window.__specTermPicker) {
+        window.__specTermPicker = await window.TermYearPicker.mount({
+          rootId: 'specTermPicker',
+          seasonId: 'specAtTermSeason',
+          yearId: 'specAtTermYear',
+          hiddenId: 'specAtTerm',
+          allowEmpty: true,
+          opsLabel: student.specialized_at_term || '',
+        });
+      } else {
+        window.__specTermPicker.setFromOpsLabel(student.specialized_at_term || '');
+      }
+    } catch (_e) {}
+  }
 
   // تحميل نسخ الاستمارة التاريخية لهذا الطالب/الفصل
   try {
@@ -1441,13 +1507,23 @@ async function migrateStudentRegistrations(student){
   if(!(student.registrations||[]).length){
     if(!confirm('لا توجد تسجيلات حالية لهذا الطالب. هل تريد المتابعة على أي حال؟')) return;
   }
-  const defaultTerm = (document.getElementById('currentRegistrationTerm')||{}).value.trim();
-  const defaultYear = (document.getElementById('currentRegistrationYear')||{}).value.trim();
-  const semester = prompt('أدخل اسم الفصل الدراسي كما سيظهر في كشف الدرجات (مثال: خريف 25-26). اتركه فارغاً لاستخدام الفصل الحالي المحفوظ:', defaultTerm);
-  if(semester === null) return;
-  const year = prompt('أدخل السنة (مثال: 2025). اتركه فارغاً لاستخدام الفصل الحالي المحفوظ:', defaultYear);
-  if(year === null) return;
-  const label = [semester.trim(), year.trim()].filter(Boolean).join(' ') || 'الفصل الحالي من الإعدادات';
+  const defaultTerm = ((document.getElementById('currentRegistrationTerm')||{}).value || '').trim();
+  const defaultYear = ((document.getElementById('currentRegistrationYear')||{}).value || '').trim();
+  let semester = defaultTerm;
+  let year = defaultYear;
+  const isMainAdmin = String(CURRENT_ROLE || '').toLowerCase() === 'admin_main';
+  if (isMainAdmin && window.TermYearPicker) {
+    const picked = await window.TermYearPicker.openDialog({
+      title: 'فصل الترحيل إلى كشف الدرجات',
+      hint: 'اختر الفصل والعام (أو أبقِ الفصل الجاري). متاح للأدمن الرئيسي فقط.',
+      termName: ((document.getElementById('migrateTermSeason')||{}).value || defaultTerm),
+      termYear: ((document.getElementById('migrateTermYear')||{}).value || defaultYear),
+    });
+    if (picked === null) return;
+    semester = picked.term_name || '';
+    year = picked.term_year || '';
+  }
+  const label = [semester, year].filter(Boolean).join(' ') || 'الفصل الحالي من الإعدادات';
   const btnText = `ترحيل تسجيلات ${student.student_name || student.name || ''}`;
   const sure = confirm(`${btnText} إلى كشف الدرجات للفصل "${label}"؟ سيتم بعد ذلك حذف التسجيلات الفعلية لهذا الطالب.`);
   if(!sure) return;
@@ -1717,27 +1793,6 @@ function applyRegViewOnlyUi(){
   if (btnReloadSpec){
     btnReloadSpec.addEventListener('click', async ()=>{
       await loadSpecializationSummary();
-    });
-  }
-
-  const btnSaveTerm = document.getElementById('btnSaveRegistrationTerm');
-  if (btnSaveTerm) {
-    btnSaveTerm.addEventListener('click', async function(){
-      const termName = (document.getElementById('currentRegistrationTerm')||{}).value.trim();
-      const termYear = (document.getElementById('currentRegistrationYear')||{}).value.trim();
-      if (!termName) { uiToast('اسم الفصل مطلوب', 'warning'); return; }
-      const msgEl = document.getElementById('currentTermMsg');
-      const r = await fetchJSON('/admin/settings/current_term', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ term_name: termName, term_year: termYear })
-      });
-      if (r.ok) {
-        if (msgEl) { msgEl.textContent = 'تم الحفظ'; msgEl.classList.remove('text-danger'); msgEl.classList.add('text-success'); }
-        setTimeout(function(){ if (msgEl) msgEl.textContent = ''; }, 3000);
-      } else {
-        if (msgEl) { msgEl.textContent = (r.json && r.json.message) || 'فشل الحفظ'; msgEl.classList.add('text-danger'); msgEl.classList.remove('text-success'); }
-      }
     });
   }
 })();

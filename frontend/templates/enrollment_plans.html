@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8"/>
@@ -33,9 +33,14 @@
           <div class="d-flex flex-wrap gap-2" id="reviewSummaryChips"></div>
         </div>
         <div class="row g-2 align-items-end mb-3">
-          <div class="col-md-3">
-            <label class="form-label">الفصل الدراسي</label>
-            <input id="reviewSemesterInput" class="form-control form-control-sm" placeholder="الكل إن تُرك فارغاً">
+          <div class="col-md-4">
+            <label class="form-label">الفصل الدراسي (فلتر)</label>
+            {% set typ_id = 'reviewTermPicker' %}
+            {% set typ_season_id = 'reviewSeason' %}
+            {% set typ_year_id = 'reviewYear' %}
+            {% include "partials/term_year_picker.html" %}
+            <input type="hidden" id="reviewSemesterInput" value="">
+            <div class="form-text">اتركه فارغاً لعرض الكل</div>
           </div>
           <div class="col-md-4">
             <label class="form-label">بحث (اسم / رقم / مقرر)</label>
@@ -69,9 +74,13 @@
             </select>
             <div id="studentJoinInfo" class="small text-muted mt-1" style="display:none;"></div>
           </div>
-          <div class="col-md-3">
+          <div class="col-md-4">
             <label class="form-label">الفصل الدراسي</label>
-            <input id="semesterInput" class="form-control form-control-sm" placeholder="مثال: خريف 25-26">
+            {% set typ_id = 'planTermPicker' %}
+            {% set typ_season_id = 'planSeason' %}
+            {% set typ_year_id = 'planYear' %}
+            {% include "partials/term_year_picker.html" %}
+            <input type="hidden" id="semesterInput" value="">
           </div>
           <div class="col-md-5">
             <label class="form-label">المقررات في الخطة</label>
@@ -153,6 +162,7 @@
     </div>
   </main>
 
+  <script src="/static/js/term-year-picker.js"></script>
   <script>
     async function fetchJSON(url, opts){ const r = await fetch(url, opts); const j = await r.json().catch(()=>null); return {ok:r.ok,status:r.status,json:j}; }
 
@@ -1142,6 +1152,8 @@
     }
 
     document.addEventListener('DOMContentLoaded', async ()=>{
+      let planPicker = null;
+      let reviewPicker = null;
       // تحديد الدور الحالي وإخفاء/إظهار أقسام حسبه
       try {
         const auth = await fetchJSON('/auth/check');
@@ -1153,6 +1165,29 @@
         // الطالب لا يرى قسم مراجعة الخطط
         const review = document.getElementById('reviewSection');
         if (review) review.style.display = 'none';
+      }
+
+      if (window.TermYearPicker) {
+        try {
+          planPicker = await window.TermYearPicker.mount({
+            rootId: 'planTermPicker',
+            seasonId: 'planSeason',
+            yearId: 'planYear',
+            hiddenId: 'semesterInput',
+            useCurrent: true,
+          });
+          window.__planTermPicker = planPicker;
+        } catch (e) { console.warn(e); }
+        try {
+          reviewPicker = await window.TermYearPicker.mount({
+            rootId: 'reviewTermPicker',
+            seasonId: 'reviewSeason',
+            yearId: 'reviewYear',
+            hiddenId: 'reviewSemesterInput',
+            allowEmpty: true,
+          });
+          window.__reviewTermPicker = reviewPicker;
+        } catch (e) { console.warn(e); }
       }
 
       await loadStudentsAndCourses();

@@ -13,7 +13,11 @@
   function initNavDropdowns() {
     if (!window.bootstrap || typeof window.bootstrap.Dropdown === 'undefined') return;
     document.querySelectorAll('.app-navbar [data-bs-toggle="dropdown"]').forEach(function (el) {
-      try { bootstrap.Dropdown.getOrCreateInstance(el); } catch (_e) { /* ignore */ }
+      try {
+        var existing = bootstrap.Dropdown.getInstance(el);
+        if (existing) existing.dispose();
+        bootstrap.Dropdown.getOrCreateInstance(el);
+      } catch (_e) { /* ignore */ }
     });
   }
   window.cleanupUiBlockers = cleanupUiBlockers;
@@ -28,6 +32,11 @@
   } else {
     onReady();
   }
+  // بعد اكتمال كل السكربتات (يشمل صفحات كانت تعيد تحميل Bootstrap بالخطأ)
+  window.addEventListener('load', function () {
+    cleanupUiBlockers();
+    initNavDropdowns();
+  });
   window.addEventListener('pageshow', function () {
     cleanupUiBlockers();
     initNavDropdowns();

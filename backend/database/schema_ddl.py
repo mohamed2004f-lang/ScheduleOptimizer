@@ -752,8 +752,32 @@ TABLES_SCHEMA = {
             external_scope TEXT NOT NULL DEFAULT 'within_college'
                 CHECK (external_scope IN ('within_college','outside_college','outside_university')),
             is_active INTEGER NOT NULL DEFAULT 1,
+            contact_email_visible INTEGER NOT NULL DEFAULT 0,
+            whatsapp_phone TEXT,
+            whatsapp_phone_visible INTEGER NOT NULL DEFAULT 0,
+            whatsapp_username TEXT,
+            whatsapp_username_key TEXT,
+            whatsapp_username_visible INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (department_id) REFERENCES departments(id)
                 ON DELETE SET NULL ON UPDATE CASCADE
+        )
+    """,
+
+    'course_group_links': """
+        CREATE TABLE IF NOT EXISTS course_group_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            teaching_group_id INTEGER NOT NULL,
+            semester TEXT NOT NULL DEFAULT '',
+            platform TEXT NOT NULL DEFAULT 'other'
+                CHECK (platform IN ('whatsapp', 'telegram', 'other')),
+            label_ar TEXT NOT NULL DEFAULT '',
+            url TEXT NOT NULL,
+            is_visible INTEGER NOT NULL DEFAULT 0 CHECK (is_visible IN (0, 1)),
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_by_instructor_id INTEGER,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (teaching_group_id) REFERENCES teaching_groups(id)
+                ON DELETE CASCADE ON UPDATE CASCADE
         )
     """,
 
@@ -1625,6 +1649,7 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_students_program ON students(current_program_id)",
     "CREATE INDEX IF NOT EXISTS idx_users_department ON users(department_id)",
     "CREATE INDEX IF NOT EXISTS idx_instructors_department ON instructors(department_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cgl_tg_vis ON course_group_links(teaching_group_id, is_visible)",
     "CREATE INDEX IF NOT EXISTS idx_ida_instructor_dept ON instructor_department_assignments(instructor_id, department_id)",
     "CREATE INDEX IF NOT EXISTS idx_ida_department_sem ON instructor_department_assignments(department_id, semester)",
     "CREATE INDEX IF NOT EXISTS idx_ida_schedule_section ON instructor_department_assignments(schedule_section_id)",

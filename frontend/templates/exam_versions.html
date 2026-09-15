@@ -20,9 +20,14 @@
 
   <div class="card mb-3 filter-section">
     <div class="card-body row g-2 align-items-end">
-      <div class="col-md-3">
+      <div class="col-md-4">
         <label class="form-label mb-1 small">الفصل</label>
-        <input id="semesterInput" class="form-control form-control-sm" placeholder="مثال: خريف 25-26">
+        {% set typ_id = 'evTermPicker' %}
+        {% set typ_season_id = 'evSeason' %}
+        {% set typ_year_id = 'evYear' %}
+        {% include "partials/term_year_picker.html" %}
+        <input type="hidden" id="semesterInput" value="">
+        <div class="form-text">فارغ = الكل</div>
       </div>
       <div class="col-md-2">
         <label class="form-label mb-1 small">نوع الامتحان</label>
@@ -79,6 +84,7 @@
   </div>
 </main>
 
+<script src="/static/js/term-year-picker.js"></script>
 <script>
 async function fetchJSON(url, opts){
   const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
@@ -191,23 +197,34 @@ async function loadVersions(){
 
 document.getElementById('btnSearch').addEventListener('click', loadVersions);
 document.getElementById('btnReset').addEventListener('click', () => {
-  const sem = document.getElementById('semesterInput');
+  if (window.__evTermPicker) window.__evTermPicker.setValue('', '');
+  else {
+    const sem = document.getElementById('semesterInput');
+    if (sem) sem.value = '';
+  }
   const et = document.getElementById('examType');
   const ev = document.getElementById('eventType');
-  if (sem) sem.value = '';
   if (et) et.value = '';
   if (ev) ev.value = '';
   loadVersions();
 });
-(function initFromQuery(){
+(async function initEvTerm(){
   try {
     const q = new URLSearchParams(window.location.search || '');
     const et = (q.get('exam_type') || '').trim().toLowerCase();
     const sel = document.getElementById('examType');
     if (sel && (et === 'midterm' || et === 'final')) sel.value = et;
   } catch (_e) {}
+  if (window.TermYearPicker) {
+    try {
+      window.__evTermPicker = await window.TermYearPicker.mount({
+        rootId: 'evTermPicker', seasonId: 'evSeason', yearId: 'evYear',
+        hiddenId: 'semesterInput', allowEmpty: true,
+      });
+    } catch (e) { console.warn(e); }
+  }
+  loadVersions();
 })();
-loadVersions();
 </script>
 </body>
 </html>

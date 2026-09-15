@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8" />
@@ -183,13 +183,13 @@
           استخدم ملف التصدير الحالي (Excel) لاستيراد درجات الطالب. يمكن ترك حقلي الفصل والسنة فارغين وسيتم استخدام البيانات من الملف عند توفرها.
         </p>
         <form id="transcriptImportForm" class="row g-3 align-items-end" onsubmit="return false;">
-          <div class="col-md-3">
+          <div class="col-md-5">
             <label class="form-label">الفصل الدراسي</label>
-            <input id="importSemester" class="form-control" placeholder="مثال: خريف" />
-          </div>
-          <div class="col-md-2">
-            <label class="form-label">السنة</label>
-            <input id="importYear" class="form-control" placeholder="مثال: 2024/2025" />
+            {% set typ_id = 'importTermPicker' %}
+            {% set typ_season_id = 'importSemester' %}
+            {% set typ_year_id = 'importYear' %}
+            {% include "partials/term_year_picker.html" %}
+            <div class="form-text">اختياري — إن تُرك فارغاً يُستخرج من الملف عند الإمكان</div>
           </div>
           <div class="col-md-4">
             <label class="form-label">اسم الطالب</label>
@@ -253,9 +253,13 @@
       <div class="card-body">
         <h6>إدخال/تعديل درجات فصل</h6>
         <div class="row g-2 align-items-center mb-2">
-          <div class="col-md-4">
+          <div class="col-md-5">
             <label class="form-label">فصل</label>
-            <input id="gradeSemesterInput" class="form-control" placeholder="مثال: خريف 25-26">
+            {% set typ_id = 'gradeTermPicker' %}
+            {% set typ_season_id = 'gradeSemesterSeason' %}
+            {% set typ_year_id = 'gradeSemesterYear' %}
+            {% include "partials/term_year_picker.html" %}
+            <input type="hidden" id="gradeSemesterInput" value="">
           </div>
           <div class="col-md-4">
             <label class="form-label">إضافة مقرر</label>
@@ -333,6 +337,7 @@
 
   </main>
 
+<script src="/static/js/term-year-picker.js"></script>
 <script>
 /* helpers */
 async function fetchJSON(url, opts){
@@ -574,8 +579,11 @@ function renderTranscript(data){
         <div class="nowrap">الوحدات المنجزة: <span class="badge bg-secondary text-white">${semCompleted}</span></div>
     `;
     if (CAN_MANAGE_TRANSCRIPT) {
+      if (CURRENT_ROLE === 'admin_main') {
+        actionsHtml += `
+        <button class="btn btn-sm btn-outline-secondary btn-rename-sem" data-sem="${escape(sem)}">تعديل اسم الفصل</button>`;
+      }
       actionsHtml += `
-        <button class="btn btn-sm btn-outline-secondary btn-rename-sem" data-sem="${escape(sem)}">تعديل اسم الفصل</button>
         <button class="btn btn-sm btn-outline-primary btn-add-course-sem" data-sem="${escape(sem)}">إضافة مقرر لهذا الفصل</button>
         <button class="btn btn-sm btn-outline-danger btn-delete-sem" data-sem="${escape(sem)}">حذف الفصل</button>
       `;
@@ -652,8 +660,16 @@ function renderTranscript(data){
   const planWrap = document.getElementById('graduationPlanWrap');
   const planLabel = document.getElementById('graduationPlanLabel');
   if (planWrap && planLabel) {
-    if (plan) {
-      planLabel.textContent = plan === '150' ? '150 وحدة (نظام قديم)' : plan === '155' ? '155 وحدة (نظام جديد)' : plan;
+    if (plan === '150' || plan === '155') {
+      planLabel.textContent = plan === '150'
+        ? '150 وحدة (نظام وحدات تراثي)'
+        : '155 وحدة (نظام وحدات تراثي)';
+      planWrap.style.display = '';
+    } else if (data.graduation_plan_label) {
+      planLabel.textContent = data.graduation_plan_label;
+      planWrap.style.display = '';
+    } else if (data.graduation_target_units) {
+      planLabel.textContent = data.graduation_target_units + ' وحدة — خطة القسم';
       planWrap.style.display = '';
     } else {
       planWrap.style.display = 'none';
@@ -695,17 +711,33 @@ function renderTranscript(data){
     document.querySelectorAll('.btn-inline-edit').forEach(btn=>{ btn.addEventListener('click', onInlineEditClick); });
     document.querySelectorAll('.btn-rename-sem').forEach(btn=>{
       btn.addEventListener('click', async (ev)=>{
+        if (CURRENT_ROLE !== 'admin_main') {
+          setMsg('تعديل اسم الفصل متاح للأدمن الرئيسي فقط','warning');
+          return;
+        }
         const oldSem = ev.currentTarget.dataset.sem;
-        const newSem = prompt('أدخل الاسم الجديد للفصل كما سيظهر في السجل (مثال: خريف 24-25):', oldSem);
-        if (newSem === null) return;
-        const trimmed = (newSem || '').trim();
+        let picked = null;
+        if (window.TermYearPicker) {
+          picked = await window.TermYearPicker.openDialog({
+            title: 'تعديل اسم الفصل في كشف الدرجات',
+            hint: 'اختر الفصل والعام الجديدين (يؤثر على كل الطلبة لهذا الاسم).',
+            opsLabel: oldSem,
+          });
+        }
+        if (picked === null) return;
+        const trimmed = (picked.ops_label || '').trim();
         if (!trimmed){ setMsg('اسم الفصل الجديد لا يمكن أن يكون فارغاً','warning'); return; }
         if (trimmed === oldSem){ return; }
         if (!confirm(`سيتم تغيير اسم الفصل "${oldSem}" إلى "${trimmed}" لجميع الطلبة الذين لديهم هذا الفصل. هل أنت متأكد؟`)) return;
         const r = await fetchJSON('/grades/rename_semester', {
           method:'POST',
           headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ old_semester: oldSem, new_semester: trimmed })
+          body: JSON.stringify({
+            old_semester: oldSem,
+            new_semester: trimmed,
+            term_name: picked.term_name,
+            term_year: picked.term_year,
+          })
         });
         if (r.ok){
           setMsg((r.json && r.json.message) ? r.json.message : 'تم تحديث اسم الفصل','success');
@@ -720,7 +752,8 @@ function renderTranscript(data){
         const sem = ev.currentTarget.dataset.sem;
         const semInput = document.getElementById('gradeSemesterInput');
         if (semInput) semInput.value = sem;
-        showEditor();
+        if (window.__gradeTermPicker) window.__gradeTermPicker.setFromOpsLabel(sem);
+        showEditor({ keepSemester: true });
       });
     });
     document.querySelectorAll('.btn-delete-sem').forEach(btn=>{
@@ -752,7 +785,39 @@ function renderTranscript(data){
 }
 
 /* grade editor */
-function showEditor(){ const el = document.getElementById('gradeEditorCard'); if(el) el.style.display='block'; EDIT_ROWS = []; renderEditorRows(); const g = document.getElementById('gradeSemesterInput'); if(g) g.value=''; }
+function showEditor(opts){
+  opts = opts || {};
+  const el = document.getElementById('gradeEditorCard');
+  if(el) el.style.display='block';
+  EDIT_ROWS = [];
+  renderEditorRows();
+  const g = document.getElementById('gradeSemesterInput');
+  if (!opts.keepSemester) {
+    // لا تفرّغ التسمية إن كان المكوّن يحمل فصلاً/عاماً — زامِن من القوائم
+    if (window.__gradeTermPicker) {
+      window.__gradeTermPicker.syncHidden();
+      const v = window.__gradeTermPicker.getValue();
+      if (!v.ops_label && window.__gradeTermPicker.options?.current) {
+        const cur = window.__gradeTermPicker.options.current;
+        window.__gradeTermPicker.setValue(cur.term_name, cur.term_year);
+      }
+    } else if (g) {
+      g.value = '';
+    }
+  } else if (window.__gradeTermPicker) {
+    window.__gradeTermPicker.setFromOpsLabel((g && g.value) || '');
+    window.__gradeTermPicker.syncHidden();
+  }
+}
+
+function readGradeSemesterLabel(){
+  if (window.__gradeTermPicker) {
+    try { window.__gradeTermPicker.syncHidden(); } catch (_e) {}
+    const v = window.__gradeTermPicker.getValue();
+    if (v && v.ops_label) return v.ops_label;
+  }
+  return (document.getElementById('gradeSemesterInput')||{}).value?.trim?.() || '';
+}
 function hideEditor(){ const el = document.getElementById('gradeEditorCard'); if(el) el.style.display='none'; }
 
 function renderEditorRows(){
@@ -859,7 +924,7 @@ const btnAddCourse = document.getElementById('btnAddCourseRow'); if(btnAddCourse
 
 const btnImportEl = document.getElementById('btnImportTranscript'); if(btnImportEl) btnImportEl.addEventListener('click', async ()=>{ const student = (document.getElementById('studentSelect')||{}).value; if(!student){ setMsg('اختر طالباً أولاً قبل الاستيراد','warning'); return; } const semesterVal = (document.getElementById('importSemester')||{}).value.trim(); const yearVal = (document.getElementById('importYear')||{}).value.trim(); const fileInput = document.getElementById('importFile'); const file = fileInput && fileInput.files ? fileInput.files[0] : null; if(!file){ setMsg('اختر ملف Excel يحتوي على كشف الدرجات','warning'); return; } const nameVal = (document.getElementById('importStudentName')||{}).value.trim(); const fd = new FormData(); fd.append('student_id', student); if(semesterVal) fd.append('semester', semesterVal); if(yearVal) fd.append('year', yearVal); if(nameVal) fd.append('student_name', nameVal); fd.append('changed_by', 'transcript-import-ui'); fd.append('file', file); btnImportEl.disabled = true; setMsg('جاري استيراد كشف الدرجات...', 'info'); try{ const resp = await fetch('/grades/import/transcript', { method:'POST', body: fd }); const data = await resp.json().catch(()=>null); if(resp.ok){ setMsg((data && data.message) ? data.message : 'تم استيراد كشف الدرجات بنجاح', 'success'); if(fileInput){ fileInput.value = ''; } if(data && data.semester){ const gsi = document.getElementById('gradeSemesterInput'); if(gsi) gsi.value = data.semester; } if(nameVal){ const st = STUDENTS.find(s=>s.student_id===student); if(st){ st.student_name = nameVal; } } syncImportFields(); loadTranscript(student); } else { setMsg((data && data.message) ? data.message : resp.statusText || 'فشل الاستيراد', 'danger'); } } catch(err){ console.error(err); setMsg('حدث خطأ أثناء الاتصال بالخادم أثناء الاستيراد','danger'); } finally { btnImportEl.disabled = false; } });
 
-const btnImportResetEl = document.getElementById('btnImportReset'); if(btnImportResetEl) btnImportResetEl.addEventListener('click', ()=>{ const is = document.getElementById('importSemester'); if(is) is.value=''; const iy = document.getElementById('importYear'); if(iy) iy.value=''; const fileInput = document.getElementById('importFile'); if(fileInput){ fileInput.value = ''; } syncImportFields(); });
+const btnImportResetEl = document.getElementById('btnImportReset'); if(btnImportResetEl) btnImportResetEl.addEventListener('click', ()=>{ if (window.__importTermPicker) window.__importTermPicker.setValue('', ''); else { const is = document.getElementById('importSemester'); if(is) is.value=''; const iy = document.getElementById('importYear'); if(iy) iy.value=''; } const fileInput = document.getElementById('importFile'); if(fileInput){ fileInput.value = ''; } syncImportFields(); });
 
 const btnImportSemesterEl = document.getElementById('btnImportSemester');
 if (btnImportSemesterEl) {
@@ -996,7 +1061,47 @@ if (btnDownloadSemesterTemplate) {
 }
 
 /* save grades (batch) */
-const btnSaveAll = document.getElementById('btnSaveGrades'); if(btnSaveAll) btnSaveAll.addEventListener('click', async ()=>{ const student = (document.getElementById('studentSelect')||{}).value; if(!student){ setMsg('اختر طالباً أولاً','warning'); return; } const sem = (document.getElementById('gradeEditorCard')||{}).style && document.getElementById('gradeEditorCard').style.display==='block' ? (document.getElementById('gradeSemesterInput')||{}).value.trim() : ''; if(!sem){ setMsg('أدخل اسم الفصل في محرر الدرجات (مثال: خريف 25-26) أو افتح المحرر ثم حاول الحفظ','warning'); showEditor(); return; } if(EDIT_ROWS.length===0){ setMsg('أضف مقرراً واحداً على الأقل قبل الحفظ','warning'); return; } const reason = String((document.getElementById('gradeNote')||{}).value || '').trim(); if(REQUIRE_TRANSCRIPT_REASON && reason.length < 5){ setMsg('سبب التعديل مطلوب (٥ أحرف على الأقل) لرئيس القسم.','warning'); return; } const grades = EDIT_ROWS.map(r=>({course_name:r.course_name, course_code:r.course_code||'', units: Number(r.units)||0, grade: r.grade})); const btn = btnSaveAll; btn.disabled=true; setMsg('جاري حفظ الدرجات...', 'info'); const resp = await fetch('/save_grades', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({student_id:student, semester:sem, grades, reason})}); const j = await resp.json().catch(()=>null); btn.disabled=false; if(resp.ok){ setMsg('✅ تم حفظ الدرجات', 'success'); hideEditor(); loadTranscript(student); } else { setMsg('فشل الحفظ: '+(j&&j.message?j.message:resp.statusText),'danger'); } });
+const btnSaveAll = document.getElementById('btnSaveGrades');
+if (btnSaveAll) btnSaveAll.addEventListener('click', async () => {
+  const student = (document.getElementById('studentSelect') || {}).value;
+  if (!student) { setMsg('اختر طالباً أولاً', 'warning'); return; }
+  const editorOpen = (document.getElementById('gradeEditorCard') || {}).style && document.getElementById('gradeEditorCard').style.display === 'block';
+  const sem = editorOpen ? readGradeSemesterLabel() : '';
+  if (!sem) {
+    setMsg('اختر الفصل والعام الدراسي من القوائم في محرر الدرجات ثم حاول الحفظ', 'warning');
+    showEditor();
+    return;
+  }
+  if (EDIT_ROWS.length === 0) { setMsg('أضف مقرراً واحداً على الأقل قبل الحفظ', 'warning'); return; }
+  const reason = String((document.getElementById('gradeNote') || {}).value || '').trim();
+  if (REQUIRE_TRANSCRIPT_REASON && reason.length < 5) {
+    setMsg('سبب التعديل مطلوب (٥ أحرف على الأقل) لرئيس القسم.', 'warning');
+    return;
+  }
+  const grades = EDIT_ROWS.map(r => ({
+    course_name: r.course_name,
+    course_code: r.course_code || '',
+    units: Number(r.units) || 0,
+    grade: r.grade,
+  }));
+  const btn = btnSaveAll;
+  btn.disabled = true;
+  setMsg('جاري حفظ الدرجات...', 'info');
+  const resp = await fetch('/save_grades', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ student_id: student, semester: sem, grades, reason }),
+  });
+  const j = await resp.json().catch(() => null);
+  btn.disabled = false;
+  if (resp.ok) {
+    setMsg('✅ تم حفظ الدرجات', 'success');
+    hideEditor();
+    loadTranscript(student);
+  } else {
+    setMsg('فشل الحفظ: ' + (j && j.message ? j.message : resp.statusText), 'danger');
+  }
+});
 
 // زر حفظ داخل نموذج إدخال الفصل اليدوي يستدعي نفس منطق btnSaveGrades العلوي
 const btnSaveInline = document.getElementById('btnSaveGradesInline');
@@ -1083,6 +1188,26 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
     CURRENT_ROLE = null;
     CAN_MANAGE_TRANSCRIPT = ['admin', 'admin_main', 'head_of_department'].includes(CURRENT_ROLE || '');
     REQUIRE_TRANSCRIPT_REASON = false;
+  }
+
+  if (window.TermYearPicker && CAN_MANAGE_TRANSCRIPT) {
+    try {
+      window.__importTermPicker = await window.TermYearPicker.mount({
+        rootId: 'importTermPicker',
+        seasonId: 'importSemester',
+        yearId: 'importYear',
+        allowEmpty: true,
+      });
+    } catch (e) { console.warn(e); }
+    try {
+      window.__gradeTermPicker = await window.TermYearPicker.mount({
+        rootId: 'gradeTermPicker',
+        seasonId: 'gradeSemesterSeason',
+        yearId: 'gradeSemesterYear',
+        hiddenId: 'gradeSemesterInput',
+        useCurrent: true,
+      });
+    } catch (e) { console.warn(e); }
   }
 
   // إخفاء أدوات الإدخال/الاستيراد لغير الإداريين (عرض كشف فقط)

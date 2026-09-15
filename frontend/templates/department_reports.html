@@ -48,7 +48,6 @@
     <div id="sectionsWrap"></div>
   </main>
 
-  <script src="/static/js/common.js"></script>
   <script>
     const REPORT_SECTIONS = [
       {
@@ -182,14 +181,15 @@
           });
         if (!hubOk) {
           setMsg('danger', 'غير مصرح لك بعرض تقارير القسم.');
-          return;
+        } else {
+          renderSections(caps, staffFallback);
         }
-        renderSections(caps, staffFallback);
       } catch (e) {
         setMsg('danger', 'تعذّر تحميل الصلاحيات.');
       }
+      if (typeof window.cleanupUiBlockers === 'function') window.cleanupUiBlockers();
+      if (typeof window.initNavDropdowns === 'function') window.initNavDropdowns();
     })();
   </script>
-  <script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8">
@@ -51,13 +51,13 @@
                 <label class="form-label">اسم الطالب</label>
                 <input id="student_name" class="form-control">
               </div>
-              <div class="col-md-3">
-                <label class="form-label">خطة التخرج</label>
-                <select id="student_graduation_plan" class="form-select">
+              <div class="col-md-3" id="studentGradPlanWrap">
+                <label class="form-label" id="student_graduation_plan_label">خطة التخرج</label>
+                <div id="student_grad_target_hint" class="form-control-plaintext small py-1 text-muted">—</div>
+                <select id="student_graduation_plan" class="form-select" style="display:none;">
                   <option value="">— غير محدد —</option>
-                  <option value="150">150 وحدة (نظام قديم)</option>
-                  <option value="155">155 وحدة (نظام جديد)</option>
                 </select>
+                <div id="student_grad_plan_help" class="form-text small"></div>
               </div>
               <div class="col-md-2">
                 <button id="btnAddStudent" class="btn btn-primary w-100" type="button">أضف</button>
@@ -220,13 +220,13 @@
               <label class="form-label">اسم الطالب</label>
               <input id="es_student_name" class="form-control">
             </div>
-            <div class="mb-2">
-              <label class="form-label">خطة التخرج</label>
-              <select id="es_graduation_plan" class="form-select">
+            <div class="mb-2" id="esGradPlanWrap">
+              <label class="form-label" id="es_graduation_plan_label">خطة التخرج</label>
+              <div id="es_grad_target_hint" class="form-control-plaintext small py-1 text-muted">—</div>
+              <select id="es_graduation_plan" class="form-select" style="display:none;">
                 <option value="">— غير محدد —</option>
-                <option value="150">150 وحدة (نظام قديم)</option>
-                <option value="155">155 وحدة (نظام جديد)</option>
               </select>
+              <div id="es_grad_plan_help" class="form-text small"></div>
             </div>
             <div class="mb-2">
               <label class="form-label">فصل الالتحاق</label>
@@ -364,8 +364,83 @@
   let STUDENTS_ALL = [];
   let STUDENTS_PAGE = 1;
   let STUDENTS_PAGE_SIZE = 50;
+  let CREATE_GRAD_OPTS = null;
 
   const STUDENTS_PAGE_SIZE_KEY = 'studentsListPageSize';
+
+  function applyGraduationPlanUi(opts, {
+    hintId, selectId, helpId, labelId, preferCurrent
+  }) {
+    const hint = document.getElementById(hintId);
+    const sel = document.getElementById(selectId);
+    const help = document.getElementById(helpId);
+    const label = document.getElementById(labelId);
+    const o = opts || {};
+    const legacy = o.legacy_unit_system || {};
+    if (hint) hint.textContent = o.label_ar || '—';
+    if (label) {
+      label.textContent = legacy.applicable ? 'نظام الوحدات (تراثي)' : 'خطة التخرج';
+    }
+      if (help) {
+      if (o.needs_department) {
+        help.textContent = 'حدّد قسم الطالب أولاً (أو سجّل كرئيس قسم بنطاق معروف).';
+      } else if (legacy.applicable) {
+        help.textContent = 'هدف القسم ' + (o.graduation_target_units || 155) +
+          ' وحدة. 150/155 نظام وحدات انتقالي لطلاب الميكانيكا فقط.';
+      } else {
+        help.textContent = '';
+      }
+    }
+    if (!sel) return;
+    if (legacy.applicable) {
+      sel.style.display = '';
+      const cur = (preferCurrent != null ? preferCurrent : (legacy.current || '')).toString().trim();
+      sel.innerHTML = '<option value="">— غير محدد —</option>' +
+        (legacy.allowed_codes || []).map(function (c) {
+          const lab = c === '150' ? '150 وحدة (نظام قديم)' : (c === '155' ? '155 وحدة (نظام جديد)' : c);
+          return '<option value="' + c + '">' + lab + '</option>';
+        }).join('');
+      sel.value = (legacy.allowed_codes || []).includes(cur) ? cur : '';
+    } else {
+      sel.style.display = 'none';
+      sel.innerHTML = '<option value="">— غير محدد —</option>';
+      sel.value = '';
+    }
+  }
+
+  async function fetchGraduationPlanOptions(params) {
+    const q = new URLSearchParams(params || {});
+    const r = await fetch('/students/graduation_plan/options?' + q.toString(), {
+      credentials: 'include',
+      cache: 'no-store',
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.message || 'تعذر تحميل خيارات خطة التخرج');
+    return j;
+  }
+
+  async function refreshCreateGraduationPlanUi() {
+    try {
+      CREATE_GRAD_OPTS = await fetchGraduationPlanOptions({});
+      applyGraduationPlanUi(CREATE_GRAD_OPTS, {
+        hintId: 'student_grad_target_hint',
+        selectId: 'student_graduation_plan',
+        helpId: 'student_grad_plan_help',
+        labelId: 'student_graduation_plan_label',
+      });
+    } catch (_e) {
+      applyGraduationPlanUi({
+        label_ar: 'تعذر تحميل هدف القسم',
+        needs_department: true,
+        legacy_unit_system: { applicable: false, allowed_codes: [], current: '' },
+      }, {
+        hintId: 'student_grad_target_hint',
+        selectId: 'student_graduation_plan',
+        helpId: 'student_grad_plan_help',
+        labelId: 'student_graduation_plan_label',
+      });
+    }
+  }
 
   function readStudentsPageSize() {
     const sel = document.getElementById('filter_page_size');
@@ -492,27 +567,16 @@
       badge.className = `badge rounded-pill ms-1 ${stInfo.cls}`;
       badge.textContent = stInfo.label;
       span.appendChild(badge);
-      const plan = (s.graduation_plan || '').trim();
-      if (plan) {
-        const planBadge = document.createElement('span');
-        planBadge.className = 'badge rounded-pill ms-1 bg-secondary';
-        planBadge.textContent = plan === '150' ? '150 وحدة' : plan === '155' ? '155 وحدة' : plan;
-        span.appendChild(planBadge);
-      }
-      const jTerm = (s.join_term || '').trim();
-      const jYear = (s.join_year || '').trim();
-      if (jTerm || jYear) {
-        const joinBadge = document.createElement('span');
-        joinBadge.className = 'badge rounded-pill ms-1 bg-info text-dark';
-        joinBadge.textContent = [jTerm, jYear].filter(Boolean).join(' ');
-        span.appendChild(joinBadge);
-      }
+      // وحدات تراثية وفصل الالتحاق تُعرض في التعديل فقط — لا في شارات القائمة
+      // مرحلة المسار: أخفِ الحالة الافتراضية «داخل القسم» — شائعة ومربكة؛ أظهر فقط المراحل غير الافتراضية
       const pw = (s.pathway_stage || 'dept_admitted').trim();
-      const pwInfo = PATHWAY_STAGE_BADGE[pw] || { label: pathwayStageLabel(pw), cls: 'bg-secondary' };
-      const pwBadge = document.createElement('span');
-      pwBadge.className = 'badge rounded-pill ms-1 ' + pwInfo.cls;
-      pwBadge.textContent = pwInfo.label;
-      span.appendChild(pwBadge);
+      if (pw && pw !== 'dept_admitted') {
+        const pwInfo = PATHWAY_STAGE_BADGE[pw] || { label: pathwayStageLabel(pw), cls: 'bg-secondary' };
+        const pwBadge = document.createElement('span');
+        pwBadge.className = 'badge rounded-pill ms-1 ' + pwInfo.cls;
+        pwBadge.textContent = pwInfo.label;
+        span.appendChild(pwBadge);
+      }
       const tc = (s.track_code || '').trim();
       if (tc) {
         const tgBadge = document.createElement('span');
@@ -520,33 +584,35 @@
         tgBadge.textContent = tc;
         span.appendChild(tgBadge);
       }
+      // اسم القسم: مفيد لمن يدير عدة أقسام؛ لرئيس القسم (نطاق واحد) تكرار بلا قيمة
       const depName = (s.department_name || '').trim();
-      if (depName) {
+      if (CAN_TRANSFER_DEPARTMENT) {
         const depBadge = document.createElement('span');
-        depBadge.className = 'badge rounded-pill ms-1 bg-dark-subtle text-dark border';
-        depBadge.textContent = depName;
-        span.appendChild(depBadge);
-      } else if (CAN_TRANSFER_DEPARTMENT) {
-        const depBadge = document.createElement('span');
-        depBadge.className = 'badge rounded-pill ms-1 bg-danger-subtle text-danger border';
-        depBadge.textContent = 'بلا قسم';
+        if (depName) {
+          depBadge.className = 'badge rounded-pill ms-1 bg-dark-subtle text-dark border';
+          depBadge.textContent = depName;
+        } else {
+          depBadge.className = 'badge rounded-pill ms-1 bg-danger-subtle text-danger border';
+          depBadge.textContent = 'بلا قسم';
+        }
         span.appendChild(depBadge);
       }
       const btnGroup = document.createElement('div');
+      btnGroup.className = 'd-flex flex-wrap gap-1 justify-content-end ms-2';
       const progressBtn = document.createElement('button');
-      progressBtn.className = 'btn btn-sm btn-outline-success me-1';
+      progressBtn.className = 'btn btn-sm btn-outline-success';
       progressBtn.type = 'button';
       progressBtn.textContent = 'ملخص المسار';
       progressBtn.addEventListener('click', () => openPathwayProgressStudent(s));
       btnGroup.appendChild(progressBtn);
       if (!STUDENTS_VIEW_ONLY) {
         const editBtn = document.createElement('button');
-        editBtn.className = 'btn btn-sm btn-outline-primary me-1';
+        editBtn.className = 'btn btn-sm btn-outline-primary';
         editBtn.type = 'button';
         editBtn.textContent = 'تعديل';
         editBtn.addEventListener('click', () => openEditStudent(s));
         const delBtn = document.createElement('button');
-        delBtn.className = 'btn btn-sm btn-danger me-1';
+        delBtn.className = 'btn btn-sm btn-danger';
         delBtn.type = 'button';
         delBtn.textContent = 'حذف';
         delBtn.addEventListener('click', () => deleteStudent(s.student_id));
@@ -556,7 +622,7 @@
         statusBtn.textContent = 'حالة القيد';
         statusBtn.addEventListener('click', () => openStatusStudent(s));
         const pathwayBtn = document.createElement('button');
-        pathwayBtn.className = 'btn btn-sm btn-outline-info me-1';
+        pathwayBtn.className = 'btn btn-sm btn-outline-info';
         pathwayBtn.type = 'button';
         pathwayBtn.textContent = 'المسار';
         pathwayBtn.addEventListener('click', () => openPathwayStudent(s));
@@ -567,7 +633,7 @@
       }
       if (CAN_TRANSFER_DEPARTMENT) {
         const deptBtn = document.createElement('button');
-        deptBtn.className = 'btn btn-sm btn-outline-dark me-1';
+        deptBtn.className = 'btn btn-sm btn-outline-dark';
         deptBtn.type = 'button';
         deptBtn.textContent = 'القسم';
         deptBtn.addEventListener('click', () => openDepartmentStudent(s));
@@ -659,11 +725,10 @@
     }
   }
 
-  function openEditStudent(student){
+  async function openEditStudent(student){
     try{
       const sidInput = document.getElementById('es_student_id');
       const nameInput = document.getElementById('es_student_name');
-      const planSelect = document.getElementById('es_graduation_plan');
       const joinTermSelect = document.getElementById('es_join_term');
       const joinYearInput = document.getElementById('es_join_year');
       const msgEl = document.getElementById('es_msg');
@@ -680,9 +745,32 @@
           : 'الرقم لا يمكن تغييره من هذه الواجهة.';
       }
       if(nameInput) nameInput.value = student.student_name || '';
-      if(planSelect) planSelect.value = (student.graduation_plan || '').trim() || '';
       if(joinTermSelect) joinTermSelect.value = (student.join_term || '').trim() || '';
       if(joinYearInput) joinYearInput.value = (student.join_year || '').trim() || '';
+      try {
+        const opts = await fetchGraduationPlanOptions({
+          student_id: student.student_id || '',
+          department_id: student.department_id != null ? String(student.department_id) : '',
+        });
+        applyGraduationPlanUi(opts, {
+          hintId: 'es_grad_target_hint',
+          selectId: 'es_graduation_plan',
+          helpId: 'es_grad_plan_help',
+          labelId: 'es_graduation_plan_label',
+          preferCurrent: (student.graduation_plan || '').trim(),
+        });
+      } catch (_e) {
+        applyGraduationPlanUi({
+          label_ar: 'تعذر تحميل هدف القسم',
+          needs_department: !student.department_id,
+          legacy_unit_system: { applicable: false, allowed_codes: [], current: '' },
+        }, {
+          hintId: 'es_grad_target_hint',
+          selectId: 'es_graduation_plan',
+          helpId: 'es_grad_plan_help',
+          labelId: 'es_graduation_plan_label',
+        });
+      }
       const modalEl = document.getElementById('editStudentModal');
       if(modalEl){
         let modal = bootstrap.Modal.getInstance(modalEl);
@@ -953,6 +1041,7 @@
       readStudentsPageSize();
       populateDepartmentFilter();
       updateExportLinks();
+      refreshCreateGraduationPlanUi();
       loadStudents();
     });
     const addBtn = document.getElementById('btnAddStudent');
@@ -964,7 +1053,8 @@
           window.showToast?.('أدخل الرقم الدراسي', 'warning');
           return;
         }
-        const plan = (document.getElementById('student_graduation_plan')||{}).value || '';
+        const legacyOk = !!(CREATE_GRAD_OPTS && CREATE_GRAD_OPTS.legacy_unit_system && CREATE_GRAD_OPTS.legacy_unit_system.applicable);
+        const plan = legacyOk ? ((document.getElementById('student_graduation_plan')||{}).value || '') : '';
         const joinTerm = (document.getElementById('student_join_term')||{}).value || '';
         const joinYear = (document.getElementById('student_join_year')||{}).value || '';
         try {
@@ -999,7 +1089,8 @@
           document.getElementById('es_msg').innerHTML = '<div class="alert alert-warning p-1">الرقم الدراسي مفقود</div>';
           return;
         }
-        const plan = (document.getElementById('es_graduation_plan')||{}).value || '';
+        const planSel = document.getElementById('es_graduation_plan');
+        const plan = (planSel && planSel.style.display !== 'none') ? (planSel.value || '') : '';
         const joinTerm = (document.getElementById('es_join_term')||{}).value || '';
         const joinYear = (document.getElementById('es_join_year')||{}).value || '';
         try {

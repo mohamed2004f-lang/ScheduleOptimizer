@@ -812,6 +812,21 @@ def my_courses_page():
     return resp
 
 
+@app.route("/my_contact")
+@login_required
+@role_required("instructor")
+def my_contact_page():
+    """إعدادات تواصل الأستاذ مع الطلبة (الذاتية)."""
+    if not _instructor_portal_ui_allowed():
+        if current_supervisor_effective():
+            return redirect(url_for("supervisor_dashboard_page"))
+        return redirect(url_for("transcript_page"))
+    resp = make_response(render_template("instructor_my_contact.html", active_page="my_contact"))
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
+
+
 @app.route("/my_schedule")
 @login_required
 def my_schedule_page():

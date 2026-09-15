@@ -697,7 +697,11 @@ function buildPublishedTimetableHtml(scheduleRows, opts) {
                     if (idx > 0) html += '<div class="slot-record-fullsep"></div>';
                     html += '<div class="slot-course-record">';
                     html += `<div class="slot-cell slot-cell--course"><span class="course-pub-label">${escapeHtmlSchedule(c.course_name)}</span></div>`;
-                    html += `<div class="slot-cell slot-cell--inst"><span class="slot-text">${escapeHtmlSchedule(c.instructor)}</span></div>`;
+                    let instHtml = `<span class="slot-text">${escapeHtmlSchedule(c.instructor)}</span>`;
+                    if (c.contact_available && c.course_page_url) {
+                        instHtml += ` <a class="slot-contact-link small" href="${escapeAttrSchedule(c.course_page_url)}" title="تواصل المقرر">✉</a>`;
+                    }
+                    html += `<div class="slot-cell slot-cell--inst">${instHtml}</div>`;
                     html += `<div class="slot-cell slot-cell--room"><span class="slot-text">${escapeHtmlSchedule(c.room)}</span></div>`;
                     html += '</div>';
                 });

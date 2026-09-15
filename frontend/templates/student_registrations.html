@@ -126,7 +126,11 @@
           <div id="planEditorView" class="d-none">
             <div class="mb-3">
               <label class="form-label small fw-semibold">الفصل الدراسي</label>
-              <input type="text" class="form-control" id="planSemesterInput" placeholder="مثال: خريف 25-26">
+              {% set typ_id = 'stuPlanTermPicker' %}
+              {% set typ_season_id = 'planSemesterSeason' %}
+              {% set typ_year_id = 'planSemesterYear' %}
+              {% include "partials/term_year_picker.html" %}
+              <input type="hidden" id="planSemesterInput" value="">
             </div>
             <div class="mb-3">
               <label class="form-label small fw-semibold">اختر المقررات</label>
@@ -167,12 +171,14 @@
     </div>
   </main>
 
+  <script src="/static/js/term-year-picker.js"></script>
   <script>
     let studentId = '';
     let currentTerm = '';
     let coursesMap = {};
     let eligibleCourses = [];
     let currentPlan = null;
+    let stuPlanPicker = null;
     let allPlans = [];
     let lastPrereqValidation = null;
     let prereqValidateTimer = null;
@@ -306,9 +312,20 @@
         const j = await r.json().catch(() => ({}));
         const name = j.term_name || '';
         const year = j.term_year || '';
-        currentTerm = (name + ' ' + year).trim();
+        currentTerm = (j.ops_label || (name + ' ' + year).trim());
         document.getElementById('statTerm').textContent = currentTerm || '—';
         document.getElementById('planSemesterInput').value = currentTerm;
+        if (stuPlanPicker) stuPlanPicker.setFromOpsLabel(currentTerm);
+        else if (window.TermYearPicker) {
+          stuPlanPicker = await window.TermYearPicker.mount({
+            rootId: 'stuPlanTermPicker',
+            seasonId: 'planSemesterSeason',
+            yearId: 'planSemesterYear',
+            hiddenId: 'planSemesterInput',
+            opsLabel: currentTerm,
+            useCurrent: !currentTerm,
+          });
+        }
       } catch(e) {}
     }
 
@@ -506,6 +523,7 @@
       if (!eligibleCourses.length) loadEligibleCourses();
       else renderCourseCheckList();
       document.getElementById('planSemesterInput').value = currentPlan?.semester || currentTerm;
+      if (stuPlanPicker) stuPlanPicker.setFromOpsLabel(currentPlan?.semester || currentTerm);
       scheduleEditorPrereqValidate();
     }
 

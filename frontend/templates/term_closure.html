@@ -18,9 +18,13 @@
         <p class="text-muted small mb-0">بناء الأرشيف والتنزيل من هنا. إغلاق/إعادة فتح المراحل اليومية من <a href="/term_ops">لوحة تشغيل الفصل</a>.</p>
       </div>
       <div class="d-flex flex-wrap gap-2 align-items-end">
-        <div>
-          <label class="form-label small mb-0">الفصل</label>
-          <input id="tcSemester" class="form-control form-control-sm" style="min-width:12rem" placeholder="خريف 25-26">
+        <div style="min-width:16rem;">
+          {% set typ_id = 'tcTermPicker' %}
+          {% set typ_season_id = 'tcSeason' %}
+          {% set typ_year_id = 'tcYear' %}
+          {% set typ_compact = true %}
+          {% include "partials/term_year_picker.html" %}
+          <input type="hidden" id="tcSemester" value="">
         </div>
         <a class="btn btn-sm btn-outline-primary" href="/term_ops">لوحة تشغيل الفصل</a>
         <button type="button" class="btn btn-sm btn-outline-primary" id="tcReload">تحديث الحالة</button>
@@ -71,6 +75,7 @@
     </div>
   </main>
 
+<script src="/static/js/term-year-picker.js"></script>
 <script>
 (function(){
   const elSem = document.getElementById('tcSemester');
@@ -78,6 +83,41 @@
   const elMsg = document.getElementById('tcMsg');
   let STATE = null;
   let CAN_REOPEN = false;
+  let TC_PICKER = null;
+
+  function syncSemesterHidden(){
+    const s = (document.getElementById('tcSeason')||{}).value || '';
+    const y = (document.getElementById('tcYear')||{}).value || '';
+    if (elSem) elSem.value = [s, y].filter(Boolean).join(' ').trim();
+  }
+
+  async function ensureTcPicker(opsLabel){
+    if (!window.TermYearPicker) return;
+    let termName = '', termYear = '';
+    const parts = String(opsLabel || '').trim().split(/\s+/);
+    if (parts.length >= 2) {
+      termName = parts[0];
+      termYear = parts.slice(1).join(' ');
+    }
+    try {
+      TC_PICKER = await window.TermYearPicker.mount({
+        rootId: 'tcTermPicker',
+        seasonId: 'tcSeason',
+        yearId: 'tcYear',
+        termName,
+        termYear,
+        useCurrent: !(termName && termYear),
+      });
+      const seasonEl = document.getElementById('tcSeason');
+      const yearEl = document.getElementById('tcYear');
+      const sync = () => syncSemesterHidden();
+      seasonEl?.addEventListener('change', sync);
+      yearEl?.addEventListener('change', sync);
+      sync();
+    } catch (e) {
+      console.warn(e);
+    }
+  }
 
   function setMsg(text, kind){
     elMsg.innerHTML = text ? `<div class="alert alert-${kind||'info'} py-2">${text}</div>` : '';
@@ -155,6 +195,7 @@
 
   async function load(){
     setMsg('جاري تحديث الحالة…','info');
+    syncSemesterHidden();
     const sem = (elSem.value||'').trim();
     let url = '/academic_quality/term_closure/status';
     if (sem) url += `?semester=${encodeURIComponent(sem)}`;
@@ -164,12 +205,16 @@
       return;
     }
     STATE = r.json;
-    if (STATE.semester && !elSem.value) elSem.value = STATE.semester;
+    if (STATE.semester) {
+      await ensureTcPicker(STATE.semester);
+      elSem.value = STATE.semester;
+    }
     setMsg('','');
     render();
   }
 
   async function closeStage(stage){
+    syncSemesterHidden();
     if (!confirm(`إغلاق مرحلة «${stage}» لهذا الفصل/النطاق؟`)) return;
     const body = {
       stage,
@@ -192,6 +237,7 @@
   }
 
   async function reopenStage(stage){
+    syncSemesterHidden();
     const reason = prompt('سبب إعادة فتح المرحلة (مطلوب):','');
     if (reason === null) return;
     if (String(reason).trim().length < 5) {
@@ -219,6 +265,7 @@
 
   document.getElementById('tcReload').addEventListener('click', load);
   document.getElementById('tcBuildArchive').addEventListener('click', async ()=>{
+    syncSemesterHidden();
     const body = { semester: (elSem.value||'').trim() || (STATE&&STATE.semester) || '' };
     setMsg('جاري بناء الأرشيف…','info');
     const r = await fetchJSON('/academic_quality/term_closure/build_archive', {
@@ -247,6 +294,7 @@
       const role = (auth.json && auth.json.role) || '';
       CAN_REOPEN = ['admin','admin_main','system_admin','college_dean','academic_vice_dean'].includes(role);
     } catch(e) { CAN_REOPEN = false; }
+    await ensureTcPicker('');
     await load();
   })();
 })();

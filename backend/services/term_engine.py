@@ -278,16 +278,94 @@ def parse_ops_term(term_name: str | None, term_year: str | None) -> dict[str, st
     academic_year = normalize_academic_year(term_year)
     if not season or not academic_year:
         return None
+    # رفض الأعوام غير القياسية (مثل نصوص لا تُطبع إلى YYYY/YYYY+1)
+    if not re.match(r"^20\d{2}/20\d{2}$", academic_year):
+        return None
     name_ar = season_name_ar(season)
-    ops_year = (term_year or "").strip() or academic_year
-    ops_label = f"{name_ar} {ops_year}".strip()
+    # عقد العرض/التخزين الموحّد: دائماً YYYY/YYYY+1
+    ops_label = f"{name_ar} {academic_year}".strip()
     return {
         "season": season,
         "academic_year": academic_year,
         "term_key": canonical_term_key(season, academic_year),
         "term_name_ar": name_ar,
-        "ops_year_label": ops_year,
+        "ops_year_label": academic_year,
         "ops_label": ops_label,
+    }
+
+
+def list_academic_year_options(
+    conn=None,
+    *,
+    span_before: int = 8,
+    span_after: int = 5,
+) -> list[str]:
+    """أعوام دراسية للقائمة المنسدلة بصيغة YYYY/YYYY+1 (8 خلف / 5 أمام افتراضياً)."""
+    years: set[str] = set()
+    # نطاق حول السنة الميلادية الحالية (عام دراسي يبدأ عادة في الخريف)
+    try:
+        y0 = datetime.date.today().year
+    except Exception:
+        y0 = 2026
+    for i in range(-int(span_before), int(span_after) + 1):
+        a = y0 + i
+        years.add(f"{a}/{a + 1}")
+    if conn is not None:
+        try:
+            if table_exists(conn, "term_master"):
+                rows = conn.cursor().execute(
+                    "SELECT DISTINCT academic_year FROM term_master"
+                ).fetchall()
+                for r in rows or []:
+                    raw = r["academic_year"] if hasattr(r, "keys") else r[0]
+                    n = normalize_academic_year(str(raw or ""))
+                    if re.match(r"^20\d{2}/20\d{2}$", n):
+                        years.add(n)
+            if table_exists(conn, "academic_calendar"):
+                rows = conn.cursor().execute(
+                    "SELECT DISTINCT academic_year FROM academic_calendar"
+                ).fetchall()
+                for r in rows or []:
+                    raw = r["academic_year"] if hasattr(r, "keys") else r[0]
+                    n = normalize_academic_year(str(raw or ""))
+                    if re.match(r"^20\d{2}/20\d{2}$", n):
+                        years.add(n)
+        except Exception:
+            logger.exception("list_academic_year_options scan failed")
+        try:
+            from backend.services.utilities import get_current_term
+
+            _n, y = get_current_term(conn=conn)
+            n = normalize_academic_year(y)
+            if re.match(r"^20\d{2}/20\d{2}$", n):
+                years.add(n)
+        except Exception:
+            pass
+    return sorted(years, reverse=True)
+
+
+def term_picker_payload(conn=None) -> dict[str, Any]:
+    """حمولة واجهة اختيار الفصل/العام."""
+    from backend.services.utilities import get_current_term
+
+    name, year = get_current_term(conn=conn) if conn is not None else get_current_term()
+    parsed = parse_ops_term(name, year)
+    return {
+        "seasons": [
+            {"value": "خريف", "season": SEASON_FALL, "label_ar": "خريف"},
+            {"value": "ربيع", "season": SEASON_SPRING, "label_ar": "ربيع"},
+        ],
+        "academic_years": list_academic_year_options(conn),
+        "current": {
+            "term_name": (parsed or {}).get("term_name_ar") or (name or "").strip(),
+            "term_year": (parsed or {}).get("academic_year")
+            or normalize_academic_year(year)
+            or (year or "").strip(),
+            "ops_label": (parsed or {}).get("ops_label")
+            or f"{(name or '').strip()} {(year or '').strip()}".strip(),
+            "term_key": (parsed or {}).get("term_key") or "",
+            "season": (parsed or {}).get("season") or "",
+        },
     }
 
 

@@ -37,6 +37,10 @@ def student_program_id(cur, student_id: str) -> int | None:
 
 
 def student_graduation_plan(cur, student_id: str) -> str:
+    """نظام الوحدات التراثي 150/155 إن وُجد؛ فارغ لغير الميكانيكا أو عند غياب التعيين.
+
+    عند الفراغ تُعامل مقررات البرنامج كـ plan_applicability=both (آمن للأقسام غير MECH).
+    """
     row = cur.execute(
         """
         SELECT COALESCE(graduation_plan, '')

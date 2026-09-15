@@ -133,6 +133,28 @@ def _ensure_tables_postgresql() -> None:
         "ALTER TABLE department_graduation_policies ADD COLUMN IF NOT EXISTS effective_from_year TEXT DEFAULT ''",
         "ALTER TABLE instructors ADD COLUMN IF NOT EXISTS department_id BIGINT",
         "ALTER TABLE instructors ADD COLUMN IF NOT EXISTS external_scope TEXT NOT NULL DEFAULT 'within_college'",
+        "ALTER TABLE instructors ADD COLUMN IF NOT EXISTS contact_email_visible INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE instructors ADD COLUMN IF NOT EXISTS whatsapp_phone TEXT",
+        "ALTER TABLE instructors ADD COLUMN IF NOT EXISTS whatsapp_phone_visible INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE instructors ADD COLUMN IF NOT EXISTS whatsapp_username TEXT",
+        "ALTER TABLE instructors ADD COLUMN IF NOT EXISTS whatsapp_username_key TEXT",
+        "ALTER TABLE instructors ADD COLUMN IF NOT EXISTS whatsapp_username_visible INTEGER NOT NULL DEFAULT 0",
+        """
+        CREATE TABLE IF NOT EXISTS course_group_links (
+            id BIGSERIAL PRIMARY KEY,
+            teaching_group_id BIGINT NOT NULL,
+            semester TEXT NOT NULL DEFAULT '',
+            platform TEXT NOT NULL DEFAULT 'other'
+                CHECK (platform IN ('whatsapp', 'telegram', 'other')),
+            label_ar TEXT NOT NULL DEFAULT '',
+            url TEXT NOT NULL,
+            is_visible INTEGER NOT NULL DEFAULT 0 CHECK (is_visible IN (0, 1)),
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_by_instructor_id BIGINT,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_cgl_tg_vis ON course_group_links(teaching_group_id, is_visible)",
         "ALTER TABLE grade_drafts ADD COLUMN IF NOT EXISTS section_id INTEGER",
         "ALTER TABLE grade_draft_items ADD COLUMN IF NOT EXISTS coursework REAL",
         "ALTER TABLE grade_draft_items ADD COLUMN IF NOT EXISTS midterm REAL",
@@ -1253,6 +1275,13 @@ def _ensure_tables_postgresql() -> None:
             from backend.services.pathway_regulations import ensure_pathway_regulation_defaults
 
             ensure_pathway_regulation_defaults(conn)
+            try:
+                from backend.core.graduation_targets import sync_program_major_min_units
+
+                sync_program_major_min_units(conn)
+                conn.commit()
+            except Exception as e:
+                logger.warning("Could not sync PROG_MAJOR min_total_units: %s", e)
         except Exception as e:
             logger.warning("backfill academic pathway (postgresql): %s", e)
             try:

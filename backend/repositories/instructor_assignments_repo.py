@@ -277,22 +277,76 @@ def deactivate_assignments_for_department(conn, instructor_id: int, department_i
 
 
 def replace_user_assignments_from_payload(conn, instructor_id: int, assignments: list[dict]) -> None:
-    """يستبدل الإسنادات التي يديرها المستخدم بالقائمة المرسلة."""
-    delete_user_managed_assignments(conn, instructor_id)
+    """
+    يزامن أقسام التعاون مع القائمة المرسلة من الواجهة.
+
+    - يعطّل أي إسناد نشط (أي مصدر) لقسم غير موجود في القائمة وغير القسم الرئيسي.
+    - يُنشئ/يُفعّل المطلوب كـ user_ui.
+    لا يمس إسناد القسم الرئيسي (منزل الأستاذ).
+    """
+    iid = int(instructor_id)
+    cur = conn.cursor()
+    home_dept = None
+    home_row = cur.execute(
+        "SELECT department_id FROM instructors WHERE id = ? LIMIT 1",
+        (iid,),
+    ).fetchone()
+    if home_row:
+        raw_home = home_row[0] if not hasattr(home_row, "keys") else home_row["department_id"]
+        if raw_home not in (None, ""):
+            try:
+                home_dept = int(raw_home)
+            except (TypeError, ValueError):
+                home_dept = None
+
+    desired: set[int] = set()
+    desired_meta: dict[int, dict] = {}
     for raw in assignments or []:
         try:
             did = int(raw.get("department_id"))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, AttributeError):
             continue
+        if home_dept is not None and did == home_dept:
+            continue
+        desired.add(did)
+        desired_meta[did] = raw if isinstance(raw, dict) else {}
+
+    if table_exists(conn, "instructor_department_assignments"):
+        ph = "%s" if is_postgresql() else "?"
+        rows = cur.execute(
+            f"""
+            SELECT DISTINCT department_id
+            FROM instructor_department_assignments
+            WHERE instructor_id = {ph} AND COALESCE(is_active, 1) = 1
+            """,
+            (iid,),
+        ).fetchall()
+        current: set[int] = set()
+        for r in rows or []:
+            raw_did = r[0] if not hasattr(r, "keys") else r["department_id"]
+            if raw_did in (None, ""):
+                continue
+            try:
+                did = int(raw_did)
+            except (TypeError, ValueError):
+                continue
+            if home_dept is not None and did == home_dept:
+                continue
+            current.add(did)
+        for did in current - desired:
+            deactivate_assignments_for_department(conn, iid, did)
+
+    for did in sorted(desired):
+        raw = desired_meta.get(did) or {}
         try:
             sid = int(raw.get("schedule_section_id", HOME_ASSIGNMENT_SECTION_ID))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, AttributeError):
             sid = HOME_ASSIGNMENT_SECTION_ID
         sem = str(raw.get("semester") or "")
         is_pri = bool(raw.get("is_primary"))
         upsert_user_assignment(
             conn,
-            instructor_id=instructor_id,
+            instructor_id=iid,
             department_id=did,
             schedule_section_id=sid,
             semester=sem,

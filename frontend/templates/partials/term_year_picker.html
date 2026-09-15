@@ -1,0 +1,33 @@
+{# مكوّن اختيار الفصل + العام الدراسي (خريف/ربيع + YYYY/YYYY+1) #}
+{# الاستخدام: {% include "partials/term_year_picker.html" %} مع معاملات اختيارية عبر set قبل include #}
+{% set typ_id = typ_id|default('termYearPicker') %}
+{% set typ_season_id = typ_season_id|default(typ_id ~ 'Season') %}
+{% set typ_year_id = typ_year_id|default(typ_id ~ 'Year') %}
+{% set typ_show_labels = typ_show_labels|default(true) %}
+{% set typ_disabled = typ_disabled|default(false) %}
+{% set typ_compact = typ_compact|default(false) %}
+{% set typ_season_label = typ_season_label|default('الفصل') %}
+{% set typ_year_label = typ_year_label|default('العام الدراسي') %}
+<div class="term-year-picker {{ 'row g-2 align-items-end' if not typ_compact else 'd-flex flex-wrap gap-2 align-items-end' }}"
+     id="{{ typ_id }}"
+     data-term-year-picker
+     data-season-id="{{ typ_season_id }}"
+     data-year-id="{{ typ_year_id }}">
+  <div class="{{ 'col-md-6' if not typ_compact else '' }}">
+    {% if typ_show_labels %}
+    <label class="form-label small mb-0" for="{{ typ_season_id }}">{{ typ_season_label }}</label>
+    {% endif %}
+    <select id="{{ typ_season_id }}" class="form-select form-select-sm" {% if typ_disabled %}disabled{% endif %}>
+      <option value="خريف">خريف</option>
+      <option value="ربيع">ربيع</option>
+    </select>
+  </div>
+  <div class="{{ 'col-md-6' if not typ_compact else '' }}">
+    {% if typ_show_labels %}
+    <label class="form-label small mb-0" for="{{ typ_year_id }}">{{ typ_year_label }}</label>
+    {% endif %}
+    <select id="{{ typ_year_id }}" class="form-select form-select-sm" dir="ltr" {% if typ_disabled %}disabled{% endif %}>
+      <option value="">— اختر العام —</option>
+    </select>
+  </div>
+</div>
