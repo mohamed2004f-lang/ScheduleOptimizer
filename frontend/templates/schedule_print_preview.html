@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>معاينة طباعة الجدول الدراسي</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #1a1a1a;
+      padding: 16px 20px;
+      background: #fff;
+      margin: 0;
+    }
+    h1 { font-size: 20px; margin: 0 0 6px; color: #0d3b66; }
+    .meta { color: #555; margin-bottom: 12px; }
+    .preview-banner {
+      background: #e7f1ff; border: 1px solid #0d6efd; border-radius: 6px;
+      padding: 10px 14px; margin-bottom: 14px;
+      display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;
+    }
+    .preview-banner .btn-print {
+      padding: 6px 14px; border: 1px solid #198754; background: #198754;
+      color: #fff; border-radius: 4px; cursor: pointer; font-weight: 600;
+    }
+    .preview-hint {
+      font-size: 12px; color: #0f5132; margin: 0 0 12px;
+      padding: 8px 10px; background: #d1e7dd; border-right: 3px solid #198754;
+    }
+    .timetable { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .timetable th, .timetable td {
+      border: 1px solid #888; padding: 5px 6px; vertical-align: top; text-align: right;
+    }
+    .timetable th { background: #e8eef4; font-weight: 700; }
+    .stage-badge { display: inline-block; font-size: 10px; margin-inline-start: 4px; padding: 1px 5px; border-radius: 4px; background: #e2e8f0; }
+    .slot-conflict-actions, .manage-courses-btn, .btn-edit-day-periods,
+    .stage-actions-row, .stage-row-actions { display: none !important; }
+    .course-btn, .course-label-readonly, .course-pub-label {
+      display: inline-block; color: #111 !important; background: #f1f5f9 !important;
+      padding: 2px 6px; border-radius: 4px; font-weight: 700; border: none;
+    }
+    {% if use_stage_matrix %}
+    @page { size: A4 landscape; margin: 8mm; }
+    {% else %}
+    @page { size: A4 portrait; margin: 10mm; }
+    {% endif %}
+    @media print {
+      .no-print { display: none !important; }
+      body { padding: 0; }
+      .stage-time-row { page-break-inside: avoid; }
+      .slot-conflict-actions, .manage-courses-btn, .btn-edit-day-periods,
+      .stage-actions-row, .stage-row-actions { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="preview-banner no-print">
+    <span><strong>معاينة الجدول الدراسي</strong> — راجع ثم اطبع أو احفظ PDF من المتصفح.</span>
+    <button type="button" class="btn-print" id="btnPreviewPrint">طباعة / حفظ PDF</button>
+  </div>
+  <p class="preview-hint no-print">
+    <strong>الأفضل للشواهد:</strong> استخدم «طباعة / حفظ PDF» من هنا (جودة عربية وهوامش صحيحة)، بنفس أسلوب نتائج الاستبيانات.
+  </p>
+
+  <h1>الجدول الدراسي</h1>
+  <div class="meta">
+    {% if department_name %}<strong>القسم:</strong> {{ department_name }} · {% endif %}
+    {% if term_label %}<strong>الفصل:</strong> {{ term_label }} · {% endif %}
+    <strong>تاريخ الطباعة:</strong> {{ generated_at }}
+    · <strong>العرض:</strong> {% if use_stage_matrix %}مصفوفة المراحل{% else %}أسبوعي (يوم ثم وقت){% endif %}
+  </div>
+
+  <div id="printGrid"></div>
+
+  <script src="/static/js/common.js"></script>
+  <script src="/static/js/schedule-stage-grid.js?v=20260918e"></script>
+  <script>
+    window.SCHEDULE_DAYS = window.SCHEDULE_DAYS || ['السبت','الأحد','الإثنين','الثلاثاء','الأربعاء','الخميس'];
+    const ROWS = {{ rows|tojson }};
+    const USE_STAGES = {{ 'true' if use_stage_matrix else 'false' }};
+    const el = document.getElementById('printGrid');
+    if (USE_STAGES && typeof buildStageMatrixTimetableHtml === 'function') {
+      el.innerHTML = buildStageMatrixTimetableHtml(ROWS, {
+        showSlotManage: false,
+        showDayPeriodEdit: false,
+        includeActionRows: false,
+        fillEmptyDays: false,
+      });
+    } else if (typeof buildPersonalWeeklyTimetableHtml === 'function') {
+      el.innerHTML = buildPersonalWeeklyTimetableHtml(ROWS, {
+        showSlotManage: false,
+        showDayPeriodEdit: false,
+      });
+    } else if (typeof buildPublishedTimetableHtml === 'function') {
+      el.innerHTML = buildPublishedTimetableHtml(ROWS, {});
+    } else {
+      el.innerHTML = '<p>لا يمكن بناء معاينة الطباعة.</p>';
+    }
+    document.getElementById('btnPreviewPrint')?.addEventListener('click', function () {
+      window.print();
+    });
+  </script>
+</body>
+</html>

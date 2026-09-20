@@ -831,7 +831,9 @@
           return;
         }
         const rows = Array.isArray(j.rows) ? j.rows : [];
-        if (typeof buildPublishedTimetableHtml === 'function') {
+        if (typeof buildPersonalWeeklyTimetableHtml === 'function') {
+          el.innerHTML = buildPersonalWeeklyTimetableHtml(rows, {});
+        } else if (typeof buildPublishedTimetableHtml === 'function') {
           el.innerHTML = buildPublishedTimetableHtml(rows, {});
         } else {
           el.innerHTML = '<p class="text-muted small mb-0">تعذر عرض الجدول.</p>';

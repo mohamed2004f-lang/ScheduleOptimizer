@@ -534,6 +534,10 @@ def _setting_key_time_slots(conn) -> str:
     return "time_slots::" + _current_term_key_suffix(conn)
 
 
+def _setting_key_time_slots_by_day(conn) -> str:
+    return "time_slots_by_day::" + _current_term_key_suffix(conn)
+
+
 def _default_time_slots() -> list:
     return [
         "09:00-11:00",
@@ -656,6 +660,72 @@ def _get_time_slots_setting(conn) -> dict:
         except Exception:
             pass
     return {"slots": _default_time_slots(), "source": "default", "key": key, "term_label": term_label}
+
+
+def _get_time_slots_by_day_setting(conn) -> dict:
+    """يرجع {by_day: {day: [slots...]}} أو فارغ إن لم يُحفظ."""
+    key = _setting_key_time_slots_by_day(conn)
+    cur = conn.cursor()
+    row = cur.execute("SELECT value_json FROM app_settings WHERE key = ? LIMIT 1", (key,)).fetchone()
+    out: dict[str, list[str]] = {}
+    if not row:
+        return {"by_day": out, "key": key, "source": "none"}
+    raw = (row[0] if isinstance(row, (list, tuple)) else row["value_json"]) or ""
+    try:
+        data = json.loads(raw)
+        src = data.get("by_day") if isinstance(data, dict) else data
+        if isinstance(src, dict):
+            for day, slots in src.items():
+                d = _canonical_schedule_day_label(str(day or "").strip())
+                if not d or not isinstance(slots, list):
+                    continue
+                cleaned = []
+                seen = set()
+                for s in slots:
+                    lab = _canonical_time_slot_label(_normalize_time_slot_str(str(s or "")))
+                    if not lab or not _validate_time_slot_format(lab) or lab in seen:
+                        continue
+                    seen.add(lab)
+                    cleaned.append(lab)
+                out[d] = _sort_time_slots(cleaned)
+    except Exception:
+        pass
+    return {"by_day": out, "key": key, "source": "saved" if out else "none"}
+
+
+def _union_slots_from_by_day(by_day: dict) -> list[str]:
+    seen = set()
+    merged = []
+    for day in _days_ar():
+        for s in (by_day or {}).get(day) or []:
+            if s not in seen:
+                seen.add(s)
+                merged.append(s)
+    for day, slots in (by_day or {}).items():
+        if day in _days_ar():
+            continue
+        for s in slots or []:
+            if s not in seen:
+                seen.add(s)
+                merged.append(s)
+    return _sort_time_slots(merged)
+
+
+def _save_app_setting_json(conn, key: str, payload_obj, actor: str) -> None:
+    now = _now_iso_z()
+    payload = json.dumps(payload_obj, ensure_ascii=False)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO app_settings (key, value_json, updated_at, updated_by)
+        VALUES (?,?,?,?)
+        ON CONFLICT (key) DO UPDATE SET
+            value_json = EXCLUDED.value_json,
+            updated_at = EXCLUDED.updated_at,
+            updated_by = EXCLUDED.updated_by
+        """,
+        (key, payload, now, actor),
+    )
 
 
 def _days_ar() -> list:
@@ -1369,6 +1439,19 @@ def list_schedule_rows():
                 if not schedule_semester_matches_term_context(item.get("semester"), ctx):
                     continue
                 result.append(item)
+            try:
+                from backend.core.schedule_stage_layout import (
+                    enrich_schedule_row_stage_fields,
+                    load_course_codes_by_name,
+                )
+
+                code_map = load_course_codes_by_name(
+                    conn, [str(x.get("course_name") or "") for x in result]
+                )
+                for item in result:
+                    enrich_schedule_row_stage_fields(conn, item, course_code_by_name=code_map)
+            except Exception:
+                logger.exception("schedule row stage enrichment failed")
             try:
                 from backend.core.cache_setup import cache, list_cache_key
 
@@ -2630,9 +2713,15 @@ def clear_schedule_all():
 @schedule_bp.route("/time_slots")
 @login_required
 def get_time_slots():
-    """جلب تقسيمات الوقت المعتمدة للفصل الحالي (إعداد محفوظ أو افتراضي)."""
+    """جلب تقسيمات الوقت المعتمدة للفصل الحالي (إعداد محفوظ أو افتراضي).
+
+    يُرجع أيضاً by_day إن وُجد إعداد لكل يوم (حقل إضافي يتجاهله العميل القديم).
+    """
     with get_connection() as conn:
         out = _get_time_slots_setting(conn)
+        by_day_info = _get_time_slots_by_day_setting(conn)
+        out["by_day"] = by_day_info.get("by_day") or {}
+        out["by_day_source"] = by_day_info.get("source") or "none"
     return jsonify({"status": "ok", **out}), 200
 
 
@@ -2642,53 +2731,197 @@ def save_time_slots():
     """
     حفظ تقسيمات الوقت للفصل الحالي في app_settings.
     body:
-      - slots: ["09:00-11:00", ...]
+      - slots: ["09:00-11:00", ...]  (اتحاد — متوافق مع السابق)
+      - by_day: {"السبت": ["08:00-10:00", ...], ...}  اختياري — يحدّث الاتحاد أيضاً
     """
     data = request.get_json(force=True) or {}
+    by_day_raw = data.get("by_day")
     slots = data.get("slots") or []
-    if not isinstance(slots, list):
-        return jsonify({"status": "error", "message": "slots يجب أن تكون قائمة"}), 400
-    cleaned = []
-    seen = set()
-    for s in slots:
-        s = _canonical_time_slot_label(_normalize_time_slot_str(str(s or "")))
-        if not s:
-            continue
-        if not _validate_time_slot_format(s):
-            return jsonify({"status": "error", "message": f"صيغة وقت غير صحيحة: {s}"}), 400
-        if s in seen:
-            continue
-        seen.add(s)
-        cleaned.append(s)
-    cleaned = _sort_time_slots(cleaned)
+
+    cleaned_by_day: dict[str, list[str]] = {}
+    if isinstance(by_day_raw, dict):
+        for day, day_slots in by_day_raw.items():
+            d = _canonical_schedule_day_label(str(day or "").strip())
+            if not d or not isinstance(day_slots, list):
+                continue
+            cleaned = []
+            seen = set()
+            for s in day_slots:
+                s = _canonical_time_slot_label(_normalize_time_slot_str(str(s or "")))
+                if not s:
+                    continue
+                if not _validate_time_slot_format(s):
+                    return jsonify({"status": "error", "message": f"صيغة وقت غير صحيحة: {s}"}), 400
+                if s in seen:
+                    continue
+                seen.add(s)
+                cleaned.append(s)
+            cleaned_by_day[d] = _sort_time_slots(cleaned)
+
+    if cleaned_by_day:
+        cleaned = _union_slots_from_by_day(cleaned_by_day)
+    else:
+        if not isinstance(slots, list):
+            return jsonify({"status": "error", "message": "slots يجب أن تكون قائمة"}), 400
+        cleaned = []
+        seen = set()
+        for s in slots:
+            s = _canonical_time_slot_label(_normalize_time_slot_str(str(s or "")))
+            if not s:
+                continue
+            if not _validate_time_slot_format(s):
+                return jsonify({"status": "error", "message": f"صيغة وقت غير صحيحة: {s}"}), 400
+            if s in seen:
+                continue
+            seen.add(s)
+            cleaned.append(s)
+        cleaned = _sort_time_slots(cleaned)
+
     if not cleaned:
         return jsonify({"status": "error", "message": "أدخل تقسيمات صالحة (غير فارغة)"}), 400
 
     actor = (session.get("user") or session.get("username") or "").strip() or "system"
-    now = _now_iso_z()
     with get_connection() as conn:
         key = _setting_key_time_slots(conn)
-        payload = json.dumps({"slots": cleaned}, ensure_ascii=False)
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO app_settings (key, value_json, updated_at, updated_by)
-            VALUES (?,?,?,?)
-            ON CONFLICT (key) DO UPDATE SET
-                value_json = EXCLUDED.value_json,
-                updated_at = EXCLUDED.updated_at,
-                updated_by = EXCLUDED.updated_by
-            """,
-            (key, payload, now, actor),
-        )
+        _save_app_setting_json(conn, key, {"slots": cleaned}, actor)
+        if cleaned_by_day:
+            key_day = _setting_key_time_slots_by_day(conn)
+            _save_app_setting_json(conn, key_day, {"by_day": cleaned_by_day}, actor)
         conn.commit()
         try:
-            log_activity(action="save_time_slots", details=f"key={key}, slots={len(cleaned)}")
+            log_activity(
+                action="save_time_slots",
+                details=f"key={key}, slots={len(cleaned)}, by_day={len(cleaned_by_day)}",
+            )
         except Exception:
             pass
         out = _get_time_slots_setting(conn)
+        by_day_info = _get_time_slots_by_day_setting(conn)
+        out["by_day"] = by_day_info.get("by_day") or {}
+        out["by_day_source"] = by_day_info.get("source") or "none"
 
     return jsonify({"status": "ok", **out}), 200
+
+
+@schedule_bp.route("/display_layout")
+@login_required
+def schedule_display_layout():
+    """وضع عرض المحرر: مصفوفة مراحل أو أسبوع شخصي + حالة العلم."""
+    uname = (session.get("user") or session.get("username") or "").strip()
+    with get_connection() as conn:
+        from backend.core.schedule_stage_layout import build_display_layout_payload
+
+        payload = build_display_layout_payload(conn, uname or None)
+    return jsonify({"status": "ok", **payload}), 200
+
+
+@schedule_bp.route("/print_preview")
+@login_required
+def schedule_print_preview():
+    """معاينة طباعة HTML بأسلوب الاستبيانات (محتوى = العرض المناسب للدور)."""
+    uname = (session.get("user") or session.get("username") or "").strip()
+    scope = request.args.get("scope") or "editor"
+    with get_connection() as conn:
+        from backend.core.schedule_stage_layout import build_display_layout_payload
+        from backend.services.term_engine import (
+            current_term_match_context,
+            schedule_semester_matches_term_context,
+        )
+
+        layout = build_display_layout_payload(conn, uname or None)
+        ctx = current_term_match_context(conn)
+        term_label = ""
+        try:
+            term_label = str((ctx or {}).get("raw_label") or (ctx or {}).get("term_key") or "").strip()
+        except Exception:
+            term_label = ""
+
+        # صفوف المحرر (نطاق القسم) — نفس مصدر list_schedule_rows تقريباً
+        _sync_schedule_pk_col(conn)
+        cur = conn.cursor()
+        try:
+            scols = fetch_table_columns(conn, "schedule")
+        except Exception:
+            scols = []
+        dept_scope = _effective_schedule_department_scope_id(conn)
+        from backend.repositories.schedule_repo import fetch_schedule_rows_with_student_counts
+
+        has_tg = "teaching_group_id" in scols and table_exists(conn, "teaching_groups")
+        reg_has_tg = False
+        if has_tg:
+            reg_cols = {c.lower() for c in fetch_table_columns(conn, "registrations")}
+            reg_has_tg = "teaching_group_id" in reg_cols
+        dept_id = dept_scope if (dept_scope is not None and "department_id" in scols) else None
+        rows_raw = fetch_schedule_rows_with_student_counts(
+            cur,
+            pk_col=SCHEDULE_PK_COL,
+            department_id=dept_id,
+            include_teaching_groups=has_tg,
+            registrations_has_teaching_group=reg_has_tg,
+        )
+        result = []
+        for r in rows_raw:
+            def _cell(key: str, idx: int, default=None, _r=r):
+                if hasattr(_r, "keys"):
+                    try:
+                        if key in _r.keys():
+                            return _r[key]
+                    except Exception:
+                        pass
+                try:
+                    return _r[idx]
+                except Exception:
+                    return default
+
+            item = {
+                "section_id": _cell("section_id", 0) or _cell("id", 0) or 0,
+                "course_name": _cell("course_name", 1, "") or "",
+                "day": _cell("day", 2, "") or "",
+                "time": _cell("time", 3, "") or "",
+                "room": _cell("room", 4, "") or "",
+                "instructor": _cell("instructor", 5, "") or "",
+                "semester": _cell("semester", 6, "") or "",
+                "student_count": int(_cell("student_count", 8, 0) or 0),
+            }
+            if not schedule_semester_matches_term_context(item.get("semester"), ctx):
+                continue
+            result.append(item)
+        try:
+            from backend.core.schedule_stage_layout import (
+                enrich_schedule_row_stage_fields,
+                load_course_codes_by_name,
+            )
+
+            code_map = load_course_codes_by_name(
+                conn, [str(x.get("course_name") or "") for x in result]
+            )
+            for item in result:
+                enrich_schedule_row_stage_fields(conn, item, course_code_by_name=code_map)
+        except Exception:
+            logger.exception("print_preview stage enrichment failed")
+
+        use_stages = bool(layout.get("use_stage_matrix")) and scope != "personal"
+        dept_name = ""
+        if dept_scope is not None:
+            try:
+                dr = cur.execute(
+                    "SELECT COALESCE(name_ar, code, '') FROM departments WHERE id = ? LIMIT 1",
+                    (int(dept_scope),),
+                ).fetchone()
+                if dr:
+                    dept_name = str(dr[0] or "")
+            except Exception:
+                dept_name = ""
+
+    return render_template(
+        "schedule_print_preview.html",
+        rows=result,
+        layout=layout,
+        use_stage_matrix=use_stages,
+        term_label=term_label,
+        department_name=dept_name,
+        generated_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+    )
 
 
 @schedule_bp.route("/export/pdf")

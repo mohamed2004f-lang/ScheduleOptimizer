@@ -24,7 +24,7 @@
         if(!j.published){document.getElementById('unpublishedNote').textContent='الجدول غير معتمد بعد.';document.getElementById('unpublishedNote').classList.remove('d-none');return;}
         const rows=j.rows||[];
         document.getElementById('timetableCard').classList.remove('d-none');
-        document.getElementById('timetableWrap').innerHTML=typeof buildPublishedTimetableHtml==='function'?buildPublishedTimetableHtml(rows,{}):'<p class="text-muted">لا حصص.</p>';
+        document.getElementById('timetableWrap').innerHTML=typeof buildPersonalWeeklyTimetableHtml==='function'?buildPersonalWeeklyTimetableHtml(rows,{}):(typeof buildPublishedTimetableHtml==='function'?buildPublishedTimetableHtml(rows,{}):'<p class="text-muted">لا حصص.</p>');
       }catch(e){ls.textContent='تعذر التحميل.';}
     })();
   </script>

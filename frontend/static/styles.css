@@ -850,6 +850,67 @@ html[data-theme="dark"] .product-home-credit,
   color: #0f172a;
   line-height: 1.3;
 }
+.course-pub-label--filled{
+  color: #fff !important;
+  font-weight: 800;
+  padding: 6px 8px;
+  border-radius: 10px;
+  box-shadow: 0 4px 12px rgba(2,6,23,.08);
+  white-space: normal;
+}
+.slot-text--empty{
+  color: #cbd5e1;
+  font-weight: 600;
+}
+.slot-course-record--blank{
+  min-height: 0.5rem;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* وضع القراءة (بدون أزرار إدارة): صفوف أوضح وأقل فراغاً */
+.timetable.timetable--clean td.slot-slot-block{
+  padding: 6px 8px;
+  vertical-align: middle;
+}
+.timetable.timetable--clean .slot-course-record{
+  padding: 4px 0;
+  gap: 6px 10px;
+  align-items: center;
+}
+.timetable.timetable--clean .slot-record-fullsep{
+  margin: 1px 0 3px;
+  border-top-width: 1px;
+  border-top-color: rgba(15,23,42,0.10);
+}
+.timetable.timetable--clean td.time-slot-time{
+  vertical-align: middle;
+  padding: 6px 8px;
+}
+.time-slot-time-label{
+  font-weight: 800;
+  line-height: 1.25;
+}
+.slot-conflict-actions--inline{
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  margin-top: 6px;
+}
+.slot-conflict-actions--inline .conflict-row-btn{
+  font-size: 11px;
+  padding: 2px 6px;
+  width: 100%;
+}
+.timetable.timetable--clean .day-header-inner{
+  gap: 4px;
+}
+.timetable.timetable--clean th.day-header,
+.timetable.timetable--clean td{
+  min-height: 0;
+}
 .timetable.is-compact.timetable--cols3 td.slot-slot-block{
   min-width: 220px;
   padding: 6px 7px;
@@ -895,6 +956,182 @@ html[data-theme="dark"] .product-home-credit,
 .timetable.is-compact .manage-courses-btn{
   padding: 5px 8px;
   font-size: 11px;
+}
+
+/* —— مصفوفة المراحل / الأسبوع الشخصي —— */
+.timetable.timetable--stages,
+.timetable.timetable--personal{
+  --sched-day-w: 7.25rem;
+  --sched-time-w: 7.5rem;
+  min-width: 720px;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+.timetable.timetable--stages thead th.day-header,
+.timetable.timetable--personal thead th.day-header,
+.timetable.timetable--stages tbody th.day-header,
+.timetable.timetable--personal tbody th.day-header{
+  position: sticky;
+  top: auto; /* لا تثبّت رأسياً — فقط أفقياً مع التمرير */
+  right: 0;
+  z-index: 16;
+  width: var(--sched-day-w);
+  min-width: var(--sched-day-w);
+  max-width: var(--sched-day-w);
+  background: #e2e8f0;
+  vertical-align: middle;
+  box-sizing: border-box;
+  border-left: 1px solid #94a3b8;
+  box-shadow: -2px 0 0 rgba(148, 163, 184, 0.35);
+}
+.timetable.timetable--stages thead th.time-header,
+.timetable.timetable--personal thead th.time-header,
+.timetable.timetable--stages td.time-slot-time,
+.timetable.timetable--personal td.time-slot-time{
+  position: sticky;
+  top: auto;
+  right: var(--sched-day-w);
+  z-index: 15;
+  width: var(--sched-time-w);
+  min-width: var(--sched-time-w);
+  max-width: var(--sched-time-w);
+  background: #f8fafc;
+  font-weight: 800;
+  vertical-align: middle;
+  box-sizing: border-box;
+  border-left: 1px solid #cbd5e1;
+  box-shadow: -2px 0 0 rgba(148, 163, 184, 0.25);
+}
+.timetable.timetable--stages thead th.time-header,
+.timetable.timetable--personal thead th.time-header{
+  top: 0; /* رأس الجدول فقط */
+}
+.timetable.timetable--stages thead th.day-header,
+.timetable.timetable--personal thead th.day-header{
+  top: 0;
+  z-index: 18;
+}
+.timetable.timetable--stages thead th.time-header,
+.timetable.timetable--personal thead th.time-header{
+  z-index: 17;
+}
+.day-header-inner{
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.day-header-name{
+  font-weight: 900;
+  line-height: 1.2;
+}
+.day-header--cont{
+  background: #e8eef4 !important;
+  border-top-color: transparent !important;
+}
+.stage-time-row.is-day-start > th.day-header--start,
+.personal-time-row.is-day-start > th.day-header--start{
+  border-top: 2px solid #64748b;
+}
+.btn-edit-day-periods{
+  font-size: 11px !important;
+  font-weight: 800 !important;
+  padding: 2px 6px !important;
+  white-space: nowrap;
+}
+.time-slot-time-stack{
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+.time-slot-time-label{
+  font-weight: 800;
+  line-height: 1.25;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.manage-courses-btn--time{
+  width: 100%;
+  padding: 3px 6px;
+  font-size: 11px;
+  border-radius: 8px;
+  margin: 0;
+}
+.timetable.timetable--stages th.stage-block-header{
+  background: #dbeafe;
+  font-size: 12px;
+  font-weight: 900;
+  text-align: center;
+}
+.stage-badge{
+  display: none !important; /* التصنيف يظهر عبر أعمدة المراحل */
+}
+.stage-badge--general{ background: #e2e8f0; color: #334155; }
+.stage-badge--y2{ background: #dbeafe; color: #1e40af; }
+.stage-badge--other{ background: #fef3c7; color: #92400e; }
+.stage-readonly-hint{ font-size: 11px; margin-inline-start: 4px; opacity: .85; }
+.stage-row-actions{
+  background: #f8fafc;
+  padding: 4px 8px !important;
+  border-top: none !important;
+}
+.slot-conflict-actions{
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 2px 0;
+}
+.manage-courses-btn--inline{
+  width: auto;
+  display: inline-block;
+  margin-inline-start: 8px;
+}
+.timetable--stages .stage-actions-row td{
+  min-height: 0;
+  height: auto;
+}
+.hide-student-conflicts .conflict-row-btn[data-conflict-kind="students"],
+body.schedule-hide-student-conflicts .conflict-row-btn[data-conflict-kind="students"]{
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  position: absolute !important;
+  width: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  opacity: 0 !important;
+}
+body.schedule-hide-student-conflicts tr.stage-actions-row.is-collapsed,
+.hide-student-conflicts tr.stage-actions-row.is-collapsed,
+body.schedule-hide-student-conflicts tr.stage-actions-row:not(.has-instructor-conflict):not(.has-manage),
+.hide-student-conflicts tr.stage-actions-row:not(.has-instructor-conflict):not(.has-manage){
+  display: none !important;
+}
+@media print {
+  .btn-edit-day-periods,
+  .manage-courses-btn,
+  .slot-conflict-actions,
+  .stage-actions-row,
+  .stage-row-actions,
+  #scheduleToolbarMain,
+  #scheduleChartAdminBtns,
+  .schedule-view-menu {
+    display: none !important;
+  }
+}
+.time-slots-by-day-editor .day-slots-input{
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}
+.day-slots-chips .day-slot-chip{
+  font-weight: 700;
+  font-size: 11px;
+}
+.day-slots-modal-list .list-group-item{
+  border-inline: 0;
 }
 
 /* ============================================

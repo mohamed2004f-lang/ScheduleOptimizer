@@ -533,7 +533,9 @@ async function loadWeeklySchedule(studentId){
   }
   const rows = Array.isArray(r.json.rows) ? r.json.rows : [];
   if(stEl) stEl.textContent = rows.length ? ('حصص: ' + rows.length) : 'لا حصص مسجّلة';
-  if (typeof buildPublishedTimetableHtml === 'function') {
+  if (typeof buildPersonalWeeklyTimetableHtml === 'function') {
+    wrap.innerHTML = buildPersonalWeeklyTimetableHtml(rows, {});
+  } else if (typeof buildPublishedTimetableHtml === 'function') {
     wrap.innerHTML = buildPublishedTimetableHtml(rows, {});
   } else {
     wrap.innerHTML = '<p class="text-muted small mb-0">تعذر عرض الجدول.</p>';

@@ -5205,90 +5205,118 @@ def parse_time_range(value):
     # single time
     return (v, '')
 
+def _group_flat_student_conflicts(conn, flat_rows):
+    """
+    حوّل صفوفاً مسطّحة {student_id, day, time, conflicting_sections}
+    إلى تجميع slots كما تتوقعه الواجهة (day/start_time/end_time/entries).
+    """
+    cur = conn.cursor()
+    rows = list(flat_rows or [])
+
+    def _get(row, key):
+        if isinstance(row, dict):
+            return row.get(key) or ""
+        try:
+            return row[key] or ""
+        except Exception:
+            return ""
+
+    student_ids = sorted({
+        str(_get(r, "student_id")).strip()
+        for r in rows
+        if str(_get(r, "student_id")).strip()
+    })
+    name_map = {}
+    if student_ids:
+        try:
+            q2 = "SELECT student_id, COALESCE(student_name,'') as student_name FROM students WHERE student_id IN ({})".format(
+                ",".join("?" for _ in student_ids)
+            )
+            rows2 = cur.execute(q2, student_ids).fetchall()
+            name_map = {r["student_id"]: r["student_name"] for r in rows2}
+        except Exception:
+            name_map = {}
+
+    slots = {}
+    for r in rows:
+        sid = str(_get(r, "student_id")).strip()
+        day = str(_get(r, "day")).strip()
+        ts = str(_get(r, "time")).strip()
+        sections = _get(r, "conflicting_sections")
+        start, end = parse_time_range(ts)
+        start = start or ""
+        end = end or ""
+        room = ""
+        key = f"{day}|{start}|{end}|{room}"
+        if key not in slots:
+            slots[key] = {
+                "day": day,
+                "start_time": start,
+                "end_time": end,
+                "time": ts,
+                "room": room,
+                "entries": [],
+            }
+        slots[key]["entries"].append({
+            "student_id": sid,
+            "student_name": name_map.get(sid, ""),
+            "course_name": sections,
+            "section": "",
+            "note": "",
+        })
+    return [s for s in slots.values() if s["entries"]]
+
+
 @students_bp.route("/timetable/conflicts")
 @login_required
 def timetable_conflicts():
     """
     Return conflicts grouped by (day, start, end, room).
-    Tries to detect time columns named: start_time,end_time OR time OR timeslot OR time_range.
-    If times are combined (e.g. "08:00-10:00") parse them.
+
+    - الافتراضي (?live=1): حساب حي من التسجيلات + جدول schedule الحالي
+      (لا يعتمد على «إنتاج الجداول» ولا على فراغ conflict_report).
+    - ?live=0&source=report: قراءة conflict_report إن وُجدت صفوف، وإلا حساب حي.
     """
     try:
+        live_raw = (request.args.get("live") or "1").strip().lower()
+        want_live = live_raw not in ("0", "false", "no")
+        want_report = (request.args.get("source") or "").strip().lower() in ("report", "conflict_report")
+
         with get_connection() as conn:
             cur = conn.cursor()
 
-            # --- First choice: use conflict_report (source of truth) ---
-            # This prevents false positives caused by timetable/schedule tables
-            # having different time formats or missing student identifiers.
+            if want_report and not want_live:
+                try:
+                    if table_exists(conn, "conflict_report"):
+                        rows = cur.execute(
+                            """
+                            SELECT
+                                COALESCE(student_id,'') AS student_id,
+                                COALESCE(day,'') AS day,
+                                COALESCE(time,'') AS time,
+                                COALESCE(conflicting_sections,'') AS conflicting_sections
+                            FROM conflict_report
+                            """
+                        ).fetchall()
+                        if rows:
+                            return jsonify({
+                                "conflicts": _group_flat_student_conflicts(conn, rows),
+                                "source": "conflict_report",
+                            })
+                except Exception:
+                    current_app.logger.exception("timetable/conflicts: conflict_report path failed")
+
+            # حساب حي من التسجيلات × الجدول المعروض (schedule أولاً)
             try:
-                if table_exists(conn, "conflict_report"):
-                    rows = cur.execute(
-                        """
-                        SELECT
-                            COALESCE(student_id,'') AS student_id,
-                            COALESCE(day,'') AS day,
-                            COALESCE(time,'') AS time,
-                            COALESCE(conflicting_sections,'') AS conflicting_sections
-                        FROM conflict_report
-                        """
-                    ).fetchall()
-                    if not rows:
-                        return jsonify({"conflicts": []})
-
-                    # parse names for student_ids present
-                    student_ids = sorted({(r["student_id"] or "").strip() for r in rows if (r["student_id"] or "").strip()})
-                    name_map = {}
-                    if student_ids:
-                        try:
-                            q2 = "SELECT student_id, COALESCE(student_name,'') as student_name FROM students WHERE student_id IN ({})".format(
-                                ",".join("?" for _ in student_ids)
-                            )
-                            rows2 = cur.execute(q2, student_ids).fetchall()
-                            name_map = {r["student_id"]: r["student_name"] for r in rows2}
-                        except Exception:
-                            name_map = {}
-
-                    slots = {}
-                    for r in rows:
-                        sid = (r["student_id"] or "").strip()
-                        day = (r["day"] or "").strip()
-                        ts = (r["time"] or "").strip()
-                        start, end = parse_time_range(ts)
-                        # If parse failed, avoid returning empty start/end (frontend should not match '' reliably)
-                        start = start or ""
-                        end = end or ""
-                        room = ""
-                        key = f"{day}|{start}|{end}|{room}"
-                        if key not in slots:
-                            slots[key] = {
-                                "day": day,
-                                "start_time": start,
-                                "end_time": end,
-                                "room": room,
-                                "entries": [],
-                            }
-                        slots[key]["entries"].append({
-                            "student_id": sid,
-                            "student_name": name_map.get(sid, ""),
-                            "course_name": r["conflicting_sections"] or "",
-                            "section": "",
-                            "note": "",
-                        })
-
-                    conflicts = []
-                    for s in slots.values():
-                        if s["entries"]:
-                            conflicts.append(s)
-                    return jsonify({"conflicts": conflicts})
+                flat = compute_per_student_conflicts(conn, prefer_schedule=True)
+                return jsonify({
+                    "conflicts": _group_flat_student_conflicts(conn, flat),
+                    "source": "live_schedule",
+                })
             except Exception:
-                # fallback to legacy logic below
-                current_app.logger.exception("timetable/conflicts: conflict_report path failed")
+                current_app.logger.exception("timetable/conflicts: live compute failed")
 
             # --- Fallback: legacy robust parsing (may produce false positives) ---
-            # detect table
-            # (kept to avoid breaking older installations)
-
-            # detect table
             table_name = None
             for t in ("timetable", "schedule", "sessions"):
                 if table_exists(conn, t):
@@ -5297,33 +5325,26 @@ def timetable_conflicts():
             if not table_name:
                 table_name = "schedule" if table_exists(conn, "schedule") else "timetable"
 
-            # inspect columns
             col_names = fetch_table_columns(conn, table_name)
 
-            # determine which time columns exist
-            has_start = 'start_time' in col_names and 'end_time' in col_names
-            # build query selecting flexible columns (use COALESCE and aliases)
+            has_start = "start_time" in col_names and "end_time" in col_names
             select_cols = []
-            # day
-            if 'day' in col_names:
+            if "day" in col_names:
                 select_cols.append("COALESCE(day, '') AS day")
             else:
                 select_cols.append("COALESCE(weekday, '') AS day")
-            # start/end or single time
             if has_start:
                 select_cols.append("COALESCE(start_time, '') AS start_time")
                 select_cols.append("COALESCE(end_time, '') AS end_time")
-            elif 'time' in col_names:
+            elif "time" in col_names:
                 select_cols.append("COALESCE(time, '') AS time_single")
-            elif 'time_range' in col_names:
+            elif "time_range" in col_names:
                 select_cols.append("COALESCE(time_range, '') AS time_single")
-            elif 'timeslot' in col_names:
+            elif "timeslot" in col_names:
                 select_cols.append("COALESCE(timeslot, '') AS time_single")
             else:
-                # no time-related column detected — attempt to select a few common names
                 select_cols.append("COALESCE(time, '') AS time_single")
 
-            # other common columns
             for cname in ("room", "course_name", "student_id", "section", "note"):
                 if cname in col_names:
                     select_cols.append(f"COALESCE({cname}, '') AS {cname}")
@@ -5335,24 +5356,23 @@ def timetable_conflicts():
                 rows = cur.execute(q).fetchall()
             except Exception:
                 current_app.logger.exception("timetable/conflicts: query failed (check table/columns)")
-                return jsonify({"conflicts": []})
+                return jsonify({"conflicts": [], "source": "legacy_empty"})
 
             slots = {}
             for r in rows:
                 rowd = dict(r)
                 day = rowd.get("day", "") or ""
-                # parse start/end depending on which columns present
                 if "start_time" in rowd and "end_time" in rowd:
-                    start = rowd.get("start_time","") or ""
-                    end = rowd.get("end_time","") or ""
+                    start = rowd.get("start_time", "") or ""
+                    end = rowd.get("end_time", "") or ""
                 else:
-                    ts = rowd.get("time_single","") or ""
+                    ts = rowd.get("time_single", "") or ""
                     start, end = parse_time_range(ts)
-                room = rowd.get("room","") or ""
-                course = rowd.get("course_name","") or ""
-                sid = rowd.get("student_id","") or ""
-                section = rowd.get("section","") or ""
-                note = rowd.get("note","") or ""
+                room = rowd.get("room", "") or ""
+                course = rowd.get("course_name", "") or ""
+                sid = rowd.get("student_id", "") or ""
+                section = rowd.get("section", "") or ""
+                note = rowd.get("note", "") or ""
 
                 key = f"{day}|{start}|{end}|{room}"
                 slots.setdefault(key, {"day": day, "start_time": start, "end_time": end, "room": room, "entries": []})
@@ -5361,15 +5381,16 @@ def timetable_conflicts():
                     "student_name": "",
                     "course_name": course,
                     "section": section,
-                    "note": note
+                    "note": note,
                 })
 
-            # fetch student names for present student_ids
             student_ids = sorted({e["student_id"] for s in slots.values() for e in s["entries"] if e["student_id"]})
             name_map = {}
             if student_ids:
                 try:
-                    q2 = "SELECT student_id, COALESCE(student_name,'') as student_name FROM students WHERE student_id IN ({})".format(",".join("?" for _ in student_ids))
+                    q2 = "SELECT student_id, COALESCE(student_name,'') as student_name FROM students WHERE student_id IN ({})".format(
+                        ",".join("?" for _ in student_ids)
+                    )
                     rows2 = cur.execute(q2, student_ids).fetchall()
                     name_map = {r["student_id"]: r["student_name"] for r in rows2}
                 except Exception:
@@ -5379,7 +5400,7 @@ def timetable_conflicts():
             for k, s in slots.items():
                 entries = s["entries"]
                 unique_students = {e["student_id"] for e in entries if e["student_id"]}
-                unique_course_sections = {(e["course_name"], e.get("section","")) for e in entries}
+                unique_course_sections = {(e["course_name"], e.get("section", "")) for e in entries}
                 if len(entries) > 1 and (len(unique_students) > 1 or len(unique_course_sections) > 1):
                     for e in entries:
                         sid = e.get("student_id") or ""
@@ -5387,10 +5408,11 @@ def timetable_conflicts():
                     s["key"] = k
                     conflicts.append(s)
 
-            return jsonify({"conflicts": conflicts})
+            return jsonify({"conflicts": conflicts, "source": "legacy"})
     except Exception:
         current_app.logger.exception("timetable_conflicts failed outer")
         return jsonify({"conflicts": []})
+
 
 # -----------------------------
 # استيراد / تصدير بيانات الطلاب (موجودة سابقاً)
@@ -5692,43 +5714,42 @@ def compute_timetable_conflicts(conn):
     return conflicts
 
 
-def compute_per_student_conflicts(conn):
+def compute_per_student_conflicts(conn, prefer_schedule=False):
     """
     Compute conflicts where a student has 2+ different courses at the same day/time.
     Returns list of dicts: { student_id, day, time, conflicting_sections, conflict_id }.
-    Uses optimized_schedule if it has rows (لمطابقة شبكة النتائج)، وإلا schedule.
+
+    prefer_schedule=True: اقرأ من schedule أولاً (صفحة الجدول قبل/بدون إنتاج).
+    وإلا: optimized_schedule إن وُجدت صفوف (لمطابقة شبكة النتائج)، وإلا schedule.
     """
     cur = conn.cursor()
 
-    # مصدر أوقات المقررات: optimized_schedule (المعروض في النتائج) إن وُجد، وإلا schedule
-    schedule_rows = []
-    try:
-        schedule_rows = cur.execute("""
-            SELECT DISTINCT course_name, day, time 
-            FROM optimized_schedule 
-            WHERE course_name IS NOT NULL AND course_name != '' 
-            AND day IS NOT NULL AND day != '' 
-            AND time IS NOT NULL AND time != ''
-        """).fetchall()
-    except Exception:
-        pass
-    if not schedule_rows:
+    def _read_from(table):
         try:
-            schedule_rows = cur.execute("""
-                SELECT DISTINCT course_name, day, time 
-                FROM schedule 
-                WHERE course_name IS NOT NULL AND course_name != '' 
-                AND day IS NOT NULL AND day != '' 
+            return cur.execute(
+                f"""
+                SELECT DISTINCT course_name, day, time
+                FROM {table}
+                WHERE course_name IS NOT NULL AND course_name != ''
+                AND day IS NOT NULL AND day != ''
                 AND time IS NOT NULL AND time != ''
-            """).fetchall()
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error("Error reading schedule table: %s", e)
+                """
+            ).fetchall()
+        except Exception:
             return []
+
+    schedule_rows = []
+    if prefer_schedule:
+        schedule_rows = _read_from("schedule")
+        if not schedule_rows:
+            schedule_rows = _read_from("optimized_schedule")
+    else:
+        schedule_rows = _read_from("optimized_schedule")
+        if not schedule_rows:
+            schedule_rows = _read_from("schedule")
 
     if not schedule_rows:
         return []
-
     # Build mapping: course_name -> list of (day, time) tuples
     course_schedule = defaultdict(list)
     for row in schedule_rows:

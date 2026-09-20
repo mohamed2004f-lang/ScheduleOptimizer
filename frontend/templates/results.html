@@ -14,33 +14,49 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">التعارضات</h1>
-        <p class="page-subtitle">عرض الجدول النهائي مع إبراز تعارضات الطلبة وإمكانية تنزيل التقارير أو حذف التعارضات</p>
+        <p class="page-subtitle" id="resultsPageSubtitle">عرض الجدول مع شارات التعارض في عمود الوقت — نفس منطق محرر الجدول</p>
       </div>
       <div class="d-flex gap-2 flex-wrap">
-        <a href="/" class="btn btn-outline-secondary btn-sm">العودة للإدخال</a>
-        <button id="refreshBtn" class="btn btn-primary btn-sm">تحديث</button>
-        <button id="recomputeConflictsBtn" class="btn btn-warning btn-sm" title="إعادة حساب تعارضات الجدول لجميع الطلبة (يُظهر تعارضات مثل طالبة حنين)">إعادة حساب التعارضات</button>
+        <a href="/schedule" class="btn btn-outline-secondary btn-sm">محرر الجدول</a>
+        <a href="/schedule/print_preview" class="btn btn-outline-dark btn-sm" target="_blank">معاينة الطباعة</a>
+        <button id="refreshBtn" class="btn btn-primary btn-sm" type="button">تحديث</button>
+        <button id="recomputeConflictsBtn" class="btn btn-warning btn-sm" type="button" title="إعادة حساب تعارضات الجدول لجميع الطلبة">إعادة حساب التعارضات</button>
       </div>
     </div>
 
     <section class="mb-4">
       <div class="card shadow-sm">
         <div class="card-body">
-          <div class="d-flex justify-content-between align-items-center mb-2">
-            <h2 class="h6 mb-0">الجدول النهائي (عرض شبكي)</h2>
-            <div>
-              <button class="btn btn-sm btn-outline-primary" id="btnToggleCompactOptim">عرض مضغوط</button>
-              <button class="btn btn-sm btn-outline-success" id="dlOptim">تنزيل CSV</button>
+          <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+            <h2 class="h6 mb-0">الجدول الدراسي</h2>
+            <div class="d-flex flex-wrap gap-2 align-items-center">
+              <span id="resultsLayoutBadge" class="badge bg-secondary">—</span>
+              <div class="form-check form-check-inline mb-0">
+                <input class="form-check-input" type="checkbox" id="optResultsCompact">
+                <label class="form-check-label small" for="optResultsCompact">مضغوط</label>
+              </div>
+              <div class="form-check form-check-inline mb-0">
+                <input class="form-check-input" type="checkbox" id="optResultsStudentConflicts" checked>
+                <label class="form-check-label small" for="optResultsStudentConflicts">تعارضات الطلبة</label>
+              </div>
+              <div class="form-check form-check-inline mb-0">
+                <input class="form-check-input" type="checkbox" id="optResultsConflictsOnly">
+                <label class="form-check-label small" for="optResultsConflictsOnly">المتعارض فقط</label>
+              </div>
+              <label class="small mb-0 d-none" id="resultsDeptFilterWrap">
+                قسم
+                <select id="resultsDeptFilter" class="form-select form-select-sm d-inline-block" style="width:auto;min-width:9rem"></select>
+              </label>
+              <button class="btn btn-sm btn-outline-success" id="dlOptim" type="button">تنزيل CSV</button>
             </div>
           </div>
-          <div class="timetable-wrapper">
-            <div id="calendarContainer"></div>
+          <div class="timetable-scroll-hint">
+            <div class="timetable-wrapper" id="calendarContainer"></div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- نافذة تفاصيل التعارضات لكل خانة في الجدول -->
     <div class="modal fade" id="conflictDetailsModal" tabindex="-1" aria-hidden="true">
       <div class="modal-dialog modal-lg modal-dialog-centered">
         <div class="modal-content">
@@ -101,272 +117,377 @@
     <div id="msg" class="mt-3"></div>
 
 <script>
-  // helper: escape HTML to avoid XSS and undefined errors
-  function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+(function () {
+  'use strict';
+
+  function escapeHtml(s){
+    return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+  }
 
   let IS_COMPACT = false;
-  let LAST_CALENDAR_ROWS = [];
-  let LATEST_CONFLICTS = [];
+  let SHOW_STUDENT_CONFLICTS = true;
+  let CONFLICTS_ONLY = false;
+  let SCHEDULE_LAYOUT = { stage_grid_enabled: true, use_stage_matrix: false, layout_mode: 'personal_weekly' };
+  let LAST_SCHEDULE_ROWS = [];
+  let ALL_SCHEDULE_ROWS = [];
+  let SLOT_CONFLICTS = [];
+  let INSTRUCTOR_CONFLICTS = [];
+  let FLAT_CONFLICTS = [];
   let STUDENT_MAP = {};
+  let DEPT_FILTER = '';
+  let conflictDetailsModal = null;
+
+  const courseColors = {};
+  const colorPalette = [
+    '#ffc107', '#28a745', '#17a2b8', '#6f42c1', '#fd7e14',
+    '#20c997', '#e83e8c', '#6610f2', '#ff6b6b', '#4ecdc4'
+  ];
+  let colorIndex = 0;
+  function getCourseColor(courseName){
+    const key = String(courseName || '');
+    if (!courseColors[key]) {
+      courseColors[key] = colorPalette[colorIndex % colorPalette.length];
+      colorIndex++;
+    }
+    return courseColors[key];
+  }
+
+  function setMsg(html, kind) {
+    kind = kind || 'info';
+    const el = document.getElementById('msg');
+    if (el) el.innerHTML = `<div class="alert alert-${kind} p-2">${html}</div>`;
+    if (window.showToast && kind !== 'info') {
+      const plain = String(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      if (plain) window.showToast(plain, kind === 'danger' ? 'danger' : kind);
+    }
+  }
 
   async function loadStudentsForNames(){
-    try{
-      const resp = await fetch('/list_students');
-      const data = await resp.json().catch(()=>null);
-      if(resp.ok && Array.isArray(data)){
+    try {
+      const resp = await fetch('/list_students', { credentials: 'include' });
+      const data = await resp.json().catch(() => null);
+      if (resp.ok && Array.isArray(data)) {
         STUDENT_MAP = {};
-        data.forEach(s=>{
-          if(s.student_id){
-            STUDENT_MAP[String(s.student_id)] = s.student_name || '';
-          }
+        data.forEach(s => {
+          if (s.student_id) STUDENT_MAP[String(s.student_id)] = s.student_name || '';
         });
       }
-    }catch(e){
+    } catch (e) {
       console.error('failed to load students for conflict names', e);
     }
   }
 
   function getStudentNameFromMap(studentId){
-    const sid = String(studentId||'');
-    return STUDENT_MAP[sid] || '';
+    return STUDENT_MAP[String(studentId || '')] || '';
   }
 
-  function setMsg(html, kind="info") {
-    const el = document.getElementById("msg");
-    if (el) el.innerHTML = `<div class="alert alert-${kind} p-2">${html}</div>`;
-    if (window.showToast && kind !== "info") {
-      const plain = String(html).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-      if (plain) window.showToast(plain, kind === "danger" ? "danger" : kind);
+  function parseTimeParts(timeStr){
+    const s = String(timeStr || '').trim();
+    const parts = s.split(/[-–—/]/).map(x => x.trim()).filter(Boolean);
+    if (parts.length >= 2) return { start: parts[0], end: parts[1] };
+    return { start: s, end: '' };
+  }
+
+  function timesOverlap(a, b){
+    const toMin = (t) => {
+      const m = String(t || '').match(/^(\d{1,2}):(\d{2})/);
+      if (!m) return null;
+      return Number(m[1]) * 60 + Number(m[2]);
+    };
+    const a0 = toMin(a.start); const a1 = toMin(a.end || a.start);
+    const b0 = toMin(b.start); const b1 = toMin(b.end || b.start);
+    if (a0 == null || b0 == null) {
+      return String(a.start || '') === String(b.start || '') && String(a.end || '') === String(b.end || '');
     }
+    const ae = a1 == null ? a0 : a1;
+    const be = b1 == null ? b0 : b1;
+    return Math.max(a0, b0) < Math.min(ae, be) || (a0 === b0 && ae === be);
   }
 
-  // render optimized_schedule as a timetable grid (days as rows, times as columns) - matching schedule_form.html
-  const DAYS = ['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'];
-  
-  function parseStartMinutes(timeStr){
-    if(!timeStr) return 0;
-    const s = String(timeStr).trim();
-    const seps = ['-','–','—','/',' to '];
-    let part = s;
-    for(const sep of seps){ if(s.includes(sep)){ part = s.split(sep)[0].trim(); break; } }
-    const m = part.match(/(\d{1,2}):(\d{2})/);
-    if(m) return parseInt(m[1],10)*60 + parseInt(m[2],10);
-    const n = parseInt(part,10); return isNaN(n)? 0: n;
-  }
-
-  function extractUniqueTimeSlots(scheduleRows){
-    const times = new Set();
-    scheduleRows.forEach(row => {
-      if(row.time) times.add(row.time.trim());
-    });
-    // إذا لم تكن هناك توقيتات، أضف توقيتات افتراضية شائعة
-    if(times.size === 0){
-      const defaultTimes = [
-        '8:00-9:00', '9:00-10:00', '10:00-11:00', '11:00-12:00',
-        '12:00-13:00', '13:00-14:00', '14:00-15:00', '15:00-16:00', '16:00-17:00'
-      ];
-      defaultTimes.forEach(t => times.add(t));
-    }
-    // ترتيب التوقيتات بشكل ذكي (حسب وقت البداية)
-    return Array.from(times).sort((a, b) => {
-      return parseStartMinutes(a) - parseStartMinutes(b);
+  function getFlatConflictsForSlot(day, time){
+    const d = String(day || '').trim();
+    const slot = parseTimeParts(time);
+    return (FLAT_CONFLICTS || []).filter(c => {
+      if (String(c.day || '').trim() !== d) return false;
+      const other = parseTimeParts(c.time);
+      return timesOverlap(slot, other) || String(c.time || '').trim() === String(time || '').trim();
     });
   }
 
-  function groupByTimeSlot(scheduleRows){
-    const slots = {};
-    scheduleRows.forEach(row => {
-      const day = (row.day || '').trim();
-      const time = (row.time || '').trim();
-      if(!day || !time) return;
-      const key = `${day}|${time}`;
-      if(!slots[key]) slots[key] = [];
-      slots[key].push(row);
-    });
-    return slots;
-  }
-
-  // Color generation for courses (matching schedule_form.html)
-  const courseColors = {};
-  const colorPalette = [
-    '#ffc107', '#28a745', '#17a2b8', '#6f42c1', '#fd7e14', 
-    '#20c997', '#e83e8c', '#6610f2', '#ff6b6b', '#4ecdc4'
-  ];
-  let colorIndex = 0;
-  function getCourseColor(courseName){
-    if(!courseColors[courseName]){
-      courseColors[courseName] = colorPalette[colorIndex % colorPalette.length];
-      colorIndex++;
+  function updateLayoutBadge(){
+    const el = document.getElementById('resultsLayoutBadge');
+    if (!el) return;
+    if (SCHEDULE_LAYOUT.use_stage_matrix) {
+      el.textContent = 'مصفوفة مراحل';
+      el.className = 'badge bg-primary';
+    } else {
+      el.textContent = 'أسبوع شخصي';
+      el.className = 'badge bg-info text-dark';
     }
-    return courseColors[courseName];
   }
 
-  function getConflictsForSlot(day, time){
-    const d = (day || '').trim();
-    const t = (time || '').trim();
-    return (LATEST_CONFLICTS || []).filter(c => (String(c.day||'').trim() === d) && (String(c.time||'').trim() === t));
-  }
-
-  function renderCalendar(rows){
-    const container = document.getElementById('calendarContainer');
-    container.innerHTML = '';
-    LAST_CALENDAR_ROWS = Array.isArray(rows) ? rows : [];
-    if(!rows || !rows.length){ 
-      container.innerHTML = '<div class="alert alert-info p-2">لا يوجد صف في الجدول النهائي</div>'; 
-      return; 
+  function filteredScheduleRows(){
+    let rows = ALL_SCHEDULE_ROWS.slice();
+    if (DEPT_FILTER) {
+      const want = String(DEPT_FILTER);
+      rows = rows.filter(r => String(r.department_id || '') === want);
     }
-    
-    // Extract time slots and group by day/time
-    const timeSlots = extractUniqueTimeSlots(rows);
-    const slotsMap = groupByTimeSlot(rows);
+    return rows;
+  }
 
-    // Create timetable: days as rows, times as columns (matching schedule_form.html)
-    const compactClass = IS_COMPACT ? ' is-compact' : '';
-    let html = `<table class="timetable${compactClass}"><thead><tr><th class="day-header">اليوم / الوقت</th>`;
-    timeSlots.forEach(time => {
-      html += `<th class="time-header">${escapeHtml(time)}</th>`;
-    });
-    html += '</tr></thead><tbody>';
-
-    DAYS.forEach(day => {
-      html += `<tr><th class="day-header">${day}</th>`;
-      timeSlots.forEach(time => {
-        const key = `${day}|${time}`;
-        const courses = slotsMap[key] || [];
-        html += `<td class="time-slot-cell">`;
-        const slotConflicts = getConflictsForSlot(day, time);
-        if (slotConflicts.length > 0) {
-          html += `<button 
-                     class="btn btn-sm btn-danger conflict-slot-btn" 
-                     data-day="${escapeHtml(day)}" 
-                     data-time="${escapeHtml(time)}">
-                     يوجد تعارض (${slotConflicts.length})
-                   </button>`;
-        } else {
-          // لا نعرض شيئاً في حالة عدم وجود تعارضات في هذا التوقيت
-        }
-        html += `</td>`;
+  function applyConflictsOnlyFilter(root){
+    if (!root) return;
+    if (!CONFLICTS_ONLY) {
+      root.querySelectorAll('tr.stage-time-row, tr.personal-time-row').forEach(tr => {
+        tr.hidden = false;
+        tr.style.removeProperty('display');
       });
-      html += '</tr>';
+      return;
+    }
+    root.querySelectorAll('tr.stage-time-row, tr.personal-time-row').forEach(tr => {
+      const has = !!tr.querySelector('.conflict-row-btn:not([hidden])');
+      tr.hidden = !has;
+      if (!has) tr.style.setProperty('display', 'none', 'important');
+      else tr.style.removeProperty('display');
     });
+  }
 
-    html += '</tbody></table>';
+  function bindConflictButtons(root){
+    if (!root) return;
+    root.querySelectorAll('.conflict-row-btn').forEach(btn => {
+      if (btn.dataset.boundResultsClick) return;
+      btn.dataset.boundResultsClick = '1';
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const day = btn.dataset.day || '';
+        const time = btn.dataset.time || '';
+        const kind = btn.dataset.conflictKind || 'students';
+        showConflictDetails(day, time, kind);
+      });
+    });
+  }
+
+  function renderCalendar(){
+    const container = document.getElementById('calendarContainer');
+    if (!container) return;
+    const rows = filteredScheduleRows();
+    LAST_SCHEDULE_ROWS = rows;
+    if (!rows.length) {
+      container.innerHTML = '<div class="alert alert-info p-2 mb-0">لا يوجد صف في الجدول المعروض لهذا النطاق.</div>';
+      return;
+    }
+
+    const opts = {
+      compact: IS_COMPACT,
+      showSlotManage: false,
+      showDayPeriodEdit: false,
+      fillEmptyDays: false,
+      getCourseColor,
+    };
+
+    let html = '';
+    if (SCHEDULE_LAYOUT.stage_grid_enabled && SCHEDULE_LAYOUT.use_stage_matrix
+        && typeof buildStageMatrixTimetableHtml === 'function') {
+      html = buildStageMatrixTimetableHtml(rows, opts);
+    } else if (typeof buildPersonalWeeklyTimetableHtml === 'function') {
+      html = buildPersonalWeeklyTimetableHtml(rows, opts);
+    } else {
+      html = '<div class="alert alert-warning p-2">تعذّر تحميل راسم الجدول الجديد.</div>';
+    }
     container.innerHTML = html;
 
-    document.querySelectorAll('.conflict-slot-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const day = btn.getAttribute('data-day') || '';
-        const time = btn.getAttribute('data-time') || '';
-        showConflictDetails(day, time);
+    if (typeof paintScheduleConflictActions === 'function') {
+      paintScheduleConflictActions(container, SLOT_CONFLICTS, INSTRUCTOR_CONFLICTS, {
+        showStudentConflicts: SHOW_STUDENT_CONFLICTS,
       });
-    });
+    }
+    if (typeof collapseScheduleActionRows === 'function') {
+      collapseScheduleActionRows(container, !SHOW_STUDENT_CONFLICTS);
+    }
+    bindConflictButtons(container);
+    applyConflictsOnlyFilter(container);
   }
 
-  // compact toggle
-  const btnCompact = document.getElementById('btnToggleCompactOptim');
-  if (btnCompact) {
-    btnCompact.addEventListener('click', () => {
-      IS_COMPACT = !IS_COMPACT;
-      btnCompact.textContent = IS_COMPACT ? 'عرض عادي' : 'عرض مضغوط';
-      renderCalendar(LAST_CALENDAR_ROWS);
-    });
-  }
-
-  let conflictDetailsModal = null;
-
-  function showConflictDetails(day, time){
-    const conflicts = getConflictsForSlot(day, time);
+  function showConflictDetails(day, time, kind){
     const titleEl = document.getElementById('conflictDetailsTitle');
     const tbody = document.querySelector('#conflictDetailsTable tbody');
-    if(titleEl) titleEl.textContent = `تفاصيل التعارضات ليوم ${day} في الوقت ${time}`;
-    if(tbody){
+    if (titleEl) {
+      titleEl.textContent = kind === 'instructor'
+        ? `تعارض أستاذ — ${day} · ${time}`
+        : `تعارضات الطلبة — ${day} · ${time}`;
+    }
+    if (tbody) {
       tbody.innerHTML = '';
-      if(conflicts.length === 0){
-        const tr = document.createElement('tr');
-        const td = document.createElement('td');
-        td.colSpan = 3;
-        td.textContent = 'لا توجد تعارضات في هذا التوقيت.';
-        tr.appendChild(td);
-        tbody.appendChild(tr);
+      if (kind === 'instructor') {
+        const hits = (INSTRUCTOR_CONFLICTS || []).filter(c => String(c.day || '').trim() === String(day || '').trim());
+        if (!hits.length) {
+          tbody.innerHTML = '<tr><td colspan="3" class="text-muted">لا تفاصيل أستاذ مخزّنة لهذا التوقيت.</td></tr>';
+        } else {
+          hits.forEach(c => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td colspan="2">${escapeHtml(c.instructor || c.instructor_name || 'أستاذ')}</td><td>${escapeHtml(c.time || time || '')}</td>`;
+            tbody.appendChild(tr);
+          });
+        }
       } else {
-        conflicts.forEach(c => {
-          const tr = document.createElement('tr');
-          const tdSid = document.createElement('td');
-          const name = getStudentNameFromMap(c.student_id) || '';
-          tdSid.textContent = name || (c.student_id || '');
-          const tdCourses = document.createElement('td');
-          tdCourses.textContent = c.conflicting_sections || '';
-          const tdTime = document.createElement('td');
-          tdTime.textContent = c.time || '';
-          tr.appendChild(tdSid);
-          tr.appendChild(tdCourses);
-          tr.appendChild(tdTime);
-          tbody.appendChild(tr);
-        });
+        const conflicts = getFlatConflictsForSlot(day, time);
+        if (!conflicts.length) {
+          // جرّب من SLOT_CONFLICTS.entries
+          const slotHits = (SLOT_CONFLICTS || []).filter(s => String(s.day || '').trim() === String(day || '').trim());
+          let any = false;
+          slotHits.forEach(s => {
+            (s.entries || []).forEach(e => {
+              any = true;
+              const tr = document.createElement('tr');
+              const name = e.student_name || getStudentNameFromMap(e.student_id) || e.student_id || '';
+              tr.innerHTML = `<td>${escapeHtml(name)}</td><td>${escapeHtml(e.course_name || '')}</td><td>${escapeHtml(time || '')}</td>`;
+              tbody.appendChild(tr);
+            });
+          });
+          if (!any) {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-muted">لا توجد تعارضات طلبة في هذا التوقيت.</td></tr>';
+          }
+        } else {
+          conflicts.forEach(c => {
+            const tr = document.createElement('tr');
+            const name = getStudentNameFromMap(c.student_id) || c.student_id || '';
+            tr.innerHTML = `<td>${escapeHtml(name)}</td><td>${escapeHtml(c.conflicting_sections || '')}</td><td>${escapeHtml(c.time || time || '')}</td>`;
+            tbody.appendChild(tr);
+          });
+        }
       }
     }
-    if(!conflictDetailsModal){
+    if (!conflictDetailsModal) {
       const modalEl = document.getElementById('conflictDetailsModal');
-      if(modalEl){
+      if (modalEl && typeof bootstrap !== 'undefined') {
         conflictDetailsModal = new bootstrap.Modal(modalEl);
       }
     }
-    if(conflictDetailsModal){
-      conflictDetailsModal.show();
-    }
-    if (window.initInteractiveTable) {
-      initInteractiveTable("conflictDetailsTable", { placeholder: "بحث في التعارضات…" });
+    if (conflictDetailsModal) conflictDetailsModal.show();
+  }
+
+  async function loadDeptFilterOptions(){
+    const wrap = document.getElementById('resultsDeptFilterWrap');
+    const sel = document.getElementById('resultsDeptFilter');
+    if (!wrap || !sel) return;
+    try {
+      const r = await fetch('/college/catalog/departments', { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      const list = Array.isArray(j.items) ? j.items
+        : (Array.isArray(j.departments) ? j.departments : (Array.isArray(j) ? j : []));
+      if (!r.ok || list.length < 2) {
+        wrap.classList.add('d-none');
+        return;
+      }
+      const hasDeptIds = ALL_SCHEDULE_ROWS.some(row => row.department_id != null && row.department_id !== '');
+      if (!hasDeptIds) {
+        wrap.classList.add('d-none');
+        return;
+      }
+      sel.innerHTML = '<option value="">الكل (النطاق الحالي)</option>';
+      list.forEach(d => {
+        const id = d.id != null ? d.id : d.department_id;
+        const name = d.name_ar || d.name || d.department_name || d.code || id;
+        if (id == null) return;
+        const opt = document.createElement('option');
+        opt.value = String(id);
+        opt.textContent = String(name);
+        sel.appendChild(opt);
+      });
+      wrap.classList.remove('d-none');
+    } catch (_e) {
+      wrap.classList.add('d-none');
     }
   }
 
-  async function fetchResults() {
-    setMsg("جلب النتائج من الخادم...", "info");
+  async function fetchResults(){
+    setMsg('جلب النتائج من الخادم...', 'info');
     try {
-      const resp = await fetch("/results_data");
-      if (!resp.ok) throw new Error(resp.statusText);
-      const data = await resp.json();
+      const [layoutResp, schedResp, slotResp, instResp, resultsResp] = await Promise.all([
+        fetch('/schedule/display_layout', { credentials: 'include', cache: 'no-store' }),
+        fetch('/list_schedule_rows', { credentials: 'include', cache: 'no-store' }),
+        fetch('/students/timetable/conflicts', { credentials: 'include', cache: 'no-store' }),
+        fetch('/schedule/instructor_conflicts', { credentials: 'include', cache: 'no-store' }),
+        fetch('/results_data', { credentials: 'include', cache: 'no-store' }),
+      ]);
 
-      LATEST_CONFLICTS = Array.isArray(data.conflict_report) ? data.conflict_report : [];
-      renderCalendar(data.optimized_schedule);
+      const layoutJ = layoutResp.ok ? await layoutResp.json().catch(() => null) : null;
+      if (layoutJ && layoutJ.status === 'ok') {
+        SCHEDULE_LAYOUT = {
+          stage_grid_enabled: !!layoutJ.stage_grid_enabled,
+          layout_mode: layoutJ.layout_mode || 'personal_weekly',
+          use_stage_matrix: !!layoutJ.use_stage_matrix,
+        };
+      } else if (layoutJ) {
+        SCHEDULE_LAYOUT = {
+          stage_grid_enabled: !!layoutJ.stage_grid_enabled,
+          layout_mode: layoutJ.layout_mode || 'personal_weekly',
+          use_stage_matrix: !!layoutJ.use_stage_matrix,
+        };
+      }
+      updateLayoutBadge();
 
-      setMsg("تم تحميل النتائج.", "success");
+      const schedList = schedResp.ok ? await schedResp.json().catch(() => []) : [];
+      const resultsData = resultsResp.ok ? await resultsResp.json().catch(() => ({})) : {};
+      FLAT_CONFLICTS = Array.isArray(resultsData.conflict_report) ? resultsData.conflict_report : [];
+
+      if (Array.isArray(schedList) && schedList.length) {
+        ALL_SCHEDULE_ROWS = schedList;
+      } else if (Array.isArray(resultsData.optimized_schedule) && resultsData.optimized_schedule.length) {
+        ALL_SCHEDULE_ROWS = resultsData.optimized_schedule;
+      } else {
+        ALL_SCHEDULE_ROWS = [];
+      }
+
+      const slotJ = slotResp.ok ? await slotResp.json().catch(() => ({})) : {};
+      SLOT_CONFLICTS = Array.isArray(slotJ.conflicts) ? slotJ.conflicts : [];
+
+      const instJ = instResp.ok ? await instResp.json().catch(() => ({})) : {};
+      INSTRUCTOR_CONFLICTS = Array.isArray(instJ.conflicts) ? instJ.conflicts : [];
+
+      await loadDeptFilterOptions();
+      renderCalendar();
+
+      const sub = document.getElementById('resultsPageSubtitle');
+      if (sub) {
+        const nConf = FLAT_CONFLICTS.length || SLOT_CONFLICTS.reduce((s, x) => s + ((x.entries || []).length || 0), 0);
+        sub.textContent = `عرض ${ALL_SCHEDULE_ROWS.length} صف جدول · ${nConf} سجل تعارض طلبة · ${SCHEDULE_LAYOUT.use_stage_matrix ? 'مصفوفة مراحل' : 'يوم ثم وقت'}`;
+      }
+      setMsg('تم تحميل النتائج.', 'success');
     } catch (err) {
       console.error(err);
-      setMsg("فشل جلب النتائج: " + err.message, "danger");
+      setMsg('فشل جلب النتائج: ' + (err && err.message ? err.message : err), 'danger');
     }
   }
 
   async function loadProposedMoves() {
-    const tbody = document.getElementById("proposedMovesBody");
+    const tbody = document.getElementById('proposedMovesBody');
     if (!tbody) return;
     try {
-      const r = await fetch("/schedule/proposed_moves", { credentials: "include" });
+      const r = await fetch('/schedule/proposed_moves', { credentials: 'include' });
       const j = await r.json().catch(() => ({}));
       const moves = (r.ok && j.moves) ? j.moves : [];
-      tbody.innerHTML = "";
+      tbody.innerHTML = '';
       if (!moves.length) {
         tbody.innerHTML = '<tr><td colspan="6" class="text-muted small">لا توجد اقتراحات حالياً.</td></tr>';
         return;
       }
       moves.forEach(m => {
-        const tr = document.createElement("tr");
-        const fromTxt = `${escapeHtml(m.orig_day || "")} · ${escapeHtml(m.orig_time || "")}`;
-        const toTxt = `${escapeHtml(m.new_day || "")} · ${escapeHtml(m.new_time || "")}`;
-        const meta = `${escapeHtml(m.room || "")} / ${escapeHtml(m.instructor || "")}`;
+        const tr = document.createElement('tr');
+        const fromTxt = `${escapeHtml(m.orig_day || '')} · ${escapeHtml(m.orig_time || '')}`;
+        const toTxt = `${escapeHtml(m.new_day || '')} · ${escapeHtml(m.new_time || '')}`;
+        const meta = `${escapeHtml(m.room || '')} / ${escapeHtml(m.instructor || '')}`;
         tr.innerHTML = `
-          <td>${escapeHtml(m.course_name || "")}</td>
+          <td>${escapeHtml(m.course_name || '')}</td>
           <td class="small">${fromTxt}</td>
           <td class="small">${toTxt}</td>
           <td class="small text-muted">${meta}</td>
-          <td>${escapeHtml(String(m.move_cost ?? ""))}</td>
+          <td>${escapeHtml(String(m.move_cost ?? ''))}</td>
           <td><button type="button" class="btn btn-sm btn-success btn-apply-move" data-section-id="${m.section_id}" data-move-id="${m.id}">تطبيق</button></td>`;
         tbody.appendChild(tr);
       });
-      if (window.initInteractiveTable) {
-        initInteractiveTable("proposedMovesTable", { placeholder: "بحث في الاقتراحات…" });
-      }
     } catch (e) {
-      console.error("loadProposedMoves", e);
+      console.error('loadProposedMoves', e);
       tbody.innerHTML = '<tr><td colspan="6" class="text-danger small">فشل تحميل الاقتراحات.</td></tr>';
     }
   }
@@ -374,32 +495,23 @@
   async function applyProposedMove(sectionId, moveId) {
     try {
       const r = await fetch(`/proposed_move/${sectionId}`, {
-        method: "POST",
-        headers: (typeof jsonApiHeaders === "function") ? jsonApiHeaders() : { "Content-Type": "application/json" },
-        credentials: "include",
+        method: 'POST',
+        headers: (typeof jsonApiHeaders === 'function') ? jsonApiHeaders() : { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ move_id: moveId })
       });
       const j = await r.json().catch(() => ({}));
-      if (r.ok && (j.status === "ok" || j.message)) {
-        setMsg(j.message || "تم تطبيق النقل.", "success");
+      if (r.ok && (j.status === 'ok' || j.message)) {
+        setMsg(j.message || 'تم تطبيق النقل.', 'success');
         await loadProposedMoves();
         await fetchResults();
       } else {
-        setMsg(j.message || "فشل تطبيق الاقتراح.", "danger");
+        setMsg(j.message || 'فشل تطبيق الاقتراح.', 'danger');
       }
     } catch (e) {
-      setMsg("خطأ في الاتصال بالخادم.", "danger");
+      setMsg('خطأ في الاتصال بالخادم.', 'danger');
     }
   }
-
-  document.getElementById("proposedMovesBody")?.addEventListener("click", (ev) => {
-    const btn = ev.target.closest(".btn-apply-move");
-    if (!btn) return;
-    const sid = btn.getAttribute("data-section-id");
-    const mid = btn.getAttribute("data-move-id");
-    if (sid) applyProposedMove(sid, mid ? Number(mid) : null);
-  });
-  document.getElementById("btnRefreshMoves")?.addEventListener("click", () => loadProposedMoves());
 
   async function downloadCSV(table) {
     try {
@@ -407,51 +519,75 @@
       if (!resp.ok) throw new Error(resp.statusText);
       const blob = await resp.blob();
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
+      const a = document.createElement('a');
       a.href = url;
-      a.download = table + ".csv";
+      a.download = table + '.csv';
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
     } catch (err) {
-      setMsg("فشل تنزيل CSV: " + err.message, "danger");
+      setMsg('فشل تنزيل CSV: ' + err.message, 'danger');
     }
   }
 
-  document.getElementById("dlOptim").addEventListener("click", () => downloadCSV("optimized_schedule"));
-  document.getElementById("refreshBtn").addEventListener("click", fetchResults);
+  document.getElementById('proposedMovesBody')?.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.btn-apply-move');
+    if (!btn) return;
+    const sid = btn.getAttribute('data-section-id');
+    const mid = btn.getAttribute('data-move-id');
+    if (sid) applyProposedMove(sid, mid ? Number(mid) : null);
+  });
+  document.getElementById('btnRefreshMoves')?.addEventListener('click', () => loadProposedMoves());
+  document.getElementById('dlOptim')?.addEventListener('click', () => downloadCSV('optimized_schedule'));
+  document.getElementById('refreshBtn')?.addEventListener('click', fetchResults);
 
-  document.getElementById("recomputeConflictsBtn").addEventListener("click", async function() {
-    const btn = this;
-    btn.disabled = true;
-    btn.textContent = "جاري الحساب...";
-    setMsg("جاري إعادة حساب التعارضات لجميع الطلبة...", "info");
-    try {
-      const r = await fetch("/students/recompute_conflicts", { method: "POST", credentials: "include" });
-      const j = await r.json().catch(() => ({}));
-      if (r.ok && j.status === "ok") {
-        setMsg((j.message || "تم تحديث التعارضات.") + " جاري تحديث العرض...", "success");
-        await fetchResults();
-      } else {
-        setMsg(j.message || "فشل إعادة الحساب.", "danger");
-      }
-    } catch (e) {
-      setMsg("خطأ في الاتصال بالخادم.", "danger");
-    }
-    btn.disabled = false;
-    btn.textContent = "إعادة حساب التعارضات";
+  document.getElementById('optResultsCompact')?.addEventListener('change', (e) => {
+    IS_COMPACT = !!e.target.checked;
+    renderCalendar();
+  });
+  document.getElementById('optResultsStudentConflicts')?.addEventListener('change', (e) => {
+    SHOW_STUDENT_CONFLICTS = !!e.target.checked;
+    renderCalendar();
+  });
+  document.getElementById('optResultsConflictsOnly')?.addEventListener('change', (e) => {
+    CONFLICTS_ONLY = !!e.target.checked;
+    applyConflictsOnlyFilter(document.getElementById('calendarContainer'));
+  });
+  document.getElementById('resultsDeptFilter')?.addEventListener('change', (e) => {
+    DEPT_FILTER = String(e.target.value || '');
+    renderCalendar();
   });
 
-  // تحديث تلقائي كل 5 ثوانٍ
+  document.getElementById('recomputeConflictsBtn')?.addEventListener('click', async function () {
+    const btn = this;
+    btn.disabled = true;
+    btn.textContent = 'جاري الحساب...';
+    setMsg('جاري إعادة حساب التعارضات لجميع الطلبة...', 'info');
+    try {
+      const r = await fetch('/students/recompute_conflicts', { method: 'POST', credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.status === 'ok') {
+        setMsg((j.message || 'تم تحديث التعارضات.') + ' جاري تحديث العرض...', 'success');
+        await fetchResults();
+      } else {
+        setMsg(j.message || 'فشل إعادة الحساب.', 'danger');
+      }
+    } catch (e) {
+      setMsg('خطأ في الاتصال بالخادم.', 'danger');
+    }
+    btn.disabled = false;
+    btn.textContent = 'إعادة حساب التعارضات';
+  });
+
   (async function initResultsPage(){
     await loadStudentsForNames();
     await fetchResults();
     await loadProposedMoves();
-    setInterval(fetchResults, 5000);
+    setInterval(fetchResults, 15000);
   })();
+})();
 </script>
-<!-- Bootstrap JS for modal support -->
   </main>
 </body>
 </html>

@@ -305,7 +305,9 @@
         const j = await r.json().catch(() => ({}));
         if (!j.published) { wrap.innerHTML = '<p class="text-muted mb-0">الجدول غير معتمد بعد.</p>'; return; }
         const rows = j.rows || [];
-        if (typeof buildPublishedTimetableHtml === 'function') {
+        if (typeof buildPersonalWeeklyTimetableHtml === 'function') {
+          wrap.innerHTML = buildPersonalWeeklyTimetableHtml(rows, {});
+        } else if (typeof buildPublishedTimetableHtml === 'function') {
           wrap.innerHTML = buildPublishedTimetableHtml(rows, {});
         } else if (!rows.length) {
           wrap.innerHTML = '<p class="text-muted mb-0">لا حصص في الجدول المعتمد.</p>';

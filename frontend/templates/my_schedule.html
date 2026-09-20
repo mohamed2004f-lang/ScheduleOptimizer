@@ -85,7 +85,9 @@
         if (tt.published && ttRows.length) {
           timetableCard.classList.remove('d-none');
           const wrap = document.getElementById('timetableWrap');
-          if (typeof buildPublishedTimetableHtml === 'function') {
+          if (typeof buildPersonalWeeklyTimetableHtml === 'function') {
+            wrap.innerHTML = buildPersonalWeeklyTimetableHtml(ttRows, {});
+          } else if (typeof buildPublishedTimetableHtml === 'function') {
             wrap.innerHTML = buildPublishedTimetableHtml(ttRows, {});
           } else {
             wrap.innerHTML = '<p class="mb-0">تعذر عرض الجدول.</p>';

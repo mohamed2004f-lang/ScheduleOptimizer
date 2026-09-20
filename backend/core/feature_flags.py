@@ -25,6 +25,15 @@ def is_schedule_assignment_upsert_enabled() -> bool:
     return v not in ("0", "false", "no", "off")
 
 
+def is_schedule_stage_grid_enabled() -> bool:
+    """
+    عرض محرر الجدول بمصفوفة المراحل (يوم|وقت|كتل المستويات) للأقسام التخصصية.
+    الافتراضي: مفعّل. عطّل بـ SCHEDULE_STAGE_GRID=0 للرجوع للشبكة الأسبوعية الحالية.
+    """
+    v = (os.environ.get("SCHEDULE_STAGE_GRID") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
 def registration_program_course_mode() -> str:
     """
     ربط التسجيلات بـ program_courses:
