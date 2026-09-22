@@ -132,24 +132,41 @@ def _registrations_summary(conn, sid: str, term_label: str) -> dict[str, Any]:
 
 
 def _enrollment_plan_status(conn, sid: str, term_label: str) -> dict[str, Any]:
+    """حالة خطة التسجيل للفصل الحالي فقط (مطابقة مرنة لوسم الفصل)."""
     cur = conn.cursor()
     try:
-        row = cur.execute(
+        from backend.services.term_engine import (
+            current_term_match_context,
+            schedule_semester_matches_term_context,
+        )
+
+        ctx = current_term_match_context(conn)
+        rows = cur.execute(
             """
-            SELECT id, status, COALESCE(rejection_reason,'') AS rejection_reason
+            SELECT id, status, COALESCE(rejection_reason,'') AS rejection_reason,
+                   COALESCE(semester,'') AS semester
             FROM enrollment_plans
-            WHERE student_id = ? AND semester = ?
-            ORDER BY id DESC LIMIT 1
+            WHERE student_id = ? AND status != 'Archived'
+            ORDER BY id DESC
             """,
-            (sid, term_label),
-        ).fetchone()
+            (sid,),
+        ).fetchall()
     except Exception:
-        return {"status": None, "rejection_reason": ""}
-    if not row:
-        return {"status": None, "rejection_reason": ""}
-    if hasattr(row, "keys"):
-        return {"status": row["status"], "rejection_reason": row["rejection_reason"] or ""}
-    return {"status": row[1], "rejection_reason": (row[2] or "") if len(row) > 2 else ""}
+        return {"status": None, "rejection_reason": "", "semester": None}
+    for row in rows or []:
+        if hasattr(row, "keys"):
+            sem = row["semester"] or ""
+            st = row["status"]
+            reason = row["rejection_reason"] or ""
+        else:
+            sem = (row[3] or "") if len(row) > 3 else ""
+            st = row[1]
+            reason = (row[2] or "") if len(row) > 2 else ""
+        if schedule_semester_matches_term_context(sem, ctx) or (
+            term_label and str(sem).strip() == str(term_label).strip()
+        ):
+            return {"status": st, "rejection_reason": reason, "semester": sem}
+    return {"status": None, "rejection_reason": "", "semester": None}
 
 
 def _schedule_conflicts(conn, sid: str) -> list[dict]:

@@ -59,7 +59,7 @@
         <div class="col-6 col-md-3">
           <div class="stat-card bg-light border">
             <div class="stat-value" id="statPlanStatus">—</div>
-            <div class="stat-label">حالة خطة التسجيل</div>
+            <div class="stat-label">خطة الفصل الحالي</div>
           </div>
         </div>
       </div>
@@ -94,13 +94,14 @@
         </div>
       </div>
 
-      <!-- Enrollment Plan -->
+      <!-- Enrollment Plan (الفصل الحالي فقط) -->
       <div class="card shadow-sm mb-4" id="planCard">
-        <div class="card-header bg-light d-flex justify-content-between align-items-center">
-          <span class="fw-semibold"><i class="fa-solid fa-file-circle-check text-warning"></i> خطة التسجيل</span>
+        <div class="card-header bg-light d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <span class="fw-semibold"><i class="fa-solid fa-file-circle-check text-warning"></i> خطة تسجيل الفصل الحالي</span>
           <span class="badge plan-status-badge" id="planBadge">—</span>
         </div>
         <div class="card-body">
+          <p class="small text-muted mb-3" id="planTermHint">الخطة مرتبطة بفصل دراسي محدد وليست بديلاً عن المقررات المسجّلة أعلاه.</p>
           <!-- Existing Plan View -->
           <div id="planExistingView" class="d-none">
             <div class="mb-3">
@@ -155,9 +156,19 @@
 
           <!-- No Plan State -->
           <div id="planNoneView">
-            <p class="text-muted mb-3">لا توجد خطة تسجيل للفصل الحالي. يمكنك إنشاء خطة جديدة وتقديمها للمشرف الأكاديمي.</p>
-            <button class="btn btn-primary btn-sm" id="btnCreatePlan"><i class="fa-solid fa-plus"></i> إنشاء خطة تسجيل</button>
+            <p class="text-muted mb-3">لا توجد خطة تسجيل للفصل الحالي. يمكنك إنشاء خطة جديدة وتقديمها للمشرف الأكاديمي. خطط الفصول السابقة (إن وُجدت) تظهر أدناه للرجوع فقط.</p>
+            <button class="btn btn-primary btn-sm" id="btnCreatePlan"><i class="fa-solid fa-plus"></i> إنشاء خطة تسجيل للفصل الحالي</button>
           </div>
+        </div>
+      </div>
+
+      <!-- Prior-term plans (read-only archive) -->
+      <div class="card shadow-sm mb-4 d-none" id="priorPlansCard">
+        <div class="card-header bg-light fw-semibold">
+          <i class="fa-solid fa-clock-rotate-left text-muted"></i> خطط فصول سابقة (عرض فقط)
+        </div>
+        <div class="card-body p-0">
+          <ul class="list-group list-group-flush" id="priorPlansList"></ul>
         </div>
       </div>
 
@@ -180,6 +191,7 @@
     let currentPlan = null;
     let stuPlanPicker = null;
     let allPlans = [];
+    let priorPlans = [];
     let lastPrereqValidation = null;
     let prereqValidateTimer = null;
     let selectedCourseNames = new Set();
@@ -384,10 +396,58 @@
       try {
         const r = await fetch('/enrollment/plans?student_id=' + encodeURIComponent(studentId), { credentials: 'include' });
         const j = await r.json().catch(() => ({}));
-        allPlans = j.plans || [];
-        currentPlan = allPlans.find(p => p.status !== 'Archived') || null;
+        if (j.current_term && !currentTerm) {
+          currentTerm = j.current_term;
+          document.getElementById('statTerm').textContent = currentTerm || '—';
+          document.getElementById('planSemesterInput').value = currentTerm;
+        }
+        const hint = document.getElementById('planTermHint');
+        if (hint && (j.current_term || currentTerm)) {
+          hint.textContent = 'الخطة أدناه تخص الفصل الحالي فقط («' + (j.current_term || currentTerm) +
+            '»). المقررات المسجّلة فعلياً تظهر في البطاقة أعلاه بشكل منفصل.';
+        }
+        const raw = j.plans || [];
+        // الفصل الحالي فقط كخطة نشطة؛ الباقي أرشيف للعرض
+        const current = raw.filter(p => p.is_current_term && p.status !== 'Archived');
+        priorPlans = raw.filter(p => !p.is_current_term || p.status === 'Archived');
+        // إن لم يُرجَع العلم من الخادم (نسخ قديمة): طابق وسم الفصل حرفياً كاحتياط
+        if (!raw.some(p => p.is_current_term === true) && !raw.some(p => p.is_current_term === false) && currentTerm) {
+          const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+          const ct = norm(currentTerm);
+          allPlans = raw.filter(p => p.status !== 'Archived' && norm(p.semester) === ct);
+          priorPlans = raw.filter(p => !(p.status !== 'Archived' && norm(p.semester) === ct));
+        } else {
+          allPlans = current;
+        }
+        currentPlan = allPlans[0] || null;
         renderPlanView();
+        renderPriorPlans();
       } catch(e) {}
+    }
+
+    function renderPriorPlans() {
+      const card = document.getElementById('priorPlansCard');
+      const list = document.getElementById('priorPlansList');
+      if (!card || !list) return;
+      const items = (priorPlans || []).filter(p => (p.courses || []).length || p.status);
+      if (!items.length) {
+        card.classList.add('d-none');
+        list.innerHTML = '';
+        return;
+      }
+      card.classList.remove('d-none');
+      const statusLabel = {
+        Draft: 'مسودة', Pending: 'بانتظار الموافقة', Approved: 'مُعتمدة',
+        Rejected: 'مرفوضة', Archived: 'مؤرشفة'
+      };
+      list.innerHTML = items.map(p => {
+        const courses = (p.courses || []).map(c => esc(c)).join('، ') || '—';
+        return '<li class="list-group-item small">' +
+          '<div class="d-flex justify-content-between gap-2 flex-wrap">' +
+          '<span><strong>' + esc(p.semester || '—') + '</strong> — ' + esc(statusLabel[p.status] || p.status || '') + '</span>' +
+          '<span class="text-muted">' + (p.units_total != null ? (p.units_total + ' وحدة') : '') + '</span>' +
+          '</div><div class="text-muted mt-1">' + courses + '</div></li>';
+      }).join('');
     }
 
     function renderPlanView() {
@@ -522,8 +582,8 @@
       selectedCourseNames = new Set((currentPlan && (currentPlan.status === 'Draft' || currentPlan.status === 'Rejected')) ? (currentPlan.courses || []) : []);
       if (!eligibleCourses.length) loadEligibleCourses();
       else renderCourseCheckList();
-      document.getElementById('planSemesterInput').value = currentPlan?.semester || currentTerm;
-      if (stuPlanPicker) stuPlanPicker.setFromOpsLabel(currentPlan?.semester || currentTerm);
+      document.getElementById('planSemesterInput').value = currentTerm || '';
+      if (stuPlanPicker) stuPlanPicker.setFromOpsLabel(currentTerm || '');
       scheduleEditorPrereqValidate();
     }
 

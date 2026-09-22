@@ -14,6 +14,453 @@ GROUP_KIND_SPLIT = "split"
 DEFAULT_GROUP_CODE = "—"
 VALID_GROUP_KINDS = frozenset({GROUP_KIND_SINGLE, GROUP_KIND_SPLIT})
 
+ROLE_PRIMARY = "primary"
+ROLE_ASSISTANT = "assistant"
+ROLE_CO_TEACHER = "co_teacher"
+VALID_INSTRUCTOR_ROLES = frozenset({ROLE_PRIMARY, ROLE_ASSISTANT, ROLE_CO_TEACHER})
+ROLE_LABEL_AR = {
+    ROLE_PRIMARY: "رئيسي",
+    ROLE_ASSISTANT: "مساعد",
+    ROLE_CO_TEACHER: "مشارك",
+}
+
+
+def format_instructors_display(primary_name: str, assistant_names: list[str] | None = None) -> str:
+    """نص خلية الأستاذ: رئيسي (+ مساعد: …)."""
+    primary = (primary_name or "").strip()
+    asst = [str(a).strip() for a in (assistant_names or []) if str(a).strip()]
+    # أزل تكرار الرئيسي إن وُجد ضمن المساعدين
+    if primary:
+        asst = [a for a in asst if a.lower() != primary.lower()]
+    if primary and asst:
+        return f"{primary} + مساعد: {', '.join(asst)}"
+    if primary:
+        return primary
+    if asst:
+        return "مساعد: " + ", ".join(asst)
+    return ""
+
+
+def enrich_schedule_rows_instructor_team(conn, rows: list[dict[str, Any]]) -> None:
+    """يملأ instructor_primary / assistant_names / instructor_display على صفوف الجدول (in-place).
+
+    عمود العرض الرسمي يبقى instructor = الرئيسي فقط؛ الواجهة تقرر إن تعرض المساعد سطراً ثانياً.
+    """
+    if not rows:
+        return
+    tg_ids = [
+        int(x.get("teaching_group_id") or 0)
+        for x in rows
+        if int(x.get("teaching_group_id") or 0) > 0
+    ]
+    team_map = instructors_by_group_ids(conn, tg_ids) if tg_ids else {}
+    for item in rows:
+        tgid = int(item.get("teaching_group_id") or 0)
+        team = team_map.get(tgid) or []
+        primary = next((m for m in team if m.get("role") == ROLE_PRIMARY), None)
+        assistants = [
+            m
+            for m in team
+            if m.get("role") in (ROLE_ASSISTANT, ROLE_CO_TEACHER)
+        ]
+        primary_name = (
+            (primary or {}).get("instructor_name")
+            or item.get("instructor_primary")
+            or item.get("instructor")
+            or ""
+        ).strip()
+        # إن كان الحقل مخزّناً مسبقاً بصيغة «رئيسي + مساعد: …» افصل الاسم
+        if " + مساعد:" in primary_name or "+ مساعد:" in primary_name:
+            primary_name = primary_name.split("+", 1)[0].strip()
+        asst_names = [
+            (m.get("instructor_name") or "").strip()
+            for m in assistants
+            if (m.get("instructor_name") or "").strip()
+        ]
+        asst_names = [a for a in asst_names if a.lower() != primary_name.lower()]
+        item["instructors"] = team
+        item["assistant_names"] = asst_names
+        item["instructor_primary"] = primary_name
+        item["instructor_display"] = format_instructors_display(primary_name, asst_names)
+        if primary_name:
+            item["instructor"] = primary_name
+
+
+def ensure_teaching_group_instructors_table(conn) -> bool:
+    if table_exists(conn, "teaching_group_instructors"):
+        return True
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS teaching_group_instructors (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                teaching_group_id INTEGER NOT NULL,
+                instructor_id INTEGER NOT NULL,
+                role TEXT NOT NULL DEFAULT 'primary',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (teaching_group_id, instructor_id)
+            )
+            """
+        )
+        conn.commit()
+    except Exception:
+        return False
+    return table_exists(conn, "teaching_group_instructors")
+
+
+def list_group_instructors(conn, teaching_group_id: int) -> list[dict[str, Any]]:
+    """أعضاء فريق مجموعة التدريس مرتّبين (الرئيسي أولاً)."""
+    tgid = int(teaching_group_id or 0)
+    if tgid <= 0 or not ensure_teaching_group_instructors_table(conn):
+        return []
+    cur = conn.cursor()
+    rows = cur.execute(
+        """
+        SELECT tgi.instructor_id, tgi.role, tgi.sort_order,
+               COALESCE(i.name, '') AS instructor_name
+        FROM teaching_group_instructors tgi
+        LEFT JOIN instructors i ON i.id = tgi.instructor_id
+        WHERE tgi.teaching_group_id = ?
+        ORDER BY
+          CASE tgi.role WHEN 'primary' THEN 0 WHEN 'co_teacher' THEN 1 ELSE 2 END,
+          tgi.sort_order, tgi.instructor_id
+        """,
+        (tgid,),
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        if hasattr(r, "keys"):
+            iid = int(r["instructor_id"] or 0)
+            role = (r["role"] or ROLE_PRIMARY).strip().lower()
+            name = (r["instructor_name"] or "").strip()
+            sort_order = int(r["sort_order"] or 0)
+        else:
+            iid = int(r[0] or 0)
+            role = (r[1] or ROLE_PRIMARY).strip().lower()
+            sort_order = int(r[2] or 0)
+            name = (r[3] or "").strip()
+        if iid <= 0:
+            continue
+        if role not in VALID_INSTRUCTOR_ROLES:
+            role = ROLE_ASSISTANT
+        out.append(
+            {
+                "instructor_id": iid,
+                "role": role,
+                "role_label_ar": ROLE_LABEL_AR.get(role, role),
+                "sort_order": sort_order,
+                "instructor_name": name,
+            }
+        )
+    return out
+
+
+def instructors_by_group_ids(conn, group_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+    """خريطة teaching_group_id → أعضاء الفريق."""
+    ids = sorted({int(g) for g in (group_ids or []) if int(g or 0) > 0})
+    if not ids or not ensure_teaching_group_instructors_table(conn):
+        return {}
+    cur = conn.cursor()
+    placeholders = ",".join("?" for _ in ids)
+    rows = cur.execute(
+        f"""
+        SELECT tgi.teaching_group_id, tgi.instructor_id, tgi.role, tgi.sort_order,
+               COALESCE(i.name, '') AS instructor_name
+        FROM teaching_group_instructors tgi
+        LEFT JOIN instructors i ON i.id = tgi.instructor_id
+        WHERE tgi.teaching_group_id IN ({placeholders})
+        ORDER BY tgi.teaching_group_id,
+          CASE tgi.role WHEN 'primary' THEN 0 WHEN 'co_teacher' THEN 1 ELSE 2 END,
+          tgi.sort_order, tgi.instructor_id
+        """,
+        tuple(ids),
+    ).fetchall()
+    out: dict[int, list[dict[str, Any]]] = {i: [] for i in ids}
+    for r in rows:
+        if hasattr(r, "keys"):
+            tgid = int(r["teaching_group_id"] or 0)
+            iid = int(r["instructor_id"] or 0)
+            role = (r["role"] or ROLE_PRIMARY).strip().lower()
+            name = (r["instructor_name"] or "").strip()
+            sort_order = int(r["sort_order"] or 0)
+        else:
+            tgid = int(r[0] or 0)
+            iid = int(r[1] or 0)
+            role = (r[2] or ROLE_PRIMARY).strip().lower()
+            sort_order = int(r[3] or 0)
+            name = (r[4] or "").strip()
+        if tgid <= 0 or iid <= 0:
+            continue
+        if role not in VALID_INSTRUCTOR_ROLES:
+            role = ROLE_ASSISTANT
+        out.setdefault(tgid, []).append(
+            {
+                "instructor_id": iid,
+                "role": role,
+                "role_label_ar": ROLE_LABEL_AR.get(role, role),
+                "sort_order": sort_order,
+                "instructor_name": name,
+            }
+        )
+    return out
+
+
+def backfill_primary_instructors_for_groups(conn) -> int:
+    """إنشاء صف primary لكل مجموعة بلا صف فريق."""
+    if not table_exists(conn, "teaching_groups") or not ensure_teaching_group_instructors_table(conn):
+        return 0
+    cur = conn.cursor()
+    before = cur.execute("SELECT COUNT(*) FROM teaching_group_instructors").fetchone()
+    before_n = int(_row_val(before, 0) or 0)
+    try:
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO teaching_group_instructors
+                (teaching_group_id, instructor_id, role, sort_order)
+            SELECT id, instructor_id, 'primary', 0
+            FROM teaching_groups
+            WHERE instructor_id IS NOT NULL AND instructor_id > 0
+            """
+        )
+    except Exception:
+        # PostgreSQL: ON CONFLICT
+        cur.execute(
+            """
+            INSERT INTO teaching_group_instructors (teaching_group_id, instructor_id, role, sort_order)
+            SELECT tg.id, tg.instructor_id, 'primary', 0
+            FROM teaching_groups tg
+            WHERE tg.instructor_id IS NOT NULL AND tg.instructor_id > 0
+              AND NOT EXISTS (
+                SELECT 1 FROM teaching_group_instructors tgi
+                WHERE tgi.teaching_group_id = tg.id AND tgi.instructor_id = tg.instructor_id
+              )
+            """
+        )
+    conn.commit()
+    after = cur.execute("SELECT COUNT(*) FROM teaching_group_instructors").fetchone()
+    return max(0, int(_row_val(after, 0) or 0) - before_n)
+
+
+def sync_schedule_slots_to_primary(conn, teaching_group_id: int) -> int:
+    """مزامنة instructor_id/الاسم على حصص الجدول المرتبطة بالأستاذ الرئيسي للمجموعة."""
+    tgid = int(teaching_group_id or 0)
+    if tgid <= 0 or not table_exists(conn, "schedule"):
+        return 0
+    cols = {c.lower() for c in fetch_table_columns(conn, "schedule")}
+    if "teaching_group_id" not in cols:
+        return 0
+    tg = get_teaching_group(conn, tgid)
+    if not tg:
+        return 0
+    primary = int(tg.get("primary_instructor_id") or tg.get("instructor_id") or 0)
+    if primary <= 0:
+        return 0
+    cur = conn.cursor()
+    name_row = cur.execute(
+        "SELECT COALESCE(TRIM(name), '') FROM instructors WHERE id = ? LIMIT 1",
+        (primary,),
+    ).fetchone()
+    iname = (_row_val(name_row, 0) or "").strip()
+    sets = ["instructor_id = ?"]
+    params: list[Any] = [primary]
+    if "instructor" in cols and iname:
+        sets.append("instructor = ?")
+        params.append(iname)
+    params.append(tgid)
+    cur.execute(
+        f"UPDATE schedule SET {', '.join(sets)} WHERE teaching_group_id = ?",
+        tuple(params),
+    )
+    n = int(cur.rowcount or 0)
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return max(0, n)
+
+
+def _find_teaching_group_by_key(
+    conn,
+    *,
+    course_name: str,
+    semester: str,
+    department_id: int,
+    group_code: str,
+) -> int | None:
+    """بحث بالمفتاح الفريد بغض النظر عن is_active."""
+    if not table_exists(conn, "teaching_groups"):
+        return None
+    gcode = normalize_group_code(group_code)
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT id FROM teaching_groups
+        WHERE lower(trim(course_name)) = lower(trim(?))
+          AND semester = ?
+          AND department_id = ?
+          AND group_code = ?
+        LIMIT 1
+        """,
+        ((course_name or "").strip(), (semester or "").strip(), int(department_id), gcode),
+    ).fetchone()
+    gid = int(_row_val(row, 0) or 0)
+    return gid if gid > 0 else None
+
+
+def upsert_teaching_group(
+    conn,
+    *,
+    course_name: str,
+    semester: str,
+    department_id: int,
+    instructor_id: int,
+    group_code: str = DEFAULT_GROUP_CODE,
+    group_kind: str = GROUP_KIND_SINGLE,
+    capacity_max: int | None = None,
+    note: str = "",
+) -> dict[str, Any]:
+    """إنشاء أو إعادة تفعيل مجموعة بنفس المفتاح الفريد (يتجنب فشل UNIQUE عند الحفظ المتكرر)."""
+    cname = (course_name or "").strip()
+    sem = (semester or "").strip()
+    dept = int(department_id)
+    iid = int(instructor_id)
+    gkind = (group_kind or GROUP_KIND_SINGLE).strip().lower()
+    if gkind not in VALID_GROUP_KINDS:
+        raise ValueError("group_kind غير صالح")
+    gcode = DEFAULT_GROUP_CODE if gkind == GROUP_KIND_SINGLE else normalize_group_code(group_code)
+    existing_id = _find_teaching_group_by_key(
+        conn,
+        course_name=cname,
+        semester=sem,
+        department_id=dept,
+        group_code=gcode,
+    )
+    if existing_id:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE teaching_groups SET
+                course_name = ?, group_kind = ?, instructor_id = ?,
+                capacity_max = ?, note = ?, is_active = 1, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                cname,
+                gkind,
+                iid,
+                capacity_max,
+                (note or "").strip(),
+                _now_iso(),
+                int(existing_id),
+            ),
+        )
+        conn.commit()
+        ensure_primary_row_for_group(conn, int(existing_id), iid)
+        return get_teaching_group(conn, int(existing_id)) or {}
+    return create_teaching_group(
+        conn,
+        course_name=cname,
+        semester=sem,
+        department_id=dept,
+        instructor_id=iid,
+        group_code=gcode,
+        group_kind=gkind,
+        capacity_max=capacity_max,
+        note=note,
+    )
+
+
+def set_group_instructors(
+    conn,
+    teaching_group_id: int,
+    *,
+    primary_instructor_id: int,
+    assistant_ids: list[int] | None = None,
+    sync_group_primary: bool = True,
+    sync_schedule_slots: bool = True,
+) -> list[dict[str, Any]]:
+    """
+    استبدال فريق المجموعة: رئيسي واحد + مساعدون.
+    يحدّث teaching_groups.instructor_id ليطابق الرئيسي عند الطلب،
+    ويزامن حصص الجدول المرتبطة.
+    """
+    tgid = int(teaching_group_id or 0)
+    primary = int(primary_instructor_id or 0)
+    if tgid <= 0 or primary <= 0:
+        raise ValueError("teaching_group_id و primary_instructor_id مطلوبان")
+    if not ensure_teaching_group_instructors_table(conn):
+        raise RuntimeError("جدول teaching_group_instructors غير متاح")
+
+    asst_raw = [int(x) for x in (assistant_ids or []) if int(x or 0) > 0]
+    assistants: list[int] = []
+    seen = {primary}
+    for a in asst_raw:
+        if a in seen:
+            continue
+        seen.add(a)
+        assistants.append(a)
+
+    cur = conn.cursor()
+    # تحقق من وجود الأساتذة
+    for iid in [primary] + assistants:
+        row = cur.execute("SELECT id FROM instructors WHERE id = ? LIMIT 1", (iid,)).fetchone()
+        if not row:
+            raise ValueError(f"أستاذ غير موجود: {iid}")
+
+    cur.execute("DELETE FROM teaching_group_instructors WHERE teaching_group_id = ?", (tgid,))
+    cur.execute(
+        """
+        INSERT INTO teaching_group_instructors (teaching_group_id, instructor_id, role, sort_order)
+        VALUES (?, ?, ?, 0)
+        """,
+        (tgid, primary, ROLE_PRIMARY),
+    )
+    for i, aid in enumerate(assistants, start=1):
+        cur.execute(
+            """
+            INSERT INTO teaching_group_instructors (teaching_group_id, instructor_id, role, sort_order)
+            VALUES (?, ?, ?, ?)
+            """,
+            (tgid, aid, ROLE_ASSISTANT, i),
+        )
+    if sync_group_primary:
+        cur.execute(
+            "UPDATE teaching_groups SET instructor_id = ?, updated_at = ? WHERE id = ?",
+            (primary, _now_iso(), tgid),
+        )
+    conn.commit()
+    if sync_schedule_slots:
+        sync_schedule_slots_to_primary(conn, tgid)
+    return list_group_instructors(conn, tgid)
+
+
+def ensure_primary_row_for_group(conn, teaching_group_id: int, instructor_id: int) -> None:
+    """بعد إنشاء مجموعة: صف primary إن لم يوجد."""
+    tgid = int(teaching_group_id or 0)
+    iid = int(instructor_id or 0)
+    if tgid <= 0 or iid <= 0 or not ensure_teaching_group_instructors_table(conn):
+        return
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT id FROM teaching_group_instructors WHERE teaching_group_id = ? AND role = ? LIMIT 1",
+        (tgid, ROLE_PRIMARY),
+    ).fetchone()
+    if row:
+        return
+    try:
+        cur.execute(
+            """
+            INSERT INTO teaching_group_instructors (teaching_group_id, instructor_id, role, sort_order)
+            VALUES (?, ?, ?, 0)
+            """,
+            (tgid, iid, ROLE_PRIMARY),
+        )
+        conn.commit()
+    except Exception:
+        pass
+
 
 def _now_iso() -> str:
     return datetime.datetime.utcnow().isoformat(timespec="seconds")
@@ -153,6 +600,35 @@ def _group_row_to_dict(row) -> dict[str, Any]:
     return d
 
 
+def enrich_group_with_instructors(conn, group: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not group:
+        return group
+    tgid = int(group.get("id") or 0)
+    team = list_group_instructors(conn, tgid) if tgid else []
+    if not team and int(group.get("instructor_id") or 0) > 0:
+        # توافق: لا صفوف فريق بعد — اعتبر instructor_id رئيسياً
+        team = [
+            {
+                "instructor_id": int(group["instructor_id"]),
+                "role": ROLE_PRIMARY,
+                "role_label_ar": ROLE_LABEL_AR[ROLE_PRIMARY],
+                "sort_order": 0,
+                "instructor_name": (group.get("instructor_name") or "").strip(),
+            }
+        ]
+    primary = next((m for m in team if m.get("role") == ROLE_PRIMARY), team[0] if team else None)
+    assistants = [m for m in team if m.get("role") == ROLE_ASSISTANT]
+    group["instructors"] = team
+    group["primary_instructor_id"] = int((primary or {}).get("instructor_id") or group.get("instructor_id") or 0) or None
+    group["assistant_instructor_ids"] = [int(m["instructor_id"]) for m in assistants]
+    group["assistant_names"] = [m.get("instructor_name") or "" for m in assistants if m.get("instructor_name")]
+    group["instructors_display"] = format_instructors_display(
+        (primary or {}).get("instructor_name") or group.get("instructor_name") or "",
+        group["assistant_names"],
+    )
+    return group
+
+
 def _groups_base_sql() -> str:
     return """
         SELECT tg.id, tg.course_name, tg.semester, tg.department_id,
@@ -193,7 +669,10 @@ def list_teaching_groups(
         params.append((course_name or "").strip())
     sql += " ORDER BY tg.course_name, tg.department_id, tg.group_code"
     rows = cur.execute(sql, tuple(params)).fetchall()
-    return [_group_row_to_dict(r) for r in rows]
+    out = [_group_row_to_dict(r) for r in rows]
+    for g in out:
+        enrich_group_with_instructors(conn, g)
+    return out
 
 
 def get_teaching_group(conn, group_id: int) -> dict[str, Any] | None:
@@ -208,7 +687,7 @@ def get_teaching_group(conn, group_id: int) -> dict[str, Any] | None:
         return None
     g = _group_row_to_dict(row)
     g["section_ids"] = list_linked_section_ids(conn, int(group_id))
-    return g
+    return enrich_group_with_instructors(conn, g)
 
 
 def list_linked_section_ids(conn, teaching_group_id: int) -> list[int]:
@@ -295,6 +774,8 @@ def create_teaching_group(
             (cname, sem, dept, gcode),
         ).fetchone()
         gid = int(_row_val(row, 0) or 0)
+    if gid:
+        ensure_primary_row_for_group(conn, gid, iid)
     return get_teaching_group(conn, gid) or {}
 
 
@@ -335,6 +816,22 @@ def update_teaching_group(
         tuple(params),
     )
     conn.commit()
+    if instructor_id is not None:
+        # حافظ على صف primary متزامناً مع العمود
+        try:
+            set_group_instructors(
+                conn,
+                int(group_id),
+                primary_instructor_id=int(instructor_id),
+                assistant_ids=[
+                    int(m["instructor_id"])
+                    for m in list_group_instructors(conn, int(group_id))
+                    if m.get("role") == ROLE_ASSISTANT
+                ],
+                sync_group_primary=False,
+            )
+        except Exception:
+            ensure_primary_row_for_group(conn, int(group_id), int(instructor_id))
     return get_teaching_group(conn, int(group_id))
 
 
@@ -365,6 +862,8 @@ def link_schedule_slots(conn, teaching_group_id: int, section_ids: list[int]) ->
         )
         linked += 1
     conn.commit()
+    if linked:
+        sync_schedule_slots_to_primary(conn, int(teaching_group_id))
     return linked
 
 
@@ -526,7 +1025,8 @@ def setup_course_offering(
 ) -> list[dict[str, Any]]:
     """
     حفظ إعداد مقرر: single (مجموعة واحدة) أو split (A/B/C).
-    groups: [{group_code, instructor_id, section_ids, capacity_max?, note?}]
+    groups: [{group_code, instructor_id, section_ids, capacity_max?, note?, assistant_ids?}]
+    يعيد تفعيل المجموعات الموجودة بدل INSERT جديد لتفادي UNIQUE.
     """
     cname = (course_name or "").strip()
     sem = (semester or "").strip()
@@ -539,23 +1039,15 @@ def setup_course_offering(
     if not groups:
         raise ValueError("groups مطلوبة")
 
-    cur = conn.cursor()
-    cur.execute(
-        """
-        UPDATE teaching_groups SET is_active = 0, updated_at = ?
-        WHERE lower(trim(course_name)) = lower(trim(?))
-          AND semester = ? AND department_id = ?
-        """,
-        (_now_iso(), cname, sem, dept),
-    )
-
+    desired_codes: set[str] = set()
     saved: list[dict[str, Any]] = []
+
     if gkind == GROUP_KIND_SINGLE:
         g0 = groups[0]
         iid = int(g0.get("instructor_id") or 0)
         if iid <= 0:
             raise ValueError("instructor_id مطلوب")
-        all_sections = []
+        all_sections: list[int] = []
         for g in groups:
             all_sections.extend(int(x) for x in (g.get("section_ids") or []) if int(x) > 0)
         if not all_sections:
@@ -563,9 +1055,14 @@ def setup_course_offering(
             all_sections = [
                 int(s["section_id"])
                 for s in slots
-                if s["course_name"].lower() == cname.lower() and int(s.get("instructor_id") or 0) == iid
+                if s["course_name"].lower() == cname.lower()
+                and (
+                    int(s.get("instructor_id") or 0) == iid
+                    or int(s.get("instructor_id") or 0) <= 0
+                )
             ]
-        rec = create_teaching_group(
+        desired_codes.add(DEFAULT_GROUP_CODE)
+        rec = upsert_teaching_group(
             conn,
             course_name=cname,
             semester=sem,
@@ -576,7 +1073,17 @@ def setup_course_offering(
             capacity_max=g0.get("capacity_max"),
             note=str(g0.get("note") or ""),
         )
-        link_schedule_slots(conn, int(rec["id"]), list(dict.fromkeys(all_sections)))
+        section_list = list(dict.fromkeys(all_sections))
+        if section_list:
+            link_schedule_slots(conn, int(rec["id"]), section_list)
+        asst = [int(x) for x in (g0.get("assistant_ids") or []) if int(x or 0) > 0]
+        try:
+            set_group_instructors(
+                conn, int(rec["id"]), primary_instructor_id=iid, assistant_ids=asst
+            )
+        except Exception:
+            ensure_primary_row_for_group(conn, int(rec["id"]), iid)
+            sync_schedule_slots_to_primary(conn, int(rec["id"]))
         saved.append(get_teaching_group(conn, int(rec["id"])) or rec)
     else:
         for g in groups:
@@ -587,7 +1094,8 @@ def setup_course_offering(
             if iid <= 0:
                 raise ValueError(f"instructor_id مطلوب للمجموعة {gcode}")
             section_ids = [int(x) for x in (g.get("section_ids") or []) if int(x) > 0]
-            rec = create_teaching_group(
+            desired_codes.add(gcode)
+            rec = upsert_teaching_group(
                 conn,
                 course_name=cname,
                 semester=sem,
@@ -600,10 +1108,39 @@ def setup_course_offering(
             )
             if section_ids:
                 link_schedule_slots(conn, int(rec["id"]), section_ids)
+            asst = [int(x) for x in (g.get("assistant_ids") or []) if int(x or 0) > 0]
+            try:
+                set_group_instructors(
+                    conn, int(rec["id"]), primary_instructor_id=iid, assistant_ids=asst
+                )
+            except Exception:
+                ensure_primary_row_for_group(conn, int(rec["id"]), iid)
+                sync_schedule_slots_to_primary(conn, int(rec["id"]))
             saved.append(get_teaching_group(conn, int(rec["id"])) or rec)
 
+    # تعطيل المجموعات القديمة لنفس المقرر/الفصل/القسم غير المستخدمة في هذا الحفظ
+    cur = conn.cursor()
+    rows = cur.execute(
+        """
+        SELECT id, group_code FROM teaching_groups
+        WHERE lower(trim(course_name)) = lower(trim(?))
+          AND semester = ? AND department_id = ? AND is_active = 1
+        """,
+        (cname, sem, dept),
+    ).fetchall()
+    for row in rows:
+        if hasattr(row, "keys"):
+            gid, gcode = int(row["id"]), normalize_group_code(row["group_code"] or "")
+        else:
+            gid, gcode = int(row[0]), normalize_group_code(row[1] or "")
+        if gcode not in desired_codes:
+            cur.execute(
+                "UPDATE teaching_groups SET is_active = 0, updated_at = ? WHERE id = ?",
+                (_now_iso(), gid),
+            )
     conn.commit()
     return saved
+
 
 
 def backfill_teaching_groups_for_semester(
@@ -673,6 +1210,76 @@ def backfill_teaching_groups_for_semester(
     return stats
 
 
+def ensure_schedule_slot_teaching_group(conn, section_id: int) -> int | None:
+    """
+    بعد إضافة حصة جدول: اربطها بمجموعة تدريس single افتراضية إن أمكن.
+    يتخطى إن نقص القسم أو الأستاذ (تظهر في التدقيق كيتيمة).
+    """
+    sid = int(section_id or 0)
+    if sid <= 0 or not table_exists(conn, "teaching_groups"):
+        return None
+    if "teaching_group_id" not in {c.lower() for c in fetch_table_columns(conn, "schedule")}:
+        return None
+
+    pk = _schedule_section_pk_expr_bare(conn)
+    cur = conn.cursor()
+    row = cur.execute(
+        f"""
+        SELECT course_name, semester, department_id, instructor_id, teaching_group_id
+        FROM schedule
+        WHERE {pk} = ?
+        LIMIT 1
+        """,
+        (sid,),
+    ).fetchone()
+    if not row:
+        return None
+    if hasattr(row, "keys"):
+        cname = (row["course_name"] or "").strip()
+        sem = (row["semester"] or "").strip()
+        dept = int(row["department_id"] or 0)
+        iid = int(row["instructor_id"] or 0)
+        existing_tg = int(row["teaching_group_id"] or 0)
+    else:
+        cname = (row[0] or "").strip()
+        sem = (row[1] or "").strip()
+        dept = int(row[2] or 0)
+        iid = int(row[3] or 0)
+        existing_tg = int(row[4] or 0)
+    if existing_tg > 0:
+        return existing_tg
+    if not cname or not sem or dept <= 0 or iid <= 0:
+        return None
+
+    existing = cur.execute(
+        """
+        SELECT id FROM teaching_groups
+        WHERE lower(trim(course_name)) = lower(trim(?))
+          AND semester = ? AND department_id = ?
+          AND group_code = ? AND is_active = 1
+        LIMIT 1
+        """,
+        (cname, sem, dept, DEFAULT_GROUP_CODE),
+    ).fetchone()
+    if existing:
+        gid = int(_row_val(existing, 0) or 0)
+    else:
+        rec = create_teaching_group(
+            conn,
+            course_name=cname,
+            semester=sem,
+            department_id=dept,
+            instructor_id=iid,
+            group_code=DEFAULT_GROUP_CODE,
+            group_kind=GROUP_KIND_SINGLE,
+        )
+        gid = int(rec.get("id") or 0)
+    if gid:
+        link_schedule_slots(conn, gid, [sid])
+        return gid
+    return None
+
+
 def audit_teaching_groups(
     conn,
     *,
@@ -690,7 +1297,20 @@ def audit_teaching_groups(
     unlinked = [s for s in slots if not s.get("teaching_group_id")]
     no_instructor = [s for s in slots if int(s.get("instructor_id") or 0) <= 0]
     no_dept = [s for s in slots if int(s.get("department_id") or 0) <= 0]
-    empty_groups = [g for g in groups if not list_linked_section_ids(conn, int(g["id"]))]
+
+    linked_ids: set[int] = set()
+    if groups and table_exists(conn, "schedule"):
+        sch_cols = {c.lower() for c in fetch_table_columns(conn, "schedule")}
+        if "teaching_group_id" in sch_cols:
+            gids = [int(g["id"]) for g in groups if g.get("id")]
+            if gids:
+                ph = ",".join(["?"] * len(gids))
+                rows = conn.cursor().execute(
+                    f"SELECT DISTINCT teaching_group_id FROM schedule WHERE teaching_group_id IN ({ph})",
+                    tuple(gids),
+                ).fetchall()
+                linked_ids = {int(_row_val(r, 0) or 0) for r in rows if int(_row_val(r, 0) or 0)}
+    empty_groups = [g for g in groups if int(g.get("id") or 0) not in linked_ids]
 
     split_courses: dict[str, list] = {}
     for g in groups:
@@ -939,7 +1559,12 @@ def registration_teaching_groups_audit(
     *,
     semester: str | None = None,
     department_id: int | None = None,
+    detail: bool = True,
 ) -> dict[str, Any]:
+    """تدقيق ربط التسجيلات بمجموعات التدريس.
+
+    detail=False: عدّاد سريع فقط (لشاشة الإعداد) بدون خيارات لكل صف.
+    """
     sem = (semester or "").strip()
     if not sem:
         tname, tyear = get_current_term(conn=conn)
@@ -947,44 +1572,99 @@ def registration_teaching_groups_audit(
     cur = conn.cursor()
     cols = {c.lower() for c in fetch_table_columns(conn, "registrations")}
     unlinked: list[dict] = []
+    unlinked_count = 0
     if "teaching_group_id" in cols and table_exists(conn, "registrations"):
-        rows = cur.execute(
-            """
-            SELECT r.student_id, r.course_name, r.teaching_group_id,
-                   COALESCE(s.student_name, '') AS student_name
-            FROM registrations r
-            LEFT JOIN students s ON s.student_id = r.student_id
-            WHERE r.teaching_group_id IS NULL OR r.teaching_group_id = 0
-            """
-        ).fetchall()
-        for row in rows:
-            if hasattr(row, "keys"):
-                d = dict(row)
+        if not detail:
+            # مسار خفيف: COUNT فقط (مع فلتر قسم عبر JOIN عند الإمكان)
+            stu_cols = (
+                {c.lower() for c in fetch_table_columns(conn, "students")}
+                if table_exists(conn, "students")
+                else set()
+            )
+            if department_id is not None and "department_id" in stu_cols:
+                row = cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM registrations r
+                    JOIN students s ON s.student_id = r.student_id
+                    WHERE (r.teaching_group_id IS NULL OR r.teaching_group_id = 0)
+                      AND s.department_id = ?
+                    """,
+                    (int(department_id),),
+                ).fetchone()
+                unlinked_count = int(_row_val(row, 0) or 0)
             else:
-                d = {"student_id": row[0], "course_name": row[1], "teaching_group_id": row[2], "student_name": row[3]}
-            sid = d.get("student_id")
-            cname = d.get("course_name")
-            if department_id is not None and student_department_id(conn, sid) != int(department_id):
-                continue
-            opts = list_registration_group_options(conn, course_name=cname, semester=sem, student_id=sid)
-            d["available_groups"] = len(opts)
-            d["needs_choice"] = len(opts) > 1
-            unlinked.append(d)
-    groups = list_teaching_groups(conn, semester=sem, department_id=department_id)
-    group_counts = [
-        {
-            "teaching_group_id": int(g["id"]),
-            "display_label": g.get("display_label"),
-            "course_name": g.get("course_name"),
-            "enrolled_count": count_registrations_for_teaching_group(conn, int(g["id"])),
-        }
-        for g in groups
-        if g.get("id")
-    ]
+                row = cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM registrations
+                    WHERE teaching_group_id IS NULL OR teaching_group_id = 0
+                    """
+                ).fetchone()
+                unlinked_count = int(_row_val(row, 0) or 0)
+                if department_id is not None and unlinked_count:
+                    # فلتر قسم بدون JOIN مباشر: عيّنة محدودة فقط لتجنّب التعليق
+                    rows = cur.execute(
+                        """
+                        SELECT student_id FROM registrations
+                        WHERE teaching_group_id IS NULL OR teaching_group_id = 0
+                        LIMIT 5000
+                        """
+                    ).fetchall()
+                    unlinked_count = sum(
+                        1
+                        for r in rows
+                        if student_department_id(conn, _row_val(r, 0)) == int(department_id)
+                    )
+        else:
+            rows = cur.execute(
+                """
+                SELECT r.student_id, r.course_name, r.teaching_group_id,
+                       COALESCE(s.student_name, '') AS student_name
+                FROM registrations r
+                LEFT JOIN students s ON s.student_id = r.student_id
+                WHERE r.teaching_group_id IS NULL OR r.teaching_group_id = 0
+                """
+            ).fetchall()
+            for row in rows:
+                if hasattr(row, "keys"):
+                    d = dict(row)
+                else:
+                    d = {
+                        "student_id": row[0],
+                        "course_name": row[1],
+                        "teaching_group_id": row[2],
+                        "student_name": row[3],
+                    }
+                sid = d.get("student_id")
+                cname = d.get("course_name")
+                if department_id is not None and student_department_id(conn, sid) != int(department_id):
+                    continue
+                opts = list_registration_group_options(
+                    conn, course_name=cname, semester=sem, student_id=sid
+                )
+                d["available_groups"] = len(opts)
+                d["needs_choice"] = len(opts) > 1
+                unlinked.append(d)
+            unlinked_count = len(unlinked)
+
+    group_counts: list[dict] = []
+    if detail:
+        groups = list_teaching_groups(conn, semester=sem, department_id=department_id)
+        group_counts = [
+            {
+                "teaching_group_id": int(g["id"]),
+                "display_label": g.get("display_label"),
+                "course_name": g.get("course_name"),
+                "enrolled_count": count_registrations_for_teaching_group(conn, int(g["id"])),
+            }
+            for g in groups
+            if g.get("id")
+        ]
     return {
         "semester": sem,
         "unlinked_registrations": unlinked,
-        "unlinked_count": len(unlinked),
+        "unlinked_count": unlinked_count,
         "group_enrollment_counts": group_counts,
     }
 
@@ -1131,7 +1811,7 @@ def list_instructor_assigned_groups(
     instructor_id: int,
     semester: str,
 ) -> list[dict[str, Any]]:
-    """مجموعات التدريس المسندة لأستاذ في فصل معيّن."""
+    """مجموعات التدريس المسندة لأستاذ (رئيسي أو مساعد) في فصل معيّن."""
     iid = int(instructor_id or 0)
     sem = (semester or "").strip()
     if iid <= 0 or not sem:
@@ -1139,11 +1819,20 @@ def list_instructor_assigned_groups(
     groups = list_teaching_groups(conn, semester=sem, active_only=True)
     out: list[dict[str, Any]] = []
     for g in groups:
-        if int(g.get("instructor_id") or 0) != iid:
-            continue
         tgid = int(g.get("id") or 0)
         if not tgid:
             continue
+        team = g.get("instructors") or list_group_instructors(conn, tgid)
+        member_ids = {int(m.get("instructor_id") or 0) for m in team}
+        if int(g.get("instructor_id") or 0) > 0:
+            member_ids.add(int(g["instructor_id"]))
+        if iid not in member_ids:
+            continue
+        my_role = ROLE_PRIMARY
+        for m in team:
+            if int(m.get("instructor_id") or 0) == iid:
+                my_role = m.get("role") or ROLE_PRIMARY
+                break
         section_ids = list_linked_section_ids(conn, tgid)
         slots = _schedule_slots_for_section_ids(conn, section_ids)
         sec_id = min(section_ids) if section_ids else 0
@@ -1160,8 +1849,11 @@ def list_instructor_assigned_groups(
                 "day": day,
                 "time": slots[0].get("time") if len(slots) == 1 else "",
                 "room": " / ".join(dict.fromkeys(r for r in rooms if r)) if rooms else "",
-                "instructor": (g.get("instructor_name") or "").strip(),
+                "instructor": g.get("instructors_display") or (g.get("instructor_name") or "").strip(),
                 "instructor_id": iid,
+                "instructor_role": my_role,
+                "instructor_role_label_ar": ROLE_LABEL_AR.get(my_role, my_role),
+                "instructors": team,
                 "semester": sem,
                 "department_id": int(g.get("department_id") or 0),
                 "department_name": (g.get("department_name") or "").strip() or "—",
@@ -1347,3 +2039,94 @@ def teaching_groups_without_evaluation_audit(
         "missing_groups": len(missing),
         "rows": missing,
     }
+
+
+
+def run_term_teaching_groups_pipeline(
+    conn,
+    *,
+    semester: str | None = None,
+    department_id: int | None = None,
+    skip_schedule: bool = False,
+    skip_registrations: bool = False,
+    skip_evaluations: bool = False,
+) -> dict[str, Any]:
+    """تشغيل ترحيل الفصل دفعة واحدة: حصص → فريق primary → تسجيلات → تقييمات + ملخص صحة."""
+    sem = (semester or "").strip()
+    if not sem:
+        tname, tyear = get_current_term(conn=conn)
+        sem = f"{(tname or '').strip()} {(tyear or '').strip()}".strip()
+    out: dict[str, Any] = {"semester": sem, "department_id": department_id}
+
+    def _step(label: str, fn):
+        try:
+            return fn()
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            return {"error": f"{label}: {e}"}
+
+    if not skip_schedule:
+        out["schedule"] = _step(
+            "schedule",
+            lambda: backfill_teaching_groups_for_semester(
+                conn, semester=sem, department_id=department_id
+            ),
+        )
+    else:
+        out["schedule"] = {"skipped": True}
+
+    out["primary_rows"] = _step("primary", lambda: backfill_primary_instructors_for_groups(conn))
+
+    if not skip_registrations:
+        out["registrations"] = _step(
+            "registrations",
+            lambda: backfill_registrations_teaching_groups(
+                conn, semester=sem, department_id=department_id
+            ),
+        )
+    else:
+        out["registrations"] = {"skipped": True}
+
+    if not skip_evaluations:
+        out["evaluations"] = _step(
+            "evaluations",
+            lambda: backfill_course_evaluations_teaching_groups(conn, semester=sem),
+        )
+    else:
+        out["evaluations"] = {"skipped": True}
+
+    try:
+        sched_audit = audit_teaching_groups(conn, semester=sem, department_id=department_id)
+        reg_audit = registration_teaching_groups_audit(
+            conn, semester=sem, department_id=department_id, detail=False
+        )
+        out["audit"] = {
+            "total_slots": sched_audit.get("total_slots"),
+            "total_groups": sched_audit.get("total_groups"),
+            "unlinked_slots": sched_audit.get("unlinked_count"),
+            "slots_without_instructor": len(sched_audit.get("slots_without_instructor") or []),
+            "reg_unlinked": reg_audit.get("unlinked_count"),
+        }
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        out["audit"] = {"error": str(e)}
+
+    audit = out.get("audit") or {}
+    health = "ok"
+    if audit.get("error"):
+        health = "warn"
+    if (audit.get("unlinked_slots") or 0) > 0 or (audit.get("reg_unlinked") or 0) > 0:
+        health = "warn"
+    if (audit.get("unlinked_slots") or 0) > max(3, int((audit.get("total_slots") or 0) * 0.1)):
+        health = "critical"
+    for key in ("schedule", "registrations", "evaluations", "primary_rows"):
+        if isinstance(out.get(key), dict) and out[key].get("error"):
+            health = "critical" if health != "ok" else "warn"
+    out["health"] = health
+    return out

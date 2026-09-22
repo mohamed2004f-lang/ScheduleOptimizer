@@ -1439,6 +1439,11 @@ def list_schedule_rows():
                 if not schedule_semester_matches_term_context(item.get("semester"), ctx):
                     continue
                 result.append(item)
+            # إثراء فريق التدريس (رئيسي + مساعدون) — الواجهة تعرض المساعد سطراً ثانياً
+            try:
+                tg_svc.enrich_schedule_rows_instructor_team(conn, result)
+            except Exception:
+                logger.exception("schedule row instructors enrichment failed")
             try:
                 from backend.core.schedule_stage_layout import (
                     enrich_schedule_row_stage_fields,
@@ -1562,6 +1567,76 @@ def teaching_groups_patch(group_id: int):
     return jsonify({"status": "ok", "group": rec})
 
 
+@schedule_bp.route("/teaching_groups/<int:group_id>/instructors")
+@login_required
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+def teaching_groups_instructors_get(group_id: int):
+    with get_connection() as conn:
+        scope = _teaching_groups_scope_department(conn)
+        existing = tg_svc.get_teaching_group(conn, int(group_id))
+        if not existing:
+            return jsonify({"status": "error", "message": "غير موجود"}), 404
+        if scope is not None and int(existing.get("department_id") or 0) != int(scope):
+            return jsonify({"status": "error", "message": "خارج نطاق القسم"}), 403
+        tg_svc.backfill_primary_instructors_for_groups(conn)
+        team = tg_svc.list_group_instructors(conn, int(group_id))
+    return jsonify({
+        "status": "ok",
+        "teaching_group_id": int(group_id),
+        "instructors": team,
+        "instructors_display": existing.get("instructors_display")
+            or tg_svc.format_instructors_display(
+                next((m.get("instructor_name") for m in team if m.get("role") == tg_svc.ROLE_PRIMARY), ""),
+                [m.get("instructor_name") for m in team if m.get("role") == tg_svc.ROLE_ASSISTANT],
+            ),
+    })
+
+
+@schedule_bp.route("/teaching_groups/<int:group_id>/instructors", methods=["PUT", "POST"])
+@login_required
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+def teaching_groups_instructors_put(group_id: int):
+    """حفظ فريق المجموعة: { primary_instructor_id, assistant_ids: [] }"""
+    data = request.get_json(silent=True) or {}
+    with get_connection() as conn:
+        scope = _teaching_groups_scope_department(conn)
+        existing = tg_svc.get_teaching_group(conn, int(group_id))
+        if not existing:
+            return jsonify({"status": "error", "message": "غير موجود"}), 404
+        if scope is not None and int(existing.get("department_id") or 0) != int(scope):
+            return jsonify({"status": "error", "message": "خارج نطاق القسم"}), 403
+        primary = int(data.get("primary_instructor_id") or data.get("instructor_id") or 0)
+        asst = data.get("assistant_ids") or data.get("assistants") or []
+        if isinstance(asst, str):
+            asst = [x.strip() for x in asst.split(",") if x.strip()]
+        try:
+            team = tg_svc.set_group_instructors(
+                conn,
+                int(group_id),
+                primary_instructor_id=primary,
+                assistant_ids=[int(x) for x in asst],
+            )
+            rec = tg_svc.get_teaching_group(conn, int(group_id))
+            log_activity(
+                "teaching_group_instructors",
+                json.dumps(
+                    {
+                        "teaching_group_id": int(group_id),
+                        "primary": primary,
+                        "assistants": [int(x) for x in asst],
+                    },
+                    ensure_ascii=False,
+                ),
+                actor=session.get("username") or "",
+            )
+        except ValueError as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
+        except Exception as e:
+            logger.error("teaching_groups_instructors_put: %s", e)
+            return jsonify({"status": "error", "message": "فشل حفظ الفريق"}), 500
+    return jsonify({"status": "ok", "instructors": team, "group": rec})
+
+
 @schedule_bp.route("/teaching_groups/setup")
 @login_required
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
@@ -1573,19 +1648,34 @@ def teaching_groups_setup_list():
         offerings = tg_svc.list_course_offerings_for_setup(
             conn, semester=sem, department_id=scope
         )
+        # لا ترحيل كتابة عند كل فتح للصفحة — يبطئ الاستجابة
         audit = tg_svc.audit_teaching_groups(conn, semester=sem, department_id=scope)
+        reg_audit = tg_svc.registration_teaching_groups_audit(
+            conn, semester=sem, department_id=scope, detail=False
+        )
+    needs_setup = sum(1 for o in offerings if o.get("needs_setup"))
+    health = "ok"
+    if (audit.get("unlinked_count") or 0) > 0 or (reg_audit.get("unlinked_count") or 0) > 0:
+        health = "warn"
+    if (audit.get("unlinked_count") or 0) > max(3, int((audit.get("total_slots") or 0) * 0.1)):
+        health = "critical"
+    # الشاشة تستخدم العدّادات فقط — لا نرسل قوائم كاملة
     return jsonify({
         "status": "ok",
-        "semester": sem,
+        "semester": sem or "",
         "offerings": offerings,
         "audit": {
             "total_slots": audit.get("total_slots"),
             "total_groups": audit.get("total_groups"),
             "unlinked_count": audit.get("unlinked_count"),
-            "unlinked_slots": audit.get("unlinked_slots"),
-            "slots_without_instructor": audit.get("slots_without_instructor"),
-            "slots_without_department": audit.get("slots_without_department"),
-            "empty_groups": audit.get("empty_groups"),
+            "unlinked_slots": [],
+            "slots_without_instructor": audit.get("slots_without_instructor") or [],
+            "slots_without_department": audit.get("slots_without_department") or [],
+            "empty_groups": audit.get("empty_groups") or [],
+            "reg_unlinked_count": reg_audit.get("unlinked_count"),
+            "reg_unlinked_registrations": [],
+            "needs_setup_count": needs_setup,
+            "health": health,
         },
     })
 
@@ -1642,7 +1732,43 @@ def teaching_groups_backfill():
         stats = tg_svc.backfill_teaching_groups_for_semester(
             conn, semester=sem, department_id=scope
         )
+        stats["primary_rows"] = tg_svc.backfill_primary_instructors_for_groups(conn)
     return jsonify({"status": "ok", "semester": sem, "stats": stats})
+
+
+@schedule_bp.route("/teaching_groups/pipeline", methods=["POST"])
+@login_required
+@role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+def teaching_groups_pipeline():
+    """ترحيل الفصل دفعة واحدة: حصص + فريق + تسجيلات + تقييمات."""
+    data = request.get_json(silent=True) or {}
+    semester = (data.get("semester") or request.args.get("semester") or "").strip() or None
+    with get_connection() as conn:
+        scope = _teaching_groups_scope_department(conn)
+        result = tg_svc.run_term_teaching_groups_pipeline(
+            conn,
+            semester=semester or _current_term_label_safe(conn),
+            department_id=scope,
+            skip_schedule=bool(data.get("skip_schedule")),
+            skip_registrations=bool(data.get("skip_registrations")),
+            skip_evaluations=bool(data.get("skip_evaluations")),
+        )
+        try:
+            log_activity(
+                "teaching_groups_pipeline",
+                json.dumps(
+                    {
+                        "semester": result.get("semester"),
+                        "health": result.get("health"),
+                        "audit": result.get("audit"),
+                    },
+                    ensure_ascii=False,
+                ),
+                actor=session.get("username") or "",
+            )
+        except Exception:
+            pass
+    return jsonify({"status": "ok", **result})
 
 
 @schedule_bp.route("/teaching_groups/audit")
@@ -1854,20 +1980,58 @@ def instructor_conflicts():
         with get_connection() as conn:
             _sync_schedule_pk_col(conn)
             cur = conn.cursor()
-            rows = cur.execute(
-                f"""
-                SELECT
-                  s.{SCHEDULE_PK_COL} AS section_id,
-                  COALESCE(s.course_name,'') AS course_name,
-                  COALESCE(s.day,'') AS day,
-                  COALESCE(s.time,'') AS time,
-                  COALESCE(s.instructor,'') AS instructor
-                FROM schedule s
-                WHERE COALESCE(s.instructor,'') <> ''
-                  AND COALESCE(s.day,'') <> ''
-                  AND COALESCE(s.time,'') <> ''
-                """
-            ).fetchall()
+            try:
+                rows = cur.execute(
+                    f"""
+                    SELECT
+                      s.{SCHEDULE_PK_COL} AS section_id,
+                      COALESCE(s.course_name,'') AS course_name,
+                      COALESCE(s.day,'') AS day,
+                      COALESCE(s.time,'') AS time,
+                      COALESCE(NULLIF(TRIM(i.name), ''), NULLIF(TRIM(s.instructor), ''), '') AS instructor
+                    FROM schedule s
+                    LEFT JOIN teaching_group_instructors tgi
+                      ON tgi.teaching_group_id = s.teaching_group_id
+                    LEFT JOIN instructors i
+                      ON i.id = COALESCE(tgi.instructor_id, s.instructor_id)
+                    WHERE COALESCE(s.day,'') <> ''
+                      AND COALESCE(s.time,'') <> ''
+                      AND (
+                        COALESCE(NULLIF(TRIM(i.name), ''), NULLIF(TRIM(s.instructor), ''), '') <> ''
+                      )
+                    """
+                ).fetchall()
+            except Exception:
+                rows = cur.execute(
+                    f"""
+                    SELECT
+                      s.{SCHEDULE_PK_COL} AS section_id,
+                      COALESCE(s.course_name,'') AS course_name,
+                      COALESCE(s.day,'') AS day,
+                      COALESCE(s.time,'') AS time,
+                      COALESCE(s.instructor,'') AS instructor
+                    FROM schedule s
+                    WHERE COALESCE(s.instructor,'') <> ''
+                      AND COALESCE(s.day,'') <> ''
+                      AND COALESCE(s.time,'') <> ''
+                    """
+                ).fetchall()
+            # إن لم يوجد جدول الفريق بعد، ارجع للمسار القديم
+            if not rows and not table_exists(conn, "teaching_group_instructors"):
+                rows = cur.execute(
+                    f"""
+                    SELECT
+                      s.{SCHEDULE_PK_COL} AS section_id,
+                      COALESCE(s.course_name,'') AS course_name,
+                      COALESCE(s.day,'') AS day,
+                      COALESCE(s.time,'') AS time,
+                      COALESCE(s.instructor,'') AS instructor
+                    FROM schedule s
+                    WHERE COALESCE(s.instructor,'') <> ''
+                      AND COALESCE(s.day,'') <> ''
+                      AND COALESCE(s.time,'') <> ''
+                    """
+                ).fetchall()
 
         items = []
         for r in rows or []:
@@ -2180,11 +2344,18 @@ def add_schedule_row():
             department_id=dept_id,
         )
         last = res.get("section_id")
+        teaching_group_id = None
         try:
             with get_connection() as conn:
                 touch_schedule_updated_at(conn)
+                if last:
+                    teaching_group_id = tg_svc.ensure_schedule_slot_teaching_group(conn, int(last))
+                    try:
+                        conn.commit()
+                    except Exception:
+                        pass
         except Exception:
-            pass
+            logger.exception("ensure teaching_group after add_schedule_row failed")
         _invalidate_schedule_list_cache()
     except ValidationError as e:
         return jsonify({"status": "error", "message": str(e)}), 400
@@ -2195,11 +2366,16 @@ def add_schedule_row():
     try:
         log_activity(
             action="add_schedule_row",
-            details=f"section_id={last}, course_name={data.get('course_name')}, day={data.get('day')}, time={data.get('time')}",
+            details=f"section_id={last}, course_name={data.get('course_name')}, day={data.get('day')}, time={data.get('time')}, teaching_group_id={teaching_group_id}",
         )
     except Exception:
         pass
-    return jsonify({"status": "ok", "message": "تم إضافة صف إلى الجدول", "section_id": last}), 200
+    return jsonify({
+        "status": "ok",
+        "message": "تم إضافة صف إلى الجدول",
+        "section_id": last,
+        "teaching_group_id": teaching_group_id,
+    }), 200
 
 # Alias to match frontend calls that use /add_schedule_row
 @schedule_bp.route("/add_schedule_row", methods=["POST"])
@@ -2380,6 +2556,39 @@ def update_schedule_row():
         try:
             with get_connection() as conn:
                 touch_schedule_updated_at(conn)
+                # إن تغيّر أستاذ الحصة وكانت مربوطة بمجموعة: حدّث الرئيسي وزامن الحصص
+                new_iid = fields.get("instructor_id")
+                if new_iid not in (None, ""):
+                    try:
+                        pk = schedule_pk_column(conn)
+                        row_tg = conn.cursor().execute(
+                            f"SELECT teaching_group_id FROM schedule WHERE {pk} = ? LIMIT 1",
+                            (int(section_id),),
+                        ).fetchone()
+                        tgid = 0
+                        if row_tg is not None:
+                            raw = _schedule_row_get(row_tg, "teaching_group_id", index=0, default=0)
+                            tgid = int(raw or 0)
+                        if tgid > 0:
+                            team = tg_svc.list_group_instructors(conn, tgid)
+                            asst = [
+                                int(m["instructor_id"])
+                                for m in team
+                                if m.get("role") != tg_svc.ROLE_PRIMARY
+                                and int(m.get("instructor_id") or 0) > 0
+                            ]
+                            try:
+                                tg_svc.set_group_instructors(
+                                    conn,
+                                    tgid,
+                                    primary_instructor_id=int(new_iid),
+                                    assistant_ids=asst,
+                                )
+                            except Exception:
+                                tg_svc.ensure_primary_row_for_group(conn, tgid, int(new_iid))
+                                tg_svc.sync_schedule_slots_to_primary(conn, tgid)
+                    except Exception:
+                        logger.exception("sync teaching_group primary after schedule update failed")
         except Exception:
             pass
         _invalidate_schedule_list_cache()
@@ -2808,10 +3017,19 @@ def save_time_slots():
 def schedule_display_layout():
     """وضع عرض المحرر: مصفوفة مراحل أو أسبوع شخصي + حالة العلم."""
     uname = (session.get("user") or session.get("username") or "").strip()
+    dept_raw = (request.args.get("department_id") or "").strip()
+    dept_id = None
+    if dept_raw:
+        try:
+            dept_id = int(dept_raw)
+        except (TypeError, ValueError):
+            dept_id = None
     with get_connection() as conn:
         from backend.core.schedule_stage_layout import build_display_layout_payload
 
-        payload = build_display_layout_payload(conn, uname or None)
+        payload = build_display_layout_payload(
+            conn, uname or None, department_id=dept_id if dept_id and dept_id > 0 else None
+        )
     return jsonify({"status": "ok", **payload}), 200
 
 
@@ -2881,11 +3099,19 @@ def schedule_print_preview():
                 "room": _cell("room", 4, "") or "",
                 "instructor": _cell("instructor", 5, "") or "",
                 "semester": _cell("semester", 6, "") or "",
+                "instructor_id": _cell("instructor_id", 7),
                 "student_count": int(_cell("student_count", 8, 0) or 0),
             }
+            if has_tg:
+                item["teaching_group_id"] = _cell("teaching_group_id", 9)
+                item["department_id"] = _cell("department_id", 10)
             if not schedule_semester_matches_term_context(item.get("semester"), ctx):
                 continue
             result.append(item)
+        try:
+            tg_svc.enrich_schedule_rows_instructor_team(conn, result)
+        except Exception:
+            logger.exception("print_preview instructors enrichment failed")
         try:
             from backend.core.schedule_stage_layout import (
                 enrich_schedule_row_stage_fields,

@@ -66,15 +66,35 @@ def stage_badge_for_row(
 def resolve_schedule_layout_mode(
     conn,
     actor_username: str | None = None,
+    *,
+    department_id: int | None = None,
 ) -> str:
     """
     stage_matrix: قسم تخصصي (نطاق قسم ≠ GENERAL).
     personal_weekly: رئيس الاتجاه العام، أو بلا نطاق قسم (أدمن بدون فلتر).
+    department_id: تجاوز اختياري لنطاق الجلسة (فلتر صفحة التعارضات).
     """
     from backend.core.department_scope_policy import (
         actor_manages_college_general_scope,
         resolve_effective_department_scope_id,
     )
+    from backend.database.database import table_exists
+
+    if department_id is not None:
+        dep = int(department_id)
+        if dep <= 0:
+            return LAYOUT_PERSONAL_WEEKLY
+        if table_exists(conn, "departments"):
+            row = conn.cursor().execute(
+                "SELECT COALESCE(code, ''), COALESCE(name_en, '') FROM departments WHERE id = ? LIMIT 1",
+                (dep,),
+            ).fetchone()
+            if row:
+                code = str(row[0] or "").strip().upper()
+                name_en = str(row[1] or "").strip().upper()
+                if code in ("GENERAL", "GEN", "GS") or "GENERAL" in name_en:
+                    return LAYOUT_PERSONAL_WEEKLY
+        return LAYOUT_STAGE_MATRIX
 
     if actor_manages_college_general_scope(conn, actor_username):
         return LAYOUT_PERSONAL_WEEKLY
@@ -123,7 +143,6 @@ def load_course_codes_by_name(conn, course_names: list[str]) -> dict[str, str]:
         return {}
     cur = conn.cursor()
     out: dict[str, str] = {}
-    # دفعات لتفادي استعلام ضخم جداً
     chunk = 200
     for i in range(0, len(names), chunk):
         part = names[i : i + chunk]
@@ -148,12 +167,21 @@ def load_course_codes_by_name(conn, course_names: list[str]) -> dict[str, str]:
     return out
 
 
-def build_display_layout_payload(conn, actor_username: str | None = None) -> dict[str, Any]:
+def build_display_layout_payload(
+    conn,
+    actor_username: str | None = None,
+    *,
+    department_id: int | None = None,
+) -> dict[str, Any]:
     """حمولة واجهة: هل مصفوفة المراحل مفعّلة وما وضع العرض."""
     from backend.core.feature_flags import is_schedule_stage_grid_enabled
 
     enabled = is_schedule_stage_grid_enabled()
-    mode = resolve_schedule_layout_mode(conn, actor_username) if enabled else LAYOUT_PERSONAL_WEEKLY
+    mode = (
+        resolve_schedule_layout_mode(conn, actor_username, department_id=department_id)
+        if enabled
+        else LAYOUT_PERSONAL_WEEKLY
+    )
     if not enabled:
         mode = LAYOUT_PERSONAL_WEEKLY
     return {

@@ -93,13 +93,19 @@
         'navMyCoursesWrap', 'navInstructorGradeDraftsWrap',
         'navInsLibraryWrap', 'navInsMyContactWrap', 'navInsQualityHubWrap', 'navInsIloCatalogWrap', 'navInstructorRowBreak',
         'navInsMyScheduleWrap', 'navInsMyExamsWrap', 'navInsMyAttendanceWrap',
-        'navInsScheduleWrap', 'navInsCalendarWrap', 'navInsMidtermsWrap', 'navInsFinalsWrap',
+        'navInsCalendarWrap', 'navInsMidtermsWrap', 'navInsFinalsWrap',
         'navInsAttendanceWrap', 'navArchivesMenuWrap',
       ];
       showIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) { el.style.display = ''; el.classList.remove('d-none'); }
       });
+      // إخفاء محرر الجدول الدراسي من قائمة الأستاذ (يبقى لرئيس القسم/الإدارة)
+      const wrapInsSchedule = document.getElementById('navInsScheduleWrap');
+      if (wrapInsSchedule) {
+        wrapInsSchedule.style.display = 'none';
+        wrapInsSchedule.classList.add('d-none');
+      }
       const navBar = document.querySelector('.app-navbar');
       if (navBar) {
         navBar.classList.add('nav-shell-instructor');
@@ -765,7 +771,7 @@
       const instructorAlwaysFlat = [
         'navInsLibraryWrap', 'navInsMyContactWrap', 'navInsQualityHubWrap', 'navInsIloCatalogWrap', 'navInstructorRowBreak',
         'navInsMyScheduleWrap', 'navInsMyExamsWrap', 'navInsMyAttendanceWrap',
-        'navInsScheduleWrap', 'navInsCalendarWrap', 'navInsMidtermsWrap', 'navInsFinalsWrap',
+        'navInsCalendarWrap', 'navInsMidtermsWrap', 'navInsFinalsWrap',
         'navInsAttendanceWrap',
       ];
       instructorAlwaysFlat.forEach(id => {
@@ -779,6 +785,11 @@
           el.classList.add('d-none');
         }
       });
+      const wrapInsSchedFlat = document.getElementById('navInsScheduleWrap');
+      if (wrapInsSchedFlat) {
+        wrapInsSchedFlat.style.display = 'none';
+        wrapInsSchedFlat.classList.add('d-none');
+      }
       // إشراف / مساعد ذكي / مخرجات تعليمية — شرطي داخل شريط الأستاذ
       const showInsSupervisorLink = useInstructorMore && dualInstructorSupervisor && inInstructorPortal;
       const showInsStudentLo = useInstructorMore && !!showStudentLo && role !== 'student';

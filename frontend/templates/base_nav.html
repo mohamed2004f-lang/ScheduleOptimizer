@@ -43,7 +43,7 @@
 <script nonce="{{ csp_nonce }}" src="/static/js/nav-shell-pending.js?v=20260816" data-nav-shell="student"></script>
 {% elif nis %}
 <style id="navShellInstructorCritical">
-  html.nav-shell-instructor-pending .app-navbar .navbar-nav > .nav-item:not(#navMyCoursesWrap):not(#navInstructorGradeDraftsWrap):not(#navInsLibraryWrap):not(#navInsQualityHubWrap):not(#navInsIloCatalogWrap):not(#navInstructorRowBreak):not(#navInsMyScheduleWrap):not(#navInsMyExamsWrap):not(#navInsMyAttendanceWrap):not(#navInsScheduleWrap):not(#navInsCalendarWrap):not(#navInsMidtermsWrap):not(#navInsFinalsWrap):not(#navInsAttendanceWrap):not(#navInsSupervisorWrap):not(#navInsQualityAssistantWrap):not(#navInsStudentLoWrap):not(#navArchivesMenuWrap),
+  html.nav-shell-instructor-pending .app-navbar .navbar-nav > .nav-item:not(#navMyCoursesWrap):not(#navInstructorGradeDraftsWrap):not(#navInsLibraryWrap):not(#navInsQualityHubWrap):not(#navInsIloCatalogWrap):not(#navInstructorRowBreak):not(#navInsMyScheduleWrap):not(#navInsMyExamsWrap):not(#navInsMyAttendanceWrap):not(#navInsCalendarWrap):not(#navInsMidtermsWrap):not(#navInsFinalsWrap):not(#navInsAttendanceWrap):not(#navInsSupervisorWrap):not(#navInsQualityAssistantWrap):not(#navInsStudentLoWrap):not(#navArchivesMenuWrap),
   .nav-shell-instructor #navDashboardWrap,
   .nav-shell-instructor #navStudentAffairsWrap,
   .nav-shell-instructor #navAcademicRecordsMenuWrap,
@@ -87,12 +87,16 @@
   .nav-shell-instructor #navInsMyScheduleWrap,
   .nav-shell-instructor #navInsMyExamsWrap,
   .nav-shell-instructor #navInsMyAttendanceWrap,
-  .nav-shell-instructor #navInsScheduleWrap,
   .nav-shell-instructor #navInsCalendarWrap,
   .nav-shell-instructor #navInsMidtermsWrap,
   .nav-shell-instructor #navInsFinalsWrap,
   .nav-shell-instructor #navInsAttendanceWrap {
     display: list-item !important;
+  }
+  /* الجدول الدراسي محرر للإدارة/رئيس القسم — ليس في قائمة الأستاذ */
+  .nav-shell-instructor #navInsScheduleWrap {
+    display: none !important;
+    pointer-events: none !important;
   }
   .nav-shell-instructor #navArchivesMenuWrap { display: list-item !important; }
   .nav-shell-instructor .navbar-nav > .nav-item > .nav-link {
@@ -218,7 +222,7 @@
 </script>
 <meta name="show-dev-hints" content="{{ '1' if show_dev_hints else '0' }}">
 <script nonce="{{ csp_nonce }}" src="/static/js/common.js?v=20260817"></script>
-<script nonce="{{ csp_nonce }}" src="/static/js/schedule-stage-grid.js?v=20260920a"></script>
+<script nonce="{{ csp_nonce }}" src="/static/js/schedule-stage-grid.js?v=20260921d"></script>
 <script nonce="{{ csp_nonce }}" src="/static/js/guide-catalog.js"></script>
 <script nonce="{{ csp_nonce }}" src="/static/js/page-guide.js"></script>
 <script nonce="{{ csp_nonce }}" src="/static/js/quality-assistant-fab.js" defer></script>
@@ -480,7 +484,7 @@
             <i class="fa-solid fa-user-check ms-1"></i> حضور مقرراتي
           </a>
         </li>
-        <li class="nav-item" id="navInsScheduleWrap" style="display:{% if nis %}list-item{% else %}none{% endif %};">
+        <li class="nav-item" id="navInsScheduleWrap" style="display:none;">
           <a class="nav-link" id="navInsSchedule" href="/schedule_form">
             <i class="fa-solid fa-table ms-1"></i> الجدول الدراسي
           </a>

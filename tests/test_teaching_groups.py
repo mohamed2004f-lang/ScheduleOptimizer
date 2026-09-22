@@ -86,6 +86,32 @@ class TestTeachingGroupsService:
         codes = sorted(g.get("group_code") for g in saved)
         assert codes == ["A", "B"]
 
+    def test_setup_resave_does_not_fail_unique(self, db_conn):
+        """الحفظ المتكرر لنفس المقرر يجب ألا يفشل بسبب UNIQUE."""
+        seed = _seed_dept_course_schedule(db_conn)
+        sids = seed["section_ids"]
+        payload = dict(
+            course_name=seed["course"],
+            semester=seed["semester"],
+            department_id=seed["dept_id"],
+            group_kind="single",
+            groups=[{"instructor_id": seed["inst_id"], "section_ids": sids}],
+        )
+        first = tg.setup_course_offering(db_conn, **payload)
+        second = tg.setup_course_offering(db_conn, **payload)
+        assert first and second
+        assert int(first[0]["id"]) == int(second[0]["id"])
+        cur = db_conn.cursor()
+        active = cur.execute(
+            """
+            SELECT COUNT(*) FROM teaching_groups
+            WHERE lower(trim(course_name)) = lower(trim(?))
+              AND semester = ? AND department_id = ? AND is_active = 1
+            """,
+            (seed["course"], seed["semester"], seed["dept_id"]),
+        ).fetchone()[0]
+        assert int(active) == 1
+
     def test_audit_reports_unlinked_before_backfill(self, db_conn):
         seed = _seed_dept_course_schedule(db_conn)
         audit = tg.audit_teaching_groups(db_conn, semester=seed["semester"], department_id=seed["dept_id"])

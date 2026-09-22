@@ -108,6 +108,26 @@ html[data-theme="dark"] .bg-body-tertiary{
   padding: 12px 12px;
 }
 
+/* أستاذ/عارض: الجدول فقط — بلا أشرطة تعديل أو طباعة أو إنتاج */
+body.schedule-viewer-only #scheduleAdminPanel,
+body.schedule-viewer-only #scheduleReadonlyToolbar,
+body.schedule-viewer-only #scheduleToolbarMain,
+body.schedule-viewer-only #scheduleChartAdminBtns,
+body.schedule-viewer-only #scheduleRegistrationInsights,
+body.schedule-viewer-only #btnSchedulePageGuide,
+body.schedule-viewer-only #instructorDeptStudentsCard,
+body.schedule-viewer-only .instruction-text {
+  display: none !important;
+}
+body.schedule-viewer-only .chart-container > .card-body > .d-flex.justify-content-between {
+  margin-bottom: 0.5rem;
+}
+body.schedule-viewer-only .manage-courses-btn,
+body.schedule-viewer-only .conflict-row-btn,
+body.schedule-viewer-only .btn-edit-day-periods {
+  display: none !important;
+}
+
 .small-muted{ color: var(--muted); }
 
 /* ============================================
@@ -774,8 +794,9 @@ html[data-theme="dark"] .product-home-credit,
 }
 .slot-course-record{
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 0.9fr);
-  gap: 8px 12px;
+  /* مقرر + أستاذ أوسع؛ القاعة ضيقة (رقم فقط) */
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.35fr) minmax(2.4rem, 3.35rem);
+  gap: 6px 8px;
   align-items: start;
   padding: 6px 0;
 }
@@ -792,12 +813,45 @@ html[data-theme="dark"] .product-home-credit,
   min-width: 0;
   text-align: right;
 }
+.slot-cell--room{
+  text-align: center;
+  max-width: 3.5rem;
+  justify-self: center;
+}
+.slot-cell--room .slot-text,
+.slot-cell--room .slot-placeholder{
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  text-align: center;
+}
 .slot-text{
   display: block;
   font-size: 12px;
   font-weight: 700;
   line-height: 1.4;
   color: #0f172a;
+  word-break: break-word;
+}
+.slot-inst-stack{
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.25;
+}
+.slot-inst-primary{
+  font-weight: 700;
+  font-size: 12px;
+  color: #0f172a;
+  word-break: break-word;
+}
+.slot-inst-asst{
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  color: #475569;
   word-break: break-word;
 }
 .slot-placeholder{
@@ -916,8 +970,12 @@ html[data-theme="dark"] .product-home-credit,
   padding: 6px 7px;
 }
 .timetable.is-compact .slot-course-record{
-  gap: 6px 8px;
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1.3fr) minmax(2.2rem, 3rem);
+  gap: 4px 6px;
   padding: 4px 0;
+}
+.timetable.is-compact .slot-cell--room .slot-text{
+  font-size: 10px;
 }
 .timetable.is-compact .course-btn--col,
 .timetable.is-compact .course-label-readonly,
@@ -1064,6 +1122,31 @@ html[data-theme="dark"] .product-home-credit,
   font-size: 12px;
   font-weight: 900;
   text-align: center;
+}
+.timetable.timetable--stages th.sub-time-header,
+.timetable.timetable--personal th.sub-time-header{
+  font-size: 11px;
+  font-weight: 800;
+  color: #334155;
+  background: #eef2f7;
+  padding: 5px 3px;
+  line-height: 1.2;
+}
+.timetable.timetable--stages th.sub-time-header--course,
+.timetable.timetable--personal th.sub-time-header--course{
+  width: 12%;
+}
+.timetable.timetable--stages th.sub-time-header--inst,
+.timetable.timetable--personal th.sub-time-header--inst{
+  width: 11%;
+}
+.timetable.timetable--stages th.sub-time-header--room,
+.timetable.timetable--personal th.sub-time-header--room{
+  width: 3.6%;
+  max-width: 3.5rem;
+  padding-left: 2px;
+  padding-right: 2px;
+  white-space: nowrap;
 }
 .stage-badge{
   display: none !important; /* التصنيف يظهر عبر أعمدة المراحل */

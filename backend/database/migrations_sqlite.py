@@ -15,6 +15,7 @@ from backend.database.db_config import (
     allow_ensure_tables,
 )
 from backend.database.schema_ddl import INDEXES, TABLES_SCHEMA
+from backend.database.database import table_exists
 
 logger = logging.getLogger("backend.database")
 
@@ -262,6 +263,41 @@ def ensure_sqlite_tables(db_file=None):
             except Exception:
                 pass
 
+        # فريق التدريس (رئيسي + مساعدون)
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS teaching_group_instructors (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    teaching_group_id INTEGER NOT NULL,
+                    instructor_id INTEGER NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'primary'
+                        CHECK (role IN ('primary', 'assistant', 'co_teacher')),
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (teaching_group_id, instructor_id)
+                )
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tgi_group ON teaching_group_instructors(teaching_group_id)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tgi_instructor ON teaching_group_instructors(instructor_id)"
+            )
+            if table_exists(conn, "teaching_groups"):
+                cur.execute(
+                    """
+                    INSERT OR IGNORE INTO teaching_group_instructors
+                        (teaching_group_id, instructor_id, role, sort_order)
+                    SELECT id, instructor_id, 'primary', 0
+                    FROM teaching_groups
+                    WHERE instructor_id IS NOT NULL AND instructor_id > 0
+                    """
+                )
+        except Exception as e:
+            logger.warning("teaching_group_instructors schema: %s", e)
+
         try:
             gdcols = [r[1] for r in cur.execute("PRAGMA table_info(grade_drafts)").fetchall()]
         except Exception:
@@ -271,6 +307,22 @@ def ensure_sqlite_tables(db_file=None):
                 cur.execute("ALTER TABLE grade_drafts ADD COLUMN teaching_group_id INTEGER")
             except Exception:
                 pass
+
+        try:
+            exam_cols = [r[1] for r in cur.execute("PRAGMA table_info(exams)").fetchall()]
+        except Exception:
+            exam_cols = []
+        if "teaching_group_id" not in exam_cols:
+            try:
+                cur.execute("ALTER TABLE exams ADD COLUMN teaching_group_id INTEGER")
+            except Exception:
+                pass
+        try:
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_exams_teaching_group ON exams(teaching_group_id)"
+            )
+        except Exception:
+            pass
 
         try:
             gcols = [r[1] for r in cur.execute("PRAGMA table_info(grades)").fetchall()]

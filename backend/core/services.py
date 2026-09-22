@@ -543,17 +543,22 @@ class StudentService:
         cancelled_requests = 0
         now = datetime.utcnow().isoformat()
         try:
-            cur.execute(
-                """
-                UPDATE enrollment_plans
-                SET status = 'Archived', updated_at = ?
-                WHERE student_id = ? AND status IN ('Pending', 'Draft')
-                """,
-                (now, student_id),
-            )
-            archived_plans = int(cur.rowcount or 0)
+            from backend.services.enrollment import archive_all_open_enrollment_plans
+
+            archived_plans = archive_all_open_enrollment_plans(conn, student_id)
         except Exception:
-            pass
+            try:
+                cur.execute(
+                    """
+                    UPDATE enrollment_plans
+                    SET status = 'Archived', updated_at = ?
+                    WHERE student_id = ? AND status IN ('Pending', 'Draft', 'Approved', 'Rejected')
+                    """,
+                    (now, student_id),
+                )
+                archived_plans = int(cur.rowcount or 0)
+            except Exception:
+                pass
         try:
             cur.execute(
                 """
@@ -688,6 +693,22 @@ class StudentService:
                             " — أُغلق التشغيل الفصلي: أُزيلت التسجيلات الحالية وأُرشفت الخطط المعلّقة. "
                             "السجل الأكاديمي والكشف يبقيان للرجوع إليهما."
                         )
+                elif status == "active":
+                    # عودة من إيقاف/فصل سابق: لا تُعرض خطط فصول أخرى كخطة نشطة
+                    try:
+                        from backend.services.enrollment import (
+                            archive_enrollment_plans_not_matching_current_term,
+                        )
+
+                        n_arch = archive_enrollment_plans_not_matching_current_term(conn, sid)
+                        result["archived_stale_plans"] = int(n_arch or 0)
+                        if n_arch:
+                            result["message"] += (
+                                f" — أُرشفت {n_arch} خطة تسجيل من فصول سابقة؛ "
+                                "يمكن إنشاء خطة للفصل الحالي."
+                            )
+                    except Exception:
+                        result["archived_stale_plans"] = 0
                 try:
                     from backend.core.cache_setup import invalidate_list_prefix
 

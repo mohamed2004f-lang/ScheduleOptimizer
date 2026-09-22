@@ -106,14 +106,57 @@
     return name || '—';
   }
 
+  function instructorCellHtml(row, opts) {
+    opts = opts || {};
+    const primaryInst = String(row.instructor_primary || row.instructor || '').trim();
+    const asstList = Array.isArray(row.assistant_names)
+      ? row.assistant_names.map((n) => String(n || '').trim()).filter(Boolean)
+      : [];
+    // إن لم تُرسل القائمة: استخرج من instructor_display بعد «+ مساعد:»
+    let assistants = asstList;
+    if (!assistants.length) {
+      const full = String(row.instructor_display || '').trim();
+      const m = full.match(/\+\s*مساعد\s*:\s*(.+)$/);
+      if (m && m[1]) {
+        assistants = m[1].split(/\s*,\s*/).map((s) => s.trim()).filter(Boolean);
+      }
+    }
+    const fullInst = String(row.instructor_display || primaryInst).trim();
+    const instTip = escAttr(fullInst || primaryInst);
+    if (!primaryInst && !assistants.length) {
+      return `<span class="slot-text slot-text--empty" title="">—</span>`;
+    }
+    const showAsstLine = opts.showAssistantLine !== false;
+    if (!showAsstLine || !assistants.length) {
+      return `<span class="slot-text${primaryInst ? '' : ' slot-text--empty'}" title="${instTip}">${esc(primaryInst || '—')}</span>`;
+    }
+    const asstLine = assistants.join('، ');
+    return (
+      `<span class="slot-inst-stack" title="${instTip}">` +
+      `<span class="slot-text slot-inst-primary">${esc(primaryInst)}</span>` +
+      `<span class="slot-inst-asst">مساعد: ${esc(asstLine)}</span>` +
+      `</span>`
+    );
+  }
+
   function renderCourseTriple(row, opts) {
     opts = opts || {};
     const showManage = !!opts.showSlotManage;
     const color = typeof opts.getCourseColor === 'function'
       ? opts.getCourseColor(row.course_name)
       : '#64748b';
+    const primaryInst = String(
+      row.instructor_primary || row.instructor || ''
+    ).trim();
+    const fullInst = String(
+      row.instructor_display || primaryInst
+    ).trim();
     const titleTip = escAttr(
-      [courseLabel(row), row.room && ('قاعة: ' + row.room), row.instructor && ('أستاذ: ' + row.instructor)]
+      [
+        courseLabel(row),
+        row.room && ('قاعة: ' + row.room),
+        fullInst && ('أستاذ: ' + fullInst),
+      ]
         .filter(Boolean)
         .join(' — ')
     );
@@ -133,11 +176,10 @@
       courseCell = `<span class="course-pub-label course-pub-label--filled" style="background:${color};" title="${titleTip}">${display}</span>${badgeHtml}`;
     }
     const room = String(row.room || '').trim();
-    const inst = String(row.instructor || '').trim();
     return (
       `<div class="slot-course-record">` +
       `<div class="slot-cell slot-cell--course">${courseCell}</div>` +
-      `<div class="slot-cell slot-cell--inst"><span class="slot-text${inst ? '' : ' slot-text--empty'}">${esc(inst || '—')}</span></div>` +
+      `<div class="slot-cell slot-cell--inst">${instructorCellHtml(row, opts)}</div>` +
       `<div class="slot-cell slot-cell--room"><span class="slot-text${room ? '' : ' slot-text--empty'}">${esc(room || '—')}</span></div>` +
       `</div>`
     );
@@ -220,7 +262,9 @@
     let html =
       `<table class="timetable timetable--personal${compactClass}${cleanClass}"><thead><tr>` +
       `<th class="day-header">اليوم</th><th class="time-header">الوقت</th>` +
-      `<th class="sub-time-header">المقرر</th><th class="sub-time-header">الأستاذ</th><th class="sub-time-header">القاعة</th>` +
+      `<th class="sub-time-header sub-time-header--course">المقرر</th>` +
+      `<th class="sub-time-header sub-time-header--inst">الأستاذ</th>` +
+      `<th class="sub-time-header sub-time-header--room">القاعة</th>` +
       `</tr></thead><tbody>`;
 
     daysList().forEach((day) => {
@@ -278,7 +322,9 @@
     html += '</tr><tr>';
     BUCKETS.forEach(() => {
       html +=
-        '<th class="sub-time-header">المقرر</th><th class="sub-time-header">الأستاذ</th><th class="sub-time-header">القاعة</th>';
+        '<th class="sub-time-header sub-time-header--course">المقرر</th>' +
+        '<th class="sub-time-header sub-time-header--inst">الأستاذ</th>' +
+        '<th class="sub-time-header sub-time-header--room">القاعة</th>';
     });
     html += '</tr></thead><tbody>';
 

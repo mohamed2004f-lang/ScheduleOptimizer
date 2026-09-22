@@ -51,7 +51,7 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">{% if _exam_entry == 'final' %}الامتحانات النهائية{% else %}الامتحانات الجزئية{% endif %}</h1>
-        <p class="page-subtitle">نفس الصفحة والمزايا للجزئي والنهائي: التصدير Excel/PDF، التعارضات، إخفاء الأيام الفارغة، والطباعة. غيّر النوع من الحقل أعلاه عند الحاجة.</p>
+        <p class="page-subtitle" id="examPageSubtitle">مصفوفة <strong>تاريخ × فترة</strong> للجزئي والنهائي. التعارضات تُحسب حياً من التسجيلات (نفس التاريخ والفترة). غيّر النوع من الحقل أعلاه عند الحاجة.</p>
       </div>
     </div>
 
@@ -140,6 +140,12 @@
                 <option value="">-- اختر أستاذ --</option>
               </select>
               <div id="scheduleAssignHint" class="form-text text-muted d-none"></div>
+            </div>
+            <div class="col-md-5">
+              <label class="form-label">مجموعة التدريس <span class="text-muted small">(اختياري — للـ split)</span></label>
+              <select id="newTeachingGroup" class="form-select">
+                <option value="">— الكل / موحّد للمقرر —</option>
+              </select>
             </div>
             <div class="col-12">
               <button type="submit" class="btn btn-primary btn-sm">إضافة</button>
@@ -333,13 +339,39 @@ function saveDates(){
   setTimeout(()=> showToolbarMsg(''), 2200);
 }
 
+function applyExamViewOnlyUi(){
+  document.body.classList.add('exam-view-only');
+  const sub = document.getElementById('examPageSubtitle');
+  if (sub) {
+    sub.innerHTML = 'عرض مواعيد امتحاناتك (قراءة فقط) — بدون إضافة أو تعديل أو اعتماد. يمكنك تصفية الفترة والطباعة والتصدير.';
+  }
+  [
+    'btnToggleExamSlotManage',
+    'btnSaveDates',
+    'manageExamModal',
+    'conflictsModal',
+    'examPublishCard',
+    'examChangeBanner',
+  ].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.style.display = 'none';
+    el.classList.add('d-none');
+    if (el.setAttribute) el.setAttribute('aria-hidden', 'true');
+  });
+  document.querySelectorAll('.no-print').forEach((el) => {
+    el.style.display = 'none';
+  });
+  EXAM_SLOT_MANAGE_VISIBLE = false;
+}
+
 async function initPermissions(){
   try{
     const auth=await fetch('/auth/check',{credentials:'include',cache:'no-store'}).then(r=>r.json());
     EXAM_READONLY = !(auth && auth.capabilities && auth.capabilities.can_manage_schedule_edit);
   }catch(_e){ EXAM_READONLY = true; }
   if(EXAM_READONLY){
-    document.querySelectorAll('.no-print').forEach(el=>el.style.display='none');
+    applyExamViewOnlyUi();
   }
 }
 
@@ -508,8 +540,9 @@ function renderManageList(){
   if(!list.length){ el.innerHTML='<p class="text-muted">لا توجد امتحانات في هذه الفترة.</p>'; return; }
   let html='<ul class="list-group">';
   list.forEach(e=>{
+    const tgBit = e.teaching_group_id ? ` · مجموعة #${esc(e.teaching_group_id)}` : '';
     html += `<li class="list-group-item d-flex justify-content-between align-items-center">
-      <span>${esc(e.course_name)} ${e.room?`(${esc(e.room)})`:''} ${e.instructor?`- ${esc(e.instructor)}`:''}</span>
+      <span>${esc(e.course_name)}${tgBit} ${e.room?`(${esc(e.room)})`:''} ${e.instructor?`- ${esc(e.instructor)}`:''}</span>
       <span class="d-flex gap-1">
         <button class="btn btn-sm btn-outline-secondary" data-edit="${e.exam_id}">تعديل</button>
         <button class="btn btn-sm btn-danger" data-del="${e.exam_id}">حذف</button>
@@ -564,7 +597,7 @@ async function loadExamSchedule(){
 
   const [rowsResp, confResp, covResp, pubResp] = await Promise.all([
     fetch(`/exams/${t}/rows`, { credentials: 'include' }),
-    fetch(`/exams/${t}/conflicts`, { credentials: 'include' }),
+    fetch(`/exams/${t}/conflicts?live=1`, { credentials: 'include' }),
     fetch(`/exams/${t}/schedule_coverage`, { credentials: 'include' }),
     fetch(`/exams/${t}/publish_status`, { credentials: 'include' }),
   ]);
@@ -640,8 +673,32 @@ async function loadExamSchedule(){
 }
 
 const newCourseSelectEl = document.getElementById('newCourseSelect');
+async function loadTeachingGroupsForCourse(courseName){
+  const sel = document.getElementById('newTeachingGroup');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">— الكل / موحّد للمقرر —</option>';
+  const cn = String(courseName || '').trim();
+  if (!cn) return;
+  try {
+    const r = await fetch(`/schedule/teaching_groups?course_name=${encodeURIComponent(cn)}`, { credentials: 'include' });
+    const j = await r.json().catch(() => ({}));
+    const groups = Array.isArray(j.groups) ? j.groups : (Array.isArray(j) ? j : []);
+    groups.forEach(g => {
+      const id = g.id || g.teaching_group_id;
+      if (!id) return;
+      const label = g.display_label || g.group_code_label || g.group_code || ('مجموعة ' + id);
+      const opt = document.createElement('option');
+      opt.value = String(id);
+      opt.textContent = String(label);
+      sel.appendChild(opt);
+    });
+  } catch (_e) {}
+}
 if (newCourseSelectEl) {
-  newCourseSelectEl.addEventListener('change', () => applyScheduleDefaultsForCourse(newCourseSelectEl.value));
+  newCourseSelectEl.addEventListener('change', () => {
+    applyScheduleDefaultsForCourse(newCourseSelectEl.value);
+    loadTeachingGroupsForCourse(newCourseSelectEl.value);
+  });
 }
 const addCourseFormEl = document.getElementById('addCourseForm');
 if (addCourseFormEl) {
@@ -655,10 +712,14 @@ if (addCourseFormEl) {
     const instId=document.getElementById('newInstructor').value;
     const instObj=INSTRUCTORS.find(x=>String(x.id)===String(instId));
     const instructor=instObj ? (instObj.name||'').trim() : '';
+    const teaching_group_id = document.getElementById('newTeachingGroup')?.value || '';
     if(!course){ showModalExamMsg('اختر مقرراً','warning'); return; }
 
+    const payload = {course_name:course, exam_date:currentManageDate, exam_time:currentManageTime, room, instructor};
+    if (teaching_group_id) payload.teaching_group_id = Number(teaching_group_id);
+
     const check=await fetch(`/exams/${t}/check_conflicts`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({course_name:course, exam_date:currentManageDate, exam_time:currentManageTime, room, instructor})});
+      body:JSON.stringify(payload)});
     const chk=await check.json().catch(()=>null);
     if(check.ok && chk?.has_conflicts){
       const proceed = await showConflictsModal(chk.conflicts || [], course, currentManageDate);
@@ -666,7 +727,7 @@ if (addCourseFormEl) {
     }
 
     const resp=await fetch(`/exams/${t}/add_row`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({course_name:course, exam_date:currentManageDate, exam_time:currentManageTime, room, instructor})});
+      body:JSON.stringify(payload)});
     const j=await resp.json().catch(()=>null);
     if(resp.ok && j?.status==='ok'){
       showModalExamMsg('تمت الإضافة','success');
@@ -674,6 +735,8 @@ if (addCourseFormEl) {
       e.target.reset();
       const hint = document.getElementById('scheduleAssignHint');
       if(hint){ hint.classList.add('d-none'); hint.textContent = ''; }
+      const tgSel = document.getElementById('newTeachingGroup');
+      if (tgSel) tgSel.innerHTML = '<option value="">— الكل / موحّد للمقرر —</option>';
       await loadExamSchedule();
       renderManageList();
     } else {
@@ -722,6 +785,14 @@ if (hideEmptyDaysEl) hideEmptyDaysEl.addEventListener('change', loadExamSchedule
   const inp = document.getElementById(id);
   if (!inp) return;
   inp.addEventListener('change', () => {
+    // في وضع العرض فقط لا يوجد زر «حفظ التواريخ» — نحفظ الفترة محلياً ونحدّث الجدول
+    try {
+      const startDate = document.getElementById('startDate')?.value;
+      const endDate = document.getElementById('endDate')?.value;
+      if (startDate && endDate) {
+        localStorage.setItem(storageKey(), JSON.stringify({ startDate, endDate }));
+      }
+    } catch (_e) {}
     if (EXAM_TIMETABLE_VISIBLE) loadExamSchedule();
   });
 });

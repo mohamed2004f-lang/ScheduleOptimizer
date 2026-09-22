@@ -17,6 +17,7 @@
       </div>
       <div class="d-flex gap-2 flex-wrap">
         <a href="/schedule_form" class="btn btn-outline-secondary btn-sm">← الجدول الدراسي</a>
+        <button type="button" class="btn btn-success btn-sm" id="btnPipeline" title="حصص + فريق + تسجيلات + تقييمات">ترحيل الفصل كاملاً</button>
         <button type="button" class="btn btn-outline-primary btn-sm" id="btnBackfill">ترحيل حصص (single)</button>
         <button type="button" class="btn btn-outline-success btn-sm" id="btnRegBackfill">ترحيل تسجيلات → مجموعات</button>
         <button type="button" class="btn btn-outline-warning btn-sm" id="btnEvalBackfill">ترحيل تقييمات → مجموعات</button>
@@ -26,6 +27,19 @@
 
     <div id="tgMsg" class="mb-2" aria-live="polite"></div>
 
+    <div class="card mb-3" id="tgHealthCard">
+      <div class="card-body py-2">
+        <div class="d-flex flex-wrap gap-3 align-items-center justify-content-between">
+          <div>
+            <span class="badge" id="tgHealthBadge">—</span>
+            <strong class="ms-1">صحة الفصل</strong>
+            <span class="small text-muted" id="tgHealthHint"></span>
+          </div>
+          <div id="auditSummary" class="small text-muted"></div>
+        </div>
+      </div>
+    </div>
+
     <div class="card mb-3">
       <div class="card-body">
         <div class="row g-2 align-items-center">
@@ -33,9 +47,6 @@
             <label class="form-label mb-0">الفصل الدراسي</label>
             <input id="semesterInput" class="form-control form-control-sm" readonly>
             <div class="form-text">من الفصل الجاري — عيّنه من <a href="/term_ops">لوحة تشغيل الفصل</a>.</div>
-          </div>
-          <div class="col-md-8">
-            <div id="auditSummary" class="small text-muted"></div>
           </div>
         </div>
       </div>
@@ -85,6 +96,14 @@
       </label>`;
     }
 
+    function assistantOptions(selectedIds) {
+      const selected = new Set((selectedIds || []).map(Number).filter(n => n > 0));
+      return INSTRUCTORS.map(i => {
+        const sel = selected.has(Number(i.id)) ? ' selected' : '';
+        return `<option value="${i.id}"${sel}>${esc(i.name || '')}</option>`;
+      }).join('');
+    }
+
     function renderOffering(off, idx) {
       const kind = off.group_kind || 'single';
       const groups = off.groups || [];
@@ -95,12 +114,18 @@
 
       let body = '';
       if (kind === 'single' || groups.length === 0) {
-        const defaultInst = (groups[0] && groups[0].instructor_id) || (slots[0] && slots[0].instructor_id) || '';
-        const linkedIds = new Set((groups[0] && groups[0].section_ids) || slots.filter(s => s.teaching_group_id).map(s => s.section_id));
+        const g0 = groups[0] || {};
+        const defaultInst = g0.instructor_id || g0.primary_instructor_id || (slots[0] && slots[0].instructor_id) || '';
+        const asstIds = g0.assistant_instructor_ids || [];
+        const linkedIds = new Set((g0.section_ids) || slots.filter(s => s.teaching_group_id).map(s => s.section_id));
         body = `
           <div class="mb-2">
-            <label class="form-label small">الأستاذ (مجموعة واحدة — الكل)</label>
+            <label class="form-label small">الأستاذ الرئيسي</label>
             <select class="form-select form-select-sm tg-inst" data-off="${idx}" data-group="single" style="max-width:320px">${instructorOptions(defaultInst)}</select>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">المساعدون (اختياري — Ctrl لاختيار أكثر من واحد)</label>
+            <select class="form-select form-select-sm tg-assistants" data-off="${idx}" data-group="single" multiple size="3" style="max-width:320px">${assistantOptions(asstIds)}</select>
           </div>
           <div class="mb-2">
             <div class="small fw-semibold mb-1">حصص الجدول (محاضرات)</div>
@@ -110,11 +135,16 @@
         body = groups.map((g, gi) => {
           const gkey = g.group_code || ('G' + gi);
           const linked = new Set(g.section_ids || []);
+          const asstIds = g.assistant_instructor_ids || [];
           return `
             <div class="border rounded p-2 mb-2">
               <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
                 <span class="badge bg-primary">مجموعة ${esc(g.group_code_label || g.group_code || gkey)}</span>
-                <select class="form-select form-select-sm tg-inst" data-off="${idx}" data-group="${esc(gkey)}" style="max-width:280px">${instructorOptions(g.instructor_id)}</select>
+                <select class="form-select form-select-sm tg-inst" data-off="${idx}" data-group="${esc(gkey)}" style="max-width:280px" title="رئيسي">${instructorOptions(g.instructor_id || g.primary_instructor_id)}</select>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small mb-0">المساعدون</label>
+                <select class="form-select form-select-sm tg-assistants" data-off="${idx}" data-group="${esc(gkey)}" multiple size="2" style="max-width:280px">${assistantOptions(asstIds)}</select>
               </div>
               <div>${slots.map(s => slotCheckbox(idx, s, gkey, linked.has(s.section_id))).join('')}</div>
             </div>`;
@@ -161,17 +191,20 @@
         card.querySelectorAll('.split-group-row').forEach(row => {
           const gcode = row.querySelector('.split-code')?.value?.trim().toUpperCase();
           const iid = Number(row.querySelector('.split-inst')?.value || 0);
+          const asst = [...(row.querySelector('.split-assistants')?.selectedOptions || [])].map(o => Number(o.value)).filter(n => n > 0);
           const sectionIds = [...row.querySelectorAll('.slot-cb:checked')].map(cb => Number(cb.dataset.sid));
           if (gcode && iid > 0) {
-            groups.push({ group_code: gcode, instructor_id: iid, section_ids: sectionIds });
+            groups.push({ group_code: gcode, instructor_id: iid, assistant_ids: asst, section_ids: sectionIds });
           }
         });
         return { group_kind: 'split', groups };
       }
 
       const iid = Number(card.querySelector('.tg-inst')?.value || 0);
+      const asstSel = card.querySelector('.tg-assistants');
+      const asst = asstSel ? [...asstSel.selectedOptions].map(o => Number(o.value)).filter(n => n > 0) : [];
       const sectionIds = [...card.querySelectorAll('.slot-cb[data-group="single"]:checked')].map(cb => Number(cb.dataset.sid));
-      return { group_kind: 'single', groups: [{ instructor_id: iid, section_ids: sectionIds }] };
+      return { group_kind: 'single', groups: [{ instructor_id: iid, assistant_ids: asst, section_ids: sectionIds }] };
     }
 
     function bindOfferingEvents() {
@@ -253,7 +286,11 @@
       row.innerHTML = `
         <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
           <input class="form-control form-control-sm split-code" style="max-width:80px" placeholder="A" value="${esc(gcode)}">
-          <select class="form-select form-select-sm split-inst" style="max-width:280px">${instructorOptions(iid)}</select>
+          <select class="form-select form-select-sm split-inst" style="max-width:280px" title="رئيسي">${instructorOptions(iid)}</select>
+        </div>
+        <div class="mb-2">
+          <label class="form-label small mb-0">المساعدون</label>
+          <select class="form-select form-select-sm split-assistants" multiple size="2" style="max-width:280px">${assistantOptions(preset?.assistant_instructor_ids || [])}</select>
         </div>
         <div class="split-slots">${(off.slots || []).map(s => slotCheckbox(idx, s, 'split_' + (gcode || 'X'), linked.has(s.section_id))).join('')}</div>`;
       container.appendChild(row);
@@ -264,55 +301,123 @@
 
     function renderAudit(audit) {
       const el = document.getElementById('auditSummary');
-      if (!audit) { el.textContent = ''; return; }
-      el.innerHTML = `
-        <strong>ملخص:</strong>
-        ${audit.total_groups || 0} مجموعة تدريس —
-        ${audit.total_slots || 0} حصة جدول —
-        <span class="${audit.unlinked_count ? 'text-danger fw-semibold' : ''}">${audit.unlinked_count || 0} غير مربوطة</span>
-        ${(audit.slots_without_instructor || []).length ? ' — <span class="text-warning">حصص بلا أستاذ</span>' : ''}
-        ${(audit.slots_without_department || []).length ? ' — <span class="text-warning">حصص بلا قسم</span>' : ''}`;
+      const badge = document.getElementById('tgHealthBadge');
+      const hint = document.getElementById('tgHealthHint');
+      if (!audit) {
+        if (el) el.textContent = '';
+        return;
+      }
+      const health = audit.health || 'ok';
+      if (badge) {
+        badge.className = 'badge ' + (
+          health === 'critical' ? 'bg-danger' : health === 'warn' ? 'bg-warning text-dark' : 'bg-success'
+        );
+        badge.textContent = health === 'critical' ? 'حرج' : health === 'warn' ? 'يحتاج متابعة' : 'سليم';
+      }
+      if (hint) {
+        hint.textContent = health === 'ok'
+          ? ' — الحصص والتسجيلات مربوطة بمجموعات التدريس.'
+          : ' — أكمل الربط أو شغّل الترحيل ثم حدّث.';
+      }
+      const regU = audit.reg_unlinked_count || 0;
+      const emptyG = (audit.empty_groups || []).length;
+      const needs = audit.needs_setup_count || 0;
+      if (el) {
+        el.innerHTML = `
+          <strong>ملخص:</strong>
+          ${audit.total_groups || 0} مجموعة —
+          ${audit.total_slots || 0} حصة —
+          <span class="${audit.unlinked_count ? 'text-danger fw-semibold' : ''}">${audit.unlinked_count || 0} حصة بلا مجموعة</span>
+          — <span class="${regU ? 'text-danger fw-semibold' : ''}">${regU} تسجيل بلا مجموعة</span>
+          ${needs ? ` — <span class="text-warning">${needs} مقرر يحتاج إعداد</span>` : ''}
+          ${emptyG ? ` — <span class="text-warning">${emptyG} مجموعة بلا حصص</span>` : ''}
+          ${(audit.slots_without_instructor || []).length ? ' — <span class="text-warning">حصص بلا أستاذ</span>' : ''}
+          ${(audit.slots_without_department || []).length ? ' — <span class="text-warning">حصص بلا قسم</span>' : ''}`;
+      }
     }
 
-    async function loadData(runBackfill = true) {
+    async function loadData(runBackfill = false) {
       showMsg('جاري التحميل…', 'info');
-      if (runBackfill) {
-        try {
-          await fetch('/schedule/teaching_groups/backfill', {
+      const container = document.getElementById('offeringsContainer');
+      try {
+        if (runBackfill) {
+          showMsg('جاري ترحيل الحصص غير المربوطة…', 'info');
+          const br = await fetch('/schedule/teaching_groups/backfill', {
             method: 'POST',
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
             body: '{}',
           });
-        } catch (_) { /* ignore */ }
-      }
-      const r = await fetch('/schedule/teaching_groups/setup', { credentials: 'include' });
-      const j = await r.json();
-      if (!r.ok || j.status !== 'ok') throw new Error(j.message || 'فشل التحميل');
-      CURRENT_SEM = j.semester || '';
-      OFFERINGS = j.offerings || [];
-      document.getElementById('semesterInput').value = CURRENT_SEM;
-      renderAudit(j.audit);
-      const container = document.getElementById('offeringsContainer');
-      if (!OFFERINGS.length) {
-        container.innerHTML = '<div class="alert alert-secondary">لا مقررات في الجدول للفصل الحالي (أو لا أقسام/أساتذة مرتبطة).</div>';
-      } else {
-        container.innerHTML = OFFERINGS.map((o, i) => renderOffering(o, i)).join('');
-        bindOfferingEvents();
-        OFFERINGS.forEach((o, i) => {
-          if ((o.group_kind || '') === 'split') {
-            document.getElementById('splitEditor_' + i)?.classList.remove('d-none');
-            document.getElementById('offBody_' + i)?.classList.add('d-none');
-            initSplitEditor(i);
-            const ed = document.getElementById('splitEditor_' + i);
-            if (ed) ed.dataset.init = '1';
+          if (!br.ok) {
+            const bj = await br.json().catch(() => ({}));
+            console.warn('backfill failed', bj);
           }
-        });
+        }
+        const r = await fetch('/schedule/teaching_groups/setup', { credentials: 'include', cache: 'no-store' });
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || j.status !== 'ok') {
+          throw new Error((j && j.message) || ('فشل التحميل (' + r.status + ')'));
+        }
+        CURRENT_SEM = j.semester || '';
+        OFFERINGS = j.offerings || [];
+        const semInput = document.getElementById('semesterInput');
+        if (semInput) semInput.value = CURRENT_SEM || '— غير محدد —';
+        renderAudit(j.audit);
+        if (!CURRENT_SEM) {
+          container.innerHTML = '<div class="alert alert-warning">لم يُحدَّد الفصل الحالي. عيّنه من <a href="/term_ops">لوحة تشغيل الفصل</a> ثم اضغط تحديث.</div>';
+          showMsg('الفصل الحالي غير معيّن', 'warning');
+          return;
+        }
+        if (!OFFERINGS.length) {
+          container.innerHTML = '<div class="alert alert-secondary">لا مقررات في الجدول للفصل الحالي (أو لا أقسام/أساتذة مرتبطة). أضف حصصاً من الجدول الدراسي أو شغّل «ترحيل حصص».</div>';
+        } else {
+          container.innerHTML = OFFERINGS.map((o, i) => renderOffering(o, i)).join('');
+          bindOfferingEvents();
+          OFFERINGS.forEach((o, i) => {
+            if ((o.group_kind || '') === 'split') {
+              document.getElementById('splitEditor_' + i)?.classList.remove('d-none');
+              document.getElementById('offBody_' + i)?.classList.add('d-none');
+              initSplitEditor(i);
+              const ed = document.getElementById('splitEditor_' + i);
+              if (ed) ed.dataset.init = '1';
+            }
+          });
+        }
+        showMsg(`تم تحميل ${OFFERINGS.length} عرض مقرر` + (CURRENT_SEM ? ` — ${CURRENT_SEM}` : ''), 'success');
+      } catch (e) {
+        console.error(e);
+        if (container) {
+          container.innerHTML = `<div class="alert alert-danger">تعذّر التحميل: ${esc(e.message || e)}. راجع صلاحياتك أو سجّل الدخول مجدداً ثم اضغط تحديث.</div>`;
+        }
+        showMsg(e.message || 'فشل التحميل', 'danger');
       }
-      showMsg(`تم تحميل ${OFFERINGS.length} عرض مقرر`, 'success');
     }
 
     document.getElementById('btnReload').addEventListener('click', () => loadData(false));
+    document.getElementById('btnPipeline').addEventListener('click', async () => {
+      if (!confirm('تشغيل ترحيل الفصل كاملاً (حصص + فريق + تسجيلات + تقييمات)؟')) return;
+      showMsg('جاري ترحيل الفصل… قد يستغرق لحظات', 'info');
+      try {
+        const r = await fetch('/schedule/teaching_groups/pipeline', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.status !== 'ok') throw new Error(j.message || 'فشل الترحيل');
+        const a = j.audit || {};
+        const s = j.schedule || {};
+        const reg = j.registrations || {};
+        showMsg(
+          `ترحيل الفصل — صحة: ${j.health || '—'} · حصص أُنشئ ${s.created || 0}/رُبط ${s.linked || 0} · تسجيلات رُبط ${reg.linked || 0} · بلا مجموعة: حصص ${a.unlinked_slots || 0} / تسجيلات ${a.reg_unlinked || 0}`,
+          j.health === 'critical' ? 'danger' : (j.health === 'warn' ? 'warning' : 'success')
+        );
+        await loadData(false);
+      } catch (e) {
+        showMsg(e.message || 'فشل الترحيل', 'danger');
+      }
+    });
     document.getElementById('btnRegBackfill').addEventListener('click', async () => {
       showMsg('جاري ترحيل التسجيلات…', 'info');
       const r = await fetch('/schedule/teaching_groups/registrations/backfill', {
@@ -355,8 +460,13 @@
     });
 
     (async () => {
-      await loadInstructors();
-      await loadData(true);
+      try {
+        await loadInstructors();
+      } catch (e) {
+        console.warn('loadInstructors', e);
+      }
+      // لا ترحيل تلقائي عند الفتح — يبطئ الصفحة؛ الترحيل من الزر فقط
+      await loadData(false);
     })();
   </script>
 </body>

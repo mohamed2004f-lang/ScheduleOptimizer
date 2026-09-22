@@ -27,8 +27,87 @@ from backend.services.prereg_helpers import (
 from backend.database.database import is_postgresql, fetch_table_columns
 from backend.core.department_scope_policy import resolve_users_list_scope, student_matches_department
 from backend.services import teaching_groups as tg_svc
+from backend.services.term_engine import (
+    current_term_match_context,
+    schedule_semester_matches_term_context,
+)
 
 DocxTemplate = None
+
+
+def archive_enrollment_plans_not_matching_current_term(
+    conn,
+    student_id: str,
+    *,
+    statuses: tuple[str, ...] = ("Draft", "Pending", "Approved", "Rejected"),
+) -> int:
+    """
+    أرشفة خطط التسجيل التي لا تطابق الفصل الحالي (أو بلا وسم فصل).
+    يُستخدم عند إعادة تفعيل قيد طالب عائد من إيقاف/فصل سابق.
+    """
+    sid = (student_id or "").strip()
+    if not sid:
+        return 0
+    cur = conn.cursor()
+    ctx = current_term_match_context(conn)
+    ph = ",".join("?" for _ in statuses)
+    rows = cur.execute(
+        f"""
+        SELECT id, COALESCE(semester, '') AS semester
+        FROM enrollment_plans
+        WHERE student_id = ? AND status IN ({ph})
+        """,
+        (sid, *statuses),
+    ).fetchall()
+    ids: list[int] = []
+    for r in rows or []:
+        pid = int(r[0] if not hasattr(r, "keys") else r["id"])
+        sem = (r[1] if not hasattr(r, "keys") else r["semester"]) or ""
+        if not schedule_semester_matches_term_context(sem, ctx):
+            ids.append(pid)
+    if not ids:
+        return 0
+    now = _now_iso()
+    placeholders = ",".join("?" for _ in ids)
+    cur.execute(
+        f"""
+        UPDATE enrollment_plans
+        SET status = 'Archived', updated_at = ?
+        WHERE id IN ({placeholders})
+        """,
+        (now, *ids),
+    )
+    try:
+        return int(cur.rowcount or 0)
+    except (TypeError, ValueError):
+        return len(ids)
+
+
+def archive_all_open_enrollment_plans(conn, student_id: str) -> int:
+    """أرشفة كل الخطط غير المؤرشفة عند إيقاف القيد/التخرج (تبقى في الأرشيف للرجوع)."""
+    sid = (student_id or "").strip()
+    if not sid:
+        return 0
+    cur = conn.cursor()
+    now = _now_iso()
+    cur.execute(
+        """
+        UPDATE enrollment_plans
+        SET status = 'Archived', updated_at = ?
+        WHERE student_id = ? AND status IN ('Draft', 'Pending', 'Approved', 'Rejected')
+        """,
+        (now, sid),
+    )
+    try:
+        return int(cur.rowcount or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def plan_semester_is_current(conn, semester: str | None) -> bool:
+    return schedule_semester_matches_term_context(
+        semester, current_term_match_context(conn)
+    )
 
 
 def _plan_items_has_teaching_group(cur) -> bool:
@@ -542,6 +621,14 @@ def list_plans():
         sid_session = session.get("student_id") or session.get("user")
         student_id = sid_session
     with get_connection() as conn:
+        # شفاء كسول: طالب عائد من إيقاف قد يبقى بخطة معتمدة لفصل سابق
+        if user_role == "student" and student_id:
+            try:
+                n = archive_enrollment_plans_not_matching_current_term(conn, str(student_id))
+                if n:
+                    conn.commit()
+            except Exception:
+                current_app.logger.exception("archive stale enrollment plans (student list) failed")
         cur = conn.cursor()
         mode_scope, dep_scope = resolve_users_list_scope(conn, _actor_username())
         # المشرف لا يمكنه رؤية إلا خطط الطلبة المسندين إليه
@@ -647,14 +734,25 @@ def list_plans():
 
         names = _student_names_by_ids(cur, [p["student_id"] for p in plans])
         units_map = _course_units_map(cur)
+        term_ctx = current_term_match_context(conn)
+        current_ops = (term_ctx or {}).get("ops_label") or ""
         for p in plans:
             p["student_name"] = names.get(str(p.get("student_id") or ""), "")
             p["units_total"] = round(
                 sum(float(units_map.get(cn, 0) or 0) for cn in (p.get("courses") or [])),
                 2,
             )
+            p["is_current_term"] = bool(
+                schedule_semester_matches_term_context(p.get("semester"), term_ctx)
+            )
 
-    return jsonify({"status": "ok", "plans": plans})
+    return jsonify(
+        {
+            "status": "ok",
+            "plans": plans,
+            "current_term": current_ops,
+        }
+    )
 
 
 @enrollment_bp.route("/prereqs/validate", methods=["POST"])

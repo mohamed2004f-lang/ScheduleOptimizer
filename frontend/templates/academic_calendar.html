@@ -108,6 +108,22 @@
       return ['admin','admin_main','system_admin','college_dean','academic_vice_dean'].includes(role || '');
     }
 
+    function applyCalendarViewOnlyUi(opts){
+      opts = opts || {};
+      const sub = document.getElementById('pageSubtitle');
+      if (sub) sub.textContent = opts.subtitle || 'عرض التقويم الأكاديمي (قراءة فقط)';
+      const btnAdd = document.getElementById('btnAddTitle');
+      const btnSave = document.getElementById('btnSave');
+      if (btnAdd) { btnAdd.style.display = 'none'; btnAdd.classList.add('d-none'); }
+      if (btnSave) { btnSave.style.display = 'none'; btnSave.classList.add('d-none'); }
+      if (opts.lockFilters) {
+        const y = document.getElementById('academicYear');
+        const t = document.getElementById('termSelect');
+        if (y) y.disabled = true;
+        if (t) t.disabled = true;
+      }
+    }
+
     function guessAcademicYear(){
       const d = new Date();
       const y = d.getFullYear();
@@ -354,23 +370,30 @@
 
     document.addEventListener('DOMContentLoaded', async ()=>{
       let isStudent = false;
+      let caps = null;
       try {
         const auth = await fetchJSON('/auth/check');
         CURRENT_ROLE = auth.ok ? auth.json?.role : null;
-        isStudent = CURRENT_ROLE === 'student' || !!(auth.json?.capabilities?.is_student);
+        caps = auth.ok ? (auth.json?.capabilities || null) : null;
+        isStudent = CURRENT_ROLE === 'student' || !!(caps && caps.is_student);
       } catch(e) {
         CURRENT_ROLE = null;
       }
 
       await fillAcademicYearOptions(guessAcademicYear());
 
+      const canEdit = canEditCalendar(CURRENT_ROLE);
       if (isStudent) {
-        const sub = document.getElementById('pageSubtitle');
-        if (sub) sub.textContent = 'عرض التقويم الأكاديمي للفصل الحالي (قراءة فقط)';
-        document.getElementById('btnAddTitle').style.display = 'none';
-        document.getElementById('btnSave').style.display = 'none';
-        document.getElementById('academicYear').disabled = true;
-        document.getElementById('termSelect').disabled = true;
+        applyCalendarViewOnlyUi({
+          subtitle: 'عرض التقويم الأكاديمي للفصل الحالي (قراءة فقط)',
+          lockFilters: true,
+        });
+      } else if (!canEdit) {
+        // أستاذ / مشرف / رئيس قسم وغيره — عرض فقط مع إمكانية تغيير العام/الفصل
+        applyCalendarViewOnlyUi({
+          subtitle: 'عرض التقويم الأكاديمي (قراءة فقط) — التعديل والحفظ لإدارة الكلية',
+          lockFilters: false,
+        });
       }
 
       await applyCurrentTermDefaults();
@@ -389,10 +412,6 @@
       }
 
       await loadCalendar();
-      if (!canEditCalendar(CURRENT_ROLE) && !isStudent){
-        document.getElementById('btnSave').disabled = true;
-        document.getElementById('btnSave').title = 'متاح لإدارة الكلية';
-      }
     });
   </script>
 

@@ -245,7 +245,9 @@
       return;
     }
     root.querySelectorAll('tr.stage-time-row, tr.personal-time-row').forEach(tr => {
-      const has = !!tr.querySelector('.conflict-row-btn:not([hidden])');
+      const hasBtn = !!tr.querySelector('.conflict-row-btn');
+      const hasCell = !!tr.querySelector('.conflict-instructor, .conflict-students, .has-conflict');
+      const has = hasBtn || hasCell;
       tr.hidden = !has;
       if (!has) tr.style.setProperty('display', 'none', 'important');
       else tr.style.removeProperty('display');
@@ -283,6 +285,7 @@
       showDayPeriodEdit: false,
       fillEmptyDays: false,
       getCourseColor,
+      showAssistantLine: true,
     };
 
     let html = '';
@@ -554,8 +557,21 @@
     CONFLICTS_ONLY = !!e.target.checked;
     applyConflictsOnlyFilter(document.getElementById('calendarContainer'));
   });
-  document.getElementById('resultsDeptFilter')?.addEventListener('change', (e) => {
+  document.getElementById('resultsDeptFilter')?.addEventListener('change', async (e) => {
     DEPT_FILTER = String(e.target.value || '');
+    try {
+      const q = DEPT_FILTER ? (`?department_id=${encodeURIComponent(DEPT_FILTER)}`) : '';
+      const layoutResp = await fetch('/schedule/display_layout' + q, { credentials: 'include', cache: 'no-store' });
+      const layoutJ = layoutResp.ok ? await layoutResp.json().catch(() => null) : null;
+      if (layoutJ) {
+        SCHEDULE_LAYOUT = {
+          stage_grid_enabled: !!layoutJ.stage_grid_enabled,
+          layout_mode: layoutJ.layout_mode || 'personal_weekly',
+          use_stage_matrix: !!layoutJ.use_stage_matrix,
+        };
+        updateLayoutBadge();
+      }
+    } catch (_e) {}
     renderCalendar();
   });
 

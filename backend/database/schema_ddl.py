@@ -126,6 +126,23 @@ TABLES_SCHEMA = {
         )
     """,
 
+    'teaching_group_instructors': """
+        CREATE TABLE IF NOT EXISTS teaching_group_instructors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            teaching_group_id INTEGER NOT NULL,
+            instructor_id INTEGER NOT NULL,
+            role TEXT NOT NULL DEFAULT 'primary'
+                CHECK (role IN ('primary', 'assistant', 'co_teacher')),
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (teaching_group_id, instructor_id),
+            FOREIGN KEY (teaching_group_id) REFERENCES teaching_groups(id)
+                ON DELETE CASCADE ON UPDATE CASCADE,
+            FOREIGN KEY (instructor_id) REFERENCES instructors(id)
+                ON DELETE RESTRICT ON UPDATE CASCADE
+        )
+    """,
+
     'students': """
         CREATE TABLE IF NOT EXISTS students (
             student_id TEXT PRIMARY KEY,
@@ -271,6 +288,7 @@ TABLES_SCHEMA = {
             exam_time TEXT,
             room TEXT DEFAULT '',
             instructor TEXT DEFAULT '',
+            teaching_group_id INTEGER,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (course_name) REFERENCES courses(course_name) 
                 ON DELETE CASCADE ON UPDATE CASCADE
@@ -1622,6 +1640,7 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_conflict_report_student ON conflict_report(student_id)",
     "CREATE INDEX IF NOT EXISTS idx_exams_course ON exams(course_name)",
     "CREATE INDEX IF NOT EXISTS idx_exams_date ON exams(exam_date)",
+    "CREATE INDEX IF NOT EXISTS idx_exams_teaching_group ON exams(teaching_group_id)",
     "CREATE INDEX IF NOT EXISTS idx_grade_audit_student ON grade_audit(student_id)",
     "CREATE INDEX IF NOT EXISTS idx_attendance_student ON attendance_records(student_id)",
     "CREATE INDEX IF NOT EXISTS idx_attendance_course ON attendance_records(course_name)",
@@ -1662,6 +1681,9 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_teaching_groups_semester ON teaching_groups(semester)",
     "CREATE INDEX IF NOT EXISTS idx_teaching_groups_course_sem ON teaching_groups(course_name, semester)",
     "CREATE INDEX IF NOT EXISTS idx_teaching_groups_dept_sem ON teaching_groups(department_id, semester)",
+    "CREATE INDEX IF NOT EXISTS idx_tgi_group ON teaching_group_instructors(teaching_group_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tgi_instructor ON teaching_group_instructors(instructor_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tgi_role ON teaching_group_instructors(teaching_group_id, role)",
     "CREATE INDEX IF NOT EXISTS idx_grades_program_course ON grades(program_course_id)",
     "CREATE INDEX IF NOT EXISTS idx_regs_program_course ON registrations(program_course_id)",
     "CREATE INDEX IF NOT EXISTS idx_regs_teaching_group ON registrations(teaching_group_id)",

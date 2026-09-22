@@ -37,6 +37,23 @@ logger = logging.getLogger(__name__)
 VALID_TYPES = {"midterm", "final"}
 
 
+def _exams_has_teaching_group_col(conn) -> bool:
+    try:
+        return "teaching_group_id" in {c.lower() for c in fetch_table_columns(conn, "exams")}
+    except Exception:
+        return False
+
+
+def _parse_teaching_group_id(raw) -> int | None:
+    if raw in (None, "", 0, "0"):
+        return None
+    try:
+        v = int(raw)
+        return v if v > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _course_names_agg_sql(expr: str = "e.course_name") -> str:
     """Cross-db aggregation for comma-separated course names."""
     if is_postgresql():
@@ -212,6 +229,144 @@ def _is_educational_viewer_role() -> bool:
         mode = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
         return mode in ("instructor", "supervisor")
     return False
+
+
+def _is_instructor_scoped_exam_viewer() -> bool:
+    """
+    عارض امتحانات بصفته أستاذاً/مشرفاً (وليس محرّر الجدول):
+    يُقيَّد بمقررات الفصل الحالي المسندة إليه — لا يرى بقايا فصول أخرى ولا كل الكلية.
+    """
+    if _role_may_edit_exam_schedule():
+        return False
+    role = _normalize_role((session.get("user_role") or "").strip())
+    if role in ("instructor", "supervisor"):
+        return True
+    if role == "head_of_department":
+        mode = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
+        return mode in ("instructor", "supervisor")
+    return False
+
+
+def _session_instructor_id() -> int:
+    try:
+        return int(session.get("instructor_id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _instructor_current_term_exam_scope(conn, cur) -> tuple[set[str], set[int]]:
+    """
+    مقررات ومجموعات تدريس الفصل الحالي المسندة لحساب الأستاذ.
+    يُستبعد أي امتحان لمقرر غير موجود في تكليف الفصل الحالي (بقايا فصول سابقة في جدول exams).
+    """
+    from backend.core.faculty_axes import normalize_instructor_name
+    from backend.services.term_engine import (
+        current_term_match_context,
+        schedule_semester_matches_term_context,
+    )
+    import backend.services.teaching_groups as tg_svc
+
+    course_keys: set[str] = set()
+    tg_ids: set[int] = set()
+    iid = _session_instructor_id()
+    if iid <= 0:
+        return course_keys, tg_ids
+
+    tname, tyear = get_current_term(conn=conn)
+    sem_label = f"{(tname or '').strip()} {(tyear or '').strip()}".strip()
+
+    if sem_label:
+        try:
+            for g in tg_svc.list_instructor_assigned_groups(conn, iid, sem_label):
+                k = _norm_exam_course_key(g.get("course_name") or "")
+                if k:
+                    course_keys.add(k)
+                tgid = int(g.get("teaching_group_id") or 0)
+                if tgid > 0:
+                    tg_ids.add(tgid)
+        except Exception:
+            logger.exception("instructor exam scope: teaching_groups failed")
+
+    inst_name = ""
+    try:
+        row = cur.execute(
+            "SELECT COALESCE(TRIM(name), '') FROM instructors WHERE id = ? LIMIT 1",
+            (iid,),
+        ).fetchone()
+        inst_name = ((row[0] if row else "") or "").strip()
+    except Exception:
+        inst_name = ""
+    norm_name = normalize_instructor_name(inst_name) if inst_name else ""
+
+    ctx = current_term_match_context(conn)
+    try:
+        scols = {str(c).strip().lower() for c in (fetch_table_columns(conn, "schedule") or [])}
+    except Exception:
+        scols = set()
+    has_iid_col = "instructor_id" in scols
+    try:
+        if has_iid_col:
+            rows = cur.execute(
+                """
+                SELECT TRIM(course_name) AS course_name,
+                       COALESCE(TRIM(semester), '') AS semester,
+                       COALESCE(instructor_id, 0) AS instructor_id,
+                       COALESCE(TRIM(instructor), '') AS instructor
+                FROM schedule
+                WHERE COALESCE(TRIM(course_name), '') <> ''
+                """
+            ).fetchall()
+        else:
+            rows = cur.execute(
+                """
+                SELECT TRIM(course_name) AS course_name,
+                       COALESCE(TRIM(semester), '') AS semester,
+                       0 AS instructor_id,
+                       COALESCE(TRIM(instructor), '') AS instructor
+                FROM schedule
+                WHERE COALESCE(TRIM(course_name), '') <> ''
+                """
+            ).fetchall()
+    except Exception:
+        logger.exception("instructor exam scope: schedule scan failed")
+        rows = []
+
+    for r in rows or []:
+        if hasattr(r, "keys"):
+            cname = (r["course_name"] or "").strip()
+            sem = (r["semester"] or "").strip()
+            row_iid = int(r["instructor_id"] or 0)
+            row_inst = (r["instructor"] or "").strip()
+        else:
+            cname = (r[0] or "").strip()
+            sem = (r[1] or "").strip() if len(r) > 1 else ""
+            row_iid = int(r[2] or 0) if len(r) > 2 else 0
+            row_inst = (r[3] or "").strip() if len(r) > 3 else ""
+        if not cname:
+            continue
+        if ctx and not schedule_semester_matches_term_context(sem, ctx):
+            continue
+        match_id = row_iid > 0 and row_iid == iid
+        match_name = bool(norm_name) and normalize_instructor_name(row_inst) == norm_name
+        if match_id or match_name:
+            k = _norm_exam_course_key(cname)
+            if k:
+                course_keys.add(k)
+
+    return course_keys, tg_ids
+
+
+def _exam_row_visible_to_instructor(
+    item: dict, *, course_keys: set[str], tg_ids: set[int]
+) -> bool:
+    tgid = 0
+    try:
+        tgid = int(item.get("teaching_group_id") or 0)
+    except (TypeError, ValueError):
+        tgid = 0
+    if tgid > 0:
+        return tgid in tg_ids
+    return _norm_exam_course_key(item.get("course_name") or "") in course_keys
 
 
 def _user_can_view_exam_rows(exam_type: str) -> bool:
@@ -966,18 +1121,29 @@ def _fetch_exam_conflict_aggregate_rows(conn, exam_type: str):
         scope_where = f" AND ({scope_sql}) "
         scope_params_suffix = tuple(scope_params) if scope_params else ()
 
+    tg_join = ""
+    if _exams_has_teaching_group_col(conn):
+        tg_join = """
+          AND (
+            COALESCE(e.teaching_group_id, 0) = 0
+            OR r.teaching_group_id = e.teaching_group_id
+          )
+        """
+
     q = f"""
         SELECT r.student_id AS student_id, e.exam_date AS exam_date,
+               COALESCE(e.exam_time, '') AS exam_time,
                {_course_names_agg_sql("e.course_name")} AS conflicting_courses,
-               COUNT(e.course_name) AS ccount
+               COUNT(DISTINCT e.id) AS ccount
         FROM exams e
         {dept_join}
         JOIN registrations r ON LOWER(TRIM(r.course_name)) = LOWER(TRIM(e.course_name))
+        {tg_join}
         {stu_join}
         WHERE e.exam_type = ?
         {scope_where}
-        GROUP BY r.student_id, e.exam_date
-        HAVING COUNT(e.course_name) > 1
+        GROUP BY r.student_id, e.exam_date, COALESCE(e.exam_time, '')
+        HAVING COUNT(DISTINCT e.id) > 1
     """
     params = prefix_params + (exam_type,) + scope_params_suffix
     return cur.execute(q, params).fetchall()
@@ -1201,29 +1367,64 @@ def list_exam_rows(exam_type):
             sid = (session.get("student_id") or session.get("user") or "").strip()
             if not sid:
                 return jsonify([])
-            rows = cur.execute(
+            has_tg = _exams_has_teaching_group_col(conn)
+            tg_select = ", e.teaching_group_id" if has_tg else ""
+            tg_join = ""
+            if has_tg:
+                tg_join = """
+                   AND (
+                     COALESCE(e.teaching_group_id, 0) = 0
+                     OR r.teaching_group_id = e.teaching_group_id
+                   )
                 """
+            rows = cur.execute(
+                f"""
                 SELECT e.id AS exam_id, e.course_name, e.exam_date, e.exam_time, e.room, e.instructor
+                       {tg_select}
                 FROM exams e
                 INNER JOIN registrations r
                     ON lower(trim(r.course_name)) = lower(trim(e.course_name))
+                   {tg_join}
                 WHERE e.exam_type = ? AND r.student_id = ?
                 ORDER BY e.exam_date, e.exam_time, e.course_name
                 """,
                 (exam_type, sid),
             ).fetchall()
             return jsonify([dict(r) for r in rows])
+        has_tg = _exams_has_teaching_group_col(conn)
+        select_cols = "id AS exam_id, course_name, exam_date, exam_time, room, instructor"
+        if has_tg:
+            select_cols += ", teaching_group_id"
+
+        # أستاذ/مشرف (وموضع التدريس لرئيس القسم): مقررات تكليفه في الفصل الحالي فقط
+        if _is_instructor_scoped_exam_viewer():
+            course_keys, tg_ids = _instructor_current_term_exam_scope(conn, cur)
+            if not course_keys and not tg_ids:
+                return jsonify([])
+            rows = cur.execute(
+                f"SELECT {select_cols} FROM exams WHERE exam_type=? ORDER BY exam_date, exam_time",
+                (exam_type,),
+            ).fetchall()
+            out = []
+            for r in rows or []:
+                item = dict(r)
+                if _exam_row_visible_to_instructor(
+                    item, course_keys=course_keys, tg_ids=tg_ids
+                ):
+                    out.append(item)
+            return jsonify(out)
+
         dep = _effective_department_scope_id(conn)
         if dep is None:
             rows = cur.execute(
-                "SELECT id AS exam_id, course_name, exam_date, exam_time, room, instructor FROM exams WHERE exam_type=? ORDER BY exam_date, exam_time",
+                f"SELECT {select_cols} FROM exams WHERE exam_type=? ORDER BY exam_date, exam_time",
                 (exam_type,),
             ).fetchall()
             return jsonify([dict(r) for r in rows])
         visible = _dept_visible_exam_course_keys(conn, cur, dep_id=int(dep))
         rows = cur.execute(
-            """
-            SELECT id AS exam_id, course_name, exam_date, exam_time, room, instructor
+            f"""
+            SELECT {select_cols}
             FROM exams WHERE exam_type=?
             ORDER BY exam_date, exam_time
             """,
@@ -1350,6 +1551,7 @@ def add_exam_row(exam_type):
     exam_time = data.get('exam_time','09:00-12:00')  # الوقت الافتراضي
     room = data.get('room','')
     instructor = data.get('instructor','')
+    teaching_group_id = _parse_teaching_group_id(data.get('teaching_group_id'))
     if not course_name or not exam_date:
         return jsonify({"status":"error","message":"course_name and exam_date required"}), 400
     # normalize date
@@ -1376,8 +1578,16 @@ def add_exam_row(exam_type):
         except (TermClosedError, TermOperationError) as exc:
             return http_term_blocked(exc)
         cur = conn.cursor()
-        cur.execute("INSERT INTO exams (exam_type, exam_id, course_name, exam_date, exam_time, room, instructor) VALUES (?,?,?,?,?,?,?)",
-                    (exam_type, None, course_name, exam_date, exam_time, room, instructor))
+        if _exams_has_teaching_group_col(conn):
+            cur.execute(
+                "INSERT INTO exams (exam_type, exam_id, course_name, exam_date, exam_time, room, instructor, teaching_group_id) VALUES (?,?,?,?,?,?,?,?)",
+                (exam_type, None, course_name, exam_date, exam_time, room, instructor, teaching_group_id),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO exams (exam_type, exam_id, course_name, exam_date, exam_time, room, instructor) VALUES (?,?,?,?,?,?,?)",
+                (exam_type, None, course_name, exam_date, exam_time, room, instructor),
+            )
         conn.commit()
     try:
         touch_exam_schedule_updated_at(exam_type)
@@ -1747,20 +1957,33 @@ def exam_conflicts(exam_type):
         return jsonify({"conflicts": []})
     if not _user_can_view_exam_rows(exam_type):
         return jsonify({"conflicts": []})
+    # حساب حي من التسجيلات ثم مزامنة جدول exam_conflicts عند الإمكان
+    live = (request.args.get("live") or "1").strip().lower() not in ("0", "false", "no")
     role = _normalize_role((session.get("user_role") or "").strip())
+    if live:
+        try:
+            persist_exam_conflicts(exam_type)
+        except Exception:
+            logger.exception("exam_conflicts live persist failed")
     with get_connection() as conn:
         rows = _fetch_exam_conflict_aggregate_rows(conn, exam_type)
         out = []
         for r in rows:
-            out.append({
-                'student_id': r[0] or '',
-                'exam_date': r[1] or '',
-                'conflicting_courses': r[2] or ''
-            })
+            item = {
+                "student_id": r[0] or "",
+                "exam_date": r[1] or "",
+                "conflicting_courses": r[3] if len(r) > 3 else (r[2] or ""),
+            }
+            if len(r) > 3:
+                item["exam_time"] = r[2] or ""
+                item["conflicting_courses"] = r[3] or ""
+            else:
+                item["exam_time"] = ""
+            out.append(item)
         if role == "student":
             sid = (session.get("student_id") or session.get("user") or "").strip()
             out = [c for c in out if (c.get("student_id") or "").strip() == sid]
-        return jsonify({'conflicts': out})
+        return jsonify({"conflicts": out, "source": "live_registrations" if live else "query"})
 
 @exams_bp.route('/<exam_type>/results_data')
 @login_required
@@ -1822,9 +2045,11 @@ def update_exam_row(exam_type):
     if not exam_id:
         return jsonify({"status":"error","message":"exam_id required"}), 400
     fields = {}
-    for k in ('course_name','exam_date','exam_time','room','instructor'):
+    for k in ('course_name','exam_date','exam_time','room','instructor','teaching_group_id'):
         if k in data:
             fields[k] = data[k]
+    if 'teaching_group_id' in fields:
+        fields['teaching_group_id'] = _parse_teaching_group_id(fields.get('teaching_group_id'))
     # توحيد صيغة التاريخ إذا تم تمريره
     if 'exam_date' in fields and fields['exam_date']:
         nd = normalize_dates([fields['exam_date']])
@@ -1832,10 +2057,11 @@ def update_exam_row(exam_type):
             fields['exam_date'] = nd[0]
     if not fields:
         return jsonify({"status":"error","message":"no fields to update"}), 400
-    sets = ','.join([f"{k} = ?" for k in fields.keys()])
-    params = list(fields.values()) + [exam_id, exam_type]
-    q = f"UPDATE exams SET {sets} WHERE id = ? AND exam_type = ?"
     with get_connection() as conn:
+        if 'teaching_group_id' in fields and not _exams_has_teaching_group_col(conn):
+            fields.pop('teaching_group_id', None)
+        if not fields:
+            return jsonify({"status":"error","message":"no fields to update"}), 400
         try:
             from backend.core.department_scope_policy import resolve_effective_department_scope_id
             from backend.services.term_closure import TermClosedError
@@ -1851,6 +2077,9 @@ def update_exam_row(exam_type):
             assert_term_operation(conn, operation=OP_EXAM_WRITE, department_id=dept_id)
         except (TermClosedError, TermOperationError) as exc:
             return http_term_blocked(exc)
+        sets = ','.join([f"{k} = ?" for k in fields.keys()])
+        params = list(fields.values()) + [exam_id, exam_type]
+        q = f"UPDATE exams SET {sets} WHERE id = ? AND exam_type = ?"
         cur = conn.cursor()
         cur.execute(q, params)
         conn.commit()
@@ -1998,9 +2227,13 @@ def persist_exam_conflicts(exam_type):
             cur.execute("DELETE FROM exam_conflicts WHERE exam_type = ?", (exam_type,))
         rows = _fetch_exam_conflict_aggregate_rows(conn, exam_type)
         for r in rows:
+            # صف حي: student_id, exam_date, exam_time, conflicting_courses, ccount
+            sid = r[0] or ""
+            edate = r[1] or ""
+            courses = (r[3] if len(r) > 3 else r[2]) or ""
             cur.execute(
                 "INSERT INTO exam_conflicts (exam_type, student_id, exam_date, conflicting_courses) VALUES (?,?,?,?)",
-                (exam_type, r[0] or "", r[1] or "", r[2] or ""),
+                (exam_type, sid, edate, courses),
             )
         conn.commit()
         return len(rows)

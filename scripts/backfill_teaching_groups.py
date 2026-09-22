@@ -53,6 +53,8 @@ def main() -> int:
                 conn, semester=sem, department_id=dept
             )
             print("ترحيل حصص → مجموعات:", stats)
+        primary_n = tg.backfill_primary_instructors_for_groups(conn)
+        print("صفوف primary للفريق:", primary_n)
         if not args.skip_registrations:
             stats = tg.backfill_registrations_teaching_groups(
                 conn, semester=sem, department_id=dept

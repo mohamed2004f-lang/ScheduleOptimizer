@@ -77,6 +77,8 @@ def _ensure_tables_postgresql() -> None:
         "ALTER TABLE schedule ADD COLUMN IF NOT EXISTS program_course_id BIGINT",
         "ALTER TABLE schedule ADD COLUMN IF NOT EXISTS department_id BIGINT",
         "ALTER TABLE schedule ADD COLUMN IF NOT EXISTS teaching_group_id BIGINT",
+        "ALTER TABLE exams ADD COLUMN IF NOT EXISTS teaching_group_id BIGINT",
+        "CREATE INDEX IF NOT EXISTS idx_exams_teaching_group ON exams(teaching_group_id)",
         """
         CREATE TABLE IF NOT EXISTS teaching_groups (
             id BIGSERIAL PRIMARY KEY,

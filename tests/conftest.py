@@ -311,6 +311,16 @@ CREATE TABLE IF NOT EXISTS teaching_groups (
     UNIQUE (course_name, semester, department_id, group_code)
 );
 
+CREATE TABLE IF NOT EXISTS teaching_group_instructors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    teaching_group_id INTEGER NOT NULL,
+    instructor_id INTEGER NOT NULL,
+    role TEXT NOT NULL DEFAULT 'primary' CHECK (role IN ('primary', 'assistant', 'co_teacher')),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (teaching_group_id, instructor_id)
+);
+
 CREATE TABLE IF NOT EXISTS conflict_report (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id TEXT NOT NULL,

@@ -79,9 +79,8 @@
     var examType = currentExamType();
     try {
       const auth = await fetch("/auth/check", { credentials: "include" }).then(function (r) { return r.json(); }).catch(function () { return {}; });
-      const role = auth.role || "";
-      const mayPublish = !!(auth.capabilities && auth.capabilities.can_manage_schedule_edit)
-        || ["admin", "admin_main", "head_of_department", "college_dean", "academic_vice_dean", "system_admin"].includes(role);
+      // يعتمد على صلاحية تعديل الجدول فقط (أستاذ / رئيس في وضع التدريس = عرض فقط)
+      const mayPublish = !!(auth.capabilities && auth.capabilities.can_manage_schedule_edit);
       if (!mayPublish) {
         card.classList.add("d-none");
         if (banner) banner.classList.add("d-none");

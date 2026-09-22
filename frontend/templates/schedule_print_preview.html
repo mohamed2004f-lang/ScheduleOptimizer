@@ -26,6 +26,31 @@
       padding: 6px 14px; border: 1px solid #198754; background: #198754;
       color: #fff; border-radius: 4px; cursor: pointer; font-weight: 600;
     }
+    .preview-opt {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 13px; color: #0d3b66; cursor: pointer; user-select: none;
+    }
+    .preview-actions {
+      display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+    }
+    .slot-inst-stack {
+      display: flex; flex-direction: column; gap: 1px; line-height: 1.25;
+    }
+    .slot-inst-primary { font-weight: 700; font-size: 12px; color: #0f172a; }
+    .slot-inst-asst {
+      display: block; font-size: 10px; font-weight: 600; color: #475569;
+      margin-top: 1px;
+    }
+    .slot-course-record {
+      grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.35fr) minmax(2.2rem, 3.1rem) !important;
+      gap: 4px 6px !important;
+    }
+    .slot-cell--room { max-width: 3.1rem; text-align: center; }
+    .slot-cell--room .slot-text { font-size: 10px; text-align: center; white-space: nowrap; }
+    th.sub-time-header--room { width: 3.4% !important; max-width: 3.1rem; }
+    @media print {
+      .slot-inst-asst { color: #333; font-size: 9pt; }
+    }
     .preview-hint {
       font-size: 12px; color: #0f5132; margin: 0 0 12px;
       padding: 8px 10px; background: #d1e7dd; border-right: 3px solid #198754;
@@ -59,10 +84,17 @@
 <body>
   <div class="preview-banner no-print">
     <span><strong>معاينة الجدول الدراسي</strong> — راجع ثم اطبع أو احفظ PDF من المتصفح.</span>
-    <button type="button" class="btn-print" id="btnPreviewPrint">طباعة / حفظ PDF</button>
+    <div class="preview-actions">
+      <label class="preview-opt" for="optShowAssistants">
+        <input type="checkbox" id="optShowAssistants">
+        إظهار المساعد سطراً ثانياً في الطباعة
+      </label>
+      <button type="button" class="btn-print" id="btnPreviewPrint">طباعة / حفظ PDF</button>
+    </div>
   </div>
   <p class="preview-hint no-print">
-    <strong>الأفضل للشواهد:</strong> استخدم «طباعة / حفظ PDF» من هنا (جودة عربية وهوامش صحيحة)، بنفس أسلوب نتائج الاستبيانات.
+    <strong>الأفضل للشواهد:</strong> استخدم «طباعة / حفظ PDF» من هنا.
+    المساعد يظهر سطراً ثانياً أصغر تحت الرئيسي عند تفعيل الخيار (مفعّل افتراضياً). ألغِ التحديد لطباعة الرئيسي فقط.
   </p>
 
   <h1>الجدول الدراسي</h1>
@@ -76,29 +108,46 @@
   <div id="printGrid"></div>
 
   <script src="/static/js/common.js"></script>
-  <script src="/static/js/schedule-stage-grid.js?v=20260918e"></script>
+  <script src="/static/js/schedule-stage-grid.js?v=20260921d"></script>
   <script>
     window.SCHEDULE_DAYS = window.SCHEDULE_DAYS || ['السبت','الأحد','الإثنين','الثلاثاء','الأربعاء','الخميس'];
     const ROWS = {{ rows|tojson }};
     const USE_STAGES = {{ 'true' if use_stage_matrix else 'false' }};
+    const LS_KEY = 'schedule_print_show_assistants';
     const el = document.getElementById('printGrid');
-    if (USE_STAGES && typeof buildStageMatrixTimetableHtml === 'function') {
-      el.innerHTML = buildStageMatrixTimetableHtml(ROWS, {
+    const opt = document.getElementById('optShowAssistants');
+
+    function renderPreview() {
+      const showAssistantLine = !!(opt && opt.checked);
+      try { localStorage.setItem(LS_KEY, showAssistantLine ? '1' : '0'); } catch (_) {}
+      const opts = {
         showSlotManage: false,
         showDayPeriodEdit: false,
         includeActionRows: false,
         fillEmptyDays: false,
-      });
-    } else if (typeof buildPersonalWeeklyTimetableHtml === 'function') {
-      el.innerHTML = buildPersonalWeeklyTimetableHtml(ROWS, {
-        showSlotManage: false,
-        showDayPeriodEdit: false,
-      });
-    } else if (typeof buildPublishedTimetableHtml === 'function') {
-      el.innerHTML = buildPublishedTimetableHtml(ROWS, {});
-    } else {
-      el.innerHTML = '<p>لا يمكن بناء معاينة الطباعة.</p>';
+        showAssistantLine: showAssistantLine,
+      };
+      if (USE_STAGES && typeof buildStageMatrixTimetableHtml === 'function') {
+        el.innerHTML = buildStageMatrixTimetableHtml(ROWS, opts);
+      } else if (typeof buildPersonalWeeklyTimetableHtml === 'function') {
+        el.innerHTML = buildPersonalWeeklyTimetableHtml(ROWS, opts);
+      } else if (typeof buildPublishedTimetableHtml === 'function') {
+        el.innerHTML = buildPublishedTimetableHtml(ROWS, opts);
+      } else {
+        el.innerHTML = '<p>لا يمكن بناء معاينة الطباعة.</p>';
+      }
     }
+
+    try {
+      const saved = localStorage.getItem(LS_KEY);
+      // افتراضي: إظهار المساعد (إن لم يُحفظ اختيار سابق)
+      if (opt) opt.checked = saved === null ? true : saved === '1';
+    } catch (_) {
+      if (opt) opt.checked = true;
+    }
+    if (opt) opt.addEventListener('change', renderPreview);
+    renderPreview();
+
     document.getElementById('btnPreviewPrint')?.addEventListener('click', function () {
       window.print();
     });

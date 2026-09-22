@@ -674,7 +674,7 @@ function buildPublishedTimetableHtml(scheduleRows, opts) {
     });
     html += '</tr><tr>';
     for (let i = 0; i < timeSlots.length; i++) {
-        html += '<th class="sub-time-header">المقرر</th><th class="sub-time-header">الأستاذ</th><th class="sub-time-header">القاعة</th>';
+        html += '<th class="sub-time-header sub-time-header--course">المقرر</th><th class="sub-time-header sub-time-header--inst">الأستاذ</th><th class="sub-time-header sub-time-header--room">القاعة</th>';
     }
     html += '</tr></thead><tbody>';
     DAYS.forEach(day => {
