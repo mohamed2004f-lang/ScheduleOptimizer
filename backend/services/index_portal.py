@@ -32,12 +32,21 @@ _ALIASES = {
 
 _TEMPLATE_COLUMNS = {
     "students": ["student_id", "student_name"],
+    "courses": ["course_name", "course_code", "units", "category"],
     "schedule": ["course_name", "day", "time", "room", "instructor", "semester"],
     "registrations": ["student_id", "course_name"],
 }
 
 _TEMPLATE_SAMPLES = {
     "students": [{"student_id": "1200", "student_name": "أحمد محمد"}],
+    "courses": [
+        {
+            "course_name": "ديناميكا حرارية 1",
+            "course_code": "ME201",
+            "units": 3,
+            "category": "required",
+        }
+    ],
     "schedule": [
         {
             "course_name": "ميكانيكا_1",

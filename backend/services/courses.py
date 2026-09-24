@@ -1983,12 +1983,17 @@ def courses_import_excel():
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     f = request.files.get("file")
     if not f:
-        return jsonify({"status": "error", "message": "file required"}), 400
+        return jsonify({"status": "error", "message": "اختر ملف Excel أولاً"}), 400
     try:
         df = pd.read_excel(f)
         df.columns = [str(c).lower().strip() for c in df.columns]
         if "course_name" not in df.columns:
-            return jsonify({"status": "error", "message": "Columns required: course_name"}), 400
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "عمود مطلوب غير موجود: course_name (اسم المقرر)",
+                }
+            ), 400
         rows = df.to_dict(orient="records")
         imported_names: list[str] = []
         created: list[str] = []

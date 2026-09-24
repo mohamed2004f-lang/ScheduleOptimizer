@@ -404,3 +404,55 @@ class TestCoursesImportCrossDepartmentShared:
         assert row is not None
         code_now = row[0] if not hasattr(row, "keys") else row["course_code"]
         assert str(code_now).strip() == mech_plan
+
+
+class TestCoursesImportTemplate:
+    def test_courses_template_download(self, auth_client):
+        resp = auth_client.get("/index/template/courses")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert "spreadsheet" in (resp.content_type or "") or resp.data[:2] == b"PK"
+        df = pd.read_excel(io.BytesIO(resp.data))
+        cols = {str(c).lower().strip() for c in df.columns}
+        assert "course_name" in cols
+        assert "course_code" in cols
+        assert "units" in cols
+        assert "category" in cols
+
+    def test_import_from_template_shape(self, app, db_conn, auth_client):
+        uid = uuid.uuid4().hex[:8]
+        cname = f"قالب-مقرر-{uid}"
+        xls = _courses_excel_bytes(
+            [
+                {
+                    "course_name": cname,
+                    "course_code": f"T{uid[:4]}".upper(),
+                    "units": 3,
+                    "category": "required",
+                }
+            ]
+        )
+        imp = auth_client.post(
+            "/courses/import/excel",
+            data={"file": (xls, "template_courses.xlsx")},
+            content_type="multipart/form-data",
+        )
+        assert imp.status_code == 200, imp.get_data(as_text=True)
+        body = imp.get_json() or {}
+        assert body.get("status") == "ok"
+        row = db_conn.execute(
+            "SELECT 1 FROM courses WHERE course_name = ?",
+            (cname,),
+        ).fetchone()
+        assert row is not None
+
+    def test_courses_form_has_template_link_and_no_inline_onclick(self):
+        from pathlib import Path
+
+        html = (Path(__file__).resolve().parents[1] / "frontend" / "templates" / "courses_form.html").read_text(
+            encoding="utf-8"
+        )
+        assert 'id="btnImportCourses"' in html
+        assert "/index/template/courses" in html
+        assert "تنزيل قالب" in html
+        assert 'onclick="importCourses()' not in html
+        assert "importBtn.dataset.importWired" in html or "dataset.importWired" in html

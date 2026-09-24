@@ -62,6 +62,20 @@ def test_docker_compose_disables_csp_legacy():
     assert "ENABLE_CSP_LEGACY=1" not in compose
 
 
+def test_students_import_button_has_no_inline_onclick():
+    """CSP الإنتاج يمنع onclick — الاستيراد يجب أن يُربط بـ addEventListener."""
+    html = (ROOT / "frontend" / "templates" / "students_form.html").read_text(encoding="utf-8")
+    assert 'id="btnImportStudents"' in html
+    assert "onclick=" not in html or 'onclick="importStudents()' not in html
+    assert "wireStudentsImportUi" in html
+    assert "btnImportStudents" in html
+    # لا onsubmit مضمّن على نموذج الاستيراد
+    import_form_idx = html.find('id="students-import-form"')
+    assert import_form_idx > 0
+    form_snip = html[import_form_idx : import_form_idx + 400]
+    assert "onsubmit=" not in form_snip
+
+
 def test_dashboard_production_csp_script_src_has_nonce(auth_client, monkeypatch):
     monkeypatch.setenv("FLASK_ENV", "production")
     monkeypatch.setenv("ENABLE_CSP", "1")

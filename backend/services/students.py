@@ -2155,9 +2155,76 @@ def _sanitize_reg_change_note(raw) -> str:
 # مساعدة: تطبيع معرّف الطالب
 # -----------------------------
 def normalize_sid(sid):
+    """تطبيع الرقم الدراسي؛ يتعامل مع int/float من Excel دون لاحقة .0."""
     if sid is None:
         return ""
-    return str(sid).strip()
+    if isinstance(sid, bool):
+        return str(sid).strip()
+    if isinstance(sid, int):
+        return str(sid)
+    if isinstance(sid, float):
+        if sid != sid:  # NaN
+            return ""
+        try:
+            if sid == int(sid):
+                return str(int(sid))
+        except (OverflowError, ValueError):
+            pass
+        return str(sid).strip()
+    s = str(sid).strip()
+    if not s or s.lower() in ("nan", "none", "nat", "<na>"):
+        return ""
+    # Excel/CSV أحياناً يصدر الرقم كنص "23169.0"
+    if len(s) > 2 and s.endswith(".0"):
+        head = s[:-2]
+        if head.isdigit() or (head.startswith("-") and head[1:].isdigit()):
+            return head
+    return s
+
+
+_STUDENT_IMPORT_COL_ALIASES: dict[str, tuple[str, ...]] = {
+    "student_id": (
+        "student_id",
+        "id",
+        "رقم",
+        "الرقم",
+        "الرقم_الدراسي",
+        "الرقم الدراسي",
+        "رقم_الطالب",
+        "رقم الطالب",
+    ),
+    "student_name": (
+        "student_name",
+        "name",
+        "اسم",
+        "اسم_الطالب",
+        "اسم الطالب",
+        "الاسم",
+    ),
+}
+
+
+def _norm_student_import_col(name: str) -> str:
+    return str(name or "").strip().lower().replace(" ", "_")
+
+
+def _prepare_students_import_dataframe(df: "pd.DataFrame") -> "pd.DataFrame":
+    """توحيد أسماء أعمدة استيراد الطلبة (إنجليزي/عربي)."""
+    out = df.copy()
+    out.columns = [_norm_student_import_col(c) for c in out.columns]
+    rename: dict[str, str] = {}
+    present = set(out.columns)
+    for target, options in _STUDENT_IMPORT_COL_ALIASES.items():
+        if target in present:
+            continue
+        for opt in options:
+            key = _norm_student_import_col(opt)
+            if key in present and key not in rename:
+                rename[key] = target
+                break
+    if rename:
+        out = out.rename(columns=rename)
+    return out
 
 
 def _resolve_actor_department_id(conn) -> int | None:
@@ -5557,22 +5624,39 @@ def students_export_pdf():
 @login_required
 def students_import_excel():
     if _is_instructor_or_supervisor_view_only():
-        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        return jsonify({"status": "error", "message": "غير مصرح بالاستيراد لهذا الدور"}), 403
     f = request.files.get("file")
     if not f:
-        return jsonify({"status":"error","message":"file required"}), 400
+        return jsonify({"status": "error", "message": "اختر ملف Excel أولاً"}), 400
     try:
         df = pd.read_excel(f)
-        df.columns = [c.lower() for c in df.columns]
-        if not {"student_id","student_name"}.issubset(df.columns):
-            return jsonify({"status":"error","message":"Columns required: student_id, student_name"}), 400
+        if df is None or df.empty:
+            return jsonify({"status": "error", "message": "الملف فارغ — لا توجد صفوف للاستيراد"}), 400
+        df = _prepare_students_import_dataframe(df)
+        if not {"student_id", "student_name"}.issubset(set(df.columns)):
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": (
+                        "أعمدة مطلوبة غير موجودة. استخدم: student_id و student_name "
+                        "(أو: الرقم الدراسي / اسم الطالب)"
+                    ),
+                }
+            ), 400
         rows = df.to_dict(orient="records")
         imported_ids: list[str] = []
         with get_connection() as conn:
             cur = conn.cursor()
             for r in rows:
                 sid = normalize_sid(r.get("student_id"))
-                name = (r.get("student_name") or "").strip()
+                raw_name = r.get("student_name")
+                try:
+                    if raw_name is not None and pd.isna(raw_name):
+                        name = ""
+                    else:
+                        name = str(raw_name or "").strip()
+                except (TypeError, ValueError):
+                    name = str(raw_name or "").strip()
                 if not sid:
                     continue
                 imported_ids.append(sid)
@@ -5611,7 +5695,7 @@ def students_import_excel():
         return jsonify(payload), 200
     except Exception as e:
         current_app.logger.exception("students_import_excel failed")
-        return jsonify({"status":"error","message":str(e)}), 500
+        return jsonify({"status": "error", "message": f"فشل الاستيراد: {e}"}), 500
 
 
 def compute_timetable_conflicts(conn):

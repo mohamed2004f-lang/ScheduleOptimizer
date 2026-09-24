@@ -23,10 +23,10 @@
       <li class="nav-item" role="presentation">
         <button class="nav-link active" id="tab-users-btn" data-bs-toggle="tab" data-bs-target="#tabUsers" type="button" role="tab">المستخدمون</button>
       </li>
-      <li class="nav-item" role="presentation">
+      <li class="nav-item d-none" role="presentation" id="tab-profiles-item">
         <button class="nav-link" id="tab-profiles-btn" data-bs-toggle="tab" data-bs-target="#tabProfiles" type="button" role="tab">قوالب الأدوار</button>
       </li>
-      <li class="nav-item" role="presentation">
+      <li class="nav-item d-none" role="presentation" id="tab-handover-item">
         <button class="nav-link" id="tab-handover-btn" data-bs-toggle="tab" data-bs-target="#tabHandover" type="button" role="tab">نقل الصلاحيات</button>
       </li>
     </ul>
@@ -68,18 +68,18 @@
           <div class="col-md-4">
             <label class="form-label">الدور</label>
             <select id="roleSelect" class="form-select form-select-sm">
-              <option value="admin_main">مسؤول رئيسي (admin_main)</option>
-              <option value="college_dean">عميد الكلية (college_dean)</option>
-              <option value="academic_vice_dean">وكيل الكلية للشؤون العلمية (academic_vice_dean)</option>
-              <option value="head_of_department">رئيس قسم (head_of_department)</option>
-              <option value="instructor">عضو هيئة تدريس (instructor)</option>
+              <option value="instructor" selected>عضو هيئة تدريس (instructor)</option>
               <option value="student">طالب (student)</option>
+              <option value="head_of_department">رئيس قسم (head_of_department)</option>
               <option value="staff">موظف إداري (staff)</option>
+              <option value="academic_vice_dean">وكيل الكلية للشؤون العلمية (academic_vice_dean)</option>
+              <option value="college_dean">عميد الكلية (college_dean)</option>
+              <option value="admin_main">مسؤول رئيسي (admin_main)</option>
             </select>
           </div>
         </div>
         <div class="row g-2 align-items-end mt-2">
-          <div class="col-md-4" id="roleProfileWrap">
+          <div class="col-md-4 d-none" id="roleProfileWrap">
             <label class="form-label">قالب دور (اختياري)</label>
             <select id="roleProfileSelect" class="form-select form-select-sm">
               <option value="">— بدون قالب —</option>
@@ -133,7 +133,7 @@
       </div>
     </div>
 
-    <div class="card mb-3" id="inviteSection">
+    <div class="card mb-3 d-none" id="inviteSection">
       <div class="card-body">
         <h5 class="card-title mb-3">ربط طالب/أستاذ من القائمة (اختياري — دعوة بالبريد)</h5>
         <p class="form-text small mb-2">يُنشئ حساباً مرتبطاً بالسجل. إن وُجد <strong>بريد</strong> في بيانات الطالب/الأستاذ يُرسل رابط تعيين كلمة المرور؛ وإن لم يوجد يُنشأ الحساب فقط ويمكنك لاحقاً تعيين كلمة المرور من القسم أعلاه.</p>
@@ -199,7 +199,7 @@
             <input type="search" id="usersFilter" class="form-control form-control-sm" placeholder="ابحث باسم المستخدم…" autocomplete="off" title="إن لم يظهر مستخدم بعد إضافته، امسح هذا الحقل — التصفية تخفي غير المطابقين">
           </div>
         </div>
-        <div id="usersAdminDiagnostics">
+        <div id="usersAdminDiagnostics" class="d-none">
         <div class="d-flex flex-wrap gap-2 mb-2">
           <button id="btnInviteCleanup" class="btn btn-sm btn-outline-secondary">تنظيف الدعوات القديمة</button>
           <button id="btnUsersValidationReport" class="btn btn-sm btn-outline-warning">فحص سلامة بيانات المستخدمين</button>
@@ -219,7 +219,7 @@
     </div>
     </div><!-- tabUsers -->
 
-    <div class="tab-pane fade" id="tabProfiles" role="tabpanel">
+    <div class="tab-pane fade d-none" id="tabProfiles" role="tabpanel">
       <div class="card mb-3">
         <div class="card-body">
           <h5 class="card-title">قوالب الأدوار الوظيفية</h5>
@@ -229,7 +229,7 @@
       </div>
     </div>
 
-    <div class="tab-pane fade" id="tabHandover" role="tabpanel">
+    <div class="tab-pane fade d-none" id="tabHandover" role="tabpanel">
       <div class="card mb-3">
         <div class="card-body">
           <h5 class="card-title">نقل قالب الدور والصلاحيات</h5>
@@ -1155,12 +1155,15 @@
       document.querySelectorAll('.btn-handover-from-user').forEach(btn=>{
         btn.style.display = (isPrivileged ? '' : 'none');
       });
-      document.getElementById('tab-handover-btn')?.closest('.nav-item')?.classList.toggle('d-none', !isPrivileged);
-      document.getElementById('tab-profiles-btn')?.closest('.nav-item')?.classList.toggle('d-none', !isPrivileged);
+      document.getElementById('tab-handover-item')?.classList.toggle('d-none', !isPrivileged);
+      document.getElementById('tab-profiles-item')?.classList.toggle('d-none', !isPrivileged);
+      document.getElementById('tabHandover')?.classList.toggle('d-none', !isPrivileged);
+      document.getElementById('tabProfiles')?.classList.toggle('d-none', !isPrivileged);
       document.getElementById('btnInviteCleanup')?.classList.toggle('d-none', !isAdminMain);
       document.getElementById('btnUsersValidationReport')?.classList.toggle('d-none', !isPrivileged);
       document.getElementById('btnUsersAuditLog')?.classList.toggle('d-none', !isPrivileged);
       document.getElementById('usersAdminDiagnostics')?.classList.toggle('d-none', !isPrivileged);
+      // قالب الدور في النموذج: مخفي لرئيس القسم؛ يظهر لباقي الأدوار الإدارية
       document.getElementById('roleProfileWrap')?.classList.toggle('d-none', isHead);
     }
 

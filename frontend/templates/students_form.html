@@ -28,20 +28,21 @@
               <a class="btn btn-outline-success btn-sm" id="stExportPathwayBulk" href="/students/pathway_progress/bulk_export">ملخص مسار Excel</a>
               <a class="btn btn-outline-danger btn-sm" id="stExportPdf" href="/students/export/pdf" target="_blank">⬇️ تصدير PDF (رسمي)</a>
             </div>
-            <form id="students-import-form" class="d-flex align-items-center" enctype="multipart/form-data" onsubmit="return false;">
-              <label class="form-label mb-0 me-2">📂 استيراد طلاب (Excel):</label>
-              <input class="form-control form-control-sm" style="max-width: 280px;" type="file" name="file" accept=".xlsx,.xls" />
-              <button type="button" class="btn btn-primary btn-sm ms-2" onclick="importStudents()">استيراد</button>
+            <form id="students-import-form" class="d-flex flex-wrap align-items-center gap-1" enctype="multipart/form-data">
+              <label class="form-label mb-0 me-1">📂 استيراد طلاب (Excel):</label>
+              <input class="form-control form-control-sm" style="max-width: 280px;" type="file" name="file" accept=".xlsx,.xls" aria-label="ملف استيراد الطلبة" />
+              <button type="button" class="btn btn-primary btn-sm" id="btnImportStudents">استيراد</button>
+              <a class="btn btn-outline-secondary btn-sm" href="/index/template/students" title="عمودان: student_id و student_name">تنزيل قالب</a>
             </form>
           </div>
-          <div id="import_msg" class="mt-2"></div>
+          <div id="import_msg" class="mt-2" role="status" aria-live="polite"></div>
         </div>
       </div>
 
       <!-- نموذج إضافة طالب -->
       <div class="card mb-3 chart-container" id="studentCreateCard">
         <div class="card-body">
-          <form id="studentForm" onsubmit="return false;">
+          <form id="studentForm">
             <div class="row g-2 align-items-end">
               <div class="col-md-3">
                 <label class="form-label">الرقم الدراسي</label>
@@ -1278,33 +1279,104 @@
 
   /* استيراد الطلبة من Excel */
   async function importStudents(){
-    if (STUDENTS_VIEW_ONLY) return;
-    const form = document.getElementById('students-import-form');
-    const fileInput = form.querySelector('input[type="file"]');
-    const msg = document.getElementById('import_msg');
-    msg.innerHTML = '';
-    if(!fileInput.files || !fileInput.files.length){
-      msg.innerHTML = '<div class="alert alert-warning p-1">الرجاء اختيار ملف Excel أولاً.</div>';
+    if (STUDENTS_VIEW_ONLY) {
+      const msgBlocked = document.getElementById('import_msg');
+      if (msgBlocked) {
+        msgBlocked.innerHTML = '<div class="alert alert-warning py-1 px-2 mb-0">عرض فقط — الاستيراد غير متاح لهذا الدور.</div>';
+      }
       return;
     }
+    const form = document.getElementById('students-import-form');
+    const fileInput = form && form.querySelector('input[type="file"]');
+    const msg = document.getElementById('import_msg');
+    const btn = document.getElementById('btnImportStudents')
+      || (form && form.querySelector('button[type="button"]'));
+    const setImportMsg = (html) => { if (msg) msg.innerHTML = html; };
+    setImportMsg('');
+    if (!fileInput || !fileInput.files || !fileInput.files.length) {
+      setImportMsg('<div class="alert alert-warning py-1 px-2 mb-0">الرجاء اختيار ملف Excel أولاً.</div>');
+      window.showToast?.('اختر ملف Excel أولاً', 'warning');
+      return;
+    }
+    const prevBtnHtml = btn ? btn.innerHTML : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = 'جاري الاستيراد…';
+    }
+    setImportMsg('<div class="alert alert-info py-1 px-2 mb-0">جاري استيراد الملف… يرجى الانتظار.</div>');
     try {
       const data = new FormData(form);
-      const res = await fetch('/students/import/excel', { method:'POST', body: data });
-      const j = await res.json();
-      if(res.ok){
+      const res = await fetch('/students/import/excel', {
+        method: 'POST',
+        body: data,
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      let j = {};
+      try { j = await res.json(); } catch (_e) { j = {}; }
+      if (res.ok) {
+        const n = Number(j.imported || 0);
         const boundMsg = (j.department_bound != null && j.department_bound > 0)
           ? ` وربط ${j.department_bound} بقسمك`
           : '';
-        window.showToast?.(`تم استيراد ${j.imported} سجل${boundMsg}`, 'success');
-        await loadStudents();
-        form.reset();
+        if (n <= 0) {
+          const warn = 'لم يُستورد أي صف — تحقق من أعمدة student_id و student_name والبيانات.';
+          setImportMsg(`<div class="alert alert-warning py-1 px-2 mb-0">${warn}</div>`);
+          window.showToast?.(warn, 'warning');
+        } else {
+          const okText = `تم استيراد ${n} سجل${boundMsg}.`;
+          setImportMsg(`<div class="alert alert-success py-1 px-2 mb-0">${okText}</div>`);
+          window.showToast?.(okText, 'success');
+          await loadStudents();
+          form.reset();
+        }
       } else {
-        window.showToast?.(j.message || 'فشل الاستيراد', 'danger');
+        const errText = j.message || ('فشل الاستيراد (رمز ' + res.status + ')');
+        setImportMsg(`<div class="alert alert-danger py-1 px-2 mb-0">${errText}</div>`);
+        window.showToast?.(errText, 'danger');
       }
     } catch (err) {
       console.error(err);
-      msg.innerHTML = '<div class="alert alert-danger p-1">خطأ في الاتصال بالخادم أثناء الاستيراد.</div>';
+      const errNet = 'خطأ في الاتصال بالخادم أثناء الاستيراد.';
+      setImportMsg(`<div class="alert alert-danger py-1 px-2 mb-0">${errNet}</div>`);
+      window.showToast?.(errNet, 'danger');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = prevBtnHtml || 'استيراد';
+      }
     }
+  }
+  window.importStudents = importStudents;
+
+  /* CSP في الإنتاج يمنع onclick/onsubmit المضمّنين — الربط عبر addEventListener فقط */
+  function wireStudentsImportUi() {
+    const importForm = document.getElementById('students-import-form');
+    if (importForm && !importForm.dataset.importWired) {
+      importForm.dataset.importWired = '1';
+      importForm.addEventListener('submit', (ev) => {
+        ev.preventDefault();
+        importStudents();
+      });
+    }
+    const importBtn = document.getElementById('btnImportStudents');
+    if (importBtn && !importBtn.dataset.importWired) {
+      importBtn.dataset.importWired = '1';
+      importBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        importStudents();
+      });
+    }
+    const studentCreateForm = document.getElementById('studentForm');
+    if (studentCreateForm && !studentCreateForm.dataset.submitWired) {
+      studentCreateForm.dataset.submitWired = '1';
+      studentCreateForm.addEventListener('submit', (ev) => ev.preventDefault());
+    }
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wireStudentsImportUi);
+  } else {
+    wireStudentsImportUi();
   }
   </script>
 

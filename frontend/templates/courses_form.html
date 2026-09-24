@@ -27,13 +27,14 @@
               <a class="btn btn-outline-danger btn-sm" href="/courses/export/pdf" target="_blank">⬇️ تصدير PDF</a>
               <button id="btnExportCSV" class="btn btn-outline-secondary btn-sm">تصدير CSV</button>
             </div>
-            <form id="courses-import-form" class="d-flex align-items-center" enctype="multipart/form-data" onsubmit="return false;">
-              <label class="form-label mb-0 me-2">📂 استيراد مقررات (Excel):</label>
-              <input class="form-control form-control-sm" style="max-width: 280px;" type="file" name="file" accept=".xlsx,.xls" />
-              <button type="button" class="btn btn-primary btn-sm ms-2" id="btnImportCourses">استيراد</button>
+            <form id="courses-import-form" class="d-flex flex-wrap align-items-center gap-1" enctype="multipart/form-data">
+              <label class="form-label mb-0 me-1">📂 استيراد مقررات (Excel):</label>
+              <input class="form-control form-control-sm" style="max-width: 280px;" type="file" name="file" accept=".xlsx,.xls" aria-label="ملف استيراد المقررات" />
+              <button type="button" class="btn btn-primary btn-sm" id="btnImportCourses">استيراد</button>
+              <a class="btn btn-outline-secondary btn-sm" href="/index/template/courses" title="أعمدة: course_name و course_code و units و category">تنزيل قالب</a>
             </form>
           </div>
-          <div id="import_msg" class="mt-2"></div>
+          <div id="import_msg" class="mt-2" role="status" aria-live="polite"></div>
         </div>
       </div>
 
@@ -211,19 +212,40 @@ function showAlert(elId, kind, text, timeoutMs){
 
 /* استيراد المقررات من Excel */
 async function importCourses(){
-  const form = document.getElementById('courses-import-form');
-  const fileInput = form.querySelector('input[type="file"]');
-  const msg = document.getElementById('import_msg');
-  msg.innerHTML = '';
-  if(!fileInput.files || !fileInput.files.length){
-    msg.innerHTML = '<div class="alert alert-warning p-1">الرجاء اختيار ملف Excel أولاً.</div>';
+  if (typeof IS_ADMIN !== 'undefined' && !IS_ADMIN) {
+    const msgBlocked = document.getElementById('import_msg');
+    if (msgBlocked) {
+      msgBlocked.innerHTML = '<div class="alert alert-warning py-1 px-2 mb-0">عرض فقط — الاستيراد غير متاح لهذا الدور.</div>';
+    }
     return;
   }
+  const form = document.getElementById('courses-import-form');
+  const fileInput = form && form.querySelector('input[type="file"]');
+  const msg = document.getElementById('import_msg');
+  const btn = document.getElementById('btnImportCourses');
+  const setImportMsg = (html) => { if (msg) msg.innerHTML = html; };
+  setImportMsg('');
+  if (!fileInput || !fileInput.files || !fileInput.files.length) {
+    setImportMsg('<div class="alert alert-warning py-1 px-2 mb-0">الرجاء اختيار ملف Excel أولاً.</div>');
+    window.showToast?.('اختر ملف Excel أولاً', 'warning');
+    return;
+  }
+  const prevBtnHtml = btn ? btn.innerHTML : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = 'جاري الاستيراد…';
+  }
+  setImportMsg('<div class="alert alert-info py-1 px-2 mb-0">جاري استيراد الملف… يرجى الانتظار.</div>');
   try {
     const data = new FormData(form);
-    const res = await fetch('/courses/import/excel', { method:'POST', body: data });
-    const j = await res.json().catch(()=>({}));
-    if(res.ok){
+    const res = await fetch('/courses/import/excel', {
+      method: 'POST',
+      body: data,
+      credentials: 'include',
+      cache: 'no-store',
+    });
+    const j = await res.json().catch(() => ({}));
+    if (res.ok) {
       const boundMsg = (j.department_bound != null && j.department_bound > 0)
         ? ` وربط ${j.department_bound} بقسمك`
         : '';
@@ -238,11 +260,10 @@ async function importCourses(){
       if (ignoredN) parts.push(`تُجاهل ${ignoredN}`);
       const summary = parts.length ? parts.join(' — ') : `تم معالجة ${j.imported ?? 0}`;
       const warn = updatedN > 0 || ignoredN > 0 || promotedN > 0;
-      window.showToast?.(
-        `تم الاستيراد${boundMsg}: ${summary}`,
-        warn ? 'warning' : 'success'
-      );
+      const okText = `تم الاستيراد${boundMsg}: ${summary}`;
+      window.showToast?.(okText, warn ? 'warning' : 'success');
       const lines = [];
+      lines.push(`<div class="mb-1">${okText}</div>`);
       if (promotedN > 0 && Array.isArray(j.promoted_items)) {
         lines.push('<strong>ترقية/ربط مقررات مشتركة (رمز لكل قسم):</strong>');
         j.promoted_items.slice(0, 8).forEach(x => {
@@ -267,19 +288,28 @@ async function importCourses(){
         });
         if (ignoredN > 5) lines.push('…');
       }
-      if (lines.length) {
-        msg.innerHTML = `<div class="alert alert-warning p-2 small">${lines.join('<br>')}</div>`;
-      }
+      const alertKind = warn ? 'warning' : 'success';
+      setImportMsg(`<div class="alert alert-${alertKind} p-2 small mb-0">${lines.join('<br>')}</div>`);
       await loadCourses();
       form.reset();
     } else {
-      window.showToast?.(j.message || 'فشل الاستيراد', 'danger');
+      const errText = j.message || ('فشل الاستيراد (رمز ' + res.status + ')');
+      setImportMsg(`<div class="alert alert-danger py-1 px-2 mb-0">${errText}</div>`);
+      window.showToast?.(errText, 'danger');
     }
   } catch (err) {
     console.error(err);
-    msg.innerHTML = '<div class="alert alert-danger p-1">خطأ في الاتصال بالخادم أثناء الاستيراد.</div>';
+    const errNet = 'خطأ في الاتصال بالخادم أثناء الاستيراد.';
+    setImportMsg(`<div class="alert alert-danger py-1 px-2 mb-0">${errNet}</div>`);
+    window.showToast?.(errNet, 'danger');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = prevBtnHtml || 'استيراد';
+    }
   }
 }
+window.importCourses = importCourses;
 
 /* تحميل المقررات */
 async function loadCourses(){
@@ -835,7 +865,22 @@ window.addEventListener('load', async ()=>{
     const importForm = document.getElementById('courses-import-form');
     if(importForm) importForm.style.display = 'none';
   } else {
-    document.getElementById('btnImportCourses')?.addEventListener('click', () => { importCourses(); });
+    const importForm = document.getElementById('courses-import-form');
+    if (importForm && !importForm.dataset.importWired) {
+      importForm.dataset.importWired = '1';
+      importForm.addEventListener('submit', (ev) => {
+        ev.preventDefault();
+        importCourses();
+      });
+    }
+    const importBtn = document.getElementById('btnImportCourses');
+    if (importBtn && !importBtn.dataset.importWired) {
+      importBtn.dataset.importWired = '1';
+      importBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        importCourses();
+      });
+    }
     const bulk = document.getElementById('coursesBulkToolbar');
     if (bulk) bulk.classList.remove('d-none');
     document.getElementById('btnSelectFiltered')?.addEventListener('click', ()=>{
