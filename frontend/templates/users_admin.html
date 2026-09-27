@@ -85,14 +85,14 @@
               <option value="">— بدون قالب —</option>
             </select>
           </div>
-          <div class="col-md-4">
-            <label class="form-label">الرقم الدراسي (لطالب فقط)</label>
-            <input id="studentIdInput" list="studentIdOptions" class="form-control form-control-sm">
+          <div class="col-md-4 d-none" id="studentIdWrap">
+            <label class="form-label" for="studentIdInput">الرقم الدراسي</label>
+            <input id="studentIdInput" list="studentIdOptions" class="form-control form-control-sm" autocomplete="off">
             <datalist id="studentIdOptions"></datalist>
           </div>
-          <div class="col-md-4">
-            <label class="form-label" id="instructorIdLabel">رقم عضو هيئة التدريس (مطلوب للأستاذ ورئيس القسم)</label>
-            <input id="instructorIdInput" list="instructorIdOptions" class="form-control form-control-sm" title="نفس السجل في «أعضاء هيئة التدريس» حتى يعمل وضع الأستاذ و«مقرراتي»">
+          <div class="col-md-4 d-none" id="instructorIdWrap">
+            <label class="form-label" id="instructorIdLabel" for="instructorIdInput">رقم عضو هيئة التدريس</label>
+            <input id="instructorIdInput" list="instructorIdOptions" class="form-control form-control-sm" title="نفس السجل في «أعضاء هيئة التدريس» حتى يعمل وضع الأستاذ و«مقرراتي»" autocomplete="off">
             <datalist id="instructorIdOptions"></datalist>
           </div>
           <div class="col-md-4 d-none" id="managedDeptWrap">
@@ -980,6 +980,31 @@
       }
     }
 
+    function syncRoleLinkFields(){
+      const role = document.getElementById('roleSelect')?.value || '';
+      const stuWrap = document.getElementById('studentIdWrap');
+      const instWrap = document.getElementById('instructorIdWrap');
+      const stuIn = document.getElementById('studentIdInput');
+      const instIn = document.getElementById('instructorIdInput');
+      const showStudent = role === 'student';
+      const showInstructor = ['instructor', 'head_of_department', 'college_dean', 'academic_vice_dean'].includes(role);
+      if (stuWrap) stuWrap.classList.toggle('d-none', !showStudent);
+      if (instWrap) instWrap.classList.toggle('d-none', !showInstructor);
+      // لا تُرسل قيمة الربط غير المناسبة مع الحفظ
+      if (!showStudent && stuIn) stuIn.value = '';
+      if (!showInstructor && instIn) instIn.value = '';
+      const lab = document.getElementById('instructorIdLabel');
+      if (lab) {
+        if (role === 'college_dean' || role === 'academic_vice_dean') {
+          lab.textContent = 'رقم عضو هيئة التدريس (مطلوب لعميد/وكيل الكلية)';
+        } else if (role === 'head_of_department') {
+          lab.textContent = 'رقم عضو هيئة التدريس (مطلوب لرئيس القسم)';
+        } else {
+          lab.textContent = 'رقم عضو هيئة التدريس (مطلوب للأستاذ)';
+        }
+      }
+    }
+
     function syncRoleHeadHints(){
       const role = document.getElementById('roleSelect')?.value || '';
       const actorIsHead = CURRENT_ROLE === 'head_of_department';
@@ -989,6 +1014,7 @@
       if(leadHint) leadHint.classList.toggle('d-none', role !== 'college_dean' && role !== 'academic_vice_dean');
       const wrap = document.getElementById('managedDeptWrap');
       if(wrap) wrap.classList.toggle('d-none', actorIsHead || role !== 'head_of_department');
+      syncRoleLinkFields();
       syncInviteManagedDept();
     }
 
@@ -1165,6 +1191,7 @@
       document.getElementById('usersAdminDiagnostics')?.classList.toggle('d-none', !isPrivileged);
       // قالب الدور في النموذج: مخفي لرئيس القسم؛ يظهر لباقي الأدوار الإدارية
       document.getElementById('roleProfileWrap')?.classList.toggle('d-none', isHead);
+      syncRoleLinkFields();
     }
 
     async function loadRoleProfiles(){
