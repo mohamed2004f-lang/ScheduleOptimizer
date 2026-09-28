@@ -108,20 +108,29 @@ _SUPERVISOR_ALLOWED_QUALITY_PREFIXES = (
     "/academic_quality/supervisor/quality-hub",
     "/academic_quality/glossary",
     "/academic_quality/supervisor_report",
+    "/academic_quality/supervisor_report_page",
 )
+
+
+def _supervisor_quality_path_allowed(path: str) -> bool:
+    """مسارات ضمان الجودة المسموحة في وضع المشرف (تعبئة + تقرير إرشاد)."""
+    p = (path or "/").split("?")[0].rstrip("/") or "/"
+    for allowed in _SUPERVISOR_ALLOWED_QUALITY_PREFIXES:
+        if p == allowed or p.startswith(allowed + "/"):
+            return True
+    return False
 
 
 @app.before_request
 def _supervisor_quality_admin_guard():
-    """مشرف في وضع الإشراف — يُسمح فقط بتعبئة الاستبيانات من ضمان الجودة."""
+    """مشرف في وضع الإشراف — يُسمح فقط بتعبئة الاستبيانات وتقرير الإرشاد من ضمان الجودة."""
     if not supervisor_quality_admin_blocked():
         return None
     path = (request.path or "").split("?")[0].rstrip("/") or "/"
     if not path.startswith("/academic_quality"):
         return None
-    for allowed in _SUPERVISOR_ALLOWED_QUALITY_PREFIXES:
-        if path == allowed or path.startswith(allowed + "/"):
-            return None
+    if _supervisor_quality_path_allowed(path):
+        return None
     wants_json = request.is_json or "application/json" in (request.headers.get("Accept") or "")
     if wants_json or "/api/" in path:
         return jsonify({"status": "error", "message": "غير مصرح — تعبئة الاستبيانات فقط"}), 403
@@ -257,6 +266,9 @@ app.register_blueprint(students_bp, url_prefix="/students")
 app.register_blueprint(student_portal_bp, url_prefix="/students")
 app.register_blueprint(courses_bp, url_prefix="/courses")
 app.register_blueprint(grades_bp, url_prefix="/grades")
+from backend.services.transcript_corrections import transcript_corrections_bp
+
+app.register_blueprint(transcript_corrections_bp, url_prefix="/grades")
 app.register_blueprint(course_delivery_bp, url_prefix="/course_delivery")
 app.register_blueprint(course_pages_bp, url_prefix="/course_pages")
 app.register_blueprint(schedule_bp, url_prefix="/schedule")
@@ -1291,11 +1303,38 @@ def transcript_page():
         except Exception:
             initial_transcript = None
 
+    can_manage_transcript = False
+    can_propose_transcript = False
+    try:
+        from backend.core.auth import compute_capabilities
+
+        is_sup_flag = int(session.get("is_supervisor") or 0)
+        active_mode = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower() or None
+        caps = compute_capabilities(role, is_sup_flag, active_mode)
+        can_manage_transcript = bool(caps.get("can_manage_transcript_admin"))
+        can_propose_transcript = bool(
+            current_supervisor_effective() and not can_manage_transcript
+        )
+    except Exception:
+        can_manage_transcript = role in (
+            "admin",
+            "admin_main",
+            "system_admin",
+            "college_dean",
+            "academic_vice_dean",
+            "head_of_department",
+        ) and not current_supervisor_effective()
+        can_propose_transcript = bool(
+            current_supervisor_effective() and not can_manage_transcript
+        )
+
     return render_template(
         "transcript.html",
         students=students_list,
         selected_student_id=selected,
         initial_transcript=initial_transcript,
+        can_manage_transcript=can_manage_transcript,
+        can_propose_transcript=can_propose_transcript,
     )
 
 

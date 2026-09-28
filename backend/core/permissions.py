@@ -496,6 +496,7 @@ def apply_supervisor_portal_caps(caps: dict) -> dict:
     caps["nav_instructor_portal_menu"] = False
     caps["nav_instructor_quality_hub"] = False
     caps["nav_my_assigned_courses"] = False
+    caps["can_manage_transcript_admin"] = False
     for key in SUPERVISOR_PORTAL_QUALITY_DENY_KEYS:
         caps[key] = False
     return caps

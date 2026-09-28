@@ -56,10 +56,62 @@ def test_college_dean_supervisor_mode_portal_caps():
 
 
 def test_apply_supervisor_portal_caps_denies_quality_admin():
-    base = {"nav_academic_quality_dashboard": True, "nav_surveys_results": True}
+    base = {
+        "nav_academic_quality_dashboard": True,
+        "nav_surveys_results": True,
+        "can_manage_transcript_admin": True,
+    }
     out = apply_supervisor_portal_caps(base)
     assert out.get("nav_academic_quality_dashboard") is False
     assert out.get("nav_supervisor_portal_menu") is True
+    assert out.get("can_manage_transcript_admin") is False
+
+
+def test_supervisor_quality_guard_allows_report_blocks_outcomes_map(app, db_conn):
+    """تقرير الإرشاد مسموح؛ هوية الكلية (outcomes-map) تُحوَّل لمركز الاستبيانات."""
+    cur = db_conn.cursor()
+    cur.execute("UPDATE users SET is_supervisor = 1 WHERE username = 'inst-test'")
+    db_conn.commit()
+    with app.test_client() as c:
+        login = c.post(
+            "/auth/login",
+            json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+        )
+        assert login.status_code == 200
+        mode = c.post("/auth/active_mode", json={"mode": "supervisor"})
+        assert mode.status_code == 200, mode.get_data(as_text=True)
+
+        report = c.get("/academic_quality/supervisor_report_page", follow_redirects=False)
+        assert report.status_code == 200, report.get_data(as_text=True)[:300]
+
+        via_alias = c.get("/supervisor_quality_report_page", follow_redirects=True)
+        assert via_alias.status_code == 200
+
+        blocked = c.get("/academic_quality/ilo/outcomes-map", follow_redirects=False)
+        assert blocked.status_code in (301, 302)
+        loc = (blocked.headers.get("Location") or "")
+        assert "quality-hub" in loc
+
+
+def test_supervisor_transcript_page_omits_import_ui(app, db_conn):
+    """صفحة الكشف للمشرف لا تتضمن واجهة استيراد الإدارة في HTML الأولي."""
+    cur = db_conn.cursor()
+    cur.execute("UPDATE users SET is_supervisor = 1 WHERE username = 'inst-test'")
+    db_conn.commit()
+    with app.test_client() as c:
+        assert c.post(
+            "/auth/login",
+            json={"username": "inst-test", "password": "TestP@ssw0rd!"},
+        ).status_code == 200
+        assert c.post("/auth/active_mode", json={"mode": "supervisor"}).status_code == 200
+        page = c.get("/transcript_page")
+        assert page.status_code == 200
+        html = page.get_data(as_text=True)
+        assert "استيراد كشف درجات لطالب محدد" not in html
+        assert "استيراد نتيجة فصل كاملة" not in html
+        assert 'id="btnImportTranscript"' not in html
+        assert 'id="importFile"' not in html
+        assert "btnAddGradeRow" in html
 
 
 def test_supervisor_portal_ui_allowed_for_supervisor_role(app):

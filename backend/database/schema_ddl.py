@@ -164,6 +164,9 @@ TABLES_SCHEMA = {
             graduation_plan TEXT DEFAULT '',
             pathway_stage TEXT NOT NULL DEFAULT 'dept_admitted',
             join_term TEXT DEFAULT '',
+            transfer_kind TEXT DEFAULT '',
+            transfer_from_department_id INTEGER,
+            transfer_from_label TEXT DEFAULT '',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (department_id) REFERENCES departments(id)
@@ -251,6 +254,7 @@ TABLES_SCHEMA = {
             course_code TEXT DEFAULT '',
             units INTEGER DEFAULT 0,
             grade REAL CHECK (grade IS NULL OR (grade >= 0 AND grade <= 100)),
+            is_equated INTEGER NOT NULL DEFAULT 0 CHECK (is_equated IN (0, 1)),
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (student_id, semester, course_name),
@@ -806,6 +810,25 @@ TABLES_SCHEMA = {
             PRIMARY KEY (student_id, instructor_id),
             FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE,
             FOREIGN KEY (instructor_id) REFERENCES instructors(id) ON DELETE CASCADE
+        )
+    """,
+
+    'transcript_correction_requests': """
+        CREATE TABLE IF NOT EXISTS transcript_correction_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT NOT NULL,
+            semester TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'pending',
+            reason TEXT NOT NULL DEFAULT '',
+            hod_note TEXT NOT NULL DEFAULT '',
+            submitted_by TEXT NOT NULL DEFAULT '',
+            instructor_id INTEGER,
+            department_id INTEGER,
+            created_at TEXT,
+            submitted_at TEXT,
+            reviewed_at TEXT,
+            reviewed_by TEXT NOT NULL DEFAULT ''
         )
     """,
 
@@ -1688,6 +1711,9 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_regs_program_course ON registrations(program_course_id)",
     "CREATE INDEX IF NOT EXISTS idx_regs_teaching_group ON registrations(teaching_group_id)",
     "CREATE INDEX IF NOT EXISTS idx_student_supervisor_instructor ON student_supervisor(instructor_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tx_corr_status_dept ON transcript_correction_requests(status, department_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tx_corr_student ON transcript_correction_requests(student_id, semester)",
+    "CREATE INDEX IF NOT EXISTS idx_tx_corr_instructor ON transcript_correction_requests(instructor_id, status)",
     "CREATE INDEX IF NOT EXISTS idx_reg_requests_status_created ON registration_requests(status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_reg_requests_student ON registration_requests(student_id)",
     "CREATE INDEX IF NOT EXISTS idx_reg_changes_student_time ON registration_changes_log(student_id, action_time)",

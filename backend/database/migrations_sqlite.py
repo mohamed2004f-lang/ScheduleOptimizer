@@ -66,6 +66,9 @@ def ensure_sqlite_tables(db_file=None):
                 ("graduation_plan", "ALTER TABLE students ADD COLUMN graduation_plan TEXT DEFAULT ''"),
                 ("pathway_stage", "ALTER TABLE students ADD COLUMN pathway_stage TEXT NOT NULL DEFAULT 'dept_admitted'"),
                 ("join_term", "ALTER TABLE students ADD COLUMN join_term TEXT DEFAULT ''"),
+                ("transfer_kind", "ALTER TABLE students ADD COLUMN transfer_kind TEXT DEFAULT ''"),
+                ("transfer_from_department_id", "ALTER TABLE students ADD COLUMN transfer_from_department_id INTEGER"),
+                ("transfer_from_label", "ALTER TABLE students ADD COLUMN transfer_from_label TEXT DEFAULT ''"),
             ]
             for col, stmt in migrations:
                 if col not in cols:
@@ -336,6 +339,13 @@ def ensure_sqlite_tables(db_file=None):
         if "course_master_id" not in gcols:
             try:
                 cur.execute("ALTER TABLE grades ADD COLUMN course_master_id INTEGER")
+            except Exception:
+                pass
+        if "is_equated" not in gcols:
+            try:
+                cur.execute(
+                    "ALTER TABLE grades ADD COLUMN is_equated INTEGER NOT NULL DEFAULT 0"
+                )
             except Exception:
                 pass
         try:

@@ -155,6 +155,9 @@ CREATE TABLE IF NOT EXISTS students (
     graduation_plan TEXT DEFAULT '',
     pathway_stage TEXT NOT NULL DEFAULT 'dept_admitted',
     join_term TEXT DEFAULT '',
+    transfer_kind TEXT DEFAULT '',
+    transfer_from_department_id INTEGER,
+    transfer_from_label TEXT DEFAULT '',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -182,6 +185,7 @@ CREATE TABLE IF NOT EXISTS grades (
     course_code TEXT DEFAULT '',
     units INTEGER DEFAULT 0,
     grade REAL CHECK (grade IS NULL OR (grade >= 0 AND grade <= 100)),
+    is_equated INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (student_id, semester, course_name)

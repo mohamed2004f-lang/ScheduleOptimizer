@@ -129,13 +129,18 @@
       });
       const SUPERVISOR_FLAT_WRAP_IDS = [
         'navSupervisorPortalWrap', 'navSupervisorSurveysWrap',
-        'navSupCollegeStoryWrap', 'navSupQualityReportWrap', 'navSupTranscriptWrap',
+        'navSupQualityReportWrap', 'navSupTranscriptWrap',
         'navSupPerformanceWrap', 'navSupSummaryPdfWrap', 'navSupSurveysFullWrap',
       ];
       SUPERVISOR_FLAT_WRAP_IDS.forEach(id => {
         const el = document.getElementById(id);
         if (el) { el.style.display = ''; el.classList.remove('d-none'); }
       });
+      const collegeStory = document.getElementById('navSupCollegeStoryWrap');
+      if (collegeStory) {
+        collegeStory.style.display = 'none';
+        collegeStory.classList.add('d-none');
+      }
       const navBar = document.querySelector('.app-navbar');
       if (navBar) {
         navBar.classList.add('nav-shell-supervisor');
@@ -326,12 +331,17 @@
       const wrapSupSurveys = document.getElementById('navSupervisorSurveysWrap');
       if (wrapSupSurveys) wrapSupSurveys.style.display = showSupervisorPortalMenu ? '' : 'none';
       [
-        'navSupCollegeStoryWrap', 'navSupQualityReportWrap', 'navSupTranscriptWrap',
+        'navSupQualityReportWrap', 'navSupTranscriptWrap',
         'navSupPerformanceWrap', 'navSupSummaryPdfWrap', 'navSupSurveysFullWrap',
       ].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = showSupervisorPortalMenu ? '' : 'none';
       });
+      const wrapSupCollege = document.getElementById('navSupCollegeStoryWrap');
+      if (wrapSupCollege) {
+        wrapSupCollege.style.display = 'none';
+        wrapSupCollege.classList.add('d-none');
+      }
       const wrapSupMore = document.getElementById('navSupervisorMoreWrap');
       if (wrapSupMore) { wrapSupMore.style.display = 'none'; wrapSupMore.classList.add('d-none'); }
       const wrapStudentAffairs = document.getElementById('navStudentAffairsWrap');
@@ -853,12 +863,17 @@
         if (showSupervisorPortalMenu || supervisorSlimNav) {
           [
             'navSupervisorPortalWrap', 'navSupervisorSurveysWrap',
-            'navSupCollegeStoryWrap', 'navSupQualityReportWrap', 'navSupTranscriptWrap',
+            'navSupQualityReportWrap', 'navSupTranscriptWrap',
             'navSupPerformanceWrap', 'navSupSummaryPdfWrap', 'navSupSurveysFullWrap',
           ].forEach(id => {
             const el = document.getElementById(id);
             if (el) { el.style.removeProperty('display'); el.classList.remove('d-none'); }
           });
+          const hideCollege = document.getElementById('navSupCollegeStoryWrap');
+          if (hideCollege) {
+            hideCollege.style.display = 'none';
+            hideCollege.classList.add('d-none');
+          }
           enforceSupervisorNavShell();
           if (showSupervisorPortalMenu || showSupervisorPortal) {
             fetch('/supervisors/quality_context', { credentials: 'include', cache: 'no-store' })

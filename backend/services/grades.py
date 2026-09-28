@@ -1782,6 +1782,201 @@ def validate_grade_value(g):
     return True, v
 
 
+def apply_grades_batch(
+    conn,
+    sid: str,
+    semester: str,
+    grades: list,
+    changed_by: str,
+    *,
+    is_equated: bool = False,
+    transfer: dict | None = None,
+) -> int:
+    """
+    تطبيق قائمة درجات على جدول grades مع تدقيق grade_audit.
+    يُستخدم من الحفظ المباشر واعتماد طلبات المشرف.
+    يُرجع عدد الصفوف المُعالجة.
+    إن is_equated=True تُوسم المقررات كمعادلة ويُحدَّث مصدر انتقال الطالب عند توفره.
+    """
+    cur = conn.cursor()
+    cols = fetch_table_columns(conn, "grades")
+    has_equated = "is_equated" in cols
+    equated_flag = 1 if is_equated else None  # None = لا تغيّر العلم إن لم يُطلب وسم معادلة
+    count = 0
+    for g in grades or []:
+        course = (g.get("course_name") or "").strip()
+        course_code_in = (g.get("course_code") or "").strip()
+        resolved = _resolve_catalog_course(cur, course_name=course, course_code=course_code_in)
+        course = resolved["course_name"]
+        new_grade_raw = g.get("grade", None)
+        ok, val_or_msg = validate_grade_value(new_grade_raw)
+        if not ok:
+            raise ValueError(f"القيمة للمقرر {course} غير صحيحة: {val_or_msg}")
+        new_grade = val_or_msg
+
+        # وسم المقرر من الحمولة إن وُجد، وإلا من مستوى الفصل
+        row_equated = g.get("is_equated", None)
+        if row_equated is None:
+            set_equated = equated_flag
+        else:
+            set_equated = 1 if row_equated in (True, 1, "1", "true") else 0
+
+        old = cur.execute(
+            "SELECT grade FROM grades WHERE student_id = ? AND semester = ? AND course_name = ?",
+            (sid, semester, course),
+        ).fetchone()
+        old_grade = old[0] if old else None
+
+        try:
+            cur.execute(
+                "INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    sid,
+                    semester,
+                    course,
+                    old_grade,
+                    (float(new_grade) if new_grade is not None else None),
+                    changed_by,
+                    datetime.datetime.utcnow().isoformat(),
+                ),
+            )
+        except Exception:
+            # بيئات اختبار قديمة بلا جدول grade_audit
+            pass
+
+        gval = float(new_grade) if new_grade is not None else None
+        uunits = int(resolved["units"] or 0)
+        ccd = resolved["course_code"]
+        now_ts = datetime.datetime.utcnow().isoformat()
+        if has_equated and set_equated is not None:
+            cur.execute(
+                """
+                UPDATE grades SET course_code = ?, units = ?, grade = ?, is_equated = ?, updated_at = ?
+                WHERE student_id = ? AND semester = ? AND course_name = ?
+                """,
+                (ccd, uunits, gval, int(set_equated), now_ts, sid, semester, course),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE grades SET course_code = ?, units = ?, grade = ?, updated_at = ?
+                WHERE student_id = ? AND semester = ? AND course_name = ?
+                """,
+                (ccd, uunits, gval, now_ts, sid, semester, course),
+            )
+        rc = getattr(cur, "rowcount", -1) or 0
+        if rc == 0:
+            if has_equated:
+                cur.execute(
+                    """
+                    INSERT INTO grades (student_id, semester, course_name, course_code, units, grade, is_equated, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (sid, semester, course, ccd, uunits, gval, int(set_equated or 0), now_ts),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO grades (student_id, semester, course_name, course_code, units, grade, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (sid, semester, course, ccd, uunits, gval, now_ts),
+                )
+        count += 1
+
+    if is_equated and transfer:
+        _apply_student_transfer_meta(conn, sid, transfer)
+    return count
+
+
+def _apply_student_transfer_meta(conn, student_id: str, transfer: dict) -> None:
+    """تحديث وسم انتقال الطالب (داخلي/خارجي) عند حفظ فصل معادلة."""
+    cols = fetch_table_columns(conn, "students")
+    if "transfer_kind" not in cols:
+        return
+    kind = str((transfer or {}).get("kind") or "").strip().lower()
+    if kind not in ("internal", "external"):
+        return
+    label = str((transfer or {}).get("label") or "").strip()
+    dept_id = transfer.get("department_id")
+    dep_i = None
+    try:
+        if dept_id not in (None, ""):
+            dep_i = int(dept_id)
+    except (TypeError, ValueError):
+        dep_i = None
+    if kind == "internal" and dep_i is not None and not label:
+        row = conn.cursor().execute(
+            "SELECT COALESCE(name_ar, code, '') FROM departments WHERE id = ? LIMIT 1",
+            (dep_i,),
+        ).fetchone()
+        if row:
+            label = (row[0] or "").strip()
+    if kind == "external" and not label:
+        raise ValueError("حدّد الجهة المنتقل منها (معادلة خارجية)")
+    if kind == "internal" and dep_i is None:
+        raise ValueError("اختر القسم المنتقل منه (معادلة داخلية)")
+    sets = ["transfer_kind = ?", "transfer_from_label = ?"]
+    params: list = [kind, label]
+    if "transfer_from_department_id" in cols:
+        sets.append("transfer_from_department_id = ?")
+        params.append(dep_i if kind == "internal" else None)
+    if "updated_at" in cols:
+        sets.append("updated_at = ?")
+        params.append(datetime.datetime.utcnow().isoformat())
+    params.append(student_id)
+    conn.cursor().execute(
+        f"UPDATE students SET {', '.join(sets)} WHERE student_id = ?",
+        tuple(params),
+    )
+
+
+def _student_transfer_payload(conn, student_id: str) -> dict:
+    cols = fetch_table_columns(conn, "students")
+    if "transfer_kind" not in cols:
+        return {"kind": "", "department_id": None, "label": "", "badge": ""}
+    sel = "SELECT COALESCE(transfer_kind,'') AS transfer_kind"
+    if "transfer_from_department_id" in cols:
+        sel += ", transfer_from_department_id"
+    if "transfer_from_label" in cols:
+        sel += ", COALESCE(transfer_from_label,'') AS transfer_from_label"
+    sel += " FROM students WHERE student_id = ? LIMIT 1"
+    row = conn.cursor().execute(sel, (student_id,)).fetchone()
+    if not row:
+        return {"kind": "", "department_id": None, "label": "", "badge": ""}
+    kind = (row["transfer_kind"] if hasattr(row, "keys") else row[0] or "") or ""
+    kind = str(kind).strip().lower()
+    dep_id = None
+    label = ""
+    if hasattr(row, "keys"):
+        if "transfer_from_department_id" in row.keys():
+            dep_id = row["transfer_from_department_id"]
+        if "transfer_from_label" in row.keys():
+            label = (row["transfer_from_label"] or "").strip()
+    if kind == "internal" and not label and dep_id not in (None, ""):
+        try:
+            drow = conn.cursor().execute(
+                "SELECT COALESCE(name_ar, code, '') FROM departments WHERE id = ? LIMIT 1",
+                (int(dep_id),),
+            ).fetchone()
+            if drow:
+                label = (drow[0] or "").strip()
+        except (TypeError, ValueError):
+            pass
+    badge = ""
+    if kind == "internal" and label:
+        badge = f"منتقل — من قسم {label}"
+    elif kind == "external" and label:
+        badge = f"منتقل — من {label}"
+    elif kind in ("internal", "external"):
+        badge = "منتقل — لديه معادلة"
+    try:
+        dep_out = int(dep_id) if dep_id not in (None, "") else None
+    except (TypeError, ValueError):
+        dep_out = None
+    return {"kind": kind, "department_id": dep_out, "label": label, "badge": badge}
+
+
 @grades_bp.route("/save", methods=["POST"])
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def save_grades():
@@ -1790,11 +1985,12 @@ def save_grades():
     semester = data.get("semester")
     grades = data.get("grades", [])
     reason_raw = data.get("reason")
+    is_equated = bool(data.get("is_equated_semester") or data.get("is_equated"))
+    transfer = data.get("transfer") if isinstance(data.get("transfer"), dict) else None
     if not sid or not semester:
         return jsonify({"status": "error", "message": "student_id و semester مطلوبة"}), 400
 
     with get_connection() as conn:
-        cur = conn.cursor()
         try:
             _assert_transcript_edit_student_scope(conn, str(sid).strip())
             reason = _require_post_publish_reason(
@@ -1804,63 +2000,26 @@ def save_grades():
                 reason=reason,
                 kind="post_publish" if reason else "transcript",
             )
-            for g in grades:
-                course = (g.get("course_name") or "").strip()
-                course_code_in = (g.get("course_code") or "").strip()
-                resolved = _resolve_catalog_course(cur, course_name=course, course_code=course_code_in)
-                course = resolved["course_name"]
-                new_grade_raw = g.get("grade", None)
-                ok, val_or_msg = validate_grade_value(new_grade_raw)
-                if not ok:
-                    raise ValueError(f"القيمة للمقرر {course} غير صحيحة: {val_or_msg}")
-                new_grade = val_or_msg
-
-                old = cur.execute(
-                    "SELECT grade FROM grades WHERE student_id = ? AND semester = ? AND course_name = ?",
-                    (sid, semester, course)
-                ).fetchone()
-                old_grade = old[0] if old else None
-
-                cur.execute(
-                    "INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (sid, semester, course, old_grade, (float(new_grade) if new_grade is not None else None),
-                     changed_by, datetime.datetime.utcnow().isoformat())
-                )
-
-                gval = float(new_grade) if new_grade is not None else None
-                uunits = int(resolved["units"] or 0)
-                ccd = resolved["course_code"]
-                now_ts = datetime.datetime.utcnow().isoformat()
-                # تحديث ثم إدراج: يتجنب فشل PostgreSQL عند غياب قيد UNIQUE يطابق ON CONFLICT
-                cur.execute(
-                    """
-                    UPDATE grades SET course_code = ?, units = ?, grade = ?, updated_at = ?
-                    WHERE student_id = ? AND semester = ? AND course_name = ?
-                    """,
-                    (ccd, uunits, gval, now_ts, sid, semester, course),
-                )
-                rc = getattr(cur, "rowcount", -1) or 0
-                if rc == 0:
-                    cur.execute(
-                        """
-                        INSERT INTO grades (student_id, semester, course_name, course_code, units, grade, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (sid, semester, course, ccd, uunits, gval, now_ts),
-                    )
+            n = apply_grades_batch(
+                conn,
+                str(sid).strip(),
+                str(semester).strip(),
+                grades,
+                changed_by,
+                is_equated=is_equated,
+                transfer=transfer,
+            )
             conn.commit()
-            # تسجيل النشاط (عدد الدرجات التي تم تعديلها)
             try:
                 log_activity(
                     action="save_grades",
-                    details=f"student_id={sid}, semester={semester}, count={len(grades)}",
+                    details=f"student_id={sid}, semester={semester}, count={n}, equated={int(is_equated)}",
                 )
             except Exception:
                 pass
             return jsonify({"status": "ok", "message": "تم حفظ الدرجات وتسجيل التعديلات"}), 200
         except ValueError as e:
             conn.rollback()
-            # أخطاء التحقق (مقرر غير موجود في الدليل، عدم تطابق الاسم/الرمز، درجة غير رقمية، …)
             return jsonify({"status": "error", "message": str(e)}), 400
         except Exception as e:
             conn.rollback()
@@ -1874,6 +2033,35 @@ def save_grades():
             except Exception:
                 pass
             return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@grades_bp.route("/transfer_meta", methods=["GET"])
+@login_required
+def transfer_meta():
+    """أقسام الكلية لاختيار مصدر المعادلة الداخلية."""
+    with get_connection() as conn:
+        cols = fetch_table_columns(conn, "departments")
+        where = ""
+        if "is_active" in cols:
+            where = " WHERE COALESCE(is_active, 1) = 1"
+        rows = conn.cursor().execute(
+            f"""
+            SELECT id, COALESCE(code,'') AS code, COALESCE(name_ar,'') AS name_ar
+            FROM departments
+            {where}
+            ORDER BY name_ar, code, id
+            """
+        ).fetchall()
+    items = []
+    for r in rows or []:
+        items.append(
+            {
+                "id": int(r[0]),
+                "code": (r[1] or "").strip(),
+                "name_ar": (r[2] or "").strip(),
+            }
+        )
+    return jsonify({"status": "ok", "departments": items}), 200
 
 @grades_bp.route("/template/transcript", methods=["GET"])
 @login_required
@@ -2505,15 +2693,30 @@ def _load_transcript_data(student_id: str):
             except (KeyError, IndexError, TypeError):
                 pass
 
-        grade_rows = cur.execute(
-            """
-            SELECT semester, course_name, course_code, units, grade
-            FROM grades
-            WHERE student_id = ?
-            ORDER BY semester, course_name
-            """,
-            (student_id,),
-        ).fetchall()
+        grade_cols = fetch_table_columns(conn, "grades")
+        has_equated_col = "is_equated" in grade_cols
+        if has_equated_col:
+            grade_rows = cur.execute(
+                """
+                SELECT semester, course_name, course_code, units, grade,
+                       COALESCE(is_equated, 0) AS is_equated
+                FROM grades
+                WHERE student_id = ?
+                ORDER BY semester, course_name
+                """,
+                (student_id,),
+            ).fetchall()
+        else:
+            grade_rows = cur.execute(
+                """
+                SELECT semester, course_name, course_code, units, grade
+                FROM grades
+                WHERE student_id = ?
+                ORDER BY semester, course_name
+                """,
+                (student_id,),
+            ).fetchall()
+        transfer_info = _student_transfer_payload(conn, student_id)
 
         # حالة المقررات الاختيارية بعد 100 وحدة
         try:
@@ -2543,6 +2746,7 @@ def _load_transcript_data(student_id: str):
     transcript: OrderedDict = OrderedDict()
     gpa_by_semester = defaultdict(list)
     best_map = {}
+    equated_semesters: set[str] = set()
 
     for row in grade_rows:
         sem = row["semester"] or ""
@@ -2550,6 +2754,14 @@ def _load_transcript_data(student_id: str):
         course_code = row["course_code"] or ""
         units = row["units"] or 0
         grade = row["grade"]
+        is_eq = False
+        try:
+            if has_equated_col:
+                is_eq = bool(int(row["is_equated"] or 0))
+        except (KeyError, TypeError, ValueError):
+            is_eq = False
+        if is_eq:
+            equated_semesters.add(sem)
 
         transcript.setdefault(sem, []).append(
             {
@@ -2557,6 +2769,7 @@ def _load_transcript_data(student_id: str):
                 "course_code": course_code,
                 "units": units,
                 "grade": grade,
+                "is_equated": is_eq,
             }
         )
 
@@ -2646,6 +2859,8 @@ def _load_transcript_data(student_id: str):
         "graduation_plan_label": graduation_plan_label,
         "join_term": join_term,
         "join_year": join_year,
+        "transfer": transfer_info,
+        "equated_semesters": sorted(equated_semesters),
         "transcript": transcript,
         "ordered_semesters": ordered_semesters,
         "semester_gpas": semester_gpas,
@@ -3616,8 +3831,12 @@ def get_transcript(student_id):
         "student_id": data["student_id"],
         "student_name": data.get("student_name", ""),
         "graduation_plan": data.get("graduation_plan", ""),
+        "graduation_target_units": data.get("graduation_target_units"),
+        "graduation_plan_label": data.get("graduation_plan_label", ""),
         "join_term": data.get("join_term", ""),
         "join_year": data.get("join_year", ""),
+        "transfer": data.get("transfer") or {"kind": "", "department_id": None, "label": "", "badge": ""},
+        "equated_semesters": data.get("equated_semesters") or [],
         "transcript": data["transcript"],
         "semester_completed_units": data.get("semester_completed_units", {}),
         "semester_gpas": data["semester_gpas"],
