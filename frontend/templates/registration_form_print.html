@@ -3,108 +3,321 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>استمارة تسجيل — {{ student_name }}</title>
+  <title>نموذج تسجيل مقررات — {{ student_name }}</title>
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
   <style>
-    @media print {
-      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      .no-print { display: none !important; }
+    :root {
+      --ink: #111;
+      --line: #222;
+      --muted: #444;
     }
-    .university-header { text-align: center; margin-bottom: 1rem; padding: 8px 0; border-bottom: 2px solid #0d6efd; }
-    .university-header h1 { font-size: 1.25rem; margin: 0; font-weight: 700; }
-    .university-header .sub { font-size: 0.95rem; color: #555; margin-top: 2px; }
-    .form-title { font-size: 1.1rem; font-weight: 700; text-align: center; margin: 12px 0; }
-    table.registration-table { width: 100%; border-collapse: collapse; margin: 10px 0; }
-    table.registration-table th, table.registration-table td { border: 1px solid #333; padding: 6px 8px; }
-    table.registration-table th { background: #f0f0f0; font-weight: 700; }
-    .sign-row { margin-top: 24px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
-    .sign-cell { min-width: 140px; text-align: center; }
-    .sign-line { border-bottom: 1px solid #333; width: 120px; height: 20px; margin: 0 auto 4px; }
+    @page {
+      size: A4 portrait;
+      margin: 10mm 12mm;
+    }
+    body {
+      font-family: "Amiri", "Noto Naskh Arabic", "Traditional Arabic", "Times New Roman", serif;
+      color: var(--ink);
+      background: #fff;
+      font-size: 14.5px;
+      line-height: 1.35;
+    }
+    @media print {
+      body {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+        margin: 0;
+        padding: 0;
+      }
+      .no-print { display: none !important; }
+      .sheet {
+        margin: 0;
+        padding: 0;
+        max-width: none;
+      }
+      .courses-table tbody tr { height: 1.75em; }
+    }
+    .sheet {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 6px 10px 12px;
+    }
+    .hdr-brand {
+      direction: ltr;
+      display: grid;
+      grid-template-columns: 90px 1fr;
+      align-items: center;
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+    }
+    .hdr-logo { text-align: left; }
+    .hdr-logo img {
+      width: 86px;
+      height: 86px;
+      object-fit: contain;
+      display: block;
+    }
+    .hdr-uni {
+      text-align: right;
+      direction: rtl;
+      line-height: 1.25;
+      justify-self: end;
+    }
+    .hdr-uni .uni-name {
+      font-size: 1.28rem;
+      font-weight: 800;
+      margin: 0;
+    }
+    .hdr-uni .college-name {
+      font-size: 1.08rem;
+      font-weight: 700;
+      margin: 3px 0 0;
+    }
+    .hdr-meta {
+      text-align: center;
+      line-height: 1.3;
+      direction: rtl;
+      margin: 4px 0 8px;
+    }
+    .hdr-meta .office { font-size: 1.02rem; margin: 0; font-weight: 700; }
+    .hdr-meta .dept { font-size: 1.12rem; font-weight: 800; margin: 2px 0 0; }
+    .hdr-meta .title {
+      font-size: 1.12rem;
+      font-weight: 800;
+      margin: 4px 0 0;
+      text-decoration: underline;
+    }
+    .meta-table, .courses-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 6px 0;
+    }
+    .meta-table th, .meta-table td,
+    .courses-table th, .courses-table td {
+      border: 1px solid var(--line);
+      padding: 5px 8px;
+      vertical-align: middle;
+    }
+    .meta-table td { font-weight: 600; }
+    .meta-table .lbl { font-weight: 700; white-space: nowrap; }
+    .section-label {
+      text-align: center;
+      font-weight: 700;
+      margin: 10px 0 4px;
+      font-size: 1rem;
+    }
+    .courses-table thead th {
+      background: #f3f3f3;
+      text-align: center;
+      font-weight: 700;
+      padding: 6px 8px;
+    }
+    .courses-table td.num,
+    .courses-table td.code,
+    .courses-table td.units { text-align: center; }
+    .courses-table tbody tr { height: 1.7em; }
+    .courses-table td.notes { min-height: 1.4em; }
+    .courses-table .summary td { font-weight: 700; padding: 5px 8px; }
+    .sign-block { margin-top: 8px; }
+    .sign-block .section-label { margin: 4px 0 3px; }
+    .sign-line {
+      margin: 5px 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 18px;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+    .sign-field {
+      display: inline-flex;
+      flex-direction: row;
+      align-items: baseline;
+      gap: 0.35em;
+      white-space: nowrap;
+    }
+    .sign-lbl { font-weight: 600; }
+    .sign-dots {
+      direction: ltr;
+      unicode-bidi: isolate;
+      letter-spacing: 0.04em;
+    }
+    .sign-date { white-space: nowrap; }
+    .important-note {
+      text-align: center;
+      font-weight: 700;
+      margin: 8px 0 6px;
+      border: 1px dashed var(--muted);
+      padding: 4px 8px;
+    }
+    .approvals {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      margin-top: 8px;
+      text-align: center;
+    }
+    .approvals .box { flex: 1; }
+    .approvals .line {
+      border-bottom: 1px solid var(--line);
+      height: 18px;
+      margin: 4px auto 2px;
+      max-width: 170px;
+    }
+    .registrar {
+      text-align: center;
+      margin-top: 8px;
+    }
+    .registrar .line {
+      border-bottom: 1px solid var(--line);
+      width: 150px;
+      height: 16px;
+      margin: 4px auto 2px;
+    }
+    .copies {
+      margin-top: 6px;
+      margin-bottom: 0;
+      font-size: 0.9rem;
+      color: var(--muted);
+      text-align: center;
+    }
+    .sheet-foot { margin-top: 6px; padding-top: 0; }
+    .version-hint {
+      font-size: 0.85rem;
+      color: #555;
+      margin-bottom: 6px;
+    }
   </style>
 </head>
-<body class="p-4">
+<body class="p-2">
   <div class="no-print mb-2">
-    <button type="button" class="btn btn-primary btn-sm" onclick="window.print();">🖨️ طباعة</button>
+    <button type="button" class="btn btn-primary btn-sm" id="btnPrintForm">طباعة</button>
     <a href="/enrollment_plans" class="btn btn-secondary btn-sm">العودة إلى خطط التسجيل</a>
   </div>
 
-  <div class="university-header">
-    <h1>جامعة درنة — كلية الهندسة</h1>
-    <p class="sub">قسم {{ department }}</p>
-  </div>
+  <div class="sheet">
+    <div class="sheet-body">
+      <div class="hdr-brand">
+        <div class="hdr-logo">
+          <img src="/static/images/college_logo.png" alt="شعار كلية الهندسة — جامعة درنة">
+        </div>
+        <div class="hdr-uni">
+          <p class="uni-name">جامعة درنة</p>
+          <p class="college-name">كلية الهندسة</p>
+        </div>
+      </div>
+      <div class="hdr-meta">
+        <p class="office">مكتب التسجيل والقبول</p>
+        <p class="dept">قسم {{ department }}</p>
+        <p class="title">نموذج تسجيل مقررات دراسية</p>
+      </div>
 
-  <h2 class="form-title">استمارة تسجيل مقررات دراسية</h2>
-  {% if form_version_no %}
-  <div class="alert alert-info py-1 px-2 small">
-    نسخة الاستمارة: <strong>#{{ form_version_no }}</strong>
-    {% if form_version_id %} — معرف النسخة: {{ form_version_id }}{% endif %}
-    {% if form_version_generated_at %} — تاريخ الإنشاء: {{ form_version_generated_at }}{% endif %}
-  </div>
-  {% endif %}
+      {% if form_version_no %}
+      <div class="version-hint no-print">
+        نسخة الاستمارة: <strong>#{{ form_version_no }}</strong>
+        {% if form_version_id %} — معرف النسخة: {{ form_version_id }}{% endif %}
+        {% if form_version_generated_at %} — تاريخ الإنشاء: {{ form_version_generated_at }}{% endif %}
+      </div>
+      {% endif %}
 
-  <table class="table table-bordered table-sm">
-    <tr>
-      <th style="width:22%;">اسم الطالب</th>
-      <td>{{ student_name }}</td>
-      <th style="width:18%;">الرقم الجامعي</th>
-      <td>{{ university_number or '—' }}</td>
-    </tr>
-    <tr>
-      <th>الرقم الدراسي</th>
-      <td>{{ student_id }}</td>
-      <th>الفصل الدراسي</th>
-      <td>{{ semester or '—' }}</td>
-    </tr>
-    <tr>
-      <th>الوحدات المنجزة</th>
-      <td>{{ completed_units }}</td>
-      <th>المعدل التراكمي</th>
-      <td>{{ cumulative_gpa }}</td>
-    </tr>
-    <tr>
-      <th>الحالة الأكاديمية</th>
-      <td>{{ status }}</td>
-      <th>مجموع وحدات الفصل</th>
-      <td>{{ total_units }}</td>
-    </tr>
-  </table>
+      <table class="meta-table">
+        <tr>
+          <td class="lbl">اسم الطالب/ ــــة:</td>
+          <td>{{ student_name }}</td>
+          <td class="lbl">الرقم الدراسي:</td>
+          <td>{{ student_id }}</td>
+        </tr>
+        <tr>
+          <td class="lbl">العام الجامعي:</td>
+          <td>{{ academic_year or '—' }}</td>
+          <td class="lbl">الفصل الدراسي:</td>
+          <td>{{ term_season or semester or '—' }}</td>
+        </tr>
+      </table>
 
-  <table class="registration-table">
-    <thead>
-      <tr>
-        <th style="width:8%;">م</th>
-        <th style="width:40%;">اسم المقرر</th>
-        <th style="width:15%;">الرمز</th>
-        <th style="width:12%;">الوحدات</th>
-        <th>ملاحظات</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for c in courses %}
-      <tr>
-        <td>{{ c.index }}</td>
-        <td>{{ c.name }}</td>
-        <td>{{ c.code }}</td>
-        <td>{{ c.units }}</td>
-        <td>{{ c.notes }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+      <div class="section-label">(المقررات المسجلة)</div>
 
-  <div class="sign-row">
-    <div class="sign-cell">
-      <div class="sign-line"></div>
-      <span>توقيع الطالب</span>
+      <table class="courses-table">
+        <thead>
+          <tr>
+            <th style="width:6%;">ت</th>
+            <th style="width:34%;">اسم المقرر</th>
+            <th style="width:14%;">رمز المقرر</th>
+            <th style="width:12%;">الوحدات</th>
+            <th style="width:34%;">ملاحظات المشرف الأكاديمي</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in courses %}
+          <tr>
+            <td class="num">{{ c.index }}</td>
+            <td>{{ c.name }}</td>
+            <td class="code">{{ c.code }}</td>
+            <td class="units">{{ c.units }}</td>
+            {% if loop.first %}
+            <td class="notes" rowspan="{{ courses|length + 1 }}"></td>
+            {% endif %}
+          </tr>
+          {% endfor %}
+          <tr class="summary">
+            <td colspan="3"></td>
+            <td class="units">مجموع الوحدات = {{ total_units }}</td>
+          </tr>
+          <tr class="summary">
+            <td colspan="2">عدد الوحدات المنجزة = {{ completed_units }}</td>
+            <td colspan="2">المعدل التراكمي = {{ cumulative_gpa }} %</td>
+            <td>التقدير / الحالة: {{ status }}</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
-    <div class="sign-cell">
-      <div class="sign-line"></div>
-      <span>المرشد الأكاديمي</span>
-    </div>
-    <div class="sign-cell">
-      <div class="sign-line"></div>
-      <span>رئيس القسم / التسجيل</span>
+
+    <div class="sheet-foot">
+      <div class="sign-block">
+        <div class="section-label">(التوقيعات)</div>
+        <div class="sign-line">
+          <span class="sign-field"><span class="sign-lbl">اسم الطالب / ــــة:</span><span class="sign-dots">........................</span></span>
+          <span class="sign-date">التاريخ: <span class="sign-dots">.... / .... / 20</span> م</span>
+          <span class="sign-field"><span class="sign-lbl">التوقيع:</span><span class="sign-dots">........................</span></span>
+        </div>
+        <div class="sign-line">
+          <span class="sign-field"><span class="sign-lbl">المشرف الأكاديمي:</span><span class="sign-dots">........................</span></span>
+          <span class="sign-date">التاريخ: <span class="sign-dots">.... / .... / 20</span> م</span>
+          <span class="sign-field"><span class="sign-lbl">التوقيع:</span><span class="sign-dots">........................</span></span>
+        </div>
+      </div>
+
+      <div class="important-note">
+        (((ملاحظة هامة: - علي الطالب / ــة احضار هذا النموذج طيلة فترة الامتحانات)))
+      </div>
+
+      <div class="approvals">
+        <div class="box">
+          <div>رئيس القسم</div>
+          <div class="line"></div>
+        </div>
+        <div class="box">
+          <div>رئيس قسم الدراسة والامتحانات</div>
+          <div class="line"></div>
+        </div>
+      </div>
+
+      <div class="registrar">
+        <div><strong>يعتمد</strong></div>
+        <div>مسجل الكلية</div>
+        <div class="line"></div>
+      </div>
+
+      <div class="copies">
+        يعد هذا النموذج من ثلاث نسخ: 1) نسخة القسم العلمي 2) نسخة مكتب التسجيل وشؤون الطلبة 3) نسخة الطالب / ــــة
+      </div>
     </div>
   </div>
+  <script nonce="{{ csp_nonce }}">
+    (function () {
+      var btn = document.getElementById('btnPrintForm');
+      if (btn) btn.addEventListener('click', function () { window.print(); });
+    })();
+  </script>
 </body>
 </html>

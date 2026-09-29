@@ -29,6 +29,7 @@ from backend.core.department_scope_policy import resolve_users_list_scope, stude
 from backend.services import teaching_groups as tg_svc
 from backend.services.term_engine import (
     current_term_match_context,
+    parse_semester_label,
     schedule_semester_matches_term_context,
 )
 
@@ -144,6 +145,208 @@ def _normalize_plan_course_items(data: dict) -> list[dict]:
         tg = tg_map.get(cn)
         out.append({"course_name": cn, "teaching_group_id": int(tg) if tg else None})
     return out
+
+
+def _word_strip_bidi_controls(text: str) -> str:
+    """إزالة رموز التحكم ثنائية الاتجاه التي تظهر كمربعات □ في Word."""
+    s = "" if text is None else str(text)
+    for ch in (
+        "\u2066",
+        "\u2067",
+        "\u2068",
+        "\u2069",
+        "\u202a",
+        "\u202b",
+        "\u202c",
+        "\u202d",
+        "\u202e",
+        "\u200e",
+        "\u200f",
+    ):
+        s = s.replace(ch, "")
+    return s
+
+
+def _word_split_bidi_segments(text: str) -> list[tuple[str, bool]]:
+    """تقسيم النص إلى مقاطع (نص، هل_لاتيني؟) لمعالجة اتجاه Word بدون رموز عزل."""
+    import re
+
+    s = _word_strip_bidi_controls(text)
+    if not s:
+        return []
+    # أبقاء الرموز اللاتينية/الأرقام/المسافات بينها كمقطع LTR واحد (مثل ME 204 أو 54.51 %)
+    parts: list[tuple[str, bool]] = []
+    for m in re.finditer(
+        r"[A-Za-z0-9][A-Za-z0-9IVXivx./\\%\s-]*[A-Za-z0-9.%]|[A-Za-z0-9]|[^A-Za-z0-9]+",
+        s,
+    ):
+        seg = m.group(0)
+        if not seg:
+            continue
+        is_ltr = bool(re.match(r"^[A-Za-z0-9]", seg))
+        parts.append((seg, is_ltr))
+    return parts
+
+
+def _word_set_run_rtl(run, *, rtl: bool) -> None:
+    """ضبط اتجاه المقطع صراحةً عبر w:rtl (قيمة 1/0) — الطريقة الأصلية لـ Word."""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    rPr = run._element.get_or_add_rPr()
+    existing = rPr.find(qn("w:rtl"))
+    if existing is not None:
+        rPr.remove(existing)
+    el = OxmlElement("w:rtl")
+    el.set(qn("w:val"), "1" if rtl else "0")
+    rPr.append(el)
+
+
+def _word_rewrite_cell_mixed(
+    cell,
+    text: str,
+    *,
+    bold: bool = False,
+    center: bool = False,
+    size_pt: float = 11,
+) -> None:
+    """إعادة كتابة الخلية بمقاطع RTL/LTR أصلية في Word (بدون Unicode isolates)."""
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from docx.shared import Pt
+    from lxml import etree
+
+    segments = _word_split_bidi_segments(text)
+    if not any(is_ltr for _, is_ltr in segments):
+        # حتى للنص العربي فقط: أزل أي رموز تحكم متبقية إن وُجدت
+        cleaned = _word_strip_bidi_controls(text)
+        if cleaned != (cell.text or ""):
+            for paragraph in cell.paragraphs[1:]:
+                paragraph._element.getparent().remove(paragraph._element)
+            p = cell.paragraphs[0]
+            p.clear()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER if center else WD_ALIGN_PARAGRAPH.RIGHT
+            run = p.add_run(cleaned)
+            run.bold = bold
+            run.font.size = Pt(size_pt)
+            _word_set_run_rtl(run, rtl=True)
+        return
+
+    for paragraph in cell.paragraphs[1:]:
+        paragraph._element.getparent().remove(paragraph._element)
+    p = cell.paragraphs[0]
+    p.clear()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER if center else WD_ALIGN_PARAGRAPH.RIGHT
+    try:
+        pPr = p._p.get_or_add_pPr()
+        bidi = pPr.find(qn("w:bidi"))
+        if bidi is None:
+            bidi = etree.SubElement(pPr, qn("w:bidi"))
+        bidi.set(qn("w:val"), "1")
+    except Exception:
+        pass
+
+    for seg, is_ltr in segments:
+        run = p.add_run(seg)
+        run.bold = bold
+        run.font.size = Pt(size_pt)
+        _word_set_run_rtl(run, rtl=not is_ltr)
+
+
+def _word_rewrite_label_dots(cell, text: str, *, center: bool = False, size_pt: float = 10) -> bool:
+    """
+    إصلاح خلايا مثل «اسم الطالب: ......» أو «التوقيع: ......»
+    بحيث تظهر التسمية يمينًا ثم النقاط، بدون عكس ترتيب BiDi.
+    """
+    import re
+
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from docx.shared import Pt
+    from lxml import etree
+
+    raw = _word_strip_bidi_controls(text).strip()
+    m = re.match(r"^(.*?:)\s*(\.{3,}|_{3,}|…+)\s*$", raw)
+    if not m:
+        return False
+    label, dots = m.group(1).strip(), m.group(2)
+
+    for paragraph in cell.paragraphs[1:]:
+        paragraph._element.getparent().remove(paragraph._element)
+    p = cell.paragraphs[0]
+    p.clear()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER if center else WD_ALIGN_PARAGRAPH.RIGHT
+    try:
+        pPr = p._p.get_or_add_pPr()
+        bidi = pPr.find(qn("w:bidi"))
+        if bidi is None:
+            bidi = etree.SubElement(pPr, qn("w:bidi"))
+        bidi.set(qn("w:val"), "1")
+    except Exception:
+        pass
+
+    r1 = p.add_run(label + " ")
+    r1.font.size = Pt(size_pt)
+    _word_set_run_rtl(r1, rtl=True)
+    r2 = p.add_run(dots)
+    r2.font.size = Pt(size_pt)
+    _word_set_run_rtl(r2, rtl=False)
+    return True
+
+
+def _fix_registration_docx_bidi(path: str) -> None:
+    """بعد docxtpl: إصلاح الخلايا المختلطة عربي/لاتيني بطريقة Word الأصلية."""
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Pt
+
+    doc = Document(path)
+    for table in doc.tables:
+        # مهم: نحتفظ بمرجع عنصر w:tc نفسه وليس id() — لأن id() يُعاد استخدامه بعد GC
+        # فيتخطى خلايا المقررات بالخطأ وتبقى الرموز الغريبة.
+        seen: set = set()
+        for row in table.rows:
+            for cell in row.cells:
+                tc = cell._tc
+                if tc in seen:
+                    continue
+                seen.add(tc)
+                raw = _word_strip_bidi_controls(cell.text or "").strip()
+                if not raw:
+                    continue
+                # حافظ على المحاذاة/الغامق الأصليين قدر الإمكان
+                src_p = cell.paragraphs[0] if cell.paragraphs else None
+                center = bool(src_p and src_p.alignment == WD_ALIGN_PARAGRAPH.CENTER)
+                bold = False
+                size_pt = 10.0
+                if src_p and src_p.runs:
+                    bold = any(bool(r.bold) for r in src_p.runs)
+                    for r in src_p.runs:
+                        if r.font.size:
+                            size_pt = float(r.font.size.pt)
+                            break
+                if raw.startswith("التاريخ"):
+                    for paragraph in cell.paragraphs[1:]:
+                        paragraph._element.getparent().remove(paragraph._element)
+                    p = cell.paragraphs[0]
+                    p.clear()
+                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    r1 = p.add_run("التاريخ: ")
+                    r1.font.size = Pt(size_pt)
+                    _word_set_run_rtl(r1, rtl=True)
+                    r2 = p.add_run("..../..../20")
+                    r2.font.size = Pt(size_pt)
+                    _word_set_run_rtl(r2, rtl=False)
+                    r3 = p.add_run(" م")
+                    r3.font.size = Pt(size_pt)
+                    _word_set_run_rtl(r3, rtl=True)
+                    continue
+                if _word_rewrite_label_dots(cell, raw, center=center, size_pt=size_pt):
+                    continue
+                _word_rewrite_cell_mixed(
+                    cell, raw, bold=bold, center=center, size_pt=size_pt
+                )
+    doc.save(path)
 
 
 def _ensure_docxtpl():
@@ -430,6 +633,103 @@ def _enforce_units_limit(cur, student_id: str, courses: list[str]):
         )
 
 
+def _resolve_student_department_label(cur, student_id: str) -> str:
+    """اسم القسم المعروض في استمارة التسجيل."""
+    sid = (student_id or "").strip()
+    if not sid:
+        return "الهندسة الميكانيكية"
+    dept_id = None
+    try:
+        row = cur.execute(
+            "SELECT department_id FROM students WHERE student_id = ? LIMIT 1",
+            (sid,),
+        ).fetchone()
+        if row and row[0] not in (None, ""):
+            dept_id = int(row[0])
+    except Exception:
+        dept_id = None
+    if dept_id is None:
+        try:
+            row = cur.execute(
+                """
+                SELECT COALESCE(p.department_id, 0)
+                FROM students s
+                LEFT JOIN programs p ON p.id = COALESCE(s.current_program_id, s.admission_program_id)
+                WHERE s.student_id = ?
+                LIMIT 1
+                """,
+                (sid,),
+            ).fetchone()
+            if row and int(row[0] or 0) > 0:
+                dept_id = int(row[0])
+        except Exception:
+            dept_id = None
+    if dept_id is None:
+        return "الهندسة الميكانيكية"
+    try:
+        row = cur.execute(
+            "SELECT COALESCE(name_ar, code, '') FROM departments WHERE id = ? LIMIT 1",
+            (dept_id,),
+        ).fetchone()
+        label = (row[0] if row else "") or ""
+        label = str(label).strip()
+        if label:
+            return label
+    except Exception:
+        pass
+    return "الهندسة الميكانيكية"
+
+
+def _split_semester_display(semester_label: str) -> tuple[str, str, str]:
+    """
+    يُرجع (الفصل كاملاً، اسم الموسم، العام الجامعي).
+    مثال: خريف 2026/2027 → (خريف 2026/2027, خريف, 2026/2027)
+    """
+    full = " ".join((semester_label or "").split())
+    parsed = parse_semester_label(full) if full else None
+    if parsed:
+        season = (parsed.get("term_name_ar") or "").strip()
+        year = (parsed.get("academic_year") or "").strip()
+        return (parsed.get("ops_label") or full), season, year
+    parts = full.split(None, 1)
+    if len(parts) == 2:
+        return full, parts[0], parts[1]
+    return full, full, ""
+
+
+def _registration_form_status_label(student_id: str, transcript: dict, grade_estimate: str) -> str:
+    """
+    خانة «التقدير / الحالة» في الاستمارة:
+    - التقدير: تصنيف المعدل (ممتاز/…/مقبول)
+    - الحالة: نفس منطق تقرير الأداء (وضع سليم / إنذار / سحب ملف…)
+    """
+    from backend.services.grades import _academic_status_payload_from_transcript
+
+    short_by_code = {
+        "good": "وضع أكاديمي سليم",
+        "warning_1": "إنذار أكاديمي أول",
+        "warning_2": "إنذار أكاديمي ثانٍ",
+        "warning_3": "إنذارات متتالية",
+        "withdrawn": "سحب ملف",
+        "suspended": "إيقاف قيد",
+        "graduated": "خريج",
+        "no_data": "لا توجد بيانات",
+    }
+    grade = (grade_estimate or "").strip()
+    try:
+        acad = _academic_status_payload_from_transcript(student_id, transcript) or {}
+    except Exception:
+        acad = {}
+    code = str(acad.get("status_code") or "").strip()
+    perf = short_by_code.get(code, "").strip()
+    if not perf:
+        raw = str(acad.get("status_label") or "").strip()
+        perf = raw.split("—")[0].strip() if raw else ""
+    if grade and perf:
+        return f"{grade} — {perf}"
+    return perf or grade or "—"
+
+
 def _build_registration_form_context(student_id: str, semester_param: str, source: str = "plan"):
     student_id = (student_id or "").strip()
     semester_param = (semester_param or "").strip()
@@ -466,6 +766,7 @@ def _build_registration_form_context(student_id: str, semester_param: str, sourc
         if not st:
             abort(404)
         sid, sname, uni = st[0], st[1], st[2]
+        department = _resolve_student_department_label(cur, sid)
 
         # اختيار مصدر المقررات:
         # - plan: من آخر خطة معتمدة (السلوك الحالي)
@@ -557,21 +858,25 @@ def _build_registration_form_context(student_id: str, semester_param: str, sourc
                 }
             )
 
-    # بيانات المعدل والوحدات المنجزة
+    # بيانات المعدل والوحدات المنجزة + حالة تقرير الأداء
     transcript = _load_transcript_data(sid)
     completed_units = int(transcript.get("completed_units") or 0)
     cumulative_gpa = float(transcript.get("cumulative_gpa") or 0.0)
-    status = _classify_status_from_gpa(cumulative_gpa)
+    grade_estimate = _classify_status_from_gpa(cumulative_gpa)
+    status = _registration_form_status_label(sid, transcript, grade_estimate)
+    semester_full, term_season, academic_year = _split_semester_display(semester_label)
 
     context = {
-        "department": "الهندسة الميكانيكية",
+        "department": department,
         "student_name": sname,
         "student_id": sid,
         "university_number": uni,
-        "academic_year": "",
-        "semester": semester_label,
+        "academic_year": academic_year,
+        "term_season": term_season,
+        "semester": semester_full or semester_label,
         "completed_units": completed_units,
         "cumulative_gpa": f"{cumulative_gpa:.2f}",
+        "grade_estimate": grade_estimate,
         "status": status,
         "total_units": total_units,
         "courses": courses,
@@ -1775,7 +2080,18 @@ def print_registration_form(student_id):
     try:
         doc.save(tmp.name)
         tmp.close()
-        filename = f"registration_{ctx['student_id']}_{ctx['semester'] or 'semester'}.docx"
+        try:
+            _fix_registration_docx_bidi(tmp.name)
+        except Exception:
+            current_app.logger.exception("registration form Word bidi fix failed")
+        # اسم ملف آمن لـ Windows/Word: بدون / أو حروف عربية قد تفسد المسار
+        sid_safe = "".join(ch for ch in str(ctx.get("student_id") or "student") if ch.isalnum() or ch in ("-", "_")) or "student"
+        year_safe = "".join(ch for ch in str(ctx.get("academic_year") or "") if ch.isdigit() or ch in ("-", "_"))
+        season_map = {"خريف": "Fall", "ربيع": "Spring", "صيف": "Summer"}
+        season_raw = str(ctx.get("term_season") or "")
+        season_safe = season_map.get(season_raw, "".join(ch for ch in season_raw if ch.isascii() and ch.isalnum()) or "term")
+        parts = [p for p in ("registration", sid_safe, season_safe, year_safe) if p]
+        filename = "_".join(parts) + ".docx"
         return send_file(
             tmp.name,
             as_attachment=True,
