@@ -119,7 +119,12 @@
       if (!hiddenEl) return;
       const term_name = normalizeSeasonAr(seasonEl.value);
       const term_year = (yearEl.value || '').trim();
-      hiddenEl.value = term_name && term_year ? `${term_name} ${term_year}` : '';
+      const next = term_name && term_year ? `${term_name} ${term_year}` : '';
+      if (hiddenEl.value === next) return;
+      hiddenEl.value = next;
+      try {
+        hiddenEl.dispatchEvent(new Event('change', { bubbles: true }));
+      } catch (e) {}
     };
     seasonEl.addEventListener('change', syncHidden);
     yearEl.addEventListener('change', syncHidden);

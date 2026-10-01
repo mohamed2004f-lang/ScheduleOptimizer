@@ -36,7 +36,7 @@
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
           <h2 class="h6 mb-0">طلبات تحتاج مراجعة أو اعتماد</h2>
           <div class="d-flex gap-2">
-            <a href="/enrollment_plans" class="btn btn-sm btn-outline-success">خطط التسجيل</a>
+            <a href="/enrollment_plans" class="btn btn-sm btn-outline-success">الإشراف وتسجيل المقررات</a>
             <a href="/registration_requests_page" class="btn btn-sm btn-outline-primary">طلبات الإضافة والإسقاط</a>
           </div>
         </div>
@@ -202,7 +202,7 @@
             <div class="btn-group btn-group-sm" role="group">
               <a href="/student_view/${encodeURIComponent(sid)}" class="btn btn-outline-primary" target="_blank">جدول</a>
               <a href="/transcript_page" class="btn btn-outline-secondary btn-open-transcript" data-sid="${sid}" target="_blank">كشف</a>
-              <a href="/enrollment_plans" class="btn btn-outline-success btn-open-plans" data-sid="${sid}" target="_blank">خطط</a>
+              <a href="/enrollment_plans" class="btn btn-outline-success btn-open-plans" data-sid="${sid}" target="_blank">تسجيل</a>
               <a href="/performance_report?student_id=${encodeURIComponent(sid)}" class="btn btn-outline-info" target="_blank">أداء</a>
             </div>
           </td>`;

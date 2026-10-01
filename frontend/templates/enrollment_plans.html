@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>خطط تسجيل الطلبة</title>
+  <title>الإشراف وتسجيل المقررات</title>
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
@@ -12,10 +12,11 @@
   <main class="container-main container-1100">
     <div class="page-header">
       <div>
-        <h1 class="page-title">خطط تسجيل الطلبة</h1>
-        <p class="page-subtitle">رئيس القسم يراجع الخطط المعلّقة لقسمه ويعتمدها أو يرفضها — ويمكن إنشاء خطة لطالب عند الحاجة</p>
+        <h1 class="page-title">الإشراف وتسجيل المقررات</h1>
+        <p class="page-subtitle">مراجعة الخطط المعلّقة، اعتماد التسجيل النهائي، وطباعة استمارة التسجيل للطلبة المسندين</p>
       </div>
-      <div>
+      <div class="d-flex flex-wrap gap-2">
+        <a href="/supervisor_dashboard" class="btn btn-outline-secondary btn-sm" title="لوحة ملخص الإشراف">لوحة الإشراف</a>
         <button type="button" class="btn btn-outline-info btn-sm" onclick="PageGuide.open()" title="دليل استخدام الصفحة">❓ دليل الاستخدام</button>
       </div>
     </div>
@@ -54,6 +55,38 @@
           </div>
         </div>
         <div id="pendingList"></div>
+      </div>
+    </div>
+
+    <!-- التسجيلات الفعلية النهائية — طباعة الاستمارة -->
+    <div class="card chart-container mb-3" id="finalRegsSection">
+      <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+          <div>
+            <h2 class="page-title mb-1" style="font-size:18px;">التسجيلات الفعلية النهائية</h2>
+            <p class="page-subtitle mb-0">المقررات من التسجيل الفعلي (نفس مصدر الطباعة) — وليس من بنود الخطة.</p>
+          </div>
+          <div class="d-flex flex-wrap gap-2" id="finalSummaryChips"></div>
+        </div>
+        <div class="row g-2 align-items-end mb-3">
+          <div class="col-md-4">
+            <label class="form-label">الفصل الدراسي</label>
+            {% set typ_id = 'finalTermPicker' %}
+            {% set typ_season_id = 'finalSeason' %}
+            {% set typ_year_id = 'finalYear' %}
+            {% include "partials/term_year_picker.html" %}
+            <input type="hidden" id="finalSemesterInput" value="">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">بحث (اسم / رقم / مقرر)</label>
+            <input id="finalSearchInput" class="form-control form-control-sm" placeholder="مثال: أحمد أو ME 409">
+          </div>
+          <div class="col-md-2">
+            <button id="btnLoadFinal" class="btn btn-outline-primary btn-sm w-100">تحديث القائمة</button>
+          </div>
+        </div>
+        <div id="finalList"></div>
+        <div id="finalMsg" class="mt-2"></div>
       </div>
     </div>
 
@@ -160,6 +193,42 @@
         </div>
       </div>
     </div>
+
+    <!-- نافذة تعديل التسجيل الفعلي للمشرف (خفيفة — بدون صفحة رئيس القسم) -->
+    <div class="modal fade" id="supEditRegModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
+        <div class="modal-content" dir="rtl">
+          <div class="modal-header border-0 pb-0">
+            <h5 class="modal-title">تعديل التسجيل الفعلي</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+          </div>
+          <div class="modal-body pt-2">
+            <div class="mb-3">
+              <div id="supEditStudentLabel" class="fw-semibold fs-6"></div>
+              <div class="small text-muted">أضف أو أزل مقررات التسجيل الفعلي ثم احفظ.</div>
+            </div>
+            <div id="supEditMsg" class="mb-2"></div>
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+              <span class="small fw-semibold">المقررات المسجّلة حالياً</span>
+              <span class="small text-muted">الوحدات: <strong id="supEditUnitsTotal">0</strong></span>
+            </div>
+            <div id="supEditCoursesChips" class="d-flex flex-wrap gap-2 mb-3 min-vh-0" style="min-height:2.5rem;"></div>
+            <div class="border rounded p-2 bg-light">
+              <label class="form-label small mb-1" for="supEditAddSelect">إضافة مقرر متاح</label>
+              <div class="d-flex flex-wrap gap-2">
+                <select id="supEditAddSelect" class="form-select form-select-sm" style="min-width:14rem; flex:1;"></select>
+                <button type="button" id="btnSupEditAddCourse" class="btn btn-sm btn-outline-primary">إضافة</button>
+              </div>
+              <div class="form-text">تظهر المقررات من عرض الفصل المعتمد وغير المسجّلة حالياً.</div>
+            </div>
+          </div>
+          <div class="modal-footer border-0 pt-0">
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">إلغاء</button>
+            <button type="button" id="btnSupEditSave" class="btn btn-primary btn-sm">حفظ التسجيل</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </main>
 
   <script src="/static/js/term-year-picker.js"></script>
@@ -171,6 +240,9 @@
       if(!j) return 'تعذّر اعتماد الخطة.';
       const head = j.message || j.error || 'تعذّر اعتماد الخطة.';
       const parts = [head];
+      if (j.requires_hod) {
+        parts.push('هذه الحالة تتطلب موافقة رئيس القسم.');
+      }
       const b = j.blocked;
       if(b && typeof b === 'object' && Object.keys(b).length){
         parts.push('', '— مقررات بمتطلب غير مستوفٍ:');
@@ -193,6 +265,8 @@
     let currentRole = null;
     let isSupervisor = false;
     let IS_VIEW_ONLY_ROLE = false;
+    /** عند وجود خطة معتمدة: القفل على إنشاء/تعديل الخطة (التعديل عبر التسجيل الفعلي) */
+    let COMPOSE_LOCKED_APPROVED = false;
     /** مقررات أنجزها الطالب بنجاح والموجودة في الجدول المعتمد (لتحسين المعدل) */
     let lastCompletedCourses = [];
     let lastSchedulePublished = false;
@@ -526,7 +600,8 @@
       const auth = await fetchJSON('/auth/check').catch(()=>({ok:false,json:{}}));
       currentRole = auth.ok ? auth.json?.role : null;
       isSupervisor = (currentRole === 'supervisor') || (currentRole === 'instructor' && Number(auth.json?.is_supervisor || 0) === 1);
-      IS_VIEW_ONLY_ROLE = (currentRole === 'instructor') || isSupervisor;
+      // الأستاذ العادي عرض فقط؛ المشرف يكتب/يعتمد لطلبته
+      IS_VIEW_ONLY_ROLE = (currentRole === 'instructor') && !isSupervisor;
 
       let s;
       if (isSupervisor) {
@@ -573,7 +648,7 @@
       }
 
       // سيتم ملء المقررات لاحقاً بناءً على الطالب (لأخذ المتطلبات في الاعتبار)
-      await refreshEligibleCourses();
+      // لا نستدعي refresh هنا — syncComposeForSelection يتولى ذلك بعد تهيئة الفصل
       updateStudentJoinInfo();
       // إذا كان هناك طالب محدد مسبقاً، حمّل تنبيه الحالة الأكاديمية/مدة الدراسة
       const sidPref = document.getElementById('studentSelect').value;
@@ -616,15 +691,62 @@
       }
     }
 
-    async function loadCurrentPlan(){
+    function setComposeLockedForApproved(locked, reason){
+      COMPOSE_LOCKED_APPROVED = !!locked;
+      const hideIds = ['btnSaveDraft', 'btnSubmitPlan', 'btnImproveGPA'];
+      hideIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (IS_VIEW_ONLY_ROLE || locked) {
+          el.style.display = 'none';
+        } else {
+          el.style.display = '';
+        }
+      });
+      const selCourses = document.getElementById('planCoursesSelect');
+      if (selCourses) {
+        selCourses.disabled = !!(IS_VIEW_ONLY_ROLE || locked);
+      }
+      if (locked && reason) {
+        setPlanMsg('warning', reason);
+      }
+    }
+
+    /** مزامنة تلقائية: المقررات المتاحة + تحميل الخطة وقفل المعتمدة */
+    async function syncComposeForSelection({ quiet = false } = {}){
+      const sid = document.getElementById('studentSelect')?.value || '';
+      const sem = document.getElementById('semesterInput')?.value?.trim() || '';
+      planCoursesBaseline = [];
+      currentPlanId = null;
+      const statusEl = document.getElementById('planStatus');
+      if (statusEl) statusEl.textContent = '';
+      setComposeLockedForApproved(false);
+      if (!sid) {
+        const selCourses = document.getElementById('planCoursesSelect');
+        if (selCourses) selCourses.innerHTML = '';
+        if (!quiet) setPlanMsg('', '');
+        return;
+      }
+      await refreshEligibleCourses({ preserveMsg: false });
+      updateStudentJoinInfo();
+      if (!sem) {
+        if (!quiet) setPlanMsg('warning', 'حدد الفصل الدراسي لتحميل الخطة.');
+        return;
+      }
+      await loadCurrentPlan({ quietMissing: quiet });
+    }
+
+    async function loadCurrentPlan(opts = {}){
+      const quietMissing = !!opts.quietMissing;
       const sid = document.getElementById('studentSelect').value;
       const sem = document.getElementById('semesterInput').value.trim();
       currentPlanId = null;
       planCoursesBaseline = [];
       document.getElementById('planStatus').textContent = '';
       setPlanMsg('', '');
+      setComposeLockedForApproved(false);
       if(!sid || !sem){
-        setPlanMsg('warning','اختر الطالب وحدد الفصل أولاً.');
+        if (!quietMissing) setPlanMsg('warning','اختر الطالب وحدد الفصل أولاً.');
         return;
       }
       const res = await fetchJSON(`/enrollment/plans?student_id=${encodeURIComponent(sid)}&semester=${encodeURIComponent(sem)}`);
@@ -638,6 +760,41 @@
         updatePrereqPlanUI(null);
         setPlanMsg('info','لا توجد خطة سابقة لهذا الفصل. يمكنك إنشاء مسودة جديدة.');
         document.getElementById('planCoursesSelect').selectedIndex = -1;
+        return;
+      }
+      const approved = plans.find(p => p.status === 'Approved');
+      if (approved) {
+        currentPlanId = approved.id;
+        await loadPlanGroupOptions();
+        const sel = document.getElementById('planCoursesSelect');
+        // أضف مقررات الخطة المعتمدة إن لم تكن في القائمة المتاحة (للعرض فقط)
+        (approved.courses || []).forEach(cn => {
+          if (!cn) return;
+          const exists = Array.from(sel.options).some(o => o.value === cn);
+          if (!exists) {
+            const opt = document.createElement('option');
+            opt.value = cn;
+            opt.textContent = cn;
+            sel.appendChild(opt);
+          }
+        });
+        Array.from(sel.options).forEach(o=>{
+          o.selected = (approved.courses || []).includes(o.value);
+        });
+        planGroupSelections = {};
+        (approved.course_items || []).forEach(ci => {
+          if (ci.course_name && ci.teaching_group_id) {
+            planGroupSelections[ci.course_name] = String(ci.teaching_group_id);
+          }
+        });
+        refreshPlanGroupPickers();
+        planCoursesBaseline = (approved.courses || []).slice();
+        _calcUnitsSummary(Array.from(sel.selectedOptions).map(o=>o.value));
+        document.getElementById('planStatus').textContent = 'حالة الخطة: Approved';
+        setComposeLockedForApproved(
+          true,
+          'توجد خطة معتمدة لهذا الفصل. عدّل المقررات من قائمة «التسجيلات الفعلية النهائية».'
+        );
         return;
       }
       const plan = plans[0];
@@ -666,6 +823,8 @@
       if (plan.status === 'Rejected' && plan.rejection_reason) {
         statusText += ` — سبب الرفض: ${plan.rejection_reason}`;
         setPlanMsg('danger', `تم رفض الخطة السابقة. السبب: ${plan.rejection_reason}. يمكنك تعديل المقررات وحفظها كمسودة ثم إعادة الإرسال.`);
+      } else if (plan.status === 'Pending') {
+        setPlanMsg('info','الخطة معلّقة للمراجعة. يمكنك تعديلها ثم إعادة الإرسال، أو اعتمادها من قائمة المراجعة.');
       } else {
         setPlanMsg('success','تم حفظ الخطة بصفتها مبدئية، وتخضع للمراجعة الأكاديمية قبل الاعتماد النهائي.');
       }
@@ -673,6 +832,12 @@
     }
 
     async function saveDraft(){
+      if (IS_VIEW_ONLY_ROLE || COMPOSE_LOCKED_APPROVED) {
+        setPlanMsg('warning', COMPOSE_LOCKED_APPROVED
+          ? 'توجد خطة معتمدة. عدّل من قائمة التسجيلات الفعلية.'
+          : 'عرض فقط — لا يمكن حفظ الخطة.');
+        return;
+      }
       const sid = document.getElementById('studentSelect').value;
       const sem = document.getElementById('semesterInput').value.trim();
       const sel = document.getElementById('planCoursesSelect');
@@ -720,6 +885,12 @@
     }
 
     async function submitPlan(){
+      if (IS_VIEW_ONLY_ROLE || COMPOSE_LOCKED_APPROVED) {
+        setPlanMsg('warning', COMPOSE_LOCKED_APPROVED
+          ? 'توجد خطة معتمدة. عدّل من قائمة التسجيلات الفعلية.'
+          : 'عرض فقط — لا يمكن إرسال الخطة.');
+        return;
+      }
       const sid = document.getElementById('studentSelect').value;
       const sem = document.getElementById('semesterInput').value.trim();
       const sel = document.getElementById('planCoursesSelect');
@@ -978,12 +1149,18 @@
       const res = await fetchJSON(`/enrollment/plans/${id}/approve`, {method:'POST'});
       if(res.ok){
         await loadPending();
+        try { await loadFinalPlans(); } catch (e) {}
         const msg = res.json?.message || 'تم الاعتماد وترحيل التسجيلات.';
+        const sid = res.json?.student_id || '';
+        const sem = res.json?.semester || '';
         const count = res.json?.conflict_count;
         if (count !== undefined && count > 0) {
           alert(msg + '\n\nافتح صفحة "النتائج" أو اضغط "إعادة حساب التعارضات" فيها لرؤية التعارضات.');
         } else {
           alert(msg);
+        }
+        if (sid && confirm('تم الاعتماد. هل تريد طباعة استمارة التسجيل الآن؟')) {
+          openRegistrationFormHtml(sid, sem, 'actual');
         }
       } else {
         const detail = formatEnrollmentApproveError(res.json);
@@ -1021,7 +1198,8 @@
       schedulePlanPrereqValidate();
     }
 
-    async function refreshEligibleCourses(){
+    async function refreshEligibleCourses(opts = {}){
+      const preserveMsg = !!opts.preserveMsg;
       const sid = document.getElementById('studentSelect').value;
       const selCourses = document.getElementById('planCoursesSelect');
       selCourses.innerHTML = '';
@@ -1039,7 +1217,9 @@
         if (!offeringsPublished) {
           btnImprove.disabled = true;
           btnImprove.title = 'لم يُعتمد عرض مقررات هذا الفصل بعد';
-          setPlanMsg('warning', 'لم يُعتمد عرض مقررات هذا الفصل بعد. لا يمكن اختيار مقررات حتى يعتمد العميد/الأدمن العرض.');
+          if (!preserveMsg && !COMPOSE_LOCKED_APPROVED) {
+            setPlanMsg('warning', 'لم يُعتمد عرض مقررات هذا الفصل بعد. لا يمكن اختيار مقررات حتى يعتمد العميد/الأدمن العرض.');
+          }
         } else if (!completed.length) {
           btnImprove.disabled = true;
           btnImprove.title = 'لا توجد مقررات منجزة متاحة للتحسين';
@@ -1055,6 +1235,8 @@
         opt.textContent = c.course_name + (c.course_code ? ' — ' + c.course_code : '');
         selCourses.appendChild(opt);
       });
+
+      if (preserveMsg || COMPOSE_LOCKED_APPROVED) return;
 
       const completedNames = completed.map(c=>c.course_name).join(', ');
       if (offeringsPublished && completedNames) {
@@ -1109,34 +1291,7 @@
         setPlanMsg('warning','اختر الطالب أولاً.');
         return;
       }
-      const qs = sem ? `?semester=${encodeURIComponent(sem)}` : '';
-      const url = `/enrollment/print_registration_form/${encodeURIComponent(sid)}${qs}`;
-      setPlanMsg('','');
-      try {
-        const resp = await fetch(url, { credentials: 'include', method: 'GET' });
-        const contentType = resp.headers.get('Content-Type') || '';
-        if (contentType.includes('application/json')) {
-          const j = await resp.json().catch(()=> ({}));
-          const msg = (j && j.message) ? j.message : ('خطأ من الخادم: ' + resp.status);
-          setPlanMsg('danger', msg + ' — يمكنك تجربة «طباعة من المستعرض» أدناه.');
-          return;
-        }
-        if (!resp.ok) {
-          setPlanMsg('danger', 'فشل التحميل (رمز ' + resp.status + '). جرّب «طباعة من المستعرض».');
-          return;
-        }
-        const blob = await resp.blob();
-        const name = resp.headers.get('Content-Disposition')?.split('filename=')?.[1]?.replace(/^["']|["']$/g,'') || `registration_${sid}.docx`;
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = name;
-        a.click();
-        URL.revokeObjectURL(a.href);
-        setPlanMsg('success', 'تم تحميل استمارة التسجيل (Word).');
-      } catch (e) {
-        console.error(e);
-        setPlanMsg('danger', 'حدث خطأ في الاتصال. جرّب «طباعة من المستعرض».');
-      }
+      await downloadRegistrationWord(sid, sem, 'plan', setPlanMsg);
     }
 
     function openPrintRegistrationInBrowser(){
@@ -1146,14 +1301,375 @@
         setPlanMsg('warning','اختر الطالب أولاً.');
         return;
       }
-      const qs = sem ? `?semester=${encodeURIComponent(sem)}` : '';
-      const url = `/enrollment/registration_form_html/${encodeURIComponent(sid)}${qs}`;
-      window.location.href = url;
+      openRegistrationFormHtml(sid, sem, 'plan');
+    }
+
+    function openRegistrationFormHtml(sid, sem, source){
+      const params = new URLSearchParams();
+      if (sem) params.set('semester', sem);
+      if (source) params.set('source', source);
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      window.open(`/enrollment/registration_form_html/${encodeURIComponent(sid)}${qs}`, '_blank');
+    }
+
+    async function downloadRegistrationWord(sid, sem, source, msgFn){
+      const params = new URLSearchParams();
+      if (sem) params.set('semester', sem);
+      if (source) params.set('source', source);
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      const url = `/enrollment/print_registration_form/${encodeURIComponent(sid)}${qs}`;
+      const setMsg = typeof msgFn === 'function' ? msgFn : () => {};
+      setMsg('', '');
+      try {
+        const resp = await fetch(url, { credentials: 'include', method: 'GET' });
+        const contentType = resp.headers.get('Content-Type') || '';
+        if (contentType.includes('application/json')) {
+          const j = await resp.json().catch(()=> ({}));
+          const msg = (j && j.message) ? j.message : ('خطأ من الخادم: ' + resp.status);
+          setMsg('danger', msg + ' — يمكنك تجربة «طباعة من المستعرض».');
+          return false;
+        }
+        if (!resp.ok) {
+          setMsg('danger', 'فشل التحميل (رمز ' + resp.status + '). جرّب «طباعة من المستعرض».');
+          return false;
+        }
+        const blob = await resp.blob();
+        const name = resp.headers.get('Content-Disposition')?.split('filename=')?.[1]?.replace(/^["']|["']$/g,'') || `registration_${sid}.docx`;
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = name;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        setMsg('success', 'تم تحميل استمارة التسجيل (Word).');
+        return true;
+      } catch (e) {
+        console.error(e);
+        setMsg('danger', 'حدث خطأ في الاتصال. جرّب «طباعة من المستعرض».');
+        return false;
+      }
+    }
+
+    function setFinalMsg(type, text){
+      const el = document.getElementById('finalMsg');
+      if (!el) return;
+      if (!text) { el.innerHTML = ''; return; }
+      el.innerHTML = `<div class="alert alert-${type} py-2 mb-0">${escPlain(text)}</div>`;
+    }
+
+    let finalPlansCache = [];
+
+    function renderFinalSummary(plans){
+      const el = document.getElementById('finalSummaryChips');
+      if (!el) return;
+      const n = plans.length;
+      const unitsSum = plans.reduce((a, p) => a + (Number(p.units_total) || 0), 0);
+      el.innerHTML = `
+        <span class="badge bg-success">تسجيلات فعلية: ${n}</span>
+        <span class="badge bg-secondary">إجمالي وحدات: ${unitsSum}</span>
+      `;
+    }
+
+    function renderFinalCards(plans){
+      const container = document.getElementById('finalList');
+      if (!container) return;
+      container.innerHTML = '';
+      renderFinalSummary(plans);
+      if (!plans.length){
+        container.innerHTML = '<div class="alert alert-light border mb-0">لا توجد تسجيلات فعلية مطابقة للفصل أو البحث.</div>';
+        return;
+      }
+      plans.forEach(p => {
+        const item = document.createElement('div');
+        item.className = 'card mb-2 border-0 shadow-sm';
+        const name = (p.student_name || '').trim();
+        const when = _fmtWhen(p.updated_at || p.created_at);
+        const units = (p.units_total != null && p.units_total !== '') ? p.units_total : '';
+        const courses = p.courses || [];
+        const courseChips = courses.map(cn =>
+          `<span class="badge bg-light text-dark border fw-normal">${escPlain(cn)}</span>`
+        ).join(' ');
+        const body = document.createElement('div');
+        body.className = 'card-body py-3';
+        body.innerHTML = `
+          <div class="d-flex flex-wrap justify-content-between gap-2 align-items-start">
+            <div>
+              <div class="fw-semibold">${escPlain(name || 'طالب')} <span class="text-muted">— ${escPlain(p.student_id)}</span></div>
+              <div class="small text-muted">الفصل: ${escPlain(p.semester || '—')}${when ? ' · اعتماد: ' + escPlain(when) : ''}${units !== '' ? ' · وحدات: ' + escPlain(units) : ''}</div>
+              <div class="mt-2 d-flex flex-wrap gap-1">${courseChips || '<span class="text-muted small">لا مقررات</span>'}</div>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+              <button type="button" class="btn btn-sm btn-outline-primary" data-final-edit="${escPlain(p.student_id)}" data-name="${escPlain(name || '')}" data-sem="${escPlain(p.semester || '')}">تعديل التسجيل</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary" data-final-html="${escPlain(p.student_id)}" data-sem="${escPlain(p.semester || '')}">طباعة من المستعرض</button>
+              <button type="button" class="btn btn-sm btn-success" data-final-word="${escPlain(p.student_id)}" data-sem="${escPlain(p.semester || '')}">تحميل Word</button>
+            </div>
+          </div>
+        `;
+        item.appendChild(body);
+        container.appendChild(item);
+        const editBtn = body.querySelector('button[data-final-edit]');
+        const htmlBtn = body.querySelector('button[data-final-html]');
+        const wordBtn = body.querySelector('button[data-final-word]');
+        if (editBtn) {
+          editBtn.addEventListener('click', () => {
+            openSupervisorEditRegistration(editBtn.dataset.finalEdit, editBtn.dataset.name || '', editBtn.dataset.sem || '');
+          });
+        }
+        if (htmlBtn) {
+          htmlBtn.addEventListener('click', () => {
+            openRegistrationFormHtml(htmlBtn.dataset.finalHtml, htmlBtn.dataset.sem || '', 'actual');
+          });
+        }
+        if (wordBtn) {
+          wordBtn.addEventListener('click', async () => {
+            wordBtn.disabled = true;
+            const prev = wordBtn.textContent;
+            wordBtn.textContent = 'جاري التحميل...';
+            await downloadRegistrationWord(wordBtn.dataset.finalWord, wordBtn.dataset.sem || '', 'actual', setFinalMsg);
+            wordBtn.disabled = false;
+            wordBtn.textContent = prev;
+          });
+        }
+      });
+    }
+
+    let supEditState = { studentId: '', studentName: '', semester: '', courses: [], unitsMap: {}, eligible: [] };
+
+    function setSupEditMsg(type, text){
+      const el = document.getElementById('supEditMsg');
+      if (!el) return;
+      if (!text) { el.innerHTML = ''; return; }
+      el.innerHTML = `<div class="alert alert-${type} py-2 mb-0 small">${escPlain(text)}</div>`;
+    }
+
+    function _supEditUnitsTotal(){
+      return (supEditState.courses || []).reduce((a, cn) => a + Number(supEditState.unitsMap[cn] || 0), 0);
+    }
+
+    function renderSupEditCourses(){
+      const wrap = document.getElementById('supEditCoursesChips');
+      const unitsEl = document.getElementById('supEditUnitsTotal');
+      if (unitsEl) unitsEl.textContent = String(_supEditUnitsTotal());
+      if (!wrap) return;
+      wrap.innerHTML = '';
+      if (!supEditState.courses.length) {
+        wrap.innerHTML = '<span class="text-muted small">لا مقررات مسجّلة — أضف من القائمة أدناه.</span>';
+        return;
+      }
+      supEditState.courses.forEach(cn => {
+        const chip = document.createElement('span');
+        chip.className = 'badge bg-white text-dark border d-inline-flex align-items-center gap-1 py-2 px-2';
+        const u = Number(supEditState.unitsMap[cn] || 0);
+        chip.innerHTML = `<span>${escPlain(cn)}${u ? ' <span class="text-muted">(' + u + ')</span>' : ''}</span>`;
+        const rm = document.createElement('button');
+        rm.type = 'button';
+        rm.className = 'btn-close btn-close-sm';
+        rm.style.fontSize = '0.55rem';
+        rm.title = 'إزالة المقرر';
+        rm.addEventListener('click', () => {
+          supEditState.courses = supEditState.courses.filter(x => x !== cn);
+          renderSupEditCourses();
+          fillSupEditAddSelect();
+        });
+        chip.appendChild(rm);
+        wrap.appendChild(chip);
+      });
+    }
+
+    function fillSupEditAddSelect(){
+      const sel = document.getElementById('supEditAddSelect');
+      if (!sel) return;
+      const taken = new Set(supEditState.courses);
+      const opts = (supEditState.eligible || []).filter(c => c && c.course_name && !taken.has(c.course_name));
+      sel.innerHTML = '<option value="">اختر مقرراً…</option>' + opts.map(c => {
+        const u = c.units != null ? ` — ${c.units} و` : '';
+        const code = c.course_code ? ` (${escPlain(c.course_code)})` : '';
+        return `<option value="${escPlain(c.course_name)}">${escPlain(c.course_name)}${code}${u}</option>`;
+      }).join('');
+    }
+
+    async function openSupervisorEditRegistration(studentId, studentName, semester){
+      const sid = String(studentId || '').trim();
+      if (!sid) return;
+      setSupEditMsg('', '');
+      supEditState = { studentId: sid, studentName: studentName || '', semester: semester || '', courses: [], unitsMap: {}, eligible: [] };
+      const label = document.getElementById('supEditStudentLabel');
+      if (label) label.textContent = `${studentName || 'طالب'} — ${sid}`;
+      const chips = document.getElementById('supEditCoursesChips');
+      if (chips) chips.innerHTML = '<span class="text-muted small">جاري التحميل...</span>';
+      const modalEl = document.getElementById('supEditRegModal');
+      const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+      modal.show();
+
+      try {
+        const [regRes, eligRes] = await Promise.all([
+          fetchJSON('/students/get_registrations?student_id=' + encodeURIComponent(sid)),
+          fetchJSON('/students/eligible_courses?student_id=' + encodeURIComponent(sid)),
+        ]);
+        const unitsMap = {};
+        let courses = [];
+        if (regRes.ok && Array.isArray(regRes.json)) {
+          // شكلين: قائمة مسطحة لمقرر واحد، أو عناصر {student_id, course_name, units}
+          courses = regRes.json.map(r => {
+            const cn = (typeof r === 'string') ? r : (r.course_name || r.course || '');
+            const u = (typeof r === 'object') ? Number(r.units || 0) : 0;
+            if (cn && u) unitsMap[cn] = u;
+            return String(cn || '').trim();
+          }).filter(Boolean);
+        } else if (regRes.ok && Array.isArray(regRes.json?.registrations)) {
+          courses = regRes.json.registrations.map(r => {
+            const cn = (typeof r === 'string') ? r : (r.course_name || '');
+            if (typeof r === 'object' && r.units != null) unitsMap[cn] = Number(r.units || 0);
+            return String(cn || '').trim();
+          }).filter(Boolean);
+        }
+        // إزالة التكرار مع الحفاظ على الترتيب
+        const seen = new Set();
+        courses = courses.filter(cn => { if (seen.has(cn)) return false; seen.add(cn); return true; });
+
+        let eligible = [];
+        if (eligRes.ok) {
+          eligible = Array.isArray(eligRes.json?.eligible) ? eligRes.json.eligible : [];
+          (eligRes.json?.eligible || []).forEach(c => {
+            if (c && c.course_name && c.units != null) unitsMap[c.course_name] = Number(c.units || 0);
+          });
+          // أيضاً حدّث units من COURSES العام إن وُجد
+        }
+        (COURSES || []).forEach(c => {
+          if (c && c.course_name && unitsMap[c.course_name] == null && c.units != null) {
+            unitsMap[c.course_name] = Number(c.units || 0);
+          }
+        });
+
+        // إن لم تُرجع get_registrations الوحدات، اطلبها من القائمة النهائية المخبأة
+        const cached = (finalPlansCache || []).find(p => String(p.student_id) === sid);
+        if (cached && Array.isArray(cached.courses) && !courses.length) {
+          courses = cached.courses.slice();
+        }
+
+        supEditState.courses = courses;
+        supEditState.unitsMap = unitsMap;
+        // eligible: المقررات المتاحة + الحالية غير الموجودة في eligible (للإبقاء على العرض عند الإزالة ثم الإعادة)
+        const eligNames = new Set(eligible.map(c => c.course_name));
+        courses.forEach(cn => {
+          if (!eligNames.has(cn)) {
+            eligible.push({ course_name: cn, course_code: '', units: unitsMap[cn] || 0 });
+            eligNames.add(cn);
+          }
+        });
+        // أضف أيضاً كل المقررات من COURSES كاحتياط إن كان العرض فارغاً
+        if (!eligible.length && Array.isArray(COURSES) && COURSES.length) {
+          eligible = COURSES.map(c => ({ course_name: c.course_name, course_code: c.course_code || '', units: c.units || 0 }));
+        }
+        supEditState.eligible = eligible;
+        renderSupEditCourses();
+        fillSupEditAddSelect();
+        if (!eligRes.ok) {
+          setSupEditMsg('warning', 'تعذر تحميل المقررات المتاحة بالكامل — يمكنك إزالة المقررات الحالية فقط أو المحاولة لاحقاً.');
+        }
+      } catch (e) {
+        console.error(e);
+        setSupEditMsg('danger', 'فشل تحميل بيانات التسجيل.');
+      }
+    }
+
+    async function saveSupervisorEditRegistration(){
+      const sid = supEditState.studentId;
+      if (!sid) return;
+      const btn = document.getElementById('btnSupEditSave');
+      const prev = btn ? btn.textContent : '';
+      if (btn) { btn.disabled = true; btn.textContent = 'جارٍ الحفظ...'; }
+      setSupEditMsg('', '');
+      const courses = (supEditState.courses || []).slice();
+      const totalUnits = _supEditUnitsTotal();
+      let overrideReason = '';
+      if (totalUnits < 12 || totalUnits > 19) {
+        overrideReason = prompt(`إجمالي الوحدات (${totalUnits}) خارج المدى 12–19. أدخل سبب التجاوز للحفظ:`, '') || '';
+        if (!overrideReason.trim()) {
+          setSupEditMsg('warning', 'سبب تجاوز حد الوحدات مطلوب.');
+          if (btn) { btn.disabled = false; btn.textContent = prev || 'حفظ التسجيل'; }
+          return;
+        }
+      }
+      const payload = {
+        student_id: sid,
+        registrations: courses,
+        registration_items: courses.map(cn => ({ course_name: cn, teaching_group_id: null })),
+        override_reason: overrideReason.trim(),
+      };
+      try {
+        let res = await fetchJSON('/students/save_registrations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok && res.json?.code === 'PREREQ_BLOCKED' && res.json?.can_override) {
+          const ok1 = confirm('تنبيه: متطلبات غير مستوفاة. هل تريد الحفظ مع تجاوز؟');
+          if (!ok1) { setSupEditMsg('warning', 'تم إلغاء الحفظ.'); return; }
+          const rsn = prompt('سبب تجاوز المتطلبات (إلزامي):', '') || '';
+          if (!rsn.trim()) { setSupEditMsg('warning', 'سبب التجاوز مطلوب.'); return; }
+          payload.prereq_override = true;
+          payload.prereq_override_reason = rsn.trim();
+          res = await fetchJSON('/students/save_registrations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+        }
+        if (!res.ok) {
+          setSupEditMsg('danger', res.json?.message || ('فشل الحفظ (' + res.status + ')'));
+          return;
+        }
+        setSupEditMsg('success', res.json?.message || 'تم حفظ التسجيل الفعلي.');
+        setFinalMsg('success', 'تم تحديث تسجيل «' + (supEditState.studentName || sid) + '».');
+        try { await loadFinalPlans(); } catch (e) {}
+        setTimeout(() => {
+          const modalEl = document.getElementById('supEditRegModal');
+          const modal = bootstrap.Modal.getInstance(modalEl);
+          if (modal) modal.hide();
+        }, 600);
+      } catch (e) {
+        console.error(e);
+        setSupEditMsg('danger', 'خطأ في الاتصال أثناء الحفظ.');
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = prev || 'حفظ التسجيل'; }
+      }
+    }
+
+    async function loadFinalPlans(){
+      const sem = (document.getElementById('finalSemesterInput')?.value || '').trim();
+      const qs = new URLSearchParams();
+      if (sem) qs.set('semester', sem);
+      const container = document.getElementById('finalList');
+      if (container) container.innerHTML = '<div class="text-muted small">جاري التحميل...</div>';
+      const url = '/enrollment/final_registrations' + (qs.toString() ? ('?' + qs.toString()) : '');
+      const res = await fetchJSON(url);
+      if (!res.ok) {
+        finalPlansCache = [];
+        if (container) container.innerHTML = '<div class="alert alert-danger mb-0">فشل جلب التسجيلات النهائية.</div>';
+        return;
+      }
+      // مقررات من التسجيل الفعلي (نفس مصدر الطباعة)
+      finalPlansCache = Array.isArray(res.json?.items) ? res.json.items : [];
+      applyFinalFilter();
+    }
+
+    function applyFinalFilter(){
+      const q = (document.getElementById('finalSearchInput')?.value || '').trim().toLowerCase();
+      const filtered = finalPlansCache.filter(p => {
+        if (!q) return true;
+        const blob = [
+          p.student_id, p.student_name, p.semester,
+          ...(p.courses || []),
+        ].join(' ').toLowerCase();
+        return blob.includes(q);
+      });
+      renderFinalCards(filtered);
     }
 
     document.addEventListener('DOMContentLoaded', async ()=>{
       let planPicker = null;
       let reviewPicker = null;
+      let finalPicker = null;
       // تحديد الدور الحالي وإخفاء/إظهار أقسام حسبه
       try {
         const auth = await fetchJSON('/auth/check');
@@ -1162,9 +1678,11 @@
         currentRole = null;
       }
       if (currentRole === 'student') {
-        // الطالب لا يرى قسم مراجعة الخطط
+        // الطالب لا يرى قسم مراجعة الخطط ولا القائمة النهائية
         const review = document.getElementById('reviewSection');
         if (review) review.style.display = 'none';
+        const finals = document.getElementById('finalRegsSection');
+        if (finals) finals.style.display = 'none';
       }
 
       if (window.TermYearPicker) {
@@ -1188,14 +1706,24 @@
           });
           window.__reviewTermPicker = reviewPicker;
         } catch (e) { console.warn(e); }
+        try {
+          finalPicker = await window.TermYearPicker.mount({
+            rootId: 'finalTermPicker',
+            seasonId: 'finalSeason',
+            yearId: 'finalYear',
+            hiddenId: 'finalSemesterInput',
+            useCurrent: true,
+          });
+          window.__finalTermPicker = finalPicker;
+        } catch (e) { console.warn(e); }
       }
 
       await loadStudentsAndCourses();
       if (IS_VIEW_ONLY_ROLE) {
+        setComposeLockedForApproved(false);
         const hideIds = [
           'btnSaveDraft',
           'btnSubmitPlan',
-          'btnPrintForm',
           'btnImproveGPA',
         ];
         hideIds.forEach(id => {
@@ -1217,20 +1745,24 @@
           sel.value = preferred;
         }
       } catch(e) {}
-      document.getElementById('studentSelect').addEventListener('change', ()=>{
-        planCoursesBaseline = [];
-        refreshEligibleCourses();
-      });
       document.getElementById('studentSelect').addEventListener('change', async (ev)=>{
         const sid = ev.target.value;
+        try {
+          if (sid) localStorage.setItem('plans_selected_student', sid);
+        } catch (e) {}
         if (sid) {
           loadStatusNoteForStudent(sid);
-          await loadPlanGroupOptions();
-          refreshPlanGroupPickers();
         } else {
           setPlanMsg('', '');
         }
+        await syncComposeForSelection();
       });
+      const semesterHidden = document.getElementById('semesterInput');
+      if (semesterHidden) {
+        semesterHidden.addEventListener('change', () => { syncComposeForSelection(); });
+      }
+      // تحميل تلقائي عند فتح الصفحة إن وُجد طالب + فصل
+      await syncComposeForSelection({ quiet: true });
       const selPlanCourses = document.getElementById('planCoursesSelect');
       if (selPlanCourses){
         selPlanCourses.addEventListener('change', async ()=>{
@@ -1245,7 +1777,7 @@
       if (btnPD) btnPD.addEventListener('click', openPrereqDetailModal);
       const btnPH = document.getElementById('btnPlanningHints');
       if (btnPH) btnPH.addEventListener('click', openPlanningHintsModal);
-      document.getElementById('btnLoadPlan').addEventListener('click', loadCurrentPlan);
+      document.getElementById('btnLoadPlan').addEventListener('click', () => loadCurrentPlan());
       const btnImproveGPA = document.getElementById('btnImproveGPA');
       if (btnImproveGPA) btnImproveGPA.addEventListener('click', openImproveGPAModal);
       document.getElementById('btnSaveDraft').addEventListener('click', saveDraft);
@@ -1259,7 +1791,27 @@
       if (searchEl) searchEl.addEventListener('input', applyPendingFilter);
       const semEl = document.getElementById('reviewSemesterInput');
       if (semEl) semEl.addEventListener('change', loadPending);
+      document.getElementById('btnLoadFinal')?.addEventListener('click', loadFinalPlans);
+      document.getElementById('finalSearchInput')?.addEventListener('input', applyFinalFilter);
+      document.getElementById('finalSemesterInput')?.addEventListener('change', loadFinalPlans);
+      document.getElementById('btnSupEditAddCourse')?.addEventListener('click', () => {
+        const sel = document.getElementById('supEditAddSelect');
+        const cn = (sel?.value || '').trim();
+        if (!cn) return;
+        if (!supEditState.courses.includes(cn)) {
+          const meta = (supEditState.eligible || []).find(c => c.course_name === cn);
+          if (meta && meta.units != null) supEditState.unitsMap[cn] = Number(meta.units || 0);
+          supEditState.courses.push(cn);
+          renderSupEditCourses();
+          fillSupEditAddSelect();
+        }
+        if (sel) sel.value = '';
+      });
+      document.getElementById('btnSupEditSave')?.addEventListener('click', saveSupervisorEditRegistration);
       await loadPending();
+      if (currentRole !== 'student') {
+        await loadFinalPlans();
+      }
     });
   </script>
 

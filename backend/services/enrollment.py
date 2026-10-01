@@ -477,6 +477,95 @@ def _is_instructor_or_supervisor_view_only() -> bool:
     return students_registry_view_only()
 
 
+def _enrollment_writes_allowed() -> bool:
+    """المشرف يكتب/يعتمد خطط طلبته؛ الأستاذ العادي يبقى عرضاً فقط."""
+    if current_supervisor_effective():
+        return True
+    return not _is_instructor_or_supervisor_view_only()
+
+
+def _assert_actor_can_access_student(conn, student_id: str) -> tuple[bool, str]:
+    """نطاق القسم + تقييد المشرف على الطلبة المسندين."""
+    sid = (student_id or "").strip()
+    if not sid:
+        return False, "student_id مطلوب"
+    if not _student_in_effective_scope(conn, sid):
+        return False, "FORBIDDEN"
+    if current_supervisor_effective():
+        iid = _session_instructor_id(conn)
+        if not iid:
+            return False, "لا يوجد ربط بين هذا الحساب وعضو هيئة تدريس"
+        row = conn.cursor().execute(
+            """
+            SELECT 1 FROM student_supervisor
+            WHERE student_id = ? AND instructor_id = ?
+            LIMIT 1
+            """,
+            (sid, iid),
+        ).fetchone()
+        if not row:
+            return False, "لا يمكنك إدارة خطة لطالب غير مُسند إليك"
+    return True, ""
+
+
+def _has_enrollment_plan_status(
+    conn, student_id: str, semester: str, statuses: tuple[str, ...]
+) -> bool:
+    sid = (student_id or "").strip()
+    sem = (semester or "").strip()
+    if not sid or not sem or not statuses:
+        return False
+    ph = ",".join("?" for _ in statuses)
+    row = conn.cursor().execute(
+        f"""
+        SELECT 1 FROM enrollment_plans
+        WHERE student_id = ? AND semester = ? AND status IN ({ph})
+        LIMIT 1
+        """,
+        (sid, sem, *statuses),
+    ).fetchone()
+    return bool(row)
+
+
+def _plan_compose_blocked_message(conn, student_id: str, semester: str) -> str | None:
+    """عند وجود خطة معتمدة: التعديل عبر التسجيل الفعلي لا عبر إنشاء خطة جديدة."""
+    if _has_enrollment_plan_status(conn, student_id, semester, ("Approved",)):
+        return (
+            "توجد خطة معتمدة لهذا الفصل. "
+            "عدّل المقررات من قائمة «التسجيلات الفعلية النهائية»."
+        )
+    return None
+
+
+def evaluate_plan_approval_gate(
+    conn,
+    *,
+    plan_id: int,
+    student_id: str,
+    semester: str,
+    prereq_eval: dict | None = None,
+    actor_is_supervisor: bool = False,
+) -> dict:
+    """
+    بوابة اعتماد الخطة — تهيئة لقواعد لاحقة قد تتطلب موافقة رئيس القسم.
+
+    حالياً: الاعتماد مسموح للمشرف على طلبته.
+    لاحقاً يمكن تفعيل requires_hod لحالات خاصة (متطلبات ناقصة، إقرار مخالفة، …).
+    """
+    _ = (conn, plan_id, student_id, semester, prereq_eval, actor_is_supervisor)
+    # Placeholders للسياسات المستقبلية — لا تُفعَّل الآن:
+    # unmet = int(((prereq_eval or {}).get("summary") or {}).get("courses_with_unmet_count") or 0)
+    # if actor_is_supervisor and unmet > 0:
+    #     return {"allowed": False, "requires_hod": True, "code": "HOD_REQUIRED_PREREQ",
+    #             "reason": "اعتماد خطة بمتطلبات ناقصة يحتاج موافقة رئيس القسم."}
+    return {
+        "allowed": True,
+        "requires_hod": False,
+        "code": "",
+        "reason": "",
+    }
+
+
 def _actor_username() -> str:
     return (session.get("user") or session.get("username") or "").strip()
 
@@ -1066,7 +1155,7 @@ def validate_prereqs():
     """
     فحص متطلبات دون حفظ. body: student_id, courses, old_courses (اختياري), context (اختياري plan|registration).
     """
-    if _is_instructor_or_supervisor_view_only():
+    if not _enrollment_writes_allowed():
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     data = request.get_json(force=True) or {}
     student_id = (data.get("student_id") or "").strip()
@@ -1153,7 +1242,7 @@ def validate_prereqs():
 @login_required
 def prereq_planning_hints():
     """أولوية إنجاز مبسّطة: أي مقرر يفتح أكبر عدد من المقررات التالية مباشرة."""
-    if _is_instructor_or_supervisor_view_only():
+    if not _enrollment_writes_allowed():
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     student_id = (request.args.get("student_id") or "").strip()
     user_role = session.get("user_role")
@@ -1214,7 +1303,7 @@ def create_or_update_plan():
       - courses: قائمة أسماء مقررات
     إذا وُجدت خطة Draft/Rejected لنفس الطالب والفصل، يتم الكتابة فوقها.
     """
-    if _is_instructor_or_supervisor_view_only():
+    if not _enrollment_writes_allowed():
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     data = request.get_json(force=True) or {}
     student_id = (data.get("student_id") or "").strip()
@@ -1285,6 +1374,12 @@ def create_or_update_plan():
 
     with get_connection() as conn:
         cur = conn.cursor()
+        ok_access, access_msg = _assert_actor_can_access_student(conn, student_id)
+        if not ok_access:
+            return jsonify({"status": "error", "message": access_msg or "FORBIDDEN", "code": "FORBIDDEN"}), 403
+        approved_block = _plan_compose_blocked_message(conn, student_id, semester)
+        if approved_block:
+            return jsonify({"status": "error", "message": approved_block, "code": "PLAN_APPROVED_EXISTS"}), 400
         blocked = _term_guard(conn, "enrollment_plan_write", semester, student_id)
         if blocked:
             return blocked
@@ -1295,12 +1390,13 @@ def create_or_update_plan():
             _enforce_units_limit(cur, student_id, courses)
         except ValueError as ve:
             return jsonify({"status": "error", "message": str(ve), "code": "UNITS_LIMIT"}), 400
-        # ابحث عن خطة Draft أو Rejected لنفس الطالب والفصل
+        # ابحث عن خطة Draft/Rejected/Pending لنفس الطالب والفصل (لتعديل المعلّقة أيضاً)
         row = cur.execute(
             """
             SELECT id FROM enrollment_plans
-            WHERE student_id = ? AND semester = ? AND status IN ('Draft','Rejected')
-            ORDER BY id DESC LIMIT 1
+            WHERE student_id = ? AND semester = ? AND status IN ('Draft','Rejected','Pending')
+            ORDER BY CASE status WHEN 'Pending' THEN 0 WHEN 'Draft' THEN 1 ELSE 2 END, id DESC
+            LIMIT 1
             """,
             (student_id, semester),
         ).fetchone()
@@ -1444,7 +1540,7 @@ def submit_plan(plan_id: int):
     تحويل الخطة من Draft إلى Pending.
     لا يتم المساس بجدول registrations هنا.
     """
-    if _is_instructor_or_supervisor_view_only():
+    if not _enrollment_writes_allowed():
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     data = request.get_json(silent=True) or {}
     ack_prereq_violation = bool(data.get("ack_prereq_violation"))
@@ -1464,8 +1560,15 @@ def submit_plan(plan_id: int):
         status = row[3]
         student_id = row[1]
         semester = (row[2] or "").strip()
-        if not _student_in_effective_scope(conn, student_id):
-            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        ok_access, access_msg = _assert_actor_can_access_student(conn, student_id)
+        if not ok_access:
+            return jsonify({"status": "error", "message": access_msg or "FORBIDDEN", "code": "FORBIDDEN"}), 403
+        if _has_enrollment_plan_status(conn, student_id, semester, ("Approved",)):
+            return jsonify({
+                "status": "error",
+                "message": "توجد خطة معتمدة لهذا الفصل. عدّل التسجيل الفعلي بدلاً من إعادة إرسال خطة.",
+                "code": "PLAN_APPROVED_EXISTS",
+            }), 400
 
         blocked = _term_guard(conn, "enrollment_plan_write", semester, student_id)
         if blocked:
@@ -1477,7 +1580,7 @@ def submit_plan(plan_id: int):
             sid_session = session.get("student_id") or session.get("user")
             if sid_session != student_id:
                 return jsonify({"status": "error", "message": "لا يمكنك إرسال خطة طالب آخر"}), 403
-        if status not in ("Draft", "Rejected"):
+        if status not in ("Draft", "Rejected", "Pending"):
             return (
                 jsonify(
                     {
@@ -1612,7 +1715,7 @@ def recheck_plan_prereqs(plan_id: int):
     """
     إعادة فحص متطلبات خطة معلّقة بدرجات اليوم — تحديث prereq_validation_json دون تغيير الحالة.
     """
-    if _is_instructor_or_supervisor_view_only():
+    if not _enrollment_writes_allowed():
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     now = _now_iso()
     with get_connection() as conn:
@@ -1627,8 +1730,9 @@ def recheck_plan_prereqs(plan_id: int):
                 404,
             )
         _, student_id, semester, status = row
-        if not _student_in_effective_scope(conn, student_id):
-            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        ok_access, access_msg = _assert_actor_can_access_student(conn, student_id)
+        if not ok_access:
+            return jsonify({"status": "error", "message": access_msg or "FORBIDDEN", "code": "FORBIDDEN"}), 403
         if status != "Pending":
             return (
                 jsonify(
@@ -1639,38 +1743,6 @@ def recheck_plan_prereqs(plan_id: int):
                 ),
                 400,
             )
-
-        is_supervisor_chk = current_supervisor_effective()
-        if is_supervisor_chk:
-            instructor_id = _session_instructor_id(conn)
-            if not instructor_id:
-                return (
-                    jsonify(
-                        {
-                            "status": "error",
-                            "message": "لا يوجد ربط بين هذا الحساب وعضو هيئة تدريس",
-                            "code": "FORBIDDEN",
-                        }
-                    ),
-                    403,
-                )
-            row_sv = cur.execute(
-                """
-                SELECT 1 FROM student_supervisor
-                WHERE instructor_id = ? AND student_id = ? LIMIT 1
-                """,
-                (instructor_id, student_id),
-            ).fetchone()
-            if not row_sv:
-                return (
-                    jsonify(
-                        {
-                            "status": "error",
-                            "message": "لا يمكن تقييم مقررات طالب غير مسند إليك",
-                        }
-                    ),
-                    403,
-                )
 
         items = cur.execute(
             "SELECT course_name FROM enrollment_plan_items WHERE plan_id = ?",
@@ -1740,9 +1812,9 @@ def approve_plan(plan_id: int):
     """
     اعتماد الخطة وتحويلها إلى Approved
     + ترحيل المقررات إلى جدول registrations (يُستبدل تسجيل الطالب بالكامل).
-    في هذه المرحلة نعامل المعتمد كـ "مشرف/رئيس قسم" واحد (لاحقاً يمكن فصل الأدوار).
+    المشرف يعتمد خطط طلبته؛ بوابة evaluate_plan_approval_gate للحالات الخاصة لاحقاً.
     """
-    if _is_instructor_or_supervisor_view_only():
+    if not _enrollment_writes_allowed():
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     now = _now_iso()
     with get_connection() as conn:
@@ -1757,8 +1829,9 @@ def approve_plan(plan_id: int):
                 404,
             )
         _, student_id, semester, status = row
-        if not _student_in_effective_scope(conn, student_id):
-            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        ok_access, access_msg = _assert_actor_can_access_student(conn, student_id)
+        if not ok_access:
+            return jsonify({"status": "error", "message": access_msg or "FORBIDDEN", "code": "FORBIDDEN"}), 403
         blocked = _term_guard(conn, "enrollment_plan_approve", semester, student_id)
         if blocked:
             return blocked
@@ -1827,6 +1900,27 @@ def approve_plan(plan_id: int):
                 400,
             )
 
+        gate = evaluate_plan_approval_gate(
+            conn,
+            plan_id=int(plan_id),
+            student_id=student_id,
+            semester=semester,
+            prereq_eval=prereq_eval,
+            actor_is_supervisor=current_supervisor_effective(),
+        )
+        if not gate.get("allowed"):
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "code": gate.get("code") or "APPROVAL_BLOCKED",
+                        "message": gate.get("reason") or "الاعتماد غير مسموح حالياً.",
+                        "requires_hod": bool(gate.get("requires_hod")),
+                    }
+                ),
+                403 if gate.get("requires_hod") else 400,
+            )
+
         # استبدال تسجيلات الطالب الحالية بهذه المقررات
         cur.execute(
             "DELETE FROM registrations WHERE student_id = ?",
@@ -1889,9 +1983,123 @@ def approve_plan(plan_id: int):
 
     return jsonify({
         "status": "ok",
+        "student_id": student_id,
+        "semester": semester,
         "conflict_count": conflict_count,
         "message": "تم اعتماد الخطة." + (f" تم تحديث تقرير التعارضات ({conflict_count} تعارض)." if conflict_count else " لا توجد تعارضات في الجدول الحالي.")
     })
+
+
+@enrollment_bp.route("/final_registrations", methods=["GET"])
+@role_required(
+    "admin",
+    "admin_main",
+    "system_admin",
+    "college_dean",
+    "academic_vice_dean",
+    "head_of_department",
+    "supervisor",
+)
+def list_final_registrations():
+    """
+    قائمة التسجيلات الفعلية النهائية للطباعة.
+    المقررات من جدول registrations (المصدر الفعلي) وليس من بنود الخطة.
+    يُعرض طالب واحد لكل سجل — آخر خطة معتمدة للفصل كمرجع زمني فقط.
+    """
+    semester = (request.args.get("semester") or "").strip()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        mode_scope, dep_scope = resolve_users_list_scope(conn, _actor_username())
+        is_supervisor = current_supervisor_effective()
+        instructor_id = _session_instructor_id(conn) if is_supervisor else None
+        if is_supervisor and not instructor_id:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "لا يوجد ربط بين هذا الحساب وعضو هيئة تدريس",
+                        "code": "FORBIDDEN",
+                    }
+                ),
+                403,
+            )
+
+        q = """
+            SELECT ep.id, ep.student_id, ep.semester, ep.updated_at, ep.created_at
+            FROM enrollment_plans ep
+            WHERE ep.status = 'Approved'
+        """
+        params: list = []
+        if is_supervisor:
+            q += """
+                AND ep.student_id IN (
+                    SELECT student_id FROM student_supervisor WHERE instructor_id = ?
+                )
+            """
+            params.append(instructor_id)
+        elif mode_scope == "department" and dep_scope is not None:
+            q += """
+                AND ep.student_id IN (
+                    SELECT student_id FROM students
+                    WHERE department_id = ?
+                       OR current_program_id IN (SELECT id FROM programs WHERE department_id = ?)
+                       OR admission_program_id IN (SELECT id FROM programs WHERE department_id = ?)
+                )
+            """
+            params.extend([int(dep_scope), int(dep_scope), int(dep_scope)])
+        elif mode_scope == "empty":
+            return jsonify({"status": "ok", "items": []}), 200
+        if semester:
+            q += " AND ep.semester = ?"
+            params.append(semester)
+        q += " ORDER BY COALESCE(ep.updated_at, ep.created_at) DESC, ep.id DESC"
+        plan_rows = cur.execute(q, params).fetchall()
+
+        # طالب واحد: أحدث خطة معتمدة فقط
+        latest_by_student: dict[str, tuple] = {}
+        for r in plan_rows:
+            sid = str(r[1] or "").strip()
+            if not sid or sid in latest_by_student:
+                continue
+            latest_by_student[sid] = r
+
+        units_map = _course_units_map(cur)
+        names = _student_names_by_ids(cur, list(latest_by_student.keys()))
+        items = []
+        for sid, r in latest_by_student.items():
+            plan_id, _, sem_label, updated_at, created_at = r[0], r[1], r[2], r[3], r[4]
+            reg_rows = cur.execute(
+                """
+                SELECT r.course_name
+                FROM registrations r
+                WHERE r.student_id = ?
+                ORDER BY r.course_name
+                """,
+                (sid,),
+            ).fetchall()
+            courses = [str(x[0]).strip() for x in (reg_rows or []) if x and str(x[0] or "").strip()]
+            units_total = round(sum(float(units_map.get(cn, 0) or 0) for cn in courses), 2)
+            items.append(
+                {
+                    "plan_id": int(plan_id) if plan_id is not None else None,
+                    "student_id": sid,
+                    "student_name": names.get(sid, ""),
+                    "semester": sem_label or semester or "",
+                    "updated_at": updated_at or "",
+                    "created_at": created_at or "",
+                    "courses": courses,
+                    "units_total": units_total,
+                    "source": "actual",
+                }
+            )
+
+        items.sort(
+            key=lambda it: (
+                str(it.get("student_name") or ""),
+                str(it.get("student_id") or ""),
+            )
+        )
+        return jsonify({"status": "ok", "items": items, "source": "actual"})
 
 
 @enrollment_bp.route("/plans/archive_after_migration", methods=["POST"])
@@ -2001,17 +2209,23 @@ def registration_form_html(student_id):
     return render_template("registration_form_print.html", **ctx)
 
 
+def _can_print_registration_form() -> bool:
+    """المشرف يطبع استمارات طلبته؛ منع التعديل العام لا يمنع الطباعة."""
+    if current_supervisor_effective():
+        return True
+    return not _is_instructor_or_supervisor_view_only()
+
+
 @enrollment_bp.route("/print_registration_form/<student_id>", methods=["GET"])
 @role_required("admin", "admin_main", "head_of_department", "supervisor", "student")
 def print_registration_form(student_id):
-    if _is_instructor_or_supervisor_view_only():
-        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     """
     توليد ملف Word لاستمارة تسجيل مقررات دراسية لطالب محدد.
-    يقبل اختيارياً ?semester= لتحديد فصل معيّن.
+    يقبل اختيارياً ?semester= و ?source=plan|actual
     """
+    if not _can_print_registration_form():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     # تقييد المشرف: لا يطبع إلا لطلبته المسندين إليه
-    user_role = session.get("user_role")
     is_supervisor = current_supervisor_effective()
     if is_supervisor:
         instructor_id = session.get("instructor_id")
@@ -2148,13 +2362,13 @@ def registration_form_versions():
 @enrollment_bp.route("/plans/<int:plan_id>/reject", methods=["POST"])
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department", "supervisor")
 def reject_plan(plan_id: int):
-    if _is_instructor_or_supervisor_view_only():
-        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     """
     رفض الخطة مع حفظ سبب الرفض.
     body:
       - reason: نص اختياري لكن مستحسن
     """
+    if not _enrollment_writes_allowed():
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
     data = (request.get_json(force=True) or {})
     reason = (data.get("reason") or "").strip()
     now = _now_iso()
@@ -2171,8 +2385,9 @@ def reject_plan(plan_id: int):
                 404,
             )
         _, student_id, semester, status = row
-        if not _student_in_effective_scope(conn, student_id):
-            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        ok_access, access_msg = _assert_actor_can_access_student(conn, student_id)
+        if not ok_access:
+            return jsonify({"status": "error", "message": access_msg or "FORBIDDEN", "code": "FORBIDDEN"}), 403
         if status not in ("Pending", "Draft"):
             return (
                 jsonify(

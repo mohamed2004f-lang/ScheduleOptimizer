@@ -336,6 +336,8 @@ let COURSES = [];  // cached courses metadata
 let PROGRAMS = []; // cached programs list
 let editing = null; // current student object
 let REG_VIEW_ONLY = false;
+let REG_SUPERVISOR_LIMITED = false; // مشرف: يعدّل التسجيل دون استيراد/حذف جماعي/ترحيل
+let IS_SUPERVISOR_EFFECTIVE = false;
 let regEditBaseline = [];
 let lastRegPrereqValidation = null;
 let regPrereqTimer = null;
@@ -568,7 +570,16 @@ function canManageEnrollmentStatus(){
 
 function canOverridePrereqRegistrations(){
   const r = String(CURRENT_ROLE || '').trim().toLowerCase();
-  return r === 'admin' || r === 'admin_main' || r === 'head_of_department';
+  return r === 'admin' || r === 'admin_main' || r === 'head_of_department' || r === 'supervisor' || IS_SUPERVISOR_EFFECTIVE;
+}
+
+function canOverrideUnitsRegistrations(){
+  return canOverridePrereqRegistrations();
+}
+
+function canDoBulkRegistrationAdmin(){
+  // استيراد / حذف كامل / ترحيل لكشف الدرجات — ليس للمشرف
+  return !REG_VIEW_ONLY && !REG_SUPERVISOR_LIMITED;
 }
 
 async function updateEnrollmentStatus(student, newStatus){
@@ -937,7 +948,7 @@ function renderStudents(list){
       btnDownloadActual.addEventListener('click', ()=> downloadActualRegistrationForm(s));
       right.appendChild(btnDownloadActual);
 
-      if (!REG_VIEW_ONLY) {
+      if (!REG_VIEW_ONLY && canDoBulkRegistrationAdmin()) {
       const btnMigrate = el('button','btn btn-sm btn-warning','ترحيل إلى كشف الدرجات');
       btnMigrate.addEventListener('click', ()=> migrateStudentRegistrations(s));
       right.appendChild(btnMigrate);
@@ -1323,14 +1334,16 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
   let prereqOverride = false;
   let prereqOverrideReason = '';
   if (out){
-    if (!(String(CURRENT_ROLE || '').trim().toLowerCase() === 'admin' || String(CURRENT_ROLE || '').trim().toLowerCase() === 'admin_main' || String(CURRENT_ROLE || '').trim().toLowerCase() === 'head_of_department')){
+    if (!canOverrideUnitsRegistrations()){
       uiToast(`لا يمكن الحفظ لأن إجمالي الوحدات (${totalUnits}) خارج 12-19.`, 'warning');
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = oldText || 'حفظ التغييرات'; }
       return;
     }
     if (!overrideReason){
-      uiToast('أدخل سبب التجاوز للحفظ كأدمن.', 'warning');
+      uiToast('أدخل سبب التجاوز للحفظ.', 'warning');
       if (reasonWrap) reasonWrap.style.display = '';
       if (reasonEl) reasonEl.focus();
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = oldText || 'حفظ التغييرات'; }
       return;
     }
   }
@@ -1385,17 +1398,19 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
     }
   };
   try{
-    // حفظ بيانات التخصص/المسار أولاً
-    const specRes = await fetchJSON('/students/specialization/update', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(specPayload)
-    });
-    if (!specRes.ok || specRes.json?.status !== 'ok'){
-      setEditMsg('danger', specRes.json?.message || `تعذر حفظ بيانات التخصص (${specRes.status})`);
-      return;
+    // حفظ بيانات التخصص/المسار أولاً (للإدارة/رئيس القسم فقط — ليس للمشرف)
+    if (!REG_SUPERVISOR_LIMITED) {
+      const specRes = await fetchJSON('/students/specialization/update', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(specPayload)
+      });
+      if (!specRes.ok || specRes.json?.status !== 'ok'){
+        setEditMsg('danger', specRes.json?.message || `تعذر حفظ بيانات التخصص (${specRes.status})`);
+        return;
+      }
+      editing.current_program_id = specPayload.current_program_id;
+      editing.track_code = specPayload.track_code;
+      editing.specialized_at_term = specPayload.specialized_at_term;
     }
-    editing.current_program_id = specPayload.current_program_id;
-    editing.track_code = specPayload.track_code;
-    editing.specialized_at_term = specPayload.specialized_at_term;
 
     // ملاحظة: الإرسال المباشر للمسار النهائي يتجنب أي التباس في إعادة التوجيه 307.
     let res = await fetchJSON('/students/save_registrations', {
@@ -1729,6 +1744,17 @@ if (fileImport){
 }
 
 function applyRegViewOnlyUi(){
+  if (REG_SUPERVISOR_LIMITED) {
+    const subtitle = document.querySelector('.page-subtitle');
+    if (subtitle && !WITHDRAWN_MODE) {
+      subtitle.textContent = 'تعديل التسجيل الفعلي لطلبتك المسندين فقط — بدون استيراد جماعي أو ترحيل/حذف كامل.';
+    }
+    const importLabel = document.querySelector('label.btn.btn-outline-primary');
+    if (importLabel && importLabel.querySelector('#fileImport')) importLabel.style.display = 'none';
+    const hintLine = document.querySelector('#registrationsAdmin .filter-section .ms-auto.small.text-muted');
+    if (hintLine) hintLine.textContent = 'يمكنك تعديل مقررات طلبتك المسندين وحفظها.';
+    return;
+  }
   if (!REG_VIEW_ONLY) return;
   const subtitle = document.querySelector('.page-subtitle');
   if (subtitle && !WITHDRAWN_MODE) {
@@ -1750,7 +1776,11 @@ function applyRegViewOnlyUi(){
       CURRENT_ROLE = auth.json.role || null;
       CURRENT_USER_ID = auth.json.user || null;
       const caps = auth.json.capabilities || {};
-      REG_VIEW_ONLY = !!caps.students_data_view_only || caps.can_manage_students === false;
+      IS_SUPERVISOR_EFFECTIVE = !!caps.is_supervisor_effective || String(CURRENT_ROLE || '').toLowerCase() === 'supervisor';
+      const baseViewOnly = !!caps.students_data_view_only || caps.can_manage_students === false;
+      // المشرف يعدّل تسجيلات طلبته رغم view_only العام
+      REG_SUPERVISOR_LIMITED = IS_SUPERVISOR_EFFECTIVE && baseViewOnly;
+      REG_VIEW_ONLY = baseViewOnly && !IS_SUPERVISOR_EFFECTIVE;
     }
   } catch(e){
     CURRENT_ROLE = null;
@@ -1795,6 +1825,26 @@ function applyRegViewOnlyUi(){
       await loadSpecializationSummary();
     });
   }
+
+  // فتح تعديل مباشر من رابط: /registrations_form?student_id=X&edit=1
+  try {
+    const params = new URLSearchParams(location.search);
+    const qSid = (params.get('student_id') || '').trim();
+    const wantEdit = params.get('edit') === '1' || params.get('edit') === 'true';
+    if (qSid && wantEdit && !REG_VIEW_ONLY) {
+      const st = STUDENTS.find(s => String(s.student_id || '').trim() === qSid);
+      if (st) {
+        const searchEl = document.getElementById('searchInput');
+        if (searchEl) {
+          searchEl.value = qSid;
+          try { applyListFilters(); } catch (e) {}
+        }
+        await openEditModal(st);
+      } else {
+        uiToast('الطالب غير موجود ضمن نطاقك أو القائمة الحالية.', 'warning');
+      }
+    }
+  } catch (e) { console.warn(e); }
 })();
 </script>
 

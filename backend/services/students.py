@@ -129,6 +129,31 @@ def _is_instructor_or_supervisor_view_only() -> bool:
     return students_registry_view_only()
 
 
+def _can_edit_student_registrations(conn, student_id: str) -> bool:
+    """
+    صلاحية تعديل التسجيل الفعلي:
+    - الإدارة / رئيس القسم (حسب نطاقهم)
+    - المشرف الأكاديمي لطلبته المسندين فقط
+    """
+    from backend.core.auth import current_supervisor_effective
+
+    sid = normalize_sid(student_id)
+    if not sid:
+        return False
+    role = _normalize_role((session.get("user_role") or "").strip())
+    if role in ("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department"):
+        if current_supervisor_effective() and role not in ("admin", "admin_main", "system_admin"):
+            # وضع مشرف لرئيس/عميد: نطاق الإشراف فقط
+            allowed = _get_allowed_student_ids_for_role(conn, "supervisor")
+            return allowed is not None and sid in allowed
+        allowed = _get_allowed_student_ids_for_role(conn, role)
+        return allowed is None or sid in allowed
+    if role == "supervisor" or current_supervisor_effective():
+        allowed = _get_allowed_student_ids_for_role(conn, "supervisor")
+        return allowed is not None and sid in allowed
+    return False
+
+
 def _can_transfer_student_department() -> bool:
     """المسؤول الرئيسي / عميد / وكيل في وضع القيادة فقط."""
     role = _normalize_role((session.get("user_role") or "").strip())
@@ -3511,15 +3536,36 @@ def _registration_write_blocked(student_id: str | None = None):
 
 
 @students_bp.route("/save_registrations", methods=["POST"])
-@role_required("admin", "head_of_department")
+@role_required(
+    "admin",
+    "admin_main",
+    "system_admin",
+    "college_dean",
+    "academic_vice_dean",
+    "head_of_department",
+    "supervisor",
+)
 def save_registrations():
+    from backend.core.auth import current_supervisor_effective
+
     data = request.get_json(force=True) or {}
     sid = normalize_sid(data.get("student_id"))
     override_reason = (data.get("override_reason") or "").strip()
     prereq_override = bool(data.get("prereq_override"))
     prereq_override_reason = (data.get("prereq_override_reason") or "").strip()
     role = _normalize_role((session.get("user_role") or "").strip())
-    can_override_prereq = role in ("admin", "admin_main", "system_admin", "head_of_department")
+    is_sup = current_supervisor_effective()
+    # المشرف (ومكافئوه) يتجاوز المتطلبات/الوحدات بسبب إلزامي — مثل رئيس القسم لنطاقه
+    can_override_prereq = role in (
+        "admin",
+        "admin_main",
+        "system_admin",
+        "college_dean",
+        "academic_vice_dean",
+        "head_of_department",
+        "supervisor",
+    ) or is_sup
+    can_override_units = can_override_prereq
     # توافق خلفي: بعض نسخ الواجهة القديمة لا ترسل مفاتيح prereq_override* وتكتفي بسبب عام.
     # في هذه الحالة، إذا كان الدور مخوّلاً، نستخدم override_reason كتجاوز متطلبات.
     if can_override_prereq and not prereq_override_reason and override_reason:
@@ -3549,6 +3595,25 @@ def save_registrations():
     if not isinstance(courses, list) and not reg_items:
         return jsonify({"status": "error", "message": "courses/registrations يجب أن تكون قائمة"}), 400
     courses = [it["course_name"] for it in reg_items]
+
+    # أستاذ عادي (غير مشرف فعّال) يبقى ممنوعاً
+    if _is_instructor_or_supervisor_view_only() and not is_sup and role not in (
+        "admin",
+        "admin_main",
+        "system_admin",
+        "head_of_department",
+        "college_dean",
+        "academic_vice_dean",
+    ):
+        return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+
+    with get_connection() as conn:
+        if not _can_edit_student_registrations(conn, sid):
+            return jsonify({
+                "status": "error",
+                "message": "لا يمكنك تعديل تسجيلات طالب خارج نطاق إشرافك أو قسمك",
+                "code": "FORBIDDEN",
+            }), 403
 
     blocked = _registration_write_blocked(sid)
     if blocked:
@@ -3620,7 +3685,7 @@ def save_registrations():
                         }
                     ), 400
 
-            # التحقق من حد الوحدات 12-19 (إلزامي) مع استثناء للأدمن فقط بشرط سبب
+            # التحقق من حد الوحدات 12-19 (إلزامي) مع استثناء للأدمن/رئيس القسم/المشرف بشرط سبب
             try:
                 total_units = 0
                 if courses:
@@ -3633,7 +3698,7 @@ def save_registrations():
                     total_units = sum(int(units_map.get(c, 0) or 0) for c in courses)
                 out_of_range = (total_units < 12) or (total_units > 19)
                 if out_of_range:
-                    if role not in ("admin", "admin_main", "system_admin", "head_of_department"):
+                    if not can_override_units:
                         return jsonify({
                             "status": "error",
                             "code": "UNITS_LIMIT",
@@ -3644,7 +3709,7 @@ def save_registrations():
                         return jsonify({
                             "status": "error",
                             "code": "UNITS_OVERRIDE_REQUIRED",
-                            "message": f"إجمالي الوحدات ({total_units}) خارج 12-19. أدخل سبب التجاوز للحفظ كأدمن.",
+                            "message": f"إجمالي الوحدات ({total_units}) خارج 12-19. أدخل سبب التجاوز للحفظ.",
                             "total_units": total_units,
                         }), 400
             except Exception:
