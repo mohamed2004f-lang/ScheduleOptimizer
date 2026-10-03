@@ -1484,9 +1484,16 @@ def count_registrations_for_teaching_group(conn, teaching_group_id: int) -> int:
     cols = {c.lower() for c in fetch_table_columns(conn, "registrations")}
     if "teaching_group_id" not in cols:
         return 0
+    from backend.core.enrollment_status_policy import operational_status_sql
+
     cur = conn.cursor()
     row = cur.execute(
-        "SELECT COUNT(DISTINCT student_id) FROM registrations WHERE teaching_group_id = ?",
+        f"""
+        SELECT COUNT(DISTINCT r.student_id)
+        FROM registrations r
+        INNER JOIN students st ON st.student_id = r.student_id AND {operational_status_sql('st')}
+        WHERE r.teaching_group_id = ?
+        """,
         (int(teaching_group_id),),
     ).fetchone()
     return int(_row_val(row, 0) or 0)

@@ -1653,6 +1653,221 @@ def save_course_master():
 
 
 # ---------------------------------------------------------------------------
+def _count_college_general_on_program(cur, program_id: int) -> int:
+    row = cur.execute(
+        """
+        SELECT COUNT(*) AS cnt FROM program_courses
+        WHERE program_id = ?
+          AND COALESCE(is_active, 1) = 1
+          AND COALESCE(requirement_scope, 'dept_common') = 'college_general'
+        """,
+        (int(program_id),),
+    ).fetchone()
+    if not row:
+        return 0
+    if hasattr(row, "keys"):
+        return int(row["cnt"] or 0)
+    return int(row[0] or 0)
+
+
+def _college_general_source_rows(cur) -> list[dict]:
+    """أفضل مصدر لبنود الاتجاه العام: PROG_U1 ثم أي برنامج يملك college_general."""
+    from backend.core.academic_pathway import COLLEGE_GENERAL_PROGRAM_CODE
+
+    rows = _rows(
+        cur,
+        """
+        SELECT pc.course_master_id, pc.course_code, pc.course_name_override,
+               pc.level_no, pc.units_override, pc.college_general_component,
+               pc.plan_applicability, p.code AS program_code
+        FROM program_courses pc
+        INNER JOIN programs p ON p.id = pc.program_id
+        WHERE COALESCE(pc.is_active, 1) = 1
+          AND COALESCE(pc.requirement_scope, 'dept_common') = 'college_general'
+          AND COALESCE(pc.course_code, '') <> ''
+        ORDER BY CASE WHEN UPPER(TRIM(p.code)) = ? THEN 0 ELSE 1 END,
+                 pc.level_no, pc.course_code
+        """,
+        (COLLEGE_GENERAL_PROGRAM_CODE,),
+    )
+    # اختَر برنامجاً واحداً كمصدر (أفضلها PROG_U1 أو أول برنامج يملك البنود)
+    if not rows:
+        return []
+    preferred = [r for r in rows if str(r.get("program_code") or "").strip().upper() == COLLEGE_GENERAL_PROGRAM_CODE]
+    src = preferred or rows
+    src_code = str(src[0].get("program_code") or "").strip().upper()
+    return [r for r in src if str(r.get("program_code") or "").strip().upper() == src_code]
+
+
+def ensure_college_general_plan_items(conn, program_id: int) -> int:
+    """
+    إن لم تكن لخطة البرنامج بنود اتجاه عام، انسخها من PROG_U1 / برنامج يملكها.
+    لا يلمس بنوداً موجودة (نفس course_code).
+    """
+    ensure_program_course_plan_schema(conn)
+    cur = conn.cursor()
+    if _count_college_general_on_program(cur, int(program_id)) > 0:
+        return 0
+    source = _college_general_source_rows(cur)
+    if not source:
+        # بناء من مقررات مملوكة لـ GENERAL (بدون سجل المشترك)
+        from backend.core.department_scope_policy import (
+            course_is_college_shared_catalog,
+            resolve_college_general_department_id,
+        )
+
+        gen_id = resolve_college_general_department_id(conn)
+        if gen_id is None:
+            return 0
+        course_rows = cur.execute(
+            """
+            SELECT course_name, COALESCE(course_code, '') AS course_code,
+                   COALESCE(units, 0) AS units, course_master_id
+            FROM courses
+            WHERE owning_department_id = ?
+              AND COALESCE(course_name, '') <> ''
+            ORDER BY course_name
+            """,
+            (int(gen_id),),
+        ).fetchall()
+        source = []
+        for r in course_rows or []:
+            if hasattr(r, "keys"):
+                cname = (r["course_name"] or "").strip()
+                code = (r["course_code"] or "").strip()
+                units = int(r["units"] or 0)
+                mid = r["course_master_id"]
+            else:
+                cname, code, units, mid = (r[0] or "").strip(), (r[1] or "").strip(), int(r[2] or 0), r[3]
+            if not cname or course_is_college_shared_catalog(conn, cname):
+                continue
+            if not code:
+                continue
+            if mid in (None, ""):
+                # أنشئ محتوى إن لزم
+                ensure_course_master_catalog_schema(conn)
+                existing = cur.execute(
+                    "SELECT id FROM course_master WHERE lower(trim(title_ar)) = lower(trim(?)) LIMIT 1",
+                    (cname,),
+                ).fetchone()
+                if existing:
+                    mid = existing[0] if not hasattr(existing, "keys") else existing["id"]
+                else:
+                    if is_postgresql():
+                        mid = _row_id(
+                            cur.execute(
+                                """
+                                INSERT INTO course_master (title_ar, default_units, assessment_type)
+                                VALUES (?, ?, 'theoretical')
+                                RETURNING id
+                                """,
+                                (cname, units or 3),
+                            ).fetchone()
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            INSERT INTO course_master (title_ar, default_units, assessment_type)
+                            VALUES (?, ?, 'theoretical')
+                            """,
+                            (cname, units or 3),
+                        )
+                        mid = int(cur.lastrowid or 0)
+                    if mid:
+                        try:
+                            cur.execute(
+                                "UPDATE courses SET course_master_id = ? WHERE lower(trim(course_name)) = lower(trim(?))",
+                                (int(mid), cname),
+                            )
+                        except Exception:
+                            pass
+            if mid in (None, ""):
+                continue
+            source.append(
+                {
+                    "course_master_id": int(mid),
+                    "course_code": code,
+                    "course_name_override": "",
+                    "level_no": 1,
+                    "units_override": units or None,
+                    "college_general_component": resolve_college_general_component("", code, cname),
+                    "plan_applicability": "both",
+                }
+            )
+    if not source:
+        return 0
+
+    added = 0
+    pg = is_postgresql()
+    for item in source:
+        code = str(item.get("course_code") or "").strip()
+        mid = _i(item.get("course_master_id"))
+        if not code or mid is None:
+            continue
+        exists = cur.execute(
+            """
+            SELECT 1 FROM program_courses
+            WHERE program_id = ? AND lower(trim(course_code)) = lower(trim(?))
+            LIMIT 1
+            """,
+            (int(program_id), code),
+        ).fetchone()
+        if exists:
+            continue
+        units_ov = item.get("units_override")
+        units_ov_int = _i(units_ov) if units_ov not in (None, "") else None
+        level_no = max(0, _i(item.get("level_no"), 1) or 1)
+        cg = str(item.get("college_general_component") or "").strip()
+        name_ov = str(item.get("course_name_override") or "").strip()
+        plan_app = str(item.get("plan_applicability") or "both").strip() or "both"
+        if pg:
+            cur.execute(
+                """
+                INSERT INTO program_courses
+                (program_id, course_master_id, course_code, course_name_override,
+                 plan_applicability, requirement_scope, college_general_component,
+                 level_no, units_override, category, is_required, is_active)
+                VALUES (?, ?, ?, ?, ?, 'college_general', ?, ?, ?, 'required', 1, 1)
+                ON CONFLICT (program_id, course_code) DO NOTHING
+                """,
+                (
+                    int(program_id),
+                    int(mid),
+                    code,
+                    name_ov,
+                    plan_app,
+                    cg,
+                    level_no,
+                    units_ov_int,
+                ),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO program_courses
+                (program_id, course_master_id, course_code, course_name_override,
+                 plan_applicability, requirement_scope, college_general_component,
+                 level_no, units_override, category, is_required, is_active)
+                VALUES (?, ?, ?, ?, ?, 'college_general', ?, ?, ?, 'required', 1, 1)
+                """,
+                (
+                    int(program_id),
+                    int(mid),
+                    code,
+                    name_ov,
+                    plan_app,
+                    cg,
+                    level_no,
+                    units_ov_int,
+                ),
+            )
+        if int(cur.rowcount or 0) > 0:
+            added += 1
+    if added:
+        conn.commit()
+    return added
+
+
 @college_catalog_bp.route("/program_courses", methods=["GET"])
 @role_required(*_PLAN_EDITOR)
 def list_program_courses():
@@ -1666,6 +1881,10 @@ def list_program_courses():
             from backend.core.college_shared_catalog import ensure_college_shared_catalog_schema
 
             ensure_college_shared_catalog_schema(conn)
+        except Exception:
+            pass
+        try:
+            ensure_college_general_plan_items(conn, int(program_id))
         except Exception:
             pass
         cur = conn.cursor()
@@ -1701,6 +1920,10 @@ def program_courses_classification_summary():
     with get_connection() as conn:
         if not _program_belongs_to_scope(conn, int(program_id)):
             return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        try:
+            ensure_college_general_plan_items(conn, int(program_id))
+        except Exception:
+            pass
         cur = conn.cursor()
         rows = cur.execute(
             """

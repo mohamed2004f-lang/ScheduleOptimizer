@@ -5399,6 +5399,44 @@ def _group_flat_student_conflicts(conn, flat_rows):
     return [s for s in slots.values() if s["entries"]]
 
 
+def _filter_flat_student_conflicts_for_actor(conn, flat_rows):
+    """
+    عزل تعارضات الطلبة حسب نطاق الممثّل (رئيس قسم / مشرف / …).
+    None = بلا تقييد (كلية)، set فارغ = لا نتائج.
+    """
+    role = (session.get("user_role") or "").strip()
+    allowed = _get_allowed_student_ids_for_role(conn, role)
+    if allowed is None:
+        return list(flat_rows or [])
+    if not allowed:
+        return []
+
+    def _sid(row):
+        if isinstance(row, dict):
+            return normalize_sid(row.get("student_id"))
+        try:
+            return normalize_sid(row["student_id"] if "student_id" in row.keys() else row[0])
+        except Exception:
+            try:
+                return normalize_sid(getattr(row, "student_id", None))
+            except Exception:
+                return ""
+
+    out = []
+    for r in flat_rows or []:
+        sid = _sid(r)
+        if sid and sid in allowed:
+            out.append(r)
+    return out
+
+
+def _group_scoped_student_conflicts(conn, flat_rows):
+    """تجميع تعارضات الطلبة بعد تطبيق نطاق القسم/الدور."""
+    return _group_flat_student_conflicts(
+        conn, _filter_flat_student_conflicts_for_actor(conn, flat_rows)
+    )
+
+
 @students_bp.route("/timetable/conflicts")
 @login_required
 def timetable_conflicts():
@@ -5408,6 +5446,7 @@ def timetable_conflicts():
     - الافتراضي (?live=1): حساب حي من التسجيلات + جدول schedule الحالي
       (لا يعتمد على «إنتاج الجداول» ولا على فراغ conflict_report).
     - ?live=0&source=report: قراءة conflict_report إن وُجدت صفوف، وإلا حساب حي.
+    - رئيس القسم والمشرف يرون طلبتهم ضمن النطاق فقط.
     """
     try:
         live_raw = (request.args.get("live") or "1").strip().lower()
@@ -5432,7 +5471,7 @@ def timetable_conflicts():
                         ).fetchall()
                         if rows:
                             return jsonify({
-                                "conflicts": _group_flat_student_conflicts(conn, rows),
+                                "conflicts": _group_scoped_student_conflicts(conn, rows),
                                 "source": "conflict_report",
                             })
                 except Exception:
@@ -5442,7 +5481,7 @@ def timetable_conflicts():
             try:
                 flat = compute_per_student_conflicts(conn, prefer_schedule=True)
                 return jsonify({
-                    "conflicts": _group_flat_student_conflicts(conn, flat),
+                    "conflicts": _group_scoped_student_conflicts(conn, flat),
                     "source": "live_schedule",
                 })
             except Exception:
@@ -5490,6 +5529,8 @@ def timetable_conflicts():
                 current_app.logger.exception("timetable/conflicts: query failed (check table/columns)")
                 return jsonify({"conflicts": [], "source": "legacy_empty"})
 
+            allowed = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+
             slots = {}
             for r in rows:
                 rowd = dict(r)
@@ -5502,7 +5543,10 @@ def timetable_conflicts():
                     start, end = parse_time_range(ts)
                 room = rowd.get("room", "") or ""
                 course = rowd.get("course_name", "") or ""
-                sid = rowd.get("student_id", "") or ""
+                sid = normalize_sid(rowd.get("student_id", "") or "")
+                if allowed is not None:
+                    if not sid or sid not in allowed:
+                        continue
                 section = rowd.get("section", "") or ""
                 note = rowd.get("note", "") or ""
 

@@ -943,6 +943,15 @@ def bulk_delete_courses():
         scope_dep = _effective_department_scope_id(conn)
 
         if all_in_scope:
+            role = (session.get("role") or "").strip()
+            if role not in ("system_admin",):
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": "حذف/أرشفة كل مقررات القسم متاح لمسؤول النظام فقط.",
+                        "code": "system_admin_required",
+                    }
+                ), 403
             if scope_dep is None:
                 return jsonify(
                     {

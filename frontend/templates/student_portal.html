@@ -62,11 +62,13 @@
       </div>
 
       <div class="row g-3 mb-3" id="statsBar">
-        <div class="col-6 col-md-3"><div class="stat-pill"><div class="val text-primary" id="statRegs">0</div><div class="small text-muted">مقررات مسجّلة</div></div></div>
-        <div class="col-6 col-md-3"><div class="stat-pill"><div class="val text-success" id="statUnits">0</div><div class="small text-muted">وحدات</div></div></div>
-        <div class="col-6 col-md-3"><div class="stat-pill"><div class="val text-info" id="statGpa">—</div><div class="small text-muted">المعدل التراكمي</div></div></div>
-        <div class="col-6 col-md-3"><div class="stat-pill"><div class="val" id="statPlan">—</div><div class="small text-muted">خطة التسجيل</div></div></div>
+        <div class="col-6 col-md" data-stat="regs"><div class="stat-pill"><div class="val text-primary" id="statRegs">0</div><div class="small text-muted">مقررات مسجّلة</div></div></div>
+        <div class="col-6 col-md" data-stat="units-reg"><div class="stat-pill"><div class="val text-success" id="statUnits">0</div><div class="small text-muted">وحدات مسجّلة</div></div></div>
+        <div class="col-6 col-md" data-stat="units-done"><div class="stat-pill"><div class="val text-success" id="statCompletedUnits">—</div><div class="small text-muted">وحدات منجزة</div></div></div>
+        <div class="col-6 col-md" data-stat="gpa"><div class="stat-pill"><div class="val text-info" id="statGpa">—</div><div class="small text-muted">المعدل التراكمي</div></div></div>
+        <div class="col-6 col-md" data-stat="plan"><div class="stat-pill"><div class="val" id="statPlan">—</div><div class="small text-muted">خطة التسجيل</div></div></div>
       </div>
+      <p class="small text-muted mb-3" id="statsHint">المعدل والوحدات المنجزة مطابقة لكشف الدرجات (أفضل درجة لكل مقرر). الوحدات المسجّلة هي مقررات الفصل الحالي فقط.</p>
 
       <div class="card mb-3 d-none" id="actionCard">
         <div class="card-header fw-semibold d-flex justify-content-between"><span>مهام تحتاج انتباهك</span><span class="badge bg-danger" id="actionCount">0</span></div>
@@ -119,8 +121,9 @@
   </main>
   {% include "partials/product_home_credit.html" %}
   <script>
-    const CACHE_KEY = 'stu_portal_v4';
+    const CACHE_KEY = 'stu_portal_v5';
     const CACHE_TTL = 5 * 60 * 1000;
+    const OLD_CACHE_KEYS = ['stu_portal_v4', 'stu_portal_v3', 'stu_portal_v2'];
     let G_SUMMARY = {};
 
     function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
@@ -133,8 +136,21 @@
         return o.data;
       } catch(e) { return null; }
     }
+    /** لا نخزّن المعدل/الوحدات المنجزة/الحالة الأكاديمية — تُجلب دائماً من الخادم */
     function cacheSet(data) {
-      try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data })); } catch(e) {}
+      try {
+        const slim = Object.assign({}, data || {});
+        delete slim.gpa;
+        delete slim.completed_units;
+        delete slim.academic_status;
+        sessionStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data: slim }));
+      } catch(e) {}
+    }
+    function clearPortalCaches() {
+      try {
+        sessionStorage.removeItem(CACHE_KEY);
+        OLD_CACHE_KEYS.forEach(k => sessionStorage.removeItem(k));
+      } catch(e) {}
     }
 
     function planLabel(st) {
@@ -251,6 +267,8 @@
       if (d.term_label) { tl.textContent = 'الفصل: ' + d.term_label; tl.classList.remove('d-none'); }
       document.getElementById('statRegs').textContent = d.registrations_count || 0;
       document.getElementById('statUnits').textContent = d.units_registered || 0;
+      document.getElementById('statCompletedUnits').textContent =
+        d.completed_units != null ? d.completed_units : '—';
       document.getElementById('statGpa').textContent = d.gpa != null ? Number(d.gpa).toFixed(2) : '—';
       const alumni = !!d.alumni_mode;
       document.getElementById('statPlan').textContent = alumni ? 'خريج' : planLabel(d.enrollment_plan_status);
@@ -271,10 +289,14 @@
       const weeklyCard = document.getElementById('weeklyWrap')?.closest('.card');
       if (weeklyCard) weeklyCard.classList.toggle('d-none', alumni);
       const statsBar = document.getElementById('statsBar');
-      if (alumni && statsBar) {
-        document.getElementById('statRegs').closest('.col-6')?.classList.add('d-none');
-        document.getElementById('statUnits').closest('.col-6')?.classList.add('d-none');
+      if (statsBar) {
+        const hideReg = !!alumni;
+        statsBar.querySelectorAll('[data-stat="regs"], [data-stat="units-reg"], [data-stat="plan"]').forEach(el => {
+          el.classList.toggle('d-none', hideReg);
+        });
       }
+      const statsHint = document.getElementById('statsHint');
+      if (statsHint) statsHint.classList.toggle('d-none', alumni);
       renderAcademicStatus(d);
       renderTopStudents(d);
       renderHubs(d);
@@ -316,27 +338,35 @@
     }
 
     async function loadPortal(skipCache) {
+      // عرض سريع من الكاش (بدون معدل/وحدات منجزة) ثم تحديث حي دائماً
       if (!skipCache) {
         const c = cacheGet();
-        if (c) { renderSummary(c); if (!c.alumni_mode) loadWeekly(); return; }
+        if (c) {
+          renderSummary(c);
+          if (!c.alumni_mode) loadWeekly();
+        }
       }
       try {
-        const r = await fetch('/students/portal_summary', { credentials: 'include' });
+        const r = await fetch('/students/portal_summary', { credentials: 'include', cache: 'no-store' });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(j.message || 'fail');
         cacheSet(j);
         renderSummary(j);
         if (!j.alumni_mode) loadWeekly();
       } catch(e) {
-        document.getElementById('welcomeLine').textContent = 'تعذر تحميل البوابة.';
-        document.getElementById('loadSkeleton').classList.add('d-none');
+        if (!G_SUMMARY || !Object.keys(G_SUMMARY).length) {
+          document.getElementById('welcomeLine').textContent = 'تعذر تحميل البوابة.';
+          document.getElementById('loadSkeleton').classList.add('d-none');
+        }
       }
     }
 
     document.getElementById('btnRefresh').addEventListener('click', () => {
-      try { sessionStorage.removeItem(CACHE_KEY); } catch(e) {}
+      clearPortalCaches();
       loadPortal(true);
     });
+    // إبطال نسخ الكاش القديمة فقط؛ المعدل يُحدَّث دائماً من الخادم
+    try { OLD_CACHE_KEYS.forEach(k => sessionStorage.removeItem(k)); } catch(e) {}
     loadPortal(false);
   </script>
 </body>

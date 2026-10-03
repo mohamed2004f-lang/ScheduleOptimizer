@@ -321,13 +321,26 @@ def _load_pending_review_items(
 
 
 def _load_supervised_students(conn, instructor_id: int) -> list[dict]:
+    """طلبة الإشراف النشطون فقط (استبعاد الخريج/الموقوف/المنسحب من لوحة المشرف)."""
     cur = conn.cursor()
+    try:
+        from backend.database.database import fetch_table_columns
+
+        cols = fetch_table_columns(conn, "students")
+    except Exception:
+        cols = []
+    op_sql = ""
+    if "enrollment_status" in (cols or []):
+        from backend.core.enrollment_status_policy import operational_status_sql
+
+        op_sql = f" AND {operational_status_sql('s')} "
     rows = cur.execute(
-        """
+        f"""
         SELECT ss.student_id, COALESCE(s.student_name, '') AS student_name
         FROM student_supervisor ss
         LEFT JOIN students s ON s.student_id = ss.student_id
         WHERE ss.instructor_id = ?
+        {op_sql}
         ORDER BY ss.student_id
         """,
         (int(instructor_id),),

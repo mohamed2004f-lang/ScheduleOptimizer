@@ -26,6 +26,7 @@ from backend.services.prereg_helpers import (
 )
 from backend.database.database import is_postgresql, fetch_table_columns
 from backend.core.department_scope_policy import resolve_users_list_scope, student_matches_department
+from backend.core.enrollment_status_policy import operational_status_sql
 from backend.services import teaching_groups as tg_svc
 from backend.services.term_engine import (
     current_term_match_context,
@@ -1067,6 +1068,22 @@ def list_plans():
             params.extend([int(dep_scope), int(dep_scope), int(dep_scope)])
         elif mode_scope == "empty":
             return jsonify({"status": "ok", "plans": []}), 200
+        # القوائم التشغيلية للموظفين: استبعاد الخريج/الموقوف/المنسحب
+        include_inactive = (request.args.get("include_inactive") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        try:
+            stu_cols = fetch_table_columns(conn, "students")
+        except Exception:
+            stu_cols = []
+        if (
+            user_role != "student"
+            and not include_inactive
+            and "enrollment_status" in (stu_cols or [])
+        ):
+            q += f" AND student_id IN (SELECT student_id FROM students WHERE {operational_status_sql()})"
         if semester:
             q += " AND semester = ?"
             params.append(semester)
@@ -2049,6 +2066,21 @@ def list_final_registrations():
             params.extend([int(dep_scope), int(dep_scope), int(dep_scope)])
         elif mode_scope == "empty":
             return jsonify({"status": "ok", "items": []}), 200
+        include_inactive = (request.args.get("include_inactive") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        try:
+            stu_cols = fetch_table_columns(conn, "students")
+        except Exception:
+            stu_cols = []
+        if not include_inactive and "enrollment_status" in (stu_cols or []):
+            q += f"""
+                AND ep.student_id IN (
+                    SELECT student_id FROM students WHERE {operational_status_sql()}
+                )
+            """
         if semester:
             q += " AND ep.semester = ?"
             params.append(semester)

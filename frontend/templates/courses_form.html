@@ -103,7 +103,7 @@
                 <button type="button" class="btn btn-outline-secondary btn-sm" id="btnSelectFiltered">تحديد نتائج الفلتر</button>
                 <button type="button" class="btn btn-outline-secondary btn-sm" id="btnClearSelection">إلغاء التحديد</button>
                 <button type="button" class="btn btn-danger btn-sm" id="btnDeleteSelected">حذف المحدد</button>
-                <button type="button" class="btn btn-outline-warning btn-sm" id="btnDeleteAllDept" title="مقررات قسمك فقط — لا يشمل الاتجاه العام ولا المشتركة">حذف/أرشفة مقررات القسم فقط</button>
+                <button type="button" class="btn btn-outline-warning btn-sm d-none" id="btnDeleteAllDept" title="مسؤول النظام فقط — مقررات القسم القابلة للتعديل، لا يشمل الاتجاه العام ولا المشتركة">حذف/أرشفة مقررات القسم فقط</button>
               </div>
             </div>
           </div>
@@ -851,9 +851,16 @@ window.addEventListener('load', async ()=>{
     IS_ADMIN = (caps && caps.v >= 1)
       ? !!caps.can_manage_courses_edit
       : (role === 'admin' || role === 'admin_main' || role === 'head_of_department');
+    // حذف/أرشفة كل مقررات القسم: مسؤول النظام فقط
+    const btnDeleteAllDept = document.getElementById('btnDeleteAllDept');
+    if (btnDeleteAllDept) {
+      if (role === 'system_admin') btnDeleteAllDept.classList.remove('d-none');
+      else btnDeleteAllDept.classList.add('d-none');
+    }
   } catch(e){
     IS_ADMIN = false;
     IS_VIEW_ONLY_ROLE = false;
+    document.getElementById('btnDeleteAllDept')?.classList.add('d-none');
   }
 
   if(!IS_ADMIN){

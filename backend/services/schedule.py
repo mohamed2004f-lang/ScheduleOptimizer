@@ -1973,6 +1973,7 @@ def instructor_conflicts():
     """
     تعارضات الأساتذة (Double booking):
     نفس الأستاذ لديه مقرران أو أكثر بنفس اليوم مع تداخل زمني.
+    لرئيس القسم: صفوف جدول قسمه فقط (department_id).
     Returns:
       { status:'ok', conflicts:[{instructor, day, start_time, end_time, entries:[{section_id, course_name, time}]}] }
     """
@@ -1980,6 +1981,13 @@ def instructor_conflicts():
         with get_connection() as conn:
             _sync_schedule_pk_col(conn)
             cur = conn.cursor()
+            scope = _effective_schedule_department_scope_id(conn)
+            scols = fetch_table_columns(conn, "schedule")
+            dept_sql = ""
+            dept_params: list = []
+            if scope is not None and "department_id" in (scols or []):
+                dept_sql = " AND s.department_id = ? "
+                dept_params = [int(scope)]
             try:
                 rows = cur.execute(
                     f"""
@@ -1999,7 +2007,9 @@ def instructor_conflicts():
                       AND (
                         COALESCE(NULLIF(TRIM(i.name), ''), NULLIF(TRIM(s.instructor), ''), '') <> ''
                       )
-                    """
+                      {dept_sql}
+                    """,
+                    tuple(dept_params),
                 ).fetchall()
             except Exception:
                 rows = cur.execute(
@@ -2014,7 +2024,9 @@ def instructor_conflicts():
                     WHERE COALESCE(s.instructor,'') <> ''
                       AND COALESCE(s.day,'') <> ''
                       AND COALESCE(s.time,'') <> ''
-                    """
+                      {dept_sql}
+                    """,
+                    tuple(dept_params),
                 ).fetchall()
             # إن لم يوجد جدول الفريق بعد، ارجع للمسار القديم
             if not rows and not table_exists(conn, "teaching_group_instructors"):
@@ -2030,7 +2042,9 @@ def instructor_conflicts():
                     WHERE COALESCE(s.instructor,'') <> ''
                       AND COALESCE(s.day,'') <> ''
                       AND COALESCE(s.time,'') <> ''
-                    """
+                      {dept_sql}
+                    """,
+                    tuple(dept_params),
                 ).fetchall()
 
         items = []
@@ -2203,6 +2217,11 @@ def check_conflicts():
                 temp_rowid = int(cur.lastrowid or 0)
             
             # حساب التعارضات
+            from .students import (
+                _get_allowed_student_ids_for_role,
+                compute_per_student_conflicts,
+                normalize_sid,
+            )
             conflicts = compute_per_student_conflicts(conn)
             
             # حذف الإضافة المؤقتة
@@ -2231,7 +2250,8 @@ def check_conflicts():
                 )
             conn.commit()
             
-            # تصفية التعارضات المتعلقة بالمقرر الجديد
+            # تصفية التعارضات المتعلقة بالمقرر الجديد + نطاق القسم/الدور
+            allowed_ids = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
             relevant_conflicts = []
             for conflict in conflicts:
                 # التحقق إذا كان التعارض يتضمن المقرر الجديد
@@ -2239,6 +2259,9 @@ def check_conflicts():
                 # لا نعتمد على تطابق نصي للوقت لأن الوقت يُخزّن بأكثر من صيغة (مثلاً 09:00-13:00 مقابل 09:00-11:00).
                 # يكفينا تحقق: اليوم + مشاركة المقرر الجديد ضمن المقررات المتعارضة.
                 if course_name in conflicting_sections and day == conflict.get('day'):
+                    sid = normalize_sid(conflict.get('student_id', ''))
+                    if allowed_ids is not None and (not sid or sid not in allowed_ids):
+                        continue
                     relevant_conflicts.append({
                         'student_id': conflict.get('student_id', ''),
                         'day': conflict.get('day', ''),

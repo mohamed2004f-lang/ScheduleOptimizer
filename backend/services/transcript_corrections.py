@@ -1,4 +1,4 @@
-"""طلبات تصحيح كشف الدرجات من المشرف الأكاديمي لاعتماد رئيس القسم."""
+"""تصحيح كشف الدرجات من المشرف الأكاديمي (اعتماد فوري + إشعار رئيس القسم)."""
 from __future__ import annotations
 
 import datetime
@@ -19,6 +19,7 @@ from backend.services.grades import (
     _current_user_name,
     _require_post_publish_reason,
     _session_role,
+    _upsert_semester_scope,
     apply_grades_batch,
 )
 from backend.services.utilities import (
@@ -92,7 +93,7 @@ def _assert_previous_term(conn, semester: str) -> None:
         return
     if schedule_semester_matches_current_term(semester, current_label):
         raise ValueError(
-            "يُسمح للمشرف بطلب تصحيح فصول سابقة فقط — الفصل الحالي عبر مسودات الدرجات/الأستاذ."
+            "يُسمح للمشرف بتصحيح فصول سابقة فقط — الفصل الحالي عبر مسودات الدرجات/الأستاذ."
         )
 
 
@@ -274,7 +275,7 @@ def courses_for_student():
 @transcript_corrections_bp.route("/transcript_corrections", methods=["POST"])
 @login_required
 def create_transcript_correction():
-    """مشرف: إرسال طلب تصحيح كشف لفصل سابق (طلبة مسندون فقط)."""
+    """مشرف: اعتماد وتصحيح كشف لفصل سابق فوراً (طلبة مسندون) مع إشعار رئيس القسم."""
     if not _is_supervisor_actor():
         return jsonify({"status": "error", "message": "متاح للمشرف الأكاديمي فقط"}), 403
     iid = _session_instructor_id()
@@ -287,6 +288,7 @@ def create_transcript_correction():
     reason_raw = data.get("reason")
     is_equated = bool(data.get("is_equated_semester") or data.get("is_equated"))
     transfer = data.get("transfer") if isinstance(data.get("transfer"), dict) else None
+    semester_scope = data.get("semester_scope") if isinstance(data.get("semester_scope"), dict) else None
     try:
         grades = _normalize_grades_payload(data.get("grades") or [])
         reason = _require_post_publish_reason(reason_raw, required=True)
@@ -311,30 +313,59 @@ def create_transcript_correction():
                     "grades": grades,
                     "is_equated_semester": is_equated,
                     "transfer": transfer,
+                    "semester_scope": semester_scope,
                 },
                 ensure_ascii=False,
             )
             cur = conn.cursor()
-            # إلغاء طلب معلق سابق لنفس الطالب/الفصل من نفس المشرف
+            # إلغاء طلب معلق سابق لنفس الطالب/الفصل من نفس المشرف (تراكم قديم)
             cur.execute(
                 """
                 UPDATE transcript_correction_requests
                 SET status = 'rejected', hod_note = ?, reviewed_at = ?, reviewed_by = ?
                 WHERE student_id = ? AND semester = ? AND instructor_id = ? AND status = 'pending'
                 """,
-                ("استُبدل بطلب أحدث من المشرف", now, actor, sid, semester, iid),
+                ("استُبدل باعتماد أحدث من المشرف", now, actor, sid, semester, iid),
             )
+            changed_by = _audit_changed_by(
+                reason=f"اعتماد مشرف: {reason}"[:400],
+                kind="supervisor_finalize",
+            )
+            applied = apply_grades_batch(
+                conn,
+                sid,
+                semester,
+                grades,
+                changed_by,
+                is_equated=is_equated,
+                transfer=transfer,
+            )
+            if semester_scope:
+                _upsert_semester_scope(conn, sid, semester, semester_scope, actor=actor)
             if is_postgresql():
                 row_ins = cur.execute(
                     """
                     INSERT INTO transcript_correction_requests (
                         student_id, semester, payload_json, status, reason,
                         submitted_by, instructor_id, department_id,
-                        created_at, submitted_at
-                    ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
+                        created_at, submitted_at, reviewed_at, reviewed_by, hod_note
+                    ) VALUES (?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     RETURNING id
                     """,
-                    (sid, semester, payload, reason, actor, iid, dept_id, now, now),
+                    (
+                        sid,
+                        semester,
+                        payload,
+                        reason,
+                        actor,
+                        iid,
+                        dept_id,
+                        now,
+                        now,
+                        now,
+                        actor,
+                        "اعتماد تلقائي من المشرف الأكاديمي",
+                    ),
                 ).fetchone()
                 req_id = int(row_ins[0]) if row_ins else None
             else:
@@ -343,10 +374,23 @@ def create_transcript_correction():
                     INSERT INTO transcript_correction_requests (
                         student_id, semester, payload_json, status, reason,
                         submitted_by, instructor_id, department_id,
-                        created_at, submitted_at
-                    ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
+                        created_at, submitted_at, reviewed_at, reviewed_by, hod_note
+                    ) VALUES (?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (sid, semester, payload, reason, actor, iid, dept_id, now, now),
+                    (
+                        sid,
+                        semester,
+                        payload,
+                        reason,
+                        actor,
+                        iid,
+                        dept_id,
+                        now,
+                        now,
+                        now,
+                        actor,
+                        "اعتماد تلقائي من المشرف الأكاديمي",
+                    ),
                 )
                 req_id = int(cur.lastrowid or 0) or None
             conn.commit()
@@ -354,23 +398,27 @@ def create_transcript_correction():
                 notify_department_hods(
                     conn,
                     dept_id,
-                    title="طلب تصحيح كشف درجات",
-                    body=f"المشرف {actor} أرسل تصحيحاً للطالب {sid} — فصل {semester}",
+                    title="إشعار: المشرف اعتمد درجات طالب",
+                    body=(
+                        f"المشرف {actor} اعتمد درجات الطالب {sid} — فصل {semester}"
+                        f" ({applied} مقرر). السبب: {reason}"
+                    ),
                 )
             except Exception:
                 current_app.logger.exception("notify hods for transcript correction failed")
             try:
                 log_activity(
-                    action="transcript_correction_submit",
-                    details=f"id={req_id}; student_id={sid}; semester={semester}",
+                    action="transcript_correction_finalize",
+                    details=f"id={req_id}; student_id={sid}; semester={semester}; applied={applied}",
                 )
             except Exception:
                 pass
             return jsonify(
                 {
                     "status": "ok",
-                    "message": "تم إرسال طلب التصحيح لاعتماد رئيس القسم",
+                    "message": f"تم اعتماد وتطبيق {applied} درجة وإشعار رئيس القسم",
                     "id": req_id,
+                    "applied": applied,
                 }
             ), 200
         except PermissionError as e:
@@ -388,7 +436,7 @@ def create_transcript_correction():
 @transcript_corrections_bp.route("/transcript_corrections", methods=["GET"])
 @login_required
 def list_transcript_corrections():
-    """قائمة الطلبات: مشرف (طلباته) أو رئيس قسم (قسمه)."""
+    """قائمة التصحيحات: مشرف (سجلاته) أو رئيس قسم (قسمه — إشعارات الاعتماد)."""
     status = (request.args.get("status") or "pending").strip().lower()
     if status not in ("pending", "approved", "rejected", "all"):
         status = "pending"
@@ -429,7 +477,7 @@ def list_transcript_corrections():
                 "reviewed_at, reviewed_by "
                 "FROM transcript_correction_requests WHERE "
                 + " AND ".join(where)
-                + " ORDER BY COALESCE(submitted_at, created_at) DESC, id DESC LIMIT 200"
+                + " ORDER BY COALESCE(reviewed_at, submitted_at, created_at) DESC, id DESC LIMIT 200"
             )
             rows = cur.execute(sql, tuple(params)).fetchall()
             items = []
@@ -449,9 +497,14 @@ def list_transcript_corrections():
                     except Exception:
                         continue
                 try:
-                    d["grades"] = json.loads(d.get("payload_json") or "[]")
+                    grades, is_eq, transfer = _parse_correction_payload(d.get("payload_json") or "[]")
+                    d["grades"] = grades
+                    d["is_equated_semester"] = is_eq
+                    d["transfer"] = transfer
                 except Exception:
                     d["grades"] = []
+                    d["is_equated_semester"] = False
+                    d["transfer"] = None
                 d.pop("payload_json", None)
                 items.append(d)
             return jsonify({"status": "ok", "items": items}), 200
@@ -463,6 +516,7 @@ def list_transcript_corrections():
 @transcript_corrections_bp.route("/transcript_corrections/<int:req_id>/approve", methods=["POST"])
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def approve_transcript_correction(req_id: int):
+    """اعتماد طلبات معلّقة قديمة فقط — المسار الجديد يعتمد فوراً من المشرف."""
     actor = _current_user_name()
     with get_connection() as conn:
         try:

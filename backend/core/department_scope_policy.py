@@ -825,10 +825,24 @@ def finalize_instructor_department_id_for_write(
 
 
 def count_students_for_department(conn, dept_id: int) -> int:
-    """عدد الطلاب المطابقين لسياسة نطاق القسم (قسم مباشر أو عبر البرنامج)."""
+    """عدد الطلاب النشطين المطابقين لسياسة نطاق القسم (قسم مباشر أو عبر البرنامج)."""
     frag, params = sql_student_row_belongs_to_department(int(dept_id))
     cur = conn.cursor()
-    row = cur.execute(f"SELECT COUNT(*) FROM students WHERE {frag}", params).fetchone()
+    try:
+        from backend.database.database import fetch_table_columns
+
+        cols = fetch_table_columns(conn, "students")
+    except Exception:
+        cols = []
+    op = ""
+    if "enrollment_status" in (cols or []):
+        from backend.core.enrollment_status_policy import operational_status_sql
+
+        op = f" AND {operational_status_sql()} "
+    row = cur.execute(
+        f"SELECT COUNT(*) FROM students WHERE ({frag}){op}",
+        params,
+    ).fetchone()
     if not row:
         return 0
     try:
@@ -1049,12 +1063,13 @@ def _general_owned_visibility_sql(
     table_alias: str = "",
 ) -> tuple[str, tuple]:
     """
-    نطاق عرض المقررات لقسم:
+    نطاق عرض المقررات لقسم (مصادر التشغيل: إدخال المقررات، كشف الدرجات، اعتماد العرض):
 
     - قسم الاتجاه العام (GENERAL): مقررات الاتجاه العام فقط — بلا سجل المشترك
       (الطلبة يقضون فصلين ثم يتخصصون؛ المشتركة لخطط الأقسام الأربعة).
-    - قسم تخصص: مقرراته + الاتجاه العام + المشترك الموحّد للكل،
-      و multi_code/subset للأقسام المرتبطة فقط.
+    - قسم تخصص: مقرراته + كل ما يملكه GENERAL + غير المملوكة + المشترك
+      (موحّد للكل، و multi_code/subset للأقسام المرتبطة فقط).
+      الظهور لا يشترط بنود program_courses؛ التعديل يبقى مقيّداً بصلاحية الكتابة.
     """
     _ensure_shared_catalog_tables(conn)
     gen_id = resolve_college_general_department_id(conn)
@@ -1082,41 +1097,27 @@ def _general_owned_visibility_sql(
             (int(gen_id),),
         )
 
+    # تخصص: نفس اتساع اعتماد العرض — GENERAL يظهر تلقائياً دون بوابة program_courses
     return (
         f"""
          AND (
            COALESCE({own_expr}, -1) = ?
            OR {own_expr} IS NULL
-           OR (
-             COALESCE({own_expr}, -1) = ?
-             AND (
-               EXISTS (
-                 SELECT 1 FROM program_courses pc
-                 INNER JOIN courses __cg_c
-                   ON lower(trim(__cg_c.course_name)) = lower(trim({cname_expr}))
-                 WHERE COALESCE(pc.requirement_scope, 'dept_common') = 'college_general'
-                   AND COALESCE(pc.is_active, 1) = 1
-                   AND (
-                     (__cg_c.course_master_id IS NOT NULL AND __cg_c.course_master_id = pc.course_master_id)
-                     OR lower(trim(COALESCE(pc.course_code, ''))) = lower(trim(COALESCE(__cg_c.course_code, '')))
-                   )
-               )
-               OR EXISTS (
-                 SELECT 1 FROM college_shared_catalog csc
-                 WHERE lower(trim(csc.canonical_course_name)) = lower(trim({cname_expr}))
-                   AND COALESCE(csc.is_active, 1) = 1
-                   AND csc.share_type = 'unified'
-               )
-               OR EXISTS (
-                 SELECT 1 FROM college_shared_catalog csc
-                 INNER JOIN college_shared_catalog_depts csd ON csd.catalog_id = csc.id
-                 WHERE lower(trim(csc.canonical_course_name)) = lower(trim({cname_expr}))
-                   AND COALESCE(csc.is_active, 1) = 1
-                   AND csc.share_type IN ('multi_code', 'subset')
-                   AND COALESCE(csd.is_active, 1) = 1
-                   AND csd.department_id = ?
-               )
-             )
+           OR COALESCE({own_expr}, -1) = ?
+           OR EXISTS (
+             SELECT 1 FROM college_shared_catalog csc
+             WHERE lower(trim(csc.canonical_course_name)) = lower(trim({cname_expr}))
+               AND COALESCE(csc.is_active, 1) = 1
+               AND csc.share_type = 'unified'
+           )
+           OR EXISTS (
+             SELECT 1 FROM college_shared_catalog csc
+             INNER JOIN college_shared_catalog_depts csd ON csd.catalog_id = csc.id
+             WHERE lower(trim(csc.canonical_course_name)) = lower(trim({cname_expr}))
+               AND COALESCE(csc.is_active, 1) = 1
+               AND csc.share_type IN ('multi_code', 'subset')
+               AND COALESCE(csd.is_active, 1) = 1
+               AND csd.department_id = ?
            )
          )
         """,

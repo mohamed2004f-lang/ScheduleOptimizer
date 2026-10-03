@@ -1,7 +1,8 @@
-"""اختبارات طلبات تصحيح كشف الدرجات (مشرف → اعتماد رئيس القسم)."""
+"""اختبارات تصحيح كشف الدرجات (مشرف يعتمد فوراً + إشعار رئيس القسم)."""
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -111,7 +112,7 @@ class TestTranscriptCorrections:
             )
             assert resp.status_code in (403, 401), resp.get_data(as_text=True)
 
-    def test_supervisor_submit_and_hod_approve(self, app, db_conn, civil_dept_with_advisee):
+    def test_supervisor_finalize_applies_immediately(self, app, db_conn, civil_dept_with_advisee):
         ctx = civil_dept_with_advisee
         with app.test_client() as c:
             assert c.post(
@@ -141,22 +142,12 @@ class TestTranscriptCorrections:
                 },
             )
             assert ok.status_code == 200, ok.get_data(as_text=True)
-            req_id = (ok.get_json() or {}).get("id")
+            body = ok.get_json() or {}
+            req_id = body.get("id")
             assert req_id
+            assert int(body.get("applied") or 0) >= 1
 
-        with app.test_client() as c2:
-            assert c2.post(
-                "/auth/login",
-                json={"username": ctx["head_user"], "password": ctx["password"]},
-            ).status_code == 200
-            lst = c2.get("/grades/transcript_corrections?status=pending")
-            assert lst.status_code == 200
-            items = (lst.get_json() or {}).get("items") or []
-            assert any(int(x.get("id")) == int(req_id) for x in items)
-
-            ap = c2.post(f"/grades/transcript_corrections/{req_id}/approve", json={})
-            assert ap.status_code == 200, ap.get_data(as_text=True)
-
+        # الدرجة مطبّقة فوراً بدون اعتماد رئيس القسم
         row = db_conn.execute(
             "SELECT grade FROM grades WHERE student_id = ? AND semester = ? AND course_name = ?",
             (ctx["sid"], "ربيع 2025/2026", ctx["course"]),
@@ -164,7 +155,31 @@ class TestTranscriptCorrections:
         assert row is not None
         assert float(row[0]) == 88.0
 
-    def test_hod_reject(self, app, civil_dept_with_advisee):
+        status_row = db_conn.execute(
+            "SELECT status, reviewed_by FROM transcript_correction_requests WHERE id = ?",
+            (req_id,),
+        ).fetchone()
+        assert status_row is not None
+        assert (status_row[0] or "") == "approved"
+        assert (status_row[1] or "") == ctx["sup_user"]
+
+        # رئيس القسم يرى الاعتماد في قائمة المعتمد (اطلاع فقط)
+        with app.test_client() as c2:
+            assert c2.post(
+                "/auth/login",
+                json={"username": ctx["head_user"], "password": ctx["password"]},
+            ).status_code == 200
+            lst_pending = c2.get("/grades/transcript_corrections?status=pending")
+            assert lst_pending.status_code == 200
+            pending_items = (lst_pending.get_json() or {}).get("items") or []
+            assert not any(int(x.get("id")) == int(req_id) for x in pending_items)
+
+            lst = c2.get("/grades/transcript_corrections?status=approved")
+            assert lst.status_code == 200
+            items = (lst.get_json() or {}).get("items") or []
+            assert any(int(x.get("id")) == int(req_id) for x in items)
+
+    def test_transcript_includes_supervisor_audit_badge(self, app, db_conn, civil_dept_with_advisee):
         ctx = civil_dept_with_advisee
         with app.test_client() as c:
             c.post("/auth/login", json={"username": ctx["sup_user"], "password": ctx["password"]})
@@ -174,20 +189,99 @@ class TestTranscriptCorrections:
                 json={
                     "student_id": ctx["sid"],
                     "semester": "خريف 2024/2025",
-                    "reason": "طلب سيُرفض في الاختبار",
-                    "grades": [{"course_name": ctx["course"], "grade": 55}],
+                    "reason": "توثيق شارة الاعتماد في الكشف",
+                    "grades": [{"course_name": ctx["course"], "grade": 77}],
                 },
             )
             assert ok.status_code == 200, ok.get_data(as_text=True)
-            req_id = (ok.get_json() or {}).get("id")
 
         with app.test_client() as c2:
             c2.post("/auth/login", json={"username": ctx["head_user"], "password": ctx["password"]})
-            rj = c2.post(
-                f"/grades/transcript_corrections/{req_id}/reject",
-                json={"hod_note": "بيانات غير مكتملة"},
+            r = c2.get(f"/grades/transcript/{ctx['sid']}")
+            assert r.status_code == 200, r.get_data(as_text=True)
+            data = r.get_json() or {}
+            courses = (data.get("transcript") or {}).get("خريف 2024/2025") or []
+            assert courses, data
+            hit = next((x for x in courses if x.get("course_name") == ctx["course"]), None)
+            assert hit is not None
+            audit = hit.get("audit") or {}
+            assert audit.get("supervisor_approved") is True
+            assert (audit.get("supervisor_by") or audit.get("entered_by")) == ctx["sup_user"]
+            assert audit.get("entered_by") == ctx["sup_user"]
+            assert not audit.get("hod_approved")
+
+    def test_legacy_hod_approve_attributes_enterer_to_supervisor(self, app, db_conn, civil_dept_with_advisee):
+        """المسار القديم: المشرف يقدّم ورئيس القسم يعتمد — المدخل = المشرف وليس الرئيس."""
+        from backend.services.transcript_corrections import _ensure_table
+
+        ctx = civil_dept_with_advisee
+        _ensure_table(db_conn)
+        now = "2026-01-01T00:00:00Z"
+        payload = json.dumps(
+            {"grades": [{"course_name": ctx["course"], "grade": 66}], "is_equated_semester": False},
+            ensure_ascii=False,
+        )
+        db_conn.execute(
+            """
+            INSERT INTO transcript_correction_requests (
+                student_id, semester, payload_json, status, reason,
+                submitted_by, instructor_id, department_id,
+                created_at, submitted_at, reviewed_at, reviewed_by, hod_note
+            ) VALUES (?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ctx["sid"],
+                "ربيع 2023/2024",
+                payload,
+                "إدخال قديم",
+                ctx["sup_user"],
+                ctx["iid"],
+                ctx["dept_id"],
+                now,
+                now,
+                now,
+                ctx["head_user"],
+                "",
+            ),
+        )
+        db_conn.execute(
+            """
+            INSERT INTO grades (student_id, semester, course_name, course_code, units, grade)
+            VALUES (?, ?, ?, 'C1', 3, 66)
+            """,
+            (ctx["sid"], "ربيع 2023/2024", ctx["course"]),
+        )
+        # تدقيق قديم باسم رئيس القسم إن وُجد الجدول (يُتجاهل لصالح submitted_by)
+        try:
+            db_conn.execute(
+                """
+                INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts)
+                VALUES (?, ?, ?, NULL, 66, ?, ?)
+                """,
+                (
+                    ctx["sid"],
+                    "ربيع 2023/2024",
+                    ctx["course"],
+                    f"{ctx['head_user']}|transcript_correction|اعتماد طلب",
+                    now,
+                ),
             )
-            assert rj.status_code == 200, rj.get_data(as_text=True)
+        except Exception:
+            pass
+        db_conn.commit()
+
+        with app.test_client() as c:
+            c.post("/auth/login", json={"username": ctx["head_user"], "password": ctx["password"]})
+            r = c.get(f"/grades/transcript/{ctx['sid']}")
+            assert r.status_code == 200, r.get_data(as_text=True)
+            courses = ((r.get_json() or {}).get("transcript") or {}).get("ربيع 2023/2024") or []
+            hit = next((x for x in courses if x.get("course_name") == ctx["course"]), None)
+            assert hit is not None
+            audit = hit.get("audit") or {}
+            assert audit.get("entered_by") == ctx["sup_user"]
+            assert audit.get("hod_approved") is True
+            assert audit.get("hod_by") == ctx["head_user"]
+            assert not audit.get("supervisor_approved")
 
     def test_courses_for_student_scoped_to_dept(self, app, civil_dept_with_advisee):
         ctx = civil_dept_with_advisee

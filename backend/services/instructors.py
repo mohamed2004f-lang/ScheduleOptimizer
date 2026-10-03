@@ -861,7 +861,17 @@ def supervised_students():
     if not instructor_id:
         return jsonify({"status": "error", "message": "instructor_id مطلوب"}), 400
 
-    active_only = request.args.get("active_only", "").lower() in ("1", "true", "yes")
+    # افتراضياً: النشطون فقط. للكشف/الأرشيف: include_inactive=1 أو active_only=0
+    raw_active = (request.args.get("active_only") or "").strip().lower()
+    include_inactive = (request.args.get("include_inactive") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if include_inactive or raw_active in ("0", "false", "no"):
+        active_only = False
+    else:
+        active_only = True
 
     with get_connection() as conn:
         cur = conn.cursor()
@@ -906,7 +916,12 @@ def supervised_students():
                 {"student_id": r[0], "student_name": r[1], "join_term": "", "join_year": ""} for r in rows
             ]
     return jsonify(
-        {"status": "ok", "instructor_id": instructor_id, "students": students}
+        {
+            "status": "ok",
+            "instructor_id": instructor_id,
+            "students": students,
+            "active_only": bool(active_only),
+        }
     )
 
 

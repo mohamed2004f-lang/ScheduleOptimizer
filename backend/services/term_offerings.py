@@ -545,30 +545,23 @@ def _catalog_courses(conn, *, department_id: int | None = None) -> list[dict]:
     ]
     where = ["COALESCE(c.course_name,'') <> ''"]
     bind: list = []
-    extra_sql = ""
     if department_id is not None and has_owning:
-        gen_id = resolve_college_general_department_id(conn)
-        if gen_id is None:
-            where.append("c.owning_department_id = ?")
-            bind.append(int(department_id))
-        else:
-            where.append(
-                """
-                (
-                  COALESCE(c.owning_department_id, -1) IN (?, ?)
-                  OR c.owning_department_id IS NULL
-                  OR EXISTS (
-                    SELECT 1 FROM college_shared_catalog csc
-                    WHERE COALESCE(csc.is_active, 1) = 1
-                      AND lower(trim(csc.canonical_course_name)) = lower(trim(c.course_name))
-                  )
-                )
-                """
-            )
-            bind.extend([int(department_id), int(gen_id)])
+        # نفس مصدر الظهور المستخدم في إدخال المقررات وكشف الدرجات
+        from backend.core.department_scope_policy import courses_department_scope_filter
+
+        scope_sql, scope_params = courses_department_scope_filter(
+            conn,
+            int(department_id),
+            owning_col="c.owning_department_id",
+            course_name_col="c.course_name",
+        )
+        # courses_department_scope_filter يعيد " AND (...)" — ندمجه كشرط
+        if scope_sql.strip():
+            where.append(scope_sql.strip().lstrip("AND").strip())
+            bind.extend(list(scope_params))
     sql = (
         f"SELECT {', '.join(select)} FROM courses c{join}"
-        f" WHERE {' AND '.join(where)}{extra_sql} ORDER BY {order_expr}"
+        f" WHERE {' AND '.join(where)} ORDER BY {order_expr}"
     )
     try:
         rows = conn.cursor().execute(sql, tuple(bind)).fetchall()

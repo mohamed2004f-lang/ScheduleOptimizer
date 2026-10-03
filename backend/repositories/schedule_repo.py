@@ -4,6 +4,16 @@ from __future__ import annotations
 from typing import Any, Callable
 
 
+def _registrations_active_student_sql(alias_reg: str = "r", alias_stu: str = "st") -> str:
+    """ضم طلبة نشطين فقط عند عدّ التسجيلات (استبعاد الخريج/…)."""
+    from backend.core.enrollment_status_policy import operational_status_sql
+
+    return (
+        f" INNER JOIN students {alias_stu} ON {alias_stu}.student_id = {alias_reg}.student_id "
+        f" AND {operational_status_sql(alias_stu)} "
+    )
+
+
 def fetch_assigned_section_rows(
     cur,
     instructor_db_id: int,
@@ -103,17 +113,19 @@ def _course_name_keys(course_names: list[str]) -> list[str]:
 
 
 def count_students_grouped_by_course(cur, course_names: list[str]) -> dict[str, int]:
-    """عدد الطلاب المسجّلين لكل مقرر (مفتاح الاسم بعد trim/lower)."""
+    """عدد الطلاب المسجّلين لكل مقرر (مفتاح الاسم بعد trim/lower) — النشطون فقط."""
     keys = _course_name_keys(course_names)
     if not keys:
         return {}
     ph = ",".join(["?"] * len(keys))
+    active_join = _registrations_active_student_sql("r", "st")
     rows = cur.execute(
         f"""
-        SELECT LOWER(TRIM(course_name)) AS ck, COUNT(DISTINCT student_id) AS cnt
-        FROM registrations
-        WHERE LOWER(TRIM(course_name)) IN ({ph})
-        GROUP BY LOWER(TRIM(course_name))
+        SELECT LOWER(TRIM(r.course_name)) AS ck, COUNT(DISTINCT r.student_id) AS cnt
+        FROM registrations r
+        {active_join}
+        WHERE LOWER(TRIM(r.course_name)) IN ({ph})
+        GROUP BY LOWER(TRIM(r.course_name))
         """,
         tuple(keys),
     ).fetchall()
@@ -121,13 +133,19 @@ def count_students_grouped_by_course(cur, course_names: list[str]) -> dict[str, 
 
 
 def count_distinct_students_for_courses(cur, course_names: list[str]) -> int:
-    """عدد الطلاب المميزين عبر مجموعة مقررات."""
+    """عدد الطلاب المميزين عبر مجموعة مقررات — النشطون فقط."""
     keys = _course_name_keys(course_names)
     if not keys:
         return 0
     ph = ",".join(["?"] * len(keys))
+    active_join = _registrations_active_student_sql("r", "st")
     row = cur.execute(
-        f"SELECT COUNT(DISTINCT student_id) FROM registrations WHERE LOWER(TRIM(course_name)) IN ({ph})",
+        f"""
+        SELECT COUNT(DISTINCT r.student_id)
+        FROM registrations r
+        {active_join}
+        WHERE LOWER(TRIM(r.course_name)) IN ({ph})
+        """,
         tuple(keys),
     ).fetchone()
     return int(row[0]) if row else 0
@@ -152,7 +170,18 @@ def fetch_schedule_rows_with_student_counts(
         dept_params = (department_id,)
     tg_join = ""
     tg_select = ""
-    reg_join = "LEFT JOIN registrations r ON LOWER(TRIM(s.course_name)) = LOWER(TRIM(r.course_name))"
+    # عدّ الطلبة النشطين فقط عند ربط التسجيلات
+    from backend.core.enrollment_status_policy import operational_status_sql
+
+    active_stu = operational_status_sql("st")
+    reg_join = f"""
+                LEFT JOIN registrations r
+                  ON LOWER(TRIM(s.course_name)) = LOWER(TRIM(r.course_name))
+                 AND EXISTS (
+                    SELECT 1 FROM students st
+                    WHERE st.student_id = r.student_id AND {active_stu}
+                 )
+                """
     if include_teaching_groups:
         tg_join = """
                 LEFT JOIN teaching_groups tg ON tg.id = s.teaching_group_id AND tg.is_active = 1
@@ -167,11 +196,15 @@ def fetch_schedule_rows_with_student_counts(
                     COALESCE(ti.name, s.instructor, '') AS tg_instructor_name
                 """
         if registrations_has_teaching_group:
-            reg_join = """
+            reg_join = f"""
                 LEFT JOIN registrations r ON LOWER(TRIM(s.course_name)) = LOWER(TRIM(r.course_name))
                     AND (
                         s.teaching_group_id IS NULL
                         OR r.teaching_group_id = s.teaching_group_id
+                    )
+                    AND EXISTS (
+                        SELECT 1 FROM students st
+                        WHERE st.student_id = r.student_id AND {active_stu}
                     )
                     """
     group_by_tg = ""

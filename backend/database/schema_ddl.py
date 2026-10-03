@@ -832,6 +832,21 @@ TABLES_SCHEMA = {
         )
     """,
 
+    'student_semester_scope': """
+        CREATE TABLE IF NOT EXISTS student_semester_scope (
+            student_id TEXT NOT NULL,
+            semester TEXT NOT NULL,
+            scope_kind TEXT NOT NULL DEFAULT 'department',
+            department_id INTEGER,
+            teaching_group_id INTEGER,
+            group_code TEXT NOT NULL DEFAULT '',
+            department_label TEXT NOT NULL DEFAULT '',
+            updated_at TEXT,
+            updated_by TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (student_id, semester)
+        )
+    """,
+
     'student_exceptions': """
         CREATE TABLE IF NOT EXISTS student_exceptions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1714,6 +1729,7 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_tx_corr_status_dept ON transcript_correction_requests(status, department_id)",
     "CREATE INDEX IF NOT EXISTS idx_tx_corr_student ON transcript_correction_requests(student_id, semester)",
     "CREATE INDEX IF NOT EXISTS idx_tx_corr_instructor ON transcript_correction_requests(instructor_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_student_sem_scope_dept ON student_semester_scope(department_id)",
     "CREATE INDEX IF NOT EXISTS idx_reg_requests_status_created ON registration_requests(status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_reg_requests_student ON registration_requests(student_id)",
     "CREATE INDEX IF NOT EXISTS idx_reg_changes_student_time ON registration_changes_log(student_id, action_time)",

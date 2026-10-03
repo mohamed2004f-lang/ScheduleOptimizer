@@ -213,6 +213,19 @@
               <span class="small text-muted">الوحدات: <strong id="supEditUnitsTotal">0</strong></span>
             </div>
             <div id="supEditCoursesChips" class="d-flex flex-wrap gap-2 mb-3 min-vh-0" style="min-height:2.5rem;"></div>
+            <div class="border rounded p-2 mb-2 border-info-subtle bg-info-subtle bg-opacity-10" id="supEditImproveBox">
+              <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-1">
+                <label class="form-label small mb-0 fw-semibold" for="supEditImproveSelect">تحسين المعدل</label>
+                <span class="small text-muted" id="supEditImproveHint">مقررات ناجحة لإعادة دراستها</span>
+              </div>
+              <div class="d-flex flex-wrap gap-2">
+                <select id="supEditImproveSelect" class="form-select form-select-sm" style="min-width:14rem; flex:1;" disabled>
+                  <option value="">لا مقررات متاحة للتحسين</option>
+                </select>
+                <button type="button" id="btnSupEditAddImprove" class="btn btn-sm btn-outline-info" disabled>إضافة تحسين</button>
+              </div>
+              <div class="form-text">يُحتسب الأعلى في المعدل التراكمي. تظهر فقط المقررات الناجحة الموجودة في عرض الفصل المعتمد.</div>
+            </div>
             <div class="border rounded p-2 bg-light">
               <label class="form-label small mb-1" for="supEditAddSelect">إضافة مقرر متاح</label>
               <div class="d-flex flex-wrap gap-2">
@@ -1432,7 +1445,17 @@
       });
     }
 
-    let supEditState = { studentId: '', studentName: '', semester: '', courses: [], unitsMap: {}, eligible: [] };
+    let supEditState = {
+      studentId: '',
+      studentName: '',
+      semester: '',
+      courses: [],
+      unitsMap: {},
+      eligible: [],
+      completed: [],
+      improveNames: new Set(),
+      offeringsPublished: false,
+    };
 
     function setSupEditMsg(type, text){
       const el = document.getElementById('supEditMsg');
@@ -1443,6 +1466,12 @@
 
     function _supEditUnitsTotal(){
       return (supEditState.courses || []).reduce((a, cn) => a + Number(supEditState.unitsMap[cn] || 0), 0);
+    }
+
+    function _supEditIsImprove(cn){
+      if (supEditState.improveNames && supEditState.improveNames.has(cn)) return true;
+      const completed = Array.isArray(supEditState.completed) ? supEditState.completed : [];
+      return completed.some(c => c && c.course_name === cn);
     }
 
     function renderSupEditCourses(){
@@ -1459,7 +1488,10 @@
         const chip = document.createElement('span');
         chip.className = 'badge bg-white text-dark border d-inline-flex align-items-center gap-1 py-2 px-2';
         const u = Number(supEditState.unitsMap[cn] || 0);
-        chip.innerHTML = `<span>${escPlain(cn)}${u ? ' <span class="text-muted">(' + u + ')</span>' : ''}</span>`;
+        const improveBadge = _supEditIsImprove(cn)
+          ? ' <span class="badge text-bg-info">تحسين</span>'
+          : '';
+        chip.innerHTML = `<span>${escPlain(cn)}${u ? ' <span class="text-muted">(' + u + ')</span>' : ''}${improveBadge}</span>`;
         const rm = document.createElement('button');
         rm.type = 'button';
         rm.className = 'btn-close btn-close-sm';
@@ -1467,8 +1499,10 @@
         rm.title = 'إزالة المقرر';
         rm.addEventListener('click', () => {
           supEditState.courses = supEditState.courses.filter(x => x !== cn);
+          if (supEditState.improveNames) supEditState.improveNames.delete(cn);
           renderSupEditCourses();
           fillSupEditAddSelect();
+          fillSupEditImproveSelect();
         });
         chip.appendChild(rm);
         wrap.appendChild(chip);
@@ -1487,15 +1521,97 @@
       }).join('');
     }
 
+    function fillSupEditImproveSelect(){
+      const sel = document.getElementById('supEditImproveSelect');
+      const btn = document.getElementById('btnSupEditAddImprove');
+      const hint = document.getElementById('supEditImproveHint');
+      if (!sel) return;
+      const taken = new Set(supEditState.courses || []);
+      const completed = Array.isArray(supEditState.completed) ? supEditState.completed : [];
+      const opts = completed.filter(c => c && c.course_name && !taken.has(c.course_name));
+      const published = !!supEditState.offeringsPublished;
+      if (!published) {
+        sel.innerHTML = '<option value="">عرض المقررات غير معتمد بعد</option>';
+        sel.disabled = true;
+        if (btn) btn.disabled = true;
+        if (hint) hint.textContent = 'يتطلب اعتماد عرض الفصل أولاً';
+        return;
+      }
+      if (!opts.length) {
+        sel.innerHTML = '<option value="">لا مقررات متاحة للتحسين</option>';
+        sel.disabled = true;
+        if (btn) btn.disabled = true;
+        if (hint) hint.textContent = completed.length ? 'كل المقررات الناجحة مسجّلة حالياً' : 'لا مقررات ناجحة للتحسين';
+        return;
+      }
+      sel.disabled = false;
+      if (btn) btn.disabled = false;
+      if (hint) hint.textContent = opts.length + ' مقرر متاح للتحسين';
+      sel.innerHTML = '<option value="">اختر مقرراً للتحسين…</option>' + opts.map(c => {
+        const u = c.units != null ? ` — ${c.units} و` : '';
+        const g = (c.grade != null && c.grade !== '') ? ` — درجة ${c.grade}` : '';
+        const code = c.course_code ? ` (${escPlain(c.course_code)})` : '';
+        return `<option value="${escPlain(c.course_name)}">${escPlain(c.course_name)}${code}${u}${g}</option>`;
+      }).join('');
+    }
+
+    function addSupEditImproveCourse(){
+      const sel = document.getElementById('supEditImproveSelect');
+      const cn = (sel?.value || '').trim();
+      if (!cn) {
+        setSupEditMsg('warning', 'اختر مقرراً للتحسين أولاً.');
+        return;
+      }
+      if (supEditState.courses.includes(cn)) {
+        setSupEditMsg('info', 'المقرر مسجّل بالفعل.');
+        return;
+      }
+      const meta = (supEditState.completed || []).find(c => c.course_name === cn)
+        || (supEditState.eligible || []).find(c => c.course_name === cn);
+      if (meta && meta.units != null) supEditState.unitsMap[cn] = Number(meta.units || 0);
+      else if (supEditState.unitsMap[cn] == null) {
+        const fromCourses = (COURSES || []).find(c => c.course_name === cn);
+        if (fromCourses && fromCourses.units != null) supEditState.unitsMap[cn] = Number(fromCourses.units || 0);
+      }
+      if (!supEditState.improveNames) supEditState.improveNames = new Set();
+      supEditState.improveNames.add(cn);
+      supEditState.courses.push(cn);
+      // أبقِ المقرر في eligible حتى يظهر إن أُزيل ثم أُعيد
+      const eligNames = new Set((supEditState.eligible || []).map(c => c.course_name));
+      if (!eligNames.has(cn)) {
+        (supEditState.eligible || []).push({
+          course_name: cn,
+          course_code: (meta && meta.course_code) || '',
+          units: Number(supEditState.unitsMap[cn] || 0),
+        });
+      }
+      setSupEditMsg('success', 'أُضيف «' + cn + '» كتحسين معدل — احفظ لتثبيت التسجيل.');
+      renderSupEditCourses();
+      fillSupEditAddSelect();
+      fillSupEditImproveSelect();
+      if (sel) sel.value = '';
+    }
+
     async function openSupervisorEditRegistration(studentId, studentName, semester){
       const sid = String(studentId || '').trim();
       if (!sid) return;
       setSupEditMsg('', '');
-      supEditState = { studentId: sid, studentName: studentName || '', semester: semester || '', courses: [], unitsMap: {}, eligible: [] };
+      supEditState = {
+        studentId: sid,
+        studentName: studentName || '',
+        semester: semester || '',
+        courses: [],
+        unitsMap: {},
+        eligible: [],
+        completed: [],
+        improveNames: new Set(),
+        offeringsPublished: false,
+      };
       const label = document.getElementById('supEditStudentLabel');
       if (label) label.textContent = `${studentName || 'طالب'} — ${sid}`;
       const chips = document.getElementById('supEditCoursesChips');
       if (chips) chips.innerHTML = '<span class="text-muted small">جاري التحميل...</span>';
+      fillSupEditImproveSelect();
       const modalEl = document.getElementById('supEditRegModal');
       const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
       modal.show();
@@ -1527,12 +1643,18 @@
         courses = courses.filter(cn => { if (seen.has(cn)) return false; seen.add(cn); return true; });
 
         let eligible = [];
+        let completed = [];
+        let offeringsPublished = false;
         if (eligRes.ok) {
           eligible = Array.isArray(eligRes.json?.eligible) ? eligRes.json.eligible : [];
+          completed = Array.isArray(eligRes.json?.completed) ? eligRes.json.completed : [];
+          offeringsPublished = eligRes.json?.offerings_published === true;
           (eligRes.json?.eligible || []).forEach(c => {
             if (c && c.course_name && c.units != null) unitsMap[c.course_name] = Number(c.units || 0);
           });
-          // أيضاً حدّث units من COURSES العام إن وُجد
+          completed.forEach(c => {
+            if (c && c.course_name && c.units != null) unitsMap[c.course_name] = Number(c.units || 0);
+          });
         }
         (COURSES || []).forEach(c => {
           if (c && c.course_name && unitsMap[c.course_name] == null && c.units != null) {
@@ -1546,8 +1668,14 @@
           courses = cached.courses.slice();
         }
 
+        const completedNames = new Set(completed.map(c => c && c.course_name).filter(Boolean));
+        const improveNames = new Set(courses.filter(cn => completedNames.has(cn)));
+
         supEditState.courses = courses;
         supEditState.unitsMap = unitsMap;
+        supEditState.completed = completed;
+        supEditState.improveNames = improveNames;
+        supEditState.offeringsPublished = offeringsPublished;
         // eligible: المقررات المتاحة + الحالية غير الموجودة في eligible (للإبقاء على العرض عند الإزالة ثم الإعادة)
         const eligNames = new Set(eligible.map(c => c.course_name));
         courses.forEach(cn => {
@@ -1563,6 +1691,7 @@
         supEditState.eligible = eligible;
         renderSupEditCourses();
         fillSupEditAddSelect();
+        fillSupEditImproveSelect();
         if (!eligRes.ok) {
           setSupEditMsg('warning', 'تعذر تحميل المقررات المتاحة بالكامل — يمكنك إزالة المقررات الحالية فقط أو المحاولة لاحقاً.');
         }
@@ -1804,9 +1933,11 @@
           supEditState.courses.push(cn);
           renderSupEditCourses();
           fillSupEditAddSelect();
+          fillSupEditImproveSelect();
         }
         if (sel) sel.value = '';
       });
+      document.getElementById('btnSupEditAddImprove')?.addEventListener('click', addSupEditImproveCourse);
       document.getElementById('btnSupEditSave')?.addEventListener('click', saveSupervisorEditRegistration);
       await loadPending();
       if (currentRole !== 'student') {

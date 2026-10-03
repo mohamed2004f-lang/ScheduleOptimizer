@@ -375,7 +375,7 @@ def build_portal_summary(conn, sid: str) -> dict[str, Any]:
             if academic_status.get("completed_units") is not None:
                 completed_units = academic_status.get("completed_units")
     except Exception:
-        pass
+        logger.exception("portal_summary transcript load failed for %s", sid)
 
     dept_id = _resolve_portal_department_id(conn, {**stu, "student_id": sid})
     if dept_id and not stu.get("department_id"):

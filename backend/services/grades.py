@@ -1,6 +1,7 @@
 import sys
 import os
 import re
+import json
 from collections import defaultdict, OrderedDict
 import datetime
 import io
@@ -109,6 +110,315 @@ def _audit_changed_by(*, reason: str = "", kind: str = "transcript") -> str:
     if reason:
         return f"{actor}|{kind}|{reason}"
     return actor
+
+
+def _parse_audit_changed_by(changed_by: str | None) -> dict[str, str]:
+    """تفكيك changed_by بصيغة actor|kind|reason."""
+    raw = (changed_by or "").strip()
+    if not raw:
+        return {"actor": "", "kind": "", "reason": ""}
+    parts = raw.split("|", 2)
+    return {
+        "actor": (parts[0] or "").strip(),
+        "kind": (parts[1] or "").strip() if len(parts) > 1 else "",
+        "reason": (parts[2] or "").strip() if len(parts) > 2 else "",
+    }
+
+
+_SUPERVISOR_AUDIT_KINDS = frozenset({"supervisor_finalize"})
+_LEGACY_HOD_APPLY_KINDS = frozenset({"transcript_correction"})
+
+
+def _empty_audit_entry() -> dict:
+    return {
+        "entered_by": "",
+        "entered_at": "",
+        "entered_kind": "",
+        "modified_by": "",
+        "modified_at": "",
+        "modified_kind": "",
+        "supervisor_approved": False,
+        "supervisor_by": "",
+        "supervisor_at": "",
+        "hod_approved": False,
+        "hod_by": "",
+        "hod_at": "",
+    }
+
+
+def _parse_correction_grades_payload(payload_raw) -> list[dict]:
+    try:
+        raw = payload_raw
+        if isinstance(raw, str):
+            raw = json.loads(raw or "[]")
+        if isinstance(raw, dict):
+            grades = raw.get("grades") if isinstance(raw.get("grades"), list) else []
+        elif isinstance(raw, list):
+            grades = raw
+        else:
+            grades = []
+    except Exception:
+        return []
+    out = []
+    for g in grades:
+        if isinstance(g, dict) and str(g.get("course_name") or "").strip():
+            out.append(g)
+    return out
+
+
+def _grade_audit_provenance(conn, student_id: str) -> tuple[dict[tuple[str, str], dict], dict[tuple[str, str], dict]]:
+    """
+    provenance لكل (semester, course_name):
+    - المدخل الحقيقي لطلبات التصحيح = submitted_by (المشرف)، وليس من ضغط اعتماد رئيس القسم.
+    - supervisor_finalize → اعتماد مشرف.
+    - transcript_correction (قديم) → إدخال مشرف + اعتماد رئيس قسم.
+    - حفظ مباشر → أدخل باسم الفاعل فقط.
+    """
+    out: dict[tuple[str, str], dict] = {}
+    rows = []
+    try:
+        cur = conn.cursor()
+        try:
+            rows = cur.execute(
+                """
+                SELECT semester, course_name, changed_by, ts
+                FROM grade_audit
+                WHERE student_id = ?
+                ORDER BY ts ASC, audit_id ASC
+                """,
+                (student_id,),
+            ).fetchall()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            try:
+                rows = cur.execute(
+                    """
+                    SELECT semester, course_name, changed_by, ts
+                    FROM grade_audit
+                    WHERE student_id = ?
+                    ORDER BY ts ASC
+                    """,
+                    (student_id,),
+                ).fetchall()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                rows = []
+    except Exception:
+        rows = []
+
+    for row in rows or []:
+        try:
+            sem = (row["semester"] if hasattr(row, "keys") else row[0]) or ""
+            cname = (row["course_name"] if hasattr(row, "keys") else row[1]) or ""
+            changed_by = row["changed_by"] if hasattr(row, "keys") else row[2]
+            ts = row["ts"] if hasattr(row, "keys") else row[3]
+        except (KeyError, IndexError, TypeError):
+            continue
+        key = (str(sem).strip(), str(cname).strip())
+        if not key[1]:
+            continue
+        parsed = _parse_audit_changed_by(changed_by)
+        kind = parsed["kind"]
+        actor = parsed["actor"]
+        is_sup = kind in _SUPERVISOR_AUDIT_KINDS
+        is_legacy_hod = kind in _LEGACY_HOD_APPLY_KINDS
+        entry = out.get(key)
+        if entry is None:
+            entry = _empty_audit_entry()
+            out[key] = entry
+            if is_legacy_hod:
+                # الفاعل هنا رئيس القسم طبّق إدخال المشرف — لا يُحسب مدخلاً
+                entry["hod_approved"] = True
+                entry["hod_by"] = actor
+                entry["hod_at"] = ts
+                entry["modified_by"] = actor
+                entry["modified_at"] = ts
+                entry["modified_kind"] = kind
+            else:
+                entry["entered_by"] = actor
+                entry["entered_at"] = ts
+                entry["entered_kind"] = kind
+                entry["modified_by"] = actor
+                entry["modified_at"] = ts
+                entry["modified_kind"] = kind
+                if is_sup:
+                    entry["supervisor_approved"] = True
+                    entry["supervisor_by"] = actor
+                    entry["supervisor_at"] = ts
+        else:
+            if is_legacy_hod:
+                entry["hod_approved"] = True
+                entry["hod_by"] = actor
+                entry["hod_at"] = ts
+                entry["modified_by"] = actor
+                entry["modified_at"] = ts
+                entry["modified_kind"] = kind
+            else:
+                # أول إدخال حقيقي إن كان فارغاً (مثلاً سبقه اعتماد قديم بلا مدخل)
+                if not entry.get("entered_by"):
+                    entry["entered_by"] = actor
+                    entry["entered_at"] = ts
+                    entry["entered_kind"] = kind
+                entry["modified_by"] = actor
+                entry["modified_at"] = ts
+                entry["modified_kind"] = kind
+                if is_sup:
+                    entry["supervisor_approved"] = True
+                    entry["supervisor_by"] = actor
+                    entry["supervisor_at"] = ts
+
+    # طبقة طلبات التصحيح المعتمدة — مصدر الحقيقة لاسم المدخل (المشرف)
+    correction_by_course: dict[tuple[str, str], dict] = {}
+    try:
+        cur = conn.cursor()
+        approved = cur.execute(
+            """
+            SELECT semester, reviewed_by, reviewed_at, submitted_by, hod_note, payload_json
+            FROM transcript_correction_requests
+            WHERE student_id = ? AND status = 'approved'
+            ORDER BY COALESCE(reviewed_at, submitted_at, created_at) ASC, id ASC
+            """,
+            (student_id,),
+        ).fetchall()
+        for arow in approved or []:
+            try:
+                if hasattr(arow, "keys"):
+                    asem = str(arow["semester"] or "").strip()
+                    rev_by = str(arow["reviewed_by"] or "").strip()
+                    rev_at = arow["reviewed_at"]
+                    sub_by = str(arow["submitted_by"] or "").strip()
+                    hod_note = str(arow["hod_note"] or "")
+                    payload_raw = arow["payload_json"]
+                else:
+                    asem = str(arow[0] or "").strip()
+                    rev_by = str(arow[1] or "").strip()
+                    rev_at = arow[2]
+                    sub_by = str(arow[3] or "").strip()
+                    hod_note = str(arow[4] or "")
+                    payload_raw = arow[5]
+            except (KeyError, IndexError, TypeError):
+                continue
+            if not asem or not sub_by:
+                continue
+            is_supervisor_finalize = (
+                "اعتماد تلقائي من المشرف" in hod_note
+                or (rev_by and sub_by == rev_by)
+            )
+            is_legacy_hod_approve = bool(rev_by) and (not is_supervisor_finalize) and (sub_by != rev_by)
+            for g in _parse_correction_grades_payload(payload_raw):
+                cname = str(g.get("course_name") or "").strip()
+                if not cname:
+                    continue
+                key = (asem, cname)
+                correction_by_course[key] = {
+                    "entered_by": sub_by,
+                    "at": rev_at,
+                    "supervisor_finalize": is_supervisor_finalize,
+                    "legacy_hod": is_legacy_hod_approve,
+                    "hod_by": rev_by if is_legacy_hod_approve else "",
+                    "supervisor_by": sub_by if is_supervisor_finalize else "",
+                }
+    except Exception:
+        pass
+
+    for key, info in correction_by_course.items():
+        entry = out.get(key)
+        if entry is None:
+            entry = _empty_audit_entry()
+            out[key] = entry
+        # المدخل = المشرف مقدّم الطلب دائماً في مسار التصحيح
+        entry["entered_by"] = info["entered_by"]
+        if not entry.get("entered_at"):
+            entry["entered_at"] = info.get("at") or ""
+        entry["entered_kind"] = (
+            "supervisor_finalize" if info.get("supervisor_finalize") else "supervisor_submit"
+        )
+        # إن كان التدقيق ينسب التعديل لرئيس القسم فقط بسبب الاعتماد القديم — لا تعتبره تعديلاً بشرياً منفصلاً
+        if (
+            entry.get("modified_kind") in _LEGACY_HOD_APPLY_KINDS
+            and entry.get("modified_by")
+            and entry.get("modified_by") != info["entered_by"]
+        ):
+            entry["modified_by"] = ""
+            entry["modified_at"] = ""
+            entry["modified_kind"] = ""
+        elif entry.get("modified_by") == entry.get("entered_by"):
+            entry["modified_by"] = ""
+            entry["modified_at"] = ""
+            entry["modified_kind"] = ""
+        if info.get("supervisor_finalize"):
+            entry["supervisor_approved"] = True
+            entry["supervisor_by"] = info.get("supervisor_by") or info["entered_by"]
+            entry["supervisor_at"] = info.get("at") or entry.get("supervisor_at") or ""
+            entry["hod_approved"] = False
+            entry["hod_by"] = ""
+            entry["hod_at"] = ""
+        elif info.get("legacy_hod"):
+            entry["hod_approved"] = True
+            entry["hod_by"] = info.get("hod_by") or ""
+            entry["hod_at"] = info.get("at") or ""
+            # اعتماد قديم من رئيس القسم — المدخل هو المشرف وليس اعتماد مشرف
+            entry["supervisor_approved"] = False
+            entry["supervisor_by"] = ""
+            entry["supervisor_at"] = ""
+
+    # احتياطي على مستوى الفصل: إن وُجد طلب تصحيح معتمد واحد/واضح ولم تُطابق أسماء المقررات حرفياً
+    by_sem: dict[str, dict] = {}
+    for (asem, _cname), info in correction_by_course.items():
+        prev = by_sem.get(asem)
+        if prev is None:
+            by_sem[asem] = dict(info)
+        elif prev.get("entered_by") != info.get("entered_by"):
+            # أكثر من مشرف لنفس الفصل — لا نفرض إسناداً جماعياً
+            by_sem[asem] = {"ambiguous": True}
+
+    for (sem, _cname), entry in list(out.items()):
+        info = by_sem.get(sem)
+        if not info or info.get("ambiguous"):
+            continue
+        needs_fix = (
+            not entry.get("entered_by")
+            or entry.get("entered_kind") in _LEGACY_HOD_APPLY_KINDS
+            or (
+                entry.get("hod_approved")
+                and entry.get("entered_by")
+                and entry.get("entered_by") == entry.get("hod_by")
+            )
+        )
+        if not needs_fix:
+            continue
+        entry["entered_by"] = info.get("entered_by") or entry.get("entered_by") or ""
+        if not entry.get("entered_at"):
+            entry["entered_at"] = info.get("at") or ""
+        entry["entered_kind"] = (
+            "supervisor_finalize" if info.get("supervisor_finalize") else "supervisor_submit"
+        )
+        if info.get("supervisor_finalize"):
+            entry["supervisor_approved"] = True
+            entry["supervisor_by"] = info.get("supervisor_by") or info.get("entered_by") or ""
+            entry["supervisor_at"] = info.get("at") or ""
+            entry["hod_approved"] = False
+            entry["hod_by"] = ""
+            entry["hod_at"] = ""
+        elif info.get("legacy_hod"):
+            entry["hod_approved"] = True
+            entry["hod_by"] = info.get("hod_by") or ""
+            entry["hod_at"] = info.get("at") or ""
+            entry["supervisor_approved"] = False
+            entry["supervisor_by"] = ""
+            entry["supervisor_at"] = ""
+            if entry.get("modified_kind") in _LEGACY_HOD_APPLY_KINDS:
+                entry["modified_by"] = ""
+                entry["modified_at"] = ""
+                entry["modified_kind"] = ""
+
+    return out, correction_by_course
 
 
 def _student_in_effective_scope(conn, student_id: str) -> bool:
@@ -1977,6 +2287,358 @@ def _student_transfer_payload(conn, student_id: str) -> dict:
     return {"kind": kind, "department_id": dep_out, "label": label, "badge": badge}
 
 
+_SEMESTER_SCOPE_KINDS = frozenset({"college_general", "department"})
+
+
+def _ensure_student_semester_scope_table(conn) -> None:
+    """إنشاء الجدول في SQLite للاختبارات؛ على PostgreSQL يعتمد Alembic."""
+    if is_postgresql():
+        return
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS student_semester_scope (
+            student_id TEXT NOT NULL,
+            semester TEXT NOT NULL,
+            scope_kind TEXT NOT NULL DEFAULT 'department',
+            department_id INTEGER,
+            teaching_group_id INTEGER,
+            group_code TEXT NOT NULL DEFAULT '',
+            department_label TEXT NOT NULL DEFAULT '',
+            updated_at TEXT,
+            updated_by TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (student_id, semester)
+        )
+        """
+    )
+
+
+def _normalize_semester_scope_payload(raw: dict | None) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    kind = str(raw.get("scope_kind") or raw.get("kind") or "").strip().lower()
+    if kind in ("general", "college_general", "اتجاه_عام", "اتجاه عام"):
+        kind = "college_general"
+    elif kind in ("dept", "department", "تخصص", "قسم"):
+        kind = "department"
+    if kind not in _SEMESTER_SCOPE_KINDS:
+        return None
+    dept_id = raw.get("department_id")
+    try:
+        dept_id = int(dept_id) if dept_id not in (None, "") else None
+    except (TypeError, ValueError):
+        dept_id = None
+    tgid = raw.get("teaching_group_id")
+    try:
+        tgid = int(tgid) if tgid not in (None, "") else None
+    except (TypeError, ValueError):
+        tgid = None
+    return {
+        "scope_kind": kind,
+        "department_id": dept_id,
+        "teaching_group_id": tgid,
+        "group_code": str(raw.get("group_code") or "").strip(),
+        "department_label": str(raw.get("department_label") or raw.get("label") or "").strip(),
+    }
+
+
+def _semester_scope_badge(scope: dict | None) -> str:
+    if not scope:
+        return ""
+    kind = (scope.get("scope_kind") or "").strip()
+    if kind == "college_general":
+        return "اتجاه عام"
+    label = (scope.get("department_label") or "").strip()
+    group = (scope.get("group_code") or "").strip()
+    if label and group and group not in ("—", "-"):
+        return f"{label} · شعبة {group}"
+    if label:
+        return label
+    if group and group not in ("—", "-"):
+        return f"شعبة {group}"
+    return "قسم تخصص"
+
+
+def _load_semester_scopes(conn, student_id: str) -> dict[str, dict]:
+    """خريطة semester -> تصنيف الفصل للعرض."""
+    out: dict[str, dict] = {}
+    try:
+        _ensure_student_semester_scope_table(conn)
+        rows = conn.cursor().execute(
+            """
+            SELECT semester, scope_kind, department_id, teaching_group_id,
+                   COALESCE(group_code,'') AS group_code,
+                   COALESCE(department_label,'') AS department_label
+            FROM student_semester_scope
+            WHERE student_id = ?
+            """,
+            (student_id,),
+        ).fetchall()
+    except Exception:
+        return out
+    for row in rows or []:
+        try:
+            if hasattr(row, "keys"):
+                sem = str(row["semester"] or "").strip()
+                kind = str(row["scope_kind"] or "").strip()
+                dept_id = row["department_id"]
+                tgid = row["teaching_group_id"]
+                gcode = str(row["group_code"] or "").strip()
+                label = str(row["department_label"] or "").strip()
+            else:
+                sem = str(row[0] or "").strip()
+                kind = str(row[1] or "").strip()
+                dept_id = row[2]
+                tgid = row[3]
+                gcode = str(row[4] or "").strip()
+                label = str(row[5] or "").strip()
+        except (KeyError, IndexError, TypeError):
+            continue
+        if not sem:
+            continue
+        try:
+            dept_id = int(dept_id) if dept_id not in (None, "") else None
+        except (TypeError, ValueError):
+            dept_id = None
+        try:
+            tgid = int(tgid) if tgid not in (None, "") else None
+        except (TypeError, ValueError):
+            tgid = None
+        item = {
+            "scope_kind": kind if kind in _SEMESTER_SCOPE_KINDS else "department",
+            "department_id": dept_id,
+            "teaching_group_id": tgid,
+            "group_code": gcode,
+            "department_label": label,
+        }
+        item["badge"] = _semester_scope_badge(item)
+        out[sem] = item
+    return out
+
+
+def _department_label(conn, department_id: int | None) -> str:
+    if not department_id:
+        return ""
+    try:
+        row = conn.cursor().execute(
+            """
+            SELECT COALESCE(name_ar, '') AS name_ar, COALESCE(code, '') AS code
+            FROM departments WHERE id = ? LIMIT 1
+            """,
+            (int(department_id),),
+        ).fetchone()
+    except Exception:
+        return ""
+    if not row:
+        return ""
+    try:
+        name = (row["name_ar"] if hasattr(row, "keys") else row[0] or "").strip()
+        code = (row["code"] if hasattr(row, "keys") else row[1] or "").strip()
+    except (KeyError, IndexError, TypeError):
+        return ""
+    return name or code
+
+
+def _suggest_semester_scope(conn, student_id: str, semester: str) -> dict:
+    """اقتراح تصنيف الفصل من مسار الطالب وتسجيلات الشعبة إن وُجدت."""
+    from backend.core.academic_pathway import (
+        COLLEGE_PATHWAY_STAGES,
+        normalize_pathway_stage,
+    )
+
+    sid = str(student_id or "").strip()
+    sem = str(semester or "").strip()
+    # محفوظ مسبقاً؟
+    if sid and sem:
+        existing = _load_semester_scopes(conn, sid).get(sem)
+        if existing:
+            return {**existing, "source": "saved"}
+
+    pathway = ""
+    dept_id = None
+    try:
+        cols = fetch_table_columns(conn, "students")
+        sel = "SELECT department_id"
+        if "pathway_stage" in cols:
+            sel += ", COALESCE(pathway_stage,'') AS pathway_stage"
+        sel += " FROM students WHERE student_id = ? LIMIT 1"
+        row = conn.cursor().execute(sel, (sid,)).fetchone()
+        if row:
+            if hasattr(row, "keys"):
+                dept_id = row["department_id"]
+                pathway = (row["pathway_stage"] if "pathway_stage" in row.keys() else "") or ""
+            else:
+                dept_id = row[0]
+                pathway = row[1] if len(row) > 1 else ""
+    except Exception:
+        pass
+    try:
+        dept_id = int(dept_id) if dept_id not in (None, "") else None
+    except (TypeError, ValueError):
+        dept_id = None
+    stage = normalize_pathway_stage(pathway) if pathway else ""
+    if stage in COLLEGE_PATHWAY_STAGES or stage == "college_general":
+        return {
+            "scope_kind": "college_general",
+            "department_id": None,
+            "teaching_group_id": None,
+            "group_code": "",
+            "department_label": "",
+            "badge": "اتجاه عام",
+            "source": "pathway",
+        }
+
+    group_code = ""
+    tgid = None
+    # أشهر شعبة من تسجيلات الفصل
+    if sid and sem:
+        try:
+            reg_cols = fetch_table_columns(conn, "registrations")
+            if "teaching_group_id" in reg_cols:
+                rows = conn.cursor().execute(
+                    """
+                    SELECT r.teaching_group_id, COUNT(*) AS cnt
+                    FROM registrations r
+                    WHERE r.student_id = ? AND r.semester = ?
+                      AND r.teaching_group_id IS NOT NULL
+                    GROUP BY r.teaching_group_id
+                    ORDER BY cnt DESC
+                    LIMIT 1
+                    """,
+                    (sid, sem),
+                ).fetchall()
+                if rows:
+                    raw_tg = rows[0]["teaching_group_id"] if hasattr(rows[0], "keys") else rows[0][0]
+                    try:
+                        tgid = int(raw_tg)
+                    except (TypeError, ValueError):
+                        tgid = None
+                    if tgid:
+                        grow = conn.cursor().execute(
+                            """
+                            SELECT COALESCE(group_code,'') AS group_code,
+                                   department_id
+                            FROM teaching_groups WHERE id = ? LIMIT 1
+                            """,
+                            (tgid,),
+                        ).fetchone()
+                        if grow:
+                            group_code = (
+                                (grow["group_code"] if hasattr(grow, "keys") else grow[0]) or ""
+                            ).strip()
+                            if dept_id is None:
+                                try:
+                                    dept_id = int(
+                                        grow["department_id"]
+                                        if hasattr(grow, "keys")
+                                        else grow[1]
+                                    )
+                                except (TypeError, ValueError, KeyError, IndexError):
+                                    pass
+        except Exception:
+            pass
+
+    label = _department_label(conn, dept_id)
+    item = {
+        "scope_kind": "department",
+        "department_id": dept_id,
+        "teaching_group_id": tgid,
+        "group_code": group_code,
+        "department_label": label,
+        "source": "pathway",
+    }
+    item["badge"] = _semester_scope_badge(item)
+    return item
+
+
+def _upsert_semester_scope(
+    conn,
+    student_id: str,
+    semester: str,
+    scope: dict | None,
+    *,
+    actor: str = "",
+) -> dict | None:
+    """حفظ تصنيف الفصل. يُرجع الحمولة المحفوظة أو None إن أُلغيت."""
+    payload = _normalize_semester_scope_payload(scope)
+    if not payload:
+        return None
+    sid = str(student_id or "").strip()
+    sem = str(semester or "").strip()
+    if not sid or not sem:
+        return None
+    _ensure_student_semester_scope_table(conn)
+    if payload["scope_kind"] == "college_general":
+        payload["department_id"] = None
+        payload["teaching_group_id"] = None
+        payload["group_code"] = ""
+        payload["department_label"] = ""
+    else:
+        if not payload.get("department_label") and payload.get("department_id"):
+            payload["department_label"] = _department_label(conn, payload["department_id"])
+    now = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    who = (actor or _current_user_name() or "").strip()
+    cur = conn.cursor()
+    if is_postgresql():
+        cur.execute(
+            """
+            INSERT INTO student_semester_scope (
+                student_id, semester, scope_kind, department_id, teaching_group_id,
+                group_code, department_label, updated_at, updated_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (student_id, semester) DO UPDATE SET
+                scope_kind = EXCLUDED.scope_kind,
+                department_id = EXCLUDED.department_id,
+                teaching_group_id = EXCLUDED.teaching_group_id,
+                group_code = EXCLUDED.group_code,
+                department_label = EXCLUDED.department_label,
+                updated_at = EXCLUDED.updated_at,
+                updated_by = EXCLUDED.updated_by
+            """,
+            (
+                sid,
+                sem,
+                payload["scope_kind"],
+                payload["department_id"],
+                payload["teaching_group_id"],
+                payload["group_code"],
+                payload["department_label"],
+                now,
+                who,
+            ),
+        )
+    else:
+        cur.execute(
+            """
+            INSERT INTO student_semester_scope (
+                student_id, semester, scope_kind, department_id, teaching_group_id,
+                group_code, department_label, updated_at, updated_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(student_id, semester) DO UPDATE SET
+                scope_kind = excluded.scope_kind,
+                department_id = excluded.department_id,
+                teaching_group_id = excluded.teaching_group_id,
+                group_code = excluded.group_code,
+                department_label = excluded.department_label,
+                updated_at = excluded.updated_at,
+                updated_by = excluded.updated_by
+            """,
+            (
+                sid,
+                sem,
+                payload["scope_kind"],
+                payload["department_id"],
+                payload["teaching_group_id"],
+                payload["group_code"],
+                payload["department_label"],
+                now,
+                who,
+            ),
+        )
+    payload["badge"] = _semester_scope_badge(payload)
+    return payload
+
+
 @grades_bp.route("/save", methods=["POST"])
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def save_grades():
@@ -1987,6 +2649,7 @@ def save_grades():
     reason_raw = data.get("reason")
     is_equated = bool(data.get("is_equated_semester") or data.get("is_equated"))
     transfer = data.get("transfer") if isinstance(data.get("transfer"), dict) else None
+    semester_scope = data.get("semester_scope") if isinstance(data.get("semester_scope"), dict) else None
     if not sid or not semester:
         return jsonify({"status": "error", "message": "student_id و semester مطلوبة"}), 400
 
@@ -2009,6 +2672,13 @@ def save_grades():
                 is_equated=is_equated,
                 transfer=transfer,
             )
+            if semester_scope:
+                _upsert_semester_scope(
+                    conn,
+                    str(sid).strip(),
+                    str(semester).strip(),
+                    semester_scope,
+                )
             conn.commit()
             try:
                 log_activity(
@@ -2062,6 +2732,51 @@ def transfer_meta():
             }
         )
     return jsonify({"status": "ok", "departments": items}), 200
+
+@grades_bp.route("/semester_scope_suggest", methods=["GET"])
+@login_required
+def semester_scope_suggest():
+    """اقتراح تصنيف فصل (اتجاه عام / قسم + شعبة) لطالب."""
+    sid = str(request.args.get("student_id") or "").strip()
+    semester = str(request.args.get("semester") or "").strip()
+    if not sid:
+        return jsonify({"status": "error", "message": "student_id مطلوب"}), 400
+    with get_connection() as conn:
+        try:
+            from backend.core.department_scope_policy import assert_student_in_actor_scope
+
+            assert_student_in_actor_scope(conn, sid, _current_user_name())
+        except Exception:
+            role = (_session_role() or "").strip()
+            if role == "student":
+                own = str(session.get("student_id") or session.get("username") or "").strip()
+                if own != sid:
+                    return jsonify({"status": "error", "message": "غير مصرح"}), 403
+            elif not current_supervisor_effective():
+                return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        scope = _suggest_semester_scope(conn, sid, semester)
+        cols = fetch_table_columns(conn, "departments")
+        where = ""
+        if "is_active" in cols:
+            where = " WHERE COALESCE(is_active, 1) = 1"
+        rows = conn.cursor().execute(
+            f"""
+            SELECT id, COALESCE(code,'') AS code, COALESCE(name_ar,'') AS name_ar
+            FROM departments
+            {where}
+            ORDER BY name_ar, code, id
+            """
+        ).fetchall()
+    depts = []
+    for r in rows or []:
+        depts.append(
+            {
+                "id": int(r[0]),
+                "code": (r[1] or "").strip(),
+                "name_ar": (r[2] or "").strip(),
+            }
+        )
+    return jsonify({"status": "ok", "scope": scope, "departments": depts}), 200
 
 @grades_bp.route("/template/transcript", methods=["GET"])
 @login_required
@@ -2717,6 +3432,8 @@ def _load_transcript_data(student_id: str):
                 (student_id,),
             ).fetchall()
         transfer_info = _student_transfer_payload(conn, student_id)
+        audit_by_course, correction_by_course = _grade_audit_provenance(conn, student_id)
+        semester_scopes = _load_semester_scopes(conn, student_id)
 
         # حالة المقررات الاختيارية بعد 100 وحدة
         try:
@@ -2763,6 +3480,41 @@ def _load_transcript_data(student_id: str):
         if is_eq:
             equated_semesters.add(sem)
 
+        key = (str(sem).strip(), str(course_name).strip())
+        audit = dict(audit_by_course.get(key) or {})
+        # طبقة التصحيح (مطابقة حرفية) — مصدر الحقيقة للمدخل عبر مسار المشرف
+        info = correction_by_course.get(key)
+        if info:
+            audit["entered_by"] = info.get("entered_by") or audit.get("entered_by") or ""
+            if not audit.get("entered_at"):
+                audit["entered_at"] = info.get("at") or ""
+            if info.get("supervisor_finalize"):
+                audit["supervisor_approved"] = True
+                audit["supervisor_by"] = info.get("supervisor_by") or info.get("entered_by") or ""
+                audit["supervisor_at"] = info.get("at") or audit.get("supervisor_at") or ""
+                audit["hod_approved"] = False
+                audit["hod_by"] = ""
+                audit["hod_at"] = ""
+            elif info.get("legacy_hod"):
+                audit["hod_approved"] = True
+                audit["hod_by"] = info.get("hod_by") or ""
+                audit["hod_at"] = info.get("at") or ""
+                audit["supervisor_approved"] = False
+                audit["supervisor_by"] = ""
+                audit["supervisor_at"] = ""
+        # لا تُظهر «عدّل» إن كان نفس المدخل فقط أو ناتجاً عن اعتماد قديم
+        if (
+            audit.get("entered_by")
+            and audit.get("modified_by")
+            and (
+                audit.get("entered_by") == audit.get("modified_by")
+                or audit.get("modified_kind") in ("transcript_correction",)
+            )
+        ):
+            audit["modified_by"] = ""
+            audit["modified_at"] = ""
+            audit["modified_kind"] = ""
+
         transcript.setdefault(sem, []).append(
             {
                 "course_name": course_name,
@@ -2770,6 +3522,7 @@ def _load_transcript_data(student_id: str):
                 "units": units,
                 "grade": grade,
                 "is_equated": is_eq,
+                "audit": audit,
             }
         )
 
@@ -2861,6 +3614,7 @@ def _load_transcript_data(student_id: str):
         "join_year": join_year,
         "transfer": transfer_info,
         "equated_semesters": sorted(equated_semesters),
+        "semester_scopes": semester_scopes,
         "transcript": transcript,
         "ordered_semesters": ordered_semesters,
         "semester_gpas": semester_gpas,
@@ -3837,6 +4591,7 @@ def get_transcript(student_id):
         "join_year": data.get("join_year", ""),
         "transfer": data.get("transfer") or {"kind": "", "department_id": None, "label": "", "badge": ""},
         "equated_semesters": data.get("equated_semesters") or [],
+        "semester_scopes": data.get("semester_scopes") or {},
         "transcript": data["transcript"],
         "semester_completed_units": data.get("semester_completed_units", {}),
         "semester_gpas": data["semester_gpas"],
