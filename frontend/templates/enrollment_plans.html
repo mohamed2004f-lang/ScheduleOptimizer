@@ -277,7 +277,7 @@
     let currentPlanId = null;
     let currentRole = null;
     let isSupervisor = false;
-    let IS_VIEW_ONLY_ROLE = false;
+    let IS_VIEW_ONLY_ROLE = true; // fail-closed حتى تُحمَّل القدرات
     /** عند وجود خطة معتمدة: القفل على إنشاء/تعديل الخطة (التعديل عبر التسجيل الفعلي) */
     let COMPOSE_LOCKED_APPROVED = false;
     /** مقررات أنجزها الطالب بنجاح والموجودة في الجدول المعتمد (لتحسين المعدل) */
@@ -612,9 +612,25 @@
       // للمشرف: حمّل فقط الطلبة المسندين إليه
       const auth = await fetchJSON('/auth/check').catch(()=>({ok:false,json:{}}));
       currentRole = auth.ok ? auth.json?.role : null;
-      isSupervisor = (currentRole === 'supervisor') || (currentRole === 'instructor' && Number(auth.json?.is_supervisor || 0) === 1);
-      // الأستاذ العادي عرض فقط؛ المشرف يكتب/يعتمد لطلبته
-      IS_VIEW_ONLY_ROLE = (currentRole === 'instructor') && !isSupervisor;
+      const caps = (auth.ok && auth.json && auth.json.capabilities) || {};
+      isSupervisor = !!(caps.is_supervisor_effective)
+        || (currentRole === 'supervisor')
+        || (currentRole === 'instructor' && Number(auth.json?.is_supervisor || 0) === 1);
+      // تعديل الخطط/التسجيل النهائي: مفتاح صريح أو مشرف؛ العميد/الوكيل عرض فقط افتراضياً
+      const canEditPlans = window.CapabilityUI
+        ? (window.CapabilityUI.has(caps, 'can_manage_enrollment_plans_edit')
+          || window.CapabilityUI.has(caps, 'can_manage_registrations_edit'))
+        : (caps.can_manage_enrollment_plans_edit === true || caps.can_manage_registrations_edit === true);
+      if (isSupervisor) {
+        IS_VIEW_ONLY_ROLE = false;
+      } else if (caps && caps.v >= 1) {
+        IS_VIEW_ONLY_ROLE = !canEditPlans;
+      } else {
+        IS_VIEW_ONLY_ROLE = (currentRole === 'instructor')
+          || currentRole === 'college_dean'
+          || currentRole === 'academic_vice_dean'
+          || !['admin', 'admin_main', 'system_admin', 'head_of_department'].includes(currentRole || '');
+      }
 
       let s;
       if (isSupervisor) {
@@ -1411,7 +1427,7 @@
               <div class="mt-2 d-flex flex-wrap gap-1">${courseChips || '<span class="text-muted small">لا مقررات</span>'}</div>
             </div>
             <div class="d-flex flex-wrap gap-2">
-              <button type="button" class="btn btn-sm btn-outline-primary" data-final-edit="${escPlain(p.student_id)}" data-name="${escPlain(name || '')}" data-sem="${escPlain(p.semester || '')}">تعديل التسجيل</button>
+              ${IS_VIEW_ONLY_ROLE ? '' : `<button type="button" class="btn btn-sm btn-outline-primary" data-final-edit="${escPlain(p.student_id)}" data-name="${escPlain(name || '')}" data-sem="${escPlain(p.semester || '')}">تعديل التسجيل</button>`}
               <button type="button" class="btn btn-sm btn-outline-secondary" data-final-html="${escPlain(p.student_id)}" data-sem="${escPlain(p.semester || '')}">طباعة من المستعرض</button>
               <button type="button" class="btn btn-sm btn-success" data-final-word="${escPlain(p.student_id)}" data-sem="${escPlain(p.semester || '')}">تحميل Word</button>
             </div>

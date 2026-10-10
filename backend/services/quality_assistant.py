@@ -151,8 +151,25 @@ def _enrich_actions(
     bullets: list[Any] | None = None,
     actions: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = list(actions or [])
-    seen_href = {a.get("href") for a in out if a.get("type") == "open_link"}
+    from backend.core.auth import (
+        can_access_accreditation_workspace,
+        filter_accreditation_href_items,
+        is_accreditation_workspace_href,
+    )
+
+    allow_accred = can_access_accreditation_workspace()
+    links = filter_accreditation_href_items(links)
+    out: list[dict[str, Any]] = []
+    for a in list(actions or []):
+        if (
+            isinstance(a, dict)
+            and a.get("type") == "open_link"
+            and is_accreditation_workspace_href(a.get("href"))
+            and not allow_accred
+        ):
+            continue
+        out.append(a)
+    seen_href = {a.get("href") for a in out if isinstance(a, dict) and a.get("type") == "open_link"}
     for link in links or []:
         href = (link.get("href") or "").strip()
         if not href or href in seen_href:
@@ -266,6 +283,9 @@ def build_welcome_brief(
             tasks.append(t)
             if len(tasks) >= 3:
                 break
+    from backend.core.auth import filter_accreditation_href_items
+
+    tasks = filter_accreditation_href_items(tasks)
     # إزالة التكرار بالمعنى التقريبي للعنوان
     uniq: list[dict[str, str]] = []
     seen: set[str] = set()

@@ -102,17 +102,19 @@
     {% if department_name %}<strong>القسم:</strong> {{ department_name }} · {% endif %}
     {% if term_label %}<strong>الفصل:</strong> {{ term_label }} · {% endif %}
     <strong>تاريخ الطباعة:</strong> {{ generated_at }}
-    · <strong>العرض:</strong> {% if use_stage_matrix %}مصفوفة المراحل{% else %}أسبوعي (يوم ثم وقت){% endif %}
+    · <strong>العرض:</strong> {% if use_stage_matrix %}مصفوفة المراحل{% elif use_display_tracks %}أعمدة عرض{% else %}أسبوعي (يوم ثم وقت){% endif %}
   </div>
 
   <div id="printGrid"></div>
 
   <script src="/static/js/common.js"></script>
-  <script src="/static/js/schedule-stage-grid.js?v=20260921d"></script>
+  <script src="/static/js/schedule-stage-grid.js?v=20261010a"></script>
   <script>
     window.SCHEDULE_DAYS = window.SCHEDULE_DAYS || ['السبت','الأحد','الإثنين','الثلاثاء','الأربعاء','الخميس'];
     const ROWS = {{ rows|tojson }};
     const USE_STAGES = {{ 'true' if use_stage_matrix else 'false' }};
+    const USE_DISPLAY_TRACKS = {{ 'true' if use_display_tracks else 'false' }};
+    const DISPLAY_TRACKS = {{ (display_tracks or [])|tojson }};
     const LS_KEY = 'schedule_print_show_assistants';
     const el = document.getElementById('printGrid');
     const opt = document.getElementById('optShowAssistants');
@@ -126,6 +128,8 @@
         includeActionRows: false,
         fillEmptyDays: false,
         showAssistantLine: showAssistantLine,
+        useDisplayTracks: USE_DISPLAY_TRACKS,
+        displayTracks: DISPLAY_TRACKS,
       };
       if (USE_STAGES && typeof buildStageMatrixTimetableHtml === 'function') {
         el.innerHTML = buildStageMatrixTimetableHtml(ROWS, opts);

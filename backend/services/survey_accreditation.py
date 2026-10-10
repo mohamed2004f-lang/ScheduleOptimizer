@@ -295,11 +295,14 @@ def register_survey_as_evidence(
         if template_code in EXTERNAL_SURVEY_CODES
         else f"semester={quote(semester, safe='')}"
     )
+    from backend.core.auth import can_access_accreditation_workspace
+
     out = {
         **result,
         "template_code": template_code,
-        "compliance_map_url": f"/academic_quality/accreditation/map?{map_q}",
     }
+    if can_access_accreditation_workspace():
+        out["compliance_map_url"] = f"/academic_quality/accreditation/map?{map_q}"
     if ind_code:
         out["indicator_code"] = ind_code
     return out

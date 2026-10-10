@@ -106,6 +106,35 @@
     return name || '—';
   }
 
+  /** رمز مجموعة التدريس (A/B…) أو '' للمجموعة الموحّدة. */
+  function rowGroupCode(row) {
+    const raw = String((row && (row.group_code || row.tg_group_code)) || '').trim();
+    if (raw && raw !== '—' && raw !== '-' && raw.toLowerCase() !== 'all') {
+      return raw.toUpperCase();
+    }
+    const gcl = String((row && row.group_code_label) || '').trim();
+    if (gcl && gcl !== 'الكل' && gcl !== '—') return gcl.toUpperCase();
+    const lbl = String((row && row.teaching_group_label) || '').trim();
+    const m = lbl.match(/مجموعة\s+([A-Za-z0-9\u0600-\u06FF]+)/u);
+    if (m && m[1] && m[1] !== 'الكل') return String(m[1]).toUpperCase();
+    return '';
+  }
+
+  function isSplitGroupCode(code) {
+    const c = String(code || '').trim();
+    return !!c && c !== '—' && c !== '-' && c !== 'الكل';
+  }
+
+  function groupBadgeHtml(row, opts) {
+    opts = opts || {};
+    if (opts.hideGroupBadge) return '';
+    const code = rowGroupCode(row);
+    if (!isSplitGroupCode(code)) return '';
+    return (
+      `<span class="slot-group-badge" title="مجموعة ${escAttr(code)}">${esc(code)}</span>`
+    );
+  }
+
   function instructorCellHtml(row, opts) {
     opts = opts || {};
     const primaryInst = String(row.instructor_primary || row.instructor || '').trim();
@@ -122,18 +151,30 @@
       }
     }
     const fullInst = String(row.instructor_display || primaryInst).trim();
-    const instTip = escAttr(fullInst || primaryInst);
+    const gCode = rowGroupCode(row);
+    const badge = groupBadgeHtml(row, opts);
+    const tipParts = [fullInst || primaryInst];
+    if (isSplitGroupCode(gCode)) tipParts.push('مجموعة ' + gCode);
+    const instTip = escAttr(tipParts.filter(Boolean).join(' — '));
     if (!primaryInst && !assistants.length) {
+      if (badge) {
+        return `<span class="slot-inst-with-badge" title="${instTip}">${badge}</span>`;
+      }
       return `<span class="slot-text slot-text--empty" title="">—</span>`;
     }
     const showAsstLine = opts.showAssistantLine !== false;
+    const primaryHtml =
+      `<span class="slot-inst-with-badge">` +
+      `<span class="slot-text${primaryInst ? '' : ' slot-text--empty'}">${esc(primaryInst || '—')}</span>` +
+      badge +
+      `</span>`;
     if (!showAsstLine || !assistants.length) {
-      return `<span class="slot-text${primaryInst ? '' : ' slot-text--empty'}" title="${instTip}">${esc(primaryInst || '—')}</span>`;
+      return `<span title="${instTip}">${primaryHtml}</span>`;
     }
     const asstLine = assistants.join('، ');
     return (
       `<span class="slot-inst-stack" title="${instTip}">` +
-      `<span class="slot-text slot-inst-primary">${esc(primaryInst)}</span>` +
+      `<span class="slot-inst-primary">${primaryHtml}</span>` +
       `<span class="slot-inst-asst">مساعد: ${esc(asstLine)}</span>` +
       `</span>`
     );
@@ -142,6 +183,7 @@
   function renderCourseTriple(row, opts) {
     opts = opts || {};
     const showManage = !!opts.showSlotManage;
+    const stacked = !!opts.stacked;
     const color = typeof opts.getCourseColor === 'function'
       ? opts.getCourseColor(row.course_name)
       : '#64748b';
@@ -151,9 +193,11 @@
     const fullInst = String(
       row.instructor_display || primaryInst
     ).trim();
+    const gCode = rowGroupCode(row);
     const titleTip = escAttr(
       [
         courseLabel(row),
+        isSplitGroupCode(gCode) && ('مجموعة ' + gCode),
         row.room && ('قاعة: ' + row.room),
         fullInst && ('أستاذ: ' + fullInst),
       ]
@@ -165,24 +209,69 @@
     const badgeHtml = badge
       ? `<span class="stage-badge stage-badge--${escAttr(badge === 'عام' ? 'general' : badge === 'قسم 2' ? 'y2' : 'other')}" aria-hidden="true"></span>`
       : '';
+    const isOverlay = !!(row.is_overlay_general || (row.is_college_general && row.overlay_source));
+    const overlayBadge = isOverlay
+      ? `<span class="slot-overlay-badge" title="اتجاه عام — الأوقات من رئيس الاتجاه العام">اتجاه عام</span>`
+      : '';
     const display = esc(courseDisplayName(row));
     let courseCell;
-    if (showManage && row.section_id && !row.is_college_general) {
+    if (showManage && row.section_id && !row.is_college_general && !isOverlay) {
       courseCell = `<button type="button" class="course-btn course-btn--col" style="background:${color};" data-section-id="${escAttr(row.section_id)}" title="${titleTip}">${display}</button>${badgeHtml}`;
-    } else if (showManage && row.is_college_general) {
-      courseCell = `<span class="course-label-readonly" style="background:${color};" title="${titleTip}">${display}</span>${badgeHtml}<span class="stage-readonly-hint" title="مقرر اتجاه عام — للتنسيق مع رئيس الاتجاه العام">🔒</span>`;
+    } else if (showManage && (row.is_college_general || isOverlay)) {
+      courseCell = `<span class="course-label-readonly" style="background:${color};" title="${titleTip}">${display}</span>${badgeHtml}${overlayBadge}<span class="stage-readonly-hint" title="مقرر اتجاه عام — للتنسيق مع رئيس الاتجاه العام">🔒</span>`;
     } else {
       // عرض قراءة: نفس شكل زر المقرر مع نص أبيض على لون المقرر
-      courseCell = `<span class="course-pub-label course-pub-label--filled" style="background:${color};" title="${titleTip}">${display}</span>${badgeHtml}`;
+      courseCell = `<span class="course-pub-label course-pub-label--filled" style="background:${color};" title="${titleTip}">${display}</span>${badgeHtml}${overlayBadge}`;
     }
     const room = String(row.room || '').trim();
+    const stackClass = stacked ? ' slot-course-record--stacked' : '';
+    const overlayClass = isOverlay ? ' slot-course-record--overlay-general' : '';
     return (
-      `<div class="slot-course-record">` +
+      `<div class="slot-course-record${stackClass}${overlayClass}">` +
       `<div class="slot-cell slot-cell--course">${courseCell}</div>` +
       `<div class="slot-cell slot-cell--inst">${instructorCellHtml(row, opts)}</div>` +
       `<div class="slot-cell slot-cell--room"><span class="slot-text${room ? '' : ' slot-text--empty'}">${esc(room || '—')}</span></div>` +
       `</div>`
     );
+  }
+
+  /** تكديس رأسي داخل خلية العمود (أعمدة العرض تتكفّل بالتوازي). */
+  function renderAlignedSlotCourses(courses, opts) {
+    opts = opts || {};
+    const list = Array.isArray(courses) ? courses : [];
+    if (!list.length) return emptyTriple(opts);
+    let html = '';
+    list.forEach((c, cidx) => {
+      if (cidx > 0) html += '<div class="slot-record-fullsep"></div>';
+      html += renderCourseTriple(c, opts);
+    });
+    return html;
+  }
+
+  function normalizeDisplayTracks(opts) {
+    const raw = (opts && (opts.displayTracks || opts.display_tracks)) || [];
+    if (!Array.isArray(raw) || !raw.length) return [];
+    return raw
+      .map((t, i) => {
+        const index = Number(t && (t.index != null ? t.index : t.track_index));
+        const idx = Number.isFinite(index) && index >= 1 ? Math.floor(index) : i + 1;
+        const label = String((t && t.label) || `مجموعة ${idx}`).trim() || `مجموعة ${idx}`;
+        return { index: idx, label };
+      })
+      .filter((t) => t.index >= 1)
+      .sort((a, b) => a.index - b.index);
+  }
+
+  function rowDisplayColumn(row, tracksN) {
+    const n = Number(row && row.display_column);
+    if (!Number.isFinite(n) || n < 1) return 1;
+    const max = Math.max(1, intOr(tracksN, 1));
+    return Math.min(Math.floor(n), max);
+  }
+
+  function intOr(v, d) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : d;
   }
 
   function emptyTriple(opts) {
@@ -232,6 +321,10 @@
 
   function buildPersonalWeeklyTimetableHtml(scheduleRows, opts) {
     opts = opts || {};
+    const tracks = normalizeDisplayTracks(opts);
+    if (opts.useDisplayTracks && tracks.length >= 1) {
+      return buildDisplayTracksTimetableHtml(scheduleRows, Object.assign({}, opts, { displayTracks: tracks }));
+    }
     const cleanClass = opts.showSlotManage ? '' : ' timetable--clean';
     const compactClass = opts.compact ? ' is-compact' : '';
     const rows = (scheduleRows || []).filter(
@@ -277,15 +370,81 @@
         html += timeCellHtml(day, time, opts);
         html += `<td colspan="3" class="time-slot-cell slot-slot-block" data-slot-day="${escAttr(day)}" data-slot-time="${escAttr(time)}">`;
         html += '<div class="slot-aligned-rows">';
-        if (!courses.length) {
-          html += emptyTriple(opts);
-        } else {
-          courses.forEach((c, cidx) => {
-            if (cidx > 0) html += '<div class="slot-record-fullsep"></div>';
-            html += renderCourseTriple(c, opts);
-          });
-        }
+        html += renderAlignedSlotCourses(courses, opts);
         html += '</div></td></tr>';
+      });
+    });
+    html += '</tbody></table>';
+    return html;
+  }
+
+  /**
+   * جدول الاتجاه العام: يوم | وقت | N أشرطة × (مقرر|أستاذ|قاعة).
+   */
+  function buildDisplayTracksTimetableHtml(scheduleRows, opts) {
+    opts = opts || {};
+    const tracks = normalizeDisplayTracks(opts);
+    const trackList = tracks.length ? tracks : [{ index: 1, label: 'مجموعة 1' }, { index: 2, label: 'مجموعة 2' }];
+    const tracksN = trackList.length;
+    const cleanClass = opts.showSlotManage ? '' : ' timetable--clean';
+    const compactClass = opts.compact ? ' is-compact' : '';
+    const rows = (scheduleRows || []).filter(
+      (r) => r && String(r.day || '').trim() && String(r.time || '').trim()
+    );
+    const byDayTimes = timesByDayFromRows(rows, opts.byDay || {});
+    const unionFallback = sortTimes(opts.unionSlots || []);
+    if (opts.fillEmptyDays) {
+      daysList().forEach((d) => {
+        if (!(byDayTimes[d] || []).length && unionFallback.length) {
+          byDayTimes[d] = unionFallback.slice();
+        }
+      });
+    }
+    const hasAnyTime = daysList().some((d) => (byDayTimes[d] || []).length);
+    if (!rows.length && !hasAnyTime) {
+      return '<div class="alert alert-info p-2 mb-0">لا توجد حصص في الجدول لهذا العرض.</div>';
+    }
+    const slotsMap = {};
+    rows.forEach((row) => {
+      const d = canonicalDay(row.day);
+      const t = String(row.time || '').trim();
+      if (!d || !t) return;
+      const col = rowDisplayColumn(row, tracksN);
+      const key = `${d}|${t}|${col}`;
+      if (!slotsMap[key]) slotsMap[key] = [];
+      slotsMap[key].push(row);
+    });
+
+    let html =
+      `<table class="timetable timetable--personal timetable--display-tracks${compactClass}${cleanClass}"><thead>` +
+      `<tr><th rowspan="2" class="day-header">اليوم</th><th rowspan="2" class="time-header">الوقت</th>`;
+    trackList.forEach((tr) => {
+      html += `<th colspan="3" class="display-track-header" data-display-track="${escAttr(tr.index)}">${esc(tr.label)}</th>`;
+    });
+    html += '</tr><tr>';
+    trackList.forEach(() => {
+      html +=
+        '<th class="sub-time-header sub-time-header--course">المقرر</th>' +
+        '<th class="sub-time-header sub-time-header--inst">الأستاذ</th>' +
+        '<th class="sub-time-header sub-time-header--room">القاعة</th>';
+    });
+    html += '</tr></thead><tbody>';
+
+    daysList().forEach((day) => {
+      const times = byDayTimes[day] || [];
+      if (!times.length) return;
+      times.forEach((time, idx) => {
+        html += `<tr class="personal-time-row${idx === 0 ? ' is-day-start' : ''}">`;
+        html += dayHeaderCellHtml(day, opts, idx === 0 ? 'start' : 'cont');
+        html += timeCellHtml(day, time, opts);
+        trackList.forEach((tr) => {
+          const courses = slotsMap[`${day}|${time}|${tr.index}`] || [];
+          html += `<td colspan="3" class="time-slot-cell slot-slot-block display-track-cell" data-slot-day="${escAttr(day)}" data-slot-time="${escAttr(time)}" data-display-track="${escAttr(tr.index)}">`;
+          html += '<div class="slot-aligned-rows">';
+          html += renderAlignedSlotCourses(courses, opts);
+          html += '</div></td>';
+        });
+        html += '</tr>';
       });
     });
     html += '</tbody></table>';
@@ -336,14 +495,7 @@
         const courses = slotsMap[`${day}|${time}|${b.id}`] || [];
         html += `<td colspan="3" class="time-slot-cell slot-slot-block stage-bucket-cell" data-slot-day="${escAttr(day)}" data-slot-time="${escAttr(time)}" data-stage-bucket="${escAttr(b.id)}">`;
         html += '<div class="slot-aligned-rows">';
-        if (!courses.length) {
-          html += emptyTriple(opts);
-        } else {
-          courses.forEach((c, cidx) => {
-            if (cidx > 0) html += '<div class="slot-record-fullsep"></div>';
-            html += renderCourseTriple(c, opts);
-          });
-        }
+        html += renderAlignedSlotCourses(courses, opts);
         html += '</div></td>';
       });
       html += '</tr>';
@@ -521,4 +673,5 @@
   global.paintScheduleConflictActions = paintConflictActions;
   global.collapseScheduleActionRows = collapseScheduleActionRows;
   global.fixStageDayHeaderRowspans = fixStageDayHeaderRowspans;
+  global.scheduleRowGroupCode = rowGroupCode;
 })(typeof window !== 'undefined' ? window : globalThis);

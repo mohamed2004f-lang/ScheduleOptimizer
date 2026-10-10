@@ -854,6 +854,55 @@ html[data-theme="dark"] .product-home-credit,
   color: #475569;
   word-break: break-word;
 }
+.slot-inst-with-badge{
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 5px;
+  max-width: 100%;
+}
+.slot-group-badge{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.2rem;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.45;
+  letter-spacing: 0.02em;
+  color: #1e293b;
+  background: #e2e8f0;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+.slot-course-record--stacked{
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+.slot-course-record--stacked .slot-cell--room{
+  max-width: none;
+  justify-self: start;
+  text-align: right;
+}
+.slot-course-record--stacked .slot-cell--room .slot-text{
+  text-align: right;
+}
+.timetable.timetable--display-tracks thead th.display-track-header{
+  text-align: center;
+  font-size: 12px;
+  font-weight: 800;
+  color: #1e293b;
+  background: #e2e8f0;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.12);
+  padding: 8px 6px;
+}
+.timetable.timetable--display-tracks .display-track-cell{
+  vertical-align: top;
+  border-inline-start: 1px solid rgba(15, 23, 42, 0.08);
+}
 .slot-placeholder{
   color: #94a3b8;
   font-size: 13px;
@@ -1155,6 +1204,15 @@ html[data-theme="dark"] .product-home-credit,
 .stage-badge--y2{ background: #dbeafe; color: #1e40af; }
 .stage-badge--other{ background: #fef3c7; color: #92400e; }
 .stage-readonly-hint{ font-size: 11px; margin-inline-start: 4px; opacity: .85; }
+.slot-overlay-badge{
+  display:inline-block; font-size:10px; font-weight:600; line-height:1.2;
+  margin-inline-start:4px; padding:1px 5px; border-radius:3px;
+  background:#e8f1f8; color:#1e4a6e; border:1px solid #b7cfe3; vertical-align:middle;
+}
+.slot-course-record--overlay-general{ outline:1px dashed rgba(30,74,110,.35); outline-offset:1px; }
+#generalGroupSelectPanel .gg-opt-row{ cursor:pointer; }
+#generalGroupSelectPanel .gg-opt-row:hover{ background:#f5f9fc; }
+#generalGroupSelectPanel .gg-opt-row.is-current{ background:#eef6ee; }
 .stage-row-actions{
   background: #f8fafc;
   padding: 4px 8px !important;

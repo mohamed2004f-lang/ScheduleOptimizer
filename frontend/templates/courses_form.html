@@ -39,7 +39,7 @@
       </div>
 
       <!-- نموذج إضافة مقرر -->
-      <div class="card mb-3 chart-container">
+      <div class="card mb-3 chart-container" id="courseCreateCard">
         <div class="card-body">
           <form id="courseForm" onsubmit="return false;">
             <div class="row g-2 align-items-end">
@@ -847,10 +847,11 @@ window.addEventListener('load', async ()=>{
     const isSupervisor = (caps && caps.v >= 1)
       ? !!caps.is_supervisor_effective
       : ((role === 'supervisor') || (role === 'instructor' && Number(auth?.is_supervisor || 0) === 1));
-    IS_VIEW_ONLY_ROLE = (role === 'instructor') || isSupervisor;
-    IS_ADMIN = (caps && caps.v >= 1)
-      ? !!caps.can_manage_courses_edit
+    const canEditCourses = (caps && caps.v >= 1)
+      ? (window.CapabilityUI ? window.CapabilityUI.has(caps, 'can_manage_courses_edit') : caps.can_manage_courses_edit === true)
       : (role === 'admin' || role === 'admin_main' || role === 'head_of_department');
+    IS_ADMIN = canEditCourses;
+    IS_VIEW_ONLY_ROLE = !canEditCourses || (role === 'instructor') || isSupervisor;
     // حذف/أرشفة كل مقررات القسم: مسؤول النظام فقط
     const btnDeleteAllDept = document.getElementById('btnDeleteAllDept');
     if (btnDeleteAllDept) {
@@ -859,18 +860,22 @@ window.addEventListener('load', async ()=>{
     }
   } catch(e){
     IS_ADMIN = false;
-    IS_VIEW_ONLY_ROLE = false;
+    IS_VIEW_ONLY_ROLE = true;
     document.getElementById('btnDeleteAllDept')?.classList.add('d-none');
   }
 
   if(!IS_ADMIN){
-    // إخفاء/تعطيل أدوات التعديل للمشرف والطالب (عرض فقط)
+    // إخفاء نموذج الإضافة والاستيراد بالكامل (عرض فقط)
+    const createCard = document.getElementById('courseCreateCard');
+    if (createCard) createCard.style.display = 'none';
     const btnAdd = document.getElementById('btnAddCourse');
     if(btnAdd) btnAdd.disabled = true;
     const formAdd = document.getElementById('courseForm');
     if(formAdd) formAdd.querySelectorAll('input,button,select,textarea').forEach(x=> x.disabled = true);
     const importForm = document.getElementById('courses-import-form');
     if(importForm) importForm.style.display = 'none';
+    const subtitle = document.querySelector('.page-subtitle');
+    if (subtitle) subtitle.textContent = 'عرض المقررات — قراءة فقط';
   } else {
     const importForm = document.getElementById('courses-import-form');
     if (importForm && !importForm.dataset.importWired) {

@@ -265,18 +265,36 @@ def match_system_usage_topic(query: str = "") -> dict[str, Any] | None:
 
 
 def list_system_usage_topics() -> list[dict[str, Any]]:
+    from backend.core.auth import (
+        can_access_accreditation_workspace,
+        filter_accreditation_href_items,
+    )
     from backend.core.quality_guide_packs import system_usage_topics_with_guide_keys
 
-    return [
-        {
-            "code": t["code"],
-            "label_ar": t["label_ar"],
-            "links": list(t.get("links") or []),
-            "page_guide_key": t.get("page_guide_key"),
-            "steps_ar": list(t.get("steps_ar") or []),
-        }
-        for t in system_usage_topics_with_guide_keys()
-    ]
+    allow_accred = can_access_accreditation_workspace()
+    out: list[dict[str, Any]] = []
+    for t in system_usage_topics_with_guide_keys():
+        code = str(t.get("code") or "")
+        if code == "accreditation_map" and not allow_accred:
+            continue
+        links = filter_accreditation_href_items(list(t.get("links") or []))
+        if not allow_accred and not links and any(
+            "/academic_quality/accreditation/" in str((x or {}).get("href") or "")
+            for x in (t.get("links") or [])
+        ):
+            # موضوع صار بلا روابط مفيدة بعد القفل — أخفه إن كان فقط للاعتماد
+            if code in ("accreditation_map",):
+                continue
+        out.append(
+            {
+                "code": code,
+                "label_ar": t["label_ar"],
+                "links": links,
+                "page_guide_key": t.get("page_guide_key"),
+                "steps_ar": list(t.get("steps_ar") or []),
+            }
+        )
+    return out
 
 # كيف يناقش كل دور المساعد (نص إرشادي للواجهة)
 ROLE_DISCUSSION_GUIDE: dict[str, dict[str, Any]] = {

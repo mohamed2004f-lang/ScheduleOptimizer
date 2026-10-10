@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>لوحة الصلاحيات — الأدمن الرئيسي</title>
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal">
+    <div class="page-header mb-3">
+      <h1 class="page-title h4 mb-1">لوحة الصلاحيات</h1>
+      <p class="text-muted small mb-0">
+        تشغيل/إيقاف صلاحيات العرض والتعديل لكل نطاق، وتجاوزات لمستخدم محدد.
+        تصفية القسم للعميد/الوكيل = عرض فقط؛ التعديل التشغيلي للأقسام يُفعَّل صراحة من هنا.
+        مسارات الاعتماد المستقبلية تظهر مطفأة حتى تفعيلها لاحقاً.
+      </p>
+    </div>
+
+    <div class="alert alert-warning small" id="msgBox" style="display:none;"></div>
+
+    <ul class="nav nav-tabs mb-3" role="tablist">
+      <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tabProfile" type="button">قوالب الأدوار</button></li>
+      <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabUser" type="button">تجاوز مستخدم</button></li>
+    </ul>
+
+    <div class="tab-content">
+      <div class="tab-pane fade show active" id="tabProfile">
+        <div class="row g-2 align-items-end mb-3">
+          <div class="col-md-5">
+            <label class="form-label small">القالب</label>
+            <select class="form-select form-select-sm" id="profileSelect"></select>
+          </div>
+          <div class="col-md-3">
+            <button type="button" class="btn btn-primary btn-sm" id="btnLoadProfile">تحميل</button>
+            <button type="button" class="btn btn-success btn-sm" id="btnSaveProfile">حفظ القالب</button>
+          </div>
+        </div>
+        <div id="profileCards" class="row g-3"></div>
+      </div>
+
+      <div class="tab-pane fade" id="tabUser">
+        <div class="row g-2 align-items-end mb-3">
+          <div class="col-md-4">
+            <label class="form-label small">اسم المستخدم</label>
+            <input type="text" class="form-control form-control-sm" id="overrideUsername" placeholder="username">
+          </div>
+          <div class="col-md-3">
+            <button type="button" class="btn btn-outline-primary btn-sm" id="btnLoadUser">تحميل التجاوزات</button>
+          </div>
+        </div>
+        <p class="small text-muted" id="userOverrideMeta"></p>
+        <div id="userCards" class="row g-3"></div>
+      </div>
+    </div>
+  </main>
+
+  <script nonce="{{ csp_nonce }}" src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+  <script nonce="{{ csp_nonce }}">
+  (function () {
+    const MANAGED_GROUPS = new Set([
+      'scheduling', 'exams', 'courses', 'registrations', 'students', 'records',
+      'college_ops', 'dangerous', 'approvals_future', 'users'
+    ]);
+    let catalogGroups = [];
+    let profileKeys = new Set();
+    let userGrants = new Set();
+    let userDenies = new Set();
+
+    function showMsg(text, kind) {
+      const el = document.getElementById('msgBox');
+      el.style.display = text ? '' : 'none';
+      el.className = 'alert alert-' + (kind || 'warning') + ' small';
+      el.textContent = text || '';
+    }
+
+    async function fetchJSON(url, opts) {
+      const r = await fetch(url, Object.assign({
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        credentials: 'same-origin'
+      }, opts || {}));
+      let j = null;
+      try { j = await r.json(); } catch (e) {}
+      return { ok: r.ok, status: r.status, json: j };
+    }
+
+    function renderCards(containerId, mode) {
+      const root = document.getElementById(containerId);
+      root.innerHTML = '';
+      catalogGroups.filter(g => MANAGED_GROUPS.has(g.group_key)).forEach(g => {
+        const col = document.createElement('div');
+        col.className = 'col-md-6';
+        const card = document.createElement('div');
+        card.className = 'card h-100';
+        const body = document.createElement('div');
+        body.className = 'card-body';
+        body.innerHTML = '<h6 class="card-title mb-2">' + (g.group_label_ar || g.group_key) + '</h6>';
+        (g.items || []).forEach(item => {
+          const id = mode + '_' + item.key;
+          const wrap = document.createElement('div');
+          wrap.className = 'form-check form-switch mb-1';
+          const checked = mode === 'profile'
+            ? profileKeys.has(item.key)
+            : userGrants.has(item.key) && !userDenies.has(item.key);
+          wrap.innerHTML =
+            '<input class="form-check-input" type="checkbox" role="switch" id="' + id + '" data-key="' + item.key + '"' + (checked ? ' checked' : '') + '>' +
+            '<label class="form-check-label small" for="' + id + '">' + (item.label_ar || item.key) +
+            (g.group_key === 'approvals_future' ? ' <span class="badge text-bg-secondary">مستقبلي</span>' : '') +
+            (g.group_key === 'dangerous' ? ' <span class="badge text-bg-danger">خطِر</span>' : '') +
+            '</label>';
+          body.appendChild(wrap);
+        });
+        card.appendChild(body);
+        col.appendChild(card);
+        root.appendChild(col);
+      });
+    }
+
+    function collectChecked(containerId) {
+      const keys = [];
+      document.querySelectorAll('#' + containerId + ' input[data-key]').forEach(inp => {
+        if (inp.checked) keys.push(inp.getAttribute('data-key'));
+      });
+      return keys;
+    }
+
+    async function loadCatalog() {
+      const r = await fetchJSON('/role_profiles/catalog');
+      if (!r.ok) {
+        showMsg((r.json && r.json.message) || 'تعذر تحميل الكتالوج — للأدمن الرئيسي فقط', 'danger');
+        return;
+      }
+      catalogGroups = r.json.groups || [];
+    }
+
+    async function loadProfiles() {
+      const r = await fetchJSON('/role_profiles/list');
+      const sel = document.getElementById('profileSelect');
+      sel.innerHTML = '';
+      (r.json && r.json.profiles || []).forEach(p => {
+        if (p.code === 'system_admin') return;
+        const o = document.createElement('option');
+        o.value = p.code;
+        o.textContent = (p.name_ar || p.code) + ' (' + p.code + ')';
+        sel.appendChild(o);
+      });
+    }
+
+    async function loadProfileDetail() {
+      const code = document.getElementById('profileSelect').value;
+      if (!code) return;
+      const r = await fetchJSON('/role_profiles/detail/' + encodeURIComponent(code));
+      if (!r.ok) {
+        showMsg((r.json && r.json.message) || 'فشل التحميل', 'danger');
+        return;
+      }
+      const panel = (r.json.panel_permissions && r.json.panel_permissions.length)
+        ? r.json.panel_permissions
+        : (r.json.permissions || []);
+      profileKeys = new Set(panel);
+      renderCards('profileCards', 'profile');
+      const leadHint = r.json.leadership_defaults_applied
+        ? ' — افتراضات القيادة: عرض ON، تعديل أقسام OFF، تشغيل كلية ON'
+        : '';
+      showMsg('تم تحميل قالب: ' + code + leadHint, 'success');
+    }
+
+    async function saveProfile() {
+      const code = document.getElementById('profileSelect').value;
+      const permissions = collectChecked('profileCards');
+      const r = await fetchJSON('/role_profiles/profile_permissions', {
+        method: 'POST',
+        body: JSON.stringify({ profile_code: code, permissions: permissions })
+      });
+      if (!r.ok) {
+        showMsg((r.json && r.json.message) || 'فشل الحفظ', 'danger');
+        return;
+      }
+      const panel = (r.json && r.json.panel_permissions && r.json.panel_permissions.length)
+        ? r.json.panel_permissions
+        : ((r.json && r.json.permissions) || permissions);
+      profileKeys = new Set(panel);
+      renderCards('profileCards', 'profile');
+      showMsg('تم حفظ صلاحيات القالب', 'success');
+    }
+
+    async function loadUserOverrides() {
+      const username = (document.getElementById('overrideUsername').value || '').trim();
+      if (!username) {
+        showMsg('أدخل اسم المستخدم', 'warning');
+        return;
+      }
+      const r = await fetchJSON('/role_profiles/user_overrides?username=' + encodeURIComponent(username));
+      if (!r.ok) {
+        showMsg((r.json && r.json.message) || 'فشل التحميل', 'danger');
+        return;
+      }
+      userGrants = new Set(r.json.grants || []);
+      userDenies = new Set(r.json.denies || []);
+      document.getElementById('userOverrideMeta').textContent =
+        'الدور: ' + (r.json.role || '—') + ' · منح: ' + userGrants.size + ' · رفض: ' + userDenies.size;
+      renderCards('userCards', 'user');
+      // أزرار حفظ لكل مفتاح عند التغيير
+      document.querySelectorAll('#userCards input[data-key]').forEach(inp => {
+        inp.addEventListener('change', async () => {
+          const key = inp.getAttribute('data-key');
+          const granted = !!inp.checked;
+          const res = await fetchJSON('/role_profiles/user_overrides', {
+            method: 'POST',
+            body: JSON.stringify({
+              username: username,
+              permission_key: key,
+              granted: granted,
+              deny: !granted
+            })
+          });
+          if (!res.ok) {
+            inp.checked = !granted;
+            showMsg((res.json && res.json.message) || 'فشل الحفظ', 'danger');
+            return;
+          }
+          if (granted) { userGrants.add(key); userDenies.delete(key); }
+          else { userGrants.delete(key); userDenies.add(key); }
+          showMsg(res.json.message || 'تم', 'success');
+        });
+      });
+      showMsg('تم تحميل تجاوزات المستخدم', 'success');
+    }
+
+    document.getElementById('btnLoadProfile').addEventListener('click', loadProfileDetail);
+    document.getElementById('btnSaveProfile').addEventListener('click', saveProfile);
+    document.getElementById('btnLoadUser').addEventListener('click', loadUserOverrides);
+
+    (async function init() {
+      await loadCatalog();
+      await loadProfiles();
+      if (document.getElementById('profileSelect').options.length) {
+        await loadProfileDetail();
+      }
+    })();
+  })();
+  </script>
+</body>
+</html>

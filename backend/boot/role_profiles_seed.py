@@ -8,6 +8,20 @@ from backend.core.permissions import PERMISSION_CATALOG, ROLE_PROFILE_SEED
 
 logger = logging.getLogger(__name__)
 
+# مفاتيح تشغيل قسم يجب ألا تبقى ممنوحة افتراضياً لقالب العميد/الوكيل
+_LEADERSHIP_STALE_DEPT_OPS = (
+    "can_manage_schedule_edit",
+    "can_manage_exam_schedule_edit",
+    "can_manage_courses_edit",
+    "can_manage_students",
+    "can_manage_registrations_edit",
+    "can_manage_enrollment_plans_edit",
+    "can_manage_transcript_admin",
+    "can_manage_instructors_edit",
+    "can_migrate_registrations_to_transcript",
+    "can_edit_accreditation_catalog",
+)
+
 ROLE_PROFILES_DDL = [
     """
     CREATE TABLE IF NOT EXISTS permission_definitions (
@@ -153,8 +167,72 @@ def seed_role_profiles(conn) -> dict:
                 (int(pid), pk),
             )
             stats["links"] += 1
+    sanitize = sanitize_leadership_profile_permissions(conn)
+    stats["leadership_sanitized"] = sanitize
     conn.commit()
     return stats
+
+
+def sanitize_leadership_profile_permissions(conn) -> dict:
+    """
+    إزالة منح تشغيل القسم القديمة من قوالب العميد/الوكيل،
+    وإضافة مفاتيح العرض وتشغيل الكلية الافتراضية إن نقصت.
+    """
+    from backend.core.capability_gates import COLLEGE_OPS_EDIT_KEYS, LEADERSHIP_PANEL_VIEW_KEYS
+
+    cur = conn.cursor()
+    out = {"profiles": 0, "removed": 0, "added": 0}
+    ensure_keys = set(COLLEGE_OPS_EDIT_KEYS) | set(LEADERSHIP_PANEL_VIEW_KEYS)
+    for code in ("college_dean", "academic_vice_dean"):
+        row = cur.execute("SELECT id FROM role_profiles WHERE code = ? LIMIT 1", (code,)).fetchone()
+        if not row:
+            continue
+        pid = int(row[0] if not hasattr(row, "keys") else row["id"])
+        out["profiles"] += 1
+        for key in _LEADERSHIP_STALE_DEPT_OPS:
+            cur.execute(
+                "DELETE FROM role_profile_permissions WHERE profile_id = ? AND permission_key = ?",
+                (pid, key),
+            )
+            try:
+                out["removed"] += int(cur.rowcount or 0)
+            except Exception:
+                pass
+        # مفاتيح seed الأساسية غير التشغيلية + العرض/تشغيل الكلية
+        seed = next((p for p in ROLE_PROFILE_SEED if p.get("code") == code), None) or {}
+        wanted = set(seed.get("permissions") or []) | ensure_keys
+        wanted -= set(_LEADERSHIP_STALE_DEPT_OPS)
+        cat = {p["key"]: p for p in PERMISSION_CATALOG}
+        for pk in sorted(wanted):
+            meta = cat.get(pk)
+            if meta:
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO permission_definitions (key, group_key, group_label_ar, label_ar, sort_order)
+                        VALUES (?, ?, ?, ?, 0)
+                        ON CONFLICT(key) DO NOTHING
+                        """,
+                        (pk, meta["group_key"], meta["group_label_ar"], meta["label_ar"]),
+                    )
+                except Exception:
+                    pass
+            cur.execute(
+                """
+                INSERT INTO role_profile_permissions (profile_id, permission_key, granted)
+                VALUES (?, ?, 1)
+                ON CONFLICT(profile_id, permission_key) DO UPDATE SET granted = 1
+                """,
+                (pid, pk),
+            )
+            out["added"] += 1
+    logger.info(
+        "sanitize_leadership_profile_permissions profiles=%s removed=%s added=%s",
+        out["profiles"],
+        out["removed"],
+        out["added"],
+    )
+    return out
 
 
 def migrate_legacy_admin_to_system(conn, admin_username: str | None = None) -> int:

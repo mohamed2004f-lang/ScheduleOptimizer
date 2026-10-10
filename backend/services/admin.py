@@ -1196,6 +1196,13 @@ def admin_backup_page():
     return render_template("admin_backup.html")
 
 
+@admin_bp.route("/permissions")
+@role_required("admin_main", "system_admin")
+def admin_permissions_page():
+    """لوحة صلاحيات تفصيلية — قوالب أدوار وتجاوزات مستخدم."""
+    return render_template("permissions_admin.html")
+
+
 @admin_bp.route("/backup/status", methods=["GET"])
 @role_required("admin_main", "system_admin")
 def admin_backup_status():

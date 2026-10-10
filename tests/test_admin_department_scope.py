@@ -1,8 +1,52 @@
 """سياق قسم المسؤول: الجلسة وواجهة التصفية."""
 import uuid
 
+from werkzeug.security import generate_password_hash
+
 
 class TestAdminDepartmentScope:
+    def test_scope_options_for_vice_dean(self, app, db_conn):
+        """الوكيل يجب أن يرى قائمة الأقسام في نطاق العرض (لا يعتمد على كتالوج العميد فقط)."""
+        cur = db_conn.cursor()
+        code = "VD" + uuid.uuid4().hex[:8].upper()
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+            (code, "قسم وكيل", "VD Dept"),
+        )
+        uname = "vd-scope-" + uuid.uuid4().hex[:6]
+        cur.execute(
+            "INSERT INTO users (username, password_hash, role, is_system_account) VALUES (?, ?, ?, 0)",
+            (uname, generate_password_hash("TestP@ssw0rd!"), "academic_vice_dean"),
+        )
+        db_conn.commit()
+
+        with app.test_client() as c:
+            login = c.post(
+                "/auth/login",
+                json={"username": uname, "password": "TestP@ssw0rd!"},
+            )
+            assert login.status_code == 200, login.get_data(as_text=True)
+            opts = c.get(
+                "/auth/admin_department_scope/options",
+                headers={"Accept": "application/json"},
+            )
+            assert opts.status_code == 200
+            body = opts.get_json() or {}
+            assert body.get("status") == "ok"
+            items = body.get("items") or []
+            assert any((it.get("code") or "") == code for it in items)
+
+            # تعيين نطاق قسم ثم التحقق من /auth/check
+            did = next(int(it["id"]) for it in items if (it.get("code") or "") == code)
+            setr = c.post(
+                "/auth/admin_department_scope",
+                json={"department_id": did},
+                headers={"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
+            )
+            assert setr.status_code == 200
+            chk = c.get("/auth/check")
+            assert chk.get_json().get("admin_department_scope", {}).get("code") == code
+
     def test_auth_check_includes_scope_null_for_admin(self, app):
         with app.test_client() as c:
             c.post(

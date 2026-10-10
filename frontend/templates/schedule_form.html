@@ -57,13 +57,7 @@
               <span id="publishStatusText" class="small text-muted"></span>
               <button type="button" class="btn btn-outline-primary btn-sm" id="btnPublishSchedule">اعتماد ونشر الجدول</button>
             </div>
-            <form id="schedule-import-form" class="d-flex align-items-center" enctype="multipart/form-data" onsubmit="return false;">
-              <label class="form-label mb-0 me-2">📂 استيراد جدول (Excel):</label>
-              <input class="form-control form-control-sm" style="max-width: 280px;" type="file" name="file" accept=".xlsx,.xls" aria-label="ملف استيراد جدول" />
-              <button type="button" class="btn btn-primary btn-sm ms-2" id="btnImportSchedule">استيراد</button>
-            </form>
           </div>
-          <div id="import_msg" class="mt-2"></div>
           <hr>
           <div class="d-flex flex-wrap gap-2 mb-2">
             <button type="button" class="btn btn-outline-primary btn-sm" id="btnSaveTimeSlots" disabled>
@@ -172,9 +166,57 @@
             </div>
           </div>
           <div id="scheduleRegistrationInsights" class="mb-3"></div>
+          <div id="generalGroupSelectPanel" class="mb-3 d-none">
+            <div class="card border-info">
+              <div class="card-body py-2">
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                  <div>
+                    <strong class="small">مجموعات الاتجاه العام في جدول قسمك</strong>
+                    <div class="form-text small mb-0">الأوقات من رئيس الاتجاه العام — اختيار المجموعة ينقل طلبة قسمك إلى تلك المجموعة.</div>
+                  </div>
+                  <button type="button" class="btn btn-outline-info btn-sm" id="btnRefreshGeneralGroups">تحديث</button>
+                </div>
+                <div id="generalGroupSplitWarn" class="alert alert-warning py-1 px-2 small d-none mb-2"></div>
+                <div id="generalGroupCoursesList" class="small"></div>
+              </div>
+            </div>
+          </div>
           <div class="timetable-scroll-hint">
             <div id="scheduleList" class="timetable-wrapper"></div>
             <div id="scheduleMobileList" class="d-none"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- اختيار مجموعة اتجاه عام -->
+      <div class="modal fade" id="generalGroupPickModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+          <div class="modal-content">
+            <div class="modal-header py-2">
+              <h6 class="modal-title" id="generalGroupPickTitle">اختيار مجموعة الاتجاه العام</h6>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+            </div>
+            <div class="modal-body">
+              <p class="small text-muted mb-2" id="generalGroupPickHint">معاينة الأوقات ثم تأكيد النقل.</p>
+              <div id="generalGroupPickWarn" class="alert alert-warning py-1 px-2 small d-none"></div>
+              <div class="table-responsive">
+                <table class="table table-sm table-bordered align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th>المجموعة</th>
+                      <th>الأوقات</th>
+                      <th>السعة</th>
+                      <th>مسجّلو قسمك</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="generalGroupPickBody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="modal-footer py-2">
+              <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">إلغاء</button>
+            </div>
           </div>
         </div>
       </div>
@@ -424,33 +466,6 @@ function getCourseColor(courseName){
   return courseColors[courseName];
 }
 
-/* ---------- Import / Export ---------- */
-async function importSchedule(){
-  const form = document.getElementById('schedule-import-form');
-  const fileInput = form.querySelector('input[type="file"]');
-  const msg = document.getElementById('import_msg');
-  msg.innerHTML = '';
-  if(!fileInput.files || !fileInput.files.length){
-    msg.innerHTML = '<div class="alert alert-warning p-1">الرجاء اختيار ملف Excel أولاً.</div>';
-    return;
-  }
-  try {
-    const data = new FormData(form);
-    const res = await fetch('/schedule/import/excel', { method:'POST', body: data });
-    const j = await res.json().catch(()=>({}));
-    if(res.ok){
-      msg.innerHTML = `<div class="alert alert-success p-1">تم استيراد ${j.imported || 0} صف</div>`;
-      await loadSchedule();
-      form.reset();
-    } else {
-      msg.innerHTML = `<div class="alert alert-danger p-1">خطأ: ${j.message || 'فشل الاستيراد'}</div>`;
-    }
-  } catch (err) {
-    console.error(err);
-    msg.innerHTML = '<div class="alert alert-danger p-1">خطأ في الاتصال بالخادم أثناء الاستيراد.</div>';
-  }
-}
-
 /* ---------- Courses & Instructors loading ---------- */
 let COURSES = [];
 let INSTRUCTORS = [];
@@ -698,7 +713,13 @@ function renderScheduleMobileCards(data) {
 }
 let CUSTOM_TIME_SLOTS = [];
 let TIME_SLOTS_BY_DAY = {};
-let SCHEDULE_LAYOUT = { stage_grid_enabled: true, layout_mode: 'personal_weekly', use_stage_matrix: false };
+let SCHEDULE_LAYOUT = {
+  stage_grid_enabled: true,
+  layout_mode: 'personal_weekly',
+  use_stage_matrix: false,
+  use_display_tracks: false,
+  display_tracks: [],
+};
 let SHOW_STUDENT_CONFLICTS = true;
 try {
   const sc = localStorage.getItem('scheduleShowStudentConflicts');
@@ -798,6 +819,8 @@ async function refreshScheduleLayoutMeta(){
         stage_grid_enabled: !!j.stage_grid_enabled,
         layout_mode: j.layout_mode || 'personal_weekly',
         use_stage_matrix: !!j.use_stage_matrix,
+        use_display_tracks: !!j.use_display_tracks,
+        display_tracks: Array.isArray(j.display_tracks) ? j.display_tracks : [],
       };
     }
   } catch (_e) {}
@@ -981,7 +1004,11 @@ async function loadSchedule(){
         const union = (CUSTOM_TIME_SLOTS || []).slice();
         DAYS.forEach(d => { byDay[d] = union.slice(); });
       }
-      html = buildPersonalWeeklyTimetableHtml(currentScheduleData, Object.assign({}, renderOpts, { byDay }));
+      html = buildPersonalWeeklyTimetableHtml(currentScheduleData, Object.assign({}, renderOpts, {
+        byDay,
+        useDisplayTracks: !!SCHEDULE_LAYOUT.use_display_tracks,
+        displayTracks: SCHEDULE_LAYOUT.display_tracks || [],
+      }));
     } else {
       html = '<p class="text-danger">تعذّر تحميل راسم الجدول. حدّث الصفحة أو تحقق من schedule-stage-grid.js</p>';
     }
@@ -990,12 +1017,17 @@ async function loadSchedule(){
     renderScheduleMobileCards(currentScheduleData);
     applyScheduleViewMode();
     bindEditorGridHandlers(el, showSlotManage);
+    try { refreshGeneralGroupsPanel(); } catch (_gg) {}
 
     try {
       const subtitle = document.getElementById('schedulePageSubtitle');
       if (subtitle && IS_ADMIN) {
-        const modeBit = SCHEDULE_LAYOUT.use_stage_matrix ? 'مصفوفة مراحل' : 'يوم ثم وقت';
-        subtitle.textContent = `عرض الجدول (${currentScheduleData.length} صف) — ${modeBit}.`;
+        const modeBit = SCHEDULE_LAYOUT.use_stage_matrix
+          ? 'مصفوفة مراحل'
+          : (SCHEDULE_LAYOUT.use_display_tracks ? 'أعمدة عرض' : 'يوم ثم وقت');
+        const overlayN = (currentScheduleData || []).filter(x => x && x.is_overlay_general).length;
+        const overlayBit = overlayN ? ` · ${overlayN} حصة اتجاه عام` : '';
+        subtitle.textContent = `عرض الجدول (${currentScheduleData.length} صف) — ${modeBit}${overlayBit}.`;
       }
     } catch (_e) {}
 
@@ -2459,7 +2491,6 @@ document.addEventListener('DOMContentLoaded', () => {
     applyProposedInstructorForSelectedCourse({ forceSelect: false });
   });
 
-  document.getElementById('btnImportSchedule')?.addEventListener('click', () => { importSchedule(); });
   document.getElementById('btnSchedulePageGuide')?.addEventListener('click', () => {
     try { window.PageGuide?.open?.(); } catch (_e) {}
   });
@@ -2558,12 +2589,16 @@ document.addEventListener('DOMContentLoaded', () => {
       : ((role === 'supervisor') || (role === 'instructor' && Number(auth?.is_supervisor || 0) === 1 && activeMode !== 'instructor'));
     const isStudent = (role === 'student') || !!(caps && caps.is_student);
     const hodTeachingMode = role === 'head_of_department' && (activeMode === 'instructor' || activeMode === 'supervisor');
-    // مصدر الحقيقة: can_manage_schedule_edit (يغطي أستاذاً، مشرفاً، طالباً، ورئيس قسم في وضع التدريس/الإشراف)
+    // مصدر الحقيقة: can_manage_schedule_edit === true فقط (fail-closed للعميد/الوكيل)
     if (caps && caps.v >= 1) {
-      IS_VIEW_ONLY_ROLE = !caps.can_manage_schedule_edit;
-      IS_ADMIN = !!caps.can_manage_schedule_edit;
+      const canEdit = (window.CapabilityUI
+        ? window.CapabilityUI.has(caps, 'can_manage_schedule_edit')
+        : caps.can_manage_schedule_edit === true);
+      IS_VIEW_ONLY_ROLE = !canEdit;
+      IS_ADMIN = canEdit;
     } else {
-      IS_VIEW_ONLY_ROLE = (role === 'instructor') || isSupervisor || isStudent || hodTeachingMode;
+      IS_VIEW_ONLY_ROLE = (role === 'instructor') || isSupervisor || isStudent || hodTeachingMode
+        || role === 'college_dean' || role === 'academic_vice_dean';
       IS_ADMIN = ['admin', 'admin_main', 'head_of_department'].includes(role) && !hodTeachingMode;
     }
 
@@ -2620,8 +2655,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnClearOther) btnClearOther.disabled = !IS_ADMIN;
 
     if (!IS_ADMIN) {
-      const importForm = document.getElementById('schedule-import-form');
-      if (importForm) importForm.style.display = 'none';
       const tgBtn = document.getElementById('btnTeachingGroupsSetup');
       if (tgBtn) tgBtn.classList.add('d-none');
     } else {
@@ -2646,6 +2679,233 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (pubBanner) {
       pubBanner.classList.add('d-none');
     }
+  }
+
+  // ——— مجموعات الاتجاه العام (overlay) ———
+  let _ggPickCourse = '';
+  let _ggPickSemester = '';
+
+  function _ggEsc(s){
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;');
+  }
+
+  async function refreshGeneralGroupsPanel(){
+    const panel = document.getElementById('generalGroupSelectPanel');
+    const listEl = document.getElementById('generalGroupCoursesList');
+    const warnEl = document.getElementById('generalGroupSplitWarn');
+    if (!panel || !listEl) return;
+    if (!IS_ADMIN || IS_VIEW_ONLY_ROLE) {
+      // العميد/الوكيل قد يكونون view-only لكن ما زالوا يرون الملخص إن وُجد overlay
+    }
+    try {
+      const r = await fetch('/schedule/general_groups/summary', { credentials: 'same-origin' });
+      const j = r.ok ? await r.json() : null;
+      if (!j || j.status !== 'ok' || !j.applicable) {
+        panel.classList.add('d-none');
+        return;
+      }
+      const by = j.by_course || {};
+      const keys = Object.keys(by);
+      const warnings = j.split_warnings || [];
+      const overlayCourses = new Set(
+        (currentScheduleData || [])
+          .filter(x => x && x.is_overlay_general)
+          .map(x => String(x.course_name || '').trim().toLowerCase())
+      );
+      if (!keys.length && !warnings.length && !overlayCourses.size) {
+        panel.classList.add('d-none');
+        return;
+      }
+      panel.classList.remove('d-none');
+      if (warnEl) {
+        if (warnings.length) {
+          warnEl.classList.remove('d-none');
+          warnEl.textContent = warnings.map(w => w.message || w.course_name).join(' · ');
+        } else {
+          warnEl.classList.add('d-none');
+          warnEl.textContent = '';
+        }
+      }
+      const courseNames = new Set(keys);
+      overlayCourses.forEach(c => {
+        // استخدم الاسم الظاهر من الصفوف
+        (currentScheduleData || []).forEach(row => {
+          if (row && row.is_overlay_general && String(row.course_name || '').trim().toLowerCase() === c) {
+            courseNames.add(String(row.course_name || '').trim());
+          }
+        });
+      });
+      // أعد بناء قائمة بأسماء المقررات الحقيقية
+      const displayNames = [];
+      const seen = new Set();
+      (currentScheduleData || []).forEach(row => {
+        if (!row || !row.is_overlay_general) return;
+        const n = String(row.course_name || '').trim();
+        const k = n.toLowerCase();
+        if (!n || seen.has(k)) return;
+        seen.add(k);
+        displayNames.push(n);
+      });
+      Object.keys(by).forEach(k => {
+        if (seen.has(k)) return;
+        // by_course keys are lowercased — حاول إيجاد اسم من الخيارات لاحقاً
+        displayNames.push(k);
+        seen.add(k);
+      });
+      if (!displayNames.length) {
+        listEl.innerHTML = '<span class="text-muted">لا مقررات اتجاه عام مرتبطة بطلبة قسمك حالياً.</span>';
+        return;
+      }
+      listEl.innerHTML = displayNames.map(name => {
+        const meta = by[String(name).toLowerCase()] || {};
+        const src = meta.source === 'binding' ? 'ربط صريح' : (meta.source === 'registrations' ? 'من التسجيلات' : '');
+        const g = meta.teaching_group_id ? `مجموعة #${meta.teaching_group_id}` : '';
+        return (
+          `<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 border-bottom py-1">` +
+          `<div><strong>${_ggEsc(name)}</strong>` +
+          (src || g ? `<span class="text-muted ms-1">${_ggEsc([g, src].filter(Boolean).join(' · '))}</span>` : '') +
+          `</div>` +
+          `<button type="button" class="btn btn-sm btn-outline-primary gg-pick-btn" data-course="${_ggEsc(name)}">اختيار / تغيير المجموعة</button>` +
+          `</div>`
+        );
+      }).join('');
+      listEl.querySelectorAll('.gg-pick-btn').forEach(btn => {
+        btn.addEventListener('click', () => openGeneralGroupPicker(btn.getAttribute('data-course') || ''));
+      });
+    } catch (e) {
+      panel.classList.add('d-none');
+    }
+  }
+
+  async function openGeneralGroupPicker(courseName){
+    const name = String(courseName || '').trim();
+    if (!name) return;
+    _ggPickCourse = name;
+    _ggPickSemester = '';
+    const title = document.getElementById('generalGroupPickTitle');
+    const body = document.getElementById('generalGroupPickBody');
+    const warn = document.getElementById('generalGroupPickWarn');
+    if (title) title.textContent = 'اختيار مجموعة — ' + name;
+    if (body) body.innerHTML = '<tr><td colspan="5" class="text-muted">جاري التحميل…</td></tr>';
+    if (warn) { warn.classList.add('d-none'); warn.textContent = ''; }
+    const modalEl = document.getElementById('generalGroupPickModal');
+    if (modalEl) bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    try {
+      const q = new URLSearchParams({ course_name: name });
+      const r = await fetch('/schedule/general_groups/options?' + q.toString(), { credentials: 'same-origin' });
+      const j = await r.json();
+      if (!r.ok || j.status !== 'ok') {
+        if (body) body.innerHTML = `<tr><td colspan="5" class="text-danger">${_ggEsc(j.message || 'تعذّر التحميل')}</td></tr>`;
+        return;
+      }
+      _ggPickSemester = j.semester || '';
+      if (warn && j.split_warning) {
+        warn.classList.remove('d-none');
+        warn.textContent = j.split_warning.message || 'طلابك موزّعون على أكثر من مجموعة';
+      }
+      const opts = j.options || [];
+      if (!opts.length) {
+        if (body) body.innerHTML = '<tr><td colspan="5" class="text-muted">لا مجموعات اتجاه عام لهذا المقرر في الفصل الحالي.</td></tr>';
+        return;
+      }
+      body.innerHTML = opts.map(o => {
+        const slots = (o.slots || []).map(s => `${s.day || ''} ${s.time || ''}`).filter(Boolean).join('<br>') || '—';
+        const cap = o.capacity_max != null ? `${o.enrolled_count || 0} / ${o.capacity_max}` : `${o.enrolled_count || 0}`;
+        const cur = o.is_current ? ' is-current' : '';
+        const curLabel = o.is_current ? ' <span class="badge text-bg-success">الحالية</span>' : '';
+        return (
+          `<tr class="gg-opt-row${cur}" data-gid="${o.teaching_group_id}">` +
+          `<td><strong>${_ggEsc(o.group_code || o.teaching_group_id)}</strong>${curLabel}<div class="text-muted">${_ggEsc(o.instructor_name || '')}</div></td>` +
+          `<td class="small">${slots}</td>` +
+          `<td dir="ltr">${_ggEsc(cap)}</td>` +
+          `<td>${_ggEsc(o.dept_enrolled_count || 0)}</td>` +
+          `<td><button type="button" class="btn btn-sm btn-primary gg-confirm-btn" data-gid="${o.teaching_group_id}" data-code="${_ggEsc(o.group_code || '')}" data-dept-n="${o.dept_enrolled_count || 0}">اختيار</button></td>` +
+          `</tr>`
+        );
+      }).join('');
+      body.querySelectorAll('.gg-confirm-btn').forEach(btn => {
+        btn.addEventListener('click', () => confirmGeneralGroupSelect(btn));
+      });
+    } catch (e) {
+      if (body) body.innerHTML = '<tr><td colspan="5" class="text-danger">خطأ في الاتصال</td></tr>';
+    }
+  }
+
+  async function confirmGeneralGroupSelect(btn){
+    const gid = Number(btn.getAttribute('data-gid') || 0);
+    const code = btn.getAttribute('data-code') || '';
+    if (!gid || !_ggPickCourse) return;
+    // تقدير عدد المنقولين: نعرض تأكيداً عاماً — الخادم يحسب العدد الدقيق
+    const ok = window.confirm(
+      `تأكيد نقل تسجيلات طلبة قسمك في «${_ggPickCourse}» إلى المجموعة ${code || gid}؟\n\n` +
+      'الأوقات من رئيس الاتجاه العام. سيتم تحديث ربط المجموعة وتسجيلات القسم.'
+    );
+    if (!ok) return;
+    btn.disabled = true;
+    try {
+      const r = await fetch('/schedule/general_groups/select', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          course_name: _ggPickCourse,
+          semester: _ggPickSemester || undefined,
+          teaching_group_id: gid,
+          confirm: true,
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.status !== 'ok') {
+        if (j.code === 'CONFLICT') {
+          const force = window.confirm(
+            (j.message || 'تعارض أوقات') + '\n\nهل تريد المتابعة رغم التعارض؟'
+          );
+          if (force) {
+            const r2 = await fetch('/schedule/general_groups/select', {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                course_name: _ggPickCourse,
+                semester: _ggPickSemester || undefined,
+                teaching_group_id: gid,
+                confirm: true,
+                allow_conflicts: true,
+              }),
+            });
+            const j2 = await r2.json().catch(() => ({}));
+            if (!r2.ok || j2.status !== 'ok') {
+              showMsg(j2.message || 'فشل النقل', 'danger');
+              btn.disabled = false;
+              return;
+            }
+            showMsg(`تم النقل: ${j2.moved_count || 0} طالباً` + (j2.exam_note ? ' — ' + j2.exam_note : ''), 'success', 8000);
+          } else {
+            btn.disabled = false;
+            return;
+          }
+        } else {
+          showMsg(j.message || 'فشل النقل', 'danger');
+          btn.disabled = false;
+          return;
+        }
+      } else {
+        showMsg(`تم النقل: ${j.moved_count || 0} طالباً` + (j.exam_note ? ' — ' + j.exam_note : ''), 'success', 8000);
+      }
+      const modalEl = document.getElementById('generalGroupPickModal');
+      if (modalEl) bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+      await loadSchedule();
+    } catch (e) {
+      showMsg('خطأ في الاتصال', 'danger');
+      btn.disabled = false;
+    }
+  }
+
+  const btnRefreshGg = document.getElementById('btnRefreshGeneralGroups');
+  if (btnRefreshGg) {
+    btnRefreshGg.addEventListener('click', () => refreshGeneralGroupsPanel());
   }
 
   // صلاحية أولاً ثم تحميل الجدول مرة واحدة (يمنع وميض أدوات الإدارة للأستاذ)

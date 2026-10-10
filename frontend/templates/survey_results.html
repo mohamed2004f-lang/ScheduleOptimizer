@@ -77,8 +77,10 @@
             {% for agg in external_aggregates %}
             <li><a class="dropdown-item" href="/academic_quality/surveys/export/external/{{ agg.template_code }}?cycle={{ external_cycle|urlencode }}{{ external_department_qs or '' }}" target="_blank">{{ agg.title_ar }}</a></li>
             {% endfor %}
+            {% if show_accreditation_nav %}
             <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item" href="/academic_quality/accreditation/map?cycle={{ external_cycle|urlencode }}"><i class="fa-solid fa-map me-1"></i> خريطة الامتثال</a></li>
+            {% endif %}
             {% endif %}
             <li><a class="dropdown-item" href="/academic_quality/surveys/trends#externalTrends">اتجاهات الدورات</a></li>
             <li><a class="dropdown-item" href="/academic_quality/dashboard">لوحة الجودة</a></li>
@@ -121,8 +123,10 @@
             <li><a class="dropdown-item" href="/academic_quality/surveys/export/{{ agg.template_code }}?semester={{ semester|urlencode }}" target="_blank">معاينة — {{ agg.title_ar }}</a></li>
             <li><a class="dropdown-item" href="/academic_quality/surveys/export/{{ agg.template_code }}.pdf?semester={{ semester|urlencode }}">{{ agg.title_ar }} (PDF)</a></li>
             {% endfor %}
+            {% if show_accreditation_nav %}
             <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item" href="/academic_quality/accreditation/map?semester={{ semester|urlencode }}"><i class="fa-solid fa-map me-1"></i> خريطة الامتثال</a></li>
+            {% endif %}
             <li><a class="dropdown-item" href="/academic_quality/archive"><i class="fa-solid fa-folder-open me-1"></i> أرشيف القسم</a></li>
             <li><a class="dropdown-item" href="/academic_quality/surveys/completion?semester={{ semester|urlencode }}"><i class="fa-solid fa-clipboard-check me-1"></i> تغطية التعبئة</a></li>
             <li><a class="dropdown-item" href="/academic_quality/surveys/trends"><i class="fa-solid fa-chart-line me-1"></i> مقارنة الفصول</a></li>
@@ -245,11 +249,13 @@
             <a class="btn btn-sm btn-outline-info" href="/academic_quality/surveys/export/external/{{ agg.template_code }}?cycle={{ external_cycle|urlencode }}{{ external_department_qs or '' }}" target="_blank">معاينة</a>
             <a class="btn btn-sm btn-outline-success" href="/academic_quality/surveys/export/external/{{ agg.template_code }}.xlsx?cycle={{ external_cycle|urlencode }}{{ external_department_qs or '' }}">Excel</a>
             <a class="btn btn-sm btn-outline-danger" href="/academic_quality/surveys/export/external/{{ agg.template_code }}.pdf?cycle={{ external_cycle|urlencode }}{{ external_department_qs or '' }}">PDF</a>
+            {% if show_accreditation_nav %}
             <a class="btn btn-sm btn-outline-secondary"
                href="/academic_quality/accreditation/map?cycle={{ external_cycle|urlencode }}"
                title="افتح خريطة الامتثال واربط هذا الاستبيان يدوياً بالمؤشر المناسب">
               <i class="fa-solid fa-link"></i> ربط يدوي بالامتثال
             </a>
+            {% endif %}
           </div>
           {% endif %}
         </div>
@@ -734,11 +740,13 @@
               </a>
               <a class="btn btn-outline-danger btn-sm"
                  href="/academic_quality/surveys/export/{{ agg.template_code }}.pdf?semester={{ semester|urlencode }}">PDF</a>
+              {% if show_accreditation_nav %}
               <a class="btn btn-outline-secondary btn-sm"
                  href="/academic_quality/accreditation/map?semester={{ semester|urlencode }}"
                  title="افتح خريطة الامتثال واربط هذا الاستبيان يدوياً بالمؤشر المناسب">
                 <i class="fa-solid fa-link"></i> ربط يدوي بالامتثال
               </a>
+              {% endif %}
             </div>
             <p class="small text-muted mt-auto mb-0">
               مسار الإدخال:

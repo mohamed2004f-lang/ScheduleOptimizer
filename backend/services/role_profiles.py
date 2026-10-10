@@ -193,6 +193,9 @@ def list_profiles():
 @role_profiles_bp.route("/detail/<code>", methods=["GET"])
 @role_required("system_admin", "college_dean", "academic_vice_dean", "admin_main")
 def profile_detail(code: str):
+    from backend.core.capability_gates import panel_effective_keys_for_profile
+    from backend.core.permissions import GRANTABLE_USER_OVERRIDE_KEYS
+
     prof = get_profile_by_code(code)
     if not prof:
         return jsonify({"status": "error", "message": "القالب غير موجود"}), 404
@@ -200,7 +203,16 @@ def profile_detail(code: str):
         return jsonify({"status": "error", "message": "القالب غير موجود"}), 404
     with get_connection() as conn:
         keys = load_profile_permission_keys(conn, None, code)
-    return jsonify({"profile": prof, "permissions": sorted(keys)})
+    stored = set(keys or ())
+    effective = panel_effective_keys_for_profile(code, stored)
+    # اللوحة تعرض فقط المفاتيح القابلة للمنح + الافتراضات الفعّالة ضمنها
+    panel_keys = sorted((effective | stored) & set(GRANTABLE_USER_OVERRIDE_KEYS))
+    return jsonify({
+        "profile": prof,
+        "permissions": sorted(stored),
+        "panel_permissions": panel_keys,
+        "leadership_defaults_applied": (prof.get("code") or code) in ("college_dean", "academic_vice_dean"),
+    })
 
 
 @role_profiles_bp.route("/handover_options", methods=["GET"])
@@ -433,19 +445,92 @@ def get_user_overrides():
     })
 
 
+@role_profiles_bp.route("/catalog", methods=["GET"])
+@role_required("admin_main", "system_admin")
+def permissions_catalog():
+    """كتالوج الصلاحيات مجمّعاً للوحة الأدمن الرئيسي."""
+    return jsonify({"status": "ok", "groups": catalog_grouped()}), 200
+
+
+@role_profiles_bp.route("/profile_permissions", methods=["POST"])
+@role_required("admin_main", "system_admin")
+def save_profile_permissions():
+    """استبدال صلاحيات قالب دور (مفاتيح التشغيل القابلة للمنح)."""
+    from backend.core.permissions import GRANTABLE_USER_OVERRIDE_KEYS, get_profile_by_code
+
+    data = request.get_json(force=True) or {}
+    code = (data.get("profile_code") or "").strip()
+    keys_in = data.get("permissions")
+    if not code:
+        return jsonify({"status": "error", "message": "profile_code مطلوب"}), 400
+    if not isinstance(keys_in, list):
+        return jsonify({"status": "error", "message": "permissions يجب أن تكون قائمة"}), 400
+    prof = get_profile_by_code(code)
+    if not prof:
+        return jsonify({"status": "error", "message": "القالب غير موجود"}), 404
+    if code == "system_admin":
+        return jsonify({"status": "error", "message": "لا يمكن تعديل قالب مسؤول النظام من هنا"}), 400
+
+    # ادمج مفاتيح القالب الأساسية + المخزّنة غير القابلة للمنح مع مفاتيح اللوحة
+    base_seed = set(prof.get("permissions") or [])
+    managed = set(GRANTABLE_USER_OVERRIDE_KEYS)
+    requested = {str(k).strip() for k in keys_in if str(k).strip()}
+    invalid = requested - managed
+    if invalid:
+        return jsonify({
+            "status": "error",
+            "message": "مفاتيح غير مسموح تعديلها: " + ", ".join(sorted(invalid)[:8]),
+        }), 400
+
+    actor = (session.get("user") or "").strip() or "system"
+    with get_connection() as conn:
+        from backend.boot.role_profiles_seed import ensure_role_profile_tables, _is_pg
+
+        ensure_role_profile_tables(conn, pg=_is_pg(conn))
+        cur = conn.cursor()
+        row = cur.execute("SELECT id FROM role_profiles WHERE code = ? LIMIT 1", (code,)).fetchone()
+        if not row:
+            return jsonify({"status": "error", "message": "القالب غير موجود في قاعدة البيانات — أعد تشغيل التهيئة"}), 404
+        pid = int(row[0] if not hasattr(row, "keys") else row["id"])
+        existing = load_profile_permission_keys(conn, pid, code)
+        final_keys = (set(existing or ()) - managed) | (base_seed - managed) | requested
+        for k in final_keys:
+            _ensure_permission_definition(conn, k)
+        cur.execute("DELETE FROM role_profile_permissions WHERE profile_id = ?", (pid,))
+        for k in sorted(final_keys):
+            cur.execute(
+                """
+                INSERT INTO role_profile_permissions (profile_id, permission_key, granted)
+                VALUES (?, ?, 1)
+                ON CONFLICT(profile_id, permission_key) DO UPDATE SET granted = 1
+                """,
+                (pid, k),
+            )
+        conn.commit()
+        logger.info("profile permissions saved code=%s keys=%s actor=%s", code, len(final_keys), actor)
+
+    from backend.core.capability_gates import panel_effective_keys_for_profile
+
+    panel_keys = sorted(panel_effective_keys_for_profile(code, final_keys) & managed)
+    return jsonify({
+        "status": "ok",
+        "profile_code": code,
+        "permissions": sorted(final_keys),
+        "panel_permissions": panel_keys,
+        "message": "تم حفظ صلاحيات القالب",
+    }), 200
+
+
 @role_profiles_bp.route("/user_overrides", methods=["POST"])
 @role_required("system_admin", "college_dean", "admin_main")
 def set_user_override():
-    """منح أو إلغاء صلاحية إضافية لحساب معيّن (مثل إضافة مستخدمي القسم لرئيس القسم)."""
+    """منح أو إلغاء صلاحية إضافية لحساب معيّن."""
     from backend.core.permissions import (
         CAN_ADD_DEPARTMENT_USERS,
         GRANTABLE_USER_OVERRIDE_KEYS,
     )
     from backend.core.user_admin_policy import can_grant_hod_department_users_session
     from backend.core.auth_roles import _normalize_role
-
-    if not can_grant_hod_department_users_session(session):
-        return jsonify({"status": "error", "message": "غير مسموح"}), 403
 
     data = request.get_json(force=True) or {}
     username = (data.get("username") or "").strip()
@@ -461,6 +546,15 @@ def set_user_override():
         return jsonify({"status": "error", "message": "username مطلوب"}), 400
     if permission_key not in GRANTABLE_USER_OVERRIDE_KEYS:
         return jsonify({"status": "error", "message": "صلاحية غير مسموح منحها من هنا"}), 400
+
+    actor_role = _normalize_role(session.get("user_role") or "")
+    is_principal = is_principal_admin_session(session) or actor_role in ("admin_main", "system_admin")
+    # العميد يبقى قادراً على منح إضافة مستخدمي القسم فقط؛ باقي المفاتيح للأدمن الرئيسي
+    if permission_key == CAN_ADD_DEPARTMENT_USERS:
+        if not can_grant_hod_department_users_session(session):
+            return jsonify({"status": "error", "message": "غير مسموح"}), 403
+    elif not is_principal:
+        return jsonify({"status": "error", "message": "منح هذه الصلاحية محصور على الأدمن الرئيسي"}), 403
 
     actor = (session.get("user") or "").strip() or "system"
     with get_connection() as conn:
@@ -495,6 +589,7 @@ def set_user_override():
                 (tgt.get("username") or username, permission_key),
             )
         else:
+            # سحب المنح: احذف صف المنح؛ للرفض الصريح استخدم granted=0 عند الحاجة
             cur.execute(
                 """
                 DELETE FROM user_permission_overrides
@@ -502,6 +597,15 @@ def set_user_override():
                 """,
                 (username, permission_key),
             )
+            if data.get("deny") in (True, 1, "1", "true", "True"):
+                cur.execute(
+                    """
+                    INSERT INTO user_permission_overrides (username, permission_key, granted)
+                    VALUES (?, ?, 0)
+                    ON CONFLICT(username, permission_key) DO UPDATE SET granted = 0
+                    """,
+                    (tgt.get("username") or username, permission_key),
+                )
         conn.commit()
         logger.info(
             "user override username=%s key=%s granted=%s actor=%s",

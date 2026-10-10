@@ -28,10 +28,25 @@ PERMISSION_CATALOG: list[dict[str, Any]] = [
     {"key": "can_transfer_student_department", "group_key": "students", "group_label_ar": "شؤون الطلبة", "label_ar": "نقل/تحديد قسم الطالب"},
     {"key": "can_rename_student_id", "group_key": "students", "group_label_ar": "شؤون الطلبة", "label_ar": "تصحيح الرقم الدراسي"},
     {"key": "nav_planning_menu", "group_key": "scheduling", "group_label_ar": "الجدولة", "label_ar": "التخطيط والجدولة"},
-    {"key": "can_manage_schedule_edit", "group_key": "scheduling", "group_label_ar": "الجدولة", "label_ar": "تعديل الجدول"},
-    {"key": "nav_transcript_nav", "group_key": "records", "group_label_ar": "السجل الأكademي", "label_ar": "كشف الدرجات"},
-    {"key": "can_manage_transcript_admin", "group_key": "records", "group_label_ar": "السجل الأكademي", "label_ar": "إدارة الكشوف"},
-    {"key": "nav_grade_drafts", "group_key": "records", "group_label_ar": "السجل الأكademي", "label_ar": "مسودات الدرجات"},
+    {"key": "nav_view_class_schedule", "group_key": "scheduling", "group_label_ar": "الجدولة", "label_ar": "عرض الجداول الدراسية"},
+    {"key": "can_manage_schedule_edit", "group_key": "scheduling", "group_label_ar": "الجدولة", "label_ar": "تعديل الجداول الدراسية"},
+    {"key": "nav_view_exam_schedule", "group_key": "exams", "group_label_ar": "الامتحانات", "label_ar": "عرض جداول الامتحانات"},
+    {"key": "can_manage_exam_schedule_edit", "group_key": "exams", "group_label_ar": "الامتحانات", "label_ar": "تعديل جداول الامتحانات"},
+    {"key": "nav_view_courses", "group_key": "courses", "group_label_ar": "المقررات", "label_ar": "عرض المقررات"},
+    {"key": "can_manage_courses_edit", "group_key": "courses", "group_label_ar": "المقررات", "label_ar": "تعديل المقررات"},
+    {"key": "nav_view_registrations", "group_key": "registrations", "group_label_ar": "التسجيلات", "label_ar": "عرض التسجيلات الفعلية"},
+    {"key": "can_manage_registrations_edit", "group_key": "registrations", "group_label_ar": "التسجيلات", "label_ar": "تعديل التسجيلات الفعلية"},
+    {"key": "nav_view_enrollment_plans", "group_key": "registrations", "group_label_ar": "التسجيلات", "label_ar": "عرض خطط التسجيل"},
+    {"key": "can_manage_enrollment_plans_edit", "group_key": "registrations", "group_label_ar": "التسجيلات", "label_ar": "تعديل خطط التسجيل"},
+    {"key": "can_manage_instructors_edit", "group_key": "users", "group_label_ar": "المستخدمون", "label_ar": "تعديل أعضاء هيئة التدريس"},
+    {"key": "can_manage_academic_calendar_edit", "group_key": "college_ops", "group_label_ar": "تشغيل الكلّية", "label_ar": "تعديل التقويم الأكاديمي"},
+    {"key": "can_manage_term_ops_college", "group_key": "college_ops", "group_label_ar": "تشغيل الكلّية", "label_ar": "تشغيل الفصل (مستوى الكلّية)"},
+    {"key": "can_migrate_registrations_to_transcript", "group_key": "dangerous", "group_label_ar": "عمليات خطرة", "label_ar": "ترحيل المقررات إلى كشف الدرجات"},
+    {"key": "feature_enrollment_approval_chain", "group_key": "approvals_future", "group_label_ar": "اعتمادات مستقبلية", "label_ar": "تفعيل سلسلة اعتماد خطط التسجيل"},
+    {"key": "can_approve_enrollment_unit_exception", "group_key": "approvals_future", "group_label_ar": "اعتمادات مستقبلية", "label_ar": "اعتماد تجاوز حد الوحدات (وكيل/عميد)"},
+    {"key": "nav_transcript_nav", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "كشف الدرجات"},
+    {"key": "can_manage_transcript_admin", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "إدارة الكشوف"},
+    {"key": "nav_grade_drafts", "group_key": "records", "group_label_ar": "السجل الأكاديمي", "label_ar": "مسودات الدرجات"},
     {"key": "nav_academic_quality_dashboard", "group_key": "quality", "group_label_ar": "ضمان الجودة", "label_ar": "لوحة الجودة"},
     {"key": "nav_department_reports", "group_key": "dept_reports", "group_label_ar": "تقارير القسم", "label_ar": "قائمة ولوحة تقارير القسم"},
     {"key": "nav_academic_reports_section", "group_key": "dept_reports", "group_label_ar": "تقارير القسم", "label_ar": "قسم تقارير القسم/الكلية (توافق قديم)"},
@@ -99,6 +114,9 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
             "can_edit_college_identity", "can_edit_accreditation_catalog",
             "can_switch_department_scope",
             "can_transfer_student_department",
+            "nav_view_class_schedule", "nav_view_exam_schedule", "nav_view_courses",
+            "nav_view_registrations", "nav_view_enrollment_plans",
+            "can_manage_academic_calendar_edit", "can_manage_term_ops_college",
             "nav_staff_operations_menu", "nav_college_catalog",
             "nav_academic_rules",
         ],
@@ -126,6 +144,9 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
             "can_edit_accreditation_catalog",
             "can_switch_department_scope",
             "can_transfer_student_department",
+            "nav_view_class_schedule", "nav_view_exam_schedule", "nav_view_courses",
+            "nav_view_registrations", "nav_view_enrollment_plans",
+            "can_manage_academic_calendar_edit", "can_manage_term_ops_college",
             "nav_staff_operations_menu",
         ],
     },
@@ -228,7 +249,36 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
 _PROFILE_BY_CODE = {p["code"]: p for p in ROLE_PROFILE_SEED}
 
 CAN_ADD_DEPARTMENT_USERS = "can_add_department_users"
-GRANTABLE_USER_OVERRIDE_KEYS = frozenset({CAN_ADD_DEPARTMENT_USERS})
+# مفاتيح يمكن منحها/سحبها من لوحة الأدمن الرئيسي (تجاوز مستخدم)
+GRANTABLE_USER_OVERRIDE_KEYS = frozenset({
+    CAN_ADD_DEPARTMENT_USERS,
+    "nav_users_admin",
+    "can_manage_users",
+    "can_manage_schedule_edit",
+    "can_manage_exam_schedule_edit",
+    "can_manage_courses_edit",
+    "can_manage_students",
+    "can_manage_registrations_edit",
+    "can_manage_enrollment_plans_edit",
+    "can_manage_transcript_admin",
+    "can_manage_instructors_edit",
+    "can_manage_academic_calendar_edit",
+    "can_manage_term_ops_college",
+    "can_migrate_registrations_to_transcript",
+    "feature_enrollment_approval_chain",
+    "can_approve_enrollment_unit_exception",
+    "can_transfer_student_department",
+    "can_rename_student_id",
+    "nav_student_affairs_menu",
+    "nav_planning_menu",
+    "nav_view_class_schedule",
+    "nav_view_exam_schedule",
+    "nav_view_courses",
+    "nav_view_registrations",
+    "nav_view_enrollment_plans",
+    "nav_term_ops",
+    "nav_term_offerings",
+})
 
 
 def role_profiles_enabled() -> bool:
@@ -278,30 +328,34 @@ def get_profile_by_id(conn, profile_id: int | None) -> dict | None:
 
 
 def load_profile_permission_keys(conn, profile_id: int | None, profile_code: str | None = None) -> set[str]:
+    """
+    مفاتيح القالب الممنوحة.
+    مع وجود اتصال DB: يُفضَّل المخزّن في role_profile_permissions (لا تُرجع seed وتتجاهل القاعدة).
+    """
     seed = get_profile_by_code(profile_code) if profile_code else None
-    if profile_id is None and seed:
-        return set(seed.get("permissions") or [])
     if conn is None:
         return set(seed.get("permissions") or []) if seed else set()
     try:
         cur = conn.cursor()
-        if profile_id is not None:
+        pid = int(profile_id) if profile_id is not None else None
+        if pid is None and profile_code:
+            row = cur.execute(
+                "SELECT id FROM role_profiles WHERE code = ? LIMIT 1",
+                (str(profile_code).strip(),),
+            ).fetchone()
+            if row:
+                pid = int(row[0] if not hasattr(row, "keys") else row["id"])
+        if pid is not None:
             rows = cur.execute(
                 "SELECT permission_key FROM role_profile_permissions WHERE profile_id = ? AND granted = 1",
-                (int(profile_id),),
+                (int(pid),),
             ).fetchall()
             if rows:
-                return {r[0] if not hasattr(r, "keys") else r["permission_key"] for r in rows}
-        if profile_code:
-            row = cur.execute("SELECT id FROM role_profiles WHERE code = ?", (profile_code,)).fetchone()
-            if row:
-                pid = row[0] if not hasattr(row, "keys") else row["id"]
-                rows = cur.execute(
-                    "SELECT permission_key FROM role_profile_permissions WHERE profile_id = ? AND granted = 1",
-                    (int(pid),),
-                ).fetchall()
-                if rows:
-                    return {r[0] if not hasattr(r, "keys") else r["permission_key"] for r in rows}
+                return {
+                    (r[0] if not hasattr(r, "keys") else r["permission_key"])
+                    for r in rows
+                    if (r[0] if not hasattr(r, "keys") else r["permission_key"])
+                }
     except Exception:
         logger.exception("load_profile_permission_keys failed")
     if seed:
@@ -582,27 +636,30 @@ def compute_college_dean_capabilities(
     out["can_switch_active_mode"] = True
     out["active_mode_switch_profile"] = "dean_triple" if isv else "dean_dual"
     out["nav_staff_operations_menu"] = True
-    out["can_manage_students"] = False
-    out["can_manage_schedule_edit"] = False
-    out["can_manage_transcript_admin"] = False
-    out["can_manage_courses_edit"] = False
-    out["students_data_view_only"] = True
     out["can_transfer_student_department"] = True
     out["can_rename_student_id"] = True
     out["nav_student_affairs_menu"] = True
     out["nav_course_registration_report"] = True
     out["nav_schedule_versions"] = True
     out["nav_exam_schedule_versions"] = True
+    out["nav_view_class_schedule"] = True
+    out["nav_view_exam_schedule"] = True
+    out["nav_view_courses"] = True
+    out["nav_view_registrations"] = True
+    out["nav_view_enrollment_plans"] = True
     out["nav_transcript_nav"] = True
     out["nav_grade_drafts"] = True
     out["nav_evaluation_survey_admin"] = True
-    out["can_edit_accreditation_catalog"] = True
+    # قفل مؤقت: كتالوج الاعتماد للأدمن الرئيسي فقط
+    out["can_edit_accreditation_catalog"] = False
     out["is_supervisor_effective"] = False
     out["nav_surveys_results"] = True
     out["nav_surveys_invites"] = True
     out["can_manage_survey_invites"] = True
     out["nav_college_archive"] = True
-    return out
+    from backend.core.capability_gates import apply_leadership_ops_defaults
+
+    return apply_leadership_ops_defaults(out, role="college_dean")
 
 
 def compute_academic_vice_dean_capabilities(
@@ -653,28 +710,31 @@ def compute_academic_vice_dean_capabilities(
     out["can_switch_active_mode"] = True
     out["active_mode_switch_profile"] = "vice_dean_triple" if isv else "vice_dean_dual"
     out["nav_staff_operations_menu"] = True
-    out["can_manage_students"] = False
-    out["can_manage_schedule_edit"] = False
-    out["can_manage_transcript_admin"] = False
-    out["can_manage_courses_edit"] = False
-    out["students_data_view_only"] = True
     out["can_transfer_student_department"] = True
     out["can_rename_student_id"] = True
     out["nav_student_affairs_menu"] = True
     out["nav_course_registration_report"] = True
     out["nav_schedule_versions"] = True
     out["nav_exam_schedule_versions"] = True
+    out["nav_view_class_schedule"] = True
+    out["nav_view_exam_schedule"] = True
+    out["nav_view_courses"] = True
+    out["nav_view_registrations"] = True
+    out["nav_view_enrollment_plans"] = True
     out["nav_transcript_nav"] = True
     out["nav_grade_drafts"] = True
     out["nav_evaluation_survey_admin"] = True
-    out["can_edit_accreditation_catalog"] = True
+    # قفل مؤقت: كتالوج الاعتماد للأدمن الرئيسي فقط
+    out["can_edit_accreditation_catalog"] = False
     out["can_switch_department_scope"] = True
     out["is_supervisor_effective"] = False
     out["nav_surveys_results"] = True
     out["nav_surveys_invites"] = False
     out["can_manage_survey_invites"] = False
     out["nav_college_archive"] = True
-    return out
+    from backend.core.capability_gates import apply_leadership_ops_defaults
+
+    return apply_leadership_ops_defaults(out, role="academic_vice_dean")
 
 
 def resolve_capabilities_for_user(
@@ -708,31 +768,32 @@ def resolve_capabilities_for_user(
     else:
         caps = compute_capabilities(role, is_supervisor_val, active_mode)
 
-    if not role_profiles_enabled():
-        return caps
-
+    keys: set[str] = set()
+    grants: set[str] = set()
+    denies: set[str] = set()
     profile = None
-    if role_profile_code:
-        profile = get_profile_by_code(role_profile_code)
-    elif role_profile_id and conn:
-        profile = get_profile_by_id(conn, role_profile_id)
+    if role_profiles_enabled():
+        if role_profile_code:
+            profile = get_profile_by_code(role_profile_code)
+        elif role_profile_id and conn:
+            profile = get_profile_by_id(conn, role_profile_id)
 
-    if profile is None and r in _PROFILE_BY_CODE:
-        profile = _PROFILE_BY_CODE[r.replace("college_dean", "college_dean")]
+        if profile is None and r in _PROFILE_BY_CODE:
+            profile = _PROFILE_BY_CODE[r.replace("college_dean", "college_dean")]
 
-    code = (profile or {}).get("code") or role_profile_code
-    pid = role_profile_id or (profile or {}).get("id")
-    keys = load_profile_permission_keys(conn, pid, code)
-    grants, denies = load_user_overrides(conn, username or "") if conn and username else (set(), set())
+        code = (profile or {}).get("code") or role_profile_code
+        pid = role_profile_id or (profile or {}).get("id")
+        keys = load_profile_permission_keys(conn, pid, code)
+        grants, denies = load_user_overrides(conn, username or "") if conn and username else (set(), set())
 
-    if keys or grants or denies:
-        caps = merge_capabilities_with_profile(
-            caps,
-            profile_keys=keys,
-            grant_overrides=grants,
-            deny_overrides=denies,
-            profile_meta=profile,
-        )
+        if keys or grants or denies:
+            caps = merge_capabilities_with_profile(
+                caps,
+                profile_keys=keys,
+                grant_overrides=grants,
+                deny_overrides=denies,
+                profile_meta=profile,
+            )
 
     # لا تسمح لصلاحيات البروفايل القيادية بإلغاء بوابة الأستاذ/المشرف بعد التبديل
     am = (active_mode or "").strip().lower()
@@ -795,6 +856,85 @@ def resolve_capabilities_for_user(
     elif r_norm in ("admin_main", "system_admin", "college_dean"):
         caps["nav_surveys_invites"] = True
         caps["can_manage_survey_invites"] = True
+
+    # قفل مؤقت: خرائط الاعتماد للأدمن الرئيسي / مسؤول النظام فقط
+    # (لا تعتمد على بروفايل قد يمنح can_edit_accreditation_catalog لعميد/جودة)
+    caps["can_edit_accreditation_catalog"] = r_norm in ("admin_main", "system_admin")
+
+    # مفاتيح التشغيل الجديدة — افتراضات الأدوار التشغيلية
+    if r_norm in ("admin_main", "system_admin", "admin"):
+        for k in (
+            "can_manage_exam_schedule_edit",
+            "can_manage_registrations_edit",
+            "can_manage_enrollment_plans_edit",
+            "can_manage_instructors_edit",
+            "can_manage_academic_calendar_edit",
+            "can_manage_term_ops_college",
+            "can_migrate_registrations_to_transcript",
+            "nav_view_class_schedule",
+            "nav_view_exam_schedule",
+            "nav_view_courses",
+            "nav_view_registrations",
+            "nav_view_enrollment_plans",
+            "can_manage_courses_edit",
+            "can_manage_students",
+            "can_manage_transcript_admin",
+        ):
+            caps[k] = True
+        caps["feature_enrollment_approval_chain"] = False
+        caps["can_approve_enrollment_unit_exception"] = False
+    elif r_norm == "head_of_department":
+        am_h = (active_mode or "").strip().lower()
+        head_mode = am_h in ("", "head", "hod", "department_head")
+        caps["can_manage_exam_schedule_edit"] = bool(head_mode and caps.get("can_manage_schedule_edit"))
+        caps["can_manage_registrations_edit"] = bool(head_mode and caps.get("can_manage_schedule_edit"))
+        caps["can_manage_enrollment_plans_edit"] = bool(head_mode and caps.get("can_manage_schedule_edit"))
+        caps["can_manage_students"] = bool(head_mode)
+        caps["can_manage_instructors_edit"] = bool(head_mode)
+        caps["can_manage_academic_calendar_edit"] = False
+        caps["can_manage_term_ops_college"] = False
+        caps["can_migrate_registrations_to_transcript"] = False
+        caps["nav_view_class_schedule"] = True
+        caps["nav_view_exam_schedule"] = True
+        caps["nav_view_courses"] = True
+        caps["nav_view_registrations"] = True
+        caps["nav_view_enrollment_plans"] = True
+        caps["feature_enrollment_approval_chain"] = False
+        caps["can_approve_enrollment_unit_exception"] = False
+        if head_mode:
+            caps["students_data_view_only"] = False
+
+    # منح/رفض صريح من البروفايل أو تجاوز المستخدم على مفاتيح اللوحة
+    try:
+        from backend.core.capability_gates import apply_explicit_permission_overrides
+
+        caps = apply_explicit_permission_overrides(
+            caps,
+            profile_keys=set(keys or ()),
+            grants=set(grants or ()),
+            denies=set(denies or ()),
+        )
+    except Exception:
+        pass
+
+    # قيادة الكلية: مفاتيح تشغيل القسم = المنح الصريح فقط (لا ترث من admin_main)
+    am_lead = (active_mode or "").strip().lower()
+    leadership_mode = (
+        (r_norm == "college_dean" and am_lead in ("", "dean"))
+        or (r_norm == "academic_vice_dean" and am_lead in ("", "vice_dean", "dean"))
+    )
+    if leadership_mode:
+        from backend.core.capability_gates import COLLEGE_OPS_EDIT_KEYS, DEPT_OPS_EDIT_KEYS
+
+        granted_eff = set(keys or ()) | set(grants or ())
+        granted_eff -= set(denies or ())
+        for k in DEPT_OPS_EDIT_KEYS:
+            caps[k] = k in granted_eff
+        for k in COLLEGE_OPS_EDIT_KEYS:
+            caps[k] = False if k in set(denies or ()) else True
+        caps["students_data_view_only"] = not bool(caps.get("can_manage_students"))
+        # الترحيل خطِر: admin_main فقط (لا يُفتح بقالب القيادة)
+        caps["can_migrate_registrations_to_transcript"] = False
 
     return caps
 

@@ -106,10 +106,13 @@ def _ensure_exam_schedule_version_tables(cur):
 
 
 def _role_may_edit_exam_schedule():
-    role = _normalize_role((session.get("user_role") or "").strip())
-    if role in ("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean"):
+    from backend.core.capability_gates import session_has_capability
+
+    if session_has_capability("can_manage_exam_schedule_edit"):
         return True
-    if role == "head_of_department":
+    # توافق: إن وُجدت صلاحية الجدول الدراسي فقط لرئيس القسم في وضع الرئيس
+    role = _normalize_role((session.get("user_role") or "").strip())
+    if role == "head_of_department" and session_has_capability("can_manage_schedule_edit"):
         mode = (session.get(SESSION_ACTIVE_MODE) or "head").strip().lower()
         return mode in ("", "head", "hod", "department_head")
     return False

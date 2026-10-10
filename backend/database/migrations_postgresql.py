@@ -105,6 +105,39 @@ def _ensure_tables_postgresql() -> None:
         "CREATE INDEX IF NOT EXISTS idx_teaching_groups_semester ON teaching_groups(semester)",
         "CREATE INDEX IF NOT EXISTS idx_teaching_groups_course_sem ON teaching_groups(course_name, semester)",
         "CREATE INDEX IF NOT EXISTS idx_teaching_groups_dept_sem ON teaching_groups(department_id, semester)",
+        "ALTER TABLE teaching_groups ADD COLUMN IF NOT EXISTS display_column INTEGER",
+        """
+        CREATE TABLE IF NOT EXISTS schedule_display_tracks (
+            id BIGSERIAL PRIMARY KEY,
+            semester TEXT NOT NULL,
+            department_id BIGINT NOT NULL REFERENCES departments(id)
+                ON DELETE RESTRICT ON UPDATE CASCADE,
+            track_index INTEGER NOT NULL,
+            label TEXT NOT NULL DEFAULT '',
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (semester, department_id, track_index)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_sched_display_tracks_sem_dept "
+        "ON schedule_display_tracks(semester, department_id)",
+        """
+        CREATE TABLE IF NOT EXISTS department_general_group_bindings (
+            id BIGSERIAL PRIMARY KEY,
+            semester TEXT NOT NULL,
+            consumer_department_id BIGINT NOT NULL REFERENCES departments(id)
+                ON DELETE RESTRICT ON UPDATE CASCADE,
+            course_name TEXT NOT NULL,
+            teaching_group_id BIGINT NOT NULL REFERENCES teaching_groups(id)
+                ON DELETE RESTRICT ON UPDATE CASCADE,
+            updated_by TEXT DEFAULT '',
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (semester, consumer_department_id, course_name)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_dept_gen_bind_sem_dept "
+        "ON department_general_group_bindings(semester, consumer_department_id)",
         "ALTER TABLE registrations ADD COLUMN IF NOT EXISTS program_course_id BIGINT",
         "ALTER TABLE registrations ADD COLUMN IF NOT EXISTS teaching_group_id BIGINT",
         "ALTER TABLE registrations ADD COLUMN IF NOT EXISTS semester TEXT DEFAULT ''",

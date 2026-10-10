@@ -32,7 +32,9 @@
         <button class="btn btn-outline-info btn-sm" onclick="PageGuide.open()">❓ دليل الاستخدام</button>
         <a href="/academic_quality/ilo/outcomes-map" class="btn btn-outline-secondary btn-sm">القصة التعريفية</a>
         <a href="/academic_quality/programs" class="btn btn-outline-primary btn-sm">برامج الكلية</a>
+        {% if show_accreditation_nav %}
         <a href="/academic_quality/accreditation/map?scope=inst" class="btn btn-outline-primary btn-sm">امتثال مؤسسي</a>
+        {% endif %}
         <a href="/academic_quality/archive" class="btn btn-outline-secondary btn-sm">أرشيف القسم</a>
         <a href="/academic_quality/glossary" class="btn btn-outline-info btn-sm">المصطلحات</a>
         <button type="button" class="btn btn-outline-primary btn-sm d-none" id="btnToggleEditMode">وضع التحرير</button>

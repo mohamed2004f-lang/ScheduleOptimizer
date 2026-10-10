@@ -52,6 +52,22 @@
       </div>
     </div>
 
+    <div class="card mb-3 d-none" id="displayTracksCard">
+      <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
+          <div>
+            <h2 class="h6 mb-1">أعمدة عرض جدول الاتجاه العام</h2>
+            <p class="small text-muted mb-0">كل عمود = شريط (مقرر | أستاذ | قاعة). عيّن لكل مجموعة تدريس عمودها عند الحفظ.</p>
+          </div>
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-outline-primary btn-sm" id="btnAddTrack">+ عمود</button>
+            <button type="button" class="btn btn-success btn-sm" id="btnSaveTracks">حفظ الأعمدة</button>
+          </div>
+        </div>
+        <div id="displayTracksList" class="d-flex flex-column gap-2"></div>
+      </div>
+    </div>
+
     <div id="offeringsContainer"></div>
   </main>
 
@@ -60,6 +76,11 @@
     let INSTRUCTORS = [];
     let OFFERINGS = [];
     let CURRENT_SEM = '';
+    let DISPLAY_TRACKS = [];
+    let SHOW_DISPLAY_TRACKS = false;
+    const MAX_DISPLAY_TRACKS = 4;
+    /** cache: courseKey -> roster payload */
+    const ROSTER_CACHE = {};
 
     function showMsg(text, type = 'info') {
       const el = document.getElementById('tgMsg');
@@ -68,6 +89,303 @@
 
     function esc(s) {
       return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function courseRosterKey(courseName, deptId) {
+      return `${CURRENT_SEM}||${deptId || 0}||${String(courseName || '').trim()}`;
+    }
+
+    async function fetchCourseRoster(courseName, deptId, force) {
+      const key = courseRosterKey(courseName, deptId);
+      if (!force && ROSTER_CACHE[key]) return ROSTER_CACHE[key];
+      const qs = new URLSearchParams({
+        course_name: courseName,
+        semester: CURRENT_SEM || '',
+        department_id: String(deptId || ''),
+      });
+      const r = await fetch('/schedule/teaching_groups/roster?' + qs.toString(), {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j || j.status !== 'ok') {
+        throw new Error((j && j.message) || 'فشل تحميل روستر الطلبة');
+      }
+      ROSTER_CACHE[key] = j;
+      return j;
+    }
+
+    function rosterPanelHtml(offIdx, teachingGroupId, groupCode) {
+      const gid = Number(teachingGroupId || 0);
+      if (!gid) {
+        return `<div class="tg-roster-panel border rounded p-2 mt-2 bg-light">
+          <div class="small text-muted">احفظ المجموعة أولاً ثم أدر طلبتها هنا.</div>
+        </div>`;
+      }
+      return `
+        <div class="tg-roster-panel border rounded p-2 mt-2" data-off="${offIdx}" data-tgid="${gid}" data-gcode="${esc(groupCode || '')}">
+          <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+            <button type="button" class="btn btn-outline-secondary btn-sm btn-toggle-roster" data-off="${offIdx}" data-tgid="${gid}">
+              الطلبة <span class="badge bg-secondary roster-count" data-tgid="${gid}">—</span>
+            </button>
+            <button type="button" class="btn btn-outline-primary btn-sm btn-reload-roster d-none" data-off="${offIdx}" data-tgid="${gid}">تحديث القائمة</button>
+          </div>
+          <div class="tg-roster-body d-none" data-tgid="${gid}">
+            <div class="small text-muted mb-2">المسجّلون في المقرر فقط — ابحث ثم حدّد وأضف/أزل.</div>
+            <input type="search" class="form-control form-control-sm mb-2 roster-search" data-tgid="${gid}" placeholder="بحث بالاسم أو الرقم الجامعي">
+            <div class="row g-2">
+              <div class="col-md-6">
+                <div class="small fw-semibold mb-1">مرشحون للإضافة / النقل</div>
+                <div class="roster-candidates border rounded p-2" style="max-height:220px;overflow:auto" data-tgid="${gid}"></div>
+                <button type="button" class="btn btn-success btn-sm mt-2 btn-roster-assign" data-tgid="${gid}" data-action="assign">إضافة المحددين للمجموعة</button>
+              </div>
+              <div class="col-md-6">
+                <div class="small fw-semibold mb-1">ملحقون بهذه المجموعة</div>
+                <div class="roster-members border rounded p-2" style="max-height:220px;overflow:auto" data-tgid="${gid}"></div>
+                <button type="button" class="btn btn-outline-danger btn-sm mt-2 btn-roster-assign" data-tgid="${gid}" data-action="unassign">إزالة المحددين</button>
+              </div>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function studentCheckRow(s, tgid, kind, q) {
+      const name = String(s.student_name || s.student_id || '');
+      const sid = String(s.student_id || '');
+      const hay = (name + ' ' + sid).toLowerCase();
+      if (q && !hay.includes(q)) return '';
+      let hint = '';
+      if (kind === 'candidate' && s.from_group_label) {
+        hint = ` <span class="text-muted">(من مجموعة ${esc(s.from_group_label)})</span>`;
+      } else if (kind === 'candidate' && s.in_other_group) {
+        hint = ' <span class="text-muted">(مجموعة أخرى)</span>';
+      }
+      return `<label class="form-check d-block mb-1">
+        <input type="checkbox" class="form-check-input roster-cb" data-kind="${kind}" data-tgid="${tgid}" value="${esc(sid)}">
+        <span class="form-check-label small">${esc(name)} <span class="text-muted">${esc(sid)}</span>${hint}</span>
+      </label>`;
+    }
+
+    function renderRosterIntoPanel(off, tgid, roster) {
+      const gid = Number(tgid);
+      const body = document.querySelector(`.tg-roster-body[data-tgid="${gid}"]`);
+      const countBadge = document.querySelector(`.roster-count[data-tgid="${gid}"]`);
+      if (!body) return;
+      const gRow = (roster.groups || []).find(g => Number(g.teaching_group_id) === gid);
+      const members = (gRow && gRow.members) || [];
+      if (countBadge) countBadge.textContent = String(members.length);
+
+      const siblingLabels = roster.sibling_labels || {};
+      const candidates = [];
+      (roster.unassigned || []).forEach(s => {
+        candidates.push({ ...s, from_group_label: '' });
+      });
+      (roster.groups || []).forEach(g => {
+        const ogid = Number(g.teaching_group_id);
+        if (ogid === gid) return;
+        const label = siblingLabels[ogid] || g.group_code_label || g.group_code || String(ogid);
+        (g.members || []).forEach(s => {
+          candidates.push({ ...s, from_group_label: label });
+        });
+      });
+
+      const q = (body.querySelector('.roster-search')?.value || '').trim().toLowerCase();
+      const candEl = body.querySelector('.roster-candidates');
+      const memEl = body.querySelector('.roster-members');
+      if (candEl) {
+        candEl.innerHTML = candidates.map(s => studentCheckRow(s, gid, 'candidate', q)).join('')
+          || '<div class="small text-muted">لا مرشحين</div>';
+      }
+      if (memEl) {
+        memEl.innerHTML = members.map(s => studentCheckRow(s, gid, 'member', q)).join('')
+          || '<div class="small text-muted">لا طلبة في هذه المجموعة</div>';
+      }
+    }
+
+    async function openRosterPanel(offIdx, tgid) {
+      const off = OFFERINGS[offIdx];
+      if (!off) return;
+      const body = document.querySelector(`.tg-roster-body[data-tgid="${tgid}"]`);
+      const reloadBtn = document.querySelector(`.btn-reload-roster[data-tgid="${tgid}"]`);
+      if (!body) return;
+      body.classList.remove('d-none');
+      if (reloadBtn) reloadBtn.classList.remove('d-none');
+      const candEl = body.querySelector('.roster-candidates');
+      if (candEl) candEl.innerHTML = '<div class="small text-muted">جاري التحميل…</div>';
+      try {
+        const roster = await fetchCourseRoster(off.course_name, off.department_id, true);
+        renderRosterIntoPanel(off, tgid, roster);
+        const search = document.querySelector(`.roster-search[data-tgid="${tgid}"]`);
+        if (search && !search.dataset.bound) {
+          search.dataset.bound = '1';
+          search.addEventListener('input', () => {
+            const cached = ROSTER_CACHE[courseRosterKey(off.course_name, off.department_id)];
+            if (cached) renderRosterIntoPanel(off, tgid, cached);
+          });
+        }
+      } catch (e) {
+        if (candEl) {
+          candEl.innerHTML = `<div class="text-danger small">${esc(e.message || e)}</div>`;
+        }
+      }
+    }
+
+    async function rosterAssignAction(tgid, action) {
+      const kind = action === 'unassign' ? 'member' : 'candidate';
+      const boxes = [...document.querySelectorAll(`.roster-cb[data-tgid="${tgid}"][data-kind="${kind}"]:checked`)];
+      const student_ids = boxes.map(b => b.value).filter(Boolean);
+      if (!student_ids.length) {
+        showMsg('حدّد طالبًا واحدًا على الأقل', 'warning');
+        return;
+      }
+      const r = await fetch('/schedule/teaching_groups/roster/assign', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        body: JSON.stringify({ teaching_group_id: Number(tgid), student_ids, action }),
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j || j.status !== 'ok') {
+        throw new Error((j && j.message) || 'فشل تحديث التوزيع');
+      }
+      const panel = document.querySelector(`.tg-roster-panel[data-tgid="${tgid}"]`);
+      const offIdx = Number(panel?.dataset.off || -1);
+      const off = OFFERINGS[offIdx];
+      if (off && j.roster) {
+        ROSTER_CACHE[courseRosterKey(off.course_name, off.department_id)] = j.roster;
+        renderRosterIntoPanel(off, tgid, j.roster);
+        // حدّث شارات العدّ لكل مجموعات المقرر
+        (j.roster.groups || []).forEach(g => {
+          const badge = document.querySelector(`.roster-count[data-tgid="${g.teaching_group_id}"]`);
+          if (badge) badge.textContent = String(g.member_count || 0);
+        });
+      }
+      const st = j.stats || {};
+      showMsg(
+        action === 'unassign'
+          ? `تمت إزالة ${st.updated || 0} طالب`
+          : `تم تعيين ${st.updated || 0} طالب للمجموعة` + (st.not_registered ? ` — غير مسجّل: ${st.not_registered}` : ''),
+        'success'
+      );
+    }
+
+    function bindRosterEventsFor(offIdx, tgid) {
+      const toggle = document.querySelector(`.btn-toggle-roster[data-tgid="${tgid}"]`);
+      const reload = document.querySelector(`.btn-reload-roster[data-tgid="${tgid}"]`);
+      const body = document.querySelector(`.tg-roster-body[data-tgid="${tgid}"]`);
+      if (toggle && !toggle.dataset.bound) {
+        toggle.dataset.bound = '1';
+        toggle.addEventListener('click', async () => {
+          if (!body) return;
+          if (!body.classList.contains('d-none') && body.querySelector('.roster-candidates')) {
+            body.classList.add('d-none');
+            if (reload) reload.classList.add('d-none');
+            return;
+          }
+          await openRosterPanel(offIdx, tgid);
+        });
+      }
+      if (reload && !reload.dataset.bound) {
+        reload.dataset.bound = '1';
+        reload.addEventListener('click', () => openRosterPanel(offIdx, tgid));
+      }
+      document.querySelectorAll(`.btn-roster-assign[data-tgid="${tgid}"]`).forEach(btn => {
+        if (btn.dataset.bound) return;
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          try {
+            await rosterAssignAction(tgid, btn.dataset.action || 'assign');
+          } catch (e) {
+            showMsg(e.message || 'فشل', 'danger');
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      });
+    }
+
+    function bindAllRosterEvents() {
+      document.querySelectorAll('.tg-roster-panel[data-tgid]').forEach(panel => {
+        const tgid = Number(panel.dataset.tgid || 0);
+        const offIdx = Number(panel.dataset.off || -1);
+        if (tgid > 0 && offIdx >= 0) bindRosterEventsFor(offIdx, tgid);
+      });
+    }
+
+    function trackOptionsHtml(selected) {
+      const sel = Number(selected || 0);
+      const tracks = (DISPLAY_TRACKS && DISPLAY_TRACKS.length)
+        ? DISPLAY_TRACKS
+        : [{ index: 1, label: 'مجموعة 1' }, { index: 2, label: 'مجموعة 2' }];
+      let html = '<option value="">— تلقائي —</option>';
+      tracks.forEach((t) => {
+        const idx = Number(t.index || 0);
+        const picked = sel === idx ? ' selected' : '';
+        html += `<option value="${idx}"${picked}>عمود ${idx}: ${esc(t.label || ('مجموعة ' + idx))}</option>`;
+      });
+      return html;
+    }
+
+    function renderDisplayTracksEditor() {
+      const card = document.getElementById('displayTracksCard');
+      const list = document.getElementById('displayTracksList');
+      if (!card || !list) return;
+      card.classList.toggle('d-none', !SHOW_DISPLAY_TRACKS);
+      if (!SHOW_DISPLAY_TRACKS) return;
+      if (!DISPLAY_TRACKS.length) {
+        DISPLAY_TRACKS = [
+          { index: 1, label: 'مجموعة 1' },
+          { index: 2, label: 'مجموعة 2' },
+        ];
+      }
+      list.innerHTML = DISPLAY_TRACKS.map((t, i) => `
+        <div class="d-flex flex-wrap gap-2 align-items-center track-row" data-track-i="${i}">
+          <span class="badge bg-secondary">عمود ${i + 1}</span>
+          <input type="text" class="form-control form-control-sm track-label" style="max-width:280px"
+            value="${esc(t.label || '')}" placeholder="عنوان العمود">
+          <button type="button" class="btn btn-outline-danger btn-sm btn-remove-track" data-i="${i}"
+            ${DISPLAY_TRACKS.length <= 1 ? 'disabled' : ''}>حذف</button>
+        </div>
+      `).join('');
+      list.querySelectorAll('.btn-remove-track').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const i = Number(btn.dataset.i);
+          if (DISPLAY_TRACKS.length <= 1) return;
+          DISPLAY_TRACKS.splice(i, 1);
+          renderDisplayTracksEditor();
+          // أعد رسم العروض لتحديث قوائم الأعمدة
+          document.getElementById('offeringsContainer').innerHTML = OFFERINGS.map((o, idx) => renderOffering(o, idx)).join('');
+          bindOfferingEvents();
+        });
+      });
+    }
+
+    async function saveDisplayTracks() {
+      const list = document.getElementById('displayTracksList');
+      if (!list) return;
+      const tracks = [];
+      list.querySelectorAll('.track-row').forEach((row, i) => {
+        const label = row.querySelector('.track-label')?.value?.trim() || (`مجموعة ${i + 1}`);
+        tracks.push({ index: i + 1, label });
+      });
+      if (!tracks.length) {
+        showMsg('أبقِ عموداً واحداً على الأقل', 'warning');
+        return;
+      }
+      const r = await fetch('/schedule/teaching_groups/display_tracks', {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        body: JSON.stringify({ semester: CURRENT_SEM, tracks }),
+      });
+      const j = await r.json();
+      if (!r.ok || j.status !== 'ok') throw new Error(j.message || 'فشل حفظ الأعمدة');
+      DISPLAY_TRACKS = j.tracks || tracks;
+      renderDisplayTracksEditor();
+      showMsg('تم حفظ أعمدة العرض', 'success');
+      document.getElementById('offeringsContainer').innerHTML = OFFERINGS.map((o, idx) => renderOffering(o, idx)).join('');
+      bindOfferingEvents();
     }
 
     async function loadInstructors() {
@@ -118,11 +436,18 @@
         const defaultInst = g0.instructor_id || g0.primary_instructor_id || (slots[0] && slots[0].instructor_id) || '';
         const asstIds = g0.assistant_instructor_ids || [];
         const linkedIds = new Set((g0.section_ids) || slots.filter(s => s.teaching_group_id).map(s => s.section_id));
+        const dcSel = SHOW_DISPLAY_TRACKS
+          ? `<div class="mb-2">
+              <label class="form-label small">عمود العرض في الجدول</label>
+              <select class="form-select form-select-sm tg-display-col" data-off="${idx}" data-group="single" style="max-width:320px">${trackOptionsHtml(g0.display_column)}</select>
+            </div>`
+          : '';
         body = `
           <div class="mb-2">
             <label class="form-label small">الأستاذ الرئيسي</label>
             <select class="form-select form-select-sm tg-inst" data-off="${idx}" data-group="single" style="max-width:320px">${instructorOptions(defaultInst)}</select>
           </div>
+          ${dcSel}
           <div class="mb-2">
             <label class="form-label small">المساعدون (اختياري — Ctrl لاختيار أكثر من واحد)</label>
             <select class="form-select form-select-sm tg-assistants" data-off="${idx}" data-group="single" multiple size="3" style="max-width:320px">${assistantOptions(asstIds)}</select>
@@ -130,23 +455,32 @@
           <div class="mb-2">
             <div class="small fw-semibold mb-1">حصص الجدول (محاضرات)</div>
             <div class="border rounded p-2 bg-light">${slots.map(s => slotCheckbox(idx, s, 'single', linkedIds.has(s.section_id) || !s.teaching_group_id)).join('') || '<span class="text-muted small">لا حصص</span>'}</div>
-          </div>`;
+          </div>
+          ${rosterPanelHtml(idx, g0.id, g0.group_code_label || 'الكل')}`;
       } else {
         body = groups.map((g, gi) => {
           const gkey = g.group_code || ('G' + gi);
           const linked = new Set(g.section_ids || []);
           const asstIds = g.assistant_instructor_ids || [];
+          const dcSel = SHOW_DISPLAY_TRACKS
+            ? `<div class="mb-2">
+                <label class="form-label small mb-0">عمود العرض</label>
+                <select class="form-select form-select-sm tg-display-col" data-off="${idx}" data-group="${esc(gkey)}" style="max-width:280px">${trackOptionsHtml(g.display_column)}</select>
+              </div>`
+            : '';
           return `
             <div class="border rounded p-2 mb-2">
               <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
                 <span class="badge bg-primary">مجموعة ${esc(g.group_code_label || g.group_code || gkey)}</span>
                 <select class="form-select form-select-sm tg-inst" data-off="${idx}" data-group="${esc(gkey)}" style="max-width:280px" title="رئيسي">${instructorOptions(g.instructor_id || g.primary_instructor_id)}</select>
               </div>
+              ${dcSel}
               <div class="mb-2">
                 <label class="form-label small mb-0">المساعدون</label>
                 <select class="form-select form-select-sm tg-assistants" data-off="${idx}" data-group="${esc(gkey)}" multiple size="2" style="max-width:280px">${assistantOptions(asstIds)}</select>
               </div>
               <div>${slots.map(s => slotCheckbox(idx, s, gkey, linked.has(s.section_id))).join('')}</div>
+              ${rosterPanelHtml(idx, g.id, g.group_code_label || gkey)}
             </div>`;
         }).join('');
       }
@@ -193,8 +527,16 @@
           const iid = Number(row.querySelector('.split-inst')?.value || 0);
           const asst = [...(row.querySelector('.split-assistants')?.selectedOptions || [])].map(o => Number(o.value)).filter(n => n > 0);
           const sectionIds = [...row.querySelectorAll('.slot-cb:checked')].map(cb => Number(cb.dataset.sid));
+          const dcRaw = row.querySelector('.split-display-col')?.value;
+          const display_column = dcRaw ? Number(dcRaw) : null;
           if (gcode && iid > 0) {
-            groups.push({ group_code: gcode, instructor_id: iid, assistant_ids: asst, section_ids: sectionIds });
+            groups.push({
+              group_code: gcode,
+              instructor_id: iid,
+              assistant_ids: asst,
+              section_ids: sectionIds,
+              display_column: display_column || null,
+            });
           }
         });
         return { group_kind: 'split', groups };
@@ -204,7 +546,12 @@
       const asstSel = card.querySelector('.tg-assistants');
       const asst = asstSel ? [...asstSel.selectedOptions].map(o => Number(o.value)).filter(n => n > 0) : [];
       const sectionIds = [...card.querySelectorAll('.slot-cb[data-group="single"]:checked')].map(cb => Number(cb.dataset.sid));
-      return { group_kind: 'single', groups: [{ instructor_id: iid, assistant_ids: asst, section_ids: sectionIds }] };
+      const dcRaw = card.querySelector('.tg-display-col[data-group="single"]')?.value;
+      const display_column = dcRaw ? Number(dcRaw) : null;
+      return {
+        group_kind: 'single',
+        groups: [{ instructor_id: iid, assistant_ids: asst, section_ids: sectionIds, display_column: display_column || null }],
+      };
     }
 
     function bindOfferingEvents() {
@@ -261,6 +608,7 @@
       document.querySelectorAll('.btn-add-group').forEach(btn => {
         btn.addEventListener('click', () => addSplitGroup(Number(btn.dataset.off)));
       });
+      bindAllRosterEvents();
     }
 
     function initSplitEditor(idx) {
@@ -283,20 +631,30 @@
       const gcode = preset?.group_code || '';
       const iid = preset?.instructor_id || '';
       const linked = new Set(preset?.section_ids || []);
+      const dcBlock = SHOW_DISPLAY_TRACKS
+        ? `<div class="mb-2">
+            <label class="form-label small mb-0">عمود العرض</label>
+            <select class="form-select form-select-sm split-display-col" style="max-width:280px">${trackOptionsHtml(preset?.display_column)}</select>
+          </div>`
+        : '';
       row.innerHTML = `
         <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
           <input class="form-control form-control-sm split-code" style="max-width:80px" placeholder="A" value="${esc(gcode)}">
           <select class="form-select form-select-sm split-inst" style="max-width:280px" title="رئيسي">${instructorOptions(iid)}</select>
         </div>
+        ${dcBlock}
         <div class="mb-2">
           <label class="form-label small mb-0">المساعدون</label>
           <select class="form-select form-select-sm split-assistants" multiple size="2" style="max-width:280px">${assistantOptions(preset?.assistant_instructor_ids || [])}</select>
         </div>
-        <div class="split-slots">${(off.slots || []).map(s => slotCheckbox(idx, s, 'split_' + (gcode || 'X'), linked.has(s.section_id))).join('')}</div>`;
+        <div class="split-slots">${(off.slots || []).map(s => slotCheckbox(idx, s, 'split_' + (gcode || 'X'), linked.has(s.section_id))).join('')}</div>
+        ${rosterPanelHtml(idx, preset?.id, gcode || preset?.group_code_label || '')}`;
       container.appendChild(row);
       row.querySelector('.split-code')?.addEventListener('input', () => {
         row.querySelectorAll('.slot-cb').forEach(cb => { cb.dataset.group = 'split_' + row.querySelector('.split-code').value.trim().toUpperCase(); });
       });
+      const tgid = Number(preset?.id || 0);
+      if (tgid > 0) bindRosterEventsFor(idx, tgid);
     }
 
     function renderAudit(audit) {
@@ -360,6 +718,10 @@
         }
         CURRENT_SEM = j.semester || '';
         OFFERINGS = j.offerings || [];
+        Object.keys(ROSTER_CACHE).forEach(k => { delete ROSTER_CACHE[k]; });
+        SHOW_DISPLAY_TRACKS = !!j.show_display_tracks;
+        DISPLAY_TRACKS = Array.isArray(j.display_tracks) ? j.display_tracks.slice() : [];
+        renderDisplayTracksEditor();
         const semInput = document.getElementById('semesterInput');
         if (semInput) semInput.value = CURRENT_SEM || '— غير محدد —';
         renderAudit(j.audit);
@@ -394,6 +756,26 @@
     }
 
     document.getElementById('btnReload').addEventListener('click', () => loadData(false));
+    document.getElementById('btnAddTrack')?.addEventListener('click', () => {
+      if (DISPLAY_TRACKS.length >= MAX_DISPLAY_TRACKS) {
+        showMsg(`الحد الأقصى ${MAX_DISPLAY_TRACKS} أعمدة`, 'warning');
+        return;
+      }
+      const n = DISPLAY_TRACKS.length + 1;
+      DISPLAY_TRACKS.push({ index: n, label: `مجموعة ${n}` });
+      renderDisplayTracksEditor();
+      if (OFFERINGS.length) {
+        document.getElementById('offeringsContainer').innerHTML = OFFERINGS.map((o, idx) => renderOffering(o, idx)).join('');
+        bindOfferingEvents();
+      }
+    });
+    document.getElementById('btnSaveTracks')?.addEventListener('click', async () => {
+      try {
+        await saveDisplayTracks();
+      } catch (e) {
+        showMsg(e.message || 'فشل حفظ الأعمدة', 'danger');
+      }
+    });
     document.getElementById('btnPipeline').addEventListener('click', async () => {
       if (!confirm('تشغيل ترحيل الفصل كاملاً (حصص + فريق + تسجيلات + تقييمات)؟')) return;
       showMsg('جاري ترحيل الفصل… قد يستغرق لحظات', 'info');

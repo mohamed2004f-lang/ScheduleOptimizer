@@ -605,6 +605,157 @@ def get_department_plan_units(
     return _effective_dept_units(base, override)
 
 
+def _norm_plan_code(code: str) -> str:
+    return re.sub(r"\s+", "", str(code or "").strip()).upper()
+
+
+def find_course_name_by_plan_code(conn, plan_code: str) -> str | None:
+    """الاسم الرسمي لمقرر مشترك عبر رمز خطة قسم (مثل CIEN 319)."""
+    code = (plan_code or "").strip()
+    if not code:
+        return None
+    try:
+        ensure_college_shared_catalog_schema(conn)
+    except Exception:
+        return None
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT c.canonical_course_name
+        FROM college_shared_catalog_depts d
+        JOIN college_shared_catalog c ON c.id = d.catalog_id
+        WHERE COALESCE(d.is_active, 1) = 1
+          AND COALESCE(c.is_active, 1) = 1
+          AND TRIM(COALESCE(d.plan_course_code, '')) = ?
+        LIMIT 1
+        """,
+        (code,),
+    ).fetchone()
+    if row:
+        name = (row[0] if not hasattr(row, "keys") else row["canonical_course_name"]) or ""
+        name = str(name).strip()
+        if name:
+            return name
+    # تطابق بعد تطبيع المسافات
+    norm = _norm_plan_code(code)
+    if not norm:
+        return None
+    rows = cur.execute(
+        """
+        SELECT c.canonical_course_name, d.plan_course_code
+        FROM college_shared_catalog_depts d
+        JOIN college_shared_catalog c ON c.id = d.catalog_id
+        WHERE COALESCE(d.is_active, 1) = 1
+          AND COALESCE(c.is_active, 1) = 1
+          AND TRIM(COALESCE(d.plan_course_code, '')) <> ''
+        """
+    ).fetchall()
+    for rr in rows or []:
+        pname = (rr[0] if not hasattr(rr, "keys") else rr["canonical_course_name"]) or ""
+        pcode = (rr[1] if not hasattr(rr, "keys") else rr["plan_course_code"]) or ""
+        if _norm_plan_code(pcode) == norm:
+            return str(pname).strip() or None
+    return None
+
+
+def course_accepts_code(conn, course_name: str, course_code: str) -> bool:
+    """
+    هل الرمز مقبول لهذا الاسم؟ (رمز courses المرجعي أو أي plan_course_code في سجل المشترك)
+    يحل تعارض CIEN 319 مع صفوف مكررة مثل «ميكانيكا الموائع I*».
+    """
+    cname = (course_name or "").strip()
+    code = (course_code or "").strip()
+    if not cname or not code:
+        return False
+    norm = _norm_plan_code(code)
+    if not norm:
+        return False
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT COALESCE(course_code,'') AS course_code
+        FROM courses
+        WHERE course_name = ? OR trim(course_name) = trim(?)
+        LIMIT 1
+        """,
+        (cname, cname),
+    ).fetchone()
+    if row:
+        dbc = (row[0] if not hasattr(row, "keys") else row["course_code"]) or ""
+        if _norm_plan_code(dbc) == norm:
+            return True
+    try:
+        ensure_college_shared_catalog_schema(conn)
+    except Exception:
+        return False
+    cid = find_shared_catalog_id_by_course_name(conn, cname)
+    if cid is None:
+        # إن وُجد الرمز كخطة لاسم رسمي مطابق بعد التطبيع
+        plan_name = find_course_name_by_plan_code(conn, code)
+        if not plan_name:
+            return False
+        return _norm_plan_code(plan_name) == _norm_plan_code(cname) or (
+            re.sub(r"[*＊]+$", "", plan_name).strip() == re.sub(r"[*＊]+$", "", cname).strip()
+        )
+    entry = get_catalog_entry(conn, int(cid)) or {}
+    if _norm_plan_code(entry.get("canonical_course_code") or "") == norm:
+        return True
+    rows = cur.execute(
+        """
+        SELECT plan_course_code
+        FROM college_shared_catalog_depts
+        WHERE catalog_id = ? AND COALESCE(is_active, 1) = 1
+        """,
+        (int(cid),),
+    ).fetchall()
+    for rr in rows or []:
+        pcode = (rr[0] if not hasattr(rr, "keys") else rr["plan_course_code"]) or ""
+        if _norm_plan_code(pcode) == norm:
+            return True
+    return False
+
+
+def resolve_course_for_department(
+    conn,
+    course_name: str,
+    department_id: int | None,
+    *,
+    base_code: str | None = None,
+    base_units: int | None = None,
+) -> dict[str, Any]:
+    """
+    رمز ووحدات العرض/التخزين لكشف طالب حسب قسم السياق.
+    للمقرر المشترك يطبّق overlay القسم؛ وإلا يُبقي القيم المرجعية من courses.
+    """
+    cname = (course_name or "").strip()
+    code = (base_code or "").strip()
+    try:
+        units = int(base_units) if base_units is not None else 0
+    except (TypeError, ValueError):
+        units = 0
+
+    if not cname:
+        return {"course_name": "", "course_code": code, "units": units}
+
+    if department_id is None:
+        return {"course_name": cname, "course_code": code, "units": units}
+
+    try:
+        did = int(department_id)
+    except (TypeError, ValueError):
+        return {"course_name": cname, "course_code": code, "units": units}
+
+    plan_code = get_department_plan_course_code(conn, cname, did)
+    plan_units = get_department_plan_units(conn, cname, did)
+    # get_* ترجع None إن لم يكن المقرر في سجل المشترك
+    if plan_code is None and plan_units is None:
+        return {"course_name": cname, "course_code": code, "units": units}
+
+    out_code = (plan_code or code or "").strip() or code
+    out_units = int(plan_units) if plan_units is not None else units
+    return {"course_name": cname, "course_code": out_code, "units": out_units}
+
+
 def set_department_plan_course_code(
     conn,
     course_name: str,

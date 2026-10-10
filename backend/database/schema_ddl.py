@@ -113,6 +113,7 @@ TABLES_SCHEMA = {
             capacity_max INTEGER,
             program_course_id INTEGER,
             note TEXT DEFAULT '',
+            display_column INTEGER,
             is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -122,6 +123,39 @@ TABLES_SCHEMA = {
             FOREIGN KEY (department_id) REFERENCES departments(id)
                 ON DELETE RESTRICT ON UPDATE CASCADE,
             FOREIGN KEY (instructor_id) REFERENCES instructors(id)
+                ON DELETE RESTRICT ON UPDATE CASCADE
+        )
+    """,
+
+    'schedule_display_tracks': """
+        CREATE TABLE IF NOT EXISTS schedule_display_tracks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            semester TEXT NOT NULL,
+            department_id INTEGER NOT NULL,
+            track_index INTEGER NOT NULL,
+            label TEXT NOT NULL DEFAULT '',
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (semester, department_id, track_index),
+            FOREIGN KEY (department_id) REFERENCES departments(id)
+                ON DELETE RESTRICT ON UPDATE CASCADE
+        )
+    """,
+
+    'department_general_group_bindings': """
+        CREATE TABLE IF NOT EXISTS department_general_group_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            semester TEXT NOT NULL,
+            consumer_department_id INTEGER NOT NULL,
+            course_name TEXT NOT NULL,
+            teaching_group_id INTEGER NOT NULL,
+            updated_by TEXT DEFAULT '',
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (semester, consumer_department_id, course_name),
+            FOREIGN KEY (consumer_department_id) REFERENCES departments(id)
+                ON DELETE RESTRICT ON UPDATE CASCADE,
+            FOREIGN KEY (teaching_group_id) REFERENCES teaching_groups(id)
                 ON DELETE RESTRICT ON UPDATE CASCADE
         )
     """,
@@ -1719,6 +1753,8 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_teaching_groups_semester ON teaching_groups(semester)",
     "CREATE INDEX IF NOT EXISTS idx_teaching_groups_course_sem ON teaching_groups(course_name, semester)",
     "CREATE INDEX IF NOT EXISTS idx_teaching_groups_dept_sem ON teaching_groups(department_id, semester)",
+    "CREATE INDEX IF NOT EXISTS idx_sched_display_tracks_sem_dept ON schedule_display_tracks(semester, department_id)",
+    "CREATE INDEX IF NOT EXISTS idx_dept_gen_bind_sem_dept ON department_general_group_bindings(semester, consumer_department_id)",
     "CREATE INDEX IF NOT EXISTS idx_tgi_group ON teaching_group_instructors(teaching_group_id)",
     "CREATE INDEX IF NOT EXISTS idx_tgi_instructor ON teaching_group_instructors(instructor_id)",
     "CREATE INDEX IF NOT EXISTS idx_tgi_role ON teaching_group_instructors(teaching_group_id, role)",

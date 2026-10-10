@@ -479,10 +479,29 @@ def _is_instructor_or_supervisor_view_only() -> bool:
 
 
 def _enrollment_writes_allowed() -> bool:
-    """المشرف يكتب/يعتمد خطط طلبته؛ الأستاذ العادي يبقى عرضاً فقط."""
+    """
+    كتابة/اعتماد خطط التسجيل:
+    - المشرف الفعّال لطلبته
+    - أو من يملك can_manage_enrollment_plans_edit / can_manage_registrations_edit
+    - العميد/الوكيل في وضع القيادة: عرض فقط ما لم يُمنَح المفتاح صراحة
+    """
     if current_supervisor_effective():
         return True
-    return not _is_instructor_or_supervisor_view_only()
+    try:
+        from backend.core.capability_gates import session_has_capability
+
+        if session_has_capability("can_manage_enrollment_plans_edit"):
+            return True
+        if session_has_capability("can_manage_registrations_edit"):
+            return True
+    except Exception:
+        pass
+    if _is_instructor_or_supervisor_view_only():
+        return False
+    from backend.core.auth_roles import _normalize_role
+
+    role = _normalize_role((session.get("user_role") or "").strip())
+    return role in ("admin", "admin_main", "system_admin", "head_of_department")
 
 
 def _assert_actor_can_access_student(conn, student_id: str) -> tuple[bool, str]:

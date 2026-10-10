@@ -314,6 +314,10 @@ def list_courses():
 @courses_bp.route("/add", methods=["POST"])
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def add_course():
+    from backend.core.capability_gates import capability_forbidden, session_has_capability
+
+    if not session_has_capability("can_manage_courses_edit"):
+        return capability_forbidden("تعديل المقررات غير مسموح لهذا الدور")
     data = request.get_json(force=True)
     # حماية: مقررات الخطة (150/155) يجب إدارتها عبر college_catalog/program_courses
     # وليس عبر شاشة courses العامة، حتى لا تختلط نسخ الخطة بالمقرر العام.
@@ -536,6 +540,10 @@ def add_course():
 @courses_bp.route("/update", methods=["POST"])
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def update_course():
+    from backend.core.capability_gates import capability_forbidden, session_has_capability
+
+    if not session_has_capability("can_manage_courses_edit"):
+        return capability_forbidden("تعديل المقررات غير مسموح لهذا الدور")
     data = request.get_json(force=True)
     old_name = (data.get("old_course_name") or "").strip()
     new_name = (data.get("new_course_name") or "").strip()
@@ -879,6 +887,10 @@ def _scoped_active_course_names(conn, cur, *, dept_scope_id: int | None) -> list
 @courses_bp.route("/delete", methods=["POST"])
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def delete_course():
+    from backend.core.capability_gates import capability_forbidden, session_has_capability
+
+    if not session_has_capability("can_manage_courses_edit"):
+        return capability_forbidden("تعديل المقررات غير مسموح لهذا الدور")
     data = request.get_json(force=True)
     cname = data.get("course_name")
     if not cname:
@@ -1988,8 +2000,12 @@ def _try_cross_department_shared_on_import(
 @courses_bp.route("/import/excel", methods=["POST"])
 @login_required
 def courses_import_excel():
+    from backend.core.capability_gates import capability_forbidden, session_has_capability
+
     if _is_instructor_or_supervisor_view_only():
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+    if not session_has_capability("can_manage_courses_edit"):
+        return capability_forbidden("تعديل المقررات غير مسموح لهذا الدور")
     f = request.files.get("file")
     if not f:
         return jsonify({"status": "error", "message": "اختر ملف Excel أولاً"}), 400

@@ -25,7 +25,6 @@
       overflow: visible;
     }
     /* منع وميض أدوات الإدارة قبل تأكيد الصلاحيات من الخادم/الجافاسكربت */
-    #importCard.transcript-priv-pending,
     #toolbarAdmin.transcript-priv-pending,
     #txCorrHodCard.transcript-priv-pending {
       display: none !important;
@@ -230,74 +229,6 @@
       </div>
     </div>
 
-    {% if can_manage_transcript %}
-    <!-- بطاقة استيراد كشف الدرجات — للإدارة/رئيس القسم فقط (لا تُرسل HTML للمشرف) -->
-    <div class="card mb-3" id="importCard">
-      <div class="card-body">
-        <h5 class="mb-3">استيراد كشف درجات لطالب محدد</h5>
-        <p class="small-muted mb-3">
-          استخدم ملف التصدير الحالي (Excel) لاستيراد درجات الطالب. يمكن ترك حقلي الفصل والسنة فارغين وسيتم استخدام البيانات من الملف عند توفرها.
-        </p>
-        <form id="transcriptImportForm" class="row g-3 align-items-end" onsubmit="return false;">
-          <div class="col-md-5">
-            <label class="form-label">الفصل الدراسي</label>
-            {% set typ_id = 'importTermPicker' %}
-            {% set typ_season_id = 'importSemester' %}
-            {% set typ_year_id = 'importYear' %}
-            {% include "partials/term_year_picker.html" %}
-            <div class="form-text">اختياري — إن تُرك فارغاً يُستخرج من الملف عند الإمكان</div>
-          </div>
-          <div class="col-md-4">
-            <label class="form-label">اسم الطالب</label>
-            <input id="importStudentName" class="form-control" placeholder="اسم الطالب الكامل" />
-          </div>
-          <div class="col-md-3">
-            <label class="form-label">ملف كشف الطالب (تنسيق التصدير)</label>
-            <input id="importFile" class="form-control" type="file" accept=".xlsx,.xls" />
-          </div>
-          <div class="col-12 d-flex justify-content-between align-items-center flex-wrap gap-3">
-            <div class="small-muted">الطالب المحدد: <span class="fw-semibold" id="importStudentIdLabel">—</span></div>
-            <div class="d-flex gap-2">
-              <button type="button" class="btn btn-outline-secondary btn-sm" id="btnDownloadTranscriptTemplate">📥 تحميل قالب كشف طالب</button>
-              <button type="reset" class="btn btn-outline-secondary btn-sm" id="btnImportReset">تفريغ الحقول</button>
-              <button class="btn btn-primary" id="btnImportTranscript">⬆️ استيراد الكشف</button>
-            </div>
-          </div>
-        </form>
-
-        <hr class="my-4">
-
-        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
-          <div>
-            <h5 class="mb-1">استيراد نتيجة فصل كاملة</h5>
-            <p class="small-muted mb-0">
-              استخدم ملف Excel حيث يحتوي الصف الأول على أسماء المقررات، الصف الثاني على الوحدات، ثم صفوف الطلبة (الاسم الرباعي، الرقم الدراسي، الدرجات لكل مقرر)، أو أدخل نتيجة فصل يدويًا لطالب محدد.
-            </p>
-          </div>
-          <div class="d-flex flex-wrap align-items-center gap-2 small">
-            <span class="text-muted">الصيغة المدعومة: ‎.xlsx / ‎.xls</span>
-            <button type="button" class="btn btn-outline-secondary btn-sm" id="btnDownloadSemesterTemplate">📥 تحميل قالب نتيجة فصل</button>
-            <button type="button" class="btn btn-outline-primary btn-sm" id="btnOpenManualSemester">📝 إدخال نتيجة فصل يدوياً</button>
-          </div>
-        </div>
-
-        <form id="semesterImportForm" class="row g-3 align-items-end" onsubmit="return false;">
-          <div class="col-md-4">
-            <label class="form-label">ملف نتيجة الفصل</label>
-            <input id="importSemesterFile" class="form-control" type="file" accept=".xlsx,.xls" />
-          </div>
-          <div class="col-md-8 d-flex justify-content-end align-items-center gap-2">
-            <button type="reset" class="btn btn-outline-secondary btn-sm" id="btnImportSemesterReset">تفريغ الملف</button>
-            <button class="btn btn-dark" id="btnImportSemester">⬆️ استيراد نتيجة فصل كاملة</button>
-          </div>
-        </form>
-      </div>
-    </div>
-    {% else %}
-    <!-- لا تُعرض واجهة الاستيراد للمشرف/غير المخوّلين — الخادم يرفض الاستيراد أيضاً -->
-    <div id="importCard" class="d-none transcript-priv-pending" hidden aria-hidden="true"></div>
-    {% endif %}
-
     <div id="transcriptArea">
       <div class="mb-3">
         <h5>النتائج</h5>
@@ -481,20 +412,13 @@ function setMsg(html, kind="info"){
 }
 function escape(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
 
-function syncImportFields(){
-  const selectEl = document.getElementById('studentSelect');
-  const studentId = selectEl ? selectEl.value : '';
-  const labelEl = document.getElementById('importStudentIdLabel');
-  if(labelEl){ labelEl.textContent = studentId || '—'; }
-  const nameInput = document.getElementById('importStudentName');
-  if(nameInput){ const student = STUDENTS.find(s=>s.student_id===studentId); nameInput.value = student ? (student.student_name || '') : ''; }
-}
-
 /* state */
 let STUDENTS = [];
 let COURSES = [];
 let CURRENT_TRANSCRIPT = null;
 let EDIT_ROWS = []; // temp rows to save
+/** فصل المصدر عند فتح محرر من فصل موجود — يمنع إنشاء فصل مكرر عند تغيير التسمية */
+let EDITOR_SOURCE_SEMESTER = '';
 let selectedStudent = "";
 let CURRENT_ROLE = null;
 let CAN_MANAGE_TRANSCRIPT = false;
@@ -747,7 +671,6 @@ async function loadStudents(){
       STUDENTS = pre;
       const sel = document.getElementById('studentSelect');
       if(sel && sel.options && sel.options.length>0){
-        syncImportFields();
         return;
       }
     }
@@ -771,7 +694,6 @@ async function loadStudents(){
       sel.innerHTML = '<option value="">لا توجد طلبة مسندين إليك</option>';
       STUDENTS = [];
     }
-    syncImportFields();
     return;
   }
 
@@ -785,7 +707,6 @@ async function loadStudents(){
     STUDENTS = r.json;
     r.json.forEach(s=>{ const opt = document.createElement('option'); opt.value=s.student_id; opt.text = (s.student_name||s.student_id)+' — '+s.student_id; sel.appendChild(opt); });
   } else { sel.innerHTML = '<option value="">خطأ في تحميل الطلبة</option>'; }
-  syncImportFields();
 }
 
 async function loadCourses(studentId){
@@ -948,6 +869,7 @@ function renderTranscript(data){
     } else if (CAN_PROPOSE_TRANSCRIPT && isPreviousTermLabel(sem)) {
       actionsHtml += `
         <button class="btn btn-sm btn-outline-primary btn-edit-sem-propose" data-sem="${escape(sem)}">تعديل واعتماد</button>
+        <button class="btn btn-sm btn-outline-danger btn-delete-sem-propose" data-sem="${escape(sem)}">حذف الفصل</button>
       `;
     }
     const semIsEquated = equatedSems.has(sem) || courses.some(c => !!c.is_equated);
@@ -979,7 +901,9 @@ function renderTranscript(data){
     body.appendChild(header);
 
     const tbl = document.createElement('table'); tbl.className='table table-sm table-bordered mb-0';
-    const hasActions = CAN_MANAGE_TRANSCRIPT;
+    const hasAdminActions = CAN_MANAGE_TRANSCRIPT;
+    const hasSupervisorDelete = CAN_PROPOSE_TRANSCRIPT && !CAN_MANAGE_TRANSCRIPT && isPreviousTermLabel(sem);
+    const hasActions = hasAdminActions || hasSupervisorDelete;
     const headerCols = hasActions
       ? '<tr><th>المقرر</th><th>الرمز</th><th class="text-center">الوحدات</th><th class="text-center">الدرجة</th><th class="text-center">تحرير</th></tr>'
       : '<tr><th>المقرر</th><th>الرمز</th><th class="text-center">الوحدات</th><th class="text-center">الدرجة</th></tr>';
@@ -993,12 +917,9 @@ function renderTranscript(data){
       const audit = (c && c.audit && typeof c.audit === 'object') ? c.audit : {};
       const auditBadges = formatAuditBadges(audit);
       const courseCell = `${escape(c.course_name)}${isUncompleted ? ' <span class="badge badge-uncompleted">غير منجَز</span>' : ''}${auditBadges}`;
-      tr.innerHTML = hasActions ? `
-        <td>${courseCell}</td>
-        <td>${escape(c.course_code||'')}</td>
-        <td class="text-center">${c.units||0}</td>
-        <td class="text-center">${(c.grade===null||c.grade===undefined)?'—':c.grade}</td>
-        <td class="text-center">
+      let actionsCell = '';
+      if (hasAdminActions) {
+        actionsCell = `
           <button class="btn btn-sm btn-outline-primary btn-inline-edit"
                   data-sem="${escape(sem)}"
                   data-course="${escape(c.course_name)}"
@@ -1008,8 +929,19 @@ function renderTranscript(data){
           </button>
           <button class="btn btn-sm btn-outline-danger btn-delete-course ms-1"
                   data-sem="${escape(sem)}"
-                  data-course="${escape(c.course_name)}">حذف</button>
-        </td>` : `
+                  data-course="${escape(c.course_name)}">حذف</button>`;
+      } else if (hasSupervisorDelete) {
+        actionsCell = `
+          <button class="btn btn-sm btn-outline-danger btn-delete-course-propose"
+                  data-sem="${escape(sem)}"
+                  data-course="${escape(c.course_name)}">حذف</button>`;
+      }
+      tr.innerHTML = hasActions ? `
+        <td>${courseCell}</td>
+        <td>${escape(c.course_code||'')}</td>
+        <td class="text-center">${c.units||0}</td>
+        <td class="text-center">${(c.grade===null||c.grade===undefined)?'—':c.grade}</td>
+        <td class="text-center">${actionsCell}</td>` : `
         <td>${courseCell}</td>
         <td>${escape(c.course_code||'')}</td>
         <td class="text-center">${c.units||0}</td>
@@ -1181,6 +1113,58 @@ function renderTranscript(data){
       btn.addEventListener('click', (ev)=>{
         const sem = ev.currentTarget.dataset.sem;
         openGradeEditor({ keepSemester: true, semester: sem, loadExisting: true });
+      });
+    });
+    document.querySelectorAll('.btn-delete-sem-propose').forEach(btn=>{
+      btn.addEventListener('click', async (ev)=>{
+        const sem = ev.currentTarget.dataset.sem;
+        if(!selectedStudent){ setMsg('اختر طالباً أولاً','warning'); return; }
+        if(!confirm(`حذف كل درجات الفصل "${sem}" لهذا الطالب؟ سيُشعَر رئيس القسم فوراً.`)) return;
+        const reason = promptCorrectionReason('سبب حذف درجات الفصل:');
+        if (reason === null) return;
+        const r = await fetchJSON('/grades/transcript_corrections/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            student_id: selectedStudent,
+            semester: sem,
+            scope: 'semester',
+            reason,
+          }),
+        });
+        if (r.ok) {
+          setMsg((r.json && r.json.message) ? r.json.message : 'تم حذف الفصل', 'success');
+          loadTranscript(selectedStudent);
+        } else {
+          setMsg((r.json && r.json.message) ? r.json.message : 'فشل حذف الفصل', 'danger');
+        }
+      });
+    });
+    document.querySelectorAll('.btn-delete-course-propose').forEach(btn=>{
+      btn.addEventListener('click', async (ev)=>{
+        const sem = ev.currentTarget.dataset.sem;
+        const course = ev.currentTarget.dataset.course;
+        if(!selectedStudent){ setMsg('اختر طالباً أولاً','warning'); return; }
+        if(!confirm(`حذف سجل المادة "${course}" في الفصل "${sem}"؟ سيُشعَر رئيس القسم فوراً.`)) return;
+        const reason = promptCorrectionReason('سبب حذف سجل المقرر:');
+        if (reason === null) return;
+        const r = await fetchJSON('/grades/transcript_corrections/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            student_id: selectedStudent,
+            semester: sem,
+            scope: 'course',
+            course_name: course,
+            reason,
+          }),
+        });
+        if (r.ok) {
+          setMsg((r.json && r.json.message) ? r.json.message : 'تم حذف السجل', 'success');
+          loadTranscript(selectedStudent);
+        } else {
+          setMsg((r.json && r.json.message) ? r.json.message : 'فشل حذف السجل', 'danger');
+        }
       });
     });
   }
@@ -1415,6 +1399,11 @@ async function openGradeEditor(opts){
   applyTransferFormFromStudent();
   const g = document.getElementById('gradeSemesterInput');
   const targetSem = (opts.semester || '').trim();
+  if ((opts.loadExisting || opts.keepSemester) && targetSem) {
+    EDITOR_SOURCE_SEMESTER = targetSem;
+  } else if (!opts.keepSemester) {
+    EDITOR_SOURCE_SEMESTER = '';
+  }
   if (targetSem) {
     if (g) g.value = targetSem;
     if (window.__gradeTermPicker) {
@@ -1442,6 +1431,9 @@ async function openGradeEditor(opts){
   }
 
   const semNow = readGradeSemesterLabel() || targetSem;
+  if ((opts.loadExisting || opts.keepSemester) && semNow && !EDITOR_SOURCE_SEMESTER) {
+    EDITOR_SOURCE_SEMESTER = semNow;
+  }
   await loadSemesterScopeSuggest(student, semNow);
   if (opts.loadExisting && semNow) {
     fillEditorFromTranscriptSemester(semNow);
@@ -1580,127 +1572,29 @@ const btnAddGrade = document.getElementById('btnAddGradeRow'); if(btnAddGrade) b
 const btnCloseEditor = document.getElementById('btnCloseEditor'); if(btnCloseEditor) btnCloseEditor.addEventListener('click', hideEditor);
 const btnAddCourse = document.getElementById('btnAddCourseRow'); if(btnAddCourse) btnAddCourse.addEventListener('click', ()=>{ const sel = document.getElementById('courseSelect'); if(!sel) return; const cname = sel.value; if(!cname) return; const course = COURSES.find(c=>c.course_name===cname) || {course_name:cname, course_code:'', units:0}; if(EDIT_ROWS.some(r=>r.course_name===course.course_name)) { setMsg('المقرر موجود بالفعل في قائمة التحرير','warning'); return; } EDIT_ROWS.push({course_name: course.course_name, course_code: course.course_code||'', units: Number(course.units)||0, grade: null}); renderEditorRows(); });
 
-const btnImportEl = document.getElementById('btnImportTranscript'); if(btnImportEl) btnImportEl.addEventListener('click', async ()=>{ const student = (document.getElementById('studentSelect')||{}).value; if(!student){ setMsg('اختر طالباً أولاً قبل الاستيراد','warning'); return; } const semesterVal = (document.getElementById('importSemester')||{}).value.trim(); const yearVal = (document.getElementById('importYear')||{}).value.trim(); const fileInput = document.getElementById('importFile'); const file = fileInput && fileInput.files ? fileInput.files[0] : null; if(!file){ setMsg('اختر ملف Excel يحتوي على كشف الدرجات','warning'); return; } const nameVal = (document.getElementById('importStudentName')||{}).value.trim(); const fd = new FormData(); fd.append('student_id', student); if(semesterVal) fd.append('semester', semesterVal); if(yearVal) fd.append('year', yearVal); if(nameVal) fd.append('student_name', nameVal); fd.append('changed_by', 'transcript-import-ui'); fd.append('file', file); btnImportEl.disabled = true; setMsg('جاري استيراد كشف الدرجات...', 'info'); try{ const resp = await fetch('/grades/import/transcript', { method:'POST', body: fd }); const data = await resp.json().catch(()=>null); if(resp.ok){ setMsg((data && data.message) ? data.message : 'تم استيراد كشف الدرجات بنجاح', 'success'); if(fileInput){ fileInput.value = ''; } if(data && data.semester){ const gsi = document.getElementById('gradeSemesterInput'); if(gsi) gsi.value = data.semester; } if(nameVal){ const st = STUDENTS.find(s=>s.student_id===student); if(st){ st.student_name = nameVal; } } syncImportFields(); loadTranscript(student); } else { setMsg((data && data.message) ? data.message : resp.statusText || 'فشل الاستيراد', 'danger'); } } catch(err){ console.error(err); setMsg('حدث خطأ أثناء الاتصال بالخادم أثناء الاستيراد','danger'); } finally { btnImportEl.disabled = false; } });
-
-const btnImportResetEl = document.getElementById('btnImportReset'); if(btnImportResetEl) btnImportResetEl.addEventListener('click', ()=>{ if (window.__importTermPicker) window.__importTermPicker.setValue('', ''); else { const is = document.getElementById('importSemester'); if(is) is.value=''; const iy = document.getElementById('importYear'); if(iy) iy.value=''; } const fileInput = document.getElementById('importFile'); if(fileInput){ fileInput.value = ''; } syncImportFields(); });
-
-const btnImportSemesterEl = document.getElementById('btnImportSemester');
-if (btnImportSemesterEl) {
-  btnImportSemesterEl.addEventListener('click', async ()=>{
-    const semesterVal = (document.getElementById('importSemester')||{}).value.trim();
-    const yearVal = (document.getElementById('importYear')||{}).value.trim();
-    if(!semesterVal && !yearVal){
-      setMsg('أدخل الفصل الدراسي أو السنة قبل استيراد نتيجة الفصل','warning');
-      return;
-    }
-    const fileInput = document.getElementById('importSemesterFile');
-    const file = fileInput && fileInput.files ? fileInput.files[0] : null;
-    if(!file){
-      setMsg('اختر ملف Excel يحتوي على نتيجة الفصل كاملة','warning');
-      return;
-    }
-
-    // خطوة أولى: Preview (لا يتم فيها تعديل قاعدة البيانات)
-    const fdPreview = new FormData();
-    if(semesterVal) fdPreview.append('semester', semesterVal);
-    if(yearVal) fdPreview.append('year', yearVal);
-    fdPreview.append('changed_by', 'semester-import-ui');
-    fdPreview.append('file', file);
-    fdPreview.append('preview', '1');
-
-    btnImportSemesterEl.disabled = true;
-    setMsg('جاري تحليل ملف نتيجة الفصل (Preview)...','info');
-    try {
-      const respPrev = await fetch('/grades/import/semester', { method:'POST', body: fdPreview });
-      const dataPrev = await respPrev.json().catch(()=>null);
-      if(!respPrev.ok || !dataPrev || dataPrev.status !== 'ok' || dataPrev.mode !== 'preview'){
-        setMsg((dataPrev && dataPrev.message) ? dataPrev.message : respPrev.statusText || 'فشل تحليل الملف في وضع المعاينة','danger');
-        return;
-      }
-
-      const semLabel = dataPrev.semester || (semesterVal + (yearVal ? ' ' + yearVal : ''));
-      const msg = `سيتم استيراد نتيجة الفصل "${semLabel}" لعدد ${dataPrev.students||0} طالب/ة، `
-                + `وعدد مقررات ${dataPrev.courses||0}، وعدد سجلات درجات ${dataPrev.records||0}.`
-                + (dataPrev.invalid_grades && dataPrev.invalid_grades.length
-                   ? `\nتحذير: هناك ${dataPrev.invalid_grades.length} درجة خارج النطاق 0-100 سيتم رفضها.` : '');
-
-      if(!confirm(msg + '\nهل تريد المتابعة بتطبيق الاستيراد فعلياً؟')){
-        setMsg('تم إلغاء استيراد نتيجة الفصل بعد المعاينة.','info');
-        return;
-      }
-
-      // خطوة ثانية: تطبيق الاستيراد الفعلي
-      const fdApply = new FormData();
-      if(semesterVal) fdApply.append('semester', semesterVal);
-      if(yearVal) fdApply.append('year', yearVal);
-      fdApply.append('changed_by', 'semester-import-ui');
-      fdApply.append('file', file);
-
-      setMsg('جاري استيراد نتيجة الفصل...','info');
-      const previousStudent = (document.getElementById('studentSelect')||{}).value;
-      const resp = await fetch('/grades/import/semester', { method:'POST', body: fdApply });
-      const data = await resp.json().catch(()=>null);
-      if(resp.ok){
-        setMsg((data && data.message) ? data.message : 'تم استيراد نتيجة الفصل بنجاح','success');
-        if(fileInput){ fileInput.value = ''; }
-        if(data && data.semester){
-          const gsi = document.getElementById('gradeSemesterInput');
-          if(gsi) gsi.value = data.semester;
-        }
-        await loadStudents();
-        await loadCourses();
-        if(previousStudent){
-          const selectEl = document.getElementById('studentSelect');
-          if(selectEl){
-            selectEl.value = previousStudent;
-            syncImportFields();
-            if(selectEl.value === previousStudent){
-              loadTranscript(previousStudent);
-            }
-          } else {
-            syncImportFields();
-          }
-        } else {
-          syncImportFields();
-        }
-      } else {
-        setMsg((data && data.message) ? data.message : resp.statusText || 'فشل استيراد نتيجة الفصل','danger');
-      }
-    } catch(err){
-      console.error(err);
-      setMsg('حدث خطأ أثناء الاتصال بالخادم أثناء استيراد نتيجة الفصل','danger');
-    } finally {
-      btnImportSemesterEl.disabled = false;
-    }
-  });
-}
-
-// فتح محرر الدرجات لإدخال نتيجة فصل يدوياً لطالب محدد
-const btnOpenManualSemester = document.getElementById('btnOpenManualSemester');
-if (btnOpenManualSemester) {
-  btnOpenManualSemester.addEventListener('click', ()=>{
-    if (CURRENT_ROLE === 'student') {
-      setMsg('لا تملك صلاحية إدخال أو تعديل الدرجات. هذه الخيارات خاصة بالإداريين.', 'warning');
-      return;
-    }
-    openGradeEditor({});
-  });
-}
-
-const btnImportSemesterResetEl = document.getElementById('btnImportSemesterReset'); if(btnImportSemesterResetEl) btnImportSemesterResetEl.addEventListener('click', ()=>{ const fileInput = document.getElementById('importSemesterFile'); if(fileInput){ fileInput.value = ''; } });
-
-// تحميل قوالب الاستيراد (كشف طالب / نتيجة فصل)
-const btnDownloadTranscriptTemplate = document.getElementById('btnDownloadTranscriptTemplate');
-if (btnDownloadTranscriptTemplate) {
-  btnDownloadTranscriptTemplate.addEventListener('click', ()=>{
-    window.open('/grades/template/transcript', '_blank');
-  });
-}
-const btnDownloadSemesterTemplate = document.getElementById('btnDownloadSemesterTemplate');
-if (btnDownloadSemesterTemplate) {
-  btnDownloadSemesterTemplate.addEventListener('click', ()=>{
-    window.open('/grades/template/semester', '_blank');
-  });
+function formatSaveChangesSummary(changes){
+  if (!changes || typeof changes !== 'object') return '';
+  const parts = [];
+  const ren = changes.semester_renamed;
+  if (ren && ren.from && ren.to && ren.from !== ren.to) {
+    parts.push('نُقل الفصل من «' + ren.from + '» إلى «' + ren.to + '»');
+  }
+  const sc = changes.scope_changed;
+  if (sc && (sc.from || sc.to) && sc.from !== sc.to) {
+    parts.push('التصنيف: ' + (sc.from || '—') + ' → ' + (sc.to || '—'));
+  }
+  const added = Array.isArray(changes.courses_added) ? changes.courses_added : [];
+  if (added.length === 1) parts.push('أُضيف مقرر: ' + added[0]);
+  else if (added.length > 1) parts.push('أُضيفت ' + added.length + ' مقررات');
+  const gch = Array.isArray(changes.grades_changed) ? changes.grades_changed : [];
+  if (gch.length === 1) {
+    const g0 = gch[0] || {};
+    parts.push('عُدّلت درجة «' + (g0.course_name || '') + '»: ' +
+      (g0.old == null ? '—' : g0.old) + ' → ' + (g0.new == null ? '—' : g0.new));
+  } else if (gch.length > 1) {
+    parts.push('عُدّلت ' + gch.length + ' درجات');
+  }
+  return parts.join(' · ');
 }
 
 /* save grades (batch) — رئيس القسم: حفظ مباشر | مشرف: اعتماد فوري + إشعار */
@@ -1755,6 +1649,7 @@ async function saveOrProposeGrades(){
   if (btnIn) btnIn.disabled = true;
   const propose = CAN_PROPOSE_TRANSCRIPT && !CAN_MANAGE_TRANSCRIPT;
   setMsg(propose ? 'جاري اعتماد وتطبيق الدرجات…' : 'جاري حفظ الدرجات...', 'info');
+  const sourceSem = String(EDITOR_SOURCE_SEMESTER || '').trim();
   const url = propose ? '/grades/transcript_corrections' : '/save_grades';
   const resp = await fetch(url, {
     method: 'POST',
@@ -1763,6 +1658,7 @@ async function saveOrProposeGrades(){
     body: JSON.stringify({
       student_id: student,
       semester: sem,
+      source_semester: sourceSem || undefined,
       grades,
       reason,
       is_equated_semester: transferPayload.is_equated_semester,
@@ -1774,9 +1670,12 @@ async function saveOrProposeGrades(){
   if (btn) btn.disabled = false;
   if (btnIn) btnIn.disabled = false;
   if (resp.ok) {
-    setMsg(propose
-      ? ('✅ ' + ((j && j.message) || 'تم الاعتماد وتطبيق الدرجات وإشعار رئيس القسم'))
-      : '✅ تم حفظ الدرجات', 'success');
+    const baseMsg = propose
+      ? ((j && j.message) || 'تم الاعتماد وتطبيق الدرجات وإشعار رئيس القسم')
+      : ((j && j.message) || 'تم حفظ الدرجات');
+    const summary = formatSaveChangesSummary(j && j.changes);
+    setMsg('✅ ' + baseMsg + (summary ? (' — ' + summary) : ''), 'success');
+    EDITOR_SOURCE_SEMESTER = sem;
     const scopePayload = readSemesterScopePayload();
     if (!CURRENT_TRANSCRIPT) CURRENT_TRANSCRIPT = {};
     if (!CURRENT_TRANSCRIPT.semester_scopes) CURRENT_TRANSCRIPT.semester_scopes = {};
@@ -1785,6 +1684,9 @@ async function saveOrProposeGrades(){
       : (((scopePayload.department_label || '').trim()
         + (scopePayload.group_code ? (' · شعبة ' + scopePayload.group_code) : ''))
         || 'قسم تخصص');
+    if (sourceSem && sourceSem !== sem && CURRENT_TRANSCRIPT.semester_scopes[sourceSem]) {
+      delete CURRENT_TRANSCRIPT.semester_scopes[sourceSem];
+    }
     CURRENT_TRANSCRIPT.semester_scopes[sem] = {
       scope_kind: scopePayload.scope_kind,
       department_id: scopePayload.department_id,
@@ -1859,7 +1761,7 @@ if(btnExportText){
 
 /* filters and startup */
 const btnReload = document.getElementById('btnReload'); if(btnReload) btnReload.addEventListener('click', ()=> loadTranscript((document.getElementById('studentSelect')||{}).value));
-function handleStudentChange(){ syncImportFields(); const sid = (document.getElementById('studentSelect')||{}).value; if(sid){ loadTranscript(sid); } else { CURRENT_TRANSCRIPT = null; const semDiv = document.getElementById('semestersList'); if(semDiv) semDiv.innerHTML=''; const summaryEl = document.getElementById('summary'); if(summaryEl) summaryEl.textContent=''; const cumEl = document.getElementById('cumulativeGPA'); if(cumEl) cumEl.textContent='-'; const completedEl = document.getElementById('completedUnits'); if(completedEl) completedEl.textContent='-'; const planWrap = document.getElementById('graduationPlanWrap'); if(planWrap) planWrap.style.display = 'none'; const joinWrap = document.getElementById('joinSemesterWrap'); if(joinWrap) joinWrap.style.display = 'none'; const transferWrap = document.getElementById('transferBadgeWrap'); if(transferWrap) transferWrap.style.display = 'none'; loadWeeklySchedule(''); } }
+function handleStudentChange(){ const sid = (document.getElementById('studentSelect')||{}).value; if(sid){ loadTranscript(sid); } else { CURRENT_TRANSCRIPT = null; const semDiv = document.getElementById('semestersList'); if(semDiv) semDiv.innerHTML=''; const summaryEl = document.getElementById('summary'); if(summaryEl) summaryEl.textContent=''; const cumEl = document.getElementById('cumulativeGPA'); if(cumEl) cumEl.textContent='-'; const completedEl = document.getElementById('completedUnits'); if(completedEl) completedEl.textContent='-'; const planWrap = document.getElementById('graduationPlanWrap'); if(planWrap) planWrap.style.display = 'none'; const joinWrap = document.getElementById('joinSemesterWrap'); if(joinWrap) joinWrap.style.display = 'none'; const transferWrap = document.getElementById('transferBadgeWrap'); if(transferWrap) transferWrap.style.display = 'none'; loadWeeklySchedule(''); } }
 const studentSelect = document.getElementById('studentSelect'); if(studentSelect) studentSelect.addEventListener('change', handleStudentChange);
 const semesterFilter = document.getElementById('semesterFilter'); if(semesterFilter) semesterFilter.addEventListener('change', ()=>{ const f = (document.getElementById('semesterFilter')||{}).value; if(!CURRENT_TRANSCRIPT) return; if(!f) renderTranscript(CURRENT_TRANSCRIPT); else { const filtered = { transcript: {}, semester_gpas: {}, cumulative_gpa: CURRENT_TRANSCRIPT.cumulative_gpa || 0, completed_units: CURRENT_TRANSCRIPT.completed_units }; if(CURRENT_TRANSCRIPT.transcript && CURRENT_TRANSCRIPT.transcript[f]) filtered.transcript[f]=CURRENT_TRANSCRIPT.transcript[f]; if(CURRENT_TRANSCRIPT.semester_gpas && CURRENT_TRANSCRIPT.semester_gpas[f]) filtered.semester_gpas[f]=CURRENT_TRANSCRIPT.semester_gpas[f]; renderTranscript(filtered); } });
 
@@ -1877,13 +1779,18 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
       window.CURRENT_USERNAME = auth.json.user || null;
       const _caps = auth.json.capabilities;
       CAN_MANAGE_TRANSCRIPT = (_caps && _caps.v >= 1)
-        ? !!_caps.can_manage_transcript_admin
+        ? (window.CapabilityUI
+          ? window.CapabilityUI.has(_caps, 'can_manage_transcript_admin')
+          : _caps.can_manage_transcript_admin === true)
         : ['admin', 'admin_main', 'head_of_department'].includes(CURRENT_ROLE || '');
+      if (window.CapabilityUI && window.CapabilityUI.isLeadershipOpsMode(CURRENT_ROLE, auth.json.active_mode)) {
+        CAN_MANAGE_TRANSCRIPT = window.CapabilityUI.has(_caps, 'can_manage_transcript_admin');
+      }
       REQUIRE_TRANSCRIPT_REASON = CAN_MANAGE_TRANSCRIPT && CURRENT_ROLE === 'head_of_department';
       CAN_PROPOSE_TRANSCRIPT = IS_SUPERVISOR_EFFECTIVE && !CAN_MANAGE_TRANSCRIPT;
     } else {
-      CAN_MANAGE_TRANSCRIPT = ['admin', 'admin_main', 'head_of_department'].includes(CURRENT_ROLE || '');
-      REQUIRE_TRANSCRIPT_REASON = CAN_MANAGE_TRANSCRIPT && CURRENT_ROLE === 'head_of_department';
+      CAN_MANAGE_TRANSCRIPT = false;
+      REQUIRE_TRANSCRIPT_REASON = false;
       CAN_PROPOSE_TRANSCRIPT = false;
     }
   } catch(e){
@@ -1896,14 +1803,6 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
   await loadCurrentTermLabel();
 
   if (window.TermYearPicker && (CAN_MANAGE_TRANSCRIPT || CAN_PROPOSE_TRANSCRIPT)) {
-    try {
-      window.__importTermPicker = await window.TermYearPicker.mount({
-        rootId: 'importTermPicker',
-        seasonId: 'importSemester',
-        yearId: 'importYear',
-        allowEmpty: true,
-      });
-    } catch (e) { console.warn(e); }
     try {
       const proposeOnly = CAN_PROPOSE_TRANSCRIPT && !CAN_MANAGE_TRANSCRIPT;
       window.__gradeTermPicker = await window.TermYearPicker.mount({
@@ -1969,17 +1868,8 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
         toolbarAdmin.classList.add('transcript-priv-pending');
       }
     }
-    const importCard = document.getElementById('importCard');
-    if (importCard) {
-      importCard.style.display = 'none';
-      importCard.setAttribute('hidden', '');
-      importCard.classList.add('d-none', 'transcript-priv-pending');
-      importCard.setAttribute('aria-hidden', 'true');
-      importCard.innerHTML = '';
-    }
   } else {
     revealTranscriptPrivilege(document.getElementById('toolbarAdmin'));
-    revealTranscriptPrivilege(document.getElementById('importCard'));
     const addBtn = document.getElementById('btnAddGradeRow');
     if (addBtn) addBtn.textContent = 'إدخال نتيجة فصل يدوياً';
     if (REQUIRE_TRANSCRIPT_REASON) {
@@ -2035,7 +1925,6 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
       sel.innerHTML = `<option value="${sid}">${sid}</option>`;
       sel.value = sid;
       sel.disabled = true;
-      syncImportFields();
       loadTranscript(sid);
       return;
     }
@@ -2064,7 +1953,6 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
 
   const pickStudent = (sid) => {
     if (sel) sel.value = sid;
-    syncImportFields();
     // لا تعِد جلب الكشف إن كانت بيانات SSR لنفس الطالب جاهزة
     if (initialSid && sid === initialSid && INITIAL_TRANSCRIPT && INITIAL_TRANSCRIPT.transcript) {
       showCachedTranscript(INITIAL_TRANSCRIPT, sid);
@@ -2077,8 +1965,6 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
     pickStudent(preferred);
   } else if (STUDENTS.length>0){
     pickStudent(STUDENTS[0].student_id);
-  } else {
-    syncImportFields();
   }
 })();
 </script>

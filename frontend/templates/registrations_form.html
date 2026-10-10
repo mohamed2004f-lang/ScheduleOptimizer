@@ -949,9 +949,11 @@ function renderStudents(list){
       right.appendChild(btnDownloadActual);
 
       if (!REG_VIEW_ONLY && canDoBulkRegistrationAdmin()) {
-      const btnMigrate = el('button','btn btn-sm btn-warning','ترحيل إلى كشف الدرجات');
-      btnMigrate.addEventListener('click', ()=> migrateStudentRegistrations(s));
-      right.appendChild(btnMigrate);
+      if (window.CAN_MIGRATE_REGS_TO_TRANSCRIPT) {
+        const btnMigrate = el('button','btn btn-sm btn-warning','ترحيل إلى كشف الدرجات');
+        btnMigrate.addEventListener('click', ()=> migrateStudentRegistrations(s));
+        right.appendChild(btnMigrate);
+      }
 
       const btnDelete = el('button','btn btn-sm btn-danger','حذف');
       btnDelete.addEventListener('click', ()=> deleteAllRegistrations(s));
@@ -1777,14 +1779,22 @@ function applyRegViewOnlyUi(){
       CURRENT_USER_ID = auth.json.user || null;
       const caps = auth.json.capabilities || {};
       IS_SUPERVISOR_EFFECTIVE = !!caps.is_supervisor_effective || String(CURRENT_ROLE || '').toLowerCase() === 'supervisor';
-      const baseViewOnly = !!caps.students_data_view_only || caps.can_manage_students === false;
+      const canEditRegs = window.CapabilityUI
+        ? window.CapabilityUI.has(caps, 'can_manage_registrations_edit')
+        : caps.can_manage_registrations_edit === true;
+      const baseViewOnly = !!caps.students_data_view_only || !canEditRegs
+        || (window.CapabilityUI && window.CapabilityUI.isLeadershipOpsMode(CURRENT_ROLE, auth.json.active_mode) && !canEditRegs);
       // المشرف يعدّل تسجيلات طلبته رغم view_only العام
       REG_SUPERVISOR_LIMITED = IS_SUPERVISOR_EFFECTIVE && baseViewOnly;
       REG_VIEW_ONLY = baseViewOnly && !IS_SUPERVISOR_EFFECTIVE;
+      window.CAN_MIGRATE_REGS_TO_TRANSCRIPT = window.CapabilityUI
+        ? window.CapabilityUI.has(caps, 'can_migrate_registrations_to_transcript')
+        : caps.can_migrate_registrations_to_transcript === true;
     }
   } catch(e){
     CURRENT_ROLE = null;
     CURRENT_USER_ID = null;
+    REG_VIEW_ONLY = true;
   }
 
   if (CURRENT_ROLE === 'student'){

@@ -12,11 +12,13 @@ from backend.core.department_scope_policy import (
     assert_student_in_actor_scope,
     courses_department_scope_filter,
 )
-from backend.database.database import fetch_table_columns, is_postgresql
+from backend.database.database import fetch_table_columns, is_postgresql, table_exists
 from backend.services.course_workflow import notify_department_hods, notify_instructor
 from backend.services.grades import (
     _audit_changed_by,
+    _build_grades_save_changes,
     _current_user_name,
+    _move_student_semester,
     _require_post_publish_reason,
     _session_role,
     _upsert_semester_scope,
@@ -249,6 +251,8 @@ def courses_for_student():
             rows = conn.cursor().execute(sel, tuple(params)).fetchall()
             seen: set[str] = set()
             out: list[dict[str, Any]] = []
+            from backend.core.college_shared_catalog import resolve_course_for_department
+
             for r in rows or []:
                 cname = (r[0] or "").strip() if r else ""
                 if not cname:
@@ -257,11 +261,23 @@ def courses_for_student():
                 if key in seen:
                     continue
                 seen.add(key)
+                base_code = ((r[1] or "") if r else "")
+                try:
+                    base_units = int(r[2]) if r and len(r) > 2 and r[2] is not None else 0
+                except (TypeError, ValueError):
+                    base_units = 0
+                resolved = resolve_course_for_department(
+                    conn,
+                    cname,
+                    dept_id,
+                    base_code=base_code,
+                    base_units=base_units,
+                )
                 out.append(
                     {
                         "course_name": cname,
-                        "course_code": (r[1] or "") if r else "",
-                        "units": r[2] if r and len(r) > 2 else 0,
+                        "course_code": resolved.get("course_code") or base_code,
+                        "units": resolved.get("units") if resolved.get("units") is not None else base_units,
                     }
                 )
             return jsonify(out), 200
@@ -285,6 +301,7 @@ def create_transcript_correction():
     data = request.get_json(force=True) or {}
     sid = str(data.get("student_id") or "").strip()
     semester = str(data.get("semester") or "").strip()
+    source_semester = str(data.get("source_semester") or "").strip()
     reason_raw = data.get("reason")
     is_equated = bool(data.get("is_equated_semester") or data.get("is_equated"))
     transfer = data.get("transfer") if isinstance(data.get("transfer"), dict) else None
@@ -314,23 +331,38 @@ def create_transcript_correction():
                     "is_equated_semester": is_equated,
                     "transfer": transfer,
                     "semester_scope": semester_scope,
+                    "source_semester": source_semester or None,
                 },
                 ensure_ascii=False,
             )
             cur = conn.cursor()
             # إلغاء طلب معلق سابق لنفس الطالب/الفصل من نفس المشرف (تراكم قديم)
-            cur.execute(
-                """
-                UPDATE transcript_correction_requests
-                SET status = 'rejected', hod_note = ?, reviewed_at = ?, reviewed_by = ?
-                WHERE student_id = ? AND semester = ? AND instructor_id = ? AND status = 'pending'
-                """,
-                ("استُبدل باعتماد أحدث من المشرف", now, actor, sid, semester, iid),
-            )
+            for sem_key in {semester, source_semester} - {""}:
+                cur.execute(
+                    """
+                    UPDATE transcript_correction_requests
+                    SET status = 'rejected', hod_note = ?, reviewed_at = ?, reviewed_by = ?
+                    WHERE student_id = ? AND semester = ? AND instructor_id = ? AND status = 'pending'
+                    """,
+                    ("استُبدل باعتماد أحدث من المشرف", now, actor, sid, sem_key, iid),
+                )
             changed_by = _audit_changed_by(
                 reason=f"اعتماد مشرف: {reason}"[:400],
                 kind="supervisor_finalize",
             )
+            rename_info = {"moved": False, "from": source_semester, "to": semester}
+            if source_semester and source_semester != semester:
+                rename_info = _move_student_semester(conn, sid, source_semester, semester)
+            changes = _build_grades_save_changes(
+                conn,
+                sid,
+                semester,
+                grades,
+                semester_scope=semester_scope,
+                rename_info=rename_info,
+            )
+            if semester_scope:
+                _upsert_semester_scope(conn, sid, semester, semester_scope, actor=actor)
             applied = apply_grades_batch(
                 conn,
                 sid,
@@ -340,8 +372,6 @@ def create_transcript_correction():
                 is_equated=is_equated,
                 transfer=transfer,
             )
-            if semester_scope:
-                _upsert_semester_scope(conn, sid, semester, semester_scope, actor=actor)
             if is_postgresql():
                 row_ins = cur.execute(
                     """
@@ -419,6 +449,7 @@ def create_transcript_correction():
                     "message": f"تم اعتماد وتطبيق {applied} درجة وإشعار رئيس القسم",
                     "id": req_id,
                     "applied": applied,
+                    "changes": changes,
                 }
             ), 200
         except PermissionError as e:
@@ -430,6 +461,243 @@ def create_transcript_correction():
         except Exception as e:
             conn.rollback()
             current_app.logger.exception("create_transcript_correction failed")
+            return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@transcript_corrections_bp.route("/transcript_corrections/delete", methods=["POST"])
+@login_required
+def supervisor_delete_transcript_grades():
+    """
+    مشرف: حذف مقرر أو فصل كامل من كشف طالب مسند (فصول سابقة فقط).
+    تطبيق فوري + تدقيق + إشعار رئيس القسم.
+    body: { student_id, semester, scope: course|semester, course_name?, reason }
+    """
+    if not _is_supervisor_actor():
+        return jsonify({"status": "error", "message": "متاح للمشرف الأكاديمي فقط"}), 403
+    iid = _session_instructor_id()
+    if not iid:
+        return jsonify({"status": "error", "message": "رقم عضو هيئة التدريس غير مرتبط بالحساب"}), 403
+
+    data = request.get_json(force=True) or {}
+    sid = str(data.get("student_id") or "").strip()
+    semester = str(data.get("semester") or "").strip()
+    scope = str(data.get("scope") or data.get("delete_scope") or "").strip().lower()
+    course_name = str(data.get("course_name") or "").strip()
+    reason_raw = data.get("reason")
+
+    if scope not in ("course", "semester"):
+        return jsonify({"status": "error", "message": "scope يجب أن يكون course أو semester"}), 400
+    if not sid or not semester:
+        return jsonify({"status": "error", "message": "student_id و semester مطلوبة"}), 400
+    if scope == "course" and not course_name:
+        return jsonify({"status": "error", "message": "course_name مطلوب عند حذف مقرر"}), 400
+
+    try:
+        reason = _require_post_publish_reason(reason_raw, required=True)
+    except ValueError as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+    with get_connection() as conn:
+        try:
+            _ensure_table(conn)
+            _assert_advisee(conn, sid, iid)
+            _assert_previous_term(conn, semester)
+            dept_id = _student_department_id(conn, sid)
+            actor = _current_user_name()
+            now = _now_iso()
+            cur = conn.cursor()
+            changed_by = _audit_changed_by(
+                reason=f"حذف مشرف: {reason}"[:400],
+                kind="supervisor_delete",
+            )
+            now_iso = datetime.datetime.utcnow().isoformat()
+            has_audit = table_exists(conn, "grade_audit")
+            if not has_audit and not is_postgresql():
+                try:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS grade_audit (
+                            audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            student_id TEXT NOT NULL,
+                            semester TEXT,
+                            course_name TEXT,
+                            old_grade REAL,
+                            new_grade REAL,
+                            changed_by TEXT DEFAULT 'system',
+                            ts TEXT DEFAULT CURRENT_TIMESTAMP
+                        )
+                        """
+                    )
+                    has_audit = True
+                except Exception:
+                    has_audit = False
+
+            def _audit_delete_row(cname: str, old_f: float | None) -> None:
+                if not has_audit:
+                    return
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO grade_audit
+                            (student_id, semester, course_name, old_grade, new_grade, changed_by, ts)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (sid, semester, cname, old_f, None, changed_by, now_iso),
+                    )
+                except Exception:
+                    pass
+
+            if scope == "course":
+                row = cur.execute(
+                    """
+                    SELECT grade FROM grades
+                    WHERE student_id = ? AND semester = ? AND course_name = ?
+                    LIMIT 1
+                    """,
+                    (sid, semester, course_name),
+                ).fetchone()
+                if not row:
+                    return jsonify(
+                        {"status": "ok", "message": "لا يوجد سجل لهذه المادة", "deleted": 0}
+                    ), 200
+                old_grade = row[0] if not hasattr(row, "keys") else row["grade"]
+                try:
+                    old_f = float(old_grade) if old_grade is not None else None
+                except (TypeError, ValueError):
+                    old_f = None
+                _audit_delete_row(course_name, old_f)
+                cur.execute(
+                    "DELETE FROM grades WHERE student_id = ? AND semester = ? AND course_name = ?",
+                    (sid, semester, course_name),
+                )
+                deleted = 1
+                notify_title = "إشعار: المشرف حذف مقرراً من كشف طالب"
+                notify_body = (
+                    f"المشرف {actor} حذف المقرر «{course_name}» للطالب {sid} — فصل {semester}. "
+                    f"السبب: {reason}"
+                )
+                payload_obj = {
+                    "action": "delete_course",
+                    "course_name": course_name,
+                    "old_grade": old_f,
+                    "grades": [],
+                }
+            else:
+                rows = cur.execute(
+                    "SELECT course_name, grade FROM grades WHERE student_id = ? AND semester = ?",
+                    (sid, semester),
+                ).fetchall()
+                if not rows:
+                    return jsonify(
+                        {"status": "ok", "message": "لا توجد درجات للحذف", "deleted": 0}
+                    ), 200
+                deleted_courses: list[dict[str, Any]] = []
+                for r in rows:
+                    if hasattr(r, "keys"):
+                        cname = str(r["course_name"] or "").strip()
+                        oldg = r["grade"]
+                    else:
+                        cname = str(r[0] or "").strip()
+                        oldg = r[1] if len(r) > 1 else None
+                    if not cname:
+                        continue
+                    try:
+                        old_f = float(oldg) if oldg is not None else None
+                    except (TypeError, ValueError):
+                        old_f = None
+                    _audit_delete_row(cname, old_f)
+                    deleted_courses.append({"course_name": cname, "old_grade": old_f})
+                cur.execute(
+                    "DELETE FROM grades WHERE student_id = ? AND semester = ?",
+                    (sid, semester),
+                )
+                deleted = len(deleted_courses)
+                notify_title = "إشعار: المشرف حذف فصلاً من كشف طالب"
+                notify_body = (
+                    f"المشرف {actor} حذف فصل {semester} للطالب {sid} ({deleted} مقرر). "
+                    f"السبب: {reason}"
+                )
+                payload_obj = {
+                    "action": "delete_semester",
+                    "deleted_courses": deleted_courses,
+                    "grades": [],
+                }
+
+            payload = json.dumps(payload_obj, ensure_ascii=False)
+            hod_note = "حذف تلقائي من المشرف الأكاديمي"
+            if is_postgresql():
+                row_ins = cur.execute(
+                    """
+                    INSERT INTO transcript_correction_requests (
+                        student_id, semester, payload_json, status, reason,
+                        submitted_by, instructor_id, department_id,
+                        created_at, submitted_at, reviewed_at, reviewed_by, hod_note
+                    ) VALUES (?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    RETURNING id
+                    """,
+                    (
+                        sid, semester, payload, reason, actor, iid, dept_id,
+                        now, now, now, actor, hod_note,
+                    ),
+                ).fetchone()
+                req_id = int(row_ins[0]) if row_ins else None
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO transcript_correction_requests (
+                        student_id, semester, payload_json, status, reason,
+                        submitted_by, instructor_id, department_id,
+                        created_at, submitted_at, reviewed_at, reviewed_by, hod_note
+                    ) VALUES (?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        sid, semester, payload, reason, actor, iid, dept_id,
+                        now, now, now, actor, hod_note,
+                    ),
+                )
+                req_id = int(cur.lastrowid or 0) or None
+            conn.commit()
+
+            try:
+                notify_department_hods(
+                    conn, dept_id, title=notify_title, body=notify_body
+                )
+            except Exception:
+                current_app.logger.exception("notify hods for supervisor delete failed")
+            try:
+                log_activity(
+                    action="transcript_correction_delete",
+                    details=(
+                        f"id={req_id}; scope={scope}; student_id={sid}; "
+                        f"semester={semester}; course={course_name}; deleted={deleted}"
+                    ),
+                )
+            except Exception:
+                pass
+
+            msg = (
+                f"تم حذف سجل المقرر {course_name} وإشعار رئيس القسم"
+                if scope == "course"
+                else f"تم حذف {deleted} سجل(سجلات) للفصل {semester} وإشعار رئيس القسم"
+            )
+            return jsonify(
+                {
+                    "status": "ok",
+                    "message": msg,
+                    "id": req_id,
+                    "deleted": deleted,
+                    "scope": scope,
+                }
+            ), 200
+        except PermissionError as e:
+            conn.rollback()
+            return jsonify({"status": "error", "message": str(e)}), 403
+        except ValueError as e:
+            conn.rollback()
+            return jsonify({"status": "error", "message": str(e)}), 400
+        except Exception as e:
+            conn.rollback()
+            current_app.logger.exception("supervisor_delete_transcript_grades failed")
             return jsonify({"status": "error", "message": str(e)}), 500
 
 

@@ -225,17 +225,30 @@ def admin_department_scope_ui_allowed(
 def students_registry_view_only() -> bool:
     """
     عرض قوائم الطلبة والتسجيلات والجداول دون تعديل.
-    يشمل: أستاذ/مشرف، عميد في وضع القيادة، رئيس قسم في وضع مشرف.
+    يشمل: أستاذ/مشرف، عميد/وكيل في وضع القيادة (ما لم يُمنَح can_manage_students)،
+    ورئيس قسم في وضع مشرف.
     """
     role = _normalize_role((session.get("user_role") or "").strip())
     if role in ("instructor", "supervisor"):
         return True
+
+    def _leadership_view_only(default_mode: str, leadership_modes: tuple[str, ...]) -> bool:
+        am = (session.get(SESSION_ACTIVE_MODE) or default_mode).strip().lower()
+        if am not in leadership_modes:
+            return False
+        try:
+            from backend.core.capability_gates import session_has_capability
+
+            if session_has_capability("can_manage_students"):
+                return False
+        except Exception:
+            pass
+        return True
+
     if role == "college_dean":
-        am = (session.get(SESSION_ACTIVE_MODE) or "dean").strip().lower()
-        return am in ("", "dean")
+        return _leadership_view_only("dean", ("", "dean"))
     if role == "academic_vice_dean":
-        am = (session.get(SESSION_ACTIVE_MODE) or "vice_dean").strip().lower()
-        return am in ("", "vice_dean", "dean")
+        return _leadership_view_only("vice_dean", ("", "vice_dean", "dean"))
     if current_supervisor_effective() and role not in ("admin", "admin_main", "system_admin"):
         return True
     return False

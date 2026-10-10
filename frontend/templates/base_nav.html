@@ -155,7 +155,7 @@
 </style>
 <script nonce="{{ csp_nonce }}" src="/static/js/nav-shell-pending.js?v=20260816" data-nav-shell="supervisor"></script>
 {% endif %}
-<link rel="stylesheet" href="/static/styles.css?v=20260912b">
+<link rel="stylesheet" href="/static/styles.css?v=20261010a">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
@@ -222,7 +222,8 @@
 </script>
 <meta name="show-dev-hints" content="{{ '1' if show_dev_hints else '0' }}">
 <script nonce="{{ csp_nonce }}" src="/static/js/common.js?v=20260817"></script>
-<script nonce="{{ csp_nonce }}" src="/static/js/schedule-stage-grid.js?v=20260921d"></script>
+<script nonce="{{ csp_nonce }}" src="/static/js/capability-ui.js?v=20261010caps"></script>
+<script nonce="{{ csp_nonce }}" src="/static/js/schedule-stage-grid.js?v=20261010a"></script>
 <script nonce="{{ csp_nonce }}" src="/static/js/guide-catalog.js"></script>
 <script nonce="{{ csp_nonce }}" src="/static/js/page-guide.js"></script>
 <script nonce="{{ csp_nonce }}" src="/static/js/quality-assistant-fab.js" defer></script>
@@ -747,6 +748,7 @@
           </a>
           <ul class="dropdown-menu" aria-labelledby="adminSettingsMenu" id="adminSettingsMenuList">
             <li><a class="dropdown-item" id="navUsersAdmin" href="/users_admin">المستخدمون</a></li>
+            <li><a class="dropdown-item" id="navPermissionsAdmin" href="/admin/permissions" style="display:none;">لوحة الصلاحيات</a></li>
             <li><a class="dropdown-item" id="navDepartmentPolicyHead" href="/department_policy_head_page" style="display:none;">اقتراح سياسة نظام التخرج</a></li>
             <li><a class="dropdown-item" id="navDepartmentPolicyApprovals" href="/department_policy_approvals_page" style="display:none;">اعتماد سياسات الأقسام</a></li>
             <li><a class="dropdown-item" id="navAdminBackup" href="/admin/backup_page" style="display:none;">النسخ الاحتياطي الكامل</a></li>
@@ -764,4 +766,4 @@
 
 <script nonce="{{ csp_nonce }}" src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
 <script nonce="{{ csp_nonce }}" src="/static/js/nav-shell.js?v=20260914a"></script>
-<script nonce="{{ csp_nonce }}" src="/static/js/nav-auth.js?v=20260912a"></script>
+<script nonce="{{ csp_nonce }}" src="/static/js/nav-auth.js?v=20261010perms"></script>

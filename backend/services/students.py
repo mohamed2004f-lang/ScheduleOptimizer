@@ -129,13 +129,35 @@ def _is_instructor_or_supervisor_view_only() -> bool:
     return students_registry_view_only()
 
 
+def _can_manage_student_records() -> bool:
+    """تعديل بيانات الطلبة (إضافة/حذف/حالة/مسار) — ليس نقل القسم."""
+    from backend.core.capability_gates import session_has_capability
+
+    if session_has_capability("can_manage_students"):
+        return True
+    # توافق: أدوار إدارة قديمة بلا مفتاح صريح
+    role = _normalize_role((session.get("user_role") or "").strip())
+    if role in ("admin", "admin_main", "system_admin"):
+        return True
+    return False
+
+
+def _forbid_student_mutation_if_needed():
+    if _can_manage_student_records():
+        return None
+    from backend.core.capability_gates import capability_forbidden
+
+    return capability_forbidden("ليست لديك صلاحية تعديل بيانات الطلبة (عرض فقط)")
+
+
 def _can_edit_student_registrations(conn, student_id: str) -> bool:
     """
     صلاحية تعديل التسجيل الفعلي:
-    - الإدارة / رئيس القسم (حسب نطاقهم)
+    - الإدارة / رئيس القسم (حسب نطاقهم) مع can_manage_registrations_edit
     - المشرف الأكاديمي لطلبته المسندين فقط
     """
     from backend.core.auth import current_supervisor_effective
+    from backend.core.capability_gates import session_has_capability
 
     sid = normalize_sid(student_id)
     if not sid:
@@ -146,6 +168,9 @@ def _can_edit_student_registrations(conn, student_id: str) -> bool:
             # وضع مشرف لرئيس/عميد: نطاق الإشراف فقط
             allowed = _get_allowed_student_ids_for_role(conn, "supervisor")
             return allowed is not None and sid in allowed
+        if role in ("college_dean", "academic_vice_dean", "head_of_department"):
+            if not session_has_capability("can_manage_registrations_edit"):
+                return False
         allowed = _get_allowed_student_ids_for_role(conn, role)
         return allowed is None or sid in allowed
     if role == "supervisor" or current_supervisor_effective():
@@ -155,22 +180,39 @@ def _can_edit_student_registrations(conn, student_id: str) -> bool:
 
 
 def _can_transfer_student_department() -> bool:
-    """المسؤول الرئيسي / عميد / وكيل في وضع القيادة فقط."""
+    """المسؤول الرئيسي / عميد / وكيل في وضع القيادة فقط + صلاحية النقل."""
+    from backend.core.capability_gates import session_has_capability
+
     role = _normalize_role((session.get("user_role") or "").strip())
     if role not in ("admin_main", "system_admin", "college_dean", "academic_vice_dean"):
         return False
     if role == "college_dean":
         am = (session.get(SESSION_ACTIVE_MODE) or "dean").strip().lower()
-        return am in ("", "dean")
-    if role == "academic_vice_dean":
+        if am not in ("", "dean"):
+            return False
+    elif role == "academic_vice_dean":
         am = (session.get(SESSION_ACTIVE_MODE) or "vice_dean").strip().lower()
-        return am in ("", "vice_dean", "dean")
-    return True
+        if am not in ("", "vice_dean", "dean"):
+            return False
+    return session_has_capability("can_transfer_student_department")
 
 
 def _can_rename_student_id() -> bool:
-    """تصحيح الرقم الدراسي — نفس صلاحيات نقل القسم."""
-    return _can_transfer_student_department()
+    """تصحيح الرقم الدراسي — صلاحية منفصلة (نفس نطاق النقل افتراضياً)."""
+    from backend.core.capability_gates import session_has_capability
+
+    role = _normalize_role((session.get("user_role") or "").strip())
+    if role not in ("admin_main", "system_admin", "college_dean", "academic_vice_dean"):
+        return False
+    if role == "college_dean":
+        am = (session.get(SESSION_ACTIVE_MODE) or "dean").strip().lower()
+        if am not in ("", "dean"):
+            return False
+    elif role == "academic_vice_dean":
+        am = (session.get(SESSION_ACTIVE_MODE) or "vice_dean").strip().lower()
+        if am not in ("", "vice_dean", "dean"):
+            return False
+    return session_has_capability("can_rename_student_id")
 
 
 def _discover_student_id_tables(conn) -> list[str]:
@@ -2716,8 +2758,9 @@ def list_graduates():
 def add_student():
     """إضافة طالب جديد - يستخدم Service Layer"""
     try:
-        if _is_instructor_or_supervisor_view_only():
-            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        blocked = _forbid_student_mutation_if_needed()
+        if blocked is not None:
+            return blocked
         from backend.core.services import StudentService
         from backend.core.exceptions import AppException
         
@@ -2793,6 +2836,9 @@ def add_student():
 def update_student_status():
     """تحديث حالة قيد الطالب (مسجَّل، سحب الملف، موقوف قيده، خريج) عبر Service Layer"""
     try:
+        blocked = _forbid_student_mutation_if_needed()
+        if blocked is not None:
+            return blocked
         from backend.core.services import StudentService
         from backend.core.exceptions import AppException
 
@@ -2956,6 +3002,9 @@ def rename_student_id():
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def update_student_pathway_stage():
     """تحديث مرحلة مسار الطالب (داخل القسم / ما قبل الشعبة / متخصص …)."""
+    blocked = _forbid_student_mutation_if_needed()
+    if blocked is not None:
+        return blocked
     from backend.core.academic_pathway import (
         PATHWAY_STAGE_LABELS,
         normalize_pathway_stage,
@@ -3153,6 +3202,9 @@ def update_student_specialization():
     تحديث برنامج/مسار الطالب بعد التخصص (current_program_id, track_code, specialized_at_term)
     مع تسجيل تدقيق في activity_log.
     """
+    blocked = _forbid_student_mutation_if_needed()
+    if blocked is not None:
+        return blocked
     data = request.get_json(force=True) or {}
     sid = normalize_sid(data.get("student_id"))
     if not sid:
@@ -3307,8 +3359,9 @@ def specialization_summary():
 def delete_student():
     """حذف طالب - يستخدم Service Layer"""
     try:
-        if _is_instructor_or_supervisor_view_only():
-            return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
+        blocked = _forbid_student_mutation_if_needed()
+        if blocked is not None:
+            return blocked
         from backend.core.services import StudentService
         from backend.core.exceptions import AppException
         
@@ -3547,6 +3600,7 @@ def _registration_write_blocked(student_id: str | None = None):
 )
 def save_registrations():
     from backend.core.auth import current_supervisor_effective
+    from backend.core.capability_gates import capability_forbidden, session_has_capability
 
     data = request.get_json(force=True) or {}
     sid = normalize_sid(data.get("student_id"))
@@ -3555,6 +3609,9 @@ def save_registrations():
     prereq_override_reason = (data.get("prereq_override_reason") or "").strip()
     role = _normalize_role((session.get("user_role") or "").strip())
     is_sup = current_supervisor_effective()
+    # المشرف يعدّل تسجيلات طلبته؛ غيره يحتاج can_manage_registrations_edit
+    if not is_sup and not session_has_capability("can_manage_registrations_edit"):
+        return capability_forbidden("تعديل التسجيلات الفعلية غير مسموح لهذا الدور")
     # المشرف (ومكافئوه) يتجاوز المتطلبات/الوحدات بسبب إلزامي — مثل رئيس القسم لنطاقه
     can_override_prereq = role in (
         "admin",
@@ -3602,8 +3659,6 @@ def save_registrations():
         "admin_main",
         "system_admin",
         "head_of_department",
-        "college_dean",
-        "academic_vice_dean",
     ):
         return jsonify({"status": "error", "message": "FORBIDDEN"}), 403
 
@@ -5732,8 +5787,9 @@ def students_export_pdf():
 @students_bp.route("/import/excel", methods=["POST"])
 @login_required
 def students_import_excel():
-    if _is_instructor_or_supervisor_view_only():
-        return jsonify({"status": "error", "message": "غير مصرح بالاستيراد لهذا الدور"}), 403
+    blocked = _forbid_student_mutation_if_needed()
+    if blocked is not None:
+        return blocked
     f = request.files.get("file")
     if not f:
         return jsonify({"status": "error", "message": "اختر ملف Excel أولاً"}), 400

@@ -320,8 +320,13 @@ def upsert_teaching_group(
     group_kind: str = GROUP_KIND_SINGLE,
     capacity_max: int | None = None,
     note: str = "",
+    display_column: int | None = None,
 ) -> dict[str, Any]:
     """إنشاء أو إعادة تفعيل مجموعة بنفس المفتاح الفريد (يتجنب فشل UNIQUE عند الحفظ المتكرر)."""
+    from backend.services.schedule_display_tracks import (
+        teaching_groups_has_display_column,
+    )
+
     cname = (course_name or "").strip()
     sem = (semester or "").strip()
     dept = int(department_id)
@@ -330,6 +335,15 @@ def upsert_teaching_group(
     if gkind not in VALID_GROUP_KINDS:
         raise ValueError("group_kind غير صالح")
     gcode = DEFAULT_GROUP_CODE if gkind == GROUP_KIND_SINGLE else normalize_group_code(group_code)
+    has_dc = teaching_groups_has_display_column(conn)
+    dc_val = None
+    if has_dc and display_column is not None:
+        try:
+            dc_val = int(display_column)
+            if dc_val < 1:
+                dc_val = None
+        except (TypeError, ValueError):
+            dc_val = None
     existing_id = _find_teaching_group_by_key(
         conn,
         course_name=cname,
@@ -339,23 +353,44 @@ def upsert_teaching_group(
     )
     if existing_id:
         cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE teaching_groups SET
-                course_name = ?, group_kind = ?, instructor_id = ?,
-                capacity_max = ?, note = ?, is_active = 1, updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                cname,
-                gkind,
-                iid,
-                capacity_max,
-                (note or "").strip(),
-                _now_iso(),
-                int(existing_id),
-            ),
-        )
+        if has_dc:
+            cur.execute(
+                """
+                UPDATE teaching_groups SET
+                    course_name = ?, group_kind = ?, instructor_id = ?,
+                    capacity_max = ?, note = ?, display_column = ?,
+                    is_active = 1, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    cname,
+                    gkind,
+                    iid,
+                    capacity_max,
+                    (note or "").strip(),
+                    dc_val,
+                    _now_iso(),
+                    int(existing_id),
+                ),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE teaching_groups SET
+                    course_name = ?, group_kind = ?, instructor_id = ?,
+                    capacity_max = ?, note = ?, is_active = 1, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    cname,
+                    gkind,
+                    iid,
+                    capacity_max,
+                    (note or "").strip(),
+                    _now_iso(),
+                    int(existing_id),
+                ),
+            )
         conn.commit()
         ensure_primary_row_for_group(conn, int(existing_id), iid)
         return get_teaching_group(conn, int(existing_id)) or {}
@@ -369,6 +404,7 @@ def upsert_teaching_group(
         group_kind=gkind,
         capacity_max=capacity_max,
         note=note,
+        display_column=dc_val,
     )
 
 
@@ -629,13 +665,23 @@ def enrich_group_with_instructors(conn, group: dict[str, Any] | None) -> dict[st
     return group
 
 
-def _groups_base_sql() -> str:
-    return """
+def _groups_base_sql(conn=None) -> str:
+    dc_sel = ""
+    if conn is not None:
+        try:
+            from backend.services.schedule_display_tracks import teaching_groups_has_display_column
+
+            if teaching_groups_has_display_column(conn):
+                dc_sel = ", tg.display_column"
+        except Exception:
+            pass
+    return f"""
         SELECT tg.id, tg.course_name, tg.semester, tg.department_id,
                tg.group_code, tg.group_kind, tg.instructor_id,
                tg.capacity_max, tg.program_course_id, tg.note, tg.is_active,
                COALESCE(d.name_ar, d.code, '') AS department_name,
                COALESCE(i.name, '') AS instructor_name
+               {dc_sel}
         FROM teaching_groups tg
         LEFT JOIN departments d ON d.id = tg.department_id
         LEFT JOIN instructors i ON i.id = tg.instructor_id
@@ -657,7 +703,7 @@ def list_teaching_groups(
         tname, tyear = get_current_term(conn=conn)
         sem = f"{(tname or '').strip()} {(tyear or '').strip()}".strip()
     cur = conn.cursor()
-    sql = _groups_base_sql() + " WHERE tg.semester = ?"
+    sql = _groups_base_sql(conn) + " WHERE tg.semester = ?"
     params: list[Any] = [sem]
     if active_only:
         sql += " AND tg.is_active = 1"
@@ -680,7 +726,7 @@ def get_teaching_group(conn, group_id: int) -> dict[str, Any] | None:
         return None
     cur = conn.cursor()
     row = cur.execute(
-        _groups_base_sql() + " WHERE tg.id = ?",
+        _groups_base_sql(conn) + " WHERE tg.id = ?",
         (int(group_id),),
     ).fetchone()
     if not row:
@@ -726,7 +772,10 @@ def create_teaching_group(
     capacity_max: int | None = None,
     program_course_id: int | None = None,
     note: str = "",
+    display_column: int | None = None,
 ) -> dict[str, Any]:
+    from backend.services.schedule_display_tracks import teaching_groups_has_display_column
+
     cname = (course_name or "").strip()
     sem = (semester or "").strip()
     dept = int(department_id)
@@ -739,30 +788,64 @@ def create_teaching_group(
     gcode = normalize_group_code(group_code)
     if gkind == GROUP_KIND_SINGLE:
         gcode = DEFAULT_GROUP_CODE
+    has_dc = teaching_groups_has_display_column(conn)
+    dc_val = None
+    if has_dc and display_column is not None:
+        try:
+            dc_val = int(display_column)
+            if dc_val < 1:
+                dc_val = None
+        except (TypeError, ValueError):
+            dc_val = None
     cur = conn.cursor()
     now = _now_iso()
-    cur.execute(
-        """
-        INSERT INTO teaching_groups (
-            course_name, semester, department_id, group_code, group_kind,
-            instructor_id, capacity_max, program_course_id, note,
-            is_active, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-        """,
-        (
-            cname,
-            sem,
-            dept,
-            gcode,
-            gkind,
-            iid,
-            capacity_max,
-            program_course_id,
-            (note or "").strip(),
-            now,
-            now,
-        ),
-    )
+    if has_dc:
+        cur.execute(
+            """
+            INSERT INTO teaching_groups (
+                course_name, semester, department_id, group_code, group_kind,
+                instructor_id, capacity_max, program_course_id, note, display_column,
+                is_active, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            """,
+            (
+                cname,
+                sem,
+                dept,
+                gcode,
+                gkind,
+                iid,
+                capacity_max,
+                program_course_id,
+                (note or "").strip(),
+                dc_val,
+                now,
+                now,
+            ),
+        )
+    else:
+        cur.execute(
+            """
+            INSERT INTO teaching_groups (
+                course_name, semester, department_id, group_code, group_kind,
+                instructor_id, capacity_max, program_course_id, note,
+                is_active, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            """,
+            (
+                cname,
+                sem,
+                dept,
+                gcode,
+                gkind,
+                iid,
+                capacity_max,
+                program_course_id,
+                (note or "").strip(),
+                now,
+                now,
+            ),
+        )
     conn.commit()
     gid = int(cur.lastrowid or 0)
     if not gid:
@@ -1072,6 +1155,7 @@ def setup_course_offering(
             group_kind=GROUP_KIND_SINGLE,
             capacity_max=g0.get("capacity_max"),
             note=str(g0.get("note") or ""),
+            display_column=g0.get("display_column"),
         )
         section_list = list(dict.fromkeys(all_sections))
         if section_list:
@@ -1105,6 +1189,7 @@ def setup_course_offering(
                 group_kind=GROUP_KIND_SPLIT,
                 capacity_max=g.get("capacity_max"),
                 note=str(g.get("note") or ""),
+                display_column=g.get("display_column"),
             )
             if section_ids:
                 link_schedule_slots(conn, int(rec["id"]), section_ids)
@@ -1418,6 +1503,20 @@ def list_registration_group_options(
             "teaching_group_id": gid,
             "enrolled_count": count_registrations_for_teaching_group(conn, gid),
         })
+    # مقررات الاتجاه العام: إتاحة مجموعات GENERAL لطالب قسم تخصصي
+    try:
+        from backend.services import schedule_general_overlay as sgo
+
+        sdept = dept if dept > 0 else (student_department_id(conn, student_id) if student_id else 0)
+        out = sgo.expand_registration_options_with_general(
+            conn,
+            out,
+            course_name=cname,
+            semester=sem,
+            student_department_id=int(sdept or 0),
+        )
+    except Exception:
+        pass
     return out
 
 
@@ -1674,6 +1773,252 @@ def registration_teaching_groups_audit(
         "unlinked_count": unlinked_count,
         "group_enrollment_counts": group_counts,
     }
+
+
+def _registration_matches_semester(reg_semester: str | None, term_semester: str) -> bool:
+    """توافق فصل التسجيل مع فصل العرض (فارغ = يُقبل ضمن الفصل الجاري)."""
+    rs = (reg_semester or "").strip()
+    ts = (term_semester or "").strip()
+    if not rs or not ts:
+        return True
+    if rs == ts:
+        return True
+    return rs.lower() == ts.lower()
+
+
+def list_course_group_roster(
+    conn,
+    *,
+    course_name: str,
+    semester: str | None = None,
+    department_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    روستر توزيع طلبة مقرر على مجموعات التدريس.
+    فقط المسجّلون في المقرر — لا يُنشئ تسجيلات.
+    """
+    cname = (course_name or "").strip()
+    if not cname:
+        raise ValueError("course_name مطلوب")
+    sem = (semester or "").strip()
+    if not sem:
+        tname, tyear = get_current_term(conn=conn)
+        sem = f"{(tname or '').strip()} {(tyear or '').strip()}".strip()
+
+    groups = list_teaching_groups(
+        conn,
+        semester=sem,
+        department_id=int(department_id) if department_id is not None else None,
+        course_name=cname,
+    )
+    if department_id is not None:
+        groups = [g for g in groups if int(g.get("department_id") or 0) == int(department_id)]
+
+    group_ids = {int(g["id"]) for g in groups if g.get("id")}
+    by_gid: dict[int, list[dict[str, Any]]] = {gid: [] for gid in group_ids}
+    unassigned: list[dict[str, Any]] = []
+
+    if not table_exists(conn, "registrations"):
+        return {
+            "course_name": cname,
+            "semester": sem,
+            "groups": [
+                {
+                    "teaching_group_id": int(g["id"]),
+                    "group_code": g.get("group_code"),
+                    "group_code_label": g.get("group_code_label"),
+                    "display_label": g.get("display_label"),
+                    "members": [],
+                    "member_count": 0,
+                }
+                for g in groups
+                if g.get("id")
+            ],
+            "unassigned": [],
+            "totals": {"registered": 0, "assigned": 0, "unassigned": 0},
+        }
+
+    cols = {c.lower() for c in fetch_table_columns(conn, "registrations")}
+    has_tg = "teaching_group_id" in cols
+    has_sem = "semester" in cols
+    from backend.core.enrollment_status_policy import operational_status_sql
+
+    active_stu = operational_status_sql("st")
+    cur = conn.cursor()
+    tg_sel = "r.teaching_group_id" if has_tg else "NULL AS teaching_group_id"
+    sem_sel = "COALESCE(r.semester, '')" if has_sem else "''"
+    rows = cur.execute(
+        f"""
+        SELECT r.id, r.student_id, COALESCE(st.student_name, '') AS student_name,
+               {tg_sel}, {sem_sel} AS reg_semester
+        FROM registrations r
+        INNER JOIN students st ON st.student_id = r.student_id AND {active_stu}
+        WHERE lower(trim(r.course_name)) = lower(trim(?))
+        ORDER BY st.student_name, r.student_id
+        """,
+        (cname,),
+    ).fetchall()
+
+    for row in rows:
+        if hasattr(row, "keys"):
+            rid = int(row["id"] or 0)
+            sid = str(row["student_id"] or "").strip()
+            sname = str(row["student_name"] or "").strip()
+            tgid = int(row["teaching_group_id"] or 0) if has_tg else 0
+            rsem = str(row["reg_semester"] or "").strip()
+        else:
+            rid = int(row[0] or 0)
+            sid = str(row[1] or "").strip()
+            sname = str(row[2] or "").strip()
+            tgid = int(row[3] or 0) if has_tg else 0
+            rsem = str(row[4] or "").strip()
+        if not sid:
+            continue
+        if has_sem and not _registration_matches_semester(rsem, sem):
+            continue
+        item = {
+            "registration_id": rid,
+            "student_id": sid,
+            "student_name": sname or sid,
+            "teaching_group_id": tgid or None,
+        }
+        if tgid and tgid in by_gid:
+            by_gid[tgid].append(item)
+        elif tgid and tgid not in group_ids:
+            unassigned.append({**item, "in_other_group": True})
+        else:
+            unassigned.append({**item, "in_other_group": False})
+
+    groups_out = []
+    assigned_n = 0
+    for g in groups:
+        gid = int(g.get("id") or 0)
+        if not gid:
+            continue
+        members = by_gid.get(gid) or []
+        assigned_n += len(members)
+        groups_out.append(
+            {
+                "teaching_group_id": gid,
+                "group_code": g.get("group_code"),
+                "group_code_label": g.get("group_code_label"),
+                "display_label": g.get("display_label"),
+                "members": members,
+                "member_count": len(members),
+            }
+        )
+
+    sibling_map: dict[int, str] = {
+        int(g["teaching_group_id"]): str(
+            g.get("group_code_label") or g.get("group_code") or g["teaching_group_id"]
+        )
+        for g in groups_out
+    }
+    registered = assigned_n + len(unassigned)
+
+    return {
+        "course_name": cname,
+        "semester": sem,
+        "groups": groups_out,
+        "unassigned": unassigned,
+        "sibling_labels": sibling_map,
+        "totals": {
+            "registered": registered,
+            "assigned": assigned_n,
+            "unassigned": len([u for u in unassigned if not u.get("in_other_group")]),
+        },
+    }
+
+
+def assign_students_to_teaching_group(
+    conn,
+    *,
+    teaching_group_id: int,
+    student_ids: list[str],
+    action: str = "assign",
+) -> dict[str, int]:
+    """
+    تعيين أو إزالة طلبة من مجموعة تدريس (يحدّث registrations.teaching_group_id فقط).
+    action: assign | unassign
+    """
+    tgid = int(teaching_group_id or 0)
+    act = (action or "assign").strip().lower()
+    if tgid <= 0:
+        raise ValueError("teaching_group_id مطلوب")
+    if act not in ("assign", "unassign"):
+        raise ValueError("action يجب أن يكون assign أو unassign")
+    if not table_exists(conn, "registrations"):
+        raise ValueError("جدول التسجيلات غير متوفر")
+    cols = {c.lower() for c in fetch_table_columns(conn, "registrations")}
+    if "teaching_group_id" not in cols:
+        raise ValueError("عمود teaching_group_id غير موجود في registrations")
+
+    group = get_teaching_group(conn, tgid)
+    if not group or not int(group.get("is_active") or 0):
+        raise ValueError("مجموعة التدريس غير موجودة أو غير نشطة")
+    cname = str(group.get("course_name") or "").strip()
+    sem = str(group.get("semester") or "").strip()
+    if not cname:
+        raise ValueError("مجموعة بلا مقرر")
+
+    ids = [str(s).strip() for s in (student_ids or []) if str(s).strip()]
+    if not ids:
+        raise ValueError("student_ids مطلوبة")
+
+    cur = conn.cursor()
+    has_sem = "semester" in cols
+    stats = {"updated": 0, "skipped": 0, "not_registered": 0}
+
+    for sid in ids:
+        if has_sem:
+            rows = cur.execute(
+                """
+                SELECT id, COALESCE(semester, ''), teaching_group_id
+                FROM registrations
+                WHERE student_id = ? AND lower(trim(course_name)) = lower(trim(?))
+                """,
+                (sid, cname),
+            ).fetchall()
+        else:
+            rows = cur.execute(
+                """
+                SELECT id, '', teaching_group_id
+                FROM registrations
+                WHERE student_id = ? AND lower(trim(course_name)) = lower(trim(?))
+                """,
+                (sid, cname),
+            ).fetchall()
+        matched = []
+        for r in rows:
+            rid = int(_row_val(r, 0) or 0)
+            rsem = str(_row_val(r, 1) or "").strip()
+            if has_sem and rsem and sem and not _registration_matches_semester(rsem, sem):
+                continue
+            matched.append(rid)
+        if not matched:
+            stats["not_registered"] += 1
+            continue
+        for rid in matched:
+            if act == "assign":
+                cur.execute(
+                    "UPDATE registrations SET teaching_group_id = ? WHERE id = ?",
+                    (tgid, rid),
+                )
+                stats["updated"] += 1
+            else:
+                cur.execute(
+                    """
+                    UPDATE registrations SET teaching_group_id = NULL
+                    WHERE id = ? AND teaching_group_id = ?
+                    """,
+                    (rid, tgid),
+                )
+                if cur.rowcount:
+                    stats["updated"] += 1
+                else:
+                    stats["skipped"] += 1
+    conn.commit()
+    return stats
 
 
 def semester_has_teaching_groups(conn, semester: str) -> bool:

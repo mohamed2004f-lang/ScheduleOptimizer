@@ -149,6 +149,8 @@ class TestTeachingGroupsApi:
         assert mine
         assert mine[0].get("teaching_group_id")
         assert mine[0].get("teaching_group_label")
+        assert mine[0].get("group_code")
+        assert mine[0].get("group_code_label")
 
     def test_setup_list_api(self, auth_client, db_conn):
         seed = _seed_dept_course_schedule(db_conn)

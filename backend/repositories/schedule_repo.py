@@ -188,12 +188,22 @@ def fetch_schedule_rows_with_student_counts(
                 LEFT JOIN departments td ON td.id = COALESCE(tg.department_id, s.department_id)
                 LEFT JOIN instructors ti ON ti.id = COALESCE(tg.instructor_id, s.instructor_id)
                 """
-        tg_select = """,
+        tg_dc = ""
+        try:
+            from backend.services.schedule_display_tracks import teaching_groups_has_display_column
+
+            conn_ref = getattr(cur, "connection", None) or getattr(cur, "conn", None)
+            if conn_ref is not None and teaching_groups_has_display_column(conn_ref):
+                tg_dc = ", tg.display_column AS tg_display_column"
+        except Exception:
+            tg_dc = ""
+        tg_select = f""",
                     s.teaching_group_id,
                     s.department_id,
                     COALESCE(tg.group_code, '—') AS tg_group_code,
                     COALESCE(td.name_ar, td.code, '') AS tg_department_name,
                     COALESCE(ti.name, s.instructor, '') AS tg_instructor_name
+                    {tg_dc}
                 """
         if registrations_has_teaching_group:
             reg_join = f"""
@@ -209,9 +219,11 @@ def fetch_schedule_rows_with_student_counts(
                     """
     group_by_tg = ""
     if tg_select:
-        group_by_tg = """,
+        gb_dc = ", tg.display_column" if "tg_display_column" in tg_select else ""
+        group_by_tg = f""",
                     s.teaching_group_id, s.department_id,
                     tg.group_code, td.name_ar, td.code, ti.name
+                    {gb_dc}
                 """
     return cur.execute(
         f"""

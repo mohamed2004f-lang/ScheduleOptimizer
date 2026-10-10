@@ -31,7 +31,9 @@
         <a href="/academic_quality/ilo/catalog" class="btn btn-outline-warning btn-sm">كتالوج المخرجات</a>
         {% endif %}
         {% if not is_student %}
+        {% if show_accreditation_nav %}
         <a href="/academic_quality/accreditation/map?scope=prog" class="btn btn-outline-primary btn-sm">لشواهد الاعتماد</a>
+        {% endif %}
         <a href="/academic_quality/archive" class="btn btn-outline-secondary btn-sm">أرشيف القسم</a>
         <a href="/academic_quality/glossary" class="btn btn-outline-info btn-sm">المصطلحات</a>
         {% endif %}

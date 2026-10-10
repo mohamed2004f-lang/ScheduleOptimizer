@@ -20,7 +20,9 @@
       <div class="d-flex gap-2 flex-wrap">
         <a class="btn btn-outline-secondary btn-sm" href="/academic_quality/surveys/results?semester={{ semester|urlencode }}">النتائج الحية</a>
         <a class="btn btn-outline-dark btn-sm" href="/academic_quality/surveys/export/bundle.zip?semester={{ semester|urlencode }}">حزمة ZIP</a>
+        {% if show_accreditation_nav %}
         <a class="btn btn-outline-primary btn-sm" href="/academic_quality/accreditation/map?semester={{ semester|urlencode }}">خريطة الامتثال</a>
+        {% endif %}
       </div>
     </div>
 

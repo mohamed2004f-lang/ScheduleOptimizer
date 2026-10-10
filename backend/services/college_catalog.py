@@ -54,6 +54,15 @@ from backend.services.utilities import excel_response_from_frames, get_connectio
 college_catalog_bp = Blueprint("college_catalog", __name__, url_prefix="/college/catalog")
 
 _ADMIN_FULL = ("admin", "admin_main", "system_admin", "college_dean")
+# قراءة قائمة الأقسام لنطاق العرض (يشمل الوكيل ومسجل الكلية)
+_DEPT_LIST_READERS = (
+    "admin",
+    "admin_main",
+    "system_admin",
+    "college_dean",
+    "academic_vice_dean",
+    "staff",
+)
 _PLAN_EDITOR = ("admin", "admin_main", "system_admin", "college_dean", "head_of_department")
 
 
@@ -313,7 +322,7 @@ def pathway_meta():
 
 
 @college_catalog_bp.route("/departments", methods=["GET"])
-@role_required(*_ADMIN_FULL)
+@role_required(*_DEPT_LIST_READERS)
 def list_departments():
     with get_connection() as conn:
         cur = conn.cursor()

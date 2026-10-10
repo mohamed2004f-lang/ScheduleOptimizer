@@ -715,39 +715,101 @@ def is_college_dean_session() -> bool:
     return _icd(session)
 
 
+def can_access_accreditation_workspace(user_role: str | None = None) -> bool:
+    """
+    قفل مؤقت لخرائط الاعتماد (مؤسسي/برامجي) وواجهاتها.
+    يعتمد الدور المخزَّن فقط (لا _effective_roles) حتى لا يمرّ رئيس القسم عبر admin_main.
+    """
+    if user_role is None:
+        try:
+            user_role = session.get("user_role")
+        except RuntimeError:
+            return False
+    role = _normalize_role((user_role or "").strip())
+    return role in ("admin_main", "system_admin")
+
+
+def is_accreditation_workspace_href(href: str | None) -> bool:
+    """هل الرابط يشير إلى مساحة الاعتماد المقفلة مؤقتاً؟"""
+    h = (href or "").strip().lower()
+    return "/academic_quality/accreditation/" in h
+
+
+def filter_accreditation_href_items(items: list | None) -> list:
+    """يحذف عناصر القوائم/المهام التي تشير لخرائط الاعتماد إن لم يُسمح بالوصول."""
+    raw = list(items or [])
+    if can_access_accreditation_workspace():
+        return raw
+    out: list = []
+    for it in raw:
+        if isinstance(it, dict) and is_accreditation_workspace_href(it.get("href")):
+            continue
+        out.append(it)
+    return out
+
+
 def can_edit_accreditation_catalog(user_role: str | None = None) -> bool:
     """
     تعديل مصفوفة الأدلة الثابتة (أنواع + قواعد) — مستوى المؤسسة.
+    حالياً ضمن قفل الاعتماد المؤقت: admin_main / system_admin فقط.
     """
-    if is_system_admin_session():
-        return True
-    try:
-        if int(session.get("is_platform_admin") or 0) == 1:
-            return True
-    except (TypeError, ValueError):
-        pass
-    role = _normalize_role((user_role or session.get("user_role") or "").strip())
-    if role == "admin_main" and is_college_quality_lead_session():
-        return True
-    return False
+    return can_access_accreditation_workspace(user_role)
 
 
 def can_bind_accreditation_evidence(user_role: str | None = None) -> bool:
-    """ربط المصادر الفعلية — رئيس قسم، منسق جودة، عميد، أو مسؤول."""
-    if can_edit_accreditation_catalog(user_role):
-        return True
-    if is_college_dean_session():
-        return True
-    role = _normalize_role((user_role or session.get("user_role") or "").strip())
-    if role == "academic_vice_dean":
-        return True
-    if role in ("admin", "admin_main"):
-        return True
-    if role == "head_of_department":
-        return True
-    if role == "instructor" and session.get("is_dept_quality_coordinator"):
-        return True
-    return False
+    """ربط المصادر الفعلية — حالياً ضمن قفل الاعتماد المؤقت: admin_main / system_admin فقط."""
+    return can_access_accreditation_workspace(user_role)
+
+
+def _accreditation_access_denied_response():
+    accept = (request.headers.get("Accept") or "").lower()
+    is_api_request = (
+        request.is_json
+        or "application/json" in accept
+        or request.path.startswith("/api/")
+        or "/api/" in (request.path or "")
+        or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    )
+    if is_api_request:
+        return jsonify({
+            "status": "error",
+            "message": "خرائط الاعتماد مقفلة مؤقتاً — متاحة للأدمن الرئيسي فقط",
+            "code": "FORBIDDEN",
+        }), 403
+    return (
+        "<h3>403 Forbidden</h3><p>خرائط الاعتماد مقفلة مؤقتاً — متاحة للأدمن الرئيسي فقط.</p>",
+        403,
+        {"Content-Type": "text/html; charset=utf-8"},
+    )
+
+
+def accreditation_workspace_required(f):
+    """ديكوراتور: قفل مؤقت لصفحات/واجهات الاعتماد — admin_main / system_admin فقط."""
+
+    @wraps(f)
+    def wrapped(*args, **kwargs):
+        is_logged_in = bool(session.get(SESSION_KEY, False))
+        if not is_logged_in:
+            accept = (request.headers.get("Accept") or "").lower()
+            is_api_request = (
+                request.is_json
+                or "application/json" in accept
+                or request.path.startswith("/api/")
+                or "/api/" in (request.path or "")
+                or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+            )
+            if is_api_request:
+                return jsonify({
+                    "status": "error",
+                    "message": "يجب تسجيل الدخول للوصول إلى هذه الصفحة",
+                    "code": "UNAUTHORIZED",
+                }), 401
+            return redirect("/login")
+        if not can_access_accreditation_workspace():
+            return _accreditation_access_denied_response()
+        return f(*args, **kwargs)
+
+    return wrapped
 
 
 def accreditation_evidence_binder_required(f):
@@ -765,7 +827,7 @@ def accreditation_evidence_binder_required(f):
         if not can_bind_accreditation_evidence():
             return jsonify({
                 "status": "error",
-                "message": "ربط الأدلة محصور على رئيس القسم أو منسق الجودة أو إدارة الكلية",
+                "message": "خرائط الاعتماد مقفلة مؤقتاً — متاحة للأدمن الرئيسي فقط",
                 "code": "FORBIDDEN",
             }), 403
         return f(*args, **kwargs)
@@ -774,7 +836,7 @@ def accreditation_evidence_binder_required(f):
 
 
 def accreditation_catalog_editor_required(f):
-    """ديكوراتور: تعديل كتالوج مصفوفة الأدلة (admin أو رئيس جودة الكلية)."""
+    """ديكوراتور: تعديل كتالوج مصفوفة الأدلة (قفل مؤقت: أدمن رئيسي فقط)."""
 
     @wraps(f)
     def wrapped(*args, **kwargs):
@@ -797,7 +859,7 @@ def accreditation_catalog_editor_required(f):
         if not can_edit_accreditation_catalog():
             return jsonify({
                 "status": "error",
-                "message": "تعديل مصفوفة الأدلة محصور على المسؤول أو رئيس ضمان الجودة بالكلية",
+                "message": "خرائط الاعتماد مقفلة مؤقتاً — متاحة للأدمن الرئيسي فقط",
                 "code": "FORBIDDEN",
             }), 403
         return f(*args, **kwargs)
@@ -1674,6 +1736,94 @@ def init_auth(app):
                 "capabilities": caps,
             }
         )
+        out.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        return out, 200
+
+    @auth_bp.route("/admin_department_scope/options", methods=["GET"])
+    @login_required
+    def admin_department_scope_options():
+        """قائمة الأقسام النشطة لشريط نطاق العرض (عميد/وكيل/أدمن/مسجل كلية)."""
+        _sync_user_session_from_db(session.get(SESSION_USER))
+        role = _normalize_role((session.get("user_role") or "").strip())
+        if role not in _ADMIN_SCOPE_ROLES:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "غير مسموح",
+                        "code": "FORBIDDEN",
+                    }
+                ),
+                403,
+            )
+        if role == "staff":
+            from backend.core.department_scope_policy import session_role_profile_scope_mode
+
+            if session_role_profile_scope_mode() == "department":
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "حسابك مقيّد بقسم واحد.",
+                            "code": "FORBIDDEN",
+                        }
+                    ),
+                    403,
+                )
+        if get_connection is None:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "قاعدة البيانات غير متاحة",
+                        "code": "DB",
+                    }
+                ),
+                500,
+            )
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                rows = cur.execute(
+                    """
+                    SELECT id, COALESCE(code, '') AS code,
+                           COALESCE(name_ar, name_en, code, '') AS name_ar
+                    FROM departments
+                    WHERE COALESCE(is_active, 1) = 1
+                    ORDER BY COALESCE(name_ar, code, '')
+                    """
+                ).fetchall()
+            items = []
+            for r in rows or []:
+                if hasattr(r, "keys"):
+                    items.append(
+                        {
+                            "id": int(r["id"]),
+                            "code": (r["code"] or ""),
+                            "name_ar": (r["name_ar"] or ""),
+                        }
+                    )
+                else:
+                    items.append(
+                        {
+                            "id": int(r[0]),
+                            "code": (r[1] or ""),
+                            "name_ar": (r[2] or ""),
+                        }
+                    )
+        except Exception:
+            logger.exception("admin_department_scope_options failed")
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "تعذّر تحميل الأقسام",
+                        "code": "DB",
+                    }
+                ),
+                500,
+            )
+        out = jsonify({"status": "ok", "items": items})
         out.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         return out, 200
 

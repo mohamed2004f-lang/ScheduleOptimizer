@@ -301,6 +301,65 @@ def ensure_sqlite_tables(db_file=None):
         except Exception as e:
             logger.warning("teaching_group_instructors schema: %s", e)
 
+        # أعمدة عرض جدول الاتجاه العام + display_column على المجموعات
+        try:
+            tg_cols = [r[1] for r in cur.execute("PRAGMA table_info(teaching_groups)").fetchall()]
+        except Exception:
+            tg_cols = []
+        if "display_column" not in tg_cols:
+            try:
+                cur.execute("ALTER TABLE teaching_groups ADD COLUMN display_column INTEGER")
+            except Exception:
+                pass
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schedule_display_tracks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    semester TEXT NOT NULL,
+                    department_id INTEGER NOT NULL,
+                    track_index INTEGER NOT NULL,
+                    label TEXT NOT NULL DEFAULT '',
+                    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (semester, department_id, track_index)
+                )
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sched_display_tracks_sem_dept "
+                "ON schedule_display_tracks(semester, department_id)"
+            )
+        except Exception as e:
+            logger.warning("schedule_display_tracks schema: %s", e)
+
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS department_general_group_bindings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    semester TEXT NOT NULL,
+                    consumer_department_id INTEGER NOT NULL,
+                    course_name TEXT NOT NULL,
+                    teaching_group_id INTEGER NOT NULL,
+                    updated_by TEXT DEFAULT '',
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (semester, consumer_department_id, course_name),
+                    FOREIGN KEY (consumer_department_id) REFERENCES departments(id)
+                        ON DELETE RESTRICT ON UPDATE CASCADE,
+                    FOREIGN KEY (teaching_group_id) REFERENCES teaching_groups(id)
+                        ON DELETE RESTRICT ON UPDATE CASCADE
+                )
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_dept_gen_bind_sem_dept "
+                "ON department_general_group_bindings(semester, consumer_department_id)"
+            )
+        except Exception as e:
+            logger.warning("department_general_group_bindings schema: %s", e)
+
         try:
             gdcols = [r[1] for r in cur.execute("PRAGMA table_info(grade_drafts)").fetchall()]
         except Exception:

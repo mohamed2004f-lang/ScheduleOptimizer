@@ -13,6 +13,7 @@ from flask import abort, jsonify, redirect, render_template, request, send_file,
 from backend.core.auth import (
     SESSION_ACTIVE_MODE,
     _normalize_role,
+    can_access_accreditation_workspace,
     can_manage_survey_invites,
     can_view_survey_results,
     get_admin_department_scope_id,
@@ -1161,6 +1162,8 @@ def register_survey_platform_routes(bp) -> None:
             closure_reminder=closure_reminder,
             compliance_map_url=(
                 f"/academic_quality/accreditation/map?semester={quote(sem, safe='')}"
+                if can_access_accreditation_workspace()
+                else ""
             ),
             course_eval_rate_percent=course_eval_rate_percent,
             course_eval_missing_audit=course_eval_missing_audit,

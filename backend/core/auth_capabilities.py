@@ -146,6 +146,7 @@ def compute_capabilities(
             "is_student": False,
             "can_manage_schedule_edit": staff_planning,
             "can_manage_courses_edit": staff_planning,
+            "can_manage_students": hod_mode == "head",
             "can_manage_transcript_admin": staff_planning,
             "nav_student_affairs_attendance_only": student_affairs_att_only,
             "nav_transcript_nav": nav_transcript,
@@ -159,6 +160,7 @@ def compute_capabilities(
             "nav_admin_settings": hod_mode == "head",
             "nav_planning_student_view": False,
             "can_switch_department_scope": False,
+            "can_edit_accreditation_catalog": False,
         }
         _apply_academic_report_nav_caps(hod_caps, hod_mode == "head")
         if hod_mode == "supervisor":
@@ -242,6 +244,9 @@ def compute_capabilities(
         "is_student": role == "student",
         "can_manage_schedule_edit": staff_planning and role != "student",
         "can_manage_courses_edit": staff_planning,
+        "can_manage_students": role in ("admin", "admin_main", "system_admin", "head_of_department")
+        and not inst_portal
+        and not sup_portal,
         "can_manage_transcript_admin": staff_planning,
         "nav_student_affairs_attendance_only": role == "instructor" and not sup_portal,
         "nav_transcript_nav": staff_planning
@@ -250,6 +255,8 @@ def compute_capabilities(
         "can_switch_department_scope": role in ("admin", "admin_main", "college_dean", "academic_vice_dean", "system_admin"),
         "can_transfer_student_department": role in ("admin", "admin_main", "college_dean", "academic_vice_dean", "system_admin"),
         "can_rename_student_id": role in ("admin", "admin_main", "college_dean", "academic_vice_dean", "system_admin"),
+        # قفل مؤقت: كتالوج/خرائط الاعتماد للأدمن الرئيسي فقط
+        "can_edit_accreditation_catalog": role in ("admin_main", "system_admin"),
     }
     _apply_academic_report_nav_caps(base_caps, staff_planning and role != "student")
     if role == "college_dean":

@@ -564,7 +564,7 @@ def close_semester_and_snapshot(
 
     conn.commit()
     closure = get_semester_closure(conn, sem, department_id) or {}
-    return {
+    out = {
         "status": "ok",
         "semester": sem,
         "scope_key": sk,
@@ -572,12 +572,19 @@ def close_semester_and_snapshot(
         "snapshot_count": len(reports),
         "closed_at": now,
         "archive_url": f"/academic_quality/surveys/archives/{archive_filename}",
-        "compliance_map_url": f"/academic_quality/accreditation/map?semester={sem}",
         "trends_url": "/academic_quality/surveys/trends",
         "evidence": evidence_result,
         "accreditation_bindings": bindings_result,
         "closure": closure,
     }
+    try:
+        from backend.core.auth import can_access_accreditation_workspace
+
+        if can_access_accreditation_workspace():
+            out["compliance_map_url"] = f"/academic_quality/accreditation/map?semester={sem}"
+    except Exception:
+        pass
+    return out
 
 
 def compare_semester_snapshots(
@@ -1085,7 +1092,7 @@ def close_cycle_and_snapshot(
     except Exception:
         invites_stopped = 0
     closure = _get_closure_by_scope(conn, cycle, sk) or {}
-    return {
+    out = {
         "status": "ok",
         "cycle_label": cycle,
         "scope_key": sk,
@@ -1094,11 +1101,18 @@ def close_cycle_and_snapshot(
         "invites_deactivated": invites_stopped,
         "closed_at": now,
         "archive_url": f"/academic_quality/surveys/archives/{archive_filename}",
-        "compliance_map_url": f"/academic_quality/accreditation/map?cycle={cycle}",
         "results_url": f"/academic_quality/surveys/results?view=external&cycle={cycle}",
         "evidence": evidence_result,
         "closure": closure,
     }
+    try:
+        from backend.core.auth import can_access_accreditation_workspace
+
+        if can_access_accreditation_workspace():
+            out["compliance_map_url"] = f"/academic_quality/accreditation/map?cycle={cycle}"
+    except Exception:
+        pass
+    return out
 
 
 def compare_cycle_snapshots(conn, cycle_a: str, cycle_b: str) -> dict[str, Any]:

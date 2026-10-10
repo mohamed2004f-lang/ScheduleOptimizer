@@ -438,15 +438,18 @@
         const elRules = document.getElementById('navAcademicRules');
         const elProjectStatus = document.getElementById('navProjectStatus');
         const elAdminBackup = document.getElementById('navAdminBackup');
+        const elPermissionsAdmin = document.getElementById('navPermissionsAdmin');
         const elCc = document.getElementById('navCollegeCatalog');
         const elShared = document.getElementById('navCollegeSharedCatalog');
         const elHeadPolicy2 = document.getElementById('navDepartmentPolicyHead');
         const elMainPolicy2 = document.getElementById('navDepartmentPolicyApprovals');
+        const showPermsPanel = role === 'admin_main' || role === 'system_admin';
         if (hodHeadModeSettings) {
           if (elUsers) elUsers.style.display = navUsers ? '' : 'none';
           if (elRules) elRules.style.display = 'none';
           if (elProjectStatus) elProjectStatus.style.display = 'none';
           if (elAdminBackup) elAdminBackup.style.display = 'none';
+          if (elPermissionsAdmin) elPermissionsAdmin.style.display = 'none';
           if (elCc) elCc.style.display = 'none';
           if (elMainPolicy2) elMainPolicy2.style.display = 'none';
           if (elHeadPolicy2) elHeadPolicy2.style.display = '';
@@ -456,6 +459,7 @@
           if (elRules) elRules.style.display = navRules ? '' : 'none';
           if (elProjectStatus) elProjectStatus.style.display = '';
           if (elAdminBackup) elAdminBackup.style.display = 'none';
+          if (elPermissionsAdmin) elPermissionsAdmin.style.display = 'none';
           if (elCc) elCc.style.display = 'none';
           if (elShared) elShared.style.display = 'none';
           if (elHeadPolicy2) elHeadPolicy2.style.display = 'none';
@@ -464,7 +468,8 @@
           if (elUsers) elUsers.style.display = navUsers ? '' : 'none';
           if (elRules) elRules.style.display = navRules ? '' : 'none';
           if (elProjectStatus) elProjectStatus.style.display = '';
-          if (elAdminBackup) elAdminBackup.style.display = (role === 'admin_main' || role === 'system_admin') ? '' : 'none';
+          if (elAdminBackup) elAdminBackup.style.display = showPermsPanel ? '' : 'none';
+          if (elPermissionsAdmin) elPermissionsAdmin.style.display = showPermsPanel ? '' : 'none';
           if (elCc) elCc.style.display = (navCollegeCatalog || role === 'head_of_department') ? '' : 'none';
           if (elShared) elShared.style.display = (navCollegeSharedCatalog || role === 'head_of_department') ? '' : 'none';
         }
@@ -621,10 +626,12 @@
       if (elDossier) elDossier.style.display = showFacultyDossier ? '' : 'none';
       const elQuality = document.getElementById('navAcademicQuality');
       if (elQuality) elQuality.style.display = showQualityDash ? '' : 'none';
+      // قفل مؤقت: خرائط الاعتماد للأدمن الرئيسي / مسؤول النظام فقط
+      const showAccredMaps = role === 'admin_main' || role === 'system_admin';
       const elAccredMap = document.getElementById('navAccreditationMap');
-      if (elAccredMap) elAccredMap.style.display = showQualityDash ? '' : 'none';
+      if (elAccredMap) elAccredMap.style.display = showAccredMaps ? '' : 'none';
       const elAccredMapProg = document.getElementById('navAccreditationMapProg');
-      if (elAccredMapProg) elAccredMapProg.style.display = showQualityDash ? '' : 'none';
+      if (elAccredMapProg) elAccredMapProg.style.display = showAccredMaps ? '' : 'none';
       const elDeptArchive = document.getElementById('navDeptArchive');
       if (elDeptArchive) elDeptArchive.style.display = (showQualityDash && !useInstructorMore) ? '' : 'none';
       const showCollegeArchive = (caps && caps.v >= 1)
@@ -1190,13 +1197,30 @@
       if (deptBanner && deptSel && canDeptScope && !isStudentUi && !isInstructorPortalMode() && !isSupervisorPortalModeNav()) {
         deptBanner.classList.remove('d-none');
         try {
-          const dResp = await fetch('/college/catalog/departments', {
-            credentials: 'include',
-            cache: 'no-store',
-            headers: { 'Accept': 'application/json' }
-          });
-          const dJson = await dResp.json().catch(function () { return null; });
-          const items = (dJson && dJson.items) ? dJson.items : [];
+          // مصدر نطاق العرض: مسار مخصص لكل أدوار التصفية (عميد/وكيل/…)،
+          // مع احتياطي لقائمة الطلبة ثم كتالوج الكلية.
+          async function fetchDeptScopeItems() {
+            const urls = [
+              '/auth/admin_department_scope/options',
+              '/students/department/options',
+              '/college/catalog/departments'
+            ];
+            for (let i = 0; i < urls.length; i++) {
+              try {
+                const dResp = await fetch(urls[i], {
+                  credentials: 'include',
+                  cache: 'no-store',
+                  headers: { 'Accept': 'application/json' }
+                });
+                const dJson = await dResp.json().catch(function () { return null; });
+                if (dResp.ok && dJson && Array.isArray(dJson.items) && dJson.items.length) {
+                  return dJson.items;
+                }
+              } catch (_e) { /* try next */ }
+            }
+            return [];
+          }
+          const items = await fetchDeptScopeItems();
           deptSel.innerHTML = '';
           const optAll = document.createElement('option');
           optAll.value = '';
@@ -1205,9 +1229,17 @@
           items.forEach(function (d) {
             const o = document.createElement('option');
             o.value = String(d.id);
-            o.textContent = (d.code ? (d.code + ' — ') : '') + (d.name_ar || '');
+            const label = (d.name_ar || d.label || '').trim();
+            o.textContent = (d.code ? (d.code + ' — ') : '') + label;
             deptSel.appendChild(o);
           });
+          if (!items.length) {
+            const optWarn = document.createElement('option');
+            optWarn.value = '';
+            optWarn.disabled = true;
+            optWarn.textContent = 'تعذّر تحميل قائمة الأقسام — حدّث الصفحة';
+            deptSel.appendChild(optWarn);
+          }
           const curScope = data.admin_department_scope;
           deptSel.value = (curScope && curScope.id != null) ? String(curScope.id) : '';
           updateAdminDeptScopeLabel(curScope, deptSel);
@@ -1585,7 +1617,7 @@
         ]);
         if (roleKey === 'admin_main') {
           reorderMenuByIds('adminSettingsMenuList', [
-            'navUsersAdmin', 'navAdminBackup', 'navDepartmentPolicyApprovals',
+            'navUsersAdmin', 'navPermissionsAdmin', 'navAdminBackup', 'navDepartmentPolicyApprovals',
             'navProjectStatus', 'navAcademicRules', 'navCollegeCatalog', 'navCollegeSharedCatalog',
           ]);
         } else if (roleKey === 'college_dean') {
@@ -1782,6 +1814,7 @@
         ['/results','navResults'],
         ['/notifications_center','navNotificationsTop'],
         ['/users_admin','navUsersAdmin'],
+        ['/admin/permissions','navPermissionsAdmin'],
         ['/department_policy_head_page','navDepartmentPolicyHead'],
         ['/department_policy_approvals_page','navDepartmentPolicyApprovals'],
         ['/admin/project_status','navProjectStatus'],

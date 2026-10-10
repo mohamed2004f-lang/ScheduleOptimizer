@@ -628,6 +628,12 @@ def inject_ui_context():
             ctx["actor_display_ar"] = display_actor
     except Exception:
         pass
+    try:
+        from backend.core.auth import can_access_accreditation_workspace
+
+        show_accred = bool(can_access_accreditation_workspace())
+    except Exception:
+        show_accred = False
     return {
         "ui_context": ctx,
         "nav_shell_student": bool(ctx.get("nav_shell_student")),
@@ -637,6 +643,8 @@ def inject_ui_context():
         "nav_shell_staff": bool(ctx.get("nav_shell_staff")),
         "show_admin_dept_scope_ui": bool(ctx.get("show_admin_dept_scope_ui")),
         "show_dev_hints": bool(ctx.get("show_dev_hints")),
+        # قفل مؤقت: روابط خرائط الاعتماد للأدمن الرئيسي / مسؤول النظام فقط
+        "show_accreditation_nav": show_accred,
     }
 
 
@@ -1306,22 +1314,19 @@ def transcript_page():
     can_manage_transcript = False
     can_propose_transcript = False
     try:
-        from backend.core.auth import compute_capabilities
+        from backend.core.capability_gates import resolve_request_capabilities
 
-        is_sup_flag = int(session.get("is_supervisor") or 0)
-        active_mode = (session.get(SESSION_ACTIVE_MODE) or "").strip().lower() or None
-        caps = compute_capabilities(role, is_sup_flag, active_mode)
-        can_manage_transcript = bool(caps.get("can_manage_transcript_admin"))
+        caps = resolve_request_capabilities()
+        can_manage_transcript = bool(caps.get("can_manage_transcript_admin") is True)
         can_propose_transcript = bool(
             current_supervisor_effective() and not can_manage_transcript
         )
     except Exception:
+        # fail-closed: لا تُمنح إدارة الكشوف للعميد/الوكيل افتراضياً
         can_manage_transcript = role in (
             "admin",
             "admin_main",
             "system_admin",
-            "college_dean",
-            "academic_vice_dean",
             "head_of_department",
         ) and not current_supervisor_effective()
         can_propose_transcript = bool(

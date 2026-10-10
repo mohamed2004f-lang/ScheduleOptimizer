@@ -125,7 +125,7 @@ def _parse_audit_changed_by(changed_by: str | None) -> dict[str, str]:
     }
 
 
-_SUPERVISOR_AUDIT_KINDS = frozenset({"supervisor_finalize"})
+_SUPERVISOR_AUDIT_KINDS = frozenset({"supervisor_finalize", "supervisor_delete"})
 _LEGACY_HOD_APPLY_KINDS = frozenset({"transcript_correction"})
 
 
@@ -823,13 +823,77 @@ def _norm_course_code(s: str) -> str:
     return t
 
 
-def _resolve_catalog_course(cur, course_name: str = "", course_code: str = ""):
+def _transcript_department_context(conn, student_id: str, semester: str) -> int | None:
+    """قسم سياق الكشف: تصنيف الفصل (قسم تخصص) ثم قسم الطالب المنزلي."""
+    sid = (student_id or "").strip()
+    sem = (semester or "").strip()
+    if sid and sem:
+        try:
+            scope = (_load_semester_scopes(conn, sid) or {}).get(sem) or {}
+            if (scope.get("scope_kind") or "") == "department" and scope.get("department_id") not in (None, ""):
+                return int(scope["department_id"])
+        except (TypeError, ValueError, Exception):
+            pass
+    if not sid:
+        return None
+    try:
+        row = conn.cursor().execute(
+            "SELECT department_id FROM students WHERE student_id = ? LIMIT 1",
+            (sid,),
+        ).fetchone()
+        if not row or row[0] in (None, ""):
+            return None
+        return int(row[0])
+    except (TypeError, ValueError, Exception):
+        return None
+
+
+def _resolve_catalog_course(
+    cur,
+    course_name: str = "",
+    course_code: str = "",
+    *,
+    department_id: int | None = None,
+    conn=None,
+):
     """
     Resolve course by code/name from catalog with strict consistency.
     Returns dict {course_name, course_code, units} or raises ValueError.
+    عند توفر department_id يُطبَّق رمز/وحدات خطة القسم للمقررات المشتركة.
     """
     cname = (course_name or "").strip()
     ccode = (course_code or "").strip()
+
+    def _norm_name(s: str) -> str:
+        s = str(s or "").strip().lower()
+        s = s.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+        s = s.replace("ى", "ي").replace("ؤ", "و").replace("ئ", "ي")
+        s = s.replace("ـ", "")
+        for ch in ("-", "_", "/", "\\", "(", ")", "[", "]", "{", "}", "،", ",", ".", ":", ";"):
+            s = s.replace(ch, " ")
+        s = " ".join(s.split())
+        return s
+
+    def _row_from_courses_by_name(name: str):
+        if not name:
+            return None
+        row = cur.execute(
+            "SELECT course_name, COALESCE(course_code,'') AS course_code, COALESCE(units,0) AS units FROM courses WHERE course_name = ? LIMIT 1",
+            (name,),
+        ).fetchone()
+        if row:
+            return row
+        target_norm = _norm_name(name)
+        if not target_norm:
+            return None
+        all_rows = cur.execute(
+            "SELECT course_name, COALESCE(course_code,'') AS course_code, COALESCE(units,0) AS units FROM courses"
+        ).fetchall()
+        for rr in all_rows or []:
+            rr_name = (rr[0] if isinstance(rr, (list, tuple)) else rr["course_name"]) or ""
+            if _norm_name(rr_name) == target_norm:
+                return rr
+        return None
 
     row_by_code = None
     row_by_name = None
@@ -880,46 +944,77 @@ def _resolve_catalog_course(cur, course_name: str = "", course_code: str = ""):
                                 (rr[0] if isinstance(rr, (list, tuple)) else rr["course_name"]) or ""
                             ),
                         )[0]
+        # رمز خطة قسم لمقرر مشترك (مثل CIEN 319) غير موجود في courses
+        if not row_by_code and conn is not None:
+            try:
+                from backend.core.college_shared_catalog import find_course_name_by_plan_code
+
+                plan_name = find_course_name_by_plan_code(conn, ccode)
+            except Exception:
+                plan_name = None
+            if plan_name:
+                if cname and _norm_name(cname) and _norm_name(cname) != _norm_name(plan_name):
+                    # اسمح باختلاف بسيط إن كان الاسم المقدَّم هو الرسمي بلا * والرمز خطته
+                    bare_c = re.sub(r"[*＊]+$", "", cname).strip()
+                    bare_p = re.sub(r"[*＊]+$", "", plan_name).strip()
+                    if _norm_name(bare_c) != _norm_name(bare_p):
+                        raise ValueError(f"عدم تطابق بين اسم المقرر ({cname}) ورمزه ({ccode})")
+                row_by_code = _row_from_courses_by_name(plan_name) or _row_from_courses_by_name(
+                    re.sub(r"[*＊]+$", "", plan_name).strip()
+                )
+                if not cname:
+                    cname = plan_name
         if not row_by_code:
-            raise ValueError(f"رمز المقرر غير موجود في دليل المقررات: {ccode}")
-    def _norm_name(s: str) -> str:
-        s = str(s or "").strip().lower()
-        # normalize common Arabic variants and separators
-        s = s.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
-        s = s.replace("ى", "ي").replace("ؤ", "و").replace("ئ", "ي")
-        s = s.replace("ـ", "")
-        for ch in ("-", "_", "/", "\\", "(", ")", "[", "]", "{", "}", "،", ",", ".", ":", ";"):
-            s = s.replace(ch, " ")
-        s = " ".join(s.split())
-        return s
+            # إن وُجد الاسم ورُمز خطة القسم: لا تفشل؛ سنعتمد الاسم لاحقاً
+            if not (cname and conn is not None):
+                raise ValueError(f"رمز المقرر غير موجود في دليل المقررات: {ccode}")
+            try:
+                from backend.core.college_shared_catalog import course_accepts_code
+
+                if not course_accepts_code(conn, cname, ccode):
+                    raise ValueError(f"رمز المقرر غير موجود في دليل المقررات: {ccode}")
+            except ValueError:
+                raise
+            except Exception:
+                raise ValueError(f"رمز المقرر غير موجود في دليل المقررات: {ccode}")
 
     if cname:
-        row_by_name = cur.execute(
-            "SELECT course_name, COALESCE(course_code,'') AS course_code, COALESCE(units,0) AS units FROM courses WHERE course_name = ? LIMIT 1",
-            (cname,),
-        ).fetchone()
-        # fallback: normalized-name match to handle minor writing variants
+        row_by_name = _row_from_courses_by_name(cname)
         if not row_by_name:
-            target_norm = _norm_name(cname)
-            all_rows = cur.execute(
-                "SELECT course_name, COALESCE(course_code,'') AS course_code, COALESCE(units,0) AS units FROM courses"
-            ).fetchall()
-            for rr in all_rows or []:
-                rr_name = (rr[0] if isinstance(rr, (list, tuple)) else rr["course_name"]) or ""
-                if _norm_name(rr_name) == target_norm and target_norm:
-                    row_by_name = rr
-                    break
+            # جرّب الاسم الرسمي من سجل المشترك عبر الرمز
+            if conn is not None and ccode:
+                try:
+                    from backend.core.college_shared_catalog import find_course_name_by_plan_code
+
+                    plan_name = find_course_name_by_plan_code(conn, ccode)
+                except Exception:
+                    plan_name = None
+                if plan_name:
+                    row_by_name = _row_from_courses_by_name(plan_name)
         if not row_by_name and not row_by_code:
             raise ValueError(f"اسم المقرر غير موجود في دليل المقررات: {cname}")
 
-    # if both provided, ensure they point to same catalog row
     if row_by_code and row_by_name:
         name_code = row_by_code[0] if isinstance(row_by_code, (list, tuple)) else row_by_code["course_name"]
         name_name = row_by_name[0] if isinstance(row_by_name, (list, tuple)) else row_by_name["course_name"]
         if str(name_code).strip() != str(name_name).strip():
-            raise ValueError(f"عدم تطابق بين اسم المقرر ({cname}) ورمزه ({ccode})")
+            # صف مكرر برمز القسم (مثل ميكانيكا الموائع I*) مقابل الاسم الرسمي المشترك
+            prefer_name = False
+            if conn is not None and ccode:
+                try:
+                    from backend.core.college_shared_catalog import course_accepts_code
 
-    row = row_by_code or row_by_name
+                    prefer_name = course_accepts_code(conn, str(name_name).strip(), ccode) or (
+                        cname and course_accepts_code(conn, cname, ccode)
+                    )
+                except Exception:
+                    prefer_name = False
+            if prefer_name:
+                row_by_code = row_by_name
+            else:
+                raise ValueError(f"عدم تطابق بين اسم المقرر ({cname}) ورمزه ({ccode})")
+
+    row = row_by_name or row_by_code
     if not row:
         raise ValueError("يجب توفير اسم مقرر أو رمز مقرر صحيح")
     out_name = (row[0] if isinstance(row, (list, tuple)) else row["course_name"]) or ""
@@ -927,8 +1022,6 @@ def _resolve_catalog_course(cur, course_name: str = "", course_code: str = ""):
     out_units = (row[2] if isinstance(row, (list, tuple)) else row["units"]) or 0
     if not str(out_code).strip():
         raise ValueError(f"المقرر '{out_name}' لا يملك رمزاً معتمداً في دليل المقررات")
-    # إعادة قراءة الاسم من الدليل كما هو مخزّن (بدون strip على الاسم) — قيد FK يطابق course_name حرفياً
-    # قد يختلف المخزّن عن المعروض بمسافات طرفية أو أحرف Unicode شبه متطابقة؛ نطابق بـ trim ثم نعيد القيمة الأصلية من العمود
     name_key = str(out_name).strip()
     canon = cur.execute(
         """
@@ -970,8 +1063,27 @@ def _resolve_catalog_course(cur, course_name: str = "", course_code: str = ""):
     out_name = (canon[0] if isinstance(canon, (list, tuple)) else canon["course_name"]) or ""
     out_code = (canon[1] if isinstance(canon, (list, tuple)) else canon["course_code"]) or ""
     out_units = (canon[2] if isinstance(canon, (list, tuple)) else canon["units"]) or 0
-    # لا نستخدم strip() على course_name: يجب أن يطابق courses.course_name للقيد الأجنبي
-    return {"course_name": str(out_name), "course_code": str(out_code).strip(), "units": int(out_units or 0)}
+    result = {
+        "course_name": str(out_name),
+        "course_code": str(out_code).strip(),
+        "units": int(out_units or 0),
+    }
+    if department_id is not None and conn is not None:
+        try:
+            from backend.core.college_shared_catalog import resolve_course_for_department
+
+            overlaid = resolve_course_for_department(
+                conn,
+                result["course_name"],
+                department_id,
+                base_code=result["course_code"],
+                base_units=result["units"],
+            )
+            result["course_code"] = str(overlaid.get("course_code") or result["course_code"]).strip()
+            result["units"] = int(overlaid.get("units") if overlaid.get("units") is not None else result["units"])
+        except Exception:
+            pass
+    return result
 
 
 _GRADE_DRAFT_SELF_SERVICE_ROLES = ("instructor", "head_of_department", "admin_main", "admin")
@@ -2112,11 +2224,18 @@ def apply_grades_batch(
     cols = fetch_table_columns(conn, "grades")
     has_equated = "is_equated" in cols
     equated_flag = 1 if is_equated else None  # None = لا تغيّر العلم إن لم يُطلب وسم معادلة
+    dept_ctx = _transcript_department_context(conn, sid, semester)
     count = 0
     for g in grades or []:
         course = (g.get("course_name") or "").strip()
         course_code_in = (g.get("course_code") or "").strip()
-        resolved = _resolve_catalog_course(cur, course_name=course, course_code=course_code_in)
+        resolved = _resolve_catalog_course(
+            cur,
+            course_name=course,
+            course_code=course_code_in,
+            department_id=dept_ctx,
+            conn=conn,
+        )
         course = resolved["course_name"]
         new_grade_raw = g.get("grade", None)
         ok, val_or_msg = validate_grade_value(new_grade_raw)
@@ -2639,12 +2758,196 @@ def _upsert_semester_scope(
     return payload
 
 
+def _move_student_semester(conn, student_id: str, old_semester: str, new_semester: str) -> dict:
+    """
+    نقل درجات/تدقيق/تصنيف فصل لطالب واحد فقط (لا يمس باقي الطلبة).
+    يرفض عند وجود تعارض مقررات تحت الاسمين.
+    """
+    sid = (student_id or "").strip()
+    old_sem = (old_semester or "").strip()
+    new_sem = (new_semester or "").strip()
+    if not sid or not old_sem or not new_sem or old_sem == new_sem:
+        return {"moved": False, "from": old_sem, "to": new_sem}
+
+    cur = conn.cursor()
+    overlaps = cur.execute(
+        """
+        SELECT g1.course_name
+        FROM grades g1
+        JOIN grades g2
+          ON g2.student_id = g1.student_id
+         AND g2.course_name = g1.course_name
+        WHERE g1.student_id = ?
+          AND g1.semester = ?
+          AND g2.semester = ?
+        ORDER BY g1.course_name
+        """,
+        (sid, old_sem, new_sem),
+    ).fetchall()
+    if overlaps:
+        names = []
+        for row in overlaps:
+            nm = (row[0] if not hasattr(row, "keys") else row["course_name"]) or ""
+            if nm:
+                names.append(str(nm))
+        shown = "، ".join(names[:5])
+        more = f" (+{len(names) - 5})" if len(names) > 5 else ""
+        raise ValueError(
+            f"لا يمكن نقل الفصل إلى «{new_sem}»: مقررات موجودة مسبقاً تحت الاسمين"
+            + (f" ({shown}{more})" if shown else "")
+        )
+
+    cur.execute(
+        "UPDATE grades SET semester = ? WHERE student_id = ? AND semester = ?",
+        (new_sem, sid, old_sem),
+    )
+    try:
+        cur.execute(
+            "UPDATE grade_audit SET semester = ? WHERE student_id = ? AND semester = ?",
+            (new_sem, sid, old_sem),
+        )
+    except Exception:
+        pass
+    try:
+        _ensure_student_semester_scope_table(conn)
+        has_new = cur.execute(
+            "SELECT 1 FROM student_semester_scope WHERE student_id = ? AND semester = ? LIMIT 1",
+            (sid, new_sem),
+        ).fetchone()
+        if has_new:
+            cur.execute(
+                "DELETE FROM student_semester_scope WHERE student_id = ? AND semester = ?",
+                (sid, old_sem),
+            )
+        else:
+            cur.execute(
+                "UPDATE student_semester_scope SET semester = ? WHERE student_id = ? AND semester = ?",
+                (new_sem, sid, old_sem),
+            )
+    except Exception:
+        pass
+    return {"moved": True, "from": old_sem, "to": new_sem}
+
+
+def _scope_summary_label(scope: dict | None) -> str:
+    if not scope:
+        return ""
+    kind = (scope.get("scope_kind") or "").strip()
+    if kind == "college_general":
+        return "اتجاه عام"
+    badge = (scope.get("badge") or "").strip()
+    if badge:
+        return badge
+    label = (scope.get("department_label") or "").strip()
+    gcode = (scope.get("group_code") or "").strip()
+    if label:
+        return label + (f" · شعبة {gcode}" if gcode else "")
+    return "قسم تخصص" if kind == "department" else ""
+
+
+def _build_grades_save_changes(
+    conn,
+    student_id: str,
+    semester: str,
+    grades_payload: list,
+    *,
+    semester_scope: dict | None = None,
+    rename_info: dict | None = None,
+) -> dict:
+    """ملخص ما سيتغيّر قبل apply — مقررات جديدة / درجات / تصنيف / نقل تسمية."""
+    sid = (student_id or "").strip()
+    sem = (semester or "").strip()
+    changes: dict = {
+        "semester_renamed": None,
+        "scope_changed": None,
+        "courses_added": [],
+        "grades_changed": [],
+    }
+    if rename_info and rename_info.get("moved"):
+        changes["semester_renamed"] = {
+            "from": rename_info.get("from") or "",
+            "to": rename_info.get("to") or "",
+        }
+
+    existing: dict[str, object] = {}
+    if sid and sem:
+        rows = conn.cursor().execute(
+            """
+            SELECT course_name, grade
+            FROM grades
+            WHERE student_id = ? AND semester = ?
+            """,
+            (sid, sem),
+        ).fetchall()
+        for row in rows or []:
+            cname = (row[0] if not hasattr(row, "keys") else row["course_name"]) or ""
+            cname = str(cname).strip()
+            if not cname:
+                continue
+            gval = row[1] if not hasattr(row, "keys") else row["grade"]
+            existing[cname] = gval
+
+    for g in grades_payload or []:
+        if not isinstance(g, dict):
+            continue
+        cname = (g.get("course_name") or "").strip()
+        if not cname:
+            continue
+        new_raw = g.get("grade", None)
+        if cname not in existing:
+            changes["courses_added"].append(cname)
+            continue
+        old_raw = existing.get(cname)
+        try:
+            old_n = None if old_raw is None else float(old_raw)
+        except (TypeError, ValueError):
+            old_n = old_raw
+        try:
+            new_n = None if new_raw is None or new_raw == "" else float(new_raw)
+        except (TypeError, ValueError):
+            new_n = new_raw
+        if old_n != new_n:
+            changes["grades_changed"].append(
+                {
+                    "course_name": cname,
+                    "old": old_n,
+                    "new": new_n,
+                }
+            )
+
+    if isinstance(semester_scope, dict) and sid and sem:
+        old_scope = (_load_semester_scopes(conn, sid) or {}).get(sem) or {}
+        old_label = _scope_summary_label(old_scope)
+        # تسمية الهدف قبل الحفظ (بدون الاعتماد على upsert)
+        kind = (semester_scope.get("scope_kind") or "").strip()
+        if kind == "college_general":
+            new_label = "اتجاه عام"
+        else:
+            new_label = (
+                (semester_scope.get("department_label") or "").strip()
+                or (semester_scope.get("badge") or "").strip()
+                or "قسم تخصص"
+            )
+            gcode = (semester_scope.get("group_code") or "").strip()
+            if gcode and "شعبة" not in new_label:
+                new_label = f"{new_label} · شعبة {gcode}" if new_label else f"شعبة {gcode}"
+        if old_label != new_label:
+            changes["scope_changed"] = {"from": old_label or "—", "to": new_label or "—"}
+
+    return changes
+
+
 @grades_bp.route("/save", methods=["POST"])
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def save_grades():
+    from backend.core.capability_gates import capability_forbidden, session_has_capability
+
+    if not session_has_capability("can_manage_transcript_admin"):
+        return capability_forbidden("إدارة كشف الدرجات غير مسموحة لهذا الدور")
     data = request.get_json(force=True)
     sid = data.get("student_id")
     semester = data.get("semester")
+    source_semester = (data.get("source_semester") or "").strip()
     grades = data.get("grades", [])
     reason_raw = data.get("reason")
     is_equated = bool(data.get("is_equated_semester") or data.get("is_equated"))
@@ -2655,7 +2958,9 @@ def save_grades():
 
     with get_connection() as conn:
         try:
-            _assert_transcript_edit_student_scope(conn, str(sid).strip())
+            sid_s = str(sid).strip()
+            sem_s = str(semester).strip()
+            _assert_transcript_edit_student_scope(conn, sid_s)
             reason = _require_post_publish_reason(
                 reason_raw, required=_is_hod_transcript_editor()
             )
@@ -2663,31 +2968,48 @@ def save_grades():
                 reason=reason,
                 kind="post_publish" if reason else "transcript",
             )
+            rename_info = {"moved": False, "from": source_semester, "to": sem_s}
+            if source_semester and source_semester != sem_s:
+                rename_info = _move_student_semester(conn, sid_s, source_semester, sem_s)
+            changes = _build_grades_save_changes(
+                conn,
+                sid_s,
+                sem_s,
+                grades,
+                semester_scope=semester_scope,
+                rename_info=rename_info,
+            )
+            if semester_scope:
+                _upsert_semester_scope(
+                    conn,
+                    sid_s,
+                    sem_s,
+                    semester_scope,
+                )
             n = apply_grades_batch(
                 conn,
-                str(sid).strip(),
-                str(semester).strip(),
+                sid_s,
+                sem_s,
                 grades,
                 changed_by,
                 is_equated=is_equated,
                 transfer=transfer,
             )
-            if semester_scope:
-                _upsert_semester_scope(
-                    conn,
-                    str(sid).strip(),
-                    str(semester).strip(),
-                    semester_scope,
-                )
             conn.commit()
             try:
                 log_activity(
                     action="save_grades",
-                    details=f"student_id={sid}, semester={semester}, count={n}, equated={int(is_equated)}",
+                    details=f"student_id={sid}, semester={semester}, source={source_semester}, count={n}, equated={int(is_equated)}",
                 )
             except Exception:
                 pass
-            return jsonify({"status": "ok", "message": "تم حفظ الدرجات وتسجيل التعديلات"}), 200
+            return jsonify(
+                {
+                    "status": "ok",
+                    "message": "تم حفظ الدرجات وتسجيل التعديلات",
+                    "changes": changes,
+                }
+            ), 200
         except ValueError as e:
             conn.rollback()
             return jsonify({"status": "error", "message": str(e)}), 400
@@ -2869,16 +3191,14 @@ def download_semester_template():
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def import_semester_excel():
     """
-    استيراد نتيجة فصل كاملة من ملف Excel.
-    يدعم نمطين:
-      - preview: عندما يحتوي النموذج على preview=1 (أو true)، يتم فقط تحليل الملف
-        وإرجاع ملخص بعدد الطلبة/المقررات/السجلات بدون أي كتابة في قاعدة البيانات.
-      - apply: الاستيراد الفعلي عند عدم وجود preview، مع نفس منطق إدراج الدرجات السابق.
-    صيغة الملف:
-      - الصف الأول: أسماء المقررات، مع أول عمودين للـ (الاسم الرباعي، الرقم الدراسي)
-      - الصف الثاني: وحدات كل مقرر
-      - باقي الصفوف: بيانات الطلبة (الاسم، الرقم، الدرجات لكل مقرر)
+    استيراد نتيجة فصل كاملة من ملف Excel — معطّل.
+    استخدم إدخال/تعديل درجات الفصل من واجهة الكشف.
     """
+    return jsonify({
+        "status": "error",
+        "code": "IMPORT_DISABLED",
+        "message": "استيراد نتيجة الفصل لم يعد متاحاً — استخدم إدخال/تعديل درجات الفصل.",
+    }), 410
     semester_label = (request.form.get("semester") or "").strip()
     academic_year = (request.form.get("year") or "").strip()
     changed_by = (request.form.get("changed_by") or "semester-import").strip() or "semester-import"
@@ -3170,6 +3490,10 @@ def import_semester_excel():
 @grades_bp.route("/migrate_registrations_to_transcript", methods=["POST"])
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def migrate_registrations_to_transcript():
+    from backend.core.capability_gates import capability_forbidden, session_has_capability
+
+    if not session_has_capability("can_migrate_registrations_to_transcript"):
+        return capability_forbidden("ترحيل المقررات إلى كشف الدرجات محصور على الأدمن الرئيسي ما لم يُمنَح صراحة")
     data = request.get_json(force=True)
     student_id = data.get("student_id")
     semester = (data.get("semester") or "").strip()
@@ -3916,6 +4240,11 @@ def _parse_export_style_single_student(df):
 @grades_bp.route("/import/single", methods=["POST"])
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def import_single_student():
+    return jsonify({
+        "status": "error",
+        "code": "IMPORT_DISABLED",
+        "message": "استيراد كشف الدرجات لم يعد متاحاً — استخدم إدخال/تعديل درجات الفصل.",
+    }), 410
     # expects form with file (excel) and optional student_id/semester/year/changed_by
     file = request.files.get("file")
     sid = request.form.get("student_id")
@@ -4084,6 +4413,10 @@ def _import_export_style_single_student(parsed, student_id_override, student_nam
 @grades_bp.route("/update", methods=["POST"])
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def update_grade():
+    from backend.core.capability_gates import capability_forbidden, session_has_capability
+
+    if not session_has_capability("can_manage_transcript_admin"):
+        return capability_forbidden("إدارة كشف الدرجات غير مسموحة لهذا الدور")
     data = request.get_json(force=True)
     sid = data.get("student_id")
     semester = data.get("semester")
@@ -4149,15 +4482,18 @@ def update_grade():
         if new_course_name:
             course_name_final = new_course_name
 
-        # ربط الاسم/الرمز بدليل المقررات (تطبيع GE 102 ≡ GE102؛ لا مطابقة حرفية فقط)
+        # ربط الاسم/الرمز بدليل المقررات + overlay قسم الطالب/تصنيف الفصل
         catalog_name = (course_name_final or "").strip()
         catalog_code = (new_course_code or course_code_to_use or "").strip()
+        dept_ctx = _transcript_department_context(conn, str(sid).strip(), str(semester).strip())
         if catalog_name or catalog_code:
             try:
                 resolved = _resolve_catalog_course(
                     cur,
                     course_name=catalog_name,
                     course_code=catalog_code,
+                    department_id=dept_ctx,
+                    conn=conn,
                 )
             except ValueError as first_err:
                 if catalog_code and catalog_name:
@@ -4166,6 +4502,8 @@ def update_grade():
                             cur,
                             course_name=catalog_name,
                             course_code="",
+                            department_id=dept_ctx,
+                            conn=conn,
                         )
                     except ValueError:
                         return jsonify({"status": "error", "message": str(first_err)}), 400
@@ -4173,7 +4511,7 @@ def update_grade():
                     return jsonify({"status": "error", "message": str(first_err)}), 400
             course_name_final = resolved["course_name"]
             course_code_to_use = resolved["course_code"]
-            if resolved.get("units"):
+            if resolved.get("units") is not None:
                 units_to_use = int(resolved["units"])
 
         # إذا تغير اسم المقرر النهائي عن الاسم المسجل حالياً، نحذف السطر القديم لتفادي ازدواجية (اسم قديم + اسم صحيح)
@@ -4183,18 +4521,22 @@ def update_grade():
                 (sid, semester, course),
             )
 
-        cur.execute(
-            "INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                sid,
-                semester,
-                course_name_final,
-                old_grade,
-                (float(new_grade) if new_grade is not None else None),
-                changed_by,
-                datetime.datetime.utcnow().isoformat(),
-            ),
-        )
+        try:
+            cur.execute(
+                "INSERT INTO grade_audit (student_id, semester, course_name, old_grade, new_grade, changed_by, ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    sid,
+                    semester,
+                    course_name_final,
+                    old_grade,
+                    (float(new_grade) if new_grade is not None else None),
+                    changed_by,
+                    datetime.datetime.utcnow().isoformat(),
+                ),
+            )
+        except Exception:
+            # بيئات اختبار قديمة بلا جدول grade_audit
+            pass
 
         cur.execute(
             """
@@ -5128,6 +5470,10 @@ def export_transcript(student_id):
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def delete_semester():
     """Delete all grades for a student in a semester. Records audit rows for each deleted course."""
+    from backend.core.capability_gates import capability_forbidden, session_has_capability
+
+    if not session_has_capability("can_manage_transcript_admin"):
+        return capability_forbidden("إدارة كشف الدرجات غير مسموحة لهذا الدور")
     data = request.get_json(force=True)
     student_id = data.get("student_id")
     semester = data.get("semester")
@@ -5187,6 +5533,10 @@ def delete_semester():
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def delete_course():
     """Delete a single course result for a student in a semester. Records an audit row."""
+    from backend.core.capability_gates import capability_forbidden, session_has_capability
+
+    if not session_has_capability("can_manage_transcript_admin"):
+        return capability_forbidden("إدارة كشف الدرجات غير مسموحة لهذا الدور")
     data = request.get_json(force=True)
     student_id = data.get("student_id")
     semester = data.get("semester")

@@ -179,6 +179,105 @@ class TestTranscriptCorrections:
             items = (lst.get_json() or {}).get("items") or []
             assert any(int(x.get("id")) == int(req_id) for x in items)
 
+    def test_supervisor_delete_course_and_semester(self, app, db_conn, civil_dept_with_advisee):
+        ctx = civil_dept_with_advisee
+        sem = "ربيع 2025/2026"
+        cur = db_conn.cursor()
+        cur.execute(
+            "INSERT INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES (?, ?, ?, ?, ?, ?)",
+            (ctx["sid"], sem, ctx["course"], "C1", 3, 75),
+        )
+        c2 = ctx["course"] + "-ب"
+        cur.execute(
+            "INSERT INTO courses (course_name, course_code, units, owning_department_id) VALUES (?, ?, ?, ?)",
+            (c2, "C2XX", 2, ctx["dept_id"]),
+        )
+        cur.execute(
+            "INSERT INTO grades (student_id, semester, course_name, course_code, units, grade) VALUES (?, ?, ?, ?, ?, ?)",
+            (ctx["sid"], sem, c2, "C2", 2, 80),
+        )
+        db_conn.commit()
+
+        with app.test_client() as c:
+            assert c.post(
+                "/auth/login",
+                json={"username": ctx["sup_user"], "password": ctx["password"]},
+            ).status_code == 200
+            c.post("/auth/active_mode", json={"mode": "supervisor"})
+
+            # فصل حالي مرفوض
+            bad = c.post(
+                "/grades/transcript_corrections/delete",
+                json={
+                    "student_id": ctx["sid"],
+                    "semester": "خريف 2026/2027",
+                    "scope": "course",
+                    "course_name": ctx["course"],
+                    "reason": "محاولة حذف فصل حالي",
+                },
+            )
+            assert bad.status_code == 400, bad.get_data(as_text=True)
+
+            del_course = c.post(
+                "/grades/transcript_corrections/delete",
+                json={
+                    "student_id": ctx["sid"],
+                    "semester": sem,
+                    "scope": "course",
+                    "course_name": ctx["course"],
+                    "reason": "حذف مقرر بالخطأ من المشرف",
+                },
+            )
+            assert del_course.status_code == 200, del_course.get_data(as_text=True)
+            assert int((del_course.get_json() or {}).get("deleted") or 0) == 1
+
+        row = db_conn.execute(
+            "SELECT 1 FROM grades WHERE student_id = ? AND semester = ? AND course_name = ?",
+            (ctx["sid"], sem, ctx["course"]),
+        ).fetchone()
+        assert row is None
+
+        with app.test_client() as c:
+            c.post("/auth/login", json={"username": ctx["sup_user"], "password": ctx["password"]})
+            c.post("/auth/active_mode", json={"mode": "supervisor"})
+            del_sem = c.post(
+                "/grades/transcript_corrections/delete",
+                json={
+                    "student_id": ctx["sid"],
+                    "semester": sem,
+                    "scope": "semester",
+                    "reason": "حذف فصل كامل بعد خطأ إدخال",
+                },
+            )
+            assert del_sem.status_code == 200, del_sem.get_data(as_text=True)
+            assert int((del_sem.get_json() or {}).get("deleted") or 0) >= 1
+
+        left = db_conn.execute(
+            "SELECT COUNT(*) FROM grades WHERE student_id = ? AND semester = ?",
+            (ctx["sid"], sem),
+        ).fetchone()
+        assert int(left[0] or 0) == 0
+
+        try:
+            audit = db_conn.execute(
+                "SELECT COUNT(*) FROM grade_audit WHERE student_id = ? AND semester = ? AND new_grade IS NULL",
+                (ctx["sid"], sem),
+            ).fetchone()
+            assert int(audit[0] or 0) >= 2
+        except Exception:
+            pass
+
+        req = db_conn.execute(
+            """
+            SELECT status, reason FROM transcript_correction_requests
+            WHERE student_id = ? AND semester = ? AND status = 'approved'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (ctx["sid"], sem),
+        ).fetchone()
+        assert req is not None
+        assert "حذف" in str(req[1] or "")
+
     def test_transcript_includes_supervisor_audit_badge(self, app, db_conn, civil_dept_with_advisee):
         ctx = civil_dept_with_advisee
         with app.test_client() as c:

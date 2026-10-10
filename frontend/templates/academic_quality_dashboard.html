@@ -120,7 +120,9 @@
             <div class="d-grid gap-2">
               <a href="/academic_quality/surveys/results?semester={{ metrics.semester|urlencode }}" class="btn btn-primary btn-sm">نتائج الاستبيانات</a>
               <a href="/academic_quality/term_closure" class="btn btn-warning btn-sm">إغلاق الفصل (موحّد)</a>
+              {% if show_accreditation_nav %}
               <a href="/academic_quality/accreditation/map?scope=inst" class="btn btn-outline-primary btn-sm">امتثال مؤسسي</a>
+              {% endif %}
               <a href="/academic_quality/archive" class="btn btn-outline-primary btn-sm">أرشيف القسم</a>
               <a href="/academic_quality/assistant" class="btn btn-outline-primary btn-sm">المساعد الذكي</a>
             </div>
@@ -147,6 +149,7 @@
           </div>
         </a>
       </div>
+      {% if show_accreditation_nav %}
       <div class="col-md-4 col-lg-2">
         <a href="/academic_quality/accreditation/map?scope=prog" class="action-tile">
           <div class="card p-3 h-100">
@@ -155,6 +158,7 @@
           </div>
         </a>
       </div>
+      {% endif %}
       <div class="col-md-4 col-lg-2">
         <a href="/academic_quality/archive" class="action-tile">
           <div class="card p-3 h-100">

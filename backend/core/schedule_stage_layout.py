@@ -172,9 +172,16 @@ def build_display_layout_payload(
     actor_username: str | None = None,
     *,
     department_id: int | None = None,
+    semester: str | None = None,
 ) -> dict[str, Any]:
     """حمولة واجهة: هل مصفوفة المراحل مفعّلة وما وضع العرض."""
     from backend.core.feature_flags import is_schedule_stage_grid_enabled
+    from backend.core.department_scope_policy import (
+        actor_manages_college_general_scope,
+        resolve_college_general_department_id,
+        resolve_effective_department_scope_id,
+    )
+    from backend.services import schedule_display_tracks as sdt
 
     enabled = is_schedule_stage_grid_enabled()
     mode = (
@@ -184,10 +191,31 @@ def build_display_layout_payload(
     )
     if not enabled:
         mode = LAYOUT_PERSONAL_WEEKLY
+    use_stage = bool(enabled and mode == LAYOUT_STAGE_MATRIX)
+
+    display_tracks: list[dict[str, Any]] = []
+    use_display_tracks = False
+    tracks_dept = department_id
+    if tracks_dept is None:
+        if actor_manages_college_general_scope(conn, actor_username):
+            tracks_dept = resolve_college_general_department_id(conn)
+        else:
+            tracks_dept = resolve_effective_department_scope_id(conn, actor_username)
+    # أعمدة العرض لجدول الاتجاه العام فقط (ليس مصفوفة المراحل)
+    if not use_stage and tracks_dept:
+        gen_id = resolve_college_general_department_id(conn)
+        if gen_id and int(tracks_dept) == int(gen_id):
+            display_tracks = sdt.list_display_tracks(
+                conn, semester=semester, department_id=int(tracks_dept)
+            )
+            use_display_tracks = len(display_tracks) >= 1
+
     return {
         "stage_grid_enabled": enabled,
         "layout_mode": mode,
-        "use_stage_matrix": bool(enabled and mode == LAYOUT_STAGE_MATRIX),
+        "use_stage_matrix": use_stage,
+        "use_display_tracks": use_display_tracks,
+        "display_tracks": display_tracks,
         "buckets": [
             {"id": b, "label": STAGE_BUCKET_LABELS[b]} for b in STAGE_BUCKETS
         ],
