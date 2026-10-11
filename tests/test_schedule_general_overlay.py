@@ -252,3 +252,316 @@ def test_split_warning_when_multiple_groups(db_conn):
         str(w.get("course_name") or "").lower() == world["course"].lower()
         for w in resolved["split_warnings"]
     )
+
+
+def test_early_discovery_lists_registered_general_courses(db_conn):
+    world = _seed_overlay_world(db_conn)
+    disc = sgo.discover_general_courses_for_department(
+        db_conn, consumer_department_id=world["mech_id"], semester=world["sem"]
+    )
+    assert disc["applicable"] is True
+    assert disc["courses"]
+    names = {str(c["course_name"]).lower() for c in disc["courses"]}
+    assert world["course"].lower() in names
+    row = next(c for c in disc["courses"] if c["course_name"].lower() == world["course"].lower())
+    assert row["dept_registered_count"] == 2
+    assert row["groups_count"] >= 2
+    assert row["slots_preview"]
+
+
+def test_times_changed_alert_after_general_slot_edit(db_conn):
+    world = _seed_overlay_world(db_conn)
+    # اطّلاع أولي
+    sgo.acknowledge_general_course_times(
+        db_conn,
+        course_name=world["course"],
+        semester=world["sem"],
+        consumer_department_id=world["mech_id"],
+        actor="hod",
+    )
+    db_conn.commit()
+    disc1 = sgo.discover_general_courses_for_department(
+        db_conn, consumer_department_id=world["mech_id"], semester=world["sem"]
+    )
+    assert disc1["times_changed_count"] == 0
+
+    # رئيس GENERAL يغيّر الوقت
+    cur = db_conn.cursor()
+    cur.execute(
+        "UPDATE schedule SET time = ? WHERE teaching_group_id = ?",
+        ("14:00-16:00", world["groups"]["A"]),
+    )
+    db_conn.commit()
+    disc2 = sgo.discover_general_courses_for_department(
+        db_conn, consumer_department_id=world["mech_id"], semester=world["sem"]
+    )
+    assert disc2["times_changed_count"] >= 1
+    row = next(c for c in disc2["courses"] if c["course_name"].lower() == world["course"].lower())
+    assert row["times_changed"] is True
+
+
+def test_overlay_fallback_by_general_dept_course_name(db_conn):
+    """شعبة واحدة بلا teaching_group تظهر؛ متعدد الشعب لا يُحقَن تلقائياً."""
+    uid = uuid.uuid4().hex[:6]
+    cur = db_conn.cursor()
+    gen_id = _ensure_general(db_conn)
+    cur.execute(
+        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+        (f"CV{uid}".upper()[:12], f"مدني {uid}", "Civil"),
+    )
+    civil = int(cur.execute("SELECT id FROM departments WHERE code=?", (f"CV{uid}".upper()[:12],)).fetchone()[0])
+    sem = f"خريف 14{uid[:2]}"
+    course = f"ميكانيكا هندسية {uid}"
+    cur.execute(
+        "INSERT OR IGNORE INTO courses (course_name, course_code, units, owning_department_id) VALUES (?, ?, 3, ?)",
+        (course, f"EM{uid}"[:8], gen_id),
+    )
+    cur.execute(
+        "INSERT INTO instructors (name, type, is_active, department_id) VALUES (?, 'internal', 1, ?)",
+        (f"د. م {uid}", gen_id),
+    )
+    iid = int(cur.lastrowid)
+    cur.execute(
+        """
+        INSERT INTO schedule
+            (course_name, day, time, room, instructor, instructor_id, semester, department_id)
+        VALUES (?, 'الإثنين', '09:00-12:00', 'R1', ?, ?, ?, ?)
+        """,
+        (course, f"د. م {uid}", iid, sem, gen_id),
+    )
+    try:
+        cur.execute("UPDATE schedule SET id = rowid WHERE id IS NULL")
+    except Exception:
+        pass
+    sid = f"CVS{uid}"
+    cur.execute(
+        "INSERT INTO students (student_id, student_name, department_id, enrollment_status) VALUES (?, 'ط', ?, 'active')",
+        (sid, civil),
+    )
+    cur.execute(
+        "INSERT INTO registrations (student_id, course_name, semester) VALUES (?, ?, ?)",
+        (sid, course, sem),
+    )
+    db_conn.commit()
+    items = sgo.fetch_overlay_schedule_items(db_conn, consumer_department_id=civil, semester=sem)
+    assert len(items) >= 1
+    assert items[0]["course_name"] == course
+    assert items[0].get("is_overlay_general") is True
+
+    # شعبتان مختلفتان → لا حقن في الشبكة بدون اختيار
+    cur.execute(
+        "INSERT INTO instructors (name, type, is_active, department_id) VALUES (?, 'internal', 1, ?)",
+        (f"د. ن {uid}", gen_id),
+    )
+    iid2 = int(cur.lastrowid)
+    cur.execute(
+        """
+        INSERT INTO schedule
+            (course_name, day, time, room, instructor, instructor_id, semester, department_id)
+        VALUES (?, 'الثلاثاء', '09:00-12:00', 'R2', ?, ?, ?, ?)
+        """,
+        (course, f"د. ن {uid}", iid2, sem, gen_id),
+    )
+    db_conn.commit()
+    items2 = sgo.fetch_overlay_schedule_items(db_conn, consumer_department_id=civil, semester=sem)
+    assert items2 == []
+
+
+def test_full_general_timetable_returns_rows(db_conn):
+    world = _seed_overlay_world(db_conn)
+    full = sgo.fetch_full_general_timetable(db_conn, semester=world["sem"])
+    assert full["count"] >= 1
+    assert any(r["course_name"] == world["course"] for r in full["rows"])
+    assert full.get("use_display_tracks") is True
+    assert isinstance(full.get("display_tracks"), list) and len(full["display_tracks"]) >= 2
+    assert all("display_column" in r for r in full["rows"])
+
+
+def test_auto_single_group_overlay_without_binding(db_conn):
+    """مجموعة GENERAL واحدة + مسجّلون → تظهر في overlay حتى بلا ربط صريح."""
+    uid = uuid.uuid4().hex[:6]
+    cur = db_conn.cursor()
+    gen_id = _ensure_general(db_conn)
+    cur.execute(
+        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+        (f"PW{uid}".upper()[:12], f"طاقات {uid}", "Power"),
+    )
+    dept = int(cur.execute("SELECT id FROM departments WHERE code=?", (f"PW{uid}".upper()[:12],)).fetchone()[0])
+    sem = f"ربيع 14{uid[:2]}"
+    course = f"فيزياء عامة {uid}"
+    cur.execute(
+        "INSERT OR IGNORE INTO courses (course_name, course_code, units, owning_department_id) VALUES (?, ?, 3, ?)",
+        (course, f"PH{uid}"[:8], gen_id),
+    )
+    cur.execute(
+        "INSERT INTO instructors (name, type, is_active, department_id) VALUES (?, 'internal', 1, ?)",
+        (f"د. ف {uid}", gen_id),
+    )
+    iid = int(cur.lastrowid)
+    cur.execute(
+        """
+        INSERT INTO teaching_groups
+            (course_name, semester, department_id, group_code, group_kind, instructor_id, is_active)
+        VALUES (?, ?, ?, '—', 'single', ?, 1)
+        """,
+        (course, sem, gen_id, iid),
+    )
+    gid = int(cur.lastrowid)
+    cur.execute(
+        """
+        INSERT INTO schedule
+            (course_name, day, time, room, instructor, instructor_id, semester, department_id, teaching_group_id)
+        VALUES (?, 'الثلاثاء', '09:00-11:00', 'P1', ?, ?, ?, ?, ?)
+        """,
+        (course, f"د. ف {uid}", iid, sem, gen_id, gid),
+    )
+    try:
+        cur.execute("UPDATE schedule SET id = rowid WHERE id IS NULL")
+    except Exception:
+        pass
+    sid = f"SP{uid}"
+    cur.execute(
+        "INSERT INTO students (student_id, student_name, department_id, enrollment_status) VALUES (?, 'ط', ?, 'active')",
+        (sid, dept),
+    )
+    # تسجيل بلا teaching_group_id
+    cur.execute(
+        "INSERT INTO registrations (student_id, course_name, semester) VALUES (?, ?, ?)",
+        (sid, course, sem),
+    )
+    db_conn.commit()
+    items = sgo.fetch_overlay_schedule_items(db_conn, consumer_department_id=dept, semester=sem)
+    assert len(items) >= 1
+    assert int(items[0]["teaching_group_id"]) == gid
+
+
+def test_shared_catalog_courses_excluded_from_general_discovery(db_conn):
+    """مقرر مشترك مملوك لـ GENERAL لا يظهر في لوحة اختيار شعبة الاتجاه العام."""
+    from backend.core.college_shared_catalog import save_catalog_entry
+
+    uid = uuid.uuid4().hex[:6]
+    cur = db_conn.cursor()
+    gen_id = _ensure_general(db_conn)
+    cur.execute(
+        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+        (f"ME{uid}".upper()[:12], f"ميكانيكا {uid}", "Mech"),
+    )
+    mech_id = int(
+        cur.execute("SELECT id FROM departments WHERE code=?", (f"ME{uid}".upper()[:12],)).fetchone()[0]
+    )
+    sem = f"خريف 14{uid[:2]}"
+    shared_course = f"تحليلات عددية {uid}"
+    cur.execute(
+        "INSERT OR IGNORE INTO courses (course_name, course_code, units, owning_department_id) VALUES (?, ?, 3, ?)",
+        (shared_course, f"SH{uid}"[:8], gen_id),
+    )
+    save_catalog_entry(
+        db_conn,
+        {
+            "catalog_key": f"sh_{uid}",
+            "share_type": "unified",
+            "canonical_course_name": shared_course,
+            "canonical_course_code": f"SH{uid}"[:8],
+            "units": 3,
+            "requirement_scope": "pre_track",
+        },
+    )
+    sid = f"SHS{uid}"
+    cur.execute(
+        "INSERT INTO students (student_id, student_name, department_id, enrollment_status) VALUES (?, 'ط', ?, 'active')",
+        (sid, mech_id),
+    )
+    cur.execute(
+        "INSERT INTO registrations (student_id, course_name, semester) VALUES (?, ?, ?)",
+        (sid, shared_course, sem),
+    )
+    db_conn.commit()
+
+    assert sgo._is_overlay_candidate_course(db_conn, shared_course) is False
+    disc = sgo.discover_general_courses_for_department(
+        db_conn, consumer_department_id=mech_id, semester=sem
+    )
+    names = {str(c.get("course_name") or "").lower() for c in (disc.get("courses") or [])}
+    assert shared_course.lower() not in names
+
+
+def test_options_dept_on_group_differs_from_course_total_when_unlinked(db_conn):
+    """عمود «على هذه المجموعة» يجب ألا يكرّر إجمالي مسجّلي المقرر قبل الربط."""
+    world = _seed_overlay_world(db_conn)
+    cur = db_conn.cursor()
+    # أزل ربط طلبة الميكانيكا بالمجموعة A
+    cur.execute(
+        """
+        UPDATE registrations SET teaching_group_id = NULL
+        WHERE course_name = ? AND student_id LIKE ?
+        """,
+        (world["course"], f"S{world['uid']}%"),
+    )
+    db_conn.commit()
+
+    opts = sgo.list_general_group_options(
+        db_conn,
+        course_name=world["course"],
+        semester=world["sem"],
+        consumer_department_id=world["mech_id"],
+    )
+    options = opts.get("options") or []
+    assert len(options) >= 2
+    totals = {int(o.get("dept_enrolled_count") or 0) for o in options}
+    assert totals == {2}
+    for o in options:
+        assert int(o.get("dept_on_group_count") or 0) == 0
+        assert int(o.get("dept_on_group_count") or 0) != int(o.get("dept_enrolled_count") or 0)
+
+
+def test_select_assigns_unlinked_dept_registrations_and_binding(db_conn):
+    """اختيار مجموعة يربط تسجيلات القسم بلا teaching_group_id ويحفظ الـbinding."""
+    world = _seed_overlay_world(db_conn)
+    cur = db_conn.cursor()
+    cur.execute(
+        """
+        UPDATE registrations SET teaching_group_id = NULL
+        WHERE course_name = ? AND student_id LIKE ?
+        """,
+        (world["course"], f"S{world['uid']}%"),
+    )
+    db_conn.commit()
+
+    result = sgo.select_general_group_for_department(
+        db_conn,
+        course_name=world["course"],
+        semester=world["sem"],
+        teaching_group_id=world["groups"]["B"],
+        consumer_department_id=world["mech_id"],
+        actor="test",
+        force_admin=True,
+    )
+    db_conn.commit()
+    assert result["status"] == "ok"
+    assert result["moved_count"] == 2
+    assert result["teaching_group_id"] == world["groups"]["B"]
+
+    rows = cur.execute(
+        """
+        SELECT teaching_group_id FROM registrations
+        WHERE course_name = ? AND student_id LIKE ?
+        """,
+        (world["course"], f"S{world['uid']}%"),
+    ).fetchall()
+    assert len(rows) == 2
+    assert all(int(r[0]) == world["groups"]["B"] for r in rows)
+
+    bindings = sgo.list_bindings(
+        db_conn, semester=world["sem"], consumer_department_id=world["mech_id"]
+    )
+    assert bindings[world["course"].lower()] == world["groups"]["B"]
+
+    opts = sgo.list_general_group_options(
+        db_conn,
+        course_name=world["course"],
+        semester=world["sem"],
+        consumer_department_id=world["mech_id"],
+    )
+    by_code = {str(o.get("group_code")): o for o in (opts.get("options") or [])}
+    assert int(by_code["B"].get("dept_on_group_count") or 0) == 2
+    assert int(by_code["A"].get("dept_on_group_count") or 0) == 0

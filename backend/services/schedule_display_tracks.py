@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from backend.database.database import fetch_table_columns, table_exists
@@ -10,7 +11,9 @@ from backend.services.utilities import get_current_term
 MIN_DISPLAY_TRACKS = 1
 MAX_DISPLAY_TRACKS = 4
 DEFAULT_TRACK_COUNT = 2
-DEFAULT_TRACK_LABELS = ("مجموعة 1", "مجموعة 2", "مجموعة 3", "مجموعة 4")
+DEFAULT_TRACK_LABELS = ("المجموعة A", "المجموعة B", "المجموعة C", "المجموعة D")
+_LEGACY_NUMERIC_LABEL = re.compile(r"^مجموعة\s*([1-4])$")
+_LETTER_PREFIX = re.compile(r"^([A-Za-z])")
 
 
 def _now_iso() -> str:
@@ -34,12 +37,24 @@ def _row_val(row, idx: int = 0, key: str | None = None, default=None):
         return default
 
 
+def default_track_label(index: int) -> str:
+    idx = max(1, int(index or 1))
+    if idx <= len(DEFAULT_TRACK_LABELS):
+        return DEFAULT_TRACK_LABELS[idx - 1]
+    return f"المجموعة {idx}"
+
+
+def normalize_track_label(index: int, label: str | None = None) -> str:
+    """يحوّل التسميات القديمة «مجموعة 1/2» إلى «المجموعة A/B» مع الإبقاء على التسميات المخصّصة."""
+    raw = (label or "").strip()
+    if not raw or _LEGACY_NUMERIC_LABEL.match(raw):
+        return default_track_label(index)
+    return raw
+
+
 def default_track_defs(count: int = DEFAULT_TRACK_COUNT) -> list[dict[str, Any]]:
     n = max(MIN_DISPLAY_TRACKS, min(MAX_DISPLAY_TRACKS, int(count or DEFAULT_TRACK_COUNT)))
-    return [
-        {"index": i, "label": DEFAULT_TRACK_LABELS[i - 1] if i <= len(DEFAULT_TRACK_LABELS) else f"مجموعة {i}"}
-        for i in range(1, n + 1)
-    ]
+    return [{"index": i, "label": default_track_label(i)} for i in range(1, n + 1)]
 
 
 def resolve_semester_label(conn, semester: str | None = None) -> str:
@@ -81,9 +96,7 @@ def list_display_tracks(
         label = str(_row_val(r, 1, "label") or "").strip()
         if idx < MIN_DISPLAY_TRACKS or idx > MAX_DISPLAY_TRACKS:
             continue
-        if not label:
-            label = DEFAULT_TRACK_LABELS[idx - 1] if idx <= len(DEFAULT_TRACK_LABELS) else f"مجموعة {idx}"
-        out.append({"index": idx, "label": label})
+        out.append({"index": idx, "label": normalize_track_label(idx, label)})
     if out:
         return out
     if ensure_defaults:
@@ -115,9 +128,7 @@ def save_display_tracks(
             continue
         if idx < MIN_DISPLAY_TRACKS or idx > MAX_DISPLAY_TRACKS or idx in seen:
             continue
-        label = str(t.get("label") or "").strip()
-        if not label:
-            label = DEFAULT_TRACK_LABELS[idx - 1] if idx <= len(DEFAULT_TRACK_LABELS) else f"مجموعة {idx}"
+        label = normalize_track_label(idx, str(t.get("label") or "").strip())
         seen.add(idx)
         cleaned.append({"index": idx, "label": label})
     if not cleaned:
@@ -241,22 +252,48 @@ def clamp_display_column(value: Any, tracks_n: int) -> int | None:
     return min(n, tn)
 
 
+def letter_column_from_group_code(group_code: str | None, tracks_n: int) -> int | None:
+    """A/A1/A2 → العمود 1، B/B1 → 2، … إن وُجد حرف لاتيني في بداية الرمز."""
+    from backend.services.teaching_groups import DEFAULT_GROUP_CODE, normalize_group_code
+
+    tn = max(MIN_DISPLAY_TRACKS, min(MAX_DISPLAY_TRACKS, int(tracks_n or DEFAULT_TRACK_COUNT)))
+    code = normalize_group_code(group_code)
+    if not code or code == DEFAULT_GROUP_CODE:
+        return None
+    m = _LETTER_PREFIX.match(code)
+    if not m:
+        return None
+    letter = m.group(1).upper()
+    if letter < "A" or letter > "Z":
+        return None
+    idx = ord(letter) - ord("A") + 1
+    return min(idx, tn)
+
+
 def auto_display_column_for_group_code(
     group_code: str | None,
     *,
     sibling_codes: list[str],
     tracks_n: int,
 ) -> int:
-    """توزيع تلقائي: رتّب رموز المجموعات ثم عمود = min(رتبة، N)."""
+    """توزيع تلقائي: حرف الرمز أولاً (A*→1، B*→2)، وإلا رتبة الرموز بين الأشقاء."""
     from backend.services.teaching_groups import DEFAULT_GROUP_CODE, normalize_group_code
 
     tn = max(MIN_DISPLAY_TRACKS, min(MAX_DISPLAY_TRACKS, int(tracks_n or DEFAULT_TRACK_COUNT)))
+    by_letter = letter_column_from_group_code(group_code, tn)
+    if by_letter is not None:
+        return by_letter
+
     code = normalize_group_code(group_code)
     codes = sorted(
-        {normalize_group_code(c) for c in (sibling_codes or []) if normalize_group_code(c)},
+        {
+            normalize_group_code(c)
+            for c in (sibling_codes or [])
+            if normalize_group_code(c) and normalize_group_code(c) != DEFAULT_GROUP_CODE
+        },
         key=lambda c: (c == DEFAULT_GROUP_CODE, c),
     )
-    if not codes:
+    if not code or code == DEFAULT_GROUP_CODE or not codes:
         return 1
     try:
         rank = codes.index(code) if code in codes else 0
@@ -265,19 +302,28 @@ def auto_display_column_for_group_code(
     return min(rank + 1, tn)
 
 
+def _slot_key(row: dict[str, Any]) -> str:
+    day = str(row.get("day") or "").strip()
+    time = str(row.get("time") or "").strip()
+    return f"{day}|{time}"
+
+
 def enrich_schedule_rows_display_columns(
     conn,
     rows: list[dict[str, Any]],
     *,
     tracks_n: int | None = None,
 ) -> None:
-    """يملأ display_column على صفوف الجدول (صريح أو تلقائي حسب group_code للمقرر)."""
+    """يملأ display_column:
+    1) رمز يبدأ بـ A/B/… → عمود الحرف (يتجاوز العرض الصريح الخاطئ)
+    2) عرض صريح من مجموعة التدريس إن وُجد
+    3) بلا رمز مجموعة → أقل الأعمدة ازدحاماً في نفس اليوم/الوقت
+    """
     if not rows:
         return
     tn = int(tracks_n or DEFAULT_TRACK_COUNT)
     tn = max(MIN_DISPLAY_TRACKS, min(MAX_DISPLAY_TRACKS, tn))
 
-    # sibling codes لكل مقرر في نفس الفصل
     by_course: dict[str, set[str]] = {}
     for r in rows:
         cname = str(r.get("course_name") or "").strip().lower()
@@ -288,16 +334,63 @@ def enrich_schedule_rows_display_columns(
         if gcode:
             by_course[cname].add(gcode)
 
+    from backend.services.teaching_groups import DEFAULT_GROUP_CODE, normalize_group_code
+
+    pending: list[dict[str, Any]] = []
+    slot_counts: dict[str, list[int]] = {}
+
+    def _bump(row: dict[str, Any], col: int) -> None:
+        key = _slot_key(row)
+        if key not in slot_counts:
+            slot_counts[key] = [0] * tn
+        idx = max(0, min(tn - 1, int(col) - 1))
+        slot_counts[key][idx] += 1
+
     for r in rows:
-        explicit = clamp_display_column(r.get("display_column"), tn)
+        gcode = str(r.get("group_code") or r.get("tg_group_code") or "")
+        letter_col = letter_column_from_group_code(gcode, tn)
+        if letter_col is not None:
+            r["display_column"] = letter_col
+            _bump(r, letter_col)
+            continue
+
+        # عرض صريح من مجموعة التدريس (أو قيمة صفّية) لغير المرمّزين بحرف A/B
+        explicit = clamp_display_column(r.get("tg_display_column"), tn)
         if explicit is None:
-            explicit = clamp_display_column(r.get("tg_display_column"), tn)
+            explicit = clamp_display_column(r.get("display_column"), tn)
+
+        norm = normalize_group_code(gcode)
+        if not norm or norm == DEFAULT_GROUP_CODE:
+            # بلا مجموعة: تجاهل عموداً مسبقاً قد يكون من توزيع قديم — وازن لاحقاً
+            r.pop("display_column", None)
+            pending.append(r)
+            continue
+
         if explicit is not None:
             r["display_column"] = explicit
+            _bump(r, explicit)
             continue
+
         cname = str(r.get("course_name") or "").strip().lower()
-        gcode = str(r.get("group_code") or r.get("tg_group_code") or "")
         siblings = sorted(by_course.get(cname) or [])
-        r["display_column"] = auto_display_column_for_group_code(
+        col = auto_display_column_for_group_code(
             gcode, sibling_codes=siblings, tracks_n=tn
         )
+        r["display_column"] = col
+        _bump(r, col)
+
+    # المقررات بلا مجموعة: الأقل ازدحاماً في نفس الفترة (ثم العمود الأصغر عند التعادل)
+    pending.sort(
+        key=lambda r: (
+            _slot_key(r),
+            str(r.get("course_name") or ""),
+            int(r.get("section_id") or 0),
+        )
+    )
+    for r in pending:
+        key = _slot_key(r)
+        counts = slot_counts.setdefault(key, [0] * tn)
+        best_idx = min(range(tn), key=lambda i: (counts[i], i))
+        col = best_idx + 1
+        r["display_column"] = col
+        counts[best_idx] += 1

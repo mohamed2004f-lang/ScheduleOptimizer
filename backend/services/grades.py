@@ -1305,27 +1305,43 @@ def create_grade_draft():
 
         gd_cols = {c.lower() for c in fetch_table_columns(conn, "grade_drafts")}
 
-        # منع أكثر من مسودة مفتوحة في نفس الوقت للأستاذ (مقرر واحد فقط في كل مرة)
-        row_open = cur.execute(
-            """
-            SELECT id FROM grade_drafts
-            WHERE instructor_id = ?
-              AND semester = ?
-              AND status IN ('Draft','Submitted')
-            LIMIT 1
-            """,
-            (int(instructor_id), semester_label),
-        ).fetchone()
-        if row_open:
-            return jsonify({"status": "error", "message": "لديك مسودة مفتوحة بالفعل لهذا الفصل"}), 400
-
-        # قيد فريد في قاعدة البيانات على (semester, course_name, instructor_id)
-        # لذلك نتحقق مسبقاً ونُرجع رسالة واضحة بدل 500.
         draft_phase = (data.get("draft_phase") or "").strip().lower()
         if not draft_phase:
             draft_phase = "partial" if teaching_group_id else "combined"
         if draft_phase not in ("partial", "final", "combined"):
             return jsonify({"status": "error", "message": "draft_phase غير صالح"}), 400
+
+        # مسودة مفتوحة واحدة لكل مجموعة (أو لكل مقرر بلا مجموعة) — لا حظر عالمي لكل الفصل
+        open_scope_sql = ""
+        open_params: list = [int(instructor_id), semester_label]
+        if teaching_group_id and "teaching_group_id" in gd_cols:
+            open_scope_sql = " AND COALESCE(teaching_group_id, 0) = ?"
+            open_params.append(int(teaching_group_id))
+        else:
+            open_scope_sql = " AND course_name = ?"
+            open_params.append(course_name)
+            if "teaching_group_id" in gd_cols:
+                open_scope_sql += " AND (teaching_group_id IS NULL OR teaching_group_id = 0)"
+        if "draft_phase" in gd_cols:
+            open_scope_sql += " AND COALESCE(draft_phase, 'combined') = ?"
+            open_params.append(draft_phase)
+        row_open = cur.execute(
+            f"""
+            SELECT id FROM grade_drafts
+            WHERE instructor_id = ?
+              AND semester = ?
+              AND status IN ('Draft','Submitted')
+              {open_scope_sql}
+            LIMIT 1
+            """,
+            tuple(open_params),
+        ).fetchone()
+        if row_open:
+            return jsonify({
+                "status": "error",
+                "message": "لديك مسودة مفتوحة بالفعل لهذه المجموعة/المقرر",
+                "draft_id": int(row_open["id"] if hasattr(row_open, "keys") else row_open[0]),
+            }), 400
 
         if teaching_group_id and draft_phase in ("partial", "final"):
             from backend.services import course_delivery as cd
@@ -1355,6 +1371,14 @@ def create_grade_draft():
         if "draft_phase" in gd_cols and draft_phase in ("partial", "final"):
             phase_filter = " AND COALESCE(draft_phase, 'combined') = ?"
             phase_params = [draft_phase]
+        tg_filter = ""
+        tg_params: list = []
+        if "teaching_group_id" in gd_cols:
+            if teaching_group_id:
+                tg_filter = " AND COALESCE(teaching_group_id, 0) = ?"
+                tg_params = [int(teaching_group_id)]
+            else:
+                tg_filter = " AND (teaching_group_id IS NULL OR teaching_group_id = 0)"
 
         row_same_course = cur.execute(
             f"""
@@ -1363,10 +1387,11 @@ def create_grade_draft():
             WHERE instructor_id = ?
               AND semester = ?
               AND course_name = ?
+              {tg_filter}
               {phase_filter}
             LIMIT 1
             """,
-            (int(instructor_id), semester_label, course_name, *phase_params),
+            (int(instructor_id), semester_label, course_name, *tg_params, *phase_params),
         ).fetchone()
         if row_same_course:
             existing_id = int(row_same_course["id"] if hasattr(row_same_course, "keys") else row_same_course[0])
@@ -1585,8 +1610,27 @@ def save_grade_draft_items(draft_id: int):
         if (d["status"] or "") not in ("Draft", "Rejected"):
             return jsonify({"status": "error", "message": "لا يمكن تعديل مسودة ليست Draft/Rejected"}), 400
 
-        draft_phase = str(dict(d).get("draft_phase") or "combined").strip().lower()
-        has_tg = bool(dict(d).get("teaching_group_id"))
+        drow = dict(d) if hasattr(d, "keys") else {}
+        draft_phase = str(drow.get("draft_phase") or "combined").strip().lower()
+        has_tg = bool(drow.get("teaching_group_id"))
+        draft_tgid = int(drow.get("teaching_group_id") or 0)
+        allowed_sids: set[str] | None = None
+        if draft_tgid > 0:
+            reg_cols = {c.lower() for c in fetch_table_columns(conn, "registrations")}
+            if "teaching_group_id" in reg_cols:
+                rows_ok = cur.execute(
+                    """
+                    SELECT student_id FROM registrations
+                    WHERE teaching_group_id = ?
+                      AND lower(trim(course_name)) = lower(trim(?))
+                    """,
+                    (draft_tgid, (drow.get("course_name") or d["course_name"] or "").strip()),
+                ).fetchall()
+                allowed_sids = {
+                    str((r["student_id"] if hasattr(r, "keys") else r[0]) or "").strip()
+                    for r in (rows_ok or [])
+                    if str((r["student_id"] if hasattr(r, "keys") else r[0]) or "").strip()
+                }
         ap = _course_assessment_profile(conn, (d["course_name"] or "").strip())
         weights = ap.get("weights") or {}
         cw_cap = float(weights.get("coursework") or 10)
@@ -1596,9 +1640,13 @@ def save_grade_draft_items(draft_id: int):
         now = _now_iso_z()
 
         saved = 0
+        skipped_not_in_group = 0
         for it in items:
             sid = str((it or {}).get("student_id") or "").strip()
             if not sid:
+                continue
+            if allowed_sids is not None and sid not in allowed_sids:
+                skipped_not_in_group += 1
                 continue
             coursework = it.get("coursework", None)
             midterm = it.get("midterm", None)
@@ -1690,7 +1738,10 @@ def save_grade_draft_items(draft_id: int):
         cur.execute("UPDATE grade_drafts SET updated_at = ? WHERE id = ?", (now, int(draft_id)))
         conn.commit()
 
-    return jsonify({"status": "ok", "saved": int(saved)}), 200
+    payload = {"status": "ok", "saved": int(saved)}
+    if skipped_not_in_group:
+        payload["skipped_not_in_group"] = int(skipped_not_in_group)
+    return jsonify(payload), 200
 
 
 @grades_bp.route("/drafts/<int:draft_id>/submit", methods=["POST"])

@@ -5968,16 +5968,31 @@ def compute_per_student_conflicts(conn, prefer_schedule=False):
     Compute conflicts where a student has 2+ different courses at the same day/time.
     Returns list of dicts: { student_id, day, time, conflicting_sections, conflict_id }.
 
+    عند توفر teaching_group_id: تُحسب فقط حصص مجموعة الطالب، وليس كل شعب المقرر.
+    طالب بلا مجموعة لهذا المقرر لا تُحقَن أوقاته (يتجنب تضارباً وهمياً من كل الشعب).
+
     prefer_schedule=True: اقرأ من schedule أولاً (صفحة الجدول قبل/بدون إنتاج).
     وإلا: optimized_schedule إن وُجدت صفوف (لمطابقة شبكة النتائج)، وإلا schedule.
+    عند أهمية التجميع بالمجموعة يُفضَّل schedule لأن optimized_schedule بلا teaching_group_id.
     """
-    cur = conn.cursor()
+    from backend.database.database import fetch_table_columns, table_exists
 
-    def _read_from(table):
+    cur = conn.cursor()
+    sched_has_tg = False
+    if table_exists(conn, "schedule"):
         try:
+            sched_has_tg = "teaching_group_id" in {
+                c.lower() for c in fetch_table_columns(conn, "schedule")
+            }
+        except Exception:
+            sched_has_tg = False
+
+    def _read_from(table, with_tg=False):
+        try:
+            tg_sel = ", teaching_group_id" if with_tg else ", NULL AS teaching_group_id"
             return cur.execute(
                 f"""
-                SELECT DISTINCT course_name, day, time
+                SELECT DISTINCT course_name, day, time{tg_sel}
                 FROM {table}
                 WHERE course_name IS NOT NULL AND course_name != ''
                 AND day IS NOT NULL AND day != ''
@@ -5988,31 +6003,48 @@ def compute_per_student_conflicts(conn, prefer_schedule=False):
             return []
 
     schedule_rows = []
-    if prefer_schedule:
-        schedule_rows = _read_from("schedule")
+    # عند وجود عمود المجموعة: فضّل schedule الحي (optimized بلا teaching_group_id)
+    if prefer_schedule or sched_has_tg:
+        schedule_rows = _read_from("schedule", with_tg=sched_has_tg)
         if not schedule_rows:
-            schedule_rows = _read_from("optimized_schedule")
+            schedule_rows = _read_from("optimized_schedule", with_tg=False)
     else:
-        schedule_rows = _read_from("optimized_schedule")
+        schedule_rows = _read_from("optimized_schedule", with_tg=False)
         if not schedule_rows:
-            schedule_rows = _read_from("schedule")
+            schedule_rows = _read_from("schedule", with_tg=sched_has_tg)
 
     if not schedule_rows:
         return []
-    # Build mapping: course_name -> list of (day, time) tuples
+
+    # course_name -> [(day, time)]  (كل الحصص / مقررات بلا مجموعات)
+    # (course_name, tgid) -> [(day, time)]
     course_schedule = defaultdict(list)
+    course_group_schedule = defaultdict(list)
+    courses_with_groups: set[str] = set()
     for row in schedule_rows:
-        course_name = (row['course_name'] or '').strip()
-        day = (row['day'] or '').strip()
-        time = (row['time'] or '').strip()
+        if hasattr(row, "keys"):
+            course_name = (row["course_name"] or "").strip()
+            day = (row["day"] or "").strip()
+            time = (row["time"] or "").strip()
+            raw_tg = row["teaching_group_id"] if "teaching_group_id" in row.keys() else None
+        else:
+            course_name = (row[0] or "").strip() if row[0] else ""
+            day = (row[1] or "").strip() if len(row) > 1 and row[1] else ""
+            time = (row[2] or "").strip() if len(row) > 2 and row[2] else ""
+            raw_tg = row[3] if len(row) > 3 else None
+        try:
+            tgid = int(raw_tg or 0)
+        except (TypeError, ValueError):
+            tgid = 0
         if course_name and day and time:
             course_schedule[course_name].append((day, time))
+            if tgid > 0:
+                course_group_schedule[(course_name, tgid)].append((day, time))
+                courses_with_groups.add(course_name)
 
-    # Helper to convert time string to minutes
     def time_to_minutes(time_str):
-        """Convert HH:MM to minutes since midnight"""
         try:
-            parts = str(time_str).strip().split(':')
+            parts = str(time_str).strip().split(":")
             if len(parts) >= 2:
                 h = int(parts[0])
                 m = int(parts[1])
@@ -6022,101 +6054,138 @@ def compute_per_student_conflicts(conn, prefer_schedule=False):
         return None
 
     def parse_time_range(time_str):
-        """Parse time range like '09:00-11:00' or '11:00-09:00'"""
         if not time_str:
             return None, None
         time_str = str(time_str).strip()
-        # Try different separators
-        for sep in ['-', '–', '—', '/', ' to ']:
+        for sep in ["-", "–", "—", "/", " to "]:
             if sep in time_str:
                 parts = [p.strip() for p in time_str.split(sep, 1)]
                 if len(parts) == 2:
                     start_min = time_to_minutes(parts[0])
                     end_min = time_to_minutes(parts[1])
                     if start_min is not None and end_min is not None:
-                        # Handle reversed times like '13:00-09:00'
                         if end_min < start_min:
                             start_min, end_min = end_min, start_min
                         return start_min, end_min
-        # Single time
         single_min = time_to_minutes(time_str)
         return single_min, single_min
 
-    # Get all student registrations
+    reg_has_tg = False
     try:
-        registrations = cur.execute("""
-            SELECT DISTINCT student_id, course_name 
-            FROM registrations 
-            WHERE student_id IS NOT NULL 
-            AND student_id != '' 
-            AND course_name IS NOT NULL 
-            AND course_name != ''
-        """).fetchall()
+        reg_has_tg = table_exists(conn, "registrations") and "teaching_group_id" in {
+            c.lower() for c in fetch_table_columns(conn, "registrations")
+        }
+    except Exception:
+        reg_has_tg = False
+
+    try:
+        if reg_has_tg:
+            registrations = cur.execute(
+                """
+                SELECT student_id, course_name, teaching_group_id
+                FROM registrations
+                WHERE student_id IS NOT NULL
+                AND student_id != ''
+                AND course_name IS NOT NULL
+                AND course_name != ''
+                """
+            ).fetchall()
+        else:
+            registrations = cur.execute(
+                """
+                SELECT DISTINCT student_id, course_name
+                FROM registrations
+                WHERE student_id IS NOT NULL
+                AND student_id != ''
+                AND course_name IS NOT NULL
+                AND course_name != ''
+                """
+            ).fetchall()
     except Exception as e:
         import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"Error reading registrations: {e}")
+
+        logging.getLogger(__name__).error("Error reading registrations: %s", e)
         return []
 
-    # Build student schedule: student_id -> day -> list of courses with times
     student_schedule = defaultdict(lambda: defaultdict(list))
     for reg in registrations:
-        student_id = (reg['student_id'] or '').strip()
-        course_name = (reg['course_name'] or '').strip()
-        
-        # Only include courses that are in the schedule
-        if course_name not in course_schedule:
+        if hasattr(reg, "keys"):
+            student_id = (reg["student_id"] or "").strip()
+            course_name = (reg["course_name"] or "").strip()
+            raw_tg = reg["teaching_group_id"] if reg_has_tg and "teaching_group_id" in reg.keys() else None
+        else:
+            student_id = (reg[0] or "").strip() if reg[0] else ""
+            course_name = (reg[1] or "").strip() if len(reg) > 1 and reg[1] else ""
+            raw_tg = reg[2] if reg_has_tg and len(reg) > 2 else None
+        try:
+            tgid = int(raw_tg or 0)
+        except (TypeError, ValueError):
+            tgid = 0
+        if not student_id or not course_name:
             continue
-        
-        # Add all schedule entries for this course
-        for day, time_str in course_schedule[course_name]:
-            start_min, end_min = parse_time_range(time_str)
-            student_schedule[student_id][day].append({
-                'course_name': course_name,
-                'time_str': time_str,
-                'start_min': start_min,
-                'end_min': end_min
-            })
 
-    # Find conflicts: for each student+day, check for overlapping courses
+        if reg_has_tg and course_name in courses_with_groups:
+            if tgid > 0:
+                # مجموعة الطالب فقط — لا كل شعب المقرر
+                slots = course_group_schedule.get((course_name, tgid)) or []
+            else:
+                # مسجّل بلا مجموعة على مقرر مقسّم: لا تضارب وهمي من كل الشعب
+                slots = []
+        else:
+            slots = course_schedule.get(course_name) or []
+
+        if not slots:
+            continue
+
+        for day, time_str in slots:
+            start_min, end_min = parse_time_range(time_str)
+            student_schedule[student_id][day].append(
+                {
+                    "course_name": course_name,
+                    "time_str": time_str,
+                    "start_min": start_min,
+                    "end_min": end_min,
+                }
+            )
+
     conflicts = []
     conflict_id = 0
     for student_id, days_dict in student_schedule.items():
         for day, courses in days_dict.items():
-            # Check all pairs of courses for time overlap
             n = len(courses)
             for i in range(n):
                 for j in range(i + 1, n):
                     course1 = courses[i]
                     course2 = courses[j]
-                    
-                    # Skip if same course
-                    if course1['course_name'] == course2['course_name']:
+                    if course1["course_name"] == course2["course_name"]:
                         continue
-                    
-                    # Check for time overlap
                     has_overlap = False
-                    if (course1['start_min'] is not None and course1['end_min'] is not None and
-                        course2['start_min'] is not None and course2['end_min'] is not None):
-                        # Check if time ranges overlap
-                        latest_start = max(course1['start_min'], course2['start_min'])
-                        earliest_end = min(course1['end_min'], course2['end_min'])
+                    if (
+                        course1["start_min"] is not None
+                        and course1["end_min"] is not None
+                        and course2["start_min"] is not None
+                        and course2["end_min"] is not None
+                    ):
+                        latest_start = max(course1["start_min"], course2["start_min"])
+                        earliest_end = min(course1["end_min"], course2["end_min"])
                         if latest_start < earliest_end:
                             has_overlap = True
-                    elif course1['time_str'] == course2['time_str'] and course1['time_str']:
-                        # Same time string
+                    elif course1["time_str"] == course2["time_str"] and course1["time_str"]:
                         has_overlap = True
-                    
                     if has_overlap:
                         conflict_id += 1
-                        conflicting_courses = sorted([course1['course_name'], course2['course_name']])
-                        conflicts.append({
-                            'conflict_id': conflict_id,
-                            'student_id': student_id,
-                            'day': day,
-                            'time': course1['time_str'] or course2['time_str'] or '',
-                            'conflicting_sections': ', '.join(conflicting_courses)
-                        })
+                        conflicting_courses = sorted(
+                            [course1["course_name"], course2["course_name"]]
+                        )
+                        conflicts.append(
+                            {
+                                "conflict_id": conflict_id,
+                                "student_id": student_id,
+                                "day": day,
+                                "time": course1["time_str"] or course2["time_str"] or "",
+                                "conflicting_sections": ", ".join(conflicting_courses),
+                            }
+                        )
 
     return conflicts
 

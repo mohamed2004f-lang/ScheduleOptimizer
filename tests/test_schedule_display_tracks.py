@@ -28,39 +28,74 @@ def test_default_tracks_and_save(db_conn):
     sem = "خريف 1447"
     defaults = sdt.list_display_tracks(db_conn, semester=sem, department_id=dept)
     assert len(defaults) == 2
-    assert defaults[0]["label"]
+    assert defaults[0]["label"] == "المجموعة A"
+    assert defaults[1]["label"] == "المجموعة B"
 
     saved = sdt.save_display_tracks(
         db_conn,
         semester=sem,
         department_id=dept,
         tracks=[
-            {"index": 1, "label": "مجموعة A1 / B1"},
-            {"index": 2, "label": "مجموعة A2 / B2"},
+            {"index": 1, "label": "مسار مخصّص 1"},
+            {"index": 2, "label": "مسار مخصّص 2"},
             {"index": 3, "label": "مجموعة 3"},
         ],
     )
     assert len(saved) == 3
-    assert saved[0]["label"] == "مجموعة A1 / B1"
+    assert saved[0]["label"] == "مسار مخصّص 1"
+    assert saved[2]["label"] == "المجموعة C"
     listed = sdt.list_display_tracks(db_conn, semester=sem, department_id=dept)
     assert len(listed) == 3
-    assert listed[2]["label"] == "مجموعة 3"
+    assert listed[2]["label"] == "المجموعة C"
 
 
-def test_auto_display_column_stacks_excess():
+def test_auto_display_column_letter_prefix():
     assert sdt.auto_display_column_for_group_code("A", sibling_codes=["A", "B"], tracks_n=2) == 1
     assert sdt.auto_display_column_for_group_code("B", sibling_codes=["A", "B"], tracks_n=2) == 2
+    assert sdt.auto_display_column_for_group_code("A1", sibling_codes=["A1", "A2", "B1", "B2"], tracks_n=2) == 1
+    assert sdt.auto_display_column_for_group_code("A2", sibling_codes=["A1", "A2", "B1", "B2"], tracks_n=2) == 1
+    assert sdt.auto_display_column_for_group_code("B1", sibling_codes=["A1", "A2", "B1", "B2"], tracks_n=2) == 2
+    assert sdt.auto_display_column_for_group_code("B2", sibling_codes=["A1", "A2", "B1", "B2"], tracks_n=2) == 2
     assert sdt.auto_display_column_for_group_code("C", sibling_codes=["A", "B", "C"], tracks_n=2) == 2
 
 
-def test_enrich_rows_respects_explicit_column(db_conn):
+def test_enrich_rows_letter_overrides_explicit_and_balances_untagged(db_conn):
     rows = [
-        {"course_name": "رياضيات I", "group_code": "A", "display_column": 2},
-        {"course_name": "رياضيات I", "group_code": "B"},
+        {
+            "course_name": "ميكانيكا",
+            "group_code": "A2",
+            "display_column": 2,
+            "day": "السبت",
+            "time": "12:00-14:00",
+            "section_id": 1,
+        },
+        {
+            "course_name": "ميكانيكا",
+            "group_code": "B1",
+            "day": "السبت",
+            "time": "12:00-14:00",
+            "section_id": 2,
+        },
+        {
+            "course_name": "حاسوب",
+            "group_code": "—",
+            "day": "السبت",
+            "time": "09:00-12:00",
+            "section_id": 3,
+        },
+        {
+            "course_name": "رياضيات I",
+            "group_code": "",
+            "day": "السبت",
+            "time": "09:00-12:00",
+            "section_id": 4,
+        },
     ]
     sdt.enrich_schedule_rows_display_columns(db_conn, rows, tracks_n=2)
-    assert rows[0]["display_column"] == 2
-    assert rows[1]["display_column"] in (1, 2)
+    assert rows[0]["display_column"] == 1  # A2 → المجموعة A
+    assert rows[1]["display_column"] == 2  # B1 → المجموعة B
+    # بلا رمز: يوزَّعان على العمودين لتقليل الازدحام
+    assert {rows[2]["display_column"], rows[3]["display_column"]} == {1, 2}
 
 
 def test_setup_saves_display_column(db_conn):

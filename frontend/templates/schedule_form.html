@@ -166,25 +166,38 @@
             </div>
           </div>
           <div id="scheduleRegistrationInsights" class="mb-3"></div>
-          <div id="generalGroupSelectPanel" class="mb-3 d-none">
+          <div class="timetable-scroll-hint">
+            <div id="scheduleList" class="timetable-wrapper"></div>
+            <div id="scheduleMobileList" class="d-none"></div>
+          </div>
+
+          <div id="generalGroupSelectPanel" class="mb-3 mt-3 d-none">
             <div class="card border-info">
               <div class="card-body py-2">
                 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
                   <div>
-                    <strong class="small">مجموعات الاتجاه العام في جدول قسمك</strong>
-                    <div class="form-text small mb-0">الأوقات من رئيس الاتجاه العام — اختيار المجموعة ينقل طلبة قسمك إلى تلك المجموعة.</div>
+                    <strong class="small">اختيار / تغيير شعبة الاتجاه العام</strong>
+                    <div class="form-text small mb-0">في شبكة جدولك تظهر فقط الشعبة المسجّل عليها طلبتك. باقي شعب نفس المقرر تُختار من هنا. جدول الاتجاه العام الكامل أسفل هذه اللوحة للمرجعية (عرض فقط).</div>
                   </div>
                   <button type="button" class="btn btn-outline-info btn-sm" id="btnRefreshGeneralGroups">تحديث</button>
                 </div>
+                <div id="generalGroupTimesChanged" class="alert alert-danger py-1 px-2 small d-none mb-2"></div>
                 <div id="generalGroupSplitWarn" class="alert alert-warning py-1 px-2 small d-none mb-2"></div>
                 <div id="generalGroupCoursesList" class="small"></div>
               </div>
             </div>
           </div>
-          <div class="timetable-scroll-hint">
-            <div id="scheduleList" class="timetable-wrapper"></div>
-            <div id="scheduleMobileList" class="d-none"></div>
-          </div>
+
+          <details class="mt-3 general-full-timetable-wrap d-none" id="generalFullTimetableWrap">
+            <summary class="general-full-timetable-summary">
+              <strong>جدول الاتجاه العام بالكامل</strong>
+              <span class="text-muted small ms-2" id="generalFullTimetableMeta">عرض مرجعي فقط — لا يُعدَّل من هنا</span>
+            </summary>
+            <div class="general-full-timetable-body mt-2">
+              <p class="small text-muted mb-2 mb-0">كل شعب وأوقات مقررات الاتجاه العام لهذا الفصل. لتثبيت شعبة في جدول قسمك استخدم «اختيار / تغيير المجموعة» في اللوحة أعلاه.</p>
+              <div id="generalFullTimetable" class="timetable-wrapper general-full-timetable-grid"></div>
+            </div>
+          </details>
         </div>
       </div>
 
@@ -206,7 +219,7 @@
                       <th>المجموعة</th>
                       <th>الأوقات</th>
                       <th>السعة</th>
-                      <th>مسجّلو قسمك</th>
+                      <th>على هذه المجموعة</th>
                       <th></th>
                     </tr>
                   </thead>
@@ -1018,6 +1031,7 @@ async function loadSchedule(){
     applyScheduleViewMode();
     bindEditorGridHandlers(el, showSlotManage);
     try { refreshGeneralGroupsPanel(); } catch (_gg) {}
+    try { loadGeneralFullTimetable(); } catch (_gf) {}
 
     try {
       const subtitle = document.getElementById('schedulePageSubtitle');
@@ -1094,6 +1108,17 @@ function fillManageCoursesModal(day, time){
     const title = document.createElement('strong');
     title.textContent = course.course_name || '';
     infoDiv.appendChild(title);
+    // شارة المجموعة (A / B1 …) — نفس منطق الشبكة حتى لا يُحذف/يُعدَّل الصف الخطأ
+    const gCode = (typeof scheduleRowGroupCode === 'function'
+      ? scheduleRowGroupCode(course)
+      : String(course.group_code || course.group_code_label || '').trim().toUpperCase());
+    if (gCode && gCode !== '—' && gCode !== '-' && gCode !== 'الكل') {
+      const badge = document.createElement('span');
+      badge.className = 'slot-group-badge ms-1';
+      badge.title = 'مجموعة ' + gCode;
+      badge.textContent = gCode;
+      infoDiv.appendChild(badge);
+    }
     if (course.room) {
       const spanRoom = document.createElement('span');
       spanRoom.textContent = ` — القاعة: ${course.room}`;
@@ -2484,6 +2509,363 @@ async function setupInstructorDeptStudentPanel(auth) {
   }
 }
 
+// ——— مجموعات الاتجاه العام (overlay) — يجب أن تكون عامة لأن loadSchedule يستدعيها ———
+let _ggPickCourse = '';
+let _ggPickSemester = '';
+
+function _ggEsc(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+function _ggFetchOpts(extra){
+  return Object.assign({
+    credentials: 'same-origin',
+    headers: {
+      'Accept': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+    },
+  }, extra || {});
+}
+
+async function loadGeneralFullTimetable(){
+  const wrap = document.getElementById('generalFullTimetableWrap');
+  const box = document.getElementById('generalFullTimetable');
+  const meta = document.getElementById('generalFullTimetableMeta');
+  if (!wrap || !box) return;
+  try {
+    const r = await fetch('/schedule/general_groups/full_timetable', _ggFetchOpts());
+    const j = r.ok ? await r.json() : null;
+    if (!j || j.status !== 'ok' || j.applicable === false) {
+      wrap.classList.add('d-none');
+      return;
+    }
+    const rows = Array.isArray(j.rows) ? j.rows : [];
+    if (!rows.length) {
+      wrap.classList.add('d-none');
+      return;
+    }
+    wrap.classList.remove('d-none');
+    if (meta) {
+      meta.textContent = `${rows.length} حصة · ${j.semester || ''} · عرض فقط`;
+    }
+    const displayTracks = Array.isArray(j.display_tracks) && j.display_tracks.length
+      ? j.display_tracks
+      : [{ index: 1, label: 'المجموعة A' }, { index: 2, label: 'المجموعة B' }];
+    const useDisplayTracks = j.use_display_tracks !== false;
+    const renderOpts = {
+      compact: true,
+      showSlotManage: false,
+      showDayPeriodEdit: false,
+      byDay: TIME_SLOTS_BY_DAY,
+      unionSlots: CUSTOM_TIME_SLOTS,
+      fillEmptyDays: false,
+      getCourseColor,
+      showAssistantLine: true,
+      useDisplayTracks,
+      displayTracks,
+    };
+    let html = '';
+    if (typeof buildPersonalWeeklyTimetableHtml === 'function') {
+      const byDay = Object.assign({}, TIME_SLOTS_BY_DAY);
+      if (!Object.keys(byDay).some(d => (byDay[d] || []).length)) {
+        const union = (CUSTOM_TIME_SLOTS || []).slice();
+        (DAYS || []).forEach(d => { byDay[d] = union.slice(); });
+      }
+      html = buildPersonalWeeklyTimetableHtml(rows, Object.assign({}, renderOpts, { byDay }));
+    } else {
+      html = '<p class="text-muted small">تعذّر رسم جدول الاتجاه العام.</p>';
+    }
+    box.innerHTML = html;
+  } catch (e) {
+    wrap.classList.add('d-none');
+  }
+}
+
+async function acknowledgeGeneralCourseTimes(courseName, semester){
+  const name = String(courseName || '').trim();
+  if (!name) return;
+  try {
+    await fetch('/schedule/general_groups/acknowledge', _ggFetchOpts({
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      body: JSON.stringify({ course_name: name, semester: semester || undefined }),
+    }));
+  } catch (_e) {}
+}
+
+async function refreshGeneralGroupsPanel(){
+  const panel = document.getElementById('generalGroupSelectPanel');
+  const listEl = document.getElementById('generalGroupCoursesList');
+  const warnEl = document.getElementById('generalGroupSplitWarn');
+  const changedEl = document.getElementById('generalGroupTimesChanged');
+  if (!panel || !listEl) return;
+  try {
+    const r = await fetch('/schedule/general_groups/summary', _ggFetchOpts());
+    const j = r.ok ? await r.json() : null;
+    if (!j || j.status !== 'ok' || !j.applicable) {
+      panel.classList.add('d-none');
+      return;
+    }
+    const courses = Array.isArray(j.courses) ? j.courses : [];
+    const warnings = j.split_warnings || [];
+    if (!courses.length && !warnings.length) {
+      panel.classList.add('d-none');
+      return;
+    }
+    panel.classList.remove('d-none');
+    _ggPickSemester = j.semester || _ggPickSemester || '';
+
+    if (changedEl) {
+      const n = Number(j.times_changed_count || 0);
+      if (n > 0) {
+        changedEl.classList.remove('d-none');
+        changedEl.textContent = `تغيّرت أوقات ${n} مقرر اتجاه عام بعد آخر اطلاع — راجع الأوقات أدناه.`;
+      } else {
+        changedEl.classList.add('d-none');
+        changedEl.textContent = '';
+      }
+    }
+    if (warnEl) {
+      const need = Number(j.needs_choice_count || 0);
+      if (warnings.length || need > 0) {
+        warnEl.classList.remove('d-none');
+        const bits = warnings.map(w => w.message || w.course_name);
+        if (need > 0) bits.push(`${need} مقرر يحتاج اختيار مجموعة موحّدة`);
+        warnEl.textContent = bits.filter(Boolean).join(' · ');
+      } else {
+        warnEl.classList.add('d-none');
+        warnEl.textContent = '';
+      }
+    }
+
+    if (!courses.length) {
+      listEl.innerHTML = '<span class="text-muted">لا مقررات اتجاه عام مرتبطة بطلبة/خطط قسمك حالياً.</span>';
+      return;
+    }
+
+    listEl.innerHTML = courses.map(c => {
+      const name = String(c.course_name || '').trim();
+      const badges = [];
+      if (c.times_changed) badges.push('<span class="badge text-bg-danger">تغيّرت الأوقات</span>');
+      if (c.needs_choice) badges.push('<span class="badge text-bg-warning text-dark">يلزم اختيار مجموعة</span>');
+      if (c.in_schedule_overlay) badges.push('<span class="badge text-bg-success">في الجدول</span>');
+      else if (c.never_seen) badges.push('<span class="badge text-bg-info">جديد</span>');
+      if ((c.sources || []).includes('enrollment_plans') && !(c.sources || []).includes('registrations')) {
+        badges.push('<span class="badge text-bg-secondary">من الخطة</span>');
+      }
+      const preview = (c.slots_preview || []).slice(0, 6).map(s =>
+        `${_ggEsc(s.group_code || '')}: ${_ggEsc(s.day || '')} ${_ggEsc(s.time || '')}`
+      ).join(' · ');
+      const hasTimes = (c.slots_preview || []).length > 0;
+      const groupsCount = Number(c.groups_count || 0);
+      const canPick = groupsCount > 0 && hasTimes;
+      const counts = [];
+      if (c.dept_registered_count) counts.push(`${c.dept_registered_count} مسجّل`);
+      if (c.dept_planned_count) counts.push(`${c.dept_planned_count} في الخطة`);
+      const metaLine = [counts.join(' · '), groupsCount ? `${groupsCount} مجموعة` : '']
+        .filter(Boolean).join(' — ');
+      const pickAction = canPick
+        ? `<button type="button" class="btn btn-sm btn-outline-primary gg-pick-btn" data-course="${_ggEsc(name)}">اختيار / تغيير المجموعة</button>`
+        : `<span class="small text-muted" title="لا إجراء مطلوب من رئيس القسم حتى يعلن الاتجاه العام الأوقات والمجموعات">بانتظار إعلان الاتجاه العام</span>`;
+      return (
+        `<div class="border-bottom py-2">` +
+        `<div class="d-flex flex-wrap align-items-start justify-content-between gap-2">` +
+        `<div class="flex-grow-1">` +
+        `<div><strong>${_ggEsc(name)}</strong> ${badges.join(' ')}</div>` +
+        (metaLine ? `<div class="text-muted">${_ggEsc(metaLine)}</div>` : '') +
+        (preview ? `<div class="small mt-1" style="direction:rtl">${preview}</div>` : '<div class="small text-muted mt-1">لا أوقات معلنة بعد من الاتجاه العام</div>') +
+        `</div>` +
+        `<div class="d-flex flex-wrap gap-1">` +
+        (c.times_changed
+          ? `<button type="button" class="btn btn-sm btn-outline-danger gg-ack-btn" data-course="${_ggEsc(name)}">تم الاطلاع</button>`
+          : '') +
+        pickAction +
+        `</div></div></div>`
+      );
+    }).join('');
+
+    listEl.querySelectorAll('.gg-pick-btn').forEach(btn => {
+      btn.addEventListener('click', () => openGeneralGroupPicker(btn.getAttribute('data-course') || ''));
+    });
+    listEl.querySelectorAll('.gg-ack-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        await acknowledgeGeneralCourseTimes(btn.getAttribute('data-course') || '', j.semester);
+        await refreshGeneralGroupsPanel();
+      });
+    });
+  } catch (e) {
+    panel.classList.add('d-none');
+  }
+}
+
+function _ggSelectSuccessMsg(payload) {
+  const moved = Number(payload && payload.moved_count || 0);
+  const exam = (payload && payload.exam_note) ? ` — ${payload.exam_note}` : '';
+  if (moved > 0) return `تم النقل: ${moved} طالباً${exam}`;
+  return `تم تحديث الربط؛ لا تسجيلات جديدة للنقل${exam}`;
+}
+
+function _ggSelectErrorMsg(payload) {
+  const code = String((payload && payload.code) || '');
+  const msg = String((payload && payload.message) || '').trim();
+  if (code === 'PUBLISHED_LOCK') {
+    return msg || 'الجدول معتمد/منشور — اختيار المجموعة متاح للمسؤول فقط.';
+  }
+  if (code === 'CAPACITY') {
+    return msg || 'تجاوز سعة المجموعة المختارة.';
+  }
+  return msg || 'فشل النقل';
+}
+
+async function openGeneralGroupPicker(courseName){
+  const name = String(courseName || '').trim();
+  if (!name) return;
+  _ggPickCourse = name;
+  _ggPickSemester = '';
+  const title = document.getElementById('generalGroupPickTitle');
+  const body = document.getElementById('generalGroupPickBody');
+  const warn = document.getElementById('generalGroupPickWarn');
+  const hint = document.getElementById('generalGroupPickHint');
+  if (title) title.textContent = 'اختيار مجموعة — ' + name;
+  if (body) body.innerHTML = '<tr><td colspan="5" class="text-muted">جاري التحميل…</td></tr>';
+  if (warn) { warn.classList.add('d-none'); warn.textContent = ''; }
+  if (hint) hint.textContent = 'معاينة الأوقات ثم تأكيد النقل.';
+  const modalEl = document.getElementById('generalGroupPickModal');
+  if (modalEl) bootstrap.Modal.getOrCreateInstance(modalEl).show();
+  try {
+    const q = new URLSearchParams({ course_name: name });
+    const r = await fetch('/schedule/general_groups/options?' + q.toString(), _ggFetchOpts());
+    const j = await r.json();
+    if (!r.ok || j.status !== 'ok') {
+      if (body) body.innerHTML = `<tr><td colspan="5" class="text-danger">${_ggEsc(j.message || 'تعذّر التحميل')}</td></tr>`;
+      return;
+    }
+    _ggPickSemester = j.semester || '';
+    if (warn && j.split_warning) {
+      warn.classList.remove('d-none');
+      warn.textContent = j.split_warning.message || 'طلابك موزّعون على أكثر من مجموعة';
+    }
+    const opts = j.options || [];
+    if (!opts.length) {
+      if (body) body.innerHTML = '<tr><td colspan="5" class="text-muted">لا مجموعات اتجاه عام لهذا المقرر في الفصل الحالي.</td></tr>';
+      return;
+    }
+    const deptTotal = Number((opts[0] && opts[0].dept_enrolled_count) || 0);
+    if (hint) {
+      hint.textContent = deptTotal > 0
+        ? `معاينة الأوقات ثم تأكيد النقل. إجمالي مسجّلي المقرر في قسمك: ${deptTotal}.`
+        : 'معاينة الأوقات ثم تأكيد النقل.';
+    }
+    body.innerHTML = opts.map(o => {
+      const slots = (o.slots || []).map(s => `${s.day || ''} ${s.time || ''}`).filter(Boolean).join('<br>') || '—';
+      const enrolled = Number(o.enrolled_count || 0);
+      const capMax = (o.capacity_max != null && Number(o.capacity_max) > 0) ? Number(o.capacity_max) : null;
+      const cap = capMax != null ? `${enrolled} / ${capMax}` : (enrolled > 0 ? `${enrolled} · بلا حد` : 'بلا حد');
+      const cur = o.is_current ? ' is-current' : '';
+      const gCode = (o.group_code && String(o.group_code) !== '—') ? o.group_code : 'موحّدة';
+      const curLabel = o.is_current ? ' <span class="badge text-bg-success">الحالية</span>' : '';
+      const gid = Number(o.teaching_group_id || 0);
+      const onGroup = Number(o.dept_on_group_count != null ? o.dept_on_group_count : 0);
+      const selectBtn = gid > 0
+        ? `<button type="button" class="btn btn-sm btn-primary gg-confirm-btn" data-gid="${gid}" data-code="${_ggEsc(o.group_code || '')}" data-dept-n="${onGroup}">اختيار</button>`
+        : `<span class="text-danger small">لا مجموعة صالحة</span>`;
+      return (
+        `<tr class="gg-opt-row${cur}" data-gid="${gid}">` +
+        `<td><strong>${_ggEsc(gCode)}</strong>${curLabel}<div class="text-muted">${_ggEsc(o.instructor_name || '')}</div></td>` +
+        `<td class="small">${slots}</td>` +
+        `<td dir="ltr">${_ggEsc(cap)}</td>` +
+        `<td>${_ggEsc(onGroup)}</td>` +
+        `<td>${selectBtn}</td>` +
+        `</tr>`
+      );
+    }).join('');
+    body.querySelectorAll('.gg-confirm-btn').forEach(btn => {
+      btn.addEventListener('click', () => confirmGeneralGroupSelect(btn));
+    });
+  } catch (e) {
+    if (body) body.innerHTML = '<tr><td colspan="5" class="text-danger">خطأ في الاتصال</td></tr>';
+  }
+}
+
+async function confirmGeneralGroupSelect(btn){
+  const gid = Number(btn.getAttribute('data-gid') || 0);
+  const code = btn.getAttribute('data-code') || '';
+  if (!_ggPickCourse) return;
+  if (!gid) {
+    showMsg('لا يمكن الاختيار: لم تُعرَّف مجموعة تدريس لهذا المقرر بعد — اطلب من رئيس الاتجاه العام حفظ «مجموعة واحدة» من إعداد المجموعات.', 'warning', 8000);
+    return;
+  }
+  const ok = window.confirm(
+    `تأكيد نقل تسجيلات طلبة قسمك في «${_ggPickCourse}» إلى المجموعة ${code || gid}؟\n\n` +
+    'الأوقات من رئيس الاتجاه العام. سيتم تحديث ربط المجموعة وتسجيلات القسم.'
+  );
+  if (!ok) return;
+  btn.disabled = true;
+  try {
+    const postOpts = (body) => _ggFetchOpts({
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      body: JSON.stringify(body),
+    });
+    const r = await fetch('/schedule/general_groups/select', postOpts({
+      course_name: _ggPickCourse,
+      semester: _ggPickSemester || undefined,
+      teaching_group_id: gid,
+      confirm: true,
+    }));
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.status !== 'ok') {
+      if (j.code === 'CONFLICT') {
+        const force = window.confirm(
+          (j.message || 'تعارض أوقات') + '\n\nهل تريد المتابعة رغم التعارض؟'
+        );
+        if (force) {
+          const r2 = await fetch('/schedule/general_groups/select', postOpts({
+            course_name: _ggPickCourse,
+            semester: _ggPickSemester || undefined,
+            teaching_group_id: gid,
+            confirm: true,
+            allow_conflicts: true,
+          }));
+          const j2 = await r2.json().catch(() => ({}));
+          if (!r2.ok || j2.status !== 'ok') {
+            showMsg(_ggSelectErrorMsg(j2), 'danger', 9000);
+            btn.disabled = false;
+            return;
+          }
+          showMsg(_ggSelectSuccessMsg(j2), 'success', 8000);
+        } else {
+          btn.disabled = false;
+          return;
+        }
+      } else {
+        showMsg(_ggSelectErrorMsg(j), 'danger', 9000);
+        btn.disabled = false;
+        return;
+      }
+    } else {
+      showMsg(_ggSelectSuccessMsg(j), 'success', 8000);
+    }
+    const modalEl = document.getElementById('generalGroupPickModal');
+    if (modalEl) bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+    await loadSchedule();
+  } catch (e) {
+    showMsg('خطأ في الاتصال', 'danger');
+    btn.disabled = false;
+  }
+}
+
 /* ---------- Init ---------- */
 document.addEventListener('DOMContentLoaded', () => {
   loadCourses();
@@ -2678,228 +3060,6 @@ document.addEventListener('DOMContentLoaded', () => {
         .catch(() => pubBanner.classList.add('d-none'));
     } else if (pubBanner) {
       pubBanner.classList.add('d-none');
-    }
-  }
-
-  // ——— مجموعات الاتجاه العام (overlay) ———
-  let _ggPickCourse = '';
-  let _ggPickSemester = '';
-
-  function _ggEsc(s){
-    return String(s == null ? '' : s)
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-      .replace(/"/g,'&quot;');
-  }
-
-  async function refreshGeneralGroupsPanel(){
-    const panel = document.getElementById('generalGroupSelectPanel');
-    const listEl = document.getElementById('generalGroupCoursesList');
-    const warnEl = document.getElementById('generalGroupSplitWarn');
-    if (!panel || !listEl) return;
-    if (!IS_ADMIN || IS_VIEW_ONLY_ROLE) {
-      // العميد/الوكيل قد يكونون view-only لكن ما زالوا يرون الملخص إن وُجد overlay
-    }
-    try {
-      const r = await fetch('/schedule/general_groups/summary', { credentials: 'same-origin' });
-      const j = r.ok ? await r.json() : null;
-      if (!j || j.status !== 'ok' || !j.applicable) {
-        panel.classList.add('d-none');
-        return;
-      }
-      const by = j.by_course || {};
-      const keys = Object.keys(by);
-      const warnings = j.split_warnings || [];
-      const overlayCourses = new Set(
-        (currentScheduleData || [])
-          .filter(x => x && x.is_overlay_general)
-          .map(x => String(x.course_name || '').trim().toLowerCase())
-      );
-      if (!keys.length && !warnings.length && !overlayCourses.size) {
-        panel.classList.add('d-none');
-        return;
-      }
-      panel.classList.remove('d-none');
-      if (warnEl) {
-        if (warnings.length) {
-          warnEl.classList.remove('d-none');
-          warnEl.textContent = warnings.map(w => w.message || w.course_name).join(' · ');
-        } else {
-          warnEl.classList.add('d-none');
-          warnEl.textContent = '';
-        }
-      }
-      const courseNames = new Set(keys);
-      overlayCourses.forEach(c => {
-        // استخدم الاسم الظاهر من الصفوف
-        (currentScheduleData || []).forEach(row => {
-          if (row && row.is_overlay_general && String(row.course_name || '').trim().toLowerCase() === c) {
-            courseNames.add(String(row.course_name || '').trim());
-          }
-        });
-      });
-      // أعد بناء قائمة بأسماء المقررات الحقيقية
-      const displayNames = [];
-      const seen = new Set();
-      (currentScheduleData || []).forEach(row => {
-        if (!row || !row.is_overlay_general) return;
-        const n = String(row.course_name || '').trim();
-        const k = n.toLowerCase();
-        if (!n || seen.has(k)) return;
-        seen.add(k);
-        displayNames.push(n);
-      });
-      Object.keys(by).forEach(k => {
-        if (seen.has(k)) return;
-        // by_course keys are lowercased — حاول إيجاد اسم من الخيارات لاحقاً
-        displayNames.push(k);
-        seen.add(k);
-      });
-      if (!displayNames.length) {
-        listEl.innerHTML = '<span class="text-muted">لا مقررات اتجاه عام مرتبطة بطلبة قسمك حالياً.</span>';
-        return;
-      }
-      listEl.innerHTML = displayNames.map(name => {
-        const meta = by[String(name).toLowerCase()] || {};
-        const src = meta.source === 'binding' ? 'ربط صريح' : (meta.source === 'registrations' ? 'من التسجيلات' : '');
-        const g = meta.teaching_group_id ? `مجموعة #${meta.teaching_group_id}` : '';
-        return (
-          `<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 border-bottom py-1">` +
-          `<div><strong>${_ggEsc(name)}</strong>` +
-          (src || g ? `<span class="text-muted ms-1">${_ggEsc([g, src].filter(Boolean).join(' · '))}</span>` : '') +
-          `</div>` +
-          `<button type="button" class="btn btn-sm btn-outline-primary gg-pick-btn" data-course="${_ggEsc(name)}">اختيار / تغيير المجموعة</button>` +
-          `</div>`
-        );
-      }).join('');
-      listEl.querySelectorAll('.gg-pick-btn').forEach(btn => {
-        btn.addEventListener('click', () => openGeneralGroupPicker(btn.getAttribute('data-course') || ''));
-      });
-    } catch (e) {
-      panel.classList.add('d-none');
-    }
-  }
-
-  async function openGeneralGroupPicker(courseName){
-    const name = String(courseName || '').trim();
-    if (!name) return;
-    _ggPickCourse = name;
-    _ggPickSemester = '';
-    const title = document.getElementById('generalGroupPickTitle');
-    const body = document.getElementById('generalGroupPickBody');
-    const warn = document.getElementById('generalGroupPickWarn');
-    if (title) title.textContent = 'اختيار مجموعة — ' + name;
-    if (body) body.innerHTML = '<tr><td colspan="5" class="text-muted">جاري التحميل…</td></tr>';
-    if (warn) { warn.classList.add('d-none'); warn.textContent = ''; }
-    const modalEl = document.getElementById('generalGroupPickModal');
-    if (modalEl) bootstrap.Modal.getOrCreateInstance(modalEl).show();
-    try {
-      const q = new URLSearchParams({ course_name: name });
-      const r = await fetch('/schedule/general_groups/options?' + q.toString(), { credentials: 'same-origin' });
-      const j = await r.json();
-      if (!r.ok || j.status !== 'ok') {
-        if (body) body.innerHTML = `<tr><td colspan="5" class="text-danger">${_ggEsc(j.message || 'تعذّر التحميل')}</td></tr>`;
-        return;
-      }
-      _ggPickSemester = j.semester || '';
-      if (warn && j.split_warning) {
-        warn.classList.remove('d-none');
-        warn.textContent = j.split_warning.message || 'طلابك موزّعون على أكثر من مجموعة';
-      }
-      const opts = j.options || [];
-      if (!opts.length) {
-        if (body) body.innerHTML = '<tr><td colspan="5" class="text-muted">لا مجموعات اتجاه عام لهذا المقرر في الفصل الحالي.</td></tr>';
-        return;
-      }
-      body.innerHTML = opts.map(o => {
-        const slots = (o.slots || []).map(s => `${s.day || ''} ${s.time || ''}`).filter(Boolean).join('<br>') || '—';
-        const cap = o.capacity_max != null ? `${o.enrolled_count || 0} / ${o.capacity_max}` : `${o.enrolled_count || 0}`;
-        const cur = o.is_current ? ' is-current' : '';
-        const curLabel = o.is_current ? ' <span class="badge text-bg-success">الحالية</span>' : '';
-        return (
-          `<tr class="gg-opt-row${cur}" data-gid="${o.teaching_group_id}">` +
-          `<td><strong>${_ggEsc(o.group_code || o.teaching_group_id)}</strong>${curLabel}<div class="text-muted">${_ggEsc(o.instructor_name || '')}</div></td>` +
-          `<td class="small">${slots}</td>` +
-          `<td dir="ltr">${_ggEsc(cap)}</td>` +
-          `<td>${_ggEsc(o.dept_enrolled_count || 0)}</td>` +
-          `<td><button type="button" class="btn btn-sm btn-primary gg-confirm-btn" data-gid="${o.teaching_group_id}" data-code="${_ggEsc(o.group_code || '')}" data-dept-n="${o.dept_enrolled_count || 0}">اختيار</button></td>` +
-          `</tr>`
-        );
-      }).join('');
-      body.querySelectorAll('.gg-confirm-btn').forEach(btn => {
-        btn.addEventListener('click', () => confirmGeneralGroupSelect(btn));
-      });
-    } catch (e) {
-      if (body) body.innerHTML = '<tr><td colspan="5" class="text-danger">خطأ في الاتصال</td></tr>';
-    }
-  }
-
-  async function confirmGeneralGroupSelect(btn){
-    const gid = Number(btn.getAttribute('data-gid') || 0);
-    const code = btn.getAttribute('data-code') || '';
-    if (!gid || !_ggPickCourse) return;
-    // تقدير عدد المنقولين: نعرض تأكيداً عاماً — الخادم يحسب العدد الدقيق
-    const ok = window.confirm(
-      `تأكيد نقل تسجيلات طلبة قسمك في «${_ggPickCourse}» إلى المجموعة ${code || gid}؟\n\n` +
-      'الأوقات من رئيس الاتجاه العام. سيتم تحديث ربط المجموعة وتسجيلات القسم.'
-    );
-    if (!ok) return;
-    btn.disabled = true;
-    try {
-      const r = await fetch('/schedule/general_groups/select', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          course_name: _ggPickCourse,
-          semester: _ggPickSemester || undefined,
-          teaching_group_id: gid,
-          confirm: true,
-        }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || j.status !== 'ok') {
-        if (j.code === 'CONFLICT') {
-          const force = window.confirm(
-            (j.message || 'تعارض أوقات') + '\n\nهل تريد المتابعة رغم التعارض؟'
-          );
-          if (force) {
-            const r2 = await fetch('/schedule/general_groups/select', {
-              method: 'POST',
-              credentials: 'same-origin',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                course_name: _ggPickCourse,
-                semester: _ggPickSemester || undefined,
-                teaching_group_id: gid,
-                confirm: true,
-                allow_conflicts: true,
-              }),
-            });
-            const j2 = await r2.json().catch(() => ({}));
-            if (!r2.ok || j2.status !== 'ok') {
-              showMsg(j2.message || 'فشل النقل', 'danger');
-              btn.disabled = false;
-              return;
-            }
-            showMsg(`تم النقل: ${j2.moved_count || 0} طالباً` + (j2.exam_note ? ' — ' + j2.exam_note : ''), 'success', 8000);
-          } else {
-            btn.disabled = false;
-            return;
-          }
-        } else {
-          showMsg(j.message || 'فشل النقل', 'danger');
-          btn.disabled = false;
-          return;
-        }
-      } else {
-        showMsg(`تم النقل: ${j.moved_count || 0} طالباً` + (j.exam_note ? ' — ' + j.exam_note : ''), 'success', 8000);
-      }
-      const modalEl = document.getElementById('generalGroupPickModal');
-      if (modalEl) bootstrap.Modal.getOrCreateInstance(modalEl).hide();
-      await loadSchedule();
-    } catch (e) {
-      showMsg('خطأ في الاتصال', 'danger');
-      btn.disabled = false;
     }
   }
 

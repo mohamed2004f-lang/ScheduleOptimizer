@@ -1213,6 +1213,20 @@ html[data-theme="dark"] .product-home-credit,
 #generalGroupSelectPanel .gg-opt-row{ cursor:pointer; }
 #generalGroupSelectPanel .gg-opt-row:hover{ background:#f5f9fc; }
 #generalGroupSelectPanel .gg-opt-row.is-current{ background:#eef6ee; }
+.general-full-timetable-wrap{
+  border:1px solid #c5d6e4; border-radius:6px; background:#f7fafc; padding:.5rem .75rem;
+}
+.general-full-timetable-summary{
+  cursor:pointer; list-style:none; display:flex; flex-wrap:wrap; align-items:center; gap:.35rem;
+}
+.general-full-timetable-summary::-webkit-details-marker{ display:none; }
+.general-full-timetable-summary::before{
+  content:'▶'; font-size:10px; color:#1e4a6e; margin-inline-end:4px;
+}
+.general-full-timetable-wrap[open] .general-full-timetable-summary::before{ content:'▼'; }
+.general-full-timetable-grid{ opacity:.95; }
+.general-full-timetable-grid .course-btn,
+.general-full-timetable-grid .manage-courses-btn{ pointer-events:none; }
 .stage-row-actions{
   background: #f8fafc;
   padding: 4px 8px !important;

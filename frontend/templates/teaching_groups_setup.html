@@ -37,6 +37,7 @@
           </div>
           <div id="auditSummary" class="small text-muted"></div>
         </div>
+        <div id="regUnlinkedPanel" class="d-none mt-2 border-top pt-2"></div>
       </div>
     </div>
 
@@ -154,15 +155,15 @@
       const sid = String(s.student_id || '');
       const hay = (name + ' ' + sid).toLowerCase();
       if (q && !hay.includes(q)) return '';
-      let hint = '';
-      if (kind === 'candidate' && s.from_group_label) {
-        hint = ` <span class="text-muted">(من مجموعة ${esc(s.from_group_label)})</span>`;
-      } else if (kind === 'candidate' && s.in_other_group) {
-        hint = ' <span class="text-muted">(مجموعة أخرى)</span>';
-      }
-      return `<label class="form-check d-block mb-1">
-        <input type="checkbox" class="form-check-input roster-cb" data-kind="${kind}" data-tgid="${tgid}" value="${esc(sid)}">
-        <span class="form-check-label small">${esc(name)} <span class="text-muted">${esc(sid)}</span>${hint}</span>
+      const fromOther = kind === 'candidate' && !!(s.from_group_badge || s.from_group_label || s.in_other_group);
+      const badgeText = s.from_group_badge || (s.from_group_label ? `من مجموعة ${s.from_group_label}` : (s.in_other_group ? 'مجموعة أخرى' : ''));
+      const mutedClass = fromOther ? ' text-muted opacity-75' : '';
+      const badgeHtml = badgeText
+        ? ` <span class="badge text-bg-secondary">${esc(badgeText)}</span>`
+        : '';
+      return `<label class="form-check d-block mb-1${mutedClass}">
+        <input type="checkbox" class="form-check-input roster-cb" data-kind="${kind}" data-tgid="${tgid}" data-from-other="${fromOther ? '1' : '0'}" data-from-badge="${esc(badgeText)}" value="${esc(sid)}">
+        <span class="form-check-label small">${esc(name)} <span class="text-muted">${esc(sid)}</span>${badgeHtml}</span>
       </label>`;
     }
 
@@ -176,16 +177,19 @@
       if (countBadge) countBadge.textContent = String(members.length);
 
       const siblingLabels = roster.sibling_labels || {};
+      const siblingMeta = roster.sibling_meta || {};
       const candidates = [];
       (roster.unassigned || []).forEach(s => {
-        candidates.push({ ...s, from_group_label: '' });
+        candidates.push({ ...s, from_group_label: '', from_group_badge: '' });
       });
       (roster.groups || []).forEach(g => {
         const ogid = Number(g.teaching_group_id);
         if (ogid === gid) return;
-        const label = siblingLabels[ogid] || g.group_code_label || g.group_code || String(ogid);
+        const meta = siblingMeta[String(ogid)] || siblingMeta[ogid] || {};
+        const label = meta.group_code_label || siblingLabels[ogid] || g.group_code_label || g.group_code || String(ogid);
+        const badge = meta.badge || g.badge || label;
         (g.members || []).forEach(s => {
-          candidates.push({ ...s, from_group_label: label });
+          candidates.push({ ...s, from_group_label: label, from_group_badge: badge });
         });
       });
 
@@ -238,6 +242,18 @@
         showMsg('حدّد طالبًا واحدًا على الأقل', 'warning');
         return;
       }
+      if (action === 'assign') {
+        const transfers = boxes.filter(b => b.getAttribute('data-from-other') === '1');
+        if (transfers.length) {
+          const badges = [...new Set(transfers.map(b => b.getAttribute('data-from-badge') || '').filter(Boolean))];
+          const fromBit = badges.length ? ` (${badges.join(' · ')})` : '';
+          const ok = window.confirm(
+            `سينقل ${transfers.length} طالب من مجموعاتهم الحالية${fromBit} إلى هذه المجموعة.\n` +
+            'التضارب وكشف الدرجات يتبعان المجموعة الجديدة.\n\nمتابع؟'
+          );
+          if (!ok) return;
+        }
+      }
       const r = await fetch('/schedule/teaching_groups/roster/assign', {
         method: 'POST',
         credentials: 'include',
@@ -253,20 +269,24 @@
       const off = OFFERINGS[offIdx];
       if (off && j.roster) {
         ROSTER_CACHE[courseRosterKey(off.course_name, off.department_id)] = j.roster;
-        renderRosterIntoPanel(off, tgid, j.roster);
-        // حدّث شارات العدّ لكل مجموعات المقرر
+        // حدّث كل لوحات نفس المقرر المفتوحة
+        document.querySelectorAll(`.tg-roster-panel[data-off="${offIdx}"]`).forEach(p => {
+          const otherGid = Number(p.dataset.tgid || 0);
+          if (otherGid) renderRosterIntoPanel(off, otherGid, j.roster);
+        });
         (j.roster.groups || []).forEach(g => {
           const badge = document.querySelector(`.roster-count[data-tgid="${g.teaching_group_id}"]`);
           if (badge) badge.textContent = String(g.member_count || 0);
         });
       }
       const st = j.stats || {};
-      showMsg(
-        action === 'unassign'
-          ? `تمت إزالة ${st.updated || 0} طالب`
-          : `تم تعيين ${st.updated || 0} طالب للمجموعة` + (st.not_registered ? ` — غير مسجّل: ${st.not_registered}` : ''),
-        'success'
-      );
+      let msg = action === 'unassign'
+        ? `تمت إزالة ${st.updated || 0} طالب`
+        : `تم تعيين ${st.updated || 0} طالب للمجموعة`;
+      if (st.transferred_from) msg += ` (منها ${st.transferred_from} نقلاً)`;
+      if (st.not_registered) msg += ` — غير مسجّل: ${st.not_registered}`;
+      if (st.grade_warning) msg += ` — ${st.grade_warning}`;
+      showMsg(msg, st.grade_warning ? 'warning' : 'success');
     }
 
     function bindRosterEventsFor(offIdx, tgid) {
@@ -317,7 +337,7 @@
       const sel = Number(selected || 0);
       const tracks = (DISPLAY_TRACKS && DISPLAY_TRACKS.length)
         ? DISPLAY_TRACKS
-        : [{ index: 1, label: 'مجموعة 1' }, { index: 2, label: 'مجموعة 2' }];
+        : [{ index: 1, label: 'المجموعة A' }, { index: 2, label: 'المجموعة B' }];
       let html = '<option value="">— تلقائي —</option>';
       tracks.forEach((t) => {
         const idx = Number(t.index || 0);
@@ -335,8 +355,8 @@
       if (!SHOW_DISPLAY_TRACKS) return;
       if (!DISPLAY_TRACKS.length) {
         DISPLAY_TRACKS = [
-          { index: 1, label: 'مجموعة 1' },
-          { index: 2, label: 'مجموعة 2' },
+          { index: 1, label: 'المجموعة A' },
+          { index: 2, label: 'المجموعة B' },
         ];
       }
       list.innerHTML = DISPLAY_TRACKS.map((t, i) => `
@@ -492,8 +512,11 @@
           <input type="radio" class="btn-check" name="kind_${idx}" id="kind_split_${idx}" value="split" ${kind === 'split' ? 'checked' : ''}>
           <label class="btn btn-outline-secondary" for="kind_split_${idx}">مجموعات A / B / C</label>
         </div>
+        <div class="form-text small mb-2 ${kind === 'single' ? '' : 'd-none'}" id="singleHint_${idx}">
+          عند الحفظ: كل الطلبة المسجّلين في هذا المقرر يُربطون تلقائياً بهذه المجموعة والأستاذ الرئيسي (حتى مع عدة محاضرات في الأسبوع).
+        </div>
         <div class="split-editor d-none mb-2" id="splitEditor_${idx}">
-          <div class="small text-muted mb-1">أضف مجموعات ثم عيّن الأستاذ والحصص لكل مجموعة</div>
+          <div class="small text-muted mb-1">أضف مجموعات ثم عيّن الأستاذ والحصص لكل مجموعة — الطالب يبقى في مجموعة واحدة فقط (مثل A1).</div>
           <div id="splitGroups_${idx}"></div>
           <button type="button" class="btn btn-outline-primary btn-sm mt-1 btn-add-group" data-off="${idx}">+ مجموعة</button>
         </div>`;
@@ -596,8 +619,10 @@
           const isSplit = radio.value === 'split';
           const editor = document.getElementById('splitEditor_' + idx);
           const body = document.getElementById('offBody_' + idx);
+          const singleHint = document.getElementById('singleHint_' + idx);
           if (editor) editor.classList.toggle('d-none', !isSplit);
           if (body) body.classList.toggle('d-none', isSplit);
+          if (singleHint) singleHint.classList.toggle('d-none', isSplit);
           if (isSplit && editor && !editor.dataset.init) {
             editor.dataset.init = '1';
             initSplitEditor(Number(idx));
@@ -686,11 +711,77 @@
           ${audit.total_groups || 0} مجموعة —
           ${audit.total_slots || 0} حصة —
           <span class="${audit.unlinked_count ? 'text-danger fw-semibold' : ''}">${audit.unlinked_count || 0} حصة بلا مجموعة</span>
-          — <span class="${regU ? 'text-danger fw-semibold' : ''}">${regU} تسجيل بلا مجموعة</span>
+          — <button type="button" id="btnShowRegUnlinked" class="btn btn-link btn-sm p-0 align-baseline ${regU ? 'text-danger fw-semibold' : 'text-muted'}" ${regU ? '' : 'disabled'} title="عرض أسماء الطلبة">${regU} تسجيل بلا مجموعة</button>
           ${needs ? ` — <span class="text-warning">${needs} مقرر يحتاج إعداد</span>` : ''}
           ${emptyG ? ` — <span class="text-warning">${emptyG} مجموعة بلا حصص</span>` : ''}
           ${(audit.slots_without_instructor || []).length ? ' — <span class="text-warning">حصص بلا أستاذ</span>' : ''}
           ${(audit.slots_without_department || []).length ? ' — <span class="text-warning">حصص بلا قسم</span>' : ''}`;
+        const btn = document.getElementById('btnShowRegUnlinked');
+        if (btn && regU) btn.addEventListener('click', showRegUnlinkedList);
+      }
+      const panel = document.getElementById('regUnlinkedPanel');
+      if (panel && !regU) {
+        panel.classList.add('d-none');
+        panel.innerHTML = '';
+      }
+    }
+
+    async function showRegUnlinkedList() {
+      const panel = document.getElementById('regUnlinkedPanel');
+      if (!panel) return;
+      if (!panel.classList.contains('d-none') && panel.dataset.loaded === '1') {
+        panel.classList.add('d-none');
+        return;
+      }
+      panel.classList.remove('d-none');
+      panel.innerHTML = '<span class="small text-muted">جاري جلب التسجيلات…</span>';
+      try {
+        const qs = new URLSearchParams({ semester: CURRENT_SEM || '' });
+        const r = await fetch('/schedule/teaching_groups/registrations/audit?' + qs.toString(), {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || j.status !== 'ok') {
+          throw new Error((j && j.message) || 'فشل جلب التسجيلات');
+        }
+        const rows = j.unlinked_registrations || [];
+        if (!rows.length) {
+          panel.innerHTML = '<span class="small text-success">لا توجد تسجيلات بلا مجموعة حالياً.</span>';
+          panel.dataset.loaded = '1';
+          return;
+        }
+        const byCourse = {};
+        rows.forEach((u) => {
+          const c = String(u.course_name || '—').trim() || '—';
+          if (!byCourse[c]) byCourse[c] = [];
+          byCourse[c].push(u);
+        });
+        const needsAb = rows.some((u) => u.needs_choice);
+        let html = `<div class="small mb-1"><strong>${rows.length} تسجيل بلا مجموعة</strong></div>`;
+        if (needsAb) {
+          html += `<div class="alert alert-info py-1 px-2 small mb-2">` +
+            `مقررات الاتجاه العام ذات مجموعات A/B تُربط من ` +
+            `<a href="/schedule_form" class="alert-link">الجدول الدراسي → مجموعات الاتجاه العام</a> ` +
+            `(اختيار / تغيير المجموعة) — ليس من إعداد مقررات القسم التخصصي ولا من ترحيل التسجيلات التلقائي.` +
+            `</div>`;
+        } else {
+          html += `<div class="small text-muted mb-2">للمقررات ذات المجموعة الواحدة: احفظ الإعداد أو استخدم روستر الطلبة.</div>`;
+        }
+        Object.keys(byCourse).sort().forEach((course) => {
+          const list = byCourse[course];
+          html += `<div class="mb-2"><div class="fw-semibold text-dark">${esc(course)} <span class="text-muted">(${list.length})</span></div><ul class="mb-0 ps-3">`;
+          list.forEach((u) => {
+            const choice = u.needs_choice ? ' <span class="badge bg-warning text-dark">يحتاج اختيار A/B</span>' : '';
+            html += `<li>${esc(u.student_id)} — ${esc(u.student_name || '—')}${choice}</li>`;
+          });
+          html += '</ul></div>';
+        });
+        panel.innerHTML = html;
+        panel.dataset.loaded = '1';
+      } catch (e) {
+        panel.innerHTML = `<span class="small text-danger">${esc(e.message || e)}</span>`;
+        panel.dataset.loaded = '0';
       }
     }
 

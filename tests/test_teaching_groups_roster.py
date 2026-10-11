@@ -87,6 +87,10 @@ def test_roster_lists_unassigned_then_assign(db_conn):
     assert roster["totals"]["registered"] == 3
     assert roster["totals"]["unassigned"] == 3
     assert len(roster["unassigned"]) == 3
+    assert isinstance(roster.get("sibling_meta"), dict)
+    assert str(seed["group_a"]) in roster["sibling_meta"]
+    assert roster["sibling_meta"][str(seed["group_a"])].get("badge")
+    assert any(g.get("instructor_name") for g in roster["groups"])
 
     stats = tg.assign_students_to_teaching_group(
         db_conn,
@@ -95,6 +99,7 @@ def test_roster_lists_unassigned_then_assign(db_conn):
         action="assign",
     )
     assert stats["updated"] >= 2
+    assert stats.get("transferred_from", 0) == 0
 
     roster2 = tg.list_course_group_roster(
         db_conn,
@@ -107,12 +112,13 @@ def test_roster_lists_unassigned_then_assign(db_conn):
     assert roster2["totals"]["unassigned"] == 1
 
     # نقل إلى B
-    tg.assign_students_to_teaching_group(
+    stats_move = tg.assign_students_to_teaching_group(
         db_conn,
         teaching_group_id=seed["group_b"],
         student_ids=[seed["students"][0]],
         action="assign",
     )
+    assert stats_move.get("transferred_from", 0) >= 1
     roster3 = tg.list_course_group_roster(
         db_conn,
         course_name=seed["course"],
@@ -132,6 +138,68 @@ def test_roster_lists_unassigned_then_assign(db_conn):
         action="unassign",
     )
     assert tg.count_registrations_for_teaching_group(db_conn, seed["group_b"]) == 0
+
+
+def test_single_group_setup_assigns_all_registrations(db_conn):
+    """مجموعة واحدة (محاضرات متعددة): كل المسجّلين يُربطون تلقائياً بالمجموعة."""
+    uid = uuid.uuid4().hex[:6]
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+        (f"SG{uid}".upper()[:12], f"قسم {uid}", "SG"),
+    )
+    dept_id = cur.execute(
+        "SELECT id FROM departments WHERE code = ?", (f"SG{uid}".upper()[:12],)
+    ).fetchone()[0]
+    course = f"ورش {uid}"
+    sem = "خريف 44-45"
+    cur.execute(
+        "INSERT OR IGNORE INTO courses (course_name, course_code, units, owning_department_id) VALUES (?, ?, 3, ?)",
+        (course, f"WS{uid}"[:8], dept_id),
+    )
+    cur.execute(
+        "INSERT INTO instructors (name, type, is_active, department_id) VALUES (?, 'internal', 1, ?)",
+        (f"د. ورش {uid}", dept_id),
+    )
+    inst_id = int(cur.lastrowid)
+    students = []
+    for i in range(4):
+        sid = f"W{uid}{i}"
+        cur.execute(
+            "INSERT INTO students (student_id, student_name, department_id) VALUES (?, ?, ?)",
+            (sid, f"طالب ورش {i}", dept_id),
+        )
+        cur.execute(
+            "INSERT INTO registrations (student_id, course_name, semester) VALUES (?, ?, ?)",
+            (sid, course, sem),
+        )
+        students.append(sid)
+    cur.execute(
+        """
+        INSERT INTO schedule (course_name, day, time, room, instructor_id, semester, department_id)
+        VALUES (?, 'الأحد', '09:00-13:00', '1', ?, ?, ?)
+        """,
+        (course, inst_id, sem, dept_id),
+    )
+    section_id = int(cur.lastrowid)
+    db_conn.commit()
+
+    saved = tg.setup_course_offering(
+        db_conn,
+        course_name=course,
+        semester=sem,
+        department_id=dept_id,
+        group_kind="single",
+        groups=[{"instructor_id": inst_id, "section_ids": [section_id]}],
+    )
+    assert len(saved) == 1
+    gid = int(saved[0]["id"])
+    assert tg.count_registrations_for_teaching_group(db_conn, gid) == 4
+    roster = tg.list_course_group_roster(
+        db_conn, course_name=course, semester=sem, department_id=dept_id
+    )
+    assert roster["totals"]["unassigned"] == 0
+    assert roster["totals"]["assigned"] == 4
 
 
 def test_roster_api(auth_client, db_conn):

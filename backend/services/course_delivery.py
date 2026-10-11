@@ -285,9 +285,7 @@ def ensure_course_delivery_schema(conn) -> None:
 
 
 def _ensure_grade_drafts_phase_unique(conn) -> None:
-    """يسمح بمسودتي جزئي/نهائي لنفس المقرر (PostgreSQL)."""
-    if not is_postgresql():
-        return
+    """تفرد المسودة حسب المجموعة + المرحلة (PostgreSQL وSQLite)."""
     cur = conn.cursor()
     try:
         cur.execute(
@@ -303,14 +301,15 @@ def _ensure_grade_drafts_phase_unique(conn) -> None:
         )
     except Exception:
         pass
-    for cname in (
-        "grade_drafts_semester_course_name_instructor_id_section_id_key",
-        "grade_drafts_semester_course_name_instructor_id_key",
-    ):
-        try:
-            cur.execute(f"ALTER TABLE grade_drafts DROP CONSTRAINT IF EXISTS {cname}")
-        except Exception:
-            pass
+    if is_postgresql():
+        for cname in (
+            "grade_drafts_semester_course_name_instructor_id_section_id_key",
+            "grade_drafts_semester_course_name_instructor_id_key",
+        ):
+            try:
+                cur.execute(f"ALTER TABLE grade_drafts DROP CONSTRAINT IF EXISTS {cname}")
+            except Exception:
+                pass
     conn.commit()
 
 

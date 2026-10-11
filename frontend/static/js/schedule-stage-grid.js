@@ -384,7 +384,7 @@
   function buildDisplayTracksTimetableHtml(scheduleRows, opts) {
     opts = opts || {};
     const tracks = normalizeDisplayTracks(opts);
-    const trackList = tracks.length ? tracks : [{ index: 1, label: 'مجموعة 1' }, { index: 2, label: 'مجموعة 2' }];
+    const trackList = tracks.length ? tracks : [{ index: 1, label: 'المجموعة A' }, { index: 2, label: 'المجموعة B' }];
     const tracksN = trackList.length;
     const cleanClass = opts.showSlotManage ? '' : ' timetable--clean';
     const compactClass = opts.compact ? ' is-compact' : '';

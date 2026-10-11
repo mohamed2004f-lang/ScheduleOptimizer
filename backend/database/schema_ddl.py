@@ -968,7 +968,9 @@ TABLES_SCHEMA = {
             approved_at TEXT,
             approved_by TEXT,
             note TEXT,
-            UNIQUE (semester, course_name, instructor_id, section_id)
+            teaching_group_id INTEGER,
+            draft_phase TEXT DEFAULT 'combined',
+            UNIQUE (semester, course_name, instructor_id, section_id, teaching_group_id, draft_phase)
         )
     """,
 

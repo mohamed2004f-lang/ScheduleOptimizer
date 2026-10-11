@@ -1458,13 +1458,20 @@ def list_schedule_rows():
     with get_connection() as conn:
         ctx = current_term_match_context(conn)
         term_part = (ctx or {}).get("term_key") or (ctx or {}).get("raw_label") or "none"
+        # تسمية التشغيل العربية (خريف …) — مطلوبة لـ teaching_groups / overlay
+        ops_label = (
+            (ctx or {}).get("ops_label")
+            or (ctx or {}).get("raw_label")
+            or _current_term_label_safe(conn)
+            or ""
+        ).strip()
         try:
             from backend.core.cache_setup import cache, list_cache_key
 
             scope_early = _effective_schedule_department_scope_id(conn)
             dept_cache = int(scope_early) if scope_early is not None else 0
             if cache:
-                _ck = list_cache_key(f"schedule_rows:{term_part}:dept:{dept_cache}")
+                _ck = list_cache_key(f"schedule_rows:{term_part}:dept:{dept_cache}:v2")
                 _hit = cache.get(_ck)
                 if isinstance(_hit, list):
                     return jsonify(_hit)
@@ -1604,7 +1611,7 @@ def list_schedule_rows():
                         conn,
                         result,
                         consumer_department_id=int(dept_id),
-                        semester=term_part or None,
+                        semester=ops_label or None,
                         pk_col=SCHEDULE_PK_COL,
                         term_match_ctx=ctx,
                     )
@@ -1617,7 +1624,7 @@ def list_schedule_rows():
                     dept_cache = int(dept_id) if dept_id is not None else 0
                     # خزّن القائمة (JSON) لا كائن Response — أضمن عبر العمال/Redis
                     cache.set(
-                        list_cache_key(f"schedule_rows:{term_part}:dept:{dept_cache}"),
+                        list_cache_key(f"schedule_rows:{term_part}:dept:{dept_cache}:v2"),
                         result,
                     )
             except Exception:
@@ -1818,29 +1825,115 @@ def general_groups_select():
     "head_of_department",
 )
 def general_groups_summary():
-    """ملخص مجموعات الاتجاه العام الفعّالة لقسم العرض + تحذيرات الانقسام."""
+    """اكتشاف مبكر + ملخص مجموعات الاتجاه العام + تنبيهات تغيّر الأوقات."""
     from backend.services import schedule_general_overlay as sgo
 
     semester = (request.args.get("semester") or "").strip() or None
     with get_connection() as conn:
         ok, dept, _force = _general_groups_actor_ok(conn)
         if not ok or not dept:
-            return jsonify({"status": "ok", "applicable": False, "by_course": {}, "split_warnings": []})
+            return jsonify(
+                {
+                    "status": "ok",
+                    "applicable": False,
+                    "by_course": {},
+                    "split_warnings": [],
+                    "courses": [],
+                    "times_changed_count": 0,
+                    "needs_choice_count": 0,
+                }
+            )
         if not sgo.is_specialty_consumer_department(conn, dept):
-            return jsonify({"status": "ok", "applicable": False, "by_course": {}, "split_warnings": []})
-        resolved = sgo.resolve_effective_general_groups(
+            return jsonify(
+                {
+                    "status": "ok",
+                    "applicable": False,
+                    "by_course": {},
+                    "split_warnings": [],
+                    "courses": [],
+                    "times_changed_count": 0,
+                    "needs_choice_count": 0,
+                }
+            )
+        discovery = sgo.discover_general_courses_for_department(
             conn, consumer_department_id=int(dept), semester=semester
         )
-        return jsonify(
-            {
-                "status": "ok",
-                "applicable": True,
-                "department_id": int(dept),
-                "semester": resolved.get("semester"),
-                "by_course": resolved.get("by_course") or {},
-                "split_warnings": resolved.get("split_warnings") or [],
-            }
-        )
+        return jsonify({"status": "ok", **discovery})
+
+
+@schedule_bp.route("/general_groups/acknowledge", methods=["POST"])
+@login_required
+@role_required(
+    "admin",
+    "admin_main",
+    "system_admin",
+    "college_dean",
+    "academic_vice_dean",
+    "head_of_department",
+)
+def general_groups_acknowledge():
+    """تأكيد الاطلاع على أوقات مقرر اتجاه عام (إزالة تنبيه التغيّر)."""
+    from backend.services import schedule_general_overlay as sgo
+
+    data = request.get_json(silent=True) or {}
+    course_name = (data.get("course_name") or "").strip()
+    semester = (data.get("semester") or "").strip() or None
+    if not course_name:
+        return jsonify({"status": "error", "message": "course_name مطلوب"}), 400
+    actor = (session.get("user") or session.get("username") or "").strip()
+    with get_connection() as conn:
+        ok, dept, _force = _general_groups_actor_ok(conn)
+        if not ok or not dept:
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        try:
+            result = sgo.acknowledge_general_course_times(
+                conn,
+                course_name=course_name,
+                semester=semester,
+                consumer_department_id=int(dept),
+                actor=actor,
+            )
+            conn.commit()
+            return jsonify({"status": "ok", **result})
+        except ValueError as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
+        except Exception as e:
+            logger.exception("general_groups_acknowledge failed")
+            return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@schedule_bp.route("/general_groups/full_timetable")
+@login_required
+@role_required(
+    "admin",
+    "admin_main",
+    "system_admin",
+    "college_dean",
+    "academic_vice_dean",
+    "head_of_department",
+)
+def general_groups_full_timetable():
+    """جدول الاتجاه العام بالكامل (عرض مرجعي قابل للطي أسفل جدول القسم)."""
+    from backend.services import schedule_general_overlay as sgo
+
+    semester = (request.args.get("semester") or "").strip() or None
+    with get_connection() as conn:
+        ok, dept, _force = _general_groups_actor_ok(conn)
+        # متاح للأقسام التخصصية؛ الأدمن يرى أيضاً
+        if not ok:
+            return jsonify({"status": "error", "message": "غير مصرح"}), 403
+        if dept and not sgo.is_specialty_consumer_department(conn, dept) and not _force:
+            return jsonify({"status": "ok", "applicable": False, "rows": [], "count": 0})
+        try:
+            if not semester:
+                semester = _current_term_label_safe(conn)
+            payload = sgo.fetch_full_general_timetable(
+                conn, semester=semester, pk_col=SCHEDULE_PK_COL
+            )
+            return jsonify({"status": "ok", "applicable": True, **payload})
+        except Exception as e:
+            logger.exception("general_groups_full_timetable failed")
+            return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # -----------------------------
@@ -2456,6 +2549,38 @@ def registration_coverage():
                 term_label,
                 dept_scope_id=scope_dept,
             )
+            # مقررات الاتجاه العام الظاهرة كـ overlay تُعدّ «موجودة في الجدول» للقسم التخصصي
+            overlay_covered: list[str] = []
+            if scope_dept:
+                try:
+                    from backend.services import schedule_general_overlay as sgo
+
+                    if sgo.is_specialty_consumer_department(conn, int(scope_dept)):
+                        disc = sgo.discover_general_courses_for_department(
+                            conn,
+                            consumer_department_id=int(scope_dept),
+                            semester=term_label,
+                        )
+                        for c in disc.get("courses") or []:
+                            # مغطّى إن ظهرت في overlay أو لها أوقات GENERAL معلنة هذا الفصل
+                            if c.get("in_schedule_overlay") or (c.get("slots_preview") or []):
+                                nm = str(c.get("course_name") or "").strip()
+                                if nm:
+                                    overlay_covered.append(nm)
+                        # أيضاً صفوف overlay الفعلية
+                        for item in sgo.fetch_overlay_schedule_items(
+                            conn,
+                            consumer_department_id=int(scope_dept),
+                            semester=term_label,
+                            pk_col=SCHEDULE_PK_COL,
+                        ):
+                            nm = str(item.get("course_name") or "").strip()
+                            if nm:
+                                overlay_covered.append(nm)
+                except Exception:
+                    logger.exception("registration_coverage overlay union failed")
+            if overlay_covered:
+                schedule_names = list(schedule_names) + overlay_covered
             leftover = schedule_other_term_leftover_summary(
                 conn, cur, dept_scope_id=scope_dept
             )
@@ -3624,9 +3749,16 @@ def schedule_print_preview():
         ctx = current_term_match_context(conn)
         term_label = ""
         try:
-            term_label = str((ctx or {}).get("raw_label") or (ctx or {}).get("term_key") or "").strip()
+            term_label = str(
+                (ctx or {}).get("ops_label")
+                or (ctx or {}).get("raw_label")
+                or (ctx or {}).get("term_key")
+                or ""
+            ).strip()
         except Exception:
             term_label = ""
+        if not term_label:
+            term_label = _current_term_label_safe(conn)
 
         # صفوف المحرر (نطاق القسم) — نفس مصدر list_schedule_rows تقريباً
         _sync_schedule_pk_col(conn)
