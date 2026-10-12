@@ -18,6 +18,17 @@ HANDOVER_OFFICE_ROLES = frozenset(
 ADMIN_ONLY_HANDOVER_OFFICES = frozenset({"college_dean", "admin_main", "system_admin"})
 HANDOVER_EXCLUDED_ROLES = frozenset({"student"})
 
+# أدوار قيادية يمكن للأدمن الرئيسي إعادة تعيين MFA لها عند فقدان Authenticator
+MFA_RESET_TARGET_ROLES = frozenset(
+    {
+        "system_admin",
+        "admin_main",
+        "college_dean",
+        "academic_vice_dean",
+        "head_of_department",
+    }
+)
+
 
 def is_system_admin_session(session_obj) -> bool:
     try:
@@ -147,6 +158,25 @@ def assert_actor_may_modify_user(
             return False, "لا يمكن تعديل أو حذف مسؤول النظام."
     if is_college_dean_session(actor_session) and dean_may_not_touch_user(target_user):
         return False, "لا يمكن للعميد تعديل أو حذف هذا المستخدم."
+    return True, None
+
+
+def assert_actor_may_reset_mfa(
+    actor_session,
+    target_user: dict | None,
+) -> tuple[bool, str | None]:
+    """إعادة تعيين MFA: الأدمن الرئيسي / مسؤول النظام فقط، وللأدوار القيادية."""
+    if not is_principal_admin_session(actor_session):
+        return False, "إعادة تعيين التحقق بخطوتين متاحة للمسؤول الرئيسي فقط."
+    if not target_user:
+        return False, "المستخدم غير موجود."
+    target_role = _target_role(target_user)
+    if target_role == "admin":
+        target_role = "admin_main"
+    if target_role not in MFA_RESET_TARGET_ROLES:
+        return False, "إعادة التعيين متاحة للأدوار القيادية فقط."
+    if user_dict_is_protected(target_user) and not is_system_admin_session(actor_session):
+        return False, "لا يمكن إعادة تعيين التحقق بخطوتين لمسؤول النظام إلا بواسطة مسؤول النظام."
     return True, None
 
 

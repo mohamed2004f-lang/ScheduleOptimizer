@@ -60,6 +60,53 @@ if not SECRET_KEY:
 
 FLASK_ENV = os.environ.get('FLASK_ENV', 'development')
 FLASK_DEBUG = os.environ.get('FLASK_DEBUG', '0') == '1'
+_FLASK_ENV_LOWER = (FLASK_ENV or "").strip().lower()
+_IS_PRODUCTION = _FLASK_ENV_LOWER == "production"
+
+# ============================================
+# فحوصات أمان الإنتاج (أسرار + Redis)
+# ============================================
+_IN_DOCKER = os.path.exists("/.dockerenv")
+if _IS_PRODUCTION and not _IS_PYTEST:
+    if len(SECRET_KEY or "") < 32:
+        raise RuntimeError(
+            "\n\n===== خطأ أمان إنتاج =====\n"
+            "SECRET_KEY قصير جداً (يلزم 32 حرفاً على الأقل في الإنتاج).\n"
+            "ولّد مفتاحاً قوياً مثلاً:\n"
+            "  python -c \"import secrets; print(secrets.token_hex(32))\"\n"
+            "============================\n"
+        )
+    _admin_pw = ADMIN_PASSWORD or ""
+    try:
+        from backend.core.password_policy import validate_new_password
+
+        _pw_ok, _pw_err = validate_new_password(_admin_pw)
+    except Exception:
+        _pw_ok = (
+            len(_admin_pw.strip()) >= 8
+            and any(ch.isalpha() for ch in _admin_pw)
+            and any(ch.isdigit() for ch in _admin_pw)
+        )
+        _pw_err = "يجب ألا تقل عن 8 أحرف وأن تحتوي حرفاً ورقماً"
+    if not _pw_ok:
+        raise RuntimeError(
+            "\n\n===== خطأ أمان إنتاج =====\n"
+            f"ADMIN_PASSWORD لا يستوفي سياسة كلمة المرور: {_pw_err}\n"
+            "============================\n"
+        )
+    _redis_url = (
+        (os.environ.get("CACHE_REDIS_URL") or os.environ.get("REDIS_URL") or "")
+        .strip()
+    )
+    # داخل حاوية الإنتاج Redis إلزامي. على المضيف Compose يحقن
+    # redis://redis:6379/0 تلقائياً حتى لو غاب من ملف .env.
+    if not _redis_url and _IN_DOCKER:
+        raise RuntimeError(
+            "\n\n===== خطأ أمان إنتاج =====\n"
+            "CACHE_REDIS_URL (أو REDIS_URL) إلزامي داخل حاوية الإنتاج.\n"
+            "في Docker Compose يُضبط عادةً: redis://redis:6379/0\n"
+            "============================\n"
+        )
 
 # ============================================
 # إعدادات قاعدة البيانات
@@ -71,7 +118,6 @@ _RAW_DATABASE_URL = (os.environ.get('DATABASE_URL') or '').strip()
 _IS_PYTEST = bool(os.environ.get("PYTEST_CURRENT_TEST"))
 DATABASE_URL = _RAW_DATABASE_URL
 
-_flask_env_lower = FLASK_ENV.strip().lower()
 if not _IS_PYTEST:
     if not _RAW_DATABASE_URL:
         raise RuntimeError(

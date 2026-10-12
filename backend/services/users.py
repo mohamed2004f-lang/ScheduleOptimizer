@@ -832,13 +832,30 @@ def list_users():
     privileged = _actor_is_privileged_users_admin()
     if privileged:
         from backend.core.permissions import CAN_ADD_DEPARTMENT_USERS, load_usernames_granted_permission
+        from backend.core.user_admin_policy import is_principal_admin_session
 
         with get_connection() as conn:
             granted_hods = load_usernames_granted_permission(conn, CAN_ADD_DEPARTMENT_USERS)
+            if is_principal_admin_session(session):
+                try:
+                    rows = conn.cursor().execute(
+                        "SELECT username, COALESCE(totp_enabled, 0) FROM users"
+                    ).fetchall()
+                    totp_map = {
+                        str(r[0] or "").strip().lower(): int(r[1] or 0) == 1
+                        for r in rows
+                    }
+                except Exception:
+                    totp_map = {}
+            else:
+                totp_map = {}
         for u in items:
             if _normalize_role(u.get("role") or "") == "head_of_department":
                 un = (u.get("username") or "").strip().lower()
                 u["can_add_department_users"] = un in granted_hods
+            if totp_map:
+                un = (u.get("username") or "").strip().lower()
+                u["totp_enabled"] = bool(totp_map.get(un, False))
     _diag_env = (os.environ.get("SHOW_USER_LIST_STORAGE_DIAGNOSTICS") or "").strip().lower()
     verbose_meta = _diag_env in ("1", "true", "yes") and role_norm in ("admin_main", "system_admin")
     meta = _admin_storage_meta(verbose_storage_hint=verbose_meta)
@@ -1347,6 +1364,57 @@ def toggle_active():
         )
         conn.commit()
     return jsonify({"status": "ok", "message": "تم تحديث الحالة"}), 200
+
+
+@users_bp.route("/reset_mfa", methods=["POST"])
+@role_required("admin_main", "system_admin")
+def reset_mfa():
+    """إعادة تعيين التحقق بخطوتين لحساب قيادي بعد فقدان Authenticator."""
+    from backend.core.mfa import clear_user_totp, user_mfa_state
+    from backend.core.user_admin_policy import assert_actor_may_reset_mfa
+
+    data = request.get_json(force=True) or {}
+    username = _clean_username(data.get("username") or "")
+    if not username:
+        return jsonify({"status": "error", "message": "username مطلوب"}), 400
+
+    actor = _current_actor()
+    with get_connection() as conn:
+        if not target_username_allowed_for_actor(conn, actor, username):
+            return jsonify({
+                "status": "error",
+                "message": "غير مسموح بتعديل هذا المستخدم خارج نطاق القسم الحالي.",
+            }), 403
+        row = users_repo.fetch_user_row_by_username_ci(conn, username)
+        if not row:
+            return jsonify({"status": "error", "message": "المستخدم غير موجود"}), 404
+        before_user = _user_dict_from_row(row)
+        ok_reset, reset_err = assert_actor_may_reset_mfa(session, before_user)
+        if not ok_reset:
+            return jsonify({"status": "error", "message": reset_err or "غير مسموح"}), 403
+        enabled_before, _secret = user_mfa_state(username)
+        before_user = dict(before_user)
+        before_user["totp_enabled"] = bool(enabled_before)
+        if not clear_user_totp(username):
+            return jsonify({"status": "error", "message": "فشل إعادة تعيين التحقق بخطوتين"}), 500
+        after = users_repo.fetch_user_row_after_write_ci(conn, username)
+        after_user = _user_dict_from_row(after) or {}
+        after_user["totp_enabled"] = False
+        _log_user_audit(
+            conn,
+            action="users.reset_mfa",
+            actor=actor,
+            username=username,
+            before=before_user,
+            after=after_user,
+        )
+        conn.commit()
+    return jsonify({
+        "status": "ok",
+        "message": "تم إلغاء التحقق بخطوتين. عند تسجيل الدخول التالي سيُطلب تفعيل مفتاح جديد.",
+        "username": username,
+        "totp_enabled": False,
+    }), 200
 
 
 @users_bp.route("/set_supervisor", methods=["POST"])

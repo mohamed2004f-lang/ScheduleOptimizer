@@ -48,7 +48,12 @@ Copy-Item -Recurse backend\uploads "backups\uploads_$(Get-Date -Format yyyyMMdd)
 
 ```powershell
 scripts\setup_backup_tasks.bat
+scripts\backup_full_now.bat
+powershell -File scripts\verify_daily_backup.ps1
 ```
+
+المهمة اليومية (23:30) تنسخ PostgreSQL + `backend\uploads` إلى `BACKUP_MIRROR_ROOT`.
+
 
 - يومي: 23:30 — قاعدة + مرفقات → **القرص D:**
 - أسبوعي (الأحد): 23:45 — نفس النسخة الكاملة

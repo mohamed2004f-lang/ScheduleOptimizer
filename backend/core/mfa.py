@@ -1,4 +1,4 @@
-"""التحقق بخطوتين (TOTP) لـ system_admin و college_dean."""
+"""التحقق بخطوتين (TOTP) للأدوار القيادية."""
 from __future__ import annotations
 
 import logging
@@ -15,7 +15,15 @@ SESSION_MFA_SETUP = "mfa_setup_required"
 SESSION_MFA_CTX = "mfa_ctx"
 SESSION_MFA_SETUP_SECRET = "mfa_setup_secret"
 
-MFA_ROLES = frozenset({"system_admin", "college_dean"})
+MFA_ROLES = frozenset(
+    {
+        "system_admin",
+        "admin_main",
+        "college_dean",
+        "academic_vice_dean",
+        "head_of_department",
+    }
+)
 
 _MFA_PATH_PREFIXES = (
     "/auth/mfa",
@@ -65,6 +73,8 @@ def mfa_enforce() -> bool:
 
 def role_requires_mfa(role: str) -> bool:
     r = (role or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if r == "admin":
+        r = "admin_main"
     return r in MFA_ROLES
 
 
@@ -118,6 +128,29 @@ def save_user_totp(username: str, secret: str) -> bool:
         return True
     except Exception:
         logger.exception("save_user_totp failed username=%s", username)
+        return False
+
+
+def clear_user_totp(username: str) -> bool:
+    """إلغاء تفعيل MFA لحساب (بعد فقدان Authenticator) — يُستدعى من مسار إداري فقط."""
+    get_connection = _get_connection()
+    if get_connection is None or not (username or "").strip():
+        return False
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE users
+                SET totp_secret = NULL, totp_enabled = 0
+                WHERE lower(username) = lower(?)
+                """,
+                (username.strip(),),
+            )
+            conn.commit()
+        return True
+    except Exception:
+        logger.exception("clear_user_totp failed username=%s", username)
         return False
 
 

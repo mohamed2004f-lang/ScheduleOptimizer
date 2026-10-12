@@ -508,6 +508,14 @@
         line1.appendChild(document.createTextNode(' '));
         line1.appendChild(b);
       }
+      if(u.totp_enabled){
+        const b = document.createElement('span');
+        b.className = 'badge bg-dark ms-1';
+        b.textContent = 'MFA';
+        b.title = 'التحقق بخطوتين مفعّل';
+        line1.appendChild(document.createTextNode(' '));
+        line1.appendChild(b);
+      }
       const line2 = document.createElement('div');
       line2.className = 'text-muted small';
       const deptLabel = (u.department_id != null && u.department_id !== '')
@@ -581,6 +589,21 @@
           openHandoverTab(u.username, null);
         });
         right.appendChild(hoBtn);
+      }
+
+      const canResetMfa = ['admin_main', 'admin', 'system_admin'].includes(CURRENT_ROLE || '');
+      const mfaResetRoles = ['system_admin', 'admin_main', 'admin', 'college_dean', 'academic_vice_dean', 'head_of_department'];
+      if(canResetMfa && mfaResetRoles.includes(u.role || '')){
+        const mfaBtn = document.createElement('button');
+        mfaBtn.type = 'button';
+        mfaBtn.className = 'btn btn-sm btn-outline-dark btn-reset-mfa';
+        mfaBtn.textContent = 'إعادة تعيين MFA';
+        mfaBtn.title = 'إلغاء التحقق بخطوتين عند فقدان Authenticator — سيُطلب تفعيل مفتاح جديد عند الدخول';
+        mfaBtn.addEventListener('click', async (ev)=>{
+          ev.stopPropagation();
+          await resetUserMfa(u.username);
+        });
+        right.appendChild(mfaBtn);
       }
 
       if(canGrantHodAddDeptUsers() && u.role === 'head_of_department'){
@@ -861,6 +884,22 @@
       } else {
         setUserMsg('danger', res.json?.message || `فشل الحفظ (${res.status})`);
       }
+    }
+
+    async function resetUserMfa(username){
+      if(!username) return;
+      if(!confirm('تأكيد إعادة تعيين التحقق بخطوتين للمستخدم: ' + username + '؟\nسيُلغى المفتاح الحالي ويُطلب تفعيل جديد عند تسجيل الدخول التالي.')) return;
+      const r = await fetchJSON('/users/reset_mfa', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username})
+      });
+      if(!r.ok || (r.json && r.json.status === 'error')){
+        setUserMsg('danger', (r.json && r.json.message) || ('فشل إعادة التعيين (' + r.status + ')'));
+        return;
+      }
+      setUserMsg('success', (r.json && r.json.message) || 'تم إعادة تعيين MFA');
+      await loadUsers();
     }
 
     async function deleteUser(username){
@@ -1180,6 +1219,9 @@
       });
       document.querySelectorAll('.btn-handover-from-user').forEach(btn=>{
         btn.style.display = (isPrivileged ? '' : 'none');
+      });
+      document.querySelectorAll('.btn-reset-mfa').forEach(btn=>{
+        btn.style.display = (isAdminMain ? '' : 'none');
       });
       document.getElementById('tab-handover-item')?.classList.toggle('d-none', !isPrivileged);
       document.getElementById('tab-profiles-item')?.classList.toggle('d-none', !isPrivileged);

@@ -28,12 +28,16 @@ def test_totp_rfc6238_sha1_vector():
     assert verify_totp(secret, "000000", for_time=59) is False
 
 
-def test_role_requires_mfa_only_admin_and_dean():
+def test_role_requires_mfa_leadership_roles():
     assert role_requires_mfa("system_admin") is True
+    assert role_requires_mfa("admin_main") is True
+    assert role_requires_mfa("admin") is True
     assert role_requires_mfa("college_dean") is True
+    assert role_requires_mfa("academic_vice_dean") is True
+    assert role_requires_mfa("head_of_department") is True
     assert role_requires_mfa("instructor") is False
     assert role_requires_mfa("student") is False
-    assert role_requires_mfa("head_of_department") is False
+    assert role_requires_mfa("staff") is False
 
 
 def test_mfa_enforce_off_in_testing(monkeypatch):
@@ -166,3 +170,144 @@ def test_instructor_not_forced_when_enforce_on(app, db_conn, monkeypatch):
         )
         assert resp.status_code == 200
         assert (resp.get_json() or {}).get("status") == "ok"
+
+
+def test_admin_main_can_reset_mfa_for_leadership_roles(app, db_conn, monkeypatch):
+    # لا نفرض MFA على الفاعل حتى يكتمل مسار إعادة التعيين في الاختبار
+    monkeypatch.delenv("MFA_ENFORCE", raising=False)
+    secret = generate_secret()
+    db_conn.execute(
+        "INSERT INTO users (username, password_hash, role, is_active) VALUES (?, ?, ?, 1)",
+        ("admin-main-mfa", hash_password("AdminP@ss1!"), "admin_main"),
+    )
+    db_conn.execute(
+        """
+        INSERT INTO users (username, password_hash, role, is_active, totp_secret, totp_enabled)
+        VALUES (?, ?, ?, 1, ?, 1)
+        """,
+        ("hod-lost-mfa", hash_password("HodP@ss1!"), "head_of_department", secret),
+    )
+    db_conn.execute(
+        """
+        INSERT INTO users (username, password_hash, role, is_active, totp_secret, totp_enabled)
+        VALUES (?, ?, ?, 1, ?, 1)
+        """,
+        ("inst-has-mfa", hash_password("InstP@ss1!"), "instructor", secret),
+    )
+    db_conn.commit()
+
+    with app.test_client() as c:
+        login = c.post(
+            "/auth/login",
+            json={"username": "admin-main-mfa", "password": "AdminP@ss1!"},
+        )
+        assert login.status_code == 200
+        assert (login.get_json() or {}).get("status") == "ok"
+
+        ok = c.post("/users/reset_mfa", json={"username": "hod-lost-mfa"})
+        assert ok.status_code == 200, ok.get_data(as_text=True)
+        body = ok.get_json() or {}
+        assert body.get("status") == "ok"
+        assert body.get("totp_enabled") is False
+
+        row = db_conn.execute(
+            "SELECT COALESCE(totp_enabled,0), totp_secret FROM users WHERE username = ?",
+            ("hod-lost-mfa",),
+        ).fetchone()
+        assert int(row[0] or 0) == 0
+        assert row[1] in (None, "")
+
+        denied = c.post("/users/reset_mfa", json={"username": "inst-has-mfa"})
+        assert denied.status_code == 403
+
+
+def test_dean_cannot_reset_mfa(app, db_conn, monkeypatch):
+    monkeypatch.delenv("MFA_ENFORCE", raising=False)
+    secret = generate_secret()
+    db_conn.execute(
+        "INSERT INTO users (username, password_hash, role, is_active) VALUES (?, ?, ?, 1)",
+        ("dean-no-reset", hash_password("DeanP@ss1!"), "college_dean"),
+    )
+    db_conn.execute(
+        """
+        INSERT INTO users (username, password_hash, role, is_active, totp_secret, totp_enabled)
+        VALUES (?, ?, ?, 1, ?, 1)
+        """,
+        ("hod-for-dean", hash_password("HodP@ss1!"), "head_of_department", secret),
+    )
+    db_conn.commit()
+    with app.test_client() as c:
+        login = c.post(
+            "/auth/login",
+            json={"username": "dean-no-reset", "password": "DeanP@ss1!"},
+        )
+        assert login.status_code == 200
+        denied = c.post("/users/reset_mfa", json={"username": "hod-for-dean"})
+        assert denied.status_code in (401, 403)
+
+
+def test_reset_mfa_allows_fresh_setup(app, db_conn, monkeypatch):
+    secret = generate_secret()
+    db_conn.execute(
+        "INSERT INTO users (username, password_hash, role, is_active) VALUES (?, ?, ?, 1)",
+        ("admin-reset-flow", hash_password("AdminP@ss1!"), "admin_main"),
+    )
+    db_conn.execute(
+        """
+        INSERT INTO users (username, password_hash, role, is_active, totp_secret, totp_enabled)
+        VALUES (?, ?, ?, 1, ?, 1)
+        """,
+        ("dean-reset-flow", hash_password("DeanP@ss1!"), "college_dean", secret),
+    )
+    db_conn.commit()
+
+    with app.test_client() as admin_c:
+        monkeypatch.delenv("MFA_ENFORCE", raising=False)
+        assert admin_c.post(
+            "/auth/login",
+            json={"username": "admin-reset-flow", "password": "AdminP@ss1!"},
+        ).status_code == 200
+        assert admin_c.post(
+            "/users/reset_mfa", json={"username": "dean-reset-flow"}
+        ).status_code == 200
+
+    monkeypatch.setenv("MFA_ENFORCE", "1")
+    with app.test_client() as dean_c:
+        first = dean_c.post(
+            "/auth/login",
+            json={"username": "dean-reset-flow", "password": "DeanP@ss1!"},
+        )
+        assert first.status_code == 200
+        assert (first.get_json() or {}).get("code") == "MFA_SETUP_REQUIRED"
+
+
+def test_admin_main_setup_required_when_enforced(app, db_conn, monkeypatch):
+    monkeypatch.setenv("MFA_ENFORCE", "1")
+    db_conn.execute(
+        "INSERT INTO users (username, password_hash, role, is_active) VALUES (?, ?, ?, 1)",
+        ("admin-main-setup", hash_password("AdminP@ss1!"), "admin_main"),
+    )
+    db_conn.commit()
+    with app.test_client() as c:
+        resp = c.post(
+            "/auth/login",
+            json={"username": "admin-main-setup", "password": "AdminP@ss1!"},
+        )
+        assert resp.status_code == 200
+        assert (resp.get_json() or {}).get("code") == "MFA_SETUP_REQUIRED"
+
+
+def test_hod_setup_required_when_enforced(app, db_conn, monkeypatch):
+    monkeypatch.setenv("MFA_ENFORCE", "1")
+    db_conn.execute(
+        "INSERT INTO users (username, password_hash, role, is_active) VALUES (?, ?, ?, 1)",
+        ("hod-mfa-setup", hash_password("HodP@ss1!"), "head_of_department"),
+    )
+    db_conn.commit()
+    with app.test_client() as c:
+        resp = c.post(
+            "/auth/login",
+            json={"username": "hod-mfa-setup", "password": "HodP@ss1!"},
+        )
+        assert resp.status_code == 200
+        assert (resp.get_json() or {}).get("code") == "MFA_SETUP_REQUIRED"
