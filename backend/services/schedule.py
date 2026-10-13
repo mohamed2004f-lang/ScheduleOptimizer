@@ -1,7 +1,7 @@
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from flask import Blueprint, request, jsonify, render_template, session
+from flask import Blueprint, request, jsonify, render_template, session, send_file
 from backend.core.auth import (
     login_required,
     role_required,
@@ -4112,31 +4112,371 @@ def export_schedule_pdf():
     return pdf_response_from_html(html, filename_prefix="schedule")
 
 
+def _excel_cell_join(values: list[str]) -> str:
+    sep_line = "-----"
+    vals = [str(v or "").strip() for v in (values or []) if str(v or "").strip()]
+    if not vals:
+        return "—"
+    return f"\n{sep_line}\n".join(vals)
+
+
+def _excel_course_label(row: dict) -> str:
+    name = str(row.get("course_name") or "").strip()
+    g = str(row.get("group_code") or row.get("group_code_label") or "").strip()
+    if g and g not in ("—", "-", "الكل", "all", "ALL"):
+        return f"{name} ({g})" if name else g
+    return name or "—"
+
+
+def _excel_instructor_label(row: dict) -> str:
+    return (
+        str(
+            row.get("instructor_display")
+            or row.get("instructor_primary")
+            or row.get("instructor")
+            or ""
+        ).strip()
+        or "—"
+    )
+
+
+def _time_slot_sort_key(time_str: str) -> tuple:
+    import re
+
+    m = re.match(r"(\d{1,2}):(\d{2})", str(time_str or "").strip())
+    if not m:
+        return (9999, str(time_str or ""))
+    return (int(m.group(1)) * 60 + int(m.group(2)), str(time_str or ""))
+
+
+def _load_enriched_schedule_rows_for_export(conn) -> dict:
+    """صفوف مُثرية مثل معاينة الطباعة (مراحل + مجموعات + overlay)."""
+    from backend.core.schedule_stage_layout import build_display_layout_payload
+    from backend.services.term_engine import (
+        current_term_match_context,
+        schedule_semester_matches_term_context,
+    )
+
+    uname = (session.get("user") or session.get("username") or "").strip()
+    layout = build_display_layout_payload(conn, uname or None)
+    ctx = current_term_match_context(conn)
+    term_label = str(
+        (ctx or {}).get("ops_label")
+        or (ctx or {}).get("raw_label")
+        or (ctx or {}).get("term_key")
+        or ""
+    ).strip() or (_current_term_label_safe(conn) or "")
+
+    _sync_schedule_pk_col(conn)
+    cur = conn.cursor()
+    try:
+        scols = fetch_table_columns(conn, "schedule")
+    except Exception:
+        scols = []
+    dept_scope = _effective_schedule_department_scope_id(conn)
+    from backend.repositories.schedule_repo import fetch_schedule_rows_with_student_counts
+
+    has_tg = "teaching_group_id" in scols and table_exists(conn, "teaching_groups")
+    reg_has_tg = False
+    if has_tg:
+        reg_cols = {c.lower() for c in fetch_table_columns(conn, "registrations")}
+        reg_has_tg = "teaching_group_id" in reg_cols
+    dept_id = dept_scope if (dept_scope is not None and "department_id" in scols) else None
+    rows_raw = fetch_schedule_rows_with_student_counts(
+        cur,
+        pk_col=SCHEDULE_PK_COL,
+        department_id=dept_id,
+        include_teaching_groups=has_tg,
+        registrations_has_teaching_group=reg_has_tg,
+    )
+    result: list[dict] = []
+    for r in rows_raw:
+        def _cell(key: str, idx: int, default=None, _r=r):
+            if hasattr(_r, "keys"):
+                try:
+                    if key in _r.keys():
+                        return _r[key]
+                except Exception:
+                    pass
+            try:
+                return _r[idx]
+            except Exception:
+                return default
+
+        item = {
+            "section_id": _cell("section_id", 0) or _cell("id", 0) or 0,
+            "course_name": _cell("course_name", 1, "") or "",
+            "day": _cell("day", 2, "") or "",
+            "time": _cell("time", 3, "") or "",
+            "room": _cell("room", 4, "") or "",
+            "instructor": _cell("instructor", 5, "") or "",
+            "semester": _cell("semester", 6, "") or "",
+            "instructor_id": _cell("instructor_id", 7),
+        }
+        if has_tg:
+            gcode = str(
+                _cell("tg_group_code", 11, tg_svc.DEFAULT_GROUP_CODE) or tg_svc.DEFAULT_GROUP_CODE
+            )
+            item["teaching_group_id"] = _cell("teaching_group_id", 9)
+            item["department_id"] = _cell("department_id", 10)
+            item["group_code"] = gcode
+            item["group_code_label"] = tg_svc.group_code_label(gcode)
+        if not schedule_semester_matches_term_context(item.get("semester"), ctx):
+            continue
+        result.append(item)
+    try:
+        tg_svc.enrich_schedule_rows_instructor_team(conn, result)
+    except Exception:
+        logger.exception("excel export instructors enrichment failed")
+    try:
+        from backend.core.schedule_stage_layout import (
+            enrich_schedule_row_stage_fields,
+            load_course_codes_by_name,
+        )
+
+        code_map = load_course_codes_by_name(
+            conn, [str(x.get("course_name") or "") for x in result]
+        )
+        for item in result:
+            enrich_schedule_row_stage_fields(conn, item, course_code_by_name=code_map)
+    except Exception:
+        logger.exception("excel export stage enrichment failed")
+    try:
+        from backend.services import schedule_general_overlay as sgo
+
+        if dept_id:
+            sgo.append_overlay_rows(
+                conn,
+                result,
+                consumer_department_id=int(dept_id),
+                semester=term_label or None,
+                pk_col=SCHEDULE_PK_COL,
+                term_match_ctx=ctx,
+            )
+    except Exception:
+        logger.exception("excel export overlay injection failed")
+
+    use_stages = bool(layout.get("use_stage_matrix"))
+    dept_name = ""
+    if dept_scope is not None:
+        try:
+            dr = cur.execute(
+                "SELECT COALESCE(name_ar, code, '') FROM departments WHERE id = ? LIMIT 1",
+                (int(dept_scope),),
+            ).fetchone()
+            if dr:
+                dept_name = str(dr[0] or "")
+        except Exception:
+            dept_name = ""
+    return {
+        "rows": result,
+        "use_stage_matrix": use_stages,
+        "department_name": dept_name,
+        "term_label": term_label,
+        "layout": layout,
+    }
+
+
+def _build_stage_matrix_excel_bytes(
+    rows: list[dict],
+    *,
+    department_name: str = "",
+    term_label: str = "",
+) -> bytes:
+    """Excel بنفس شبكة الطباعة: يوم|وقت|3×(مقرر|أستاذ|قاعة) وترويسة مقررات المرحلة."""
+    import io
+
+    import xlsxwriter
+
+    from backend.core.schedule_stage_layout import STAGE_BUCKETS
+
+    days_order = _days_ar()
+    day_rank = {d: i for i, d in enumerate(days_order)}
+    # day -> time -> bucket -> [rows]
+    grid: dict[str, dict[str, dict[str, list]]] = {}
+    times_seen: set[str] = set()
+    for r in rows or []:
+        day = _canonical_schedule_day_label(str(r.get("day") or "").strip())
+        time = _canonical_time_slot_label(str(r.get("time") or "").strip())
+        if not day or not time:
+            continue
+        bucket = str(r.get("stage_bucket") or "general_or_y1").strip() or "general_or_y1"
+        if bucket not in STAGE_BUCKETS:
+            bucket = "general_or_y1"
+        times_seen.add(time)
+        grid.setdefault(day, {}).setdefault(time, {b: [] for b in STAGE_BUCKETS})
+        for b in STAGE_BUCKETS:
+            grid[day][time].setdefault(b, [])
+        grid[day][time][bucket].append(r)
+
+    times_ordered = sorted(times_seen, key=_time_slot_sort_key)
+    data_rows: list[tuple[str, str]] = []
+    for day in days_order:
+        if day not in grid:
+            continue
+        for time in times_ordered:
+            if time in grid[day]:
+                data_rows.append((day, time))
+    # أيام غير قياسية
+    for day in sorted(grid.keys(), key=lambda d: day_rank.get(d, 999)):
+        if day in days_order:
+            continue
+        for time in times_ordered:
+            if time in grid[day]:
+                data_rows.append((day, time))
+
+    buf = io.BytesIO()
+    wb = xlsxwriter.Workbook(buf, {"in_memory": True})
+    ws = wb.add_worksheet("الجدول الدراسي")
+    try:
+        ws.right_to_left()
+    except Exception:
+        pass
+
+    fmt_title = wb.add_format({"bold": True, "font_size": 14, "align": "right"})
+    fmt_meta = wb.add_format({"font_size": 10, "align": "right"})
+    fmt_block = wb.add_format(
+        {
+            "bold": True,
+            "align": "center",
+            "valign": "vcenter",
+            "border": 1,
+            "bg_color": "#DBEAFE",
+        }
+    )
+    fmt_sub = wb.add_format(
+        {
+            "bold": True,
+            "align": "center",
+            "valign": "vcenter",
+            "border": 1,
+            "bg_color": "#E8EEF4",
+        }
+    )
+    fmt_day = wb.add_format(
+        {"bold": True, "align": "center", "valign": "vcenter", "border": 1, "bg_color": "#E2E8F0"}
+    )
+    fmt_time = wb.add_format(
+        {"bold": True, "align": "center", "valign": "vcenter", "border": 1, "bg_color": "#F8FAFC"}
+    )
+    fmt_cell = wb.add_format(
+        {"align": "right", "valign": "top", "border": 1, "text_wrap": True, "font_size": 10}
+    )
+    fmt_room = wb.add_format(
+        {"align": "center", "valign": "top", "border": 1, "text_wrap": True, "font_size": 10}
+    )
+
+    ws.write(0, 0, "الجدول الدراسي", fmt_title)
+    meta_bits = []
+    if department_name:
+        meta_bits.append(f"القسم: {department_name}")
+    if term_label:
+        meta_bits.append(f"الفصل: {term_label}")
+    meta_bits.append(f"تاريخ التصدير: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    ws.write(1, 0, " · ".join(meta_bits), fmt_meta)
+
+    header_r = 3
+    # صف ترويسة الكتل + يوم/وقت بدمج صفين
+    ws.merge_range(header_r, 0, header_r + 1, 0, "اليوم", fmt_day)
+    ws.merge_range(header_r, 1, header_r + 1, 1, "الوقت", fmt_time)
+    for bi, _b in enumerate(STAGE_BUCKETS):
+        c0 = 2 + bi * 3
+        ws.merge_range(header_r, c0, header_r, c0 + 2, "مقررات المرحلة", fmt_block)
+        ws.write(header_r + 1, c0, "المقرر", fmt_sub)
+        ws.write(header_r + 1, c0 + 1, "الأستاذ", fmt_sub)
+        ws.write(header_r + 1, c0 + 2, "القاعة", fmt_sub)
+
+    ws.set_column(0, 0, 12)
+    ws.set_column(1, 1, 14)
+    for bi in range(len(STAGE_BUCKETS)):
+        c0 = 2 + bi * 3
+        ws.set_column(c0, c0, 22)
+        ws.set_column(c0 + 1, c0 + 1, 18)
+        ws.set_column(c0 + 2, c0 + 2, 8)
+
+    r = header_r + 2
+    last_day = None
+    day_start = r
+    for day, time in data_rows:
+        buckets = grid.get(day, {}).get(time) or {}
+        if day != last_day:
+            if last_day is not None and r - 1 > day_start:
+                try:
+                    ws.merge_range(day_start, 0, r - 1, 0, last_day, fmt_day)
+                except Exception:
+                    pass
+            last_day = day
+            day_start = r
+        ws.write(r, 0, day, fmt_day)
+        ws.write(r, 1, time, fmt_time)
+        for bi, b in enumerate(STAGE_BUCKETS):
+            items = buckets.get(b) or []
+            courses = [_excel_course_label(it) for it in items]
+            insts = [_excel_instructor_label(it) for it in items]
+            rooms = [str(it.get("room") or "").strip() or "—" for it in items]
+            c0 = 2 + bi * 3
+            ws.write(r, c0, _excel_cell_join(courses) if items else "", fmt_cell)
+            ws.write(r, c0 + 1, _excel_cell_join(insts) if items else "", fmt_cell)
+            ws.write(r, c0 + 2, _excel_cell_join(rooms) if items else "", fmt_room)
+        # ارتفاع تقريبي حسب عدد المقررات في أكثر كتلة ازدحاماً
+        max_n = max((len(buckets.get(b) or []) for b in STAGE_BUCKETS), default=0)
+        ws.set_row(r, max(18, 16 + max_n * 14))
+        r += 1
+    if last_day is not None and r - 1 > day_start:
+        try:
+            ws.merge_range(day_start, 0, r - 1, 0, last_day, fmt_day)
+        except Exception:
+            pass
+
+    if not data_rows:
+        ws.write(header_r + 2, 0, "لا توجد حصص للتصدير في الفصل الحالي.", fmt_meta)
+
+    wb.close()
+    buf.seek(0)
+    return buf.getvalue()
+
+
 @schedule_bp.route("/export/excel")
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def export_schedule_excel():
     include_empty = str(request.args.get("include_empty") or "").lower() in ("1", "true", "yes")
+    legacy = str(request.args.get("legacy") or "").lower() in ("1", "true", "yes")
     with get_connection() as conn:
-        slots_info = _get_time_slots_setting(conn)
-        rows = _load_schedule_rows_for_export(conn)
-        built = _build_schedule_triple_export_matrix(rows, slots_info.get("slots") or [], include_empty=include_empty)
+        payload = _load_enriched_schedule_rows_for_export(conn)
+        use_stages = bool(payload.get("use_stage_matrix")) and not legacy
         if not include_empty:
             try:
                 _create_schedule_version(conn, event_type="export_excel", note="schedule excel export", is_published=False)
             except Exception:
                 logger.exception("failed to create schedule version on excel export")
 
+        if use_stages:
+            data = _build_stage_matrix_excel_bytes(
+                payload.get("rows") or [],
+                department_name=str(payload.get("department_name") or ""),
+                term_label=str(payload.get("term_label") or ""),
+            )
+            now = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            fname = f"schedule_stages_{now}.xlsx"
+            import io
+
+            return send_file(
+                io.BytesIO(data),
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                as_attachment=True,
+                download_name=fname,
+            )
+
+        # مسار قديم: أعمدة حسب الوقت (الاتجاه العام / قالب include_empty)
+        slots_info = _get_time_slots_setting(conn)
+        rows = _load_schedule_rows_for_export(conn)
+        built = _build_schedule_triple_export_matrix(
+            rows, slots_info.get("slots") or [], include_empty=include_empty
+        )
+
     cols = built["columns"]
     matrix = built["matrix"]
 
-    def _join_records(values: list) -> str:
-        sep_line = "-----"
-        vals = [str(v or "").strip() for v in (values or []) if str(v or "").strip()]
-        if not vals:
-            return "—"
-        return f"\n{sep_line}\n".join(vals)
-
-    # MultiIndex أعمدة: (وقت, مقرر/أستاذ/قاعة)
     multi_cols = [("اليوم", "")]
     for t in cols:
         multi_cols.append((t, "المقرر"))
@@ -4152,12 +4492,11 @@ def export_schedule_excel():
             courses = [it.get("course_name") or "" for it in items]
             insts = [it.get("instructor") or "" for it in items]
             rooms = [it.get("room") or "" for it in items]
-            row_vals.append(_join_records(courses))
-            row_vals.append(_join_records(insts))
-            row_vals.append(_join_records(rooms))
+            row_vals.append(_excel_cell_join(courses))
+            row_vals.append(_excel_cell_join(insts))
+            row_vals.append(_excel_cell_join(rooms))
         out_rows.append(row_vals)
 
-    # Append notes row
     notes = []
     if built.get("empty_saved_slots"):
         notes.append("تقسيمات بدون مقررات: " + "، ".join(built["empty_saved_slots"]))
@@ -4168,7 +4507,7 @@ def export_schedule_excel():
         for _ in cols:
             row_vals.extend(["", "", ""])
         if cols:
-            row_vals[1] = " | ".join(notes)  # أول (وقت, مقرر)
+            row_vals[1] = " | ".join(notes)
         out_rows.append(row_vals)
 
     df = pd.DataFrame(out_rows, columns=multi_cols)

@@ -135,8 +135,40 @@
     );
   }
 
+  /** حرف المجموعة → مسار 1 أو 2 (A→1، B→2، C→1…). */
+  function earlyLaneFromGroupCode(code) {
+    const c = String(code || '').trim().toUpperCase();
+    const m = c.match(/^([A-Z])/);
+    if (!m) return null;
+    const idx = m[1].charCodeAt(0) - 64;
+    if (idx < 1 || idx > 26) return null;
+    return ((idx - 1) % 2) + 1;
+  }
+
+  /**
+   * توزيع مقررات الكتلة الأولى على مسارين حسب الأقل ازدحاماً.
+   * مجموعات A/B تُثبَّت على المسار حسب الحرف؛ الباقي يذهب للمسار الأقل عدداً.
+   */
+  function balanceEarlyStageLanes(courses) {
+    const list = Array.isArray(courses) ? courses.slice() : [];
+    const lanes = { 1: [], 2: [] };
+    const rest = [];
+    list.forEach((row) => {
+      const hint = earlyLaneFromGroupCode(rowGroupCode(row));
+      if (hint === 1 || hint === 2) lanes[hint].push(row);
+      else rest.push(row);
+    });
+    rest.forEach((row) => {
+      const lane = lanes[1].length <= lanes[2].length ? 1 : 2;
+      lanes[lane].push(row);
+    });
+    return lanes;
+  }
+
   function instructorCellHtml(row, opts) {
     opts = opts || {};
+    // شارة المجموعة تُعرض ملاصقة لاسم المقرر — لا تُكرَّر عند الأستاذ
+    const instOpts = Object.assign({}, opts, { hideGroupBadge: true });
     const primaryInst = String(row.instructor_primary || row.instructor || '').trim();
     const asstList = Array.isArray(row.assistant_names)
       ? row.assistant_names.map((n) => String(n || '').trim()).filter(Boolean)
@@ -152,22 +184,15 @@
     }
     const fullInst = String(row.instructor_display || primaryInst).trim();
     const gCode = rowGroupCode(row);
-    const badge = groupBadgeHtml(row, opts);
     const tipParts = [fullInst || primaryInst];
     if (isSplitGroupCode(gCode)) tipParts.push('مجموعة ' + gCode);
     const instTip = escAttr(tipParts.filter(Boolean).join(' — '));
     if (!primaryInst && !assistants.length) {
-      if (badge) {
-        return `<span class="slot-inst-with-badge" title="${instTip}">${badge}</span>`;
-      }
       return `<span class="slot-text slot-text--empty" title="">—</span>`;
     }
-    const showAsstLine = opts.showAssistantLine !== false;
+    const showAsstLine = instOpts.showAssistantLine !== false;
     const primaryHtml =
-      `<span class="slot-inst-with-badge">` +
-      `<span class="slot-text${primaryInst ? '' : ' slot-text--empty'}">${esc(primaryInst || '—')}</span>` +
-      badge +
-      `</span>`;
+      `<span class="slot-text${primaryInst ? '' : ' slot-text--empty'}">${esc(primaryInst || '—')}</span>`;
     if (!showAsstLine || !assistants.length) {
       return `<span title="${instTip}">${primaryHtml}</span>`;
     }
@@ -180,21 +205,11 @@
     );
   }
 
-  function renderCourseTriple(row, opts) {
-    opts = opts || {};
-    const showManage = !!opts.showSlotManage;
-    const stacked = !!opts.stacked;
-    const color = typeof opts.getCourseColor === 'function'
-      ? opts.getCourseColor(row.course_name)
-      : '#64748b';
-    const primaryInst = String(
-      row.instructor_primary || row.instructor || ''
-    ).trim();
-    const fullInst = String(
-      row.instructor_display || primaryInst
-    ).trim();
+  function courseTitleTip(row) {
+    const primaryInst = String(row.instructor_primary || row.instructor || '').trim();
+    const fullInst = String(row.instructor_display || primaryInst).trim();
     const gCode = rowGroupCode(row);
-    const titleTip = escAttr(
+    return escAttr(
       [
         courseLabel(row),
         isSplitGroupCode(gCode) && ('مجموعة ' + gCode),
@@ -204,28 +219,127 @@
         .filter(Boolean)
         .join(' — ')
     );
-    // شارات المرحلة مخفية بصرياً (الأعمدة تكفي) وتبقى في DOM لكشف تعارض عام+قسم2
+  }
+
+  /** خلية المقرر فقط — نص عادي + شارة مجموعة (بلا تظليل ملون). */
+  function renderCourseOnlyCell(row, opts) {
+    opts = opts || {};
+    const showManage = !!opts.showSlotManage;
+    const titleTip = courseTitleTip(row);
     const badge = String(row.stage_badge || '').trim();
     const badgeHtml = badge
       ? `<span class="stage-badge stage-badge--${escAttr(badge === 'عام' ? 'general' : badge === 'قسم 2' ? 'y2' : 'other')}" aria-hidden="true"></span>`
       : '';
     const isOverlay = !!(row.is_overlay_general || (row.is_college_general && row.overlay_source));
-    const overlayBadge = isOverlay
-      ? `<span class="slot-overlay-badge" title="اتجاه عام — الأوقات من رئيس الاتجاه العام">اتجاه عام</span>`
-      : '';
+    const groupBadge = groupBadgeHtml(row, opts);
     const display = esc(courseDisplayName(row));
+    const titled =
+      `<span class="slot-course-with-group">` +
+      `<span class="slot-course-name">${display}</span>` +
+      groupBadge +
+      `</span>`;
     let courseCell;
     if (showManage && row.section_id && !row.is_college_general && !isOverlay) {
-      courseCell = `<button type="button" class="course-btn course-btn--col" style="background:${color};" data-section-id="${escAttr(row.section_id)}" title="${titleTip}">${display}</button>${badgeHtml}`;
+      courseCell =
+        `<button type="button" class="course-btn course-btn--plain" data-section-id="${escAttr(row.section_id)}" title="${titleTip}">${titled}</button>${badgeHtml}`;
     } else if (showManage && (row.is_college_general || isOverlay)) {
-      courseCell = `<span class="course-label-readonly" style="background:${color};" title="${titleTip}">${display}</span>${badgeHtml}${overlayBadge}<span class="stage-readonly-hint" title="مقرر اتجاه عام — للتنسيق مع رئيس الاتجاه العام">🔒</span>`;
+      courseCell =
+        `<span class="course-plain-label" title="${titleTip}">${titled}</span>${badgeHtml}`;
     } else {
-      // عرض قراءة: نفس شكل زر المقرر مع نص أبيض على لون المقرر
-      courseCell = `<span class="course-pub-label course-pub-label--filled" style="background:${color};" title="${titleTip}">${display}</span>${badgeHtml}${overlayBadge}`;
+      courseCell =
+        `<span class="course-plain-label" title="${titleTip}">${titled}</span>${badgeHtml}`;
+    }
+    return `<div class="stage-col-item stage-col-item--course">${courseCell}</div>`;
+  }
+
+  /**
+   * ثلاث خلايا جدول حقيقية (مقرر|أستاذ|قاعة) بحدود عمودية كاملة.
+   * عدة مقررات في نفس التوقيت تُكدَّس داخل كل عمود بنفس الترتيب.
+   */
+  function renderBucketThreeTds(courses, day, time, bucketId, opts) {
+    opts = opts || {};
+    const list = Array.isArray(courses) ? courses : [];
+    const base =
+      `data-slot-day="${escAttr(day)}" data-slot-time="${escAttr(time)}" ` +
+      `data-stage-bucket="${escAttr(bucketId)}"`;
+    if (!list.length) {
+      const empty = opts.showSlotManage
+        ? '<span class="slot-placeholder">—</span>'
+        : '';
+      return (
+        `<td class="stage-col stage-col--course time-slot-cell" ${base}>${empty}</td>` +
+        `<td class="stage-col stage-col--inst time-slot-cell" ${base}>${empty}</td>` +
+        `<td class="stage-col stage-col--room time-slot-cell" ${base}>${empty}</td>`
+      );
+    }
+    let courseHtml = '';
+    let instHtml = '';
+    let roomHtml = '';
+    list.forEach((row, i) => {
+      const sep = i > 0 ? '<div class="stage-col-sep" aria-hidden="true"></div>' : '';
+      courseHtml += sep + renderCourseOnlyCell(row, opts);
+      instHtml += sep + `<div class="stage-col-item">${instructorCellHtml(row, opts)}</div>`;
+      const room = String(row.room || '').trim();
+      roomHtml +=
+        sep +
+        `<div class="stage-col-item"><span class="slot-text${room ? '' : ' slot-text--empty'}">${esc(room || '—')}</span></div>`;
+    });
+    return (
+      `<td class="stage-col stage-col--course time-slot-cell" ${base}>${courseHtml}</td>` +
+      `<td class="stage-col stage-col--inst time-slot-cell" ${base}>${instHtml}</td>` +
+      `<td class="stage-col stage-col--room time-slot-cell" ${base}>${roomHtml}</td>`
+    );
+  }
+
+  function renderCourseTriple(row, opts) {
+    opts = opts || {};
+    const showManage = !!opts.showSlotManage;
+    const stacked = !!opts.stacked;
+    const plain = opts.plainCourses !== false;
+    const color = !plain && typeof opts.getCourseColor === 'function'
+      ? opts.getCourseColor(row.course_name)
+      : '';
+    const primaryInst = String(
+      row.instructor_primary || row.instructor || ''
+    ).trim();
+    const fullInst = String(
+      row.instructor_display || primaryInst
+    ).trim();
+    const titleTip = courseTitleTip(row);
+    const badge = String(row.stage_badge || '').trim();
+    const badgeHtml = badge
+      ? `<span class="stage-badge stage-badge--${escAttr(badge === 'عام' ? 'general' : badge === 'قسم 2' ? 'y2' : 'other')}" aria-hidden="true"></span>`
+      : '';
+    const isOverlay = !!(row.is_overlay_general || (row.is_college_general && row.overlay_source));
+    const groupBadge = groupBadgeHtml(row, opts);
+    const display = esc(courseDisplayName(row));
+    const titled =
+      `<span class="slot-course-with-group">` +
+      `<span class="slot-course-name">${display}</span>` +
+      groupBadge +
+      `</span>`;
+    let courseCell;
+    if (plain) {
+      if (showManage && row.section_id && !row.is_college_general && !isOverlay) {
+        courseCell =
+          `<button type="button" class="course-btn course-btn--plain" data-section-id="${escAttr(row.section_id)}" title="${titleTip}">${titled}</button>${badgeHtml}`;
+      } else {
+        courseCell = `<span class="course-plain-label" title="${titleTip}">${titled}</span>${badgeHtml}`;
+      }
+    } else if (showManage && row.section_id && !row.is_college_general && !isOverlay) {
+      courseCell =
+        `<button type="button" class="course-btn course-btn--col" style="background:${color};" data-section-id="${escAttr(row.section_id)}" title="${titleTip}">${titled}</button>${badgeHtml}`;
+    } else if (showManage && (row.is_college_general || isOverlay)) {
+      courseCell =
+        `<span class="course-label-readonly" style="background:${color};" title="${titleTip}">${titled}</span>${badgeHtml}` +
+        `<span class="stage-readonly-hint" title="مقرر اتجاه عام — للتنسيق مع رئيس الاتجاه العام">🔒</span>`;
+    } else {
+      courseCell =
+        `<span class="course-pub-label course-pub-label--filled" style="background:${color};" title="${titleTip}">${titled}</span>${badgeHtml}`;
     }
     const room = String(row.room || '').trim();
     const stackClass = stacked ? ' slot-course-record--stacked' : '';
-    const overlayClass = isOverlay ? ' slot-course-record--overlay-general' : '';
+    const overlayClass = !plain && isOverlay ? ' slot-course-record--overlay-general' : '';
     return (
       `<div class="slot-course-record${stackClass}${overlayClass}">` +
       `<div class="slot-cell slot-cell--course">${courseCell}</div>` +
@@ -233,6 +347,19 @@
       `<div class="slot-cell slot-cell--room"><span class="slot-text${room ? '' : ' slot-text--empty'}">${esc(room || '—')}</span></div>` +
       `</div>`
     );
+  }
+
+  function renderEarlyBucketLanes(courses, opts) {
+    const lanes = balanceEarlyStageLanes(courses);
+    let html = '<div class="stage-early-lanes">';
+    [1, 2].forEach((lane) => {
+      html += `<div class="stage-early-lane" data-early-lane="${lane}"><div class="slot-aligned-rows">`;
+      const list = lanes[lane] || [];
+      html += list.length ? renderAlignedSlotCourses(list, opts) : emptyTriple(opts);
+      html += '</div></div>';
+    });
+    html += '</div>';
+    return html;
   }
 
   /** تكديس رأسي داخل خلية العمود (أعمدة العرض تتكفّل بالتوازي). */
@@ -472,31 +599,43 @@
       slotsMap[key].push(row);
     });
 
+    // خلايا جدول حقيقية (مقرر|أستاذ|قاعة) بحدود كاملة + ترويسة «مقررات المرحلة»
+    const isPrint = !!opts.printMode;
+    const stageOpts = Object.assign({}, opts, { stacked: false, plainCourses: true });
+    const tableExtra = isPrint ? ' timetable--stages-print' : ' timetable--stages-ruled';
+
     let html =
-      `<table class="timetable timetable--stages${compactClass}${cleanClass}"><thead>` +
-      `<tr><th rowspan="2" class="day-header">اليوم</th><th rowspan="2" class="time-header">الوقت</th>`;
+      `<table class="timetable timetable--stages${tableExtra}${compactClass}${cleanClass}"><thead>` +
+      `<tr>` +
+      `<th rowspan="2" class="day-header">اليوم</th>` +
+      `<th rowspan="2" class="time-header">الوقت</th>`;
     BUCKETS.forEach((b) => {
-      html += `<th colspan="3" class="stage-block-header" data-stage-bucket="${escAttr(b.id)}">${esc(b.label)}</th>`;
+      html +=
+        `<th colspan="3" class="stage-block-header stage-block-header--unified" data-stage-bucket="${escAttr(b.id)}">` +
+        `مقررات المرحلة` +
+        `</th>`;
     });
     html += '</tr><tr>';
-    BUCKETS.forEach(() => {
+    BUCKETS.forEach((b) => {
       html +=
-        '<th class="sub-time-header sub-time-header--course">المقرر</th>' +
-        '<th class="sub-time-header sub-time-header--inst">الأستاذ</th>' +
-        '<th class="sub-time-header sub-time-header--room">القاعة</th>';
+        `<th class="sub-time-header sub-time-header--course" data-stage-bucket="${escAttr(b.id)}">المقرر</th>` +
+        `<th class="sub-time-header sub-time-header--inst" data-stage-bucket="${escAttr(b.id)}">الأستاذ</th>` +
+        `<th class="sub-time-header sub-time-header--room" data-stage-bucket="${escAttr(b.id)}">القاعة</th>`;
     });
     html += '</tr></thead><tbody>';
 
     function appendStageTimeRow(day, time, idx) {
       html += `<tr class="stage-time-row${idx === 0 ? ' is-day-start' : ''}">`;
-      html += dayHeaderCellHtml(day, opts, idx === 0 ? 'start' : 'cont');
-      html += timeCellHtml(day, time, opts);
+      html += dayHeaderCellHtml(day, stageOpts, idx === 0 ? 'start' : 'cont');
+      html += timeCellHtml(day, time, stageOpts);
       BUCKETS.forEach((b) => {
-        const courses = slotsMap[`${day}|${time}|${b.id}`] || [];
-        html += `<td colspan="3" class="time-slot-cell slot-slot-block stage-bucket-cell" data-slot-day="${escAttr(day)}" data-slot-time="${escAttr(time)}" data-stage-bucket="${escAttr(b.id)}">`;
-        html += '<div class="slot-aligned-rows">';
-        html += renderAlignedSlotCourses(courses, opts);
-        html += '</div></td>';
+        let courses = slotsMap[`${day}|${time}|${b.id}`] || [];
+        // موازنة ترتيب الكتلة الأولى دون تقسيم بصري يكسر حدود الأعمدة
+        if (b.id === 'general_or_y1' && courses.length > 1) {
+          const lanes = balanceEarlyStageLanes(courses);
+          courses = (lanes[1] || []).concat(lanes[2] || []);
+        }
+        html += renderBucketThreeTds(courses, day, time, b.id, stageOpts);
       });
       html += '</tr>';
     }
@@ -608,11 +747,13 @@
       let mixedGeneralDept = false;
       try {
         const cells = root.querySelectorAll(
-          `.stage-bucket-cell[data-slot-day="${CSS.escape(day)}"][data-slot-time="${CSS.escape(time)}"][data-stage-bucket="general_or_y1"] .stage-badge--general, ` +
+          `.stage-col--course[data-slot-day="${CSS.escape(day)}"][data-slot-time="${CSS.escape(time)}"][data-stage-bucket="general_or_y1"] .stage-badge--general, ` +
+            `.stage-bucket-cell[data-slot-day="${CSS.escape(day)}"][data-slot-time="${CSS.escape(time)}"][data-stage-bucket="general_or_y1"] .stage-badge--general, ` +
             `.time-slot-cell[data-slot-day="${CSS.escape(day)}"][data-slot-time="${CSS.escape(time)}"] .stage-badge--general`
         );
         const y2 = root.querySelectorAll(
-          `.stage-bucket-cell[data-slot-day="${CSS.escape(day)}"][data-slot-time="${CSS.escape(time)}"][data-stage-bucket="general_or_y1"] .stage-badge--y2, ` +
+          `.stage-col--course[data-slot-day="${CSS.escape(day)}"][data-slot-time="${CSS.escape(time)}"][data-stage-bucket="general_or_y1"] .stage-badge--y2, ` +
+            `.stage-bucket-cell[data-slot-day="${CSS.escape(day)}"][data-slot-time="${CSS.escape(time)}"][data-stage-bucket="general_or_y1"] .stage-badge--y2, ` +
             `.time-slot-cell[data-slot-day="${CSS.escape(day)}"][data-slot-time="${CSS.escape(time)}"] .stage-badge--y2`
         );
         if (cells.length && y2.length) mixedGeneralDept = true;
@@ -674,4 +815,6 @@
   global.collapseScheduleActionRows = collapseScheduleActionRows;
   global.fixStageDayHeaderRowspans = fixStageDayHeaderRowspans;
   global.scheduleRowGroupCode = rowGroupCode;
+  global.balanceEarlyStageLanes = balanceEarlyStageLanes;
+  global.earlyLaneFromGroupCode = earlyLaneFromGroupCode;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -41,43 +41,78 @@
       display: block; font-size: 10px; font-weight: 600; color: #475569;
       margin-top: 1px;
     }
-    .slot-course-record {
-      grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.35fr) minmax(2.2rem, 3.1rem) !important;
-      gap: 4px 6px !important;
-    }
-    .slot-cell--room { max-width: 3.1rem; text-align: center; }
-    .slot-cell--room .slot-text { font-size: 10px; text-align: center; white-space: nowrap; }
-    th.sub-time-header--room { width: 3.4% !important; max-width: 3.1rem; }
-    @media print {
-      .slot-inst-asst { color: #333; font-size: 9pt; }
-    }
     .preview-hint {
       font-size: 12px; color: #0f5132; margin: 0 0 12px;
       padding: 8px 10px; background: #d1e7dd; border-right: 3px solid #198754;
     }
-    .timetable { width: 100%; border-collapse: collapse; table-layout: fixed; }
-    .timetable th, .timetable td {
-      border: 1px solid #888; padding: 5px 6px; vertical-align: top; text-align: right;
+    /* نفس تنسيق شاشة رئيس القسم — بلا بطاقات */
+    .timetable.timetable--stages,
+    .timetable.timetable--stages-print {
+      width: 100%;
+      min-width: 0 !important;
+      border-collapse: collapse;
+      table-layout: fixed;
     }
-    .timetable th { background: #e8eef4; font-weight: 700; }
-    .stage-badge { display: inline-block; font-size: 10px; margin-inline-start: 4px; padding: 1px 5px; border-radius: 4px; background: #e2e8f0; }
+    .timetable.timetable--stages-print thead th.day-header,
+    .timetable.timetable--stages-print tbody th.day-header,
+    .timetable.timetable--stages-print thead th.time-header,
+    .timetable.timetable--stages-print td.time-slot-time {
+      position: static !important;
+      right: auto !important;
+      box-shadow: none !important;
+    }
+    .timetable th, .timetable td {
+      border: 1px solid #64748b; padding: 4px 5px; vertical-align: top; text-align: right;
+    }
+    .timetable th { background: #e8eef4; font-weight: 700; font-size: 11px; }
+    .timetable th.stage-block-header--unified {
+      display: table-cell !important;
+      background: #dbeafe !important;
+      font-size: 11px;
+      font-weight: 900;
+      text-align: center;
+    }
+    .timetable td.stage-col {
+      border: 1px solid #64748b !important;
+      vertical-align: top;
+      padding: 4px 5px;
+    }
+    .timetable td.stage-col--room { text-align: center; width: 3.4rem; }
+    .stage-col-sep {
+      margin: 5px 0; border-top: 1px solid #cbd5e1;
+    }
+    .stage-badge, .slot-overlay-badge, .stage-readonly-hint { display: none !important; }
+    .slot-course-with-group {
+      display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; max-width: 100%;
+    }
+    .slot-group-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 1.05rem; padding: 0 4px; font-size: 9px; font-weight: 800;
+      border: 1px solid #64748b; border-radius: 3px; background: #fff; color: #0f172a;
+      flex-shrink: 0;
+    }
     .slot-conflict-actions, .manage-courses-btn, .btn-edit-day-periods,
     .stage-actions-row, .stage-row-actions { display: none !important; }
-    .course-btn, .course-label-readonly, .course-pub-label {
-      display: inline-block; color: #111 !important; background: #f1f5f9 !important;
-      padding: 2px 6px; border-radius: 4px; font-weight: 700; border: none;
+    .course-plain-label, .course-btn.course-btn--plain {
+      display: block; width: 100%; box-sizing: border-box;
+      color: #0f172a !important; background: transparent !important;
+      padding: 0; border: 0 !important; box-shadow: none !important;
+      font-weight: 800; border-radius: 0; max-width: 100%; white-space: normal;
     }
+    .slot-text { font-size: 11px; line-height: 1.3; }
+    .slot-inst-asst { color: #333; font-size: 9px; }
     {% if use_stage_matrix %}
-    @page { size: A4 landscape; margin: 8mm; }
+    @page { size: A4 landscape; margin: 6mm; }
     {% else %}
     @page { size: A4 portrait; margin: 10mm; }
     {% endif %}
     @media print {
       .no-print { display: none !important; }
-      body { padding: 0; }
+      body { padding: 0; font-size: 10.5px; }
+      h1 { font-size: 16px; margin-bottom: 4px; }
+      .meta { font-size: 10px; margin-bottom: 8px; }
       .stage-time-row { page-break-inside: avoid; }
-      .slot-conflict-actions, .manage-courses-btn, .btn-edit-day-periods,
-      .stage-actions-row, .stage-row-actions { display: none !important; }
+      .timetable.timetable--stages-print { font-size: 10px; }
     }
   </style>
 </head>
@@ -93,8 +128,8 @@
     </div>
   </div>
   <p class="preview-hint no-print">
-    <strong>الأفضل للشواهد:</strong> استخدم «طباعة / حفظ PDF» من هنا.
-    المساعد يظهر سطراً ثانياً أصغر تحت الرئيسي عند تفعيل الخيار (مفعّل افتراضياً). ألغِ التحديد لطباعة الرئيسي فقط.
+    <strong>الأفضل للشواهد:</strong> استخدم «طباعة / حفظ PDF» من هنا واتجاه <strong>أفقي (Landscape)</strong>.
+    طباعة شبكية: ترويسة <strong>مقررات المرحلة</strong>، بلا ألوان للمقرر، وحدود عمودية لكل من المقرر/الأستاذ/القاعة.
   </p>
 
   <h1>الجدول الدراسي</h1>
@@ -108,7 +143,7 @@
   <div id="printGrid"></div>
 
   <script src="/static/js/common.js"></script>
-  <script src="/static/js/schedule-stage-grid.js?v=20261010a"></script>
+  <script src="/static/js/schedule-stage-grid.js?v=20261013ruled"></script>
   <script>
     window.SCHEDULE_DAYS = window.SCHEDULE_DAYS || ['السبت','الأحد','الإثنين','الثلاثاء','الأربعاء','الخميس'];
     const ROWS = {{ rows|tojson }};
@@ -118,6 +153,21 @@
     const LS_KEY = 'schedule_print_show_assistants';
     const el = document.getElementById('printGrid');
     const opt = document.getElementById('optShowAssistants');
+
+    const courseColors = {};
+    const colorPalette = [
+      '#ffc107', '#28a745', '#17a2b8', '#6f42c1', '#fd7e14',
+      '#20c997', '#e83e8c', '#6610f2', '#ff6b6b', '#4ecdc4',
+    ];
+    let colorIndex = 0;
+    function getCourseColor(courseName) {
+      const key = String(courseName || '');
+      if (!courseColors[key]) {
+        courseColors[key] = colorPalette[colorIndex % colorPalette.length];
+        colorIndex++;
+      }
+      return courseColors[key];
+    }
 
     function renderPreview() {
       const showAssistantLine = !!(opt && opt.checked);
@@ -130,6 +180,9 @@
         showAssistantLine: showAssistantLine,
         useDisplayTracks: USE_DISPLAY_TRACKS,
         displayTracks: DISPLAY_TRACKS,
+        printMode: true,
+        compact: true,
+        getCourseColor,
       };
       if (USE_STAGES && typeof buildStageMatrixTimetableHtml === 'function') {
         el.innerHTML = buildStageMatrixTimetableHtml(ROWS, opts);
@@ -150,11 +203,8 @@
       if (opt) opt.checked = true;
     }
     if (opt) opt.addEventListener('change', renderPreview);
+    document.getElementById('btnPreviewPrint')?.addEventListener('click', () => window.print());
     renderPreview();
-
-    document.getElementById('btnPreviewPrint')?.addEventListener('click', function () {
-      window.print();
-    });
   </script>
 </body>
 </html>
