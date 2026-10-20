@@ -236,7 +236,7 @@ def build_template() -> Document:
         r1 = p.add_run("التاريخ: ")
         r1.font.size = Pt(size_pt)
         _set_run_rtl(r1, rtl=True)
-        r2 = p.add_run("..../..../20")
+        r2 = p.add_run("{{ form_date }}")
         r2.font.size = Pt(size_pt)
         _set_run_rtl(r2, rtl=False)
         r3 = p.add_run(" م")

@@ -342,18 +342,90 @@ def _eval_rating_subquery() -> str:
 
 
 def _course_eval_dept_filter(conn, department_id: int | None) -> tuple[str, list[Any]]:
+    """فلتر قسم لتقييمات المقرر: جدول القسم أو مجموعة التدريس فقط (بدون منزل الأستاذ)."""
     if department_id is None:
         return "", []
+    dept = int(department_id)
     pk = schedule_pk_column(conn)
-    return (
-        f"""
-        AND EXISTS (
+    parts: list[str] = [
+        f"""EXISTS (
             SELECT 1 FROM schedule sch
             WHERE sch.{pk} = e.section_id AND sch.department_id = ?
-        )
-        """,
-        [int(department_id)],
+        )"""
+    ]
+    params: list[Any] = [dept]
+
+    ce_cols: set[str] = set()
+    if table_exists(conn, "course_evaluations"):
+        try:
+            ce_cols = {c.lower() for c in fetch_table_columns(conn, "course_evaluations")}
+        except Exception:
+            ce_cols = set()
+    if "teaching_group_id" in ce_cols and table_exists(conn, "teaching_groups"):
+        try:
+            tg_cols = {c.lower() for c in fetch_table_columns(conn, "teaching_groups")}
+        except Exception:
+            tg_cols = set()
+        if "department_id" in tg_cols:
+            parts.append(
+                """EXISTS (
+                    SELECT 1 FROM teaching_groups tg
+                    WHERE tg.id = e.teaching_group_id
+                      AND tg.department_id = ?
+                      AND COALESCE(e.teaching_group_id, 0) > 0
+                )"""
+            )
+            params.append(dept)
+
+    return f" AND ({' OR '.join(parts)}) ", params
+
+
+def _semester_label_aliases(sem: str) -> list[str]:
+    """صيغ مكافئة لاسم الفصل (ربيع 25-26 ↔ ربيع 2025/2026)."""
+    from backend.services.term_engine import (
+        academic_year_aliases,
+        parse_semester_label,
+        season_name_ar,
     )
+
+    s = " ".join((sem or "").split()).strip()
+    if not s:
+        return []
+    out: list[str] = [s]
+    parsed = parse_semester_label(s)
+    if not parsed:
+        return out
+    ops = (parsed.get("ops_label") or "").strip()
+    if ops and ops not in out:
+        out.append(ops)
+    season = (parsed.get("season") or "").strip()
+    year = (parsed.get("academic_year") or "").strip()
+    name_ar = season_name_ar(season) if season else ""
+    if name_ar:
+        for y in academic_year_aliases(year):
+            lab = f"{name_ar} {y}".strip()
+            if lab and lab not in out:
+                out.append(lab)
+    return out
+
+
+def _semesters_equivalent(a: str | None, b: str | None) -> bool:
+    from backend.services.term_engine import parse_semester_label
+
+    sa = " ".join((a or "").split()).strip()
+    sb = " ".join((b or "").split()).strip()
+    if not sa or not sb:
+        return False
+    if sa.lower() == sb.lower():
+        return True
+    pa, pb = parse_semester_label(sa), parse_semester_label(sb)
+    if pa and pb and (pa.get("term_key") or "") and pa.get("term_key") == pb.get("term_key"):
+        return True
+    return False
+
+
+def _sql_in_placeholders(n: int) -> str:
+    return ",".join("?" for _ in range(max(0, int(n))))
 
 
 def course_eval_min_required(enrolled: int, *, conn=None, response_count: int = 0) -> int:
@@ -407,7 +479,12 @@ def _archived_registration_count(
     cur = conn.cursor()
     cols = {c.lower() for c in fetch_table_columns(conn, "term_registration_archives")}
     tg = int(teaching_group_id or 0)
-    params: list[Any] = [cname, sem, sem]
+    aliases = _semester_label_aliases(sem)
+    if not aliases:
+        return 0
+    alias_l = [a.lower() for a in aliases]
+    ph = _sql_in_placeholders(len(alias_l))
+    params: list[Any] = [cname, *alias_l, *alias_l]
     tg_sql = ""
     if tg > 0 and "teaching_group_id" in cols:
         tg_sql = " AND teaching_group_id = ?"
@@ -418,8 +495,8 @@ def _archived_registration_count(
         FROM term_registration_archives
         WHERE lower(trim(course_name)) = lower(trim(?))
           AND (
-            lower(trim(COALESCE(archived_term, ''))) = lower(trim(?))
-            OR lower(trim(COALESCE(semester, ''))) = lower(trim(?))
+            lower(trim(COALESCE(archived_term, ''))) IN ({ph})
+            OR lower(trim(COALESCE(semester, ''))) IN ({ph})
           )
           {tg_sql}
         """,
@@ -435,18 +512,26 @@ def _course_registration_count(conn, course_name: str, semester: str | None = No
     cur = conn.cursor()
     cols = {c.lower() for c in fetch_table_columns(conn, "registrations")}
     sem = (semester or "").strip()
+    # فصل سابق: الأرشيف أولاً (التسجيلات الحية غالباً للفصل الحالي فقط)
+    if sem and is_course_eval_historical_term(conn, sem):
+        archived = _archived_registration_count(conn, cname, sem)
+        if archived > 0:
+            return archived
     if sem and "semester" in cols:
+        aliases = _semester_label_aliases(sem)
+        alias_l = [a.lower() for a in aliases] or [sem.lower()]
+        ph = _sql_in_placeholders(len(alias_l))
         row = cur.execute(
-            """
+            f"""
             SELECT COUNT(DISTINCT student_id)
             FROM registrations
             WHERE lower(trim(course_name)) = lower(trim(?))
               AND (
-                lower(trim(COALESCE(semester, ''))) = lower(trim(?))
+                lower(trim(COALESCE(semester, ''))) IN ({ph})
                 OR trim(COALESCE(semester, '')) = ''
               )
             """,
-            (cname, sem),
+            (cname, *alias_l),
         ).fetchone()
         n = int(_row_val(row, 0) or 0)
         if n > 0:
@@ -539,74 +624,42 @@ def _college_course_eval_enrolled(
         return 0
     cur = conn.cursor()
     n = 0
+    dept_sql, dept_params = _course_eval_dept_filter(conn, department_id)
+    aliases = _semester_label_aliases(semester)
+    alias_l = [a.lower() for a in aliases] or [str(semester or "").lower()]
+    ph = _sql_in_placeholders(len(alias_l))
     if table_exists(conn, "registrations"):
-        if department_id is not None:
-            pk = schedule_pk_column(conn)
-            row = cur.execute(
-                f"""
-                SELECT COUNT(DISTINCT r.student_id)
-                FROM registrations r
-                INNER JOIN course_evaluations e
-                    ON lower(trim(e.course_name)) = lower(trim(r.course_name))
-                   AND e.semester = ?
-                WHERE EXISTS (
-                    SELECT 1 FROM schedule sch
-                    WHERE sch.{pk} = e.section_id AND sch.department_id = ?
-                )
-                """,
-                (semester, int(department_id)),
-            ).fetchone()
-        else:
-            row = cur.execute(
-                """
-                SELECT COUNT(DISTINCT r.student_id)
-                FROM registrations r
-                INNER JOIN course_evaluations e
-                    ON lower(trim(e.course_name)) = lower(trim(r.course_name))
-                   AND e.semester = ?
-                """,
-                (semester,),
-            ).fetchone()
+        row = cur.execute(
+            f"""
+            SELECT COUNT(DISTINCT r.student_id)
+            FROM registrations r
+            INNER JOIN course_evaluations e
+                ON lower(trim(e.course_name)) = lower(trim(r.course_name))
+               AND lower(trim(e.semester)) IN ({ph})
+            WHERE 1=1 {dept_sql}
+            """,
+            tuple([*alias_l] + list(dept_params)),
+        ).fetchone()
         n = int(_row_val(row, 0) or 0)
     if n > 0:
         return n
     if not table_exists(conn, "term_registration_archives"):
         return 0
-    if department_id is not None:
-        pk = schedule_pk_column(conn)
-        row = cur.execute(
-            f"""
-            SELECT COUNT(DISTINCT a.student_id)
-            FROM term_registration_archives a
-            INNER JOIN course_evaluations e
-                ON lower(trim(e.course_name)) = lower(trim(a.course_name))
-               AND e.semester = ?
-            WHERE (
-                lower(trim(COALESCE(a.archived_term, ''))) = lower(trim(?))
-                OR lower(trim(COALESCE(a.semester, ''))) = lower(trim(?))
-            )
-              AND EXISTS (
-                SELECT 1 FROM schedule sch
-                WHERE sch.{pk} = e.section_id AND sch.department_id = ?
-            )
-            """,
-            (semester, semester, semester, int(department_id)),
-        ).fetchone()
-    else:
-        row = cur.execute(
-            """
-            SELECT COUNT(DISTINCT a.student_id)
-            FROM term_registration_archives a
-            INNER JOIN course_evaluations e
-                ON lower(trim(e.course_name)) = lower(trim(a.course_name))
-               AND e.semester = ?
-            WHERE (
-                lower(trim(COALESCE(a.archived_term, ''))) = lower(trim(?))
-                OR lower(trim(COALESCE(a.semester, ''))) = lower(trim(?))
-            )
-            """,
-            (semester, semester, semester),
-        ).fetchone()
+    row = cur.execute(
+        f"""
+        SELECT COUNT(DISTINCT a.student_id)
+        FROM term_registration_archives a
+        INNER JOIN course_evaluations e
+            ON lower(trim(e.course_name)) = lower(trim(a.course_name))
+           AND lower(trim(e.semester)) IN ({ph})
+        WHERE (
+            lower(trim(COALESCE(a.archived_term, ''))) IN ({ph})
+            OR lower(trim(COALESCE(a.semester, ''))) IN ({ph})
+        )
+          {dept_sql}
+        """,
+        tuple([*alias_l, *alias_l, *alias_l] + list(dept_params)),
+    ).fetchone()
     return int(_row_val(row, 0) or 0)
 
 
@@ -659,6 +712,20 @@ def resolve_course_eval_enrollment(
     cname = (course_name or "").strip()
     sem = (semester or "").strip()
     count = int(response_count or 0)
+    # فصل سابق: الأرشيف أولاً (مع مطابقة مرنة لاسم الفصل)
+    if sem and is_course_eval_historical_term(conn, sem):
+        enrolled = _archived_registration_count(
+            conn, cname, sem, teaching_group_id=teaching_group_id
+        )
+        if enrolled <= 0 and teaching_group_id:
+            enrolled = _archived_registration_count(conn, cname, sem)
+        if enrolled > 0:
+            min_req = course_eval_min_required(enrolled, conn=conn)
+            return enrolled, min_req, count >= min_req, "archive"
+        enrolled = _grades_registration_count(conn, cname, sem)
+        if enrolled > 0:
+            min_req = course_eval_min_required(enrolled, conn=conn)
+            return enrolled, min_req, count >= min_req, "grades"
     enrolled = section_enrolled_count(
         conn,
         cname,
@@ -696,14 +763,17 @@ def _grades_registration_count(conn, course_name: str, semester: str) -> int:
     if not cname or not sem or not table_exists(conn, "grades"):
         return 0
     cur = conn.cursor()
+    aliases = _semester_label_aliases(sem)
+    alias_l = [a.lower() for a in aliases] or [sem.lower()]
+    ph = _sql_in_placeholders(len(alias_l))
     row = cur.execute(
-        """
+        f"""
         SELECT COUNT(DISTINCT student_id)
         FROM grades
         WHERE lower(trim(course_name)) = lower(trim(?))
-          AND lower(trim(semester)) = lower(trim(?))
+          AND lower(trim(semester)) IN ({ph})
         """,
-        (cname, sem),
+        (cname, *alias_l),
     ).fetchone()
     return int(_row_val(row, 0) or 0)
 
@@ -820,17 +890,8 @@ def _evaluated_section_ids(
     if not table_exists(conn, "course_evaluations"):
         return set()
     cur = conn.cursor()
-    pk = schedule_pk_column(conn)
-    dept_sql = ""
-    params: list[Any] = [semester]
-    if department_id is not None:
-        dept_sql = f"""
-            AND EXISTS (
-                SELECT 1 FROM schedule sch
-                WHERE sch.{pk} = e.section_id AND sch.department_id = ?
-            )
-        """
-        params.append(int(department_id))
+    dept_sql, dept_params = _course_eval_dept_filter(conn, department_id)
+    params: list[Any] = [semester, *dept_params]
     rows = cur.execute(
         f"""
         SELECT DISTINCT e.section_id
@@ -1000,17 +1061,8 @@ def build_course_eval_missing_sections_audit(
     evaluated_course_instructor: set[tuple[str, int]] = set()
     if table_exists(conn, "course_evaluations"):
         cur = conn.cursor()
-        dept_sql = ""
-        params: list[Any] = [sem]
-        if department_id is not None:
-            pk = schedule_pk_column(conn)
-            dept_sql = f"""
-                AND EXISTS (
-                    SELECT 1 FROM schedule sch
-                    WHERE sch.{pk} = e.section_id AND sch.department_id = ?
-                )
-            """
-            params.append(int(department_id))
+        dept_sql, dept_params = _course_eval_dept_filter(conn, department_id)
+        params: list[Any] = [sem, *dept_params]
         for row in cur.execute(
             f"""
             SELECT DISTINCT lower(trim(e.course_name)), e.instructor_id
@@ -1665,17 +1717,8 @@ def build_course_eval_report(
     """تقرير تجميعي لتقييم المقرر (مسار student_course)."""
     sem = (semester or "").strip() or term_label_from_conn(conn)
     cur = conn.cursor()
-    dept_sql = ""
-    params: list[Any] = [sem]
-    if department_id is not None:
-        pk = schedule_pk_column(conn)
-        dept_sql = f"""
-            AND EXISTS (
-                SELECT 1 FROM schedule sch
-                WHERE sch.{pk} = e.section_id AND sch.department_id = ?
-            )
-        """
-        params.append(int(department_id))
+    dept_sql, dept_params = _course_eval_dept_filter(conn, department_id)
+    params: list[Any] = [sem, *dept_params]
 
     count_row = cur.execute(
         f"SELECT COUNT(*) FROM course_evaluations e WHERE e.semester = ? {dept_sql}",

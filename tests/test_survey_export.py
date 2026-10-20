@@ -527,3 +527,108 @@ def test_section_fifty_percent_rule_uses_registrations(db_conn):
     assert rep["aggregated"] is True
     assert rep["overall_score_percent"] is not None
 
+
+def test_hod_dept_filter_includes_teaching_group_department(db_conn):
+    """رئيس القسم يرى تقييمات مجموعة تدريسه حتى لو schedule.department_id فارغ/مختلف."""
+    from backend.services.evaluation_survey import insert_evaluation_with_answers, list_survey_questions
+    from backend.services.survey_analytics import (
+        _fetch_course_eval_section_groups,
+        build_course_eval_sections_summary,
+    )
+
+    cur = db_conn.cursor()
+    uid = "hodtg"
+    cur.execute(
+        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+        (f"ME{uid}", f"ميكانيكا {uid}", "Mech"),
+    )
+    mech_id = int(cur.execute("SELECT id FROM departments WHERE code=?", (f"ME{uid}",)).fetchone()[0])
+    cur.execute(
+        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+        (f"OT{uid}", f"آخر {uid}", "Other"),
+    )
+    other_id = int(cur.execute("SELECT id FROM departments WHERE code=?", (f"OT{uid}",)).fetchone()[0])
+    cur.execute(
+        "INSERT INTO instructors (name, department_id) VALUES (?, ?)",
+        (f"أستاذ {uid}", mech_id),
+    )
+    iid = int(cur.execute("SELECT id FROM instructors WHERE name=?", (f"أستاذ {uid}",)).fetchone()[0])
+
+    sem = "ربيع 41-42-hod"
+    course = f"مقرر مجموعة HOD {uid}"
+    # شعبة بجدول لقسم آخر (لا يطابق فلتر schedule القديم)
+    cur.execute(
+        """
+        INSERT INTO schedule (course_name, day, time, room, instructor_id, semester, department_id)
+        VALUES (?, 'الأحد', '08:00', '501', ?, ?, ?)
+        """,
+        (course, iid, sem, other_id),
+    )
+    db_conn.commit()
+    cur.execute("UPDATE schedule SET id = rowid WHERE id IS NULL")
+    db_conn.commit()
+    sec_id = int(cur.execute("SELECT id FROM schedule ORDER BY rowid DESC LIMIT 1").fetchone()[0])
+    cur.execute(
+        """
+        INSERT INTO teaching_groups
+            (course_name, semester, department_id, group_code, group_kind, instructor_id, is_active)
+        VALUES (?, ?, ?, 'A', 'single', ?, 1)
+        """,
+        (course, sem, mech_id, iid),
+    )
+    db_conn.commit()
+    tgid = int(cur.execute("SELECT id FROM teaching_groups ORDER BY id DESC LIMIT 1").fetchone()[0])
+
+    questions = list_survey_questions(db_conn, active_only=True)
+    answers = {int(q["id"]): 4 for q in questions}
+    for i in range(4):
+        insert_evaluation_with_answers(
+            db_conn,
+            student_id=f"hod-eval-{uid}-{i}",
+            section_id=sec_id,
+            course_name=course,
+            instructor_id=iid,
+            semester=sem,
+            comments="",
+            answers=answers,
+            active_questions=questions,
+            teaching_group_id=tgid,
+        )
+    db_conn.commit()
+
+    groups_mech = _fetch_course_eval_section_groups(db_conn, sem, mech_id)
+    assert any(g.get("course_name") == course for g in groups_mech), groups_mech
+    summary = build_course_eval_sections_summary(db_conn, semester=sem, department_id=mech_id)
+    assert any(r.get("course_name") == course for r in (summary or [])), summary
+
+
+def test_archived_enrollment_flexible_semester_alias(db_conn):
+    """فصل سابق: المسجّلون من الأرشيف رغم اختلاف صياغة اسم الفصل."""
+    from backend.services.survey_analytics import resolve_course_eval_enrollment
+
+    query_sem = "ربيع 25-26"
+    archive_sem = "ربيع 2025/2026"
+    course = "مقرر أرشيف مسجّلين"
+    cur = db_conn.cursor()
+    for i in range(8):
+        cur.execute(
+            """
+            INSERT INTO term_registration_archives
+                (archived_term, student_id, course_name, semester, archived_by, reason)
+            VALUES (?, ?, ?, ?, 'test', 'test')
+            """,
+            (archive_sem, f"arch-stu-{i}", course, archive_sem),
+        )
+    db_conn.commit()
+
+    enrolled, min_req, aggregated, source = resolve_course_eval_enrollment(
+        db_conn,
+        course_name=course,
+        semester=query_sem,
+        response_count=4,
+    )
+    assert enrolled == 8, (enrolled, source)
+    assert min_req == 4
+    assert aggregated is True
+    assert source == "archive"
+

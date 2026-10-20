@@ -1461,6 +1461,16 @@ def course_registration_report_page():
     return render_template("course_registration_report.html")
 
 
+@app.route("/registration_review_report_page")
+@app.route("/prereq_registration_report_page")
+@login_required
+def prereq_registration_report_page():
+    """مراجعة التسجيل: أسبقية المقررات + حمل الوحدات — ضمن تقارير القسم."""
+    if _is_instructor_or_supervisor_role():
+        return redirect(url_for("performance_report_page"))
+    return render_template("prereq_registration_report.html")
+
+
 @app.route("/schedule_versions_page")
 @login_required
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")

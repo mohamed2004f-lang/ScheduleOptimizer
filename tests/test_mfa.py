@@ -10,8 +10,46 @@ from backend.core.totp import generate_secret, provisioning_qr_svg, totp_at, ver
 def test_secret_box_roundtrip_and_legacy_plaintext():
     boxed = encrypt_secret("JBSWY3DPEHPK3PXP")
     assert is_encrypted(boxed)
+    assert boxed.startswith("enc.v2.")
     assert decrypt_secret(boxed) == "JBSWY3DPEHPK3PXP"
     assert decrypt_secret("JBSWY3DPEHPK3PXP") == "JBSWY3DPEHPK3PXP"
+
+
+def test_secret_box_decrypts_legacy_v1():
+    """ترحيل توافقي من XOR+HMAC (enc.v1) إلى Fernet (enc.v2)."""
+    import base64
+    import hashlib
+    import hmac
+    import os
+
+    from backend.core import secret_box as sb
+
+    plain = b"LEGACYTOTPSECRET1"
+    key = sb._master_key()
+    nonce = b"\x01" * 16
+    cipher = bytes(a ^ b for a, b in zip(plain, sb._keystream(key, nonce, len(plain))))
+    tag = hmac.new(key, nonce + cipher, hashlib.sha256).digest()[:16]
+    legacy = sb.LEGACY_PREFIX + base64.urlsafe_b64encode(nonce + tag + cipher).decode("ascii")
+    assert decrypt_secret(legacy) == plain.decode("utf-8")
+    assert is_encrypted(legacy)
+    # القيمة الافتراضية في الاختبارات
+    assert os.environ.get("SECRET_KEY")
+
+
+def test_mfa_setup_secret_server_side_store(app):
+    from backend.core.auth_throttle import reset_throttle_state
+    from backend.core.mfa import (
+        clear_mfa_setup_secret,
+        load_mfa_setup_secret,
+        store_mfa_setup_secret,
+    )
+
+    reset_throttle_state()
+    with app.test_request_context("/"):
+        store_mfa_setup_secret("user-mfa-kv", "JBSWY3DPEHPK3PXP")
+        assert load_mfa_setup_secret("user-mfa-kv") == "JBSWY3DPEHPK3PXP"
+        clear_mfa_setup_secret("user-mfa-kv")
+        assert load_mfa_setup_secret("user-mfa-kv") is None
 
 
 def test_provisioning_qr_svg_does_not_raise():
@@ -85,6 +123,10 @@ def test_dean_setup_required_when_enforced(app, db_conn, monkeypatch):
         secret = payload.get("secret")
         assert secret
         assert "otpauth_uri" not in payload
+        # السر لا يُخزَّن في كوكي الجلسة الموقّعة (يُحفظ على الخادم)
+        with c.session_transaction() as sess:
+            assert sess.get("mfa_setup_secret") in (None, "")
+            assert secret not in {str(v) for v in sess.values() if v is not None}
         qr_svg = payload.get("qr_svg") or ""
         if qr_svg:
             assert qr_svg.startswith("<svg")
@@ -99,7 +141,7 @@ def test_dean_setup_required_when_enforced(app, db_conn, monkeypatch):
         ).fetchone()[0]
         assert stored
         assert secret not in str(stored)
-        assert str(stored).startswith("enc.v1.")
+        assert str(stored).startswith("enc.v2.")
         chk = c.get("/auth/check")
         assert chk.status_code == 200
         assert (chk.get_json() or {}).get("authenticated") is True or (

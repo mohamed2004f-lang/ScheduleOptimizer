@@ -17,6 +17,7 @@ _ACADEMIC_REPORT_NAV_KEYS: tuple[str, ...] = (
     "nav_failed_courses_report",
     "nav_not_registered_courses_report",
     "nav_uncompleted_courses_report",
+    "nav_prereq_registration_report",
     "nav_grade_course_mapping_audit",
     "nav_analytics_report",
 )

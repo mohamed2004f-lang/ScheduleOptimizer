@@ -50,9 +50,16 @@ async function fetchJSON(url, opts){
   const j = await r.json().catch(()=>null);
   return {ok:r.ok,status:r.status,json:j};
 }
+function esc(s){
+  if (s == null) return '';
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+}
 function setMsg(kind, text){
   const el = document.getElementById('msg');
-  el.innerHTML = text ? `<div class="alert alert-${kind} p-2 mb-0">${text}</div>` : '';
+  const safeKind = (kind === 'danger' || kind === 'success' || kind === 'warning' || kind === 'info') ? kind : 'info';
+  el.innerHTML = text ? `<div class="alert alert-${safeKind} p-2 mb-0">${esc(text)}</div>` : '';
 }
 
 async function load(){
@@ -72,11 +79,11 @@ async function load(){
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${idx+1}</td>
-      <td>${it.student_id || ''}</td>
-      <td>${it.student_name || ''}</td>
-      <td class="text-center">${it.completed_units ?? ''}</td>
-      <td class="text-center">${it.electives_completed ?? ''}</td>
-      <td class="text-center">${it.required_electives ?? 3}</td>
+      <td>${esc(it.student_id || '')}</td>
+      <td>${esc(it.student_name || '')}</td>
+      <td class="text-center">${esc(it.completed_units ?? '')}</td>
+      <td class="text-center">${esc(it.electives_completed ?? '')}</td>
+      <td class="text-center">${esc(it.required_electives ?? 3)}</td>
     `;
     tb.appendChild(tr);
   });

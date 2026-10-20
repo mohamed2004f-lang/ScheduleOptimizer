@@ -26,7 +26,12 @@ from .utilities import (
     get_schedule_published_at,
     get_current_term,
 )
-from .prereg_helpers import evaluate_courses_prereqs
+from .prereg_helpers import (
+    evaluate_courses_prereqs,
+    build_prereq_registration_issues_report,
+    _build_prereq_match_context,
+    _resolve_prereq_grade,
+)
 from backend.core.feature_flags import registration_program_course_mode
 from backend.core.department_scope_policy import (
     ACADEMIC_REPORT_STAFF_ROLES,
@@ -712,6 +717,138 @@ def electives_report_pdf():
     </html>
     """
     return pdf_response_from_html(html, filename_prefix="electives_report")
+
+
+# -----------------------------
+# تقرير: مراجعة التسجيل (أسبقية + وحدات)
+# -----------------------------
+def _prereq_registration_report_payload():
+    kind = (request.args.get("kind") or "").strip()
+    course_q = (request.args.get("course_name") or request.args.get("dependent") or "").strip()
+    prereq_q = (request.args.get("prereq") or "").strip()
+    group = (request.args.get("group") or "all").strip()
+    with get_connection() as conn:
+        allowed = _get_allowed_student_ids_for_role(conn, session.get("user_role"))
+        return build_prereq_registration_issues_report(
+            conn,
+            allowed,
+            kind=kind or None,
+            course_q=course_q or None,
+            prereq_q=prereq_q or None,
+            group=group or "all",
+        )
+
+
+@students_bp.route("/prereq_registration_report")
+@students_bp.route("/registration_review_report")
+@role_required(*ACADEMIC_REPORT_VIEW_ROLES)
+def prereq_registration_report_api():
+    """تقرير قسم: أسبقية المقررات + انحراف حمل الوحدات في التسجيل الفعلي."""
+    data = _prereq_registration_report_payload()
+    return jsonify({"status": "ok", **data})
+
+
+@students_bp.route("/prereq_registration_report/excel")
+@students_bp.route("/registration_review_report/excel")
+@role_required(*ACADEMIC_REPORT_VIEW_ROLES)
+def prereq_registration_report_excel():
+    data = _prereq_registration_report_payload()
+    items = data.get("items") or []
+    df = pd.DataFrame(items)
+    if not df.empty:
+        cols = [
+            "student_id",
+            "student_name",
+            "total_units",
+            "registered_count",
+            "dependent_course",
+            "prereq_course",
+            "prereq_grade",
+            "kind",
+            "kind_label_ar",
+            "issue_group",
+            "prereq_status",
+            "label_ar",
+            "matched_course",
+        ]
+        keep = [c for c in cols if c in df.columns] + [c for c in df.columns if c not in cols]
+        df = df[keep]
+        df = df.rename(
+            columns={
+                "student_id": "رقم الطالب",
+                "student_name": "الاسم",
+                "total_units": "إجمالي الوحدات",
+                "registered_count": "عدد المقررات",
+                "dependent_course": "المقرر التابع",
+                "prereq_course": "المتطلب السابق",
+                "prereq_grade": "درجة المتطلب",
+                "kind": "رمز التصنيف",
+                "kind_label_ar": "التصنيف",
+                "issue_group": "المجموعة",
+                "prereq_status": "حالة المتطلب",
+                "label_ar": "الوصف",
+                "matched_course": "مطابقة المقرر",
+            }
+        )
+    return excel_response_from_df(df, filename_prefix="registration_review_report")
+
+
+@students_bp.route("/prereq_registration_report/pdf")
+@students_bp.route("/registration_review_report/pdf")
+@role_required(*ACADEMIC_REPORT_VIEW_ROLES)
+def prereq_registration_report_pdf():
+    data = _prereq_registration_report_payload()
+    items = data.get("items") or []
+    rows_html = ""
+    for it in items:
+        units = it.get("total_units")
+        units_s = f"{units:g}" if isinstance(units, (int, float)) else (units or "—")
+        rows_html += (
+            "<tr>"
+            f"<td>{it.get('student_id', '')}</td>"
+            f"<td>{it.get('student_name', '')}</td>"
+            f"<td style='text-align:center'>{units_s}</td>"
+            f"<td>{it.get('dependent_course', '') or '—'}</td>"
+            f"<td>{it.get('prereq_course', '') or '—'}</td>"
+            f"<td style='text-align:center'>{it.get('prereq_grade', '') if it.get('prereq_grade') is not None else '—'}</td>"
+            f"<td>{it.get('kind_label_ar', '')}</td>"
+            "</tr>"
+        )
+    html = f"""
+    <html dir="rtl" lang="ar">
+    <head>
+      <meta charset="utf-8"/>
+      <style>
+        body {{ font-family: Arial, sans-serif; }}
+        h2 {{ margin: 0 0 10px 0; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        th, td {{ border: 1px solid #999; padding: 6px; font-size: 11px; }}
+        th {{ background: #f2f2f2; }}
+      </style>
+    </head>
+    <body>
+      <h2>مراجعة التسجيل (أسبقية ووحدات)</h2>
+      <p>أسبقية المقررات + حمل الوحدات خارج 12–18 — الإجمالي: {len(items)}</p>
+      <table>
+        <thead>
+          <tr>
+            <th>رقم الطالب</th>
+            <th>الاسم</th>
+            <th>الوحدات</th>
+            <th>المقرر التابع</th>
+            <th>المتطلب</th>
+            <th>درجة المتطلب</th>
+            <th>التصنيف</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows_html or "<tr><td colspan='7' style='text-align:center'>لا توجد بيانات</td></tr>"}
+        </tbody>
+      </table>
+    </body>
+    </html>
+    """
+    return pdf_response_from_html(html, filename_prefix="registration_review_report")
 
 
 # -----------------------------
@@ -5264,17 +5401,6 @@ def eligible_courses():
             "offerings_published": False,
         })
 
-    PASS_TEXT = {'p','pass','نجاح','مقبول','a','b','c'}
-    PASS_NUM_THRESHOLD = 50.0
-
-    def _is_pass(g) -> bool:
-        try:
-            if float(g) >= PASS_NUM_THRESHOLD:
-                return True
-        except Exception:
-            pass
-        return isinstance(g, str) and g.strip().lower() in PASS_TEXT
-
     try:
         with get_connection() as conn:
             cur = conn.cursor()
@@ -5316,26 +5442,25 @@ def eligible_courses():
             except Exception:
                 all_courses = []
 
-            try:
-                grade_rows = cur.execute(
-                    "SELECT course_name, grade FROM grades WHERE student_id = ?",
-                    (sid,),
-                ).fetchall()
-            except Exception:
-                grade_rows = []
-            grade_map = {}
-            for r in grade_rows:
-                cn = str(r[0] or "").strip()
-                if cn:
-                    grade_map[cn] = r[1]
-
+            by_name = {c["course_name"]: c for c in all_courses}
+            # أفضل درجة ناجحة (وليس آخر محاولة) + مطابقة الرمز/المعادل — نفس منطق المتطلبات
+            match_ctx = _build_prereq_match_context(cur, sid)
             completed = []
-            for c in all_courses:
-                g = grade_map.get(c["course_name"], None)
-                if g is None:
+            completed_seen: set[str] = set()
+            for cn, _cc, _g in match_ctx.get("grade_rows") or []:
+                cname = str(cn or "").strip()
+                if not cname or cname in completed_seen:
                     continue
-                if _is_pass(g):
-                    completed.append({**c, "grade": g})
+                raw, grade_val, _matched = _resolve_prereq_grade(match_ctx, cname)
+                if raw != "passed":
+                    continue
+                completed_seen.add(cname)
+                meta = by_name.get(cname) or {
+                    "course_name": cname,
+                    "course_code": "",
+                    "units": 0,
+                }
+                completed.append({**meta, "grade": grade_val})
 
             if not offerings_published:
                 return jsonify({
@@ -5345,11 +5470,10 @@ def eligible_courses():
                     "offerings_published": False,
                 })
 
-            by_name = {c["course_name"]: c for c in all_courses}
-            passed_names = {c["course_name"] for c in completed}
             eligible = []
             for scn in sorted(offered_names):
-                if scn in passed_names:
+                raw, _grade_val, _matched = _resolve_prereq_grade(match_ctx, scn)
+                if raw == "passed":
                     continue
                 eligible.append(by_name.get(scn) or {"course_name": scn, "course_code": "", "units": 0})
 

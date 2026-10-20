@@ -288,6 +288,11 @@ const WITHDRAWN_MODE = {{ 'true' if withdrawn_mode else 'false' }};
           <h6 class="mb-2">التسجيلات الحالية</h6>
           <div id="currentRegistrationsList" class="list-group small"></div>
           <div id="currentUnitsSummary" class="mt-2 small text-muted"></div>
+          <div id="regGroupPickers" class="mt-2 border rounded p-2 bg-light d-none">
+            <div class="small fw-semibold mb-1">مجموعات التدريس (A/B) — فقط للمقررات المقسّمة</div>
+            <div class="form-text small mb-2">المقررات ذات المجموعة الواحدة أو بلا مجموعات لا تظهر هنا وتُربط تلقائياً عند الحفظ.</div>
+            <div id="regGroupPickersBody" class="small"></div>
+          </div>
         </div>
 
         <div class="mb-3">
@@ -332,6 +337,107 @@ const WITHDRAWN_MODE = {{ 'true' if withdrawn_mode else 'false' }};
 /* state */
 let STUDENTS = []; // {student_id, student_name, university_number, enrollment_status, registrations: [...]}
 let REG_GROUP_OPTIONS = {}; // course_name -> [options]
+
+function _regEditSemester(){
+  return [(document.getElementById('currentRegistrationTerm')?.value || '').trim(), (document.getElementById('currentRegistrationYear')?.value || '').trim()].filter(Boolean).join(' ').trim();
+}
+
+function _regEditStudentId(student){
+  const s = student || editing || {};
+  return (s.student_id || s.id || s.studentId || '').toString();
+}
+
+/** مقررات تحتاج اختيار A/B فقط (أكثر من مجموعة) — بلا مجموعات أو مجموعة واحدة تُستبعد */
+function coursesNeedingGroupChoice(courseNames){
+  const list = Array.isArray(courseNames) ? courseNames : [];
+  return list.filter(cn => (REG_GROUP_OPTIONS[cn] || []).length > 1);
+}
+
+async function loadRegGroupOptionsForEditing(student){
+  const sid0 = _regEditStudentId(student);
+  const term = _regEditSemester();
+  const regs = (student && student.registrations) || (editing && editing.registrations) || [];
+  const coursesParam = regs.map(c => String(c || '').trim()).filter(Boolean).join(',');
+  let optUrl = '/schedule/teaching_groups/registration_options?student_id=' + encodeURIComponent(sid0);
+  if (term) optUrl += '&semester=' + encodeURIComponent(term);
+  if (coursesParam) optUrl += '&courses=' + encodeURIComponent(coursesParam);
+  const optRes = await fetchJSON(optUrl);
+  REG_GROUP_OPTIONS = (optRes.ok && optRes.json?.options_by_course) ? optRes.json.options_by_course : {};
+}
+
+/** جلب خيارات مقرر واحد عند الإضافة إن لم تكن محمّلة */
+async function ensureCourseGroupOptions(courseName){
+  const cn = String(courseName || '').trim();
+  if (!cn) return [];
+  if (Object.prototype.hasOwnProperty.call(REG_GROUP_OPTIONS, cn)) {
+    return REG_GROUP_OPTIONS[cn] || [];
+  }
+  const sid0 = _regEditStudentId(editing);
+  if (!sid0) return [];
+  const term = _regEditSemester();
+  let url = '/schedule/teaching_groups/registration_options?student_id=' + encodeURIComponent(sid0)
+    + '&course_name=' + encodeURIComponent(cn);
+  if (term) url += '&semester=' + encodeURIComponent(term);
+  try {
+    const res = await fetchJSON(url);
+    const opts = (res.ok && Array.isArray(res.json?.options)) ? res.json.options : [];
+    REG_GROUP_OPTIONS[cn] = opts;
+    return opts;
+  } catch (e) {
+    REG_GROUP_OPTIONS[cn] = [];
+    return [];
+  }
+}
+
+function refreshRegGroupPickers(){
+  const wrap = document.getElementById('regGroupPickers');
+  const body = document.getElementById('regGroupPickersBody');
+  if (!wrap || !body) return;
+  if (CURRENT_ROLE === 'student') {
+    wrap.classList.add('d-none');
+    body.innerHTML = '';
+    return;
+  }
+  const regs = (editing && editing.registrations) || [];
+  const needs = coursesNeedingGroupChoice(regs);
+  if (!needs.length) {
+    wrap.classList.add('d-none');
+    body.innerHTML = '';
+    return;
+  }
+  wrap.classList.remove('d-none');
+  editing.registration_groups = editing.registration_groups || {};
+  body.innerHTML = needs.map(cn => {
+    const opts = REG_GROUP_OPTIONS[cn] || [];
+    const cur = editing.registration_groups[cn] || {};
+    const curId = cur.teaching_group_id || '';
+    const selId = 'regTgPanel_' + String(cn).replace(/\W/g, '_');
+    return `<div class="mb-2">
+      <label class="form-label mb-0" for="${selId}">${escapeHtml(cn)}</label>
+      <select class="form-select form-select-sm reg-tg-panel-sel" data-course="${escapeHtml(cn)}" id="${selId}">
+        <option value="">— اختر مجموعة A/B —</option>
+        ${opts.map(o => {
+          const gid = o.teaching_group_id || o.id;
+          const sel = String(gid) === String(curId) ? ' selected' : '';
+          return `<option value="${gid}"${sel}>${escapeHtml(o.display_label || o.group_code_label || ('مجموعة ' + (o.group_code || '')))}</option>`;
+        }).join('')}
+      </select>
+    </div>`;
+  }).join('');
+  body.querySelectorAll('.reg-tg-panel-sel').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const course = sel.dataset.course;
+      const gid = sel.value;
+      editing.registration_groups = editing.registration_groups || {};
+      if (gid) {
+        editing.registration_groups[course] = { teaching_group_id: Number(gid) };
+      } else {
+        delete editing.registration_groups[course];
+      }
+      renderEditLists();
+    });
+  });
+}
 let COURSES = [];  // cached courses metadata
 let PROGRAMS = []; // cached programs list
 let editing = null; // current student object
@@ -1099,11 +1205,18 @@ async function openEditModal(student){
   } catch (e) {}
 
   try {
-    const sid0 = (student.student_id || student.id || student.studentId || '').toString();
-    const term = [(document.getElementById('currentRegistrationTerm')?.value || '').trim(), (document.getElementById('currentRegistrationYear')?.value || '').trim()].filter(Boolean).join(' ').trim();
-    const optUrl = '/schedule/teaching_groups/registration_options?student_id=' + encodeURIComponent(sid0) + (term ? ('&semester=' + encodeURIComponent(term)) : '');
-    const optRes = await fetchJSON(optUrl);
-    REG_GROUP_OPTIONS = (optRes.ok && optRes.json?.options_by_course) ? optRes.json.options_by_course : {};
+    await loadRegGroupOptionsForEditing(student);
+    // مجموعة واحدة: ربط تلقائي دون إظهار اللوحة
+    editing.registration_groups = editing.registration_groups || {};
+    (editing.registrations || []).forEach(cn => {
+      const opts = REG_GROUP_OPTIONS[cn] || [];
+      if (opts.length === 1 && !editing.registration_groups[cn]?.teaching_group_id) {
+        editing.registration_groups[cn] = {
+          teaching_group_id: opts[0].teaching_group_id || opts[0].id,
+          teaching_group_label: opts[0].display_label || opts[0].group_code_label || ''
+        };
+      }
+    });
   } catch (e) {
     REG_GROUP_OPTIONS = {};
   }
@@ -1143,7 +1256,7 @@ async function openEditModal(student){
       totalUnits += Number(cobj.units || 0);
     });
 
-    // التسجيلات الحالية
+    // التسجيلات الحالية (اختيار A/B في اللوحة المنفصلة أسفل القائمة فقط للمقررات المقسّمة)
     currentDiv.innerHTML = '';
     if(regs.length){
       regs.forEach(cn=>{
@@ -1151,20 +1264,16 @@ async function openEditModal(student){
         const row = document.createElement('div');
         row.className = 'list-group-item';
         const opts = REG_GROUP_OPTIONS[cn] || [];
-        const needsGroup = opts.length > 1;
         const curG = editing.registration_groups[cn] || {};
         let groupHtml = '';
-        if (needsGroup && CURRENT_ROLE !== 'student') {
-          const selId = 'tgSel_' + cn.replace(/\W/g, '_');
-          groupHtml = `<div class="mt-1"><label class="form-label small mb-0">مجموعة التدريس</label>
-            <select class="form-select form-select-sm reg-tg-select" data-course="${escapeHtml(cn)}" id="${selId}">
-              <option value="">— اختر —</option>
-              ${opts.map(o => {
-                const gid = o.teaching_group_id || o.id;
-                const sel = String(gid) === String(curG.teaching_group_id || '') ? ' selected' : '';
-                return `<option value="${gid}"${sel}>${escapeHtml(o.display_label || o.group_code_label || ('مجموعة ' + (o.group_code || '')))}</option>`;
-              }).join('')}
-            </select></div>`;
+        if (opts.length > 1) {
+          const label = curG.teaching_group_label
+            || (opts.find(o => String(o.teaching_group_id || o.id) === String(curG.teaching_group_id || '')) || {}).display_label
+            || (opts.find(o => String(o.teaching_group_id || o.id) === String(curG.teaching_group_id || '')) || {}).group_code_label
+            || '';
+          groupHtml = label
+            ? `<div class="small text-muted mt-1">مجموعة: ${escapeHtml(label)}</div>`
+            : `<div class="small text-warning mt-1">يلزم اختيار مجموعة A/B أدناه</div>`;
         } else if (curG.teaching_group_label) {
           groupHtml = `<div class="small text-muted mt-1">${escapeHtml(curG.teaching_group_label)}</div>`;
         }
@@ -1184,23 +1293,12 @@ async function openEditModal(student){
           });
           row.querySelector('.d-flex')?.appendChild(btn);
         }
-        row.querySelectorAll('.reg-tg-select').forEach(sel => {
-          sel.addEventListener('change', () => {
-            const course = sel.dataset.course;
-            const gid = sel.value;
-            editing.registration_groups = editing.registration_groups || {};
-            if (gid) {
-              editing.registration_groups[course] = { teaching_group_id: Number(gid) };
-            } else {
-              delete editing.registration_groups[course];
-            }
-          });
-        });
         currentDiv.appendChild(row);
       });
     } else {
       currentDiv.innerHTML = '<div class="list-group-item text-muted">لا توجد تسجيلات حالية</div>';
     }
+    refreshRegGroupPickers();
 
     // ملخص إجمالي الوحدات مع التحذير
     const summaryEl = document.getElementById('currentUnitsSummary');
@@ -1208,18 +1306,18 @@ async function openEditModal(student){
       let warning = '';
       if (totalUnits && totalUnits < 12){
         warning = 'تحذير: إجمالي الوحدات أقل من 12.';
-      } else if (totalUnits > 19){
-        warning = 'تحذير: إجمالي الوحدات أكبر من 19.';
+      } else if (totalUnits > 18){
+        warning = 'تحذير: إجمالي الوحدات أكبر من 18.';
       }
       summaryEl.innerHTML = `إجمالي الوحدات المسجَّلة حاليًا: <strong>${totalUnits}</strong>` +
         (warning ? ` — <span class="text-danger">${warning}</span>` : '');
     }
 
-    // إظهار/إخفاء سبب التجاوز للأدمن فقط عند الخروج عن 12-19
+    // إظهار/إخفاء سبب التجاوز للأدمن فقط عند الخروج عن 12-18
     const wrap = document.getElementById('overrideReasonWrap');
     const reasonEl = document.getElementById('overrideReason');
     if (wrap && reasonEl){
-      const out = (totalUnits < 12) || (totalUnits > 19);
+      const out = (totalUnits < 12) || (totalUnits > 18);
       if (CURRENT_ROLE === 'admin' && out){
         wrap.style.display = '';
       } else {
@@ -1252,11 +1350,11 @@ async function openEditModal(student){
           btn.type = 'button';
           btn.className = 'btn btn-sm btn-outline-primary';
           btn.textContent = 'إضافة';
-          btn.addEventListener('click', ()=>{
+          btn.addEventListener('click', async ()=>{
             editing.registrations = editing.registrations || [];
             if (!editing.registrations.includes(c.course_name)){
               editing.registrations.push(c.course_name);
-              const opts = REG_GROUP_OPTIONS[c.course_name] || [];
+              const opts = await ensureCourseGroupOptions(c.course_name);
               if (opts.length === 1) {
                 editing.registration_groups = editing.registration_groups || {};
                 editing.registration_groups[c.course_name] = {
@@ -1329,7 +1427,7 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
     const cobj = COURSES.find(x => x.course_name === cn) || {};
     totalUnits += Number(cobj.units || 0);
   });
-  const out = (totalUnits < 12 || totalUnits > 19);
+  const out = (totalUnits < 12 || totalUnits > 18);
   const reasonWrap = document.getElementById('overrideReasonWrap');
   const reasonEl = document.getElementById('overrideReason');
   const overrideReason = (reasonEl ? reasonEl.value.trim() : '');
@@ -1337,7 +1435,7 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
   let prereqOverrideReason = '';
   if (out){
     if (!canOverrideUnitsRegistrations()){
-      uiToast(`لا يمكن الحفظ لأن إجمالي الوحدات (${totalUnits}) خارج 12-19.`, 'warning');
+      uiToast(`لا يمكن الحفظ لأن إجمالي الوحدات (${totalUnits}) خارج 12-18.`, 'warning');
       if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = oldText || 'حفظ التغييرات'; }
       return;
     }
@@ -1377,6 +1475,14 @@ document.getElementById('btnSaveEdit').addEventListener('click', async ()=>{
     const opts = REG_GROUP_OPTIONS[cn] || [];
     if (opts.length > 1 && !regGroups[cn]?.teaching_group_id) {
       setEditMsg('warning', `اختر مجموعة التدريس للمقرر «${cn}» قبل الحفظ.`);
+      refreshRegGroupPickers();
+      const panel = document.getElementById('regGroupPickers');
+      if (panel) {
+        panel.classList.remove('d-none');
+        panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const emptySel = Array.from(panel.querySelectorAll('.reg-tg-panel-sel')).find(s => !s.value);
+        emptySel?.focus();
+      }
       return;
     }
   }

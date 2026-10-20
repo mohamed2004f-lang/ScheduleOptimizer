@@ -155,6 +155,10 @@
                       <input class="form-check-input" type="checkbox" id="optStudentConflicts" checked>
                       <label class="form-check-label" for="optStudentConflicts">تعارضات الطلبة</label>
                     </div>
+                    <div class="form-check mb-1 d-none" id="optShowGeneralOverlayWrap">
+                      <input class="form-check-input" type="checkbox" id="optShowGeneralOverlay" checked>
+                      <label class="form-check-label" for="optShowGeneralOverlay">إظهار مقررات الاتجاه العام</label>
+                    </div>
                     <div class="form-text small mt-1 mb-0" id="optStudentConflictsHint"></div>
                   </div>
                 </div>
@@ -176,8 +180,8 @@
               <div class="card-body py-2">
                 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
                   <div>
-                    <strong class="small">اختيار / تغيير شعبة الاتجاه العام</strong>
-                    <div class="form-text small mb-0">في شبكة جدولك تظهر فقط الشعبة المسجّل عليها طلبتك. باقي شعب نفس المقرر تُختار من هنا. جدول الاتجاه العام الكامل أسفل هذه اللوحة للمرجعية (عرض فقط).</div>
+                    <strong class="small">متابعة شعب الاتجاه العام (تعيين فردي)</strong>
+                    <div class="form-text small mb-0">لا نقل جماعي للقسم. عيّن مجموعة A/B لكل طالب من الخطة أو التسجيل الفعلي. الشبكة تعرض كل الشعب التي عليها طلبتك.</div>
                   </div>
                   <button type="button" class="btn btn-outline-info btn-sm" id="btnRefreshGeneralGroups">تحديث</button>
                 </div>
@@ -201,17 +205,17 @@
         </div>
       </div>
 
-      <!-- اختيار مجموعة اتجاه عام -->
+      <!-- عرض توزيع مجموعات الاتجاه العام (بدون نقل جماعي) -->
       <div class="modal fade" id="generalGroupPickModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-lg">
           <div class="modal-content">
             <div class="modal-header py-2">
-              <h6 class="modal-title" id="generalGroupPickTitle">اختيار مجموعة الاتجاه العام</h6>
+              <h6 class="modal-title" id="generalGroupPickTitle">توزيع مجموعات الاتجاه العام</h6>
               <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
             </div>
             <div class="modal-body">
-              <p class="small text-muted mb-2" id="generalGroupPickHint">معاينة الأوقات ثم تأكيد النقل.</p>
-              <div id="generalGroupPickWarn" class="alert alert-warning py-1 px-2 small d-none"></div>
+              <p class="small text-muted mb-2" id="generalGroupPickHint">عرض فقط — عيّن مجموعة كل طالب من الخطة أو التسجيل الفعلي.</p>
+              <div id="generalGroupPickWarn" class="alert alert-info py-1 px-2 small d-none"></div>
               <div class="table-responsive">
                 <table class="table table-sm table-bordered align-middle mb-0">
                   <thead>
@@ -219,8 +223,7 @@
                       <th>المجموعة</th>
                       <th>الأوقات</th>
                       <th>السعة</th>
-                      <th>على هذه المجموعة</th>
-                      <th></th>
+                      <th>طلبة قسمك عليها</th>
                     </tr>
                   </thead>
                   <tbody id="generalGroupPickBody"></tbody>
@@ -228,7 +231,7 @@
               </div>
             </div>
             <div class="modal-footer py-2">
-              <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">إلغاء</button>
+              <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">إغلاق</button>
             </div>
           </div>
         </div>
@@ -325,6 +328,13 @@
                 <div id="newInstructorHelp" class="form-text small">يُفضَّل الاختيار من القائمة لربط الصف بمعرّف عضو هيئة التدريس (حساب «مقرراتي»). إن وُجد أستاذ مقترح من عرض المقررات يظهر بشارة «مقترح» في أعلى القائمة — اختيار حر وغير إلزامي.</div>
                 <div id="newInstructorProposedHint" class="form-text small text-primary d-none"></div>
               </div>
+              <div class="col-md-6 d-none" id="newTeachingGroupWrap">
+                <label class="form-label" for="newTeachingGroup">مجموعة التدريس</label>
+                <select id="newTeachingGroup" class="form-select">
+                  <option value="">—</option>
+                </select>
+                <div id="newTeachingGroupHelp" class="form-text small">عند وجود مجموعات A/B اختر المجموعة التي تُضاف إليها هذه الحصة.</div>
+              </div>
               <div class="col-12">
                 <button type="submit" class="btn btn-primary btn-sm">إضافة</button>
               </div>
@@ -383,7 +393,7 @@
               </div>
               <div id="editDaySlotsMsg" class="small mt-2"></div>
             </div>
-            <div class="form-text mt-2">عند «تطبيق على اليوم» تُحفظ التقسيمات تلقائياً ويُحدَّث الجدول.</div>
+            <div class="form-text mt-2">عند «تطبيق على اليوم» تُحفظ التقسيمات وتُنقل مقررات الفترات التي غيّرت تسميتها (قبل→بعد) ثم يُحدَّث الجدول.</div>
           </div>
           <div class="modal-footer">
             <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">إلغاء</button>
@@ -483,22 +493,41 @@ function getCourseColor(courseName){
 let COURSES = [];
 let INSTRUCTORS = [];
 
+function rebuildCourseSelectOptions(){
+  const sel = document.getElementById('newCourseSelect');
+  if (!sel) return;
+  const prev = sel.value || '';
+  const blockGen = !!(SCHEDULE_LAYOUT && SCHEDULE_LAYOUT.block_add_general_courses);
+  sel.innerHTML = '<option value="">-- اختر مقرر --</option>';
+  COURSES.forEach(c => {
+    const name = c.course_name ?? '';
+    if (!name) return;
+    const isGen = isCollegeGeneralCourseName(name);
+    const o = document.createElement('option');
+    o.value = name;
+    const code = c.course_code ? ` (${c.course_code})` : '';
+    if (blockGen && isGen) {
+      o.disabled = true;
+      o.text = (name + code) + ' — اتجاه عام (يُدار من رئيس القسم العام)';
+      o.dataset.collegeGeneral = '1';
+    } else {
+      o.text = name + code;
+    }
+    sel.appendChild(o);
+  });
+  if (prev && Array.from(sel.options).some(o => o.value === prev && !o.disabled)) {
+    sel.value = prev;
+  } else if (prev && blockGen && isCollegeGeneralCourseName(prev)) {
+    sel.value = '';
+  }
+}
+
 async function loadCourses(){
   try {
     const r = await fetch('/list_courses');
     const arr = r.ok ? await r.json() : [];
     COURSES = Array.isArray(arr) ? arr : [];
-    const sel = document.getElementById('newCourseSelect');
-    if(sel){
-      sel.innerHTML = '<option value="">-- اختر مقرر --</option>';
-      COURSES.forEach(c => {
-        const o = document.createElement('option');
-        o.value = c.course_name ?? '';
-        const code = c.course_code ? ` (${c.course_code})` : '';
-        o.text = (c.course_name ?? '') + code;
-        sel.appendChild(o);
-      });
-    }
+    rebuildCourseSelectOptions();
   } catch (err) {
     console.error('loadCourses error', err);
   }
@@ -682,6 +711,11 @@ let IS_VIEW_ONLY_ROLE = false;
 /** عند التعطيل: إخفاء أزرار «إدارة المقررات» وحذف المقرر من الخلية (عرض أنظف) */
 let SCHEDULE_SLOT_MANAGE_VISIBLE = false;
 let IS_COMPACT = false;
+/** إظهار حصص overlay الاتجاه العام في شبكة القسم التخصصي */
+let SHOW_GENERAL_OVERLAY = true;
+let COLLEGE_GENERAL_COURSE_NAMES = new Set();
+const GENERAL_COURSE_LOCK_MSG =
+  'مقررات الاتجاه العام تُدار من رئيس قسم الاتجاه العام فقط. يمكنك متابعتها من لوحة الاتجاه العام أو جدول الاتجاه العام الكامل، ولا تُضاف من جدول قسمك.';
 let SCHEDULE_VIEW = (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 767px)').matches) ? 'cards' : 'table';
 
 function applyScheduleViewMode() {
@@ -807,10 +841,34 @@ function syncScheduleViewMenuFromState(){
   const c = document.getElementById('optCompactView');
   const m = document.getElementById('optSlotManage');
   const s = document.getElementById('optStudentConflicts');
+  const g = document.getElementById('optShowGeneralOverlay');
+  const gWrap = document.getElementById('optShowGeneralOverlayWrap');
   if (c) c.checked = !!IS_COMPACT;
   if (m) m.checked = !!SCHEDULE_SLOT_MANAGE_VISIBLE;
   if (s) s.checked = !!SHOW_STUDENT_CONFLICTS;
+  if (g) g.checked = !!SHOW_GENERAL_OVERLAY;
+  if (gWrap) {
+    if (SCHEDULE_LAYOUT && SCHEDULE_LAYOUT.is_specialty_consumer) gWrap.classList.remove('d-none');
+    else gWrap.classList.add('d-none');
+  }
   applyStudentConflictsVisibility();
+}
+
+function isCollegeGeneralCourseName(name){
+  const key = String(name || '').trim().toLowerCase();
+  if (!key) return false;
+  for (const n of COLLEGE_GENERAL_COURSE_NAMES) {
+    if (String(n || '').trim().toLowerCase() === key) return true;
+  }
+  return false;
+}
+
+function filterScheduleRowsForDisplay(rows){
+  const list = Array.isArray(rows) ? rows : [];
+  if (SHOW_GENERAL_OVERLAY || !(SCHEDULE_LAYOUT && SCHEDULE_LAYOUT.is_specialty_consumer)) {
+    return list;
+  }
+  return list.filter(r => !(r && (r.is_overlay_general || r.is_college_general)));
 }
 
 function hideScheduleManageModalIfOpen(){
@@ -834,10 +892,21 @@ async function refreshScheduleLayoutMeta(){
         use_stage_matrix: !!j.use_stage_matrix,
         use_display_tracks: !!j.use_display_tracks,
         display_tracks: Array.isArray(j.display_tracks) ? j.display_tracks : [],
+        is_specialty_consumer: !!j.is_specialty_consumer,
+        block_add_general_courses: !!j.block_add_general_courses,
+        general_department_id: j.general_department_id || null,
       };
+      COLLEGE_GENERAL_COURSE_NAMES = new Set(
+        Array.isArray(j.college_general_course_names) ? j.college_general_course_names : []
+      );
+      try {
+        const saved = localStorage.getItem('scheduleShowGeneralOverlay');
+        if (saved === '0' || saved === '1') SHOW_GENERAL_OVERLAY = saved === '1';
+      } catch (_e) {}
     }
   } catch (_e) {}
   syncScheduleViewMenuFromState();
+  rebuildCourseSelectOptions();
 }
 
 function showSlotConflictDetails(day, time, kind){
@@ -993,6 +1062,7 @@ async function loadSchedule(){
     if (seq !== _loadScheduleSeq) return;
     const list = r.ok ? await r.json() : [];
     currentScheduleData = Array.isArray(list) ? list : [];
+    const displayRows = filterScheduleRowsForDisplay(currentScheduleData);
     const el = document.getElementById('scheduleList');
     if (!el) return;
     const showSlotManage = IS_ADMIN && SCHEDULE_SLOT_MANAGE_VISIBLE;
@@ -1010,14 +1080,14 @@ async function loadSchedule(){
     let html = '';
     const useStage = SCHEDULE_LAYOUT.stage_grid_enabled !== false;
     if (useStage && SCHEDULE_LAYOUT.use_stage_matrix && typeof buildStageMatrixTimetableHtml === 'function') {
-      html = buildStageMatrixTimetableHtml(currentScheduleData, renderOpts);
+      html = buildStageMatrixTimetableHtml(displayRows, renderOpts);
     } else if (typeof buildPersonalWeeklyTimetableHtml === 'function') {
       const byDay = Object.assign({}, TIME_SLOTS_BY_DAY);
       if (!Object.keys(byDay).some(d => (byDay[d] || []).length)) {
         const union = (CUSTOM_TIME_SLOTS || []).slice();
         DAYS.forEach(d => { byDay[d] = union.slice(); });
       }
-      html = buildPersonalWeeklyTimetableHtml(currentScheduleData, Object.assign({}, renderOpts, {
+      html = buildPersonalWeeklyTimetableHtml(displayRows, Object.assign({}, renderOpts, {
         byDay,
         useDisplayTracks: !!SCHEDULE_LAYOUT.use_display_tracks,
         displayTracks: SCHEDULE_LAYOUT.display_tracks || [],
@@ -1027,7 +1097,7 @@ async function loadSchedule(){
     }
     if (seq !== _loadScheduleSeq) return;
     el.innerHTML = html;
-    renderScheduleMobileCards(currentScheduleData);
+    renderScheduleMobileCards(displayRows);
     applyScheduleViewMode();
     bindEditorGridHandlers(el, showSlotManage);
     try { refreshGeneralGroupsPanel(); } catch (_gg) {}
@@ -1040,8 +1110,13 @@ async function loadSchedule(){
           ? 'مصفوفة مراحل'
           : (SCHEDULE_LAYOUT.use_display_tracks ? 'أعمدة عرض' : 'يوم ثم وقت');
         const overlayN = (currentScheduleData || []).filter(x => x && x.is_overlay_general).length;
-        const overlayBit = overlayN ? ` · ${overlayN} حصة اتجاه عام` : '';
-        subtitle.textContent = `عرض الجدول (${currentScheduleData.length} صف) — ${modeBit}${overlayBit}.`;
+        let overlayBit = '';
+        if (overlayN) {
+          overlayBit = SHOW_GENERAL_OVERLAY
+            ? ` · ${overlayN} حصة اتجاه عام`
+            : ` · ${overlayN} حصة اتجاه عام (مخفية)`;
+        }
+        subtitle.textContent = `عرض الجدول (${displayRows.length} صف) — ${modeBit}${overlayBit}.`;
       }
     } catch (_e) {}
 
@@ -1143,7 +1218,8 @@ function fillManageCoursesModal(day, time){
         course.course_name || '',
         course.room || '',
         course.instructor || '',
-        course.instructor_id
+        course.instructor_id,
+        course.teaching_group_id
       );
     });
 
@@ -1164,6 +1240,131 @@ function fillManageCoursesModal(day, time){
   });
 }
 
+/** خيارات مجموعة التدريس لنموذج الإضافة (حسب المقرر) */
+let _tgAddOptionsState = { required: false, mode: 'hidden' };
+
+function teachingGroupPayloadFromSelect(){
+  const wrap = document.getElementById('newTeachingGroupWrap');
+  const sel = document.getElementById('newTeachingGroup');
+  if (!wrap || wrap.classList.contains('d-none') || !sel) {
+    return { teaching_group_id: null, group_code: null, group_kind: null };
+  }
+  const v = String(sel.value || '').trim();
+  if (!v || v === 'auto') {
+    return { teaching_group_id: null, group_code: null, group_kind: null };
+  }
+  if (v.startsWith('id:')) {
+    const n = Number(v.slice(3));
+    return {
+      teaching_group_id: Number.isFinite(n) && n > 0 ? n : null,
+      group_code: null,
+      group_kind: null,
+    };
+  }
+  if (v === 'new:single') {
+    return { teaching_group_id: null, group_code: '—', group_kind: 'single' };
+  }
+  if (v.startsWith('new:')) {
+    return { teaching_group_id: null, group_code: v.slice(4), group_kind: 'split' };
+  }
+  return { teaching_group_id: null, group_code: null, group_kind: null };
+}
+
+async function refreshTeachingGroupAddOptions(courseName, selectedTeachingGroupId){
+  const wrap = document.getElementById('newTeachingGroupWrap');
+  const sel = document.getElementById('newTeachingGroup');
+  const help = document.getElementById('newTeachingGroupHelp');
+  if (!wrap || !sel) return;
+  const cname = String(courseName || '').trim();
+  const preferGid = Number(selectedTeachingGroupId || 0) || 0;
+  _tgAddOptionsState = { required: false, mode: 'hidden' };
+  if (!cname) {
+    wrap.classList.add('d-none');
+    sel.innerHTML = '<option value="">—</option>';
+    return;
+  }
+  const applySelected = () => {
+    if (!(preferGid > 0)) return;
+    const want = 'id:' + preferGid;
+    if (Array.from(sel.options).some(o => o.value === want)) {
+      sel.value = want;
+    }
+  };
+  try {
+    const r = await fetch(
+      '/schedule/teaching_groups?course_name=' + encodeURIComponent(cname),
+      { credentials: 'same-origin', headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' } }
+    );
+    const j = r.ok ? await r.json() : null;
+    const groups = Array.isArray(j?.groups) ? j.groups : [];
+    const hasSplit = groups.some(g => String(g.group_kind || '') === 'split');
+    const multi = groups.length > 1 || hasSplit;
+    const editing = !!EDITING_SECTION_ID;
+
+    if (!groups.length) {
+      _tgAddOptionsState = { required: true, mode: 'create' };
+      wrap.classList.remove('d-none');
+      sel.innerHTML =
+        '<option value="">— اختر نوع المجموعة —</option>' +
+        '<option value="new:single">مجموعة واحدة (نفس الطلاب لكل المحاضرات)</option>' +
+        '<option value="new:A">إنشاء مجموعة A (تقسيم)</option>' +
+        '<option value="new:B">إنشاء مجموعة B (تقسيم)</option>';
+      if (help) {
+        help.textContent = editing
+          ? 'هذه الحصة بلا مجموعة — اختر مجموعة واحدة أو أنشئ A/B.'
+          : 'أول حصة لهذا المقرر: اختر مجموعة واحدة أو ابدأ تقسيماً A/B.';
+      }
+      return;
+    }
+
+    if (!multi && groups.length === 1 && !editing) {
+      const g = groups[0];
+      const gid = Number(g.id || g.teaching_group_id || 0);
+      _tgAddOptionsState = { required: false, mode: 'auto' };
+      wrap.classList.add('d-none');
+      sel.innerHTML = gid > 0
+        ? `<option value="id:${gid}" selected>تلقائي</option>`
+        : '<option value="auto" selected>تلقائي</option>';
+      return;
+    }
+
+    // إضافة لمقرر مقسوم، أو أي تعديل (لإظهار/تغيير المجموعة الحالية)
+    _tgAddOptionsState = { required: multi || editing, mode: multi ? 'pick' : 'edit' };
+    wrap.classList.remove('d-none');
+    const opts = multi
+      ? ['<option value="">— اختر المجموعة لهذه الحصة —</option>']
+      : [];
+    groups.forEach(g => {
+      const gid = Number(g.id || g.teaching_group_id || 0);
+      if (!(gid > 0)) return;
+      const code = g.group_code_label || g.group_code || gid;
+      const inst = (g.instructor_name || '').trim();
+      const label = inst ? `${code} — ${inst}` : String(code);
+      opts.push(`<option value="id:${gid}">${escapeHtml(label)}</option>`);
+    });
+    if (multi) {
+      const used = new Set(groups.map(g => String(g.group_code || '').toUpperCase()));
+      ['A', 'B'].forEach(code => {
+        if (!used.has(code)) {
+          opts.push(`<option value="new:${code}">إنشاء مجموعة ${code}</option>`);
+        }
+      });
+    }
+    sel.innerHTML = opts.join('');
+    applySelected();
+    if (help) {
+      help.textContent = multi
+        ? (editing
+          ? 'المقرر مقسوم — يمكنك تغيير مجموعة هذه الحصة (A/B).'
+          : 'المقرر مقسوم — اختر المجموعة (A/B) التي تُربط بها هذه الحصة.')
+        : 'مجموعة التدريس المرتبطة بهذه الحصة.';
+    }
+  } catch (e) {
+    wrap.classList.add('d-none');
+    _tgAddOptionsState = { required: false, mode: 'hidden' };
+  }
+}
+
 /** بعد الحذف أو لإلغاء وضع التعديل: تفريغ نموذج «إضافة مقرر» وإعادة بناء قائمة الأساتذة (إزالة الخيارات المؤقتة). */
 async function resetManageCoursesAddForm(){
   EDITING_SECTION_ID = null;
@@ -1173,6 +1374,7 @@ async function resetManageCoursesAddForm(){
   if (modalMsg) modalMsg.innerHTML = '';
   await loadInstructors();
   applyProposedInstructorForSelectedCourse({ forceSelect: false });
+  await refreshTeachingGroupAddOptions(document.getElementById('newCourseSelect')?.value || '');
 }
 
 function openManageCourses(day, time){
@@ -1185,7 +1387,7 @@ function openManageCourses(day, time){
   bootstrap.Modal.getOrCreateInstance(modalEl).show();
 }
 
-function startEditExistingCourse(sectionId, courseName, room, instructor, instructorId){
+function startEditExistingCourse(sectionId, courseName, room, instructor, instructorId, teachingGroupId){
   EDITING_SECTION_ID = sectionId;
   const sel = document.getElementById('newCourseSelect');
   const roomInput = document.getElementById('newRoom');
@@ -1193,6 +1395,7 @@ function startEditExistingCourse(sectionId, courseName, room, instructor, instru
   if(sel){
     sel.value = courseName || '';
   }
+  refreshTeachingGroupAddOptions(courseName || '', teachingGroupId);
   if(roomInput){
     roomInput.value = room || '';
   }
@@ -1247,14 +1450,31 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
   const instPayload = instructorPayloadFromSelect();
   const instructor = instPayload.instructor;
   const instructor_id = instPayload.instructor_id;
+  const tgPayload = teachingGroupPayloadFromSelect();
   
   if(!course){
     showMsg('اختر مقرراً', 'warning', 3000, 'modalMsg');
     return;
   }
+  if (SCHEDULE_LAYOUT && SCHEDULE_LAYOUT.block_add_general_courses && isCollegeGeneralCourseName(course)) {
+    showMsg(GENERAL_COURSE_LOCK_MSG, 'warning', 8000, 'modalMsg');
+    return;
+  }
   if(!currentModalDay || !currentModalTime){
     showMsg('اختر اليوم والوقت (أو أنشئ فترة جديدة)', 'warning', 3000, 'modalMsg');
     return;
+  }
+  if (_tgAddOptionsState.required) {
+    const hasTg = !!(tgPayload.teaching_group_id || tgPayload.group_kind);
+    if (!hasTg) {
+      showMsg('اختر مجموعة التدريس لهذه الحصة (A/B أو مجموعة واحدة).', 'warning', 4000, 'modalMsg');
+      document.getElementById('newTeachingGroup')?.focus();
+      return;
+    }
+    if ((tgPayload.group_kind === 'split' || tgPayload.group_kind === 'single') && !instructor_id) {
+      showMsg('اختر أستاذاً من الدليل لإنشاء/ربط مجموعة التدريس.', 'warning', 4000, 'modalMsg');
+      return;
+    }
   }
   ensurePeriodOnDay(currentModalDay, currentModalTime);
   
@@ -1262,31 +1482,44 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
   if (EDITING_SECTION_ID) {
     try {
       showMsg('جاري تعديل بيانات المقرر...', 'info', 0, 'modalMsg');
+      const editBody = {
+        section_id: EDITING_SECTION_ID,
+        course_name: course,
+        day: currentModalDay,
+        time: currentModalTime,
+        room: room,
+        instructor: instructor,
+        instructor_id: instructor_id
+      };
+      if (tgPayload.teaching_group_id) editBody.teaching_group_id = tgPayload.teaching_group_id;
+      if (tgPayload.group_kind) editBody.group_kind = tgPayload.group_kind;
+      if (tgPayload.group_code) editBody.group_code = tgPayload.group_code;
+      if (!editBody.teaching_group_id && !editBody.group_kind) {
+        const tgSel = document.getElementById('newTeachingGroup');
+        const autoV = String(tgSel?.value || '');
+        if (autoV.startsWith('id:')) {
+          const n = Number(autoV.slice(3));
+          if (n > 0) editBody.teaching_group_id = n;
+        }
+      }
       const resp = await fetch('/schedule/update_schedule_row', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({
-          section_id: EDITING_SECTION_ID,
-          course_name: course,
-          day: currentModalDay,
-          time: currentModalTime,
-          room: room,
-          instructor: instructor,
-          instructor_id: instructor_id
-        })
+        body: JSON.stringify(editBody)
       });
       const j = await resp.json().catch(()=>null);
       if(resp.ok && j && j.status === 'ok'){
         showMsg('تم تعديل بيانات المقرر', 'success', 2000, 'modalMsg');
         EDITING_SECTION_ID = null;
         document.getElementById('addCourseForm').reset();
+        await refreshTeachingGroupAddOptions('');
         await loadSchedule();
         setTimeout(() => {
           const mEl = document.getElementById('manageCoursesModal');
           bootstrap.Modal.getInstance(mEl)?.hide();
         }, 800);
       } else {
-        showMsg('خطأ في التعديل: ' + (j?.message || resp.statusText), 'danger', 3000, 'modalMsg');
+        showMsg('خطأ في التعديل: ' + (j?.message || resp.statusText), 'danger', 4000, 'modalMsg');
       }
     } catch (err) {
       console.error('editCourse error', err);
@@ -1333,33 +1566,47 @@ document.getElementById('addCourseForm').addEventListener('submit', async (e) =>
     }
     
     showMsg('جاري إضافة المقرر...', 'info', 0, 'modalMsg');
+    const addBody = {
+      course_name: course,
+      day: currentModalDay,
+      time: currentModalTime,
+      room: room,
+      instructor: instructor,
+      instructor_id: instructor_id,
+      semester: ''
+    };
+    if (tgPayload.teaching_group_id) addBody.teaching_group_id = tgPayload.teaching_group_id;
+    if (tgPayload.group_kind) addBody.group_kind = tgPayload.group_kind;
+    if (tgPayload.group_code) addBody.group_code = tgPayload.group_code;
+    // وضع auto لمجموعة واحدة موجودة
+    if (!addBody.teaching_group_id && !addBody.group_kind) {
+      const tgSel = document.getElementById('newTeachingGroup');
+      const autoV = String(tgSel?.value || '');
+      if (autoV.startsWith('id:')) {
+        const n = Number(autoV.slice(3));
+        if (n > 0) addBody.teaching_group_id = n;
+      }
+    }
     const resp = await fetch('/add_schedule_row', {
       method: 'POST',
       headers: {
         'Content-Type':'application/json',
         ...(csrfToken ? {'X-CSRFToken': csrfToken} : {})
       },
-      body: JSON.stringify({
-        course_name: course,
-        day: currentModalDay,
-        time: currentModalTime,
-        room: room,
-        instructor: instructor,
-        instructor_id: instructor_id,
-        semester: ''
-      })
+      body: JSON.stringify(addBody)
     });
     const j = await resp.json().catch(()=>null);
     if(resp.ok && j && j.status === 'ok'){
       showMsg('تم إضافة المقرر', 'success', 2000, 'modalMsg');
       document.getElementById('addCourseForm').reset();
+      await refreshTeachingGroupAddOptions('');
       await loadSchedule();
       setTimeout(() => {
         const mEl = document.getElementById('manageCoursesModal');
         bootstrap.Modal.getInstance(mEl)?.hide();
       }, 1000);
     } else {
-      showMsg('خطأ: ' + (j?.message || resp.statusText), 'danger', 3000, 'modalMsg');
+      showMsg('خطأ: ' + (j?.message || resp.statusText), 'danger', 4000, 'modalMsg');
     }
   } catch (err) {
     console.error('addCourseForm error', err);
@@ -1599,7 +1846,10 @@ function formatStartEndSlot(start, end){
 }
 
 let EDITING_DAY_SLOTS_DAY = '';
+/** [{ orig: string|null, value: string }] — orig = التسمية قبل التعديل (للنقل قبل→بعد) */
 let EDITING_DAY_SLOTS_DRAFT = [];
+/** remaps معلّقة تُرسل مع حفظ التقسيمات من «تطبيق على اليوم» */
+let PENDING_TIME_REMAPS = [];
 
 function renderEditDaySlotsList(){
   const list = document.getElementById('editDaySlotsList');
@@ -1609,7 +1859,8 @@ function renderEditDaySlotsList(){
     return;
   }
   let html = '<div class="list-group list-group-flush">';
-  EDITING_DAY_SLOTS_DRAFT.forEach((slot, idx) => {
+  EDITING_DAY_SLOTS_DRAFT.forEach((row, idx) => {
+    const slot = (row && row.value) ? row.value : '';
     const se = parseSlotToStartEnd(slot);
     html += `<div class="list-group-item px-0">
       <div class="row g-2 align-items-end">
@@ -1633,15 +1884,31 @@ function renderEditDaySlotsList(){
   list.querySelectorAll('.day-slot-start, .day-slot-end').forEach(inp => {
     inp.addEventListener('change', () => {
       const i = Number(inp.getAttribute('data-idx'));
-      const row = list.querySelector(`.day-slot-start[data-idx="${i}"]`);
+      const rowStart = list.querySelector(`.day-slot-start[data-idx="${i}"]`);
       const rowEnd = list.querySelector(`.day-slot-end[data-idx="${i}"]`);
-      const lab = formatStartEndSlot(row?.value, rowEnd?.value);
-      if (lab) EDITING_DAY_SLOTS_DRAFT[i] = lab;
+      const lab = formatStartEndSlot(rowStart?.value, rowEnd?.value);
+      if (lab && EDITING_DAY_SLOTS_DRAFT[i]) {
+        EDITING_DAY_SLOTS_DRAFT[i].value = lab;
+      }
     });
   });
   list.querySelectorAll('.btn-remove-day-slot').forEach(btn => {
     btn.addEventListener('click', () => {
       const i = Number(btn.getAttribute('data-idx'));
+      const row = EDITING_DAY_SLOTS_DRAFT[i];
+      const orig = row && row.orig ? normalizeTimeSlotLabelLocal(row.orig) : '';
+      if (orig) {
+        const hasCourses = (currentScheduleData || []).some(
+          r => String(r.day || '').trim() === EDITING_DAY_SLOTS_DAY
+            && normalizeTimeSlotLabelLocal(String(r.time || '')) === orig
+        );
+        if (hasCourses) {
+          const ok = window.confirm(
+            `الفترة ${orig} فيها مقررات في الجدول.\nحذف الفترة لن ينقل المقررات — ستبقى على الوقت القديم.\nهل تريد المتابعة؟`
+          );
+          if (!ok) return;
+        }
+      }
       EDITING_DAY_SLOTS_DRAFT.splice(i, 1);
       renderEditDaySlotsList();
     });
@@ -1652,7 +1919,10 @@ function openEditDaySlotsModal(day){
   EDITING_DAY_SLOTS_DAY = day;
   // اقرأ أحدث قيمة من المحرر إن وُجدت
   syncUnionInputFromByDay();
-  EDITING_DAY_SLOTS_DRAFT = (TIME_SLOTS_BY_DAY[day] || []).slice();
+  EDITING_DAY_SLOTS_DRAFT = (TIME_SLOTS_BY_DAY[day] || []).map(s => {
+    const lab = normalizeTimeSlotLabelLocal(s) || String(s || '').trim();
+    return { orig: lab || null, value: lab || '' };
+  });
   const title = document.getElementById('editDaySlotsTitle');
   if (title) title.textContent = `تعديل فترات يوم ${day}`;
   const msg = document.getElementById('editDaySlotsMsg');
@@ -1669,26 +1939,31 @@ function openEditDaySlotsModal(day){
 function applyEditDaySlotsModal(){
   const day = EDITING_DAY_SLOTS_DAY;
   if (!day) return;
-  // التقط القيم الحالية من الحقول
+  // التقط القيم الحالية من الحقول مع الإبقاء على orig
   const list = document.getElementById('editDaySlotsList');
   if (list) {
     const starts = list.querySelectorAll('.day-slot-start');
-    const next = [];
     starts.forEach(st => {
       const i = Number(st.getAttribute('data-idx'));
       const en = list.querySelector(`.day-slot-end[data-idx="${i}"]`);
       const lab = formatStartEndSlot(st.value, en?.value);
-      if (lab) next.push(lab);
+      if (lab && EDITING_DAY_SLOTS_DRAFT[i]) {
+        EDITING_DAY_SLOTS_DRAFT[i].value = lab;
+      }
     });
-    EDITING_DAY_SLOTS_DRAFT = next;
   }
+  const remaps = [];
   const seen = new Set();
   const cleaned = [];
-  EDITING_DAY_SLOTS_DRAFT.forEach(s => {
-    const lab = normalizeTimeSlotLabelLocal(s);
+  EDITING_DAY_SLOTS_DRAFT.forEach(row => {
+    const lab = normalizeTimeSlotLabelLocal(row && row.value);
     if (!lab || seen.has(lab)) return;
     seen.add(lab);
     cleaned.push(lab);
+    const from = normalizeTimeSlotLabelLocal(row && row.orig);
+    if (from && from !== lab) {
+      remaps.push({ day, from, to: lab });
+    }
   });
   const getStart = (timeStr) => {
     const m = String(timeStr).trim().match(/^(\d+):(\d+)/);
@@ -1700,12 +1975,17 @@ function applyEditDaySlotsModal(){
   const unionInput = document.getElementById('customTimeSlotsInput');
   if (unionInput) unionInput.value = slotsToInputValue(CUSTOM_TIME_SLOTS);
   renderTimeSlotsByDayEditor();
+  PENDING_TIME_REMAPS = remaps;
   try {
     bootstrap.Modal.getInstance(document.getElementById('editDaySlotsModal'))?.hide();
   } catch (_e) {}
-  showMsg(`تم تحديث فترات يوم ${day} — جاري حفظ التقسيمات…`, 'info', 4000);
-  // حفظ تلقائي ثم إعادة رسم الجدول حتى تظهر الصفوف الجديدة فوراً
-  saveTimeSlotsSetting().catch(() => {
+  const remapHint = remaps.length
+    ? ` — مع نقل مقررات ${remaps.length} فترة معدّلة`
+    : '';
+  showMsg(`تم تحديث فترات يوم ${day}${remapHint} — جاري الحفظ…`, 'info', 4000);
+  // حفظ تلقائي + نقل قبل→بعد ثم إعادة رسم الجدول
+  saveTimeSlotsSetting({ timeRemaps: remaps }).catch(() => {
+    PENDING_TIME_REMAPS = [];
     showMsg(`تم التحديث محلياً ليوم ${day} — اضغط حفظ التقسيمات يدوياً إن فشل الحفظ`, 'warning', 6000);
     loadSchedule();
   });
@@ -1773,7 +2053,7 @@ async function loadTimeSlotsSetting(){
   }
 }
 
-async function saveTimeSlotsSetting(){
+async function saveTimeSlotsSetting(opts){
   syncUnionInputFromByDay();
   const byDay = collectByDayFromEditor();
   const slots = unionFromByDay(byDay);
@@ -1781,15 +2061,28 @@ async function saveTimeSlotsSetting(){
     showMsg('أدخل فترة واحدة على الأقل في يوم واحد', 'warning');
     return;
   }
+  const remaps = Array.isArray(opts && opts.timeRemaps)
+    ? opts.timeRemaps
+    : (PENDING_TIME_REMAPS || []);
+  const body = { by_day: byDay, slots };
+  if (remaps.length) body.time_remaps = remaps;
   const resp = await fetch('/schedule/time_slots', {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-    body: JSON.stringify({ by_day: byDay, slots })
+    body: JSON.stringify(body)
   });
   const j = await resp.json().catch(()=>null);
+  PENDING_TIME_REMAPS = [];
   if(resp.ok && j && j.status === 'ok'){
-    showMsg('تم حفظ التقسيمات لكل يوم (مع الاتحاد للتوافق)', 'success');
+    const moved = Number((j.time_remap && j.time_remap.updated) || 0);
+    showMsg(
+      moved > 0
+        ? `تم حفظ التقسيمات ونقل ${moved} مقرر/حصة مع الفترات المعدّلة`
+        : 'تم حفظ التقسيمات لكل يوم (مع الاتحاد للتوافق)',
+      'success',
+      5000
+    );
     const slotsSaved = Array.isArray(j.slots) ? j.slots : slots;
     CUSTOM_TIME_SLOTS = slotsSaved;
     TIME_SLOTS_BY_DAY = (j.by_day && typeof j.by_day === 'object') ? j.by_day : byDay;
@@ -2636,7 +2929,7 @@ async function refreshGeneralGroupsPanel(){
       if (warnings.length || need > 0) {
         warnEl.classList.remove('d-none');
         const bits = warnings.map(w => w.message || w.course_name);
-        if (need > 0) bits.push(`${need} مقرر يحتاج اختيار مجموعة موحّدة`);
+        if (need > 0) bits.push(`${need} مقرر فيه طلاب بلا مجموعة — عيّنهم فردياً من التسجيل/الخطة`);
         warnEl.textContent = bits.filter(Boolean).join(' · ');
       } else {
         warnEl.classList.add('d-none');
@@ -2653,7 +2946,8 @@ async function refreshGeneralGroupsPanel(){
       const name = String(c.course_name || '').trim();
       const badges = [];
       if (c.times_changed) badges.push('<span class="badge text-bg-danger">تغيّرت الأوقات</span>');
-      if (c.needs_choice) badges.push('<span class="badge text-bg-warning text-dark">يلزم اختيار مجموعة</span>');
+      if (c.needs_choice) badges.push('<span class="badge text-bg-warning text-dark">طلاب بلا مجموعة</span>');
+      if (c.multi_group) badges.push('<span class="badge text-bg-secondary">موزّعون A/B</span>');
       if (c.in_schedule_overlay) badges.push('<span class="badge text-bg-success">في الجدول</span>');
       else if (c.never_seen) badges.push('<span class="badge text-bg-info">جديد</span>');
       if ((c.sources || []).includes('enrollment_plans') && !(c.sources || []).includes('registrations')) {
@@ -2664,14 +2958,15 @@ async function refreshGeneralGroupsPanel(){
       ).join(' · ');
       const hasTimes = (c.slots_preview || []).length > 0;
       const groupsCount = Number(c.groups_count || 0);
-      const canPick = groupsCount > 0 && hasTimes;
+      const canView = groupsCount > 0 && hasTimes;
       const counts = [];
       if (c.dept_registered_count) counts.push(`${c.dept_registered_count} مسجّل`);
+      if (c.dept_unlinked_count) counts.push(`${c.dept_unlinked_count} بلا مجموعة`);
       if (c.dept_planned_count) counts.push(`${c.dept_planned_count} في الخطة`);
       const metaLine = [counts.join(' · '), groupsCount ? `${groupsCount} مجموعة` : '']
         .filter(Boolean).join(' — ');
-      const pickAction = canPick
-        ? `<button type="button" class="btn btn-sm btn-outline-primary gg-pick-btn" data-course="${_ggEsc(name)}">اختيار / تغيير المجموعة</button>`
+      const pickAction = canView
+        ? `<button type="button" class="btn btn-sm btn-outline-primary gg-pick-btn" data-course="${_ggEsc(name)}">عرض التوزيع</button>`
         : `<span class="small text-muted" title="لا إجراء مطلوب من رئيس القسم حتى يعلن الاتجاه العام الأوقات والمجموعات">بانتظار إعلان الاتجاه العام</span>`;
       return (
         `<div class="border-bottom py-2">` +
@@ -2705,25 +3000,6 @@ async function refreshGeneralGroupsPanel(){
   }
 }
 
-function _ggSelectSuccessMsg(payload) {
-  const moved = Number(payload && payload.moved_count || 0);
-  const exam = (payload && payload.exam_note) ? ` — ${payload.exam_note}` : '';
-  if (moved > 0) return `تم النقل: ${moved} طالباً${exam}`;
-  return `تم تحديث الربط؛ لا تسجيلات جديدة للنقل${exam}`;
-}
-
-function _ggSelectErrorMsg(payload) {
-  const code = String((payload && payload.code) || '');
-  const msg = String((payload && payload.message) || '').trim();
-  if (code === 'PUBLISHED_LOCK') {
-    return msg || 'الجدول معتمد/منشور — اختيار المجموعة متاح للمسؤول فقط.';
-  }
-  if (code === 'CAPACITY') {
-    return msg || 'تجاوز سعة المجموعة المختارة.';
-  }
-  return msg || 'فشل النقل';
-}
-
 async function openGeneralGroupPicker(courseName){
   const name = String(courseName || '').trim();
   if (!name) return;
@@ -2733,10 +3009,12 @@ async function openGeneralGroupPicker(courseName){
   const body = document.getElementById('generalGroupPickBody');
   const warn = document.getElementById('generalGroupPickWarn');
   const hint = document.getElementById('generalGroupPickHint');
-  if (title) title.textContent = 'اختيار مجموعة — ' + name;
-  if (body) body.innerHTML = '<tr><td colspan="5" class="text-muted">جاري التحميل…</td></tr>';
+  if (title) title.textContent = 'توزيع المجموعات — ' + name;
+  if (body) body.innerHTML = '<tr><td colspan="4" class="text-muted">جاري التحميل…</td></tr>';
   if (warn) { warn.classList.add('d-none'); warn.textContent = ''; }
-  if (hint) hint.textContent = 'معاينة الأوقات ثم تأكيد النقل.';
+  if (hint) {
+    hint.textContent = 'عرض فقط — لا نقل جماعي. عيّن مجموعة كل طالب من الخطة أو التسجيل الفعلي.';
+  }
   const modalEl = document.getElementById('generalGroupPickModal');
   if (modalEl) bootstrap.Modal.getOrCreateInstance(modalEl).show();
   try {
@@ -2744,125 +3022,45 @@ async function openGeneralGroupPicker(courseName){
     const r = await fetch('/schedule/general_groups/options?' + q.toString(), _ggFetchOpts());
     const j = await r.json();
     if (!r.ok || j.status !== 'ok') {
-      if (body) body.innerHTML = `<tr><td colspan="5" class="text-danger">${_ggEsc(j.message || 'تعذّر التحميل')}</td></tr>`;
+      if (body) body.innerHTML = `<tr><td colspan="4" class="text-danger">${_ggEsc(j.message || 'تعذّر التحميل')}</td></tr>`;
       return;
     }
     _ggPickSemester = j.semester || '';
-    if (warn && j.split_warning) {
+    if (warn) {
       warn.classList.remove('d-none');
-      warn.textContent = j.split_warning.message || 'طلابك موزّعون على أكثر من مجموعة';
+      warn.textContent = (j.split_warning && j.split_warning.message)
+        || 'التعيين فردي لكل طالب (خطة / تسجيل فعلي). طالب واحد = مجموعة واحدة فقط.';
     }
     const opts = j.options || [];
     if (!opts.length) {
-      if (body) body.innerHTML = '<tr><td colspan="5" class="text-muted">لا مجموعات اتجاه عام لهذا المقرر في الفصل الحالي.</td></tr>';
+      if (body) body.innerHTML = '<tr><td colspan="4" class="text-muted">لا مجموعات اتجاه عام لهذا المقرر في الفصل الحالي.</td></tr>';
       return;
     }
     const deptTotal = Number((opts[0] && opts[0].dept_enrolled_count) || 0);
     if (hint) {
       hint.textContent = deptTotal > 0
-        ? `معاينة الأوقات ثم تأكيد النقل. إجمالي مسجّلي المقرر في قسمك: ${deptTotal}.`
-        : 'معاينة الأوقات ثم تأكيد النقل.';
+        ? `عرض التوزيع فقط. إجمالي مسجّلي المقرر في قسمك: ${deptTotal}. التعيين من الخطة أو التسجيل الفعلي.`
+        : 'عرض التوزيع فقط — عيّن المجموعة من الخطة أو التسجيل الفعلي.';
     }
     body.innerHTML = opts.map(o => {
       const slots = (o.slots || []).map(s => `${s.day || ''} ${s.time || ''}`).filter(Boolean).join('<br>') || '—';
       const enrolled = Number(o.enrolled_count || 0);
       const capMax = (o.capacity_max != null && Number(o.capacity_max) > 0) ? Number(o.capacity_max) : null;
       const cap = capMax != null ? `${enrolled} / ${capMax}` : (enrolled > 0 ? `${enrolled} · بلا حد` : 'بلا حد');
-      const cur = o.is_current ? ' is-current' : '';
-      const gCode = (o.group_code && String(o.group_code) !== '—') ? o.group_code : 'موحّدة';
-      const curLabel = o.is_current ? ' <span class="badge text-bg-success">الحالية</span>' : '';
-      const gid = Number(o.teaching_group_id || 0);
       const onGroup = Number(o.dept_on_group_count != null ? o.dept_on_group_count : 0);
-      const selectBtn = gid > 0
-        ? `<button type="button" class="btn btn-sm btn-primary gg-confirm-btn" data-gid="${gid}" data-code="${_ggEsc(o.group_code || '')}" data-dept-n="${onGroup}">اختيار</button>`
-        : `<span class="text-danger small">لا مجموعة صالحة</span>`;
+      const gCode = (o.group_code && String(o.group_code) !== '—') ? o.group_code : 'موحّدة';
+      const gid = Number(o.teaching_group_id || 0);
       return (
-        `<tr class="gg-opt-row${cur}" data-gid="${gid}">` +
-        `<td><strong>${_ggEsc(gCode)}</strong>${curLabel}<div class="text-muted">${_ggEsc(o.instructor_name || '')}</div></td>` +
+        `<tr class="gg-opt-row" data-gid="${gid}">` +
+        `<td><strong>${_ggEsc(gCode)}</strong><div class="text-muted">${_ggEsc(o.instructor_name || '')}</div></td>` +
         `<td class="small">${slots}</td>` +
         `<td dir="ltr">${_ggEsc(cap)}</td>` +
         `<td>${_ggEsc(onGroup)}</td>` +
-        `<td>${selectBtn}</td>` +
         `</tr>`
       );
     }).join('');
-    body.querySelectorAll('.gg-confirm-btn').forEach(btn => {
-      btn.addEventListener('click', () => confirmGeneralGroupSelect(btn));
-    });
   } catch (e) {
-    if (body) body.innerHTML = '<tr><td colspan="5" class="text-danger">خطأ في الاتصال</td></tr>';
-  }
-}
-
-async function confirmGeneralGroupSelect(btn){
-  const gid = Number(btn.getAttribute('data-gid') || 0);
-  const code = btn.getAttribute('data-code') || '';
-  if (!_ggPickCourse) return;
-  if (!gid) {
-    showMsg('لا يمكن الاختيار: لم تُعرَّف مجموعة تدريس لهذا المقرر بعد — اطلب من رئيس الاتجاه العام حفظ «مجموعة واحدة» من إعداد المجموعات.', 'warning', 8000);
-    return;
-  }
-  const ok = window.confirm(
-    `تأكيد نقل تسجيلات طلبة قسمك في «${_ggPickCourse}» إلى المجموعة ${code || gid}؟\n\n` +
-    'الأوقات من رئيس الاتجاه العام. سيتم تحديث ربط المجموعة وتسجيلات القسم.'
-  );
-  if (!ok) return;
-  btn.disabled = true;
-  try {
-    const postOpts = (body) => _ggFetchOpts({
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'X-Requested-With': 'XMLHttpRequest',
-      },
-      body: JSON.stringify(body),
-    });
-    const r = await fetch('/schedule/general_groups/select', postOpts({
-      course_name: _ggPickCourse,
-      semester: _ggPickSemester || undefined,
-      teaching_group_id: gid,
-      confirm: true,
-    }));
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || j.status !== 'ok') {
-      if (j.code === 'CONFLICT') {
-        const force = window.confirm(
-          (j.message || 'تعارض أوقات') + '\n\nهل تريد المتابعة رغم التعارض؟'
-        );
-        if (force) {
-          const r2 = await fetch('/schedule/general_groups/select', postOpts({
-            course_name: _ggPickCourse,
-            semester: _ggPickSemester || undefined,
-            teaching_group_id: gid,
-            confirm: true,
-            allow_conflicts: true,
-          }));
-          const j2 = await r2.json().catch(() => ({}));
-          if (!r2.ok || j2.status !== 'ok') {
-            showMsg(_ggSelectErrorMsg(j2), 'danger', 9000);
-            btn.disabled = false;
-            return;
-          }
-          showMsg(_ggSelectSuccessMsg(j2), 'success', 8000);
-        } else {
-          btn.disabled = false;
-          return;
-        }
-      } else {
-        showMsg(_ggSelectErrorMsg(j), 'danger', 9000);
-        btn.disabled = false;
-        return;
-      }
-    } else {
-      showMsg(_ggSelectSuccessMsg(j), 'success', 8000);
-    }
-    const modalEl = document.getElementById('generalGroupPickModal');
-    if (modalEl) bootstrap.Modal.getOrCreateInstance(modalEl).hide();
-    await loadSchedule();
-  } catch (e) {
-    showMsg('خطأ في الاتصال', 'danger');
-    btn.disabled = false;
+    if (body) body.innerHTML = '<tr><td colspan="4" class="text-danger">خطأ في الاتصال</td></tr>';
   }
 }
 
@@ -2880,7 +3078,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const courseSel = document.getElementById('newCourseSelect');
   if (courseSel) {
     courseSel.addEventListener('change', () => {
+      const picked = courseSel.value || '';
+      if (SCHEDULE_LAYOUT && SCHEDULE_LAYOUT.block_add_general_courses && isCollegeGeneralCourseName(picked)) {
+        showMsg(GENERAL_COURSE_LOCK_MSG, 'warning', 8000, 'modalMsg');
+        courseSel.value = '';
+        refreshTeachingGroupAddOptions('');
+        return;
+      }
       applyProposedInstructorForSelectedCourse({ forceSelect: !EDITING_SECTION_ID });
+      // عند تغيير المقرر أثناء التعديل: لا نفرض المجموعة القديمة
+      refreshTeachingGroupAddOptions(courseSel.value || '', EDITING_SECTION_ID ? null : undefined);
     });
   }
 
@@ -2892,10 +3099,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const optCompact = document.getElementById('optCompactView');
     const optManage = document.getElementById('optSlotManage');
     const optStudents = document.getElementById('optStudentConflicts');
+    const optGenOverlay = document.getElementById('optShowGeneralOverlay');
     if (optCompact && !optCompact.dataset.bound) {
       optCompact.dataset.bound = '1';
       optCompact.addEventListener('change', async () => {
         IS_COMPACT = !!optCompact.checked;
+        await loadSchedule();
+      });
+    }
+    if (optGenOverlay && !optGenOverlay.dataset.bound) {
+      optGenOverlay.dataset.bound = '1';
+      optGenOverlay.addEventListener('change', async () => {
+        SHOW_GENERAL_OVERLAY = !!optGenOverlay.checked;
+        try { localStorage.setItem('scheduleShowGeneralOverlay', SHOW_GENERAL_OVERLAY ? '1' : '0'); } catch (_e) {}
         await loadSchedule();
       });
     }
@@ -3173,16 +3389,21 @@ document.addEventListener('DOMContentLoaded', () => {
         if (msg) msg.innerHTML = '<span class="text-danger">وقت النهاية يجب أن يكون بعد البداية</span>';
         return;
       }
-      if (EDITING_DAY_SLOTS_DRAFT.includes(lab)) {
+      const exists = EDITING_DAY_SLOTS_DRAFT.some(
+        r => normalizeTimeSlotLabelLocal(r && r.value) === normalizeTimeSlotLabelLocal(lab)
+      );
+      if (exists) {
         if (msg) msg.innerHTML = '<span class="text-warning">الفترة موجودة مسبقاً</span>';
         return;
       }
-      EDITING_DAY_SLOTS_DRAFT.push(lab);
+      EDITING_DAY_SLOTS_DRAFT.push({ orig: null, value: lab });
       const getStart = (timeStr) => {
         const m = String(timeStr).trim().match(/^(\d+):(\d+)/);
         return m ? parseInt(m[1], 10) * 60 + parseInt(m[2], 10) : 0;
       };
-      EDITING_DAY_SLOTS_DRAFT.sort((x, y) => getStart(x) - getStart(y));
+      EDITING_DAY_SLOTS_DRAFT.sort(
+        (x, y) => getStart((x && x.value) || '') - getStart((y && y.value) || '')
+      );
       if (msg) msg.innerHTML = '<span class="text-success">تمت الإضافة</span>';
       renderEditDaySlotsList();
     });

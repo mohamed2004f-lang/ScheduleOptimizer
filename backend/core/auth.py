@@ -2014,8 +2014,8 @@ def init_auth(app):
     def mfa_setup_start():
         from backend.core.mfa import (
             SESSION_MFA_SETUP,
-            SESSION_MFA_SETUP_SECRET,
             role_requires_mfa,
+            store_mfa_setup_secret,
         )
         from backend.core.totp import generate_secret, provisioning_qr_svg
 
@@ -2039,8 +2039,8 @@ def init_auth(app):
                 "code": "FORBIDDEN",
             }), 403
         secret = generate_secret()
-        session[SESSION_MFA_SETUP_SECRET] = secret
-        session.modified = True
+        # السر على الخادم فقط؛ الاستجابة تُظهره مرة واحدة لمسح QR (مطلوب للتفعيل)
+        store_mfa_setup_secret(user, secret)
         return jsonify({
             "status": "ok",
             "secret": secret,
@@ -2053,14 +2053,14 @@ def init_auth(app):
         from backend.core.mfa import (
             SESSION_MFA_CTX,
             SESSION_MFA_SETUP,
-            SESSION_MFA_SETUP_SECRET,
+            clear_mfa_setup_secret,
+            load_mfa_setup_secret,
             role_requires_mfa,
             save_user_totp,
         )
         from backend.core.totp import verify_totp
 
         data = request.get_json(silent=True) or request.form or {}
-        secret = (session.get(SESSION_MFA_SETUP_SECRET) or "").strip()
         pending_user = _mfa_pending_user()
         logged_user = (session.get(SESSION_USER) or "").strip() if session.get(SESSION_KEY) else ""
         role = (session.get("user_role") or "").strip()
@@ -2074,6 +2074,7 @@ def init_auth(app):
                 "message": "غير مصرّح بتفعيل التحقق بخطوتين",
                 "code": "FORBIDDEN",
             }), 403
+        secret = (load_mfa_setup_secret(user) or "").strip()
         if not secret:
             return jsonify({
                 "status": "error",
@@ -2093,7 +2094,7 @@ def init_auth(app):
                 "message": "تعذر حفظ إعداد التحقق بخطوتين",
                 "code": "INTERNAL_ERROR",
             }), 500
-        session.pop(SESSION_MFA_SETUP_SECRET, None)
+        clear_mfa_setup_secret(user)
         if pending_user:
             login_ctx = session.get(SESSION_MFA_CTX) or {}
             if not isinstance(login_ctx, dict) or not login_ctx.get("canonical_user"):
@@ -2114,13 +2115,12 @@ def init_auth(app):
     from backend.core.mfa import register_mfa_pending_guard
     register_mfa_pending_guard(app)
 
-    # إعفاء مسارات بلا جلسة فقط (تسجيل الدخول/الخروج). طلبات JSON مع كوكي الجلسة تبقى تحت CSRF.
+    # الخروج فقط مُعفى (رابط بسيط). تسجيل الدخول محمي بـ CSRF ضد Login CSRF.
     try:
         csrf = app.extensions.get("csrf")
         if csrf is not None:
-            csrf.exempt(login)
             csrf.exempt(logout)
     except Exception:
-        logger.exception("csrf.exempt(auth.login) failed")
+        logger.exception("csrf.exempt(auth.logout) failed")
 
     return auth_bp

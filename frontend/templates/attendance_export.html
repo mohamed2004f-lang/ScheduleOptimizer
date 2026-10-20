@@ -158,6 +158,13 @@
       { value: 'excused', label: 'معذور' },
     ];
 
+    function esc(s) {
+      if (s == null) return '';
+      const d = document.createElement('div');
+      d.textContent = String(s);
+      return d.innerHTML;
+    }
+
     function fillWeekSelect(selectEl, maxWeeks) {
       if (!selectEl) return;
       selectEl.innerHTML = '';
@@ -301,7 +308,7 @@
         preview.textContent = 'لا توجد مقررات محددة — سيتم تصدير جميع المقررات التي لديها تسجيلات.';
         return;
       }
-      preview.innerHTML = chosen.map(name => `<span class="badge rounded-pill badge-course me-1 mb-1">${name}</span>`).join('');
+      preview.innerHTML = chosen.map(name => `<span class="badge rounded-pill badge-course me-1 mb-1">${esc(name)}</span>`).join('');
     }
 
     function renderStatusButtons(studentId, currentStatus) {
@@ -344,10 +351,10 @@
         const pctClass = pct >= 25 ? 'absence-high' : '';
         tr.innerHTML = `
           <td>${idx + 1}</td>
-          <td>${st.student_id || ''}</td>
-          <td>${st.student_name || ''}</td>
+          <td>${esc(st.student_id || '')}</td>
+          <td>${esc(st.student_name || '')}</td>
           <td class="status-cell"></td>
-          <td class="${pctClass}">${st.absence_percent ?? 0}% <span class="text-muted small">(${st.absence_label || ''})</span></td>
+          <td class="${pctClass}">${esc(st.absence_percent ?? 0)}% <span class="text-muted small">(${esc(st.absence_label || '')})</span></td>
         `;
         const statusCell = tr.querySelector('.status-cell');
         statusCell.appendChild(renderStatusButtons(st.student_id, st.week_status || ''));

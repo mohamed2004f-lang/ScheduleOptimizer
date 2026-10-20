@@ -1,0 +1,13 @@
+---
+description: Arabic/English mixed responses and bidi-safe formatting
+alwaysApply: true
+---
+
+# Arabic Formatting & Bidi Rules
+
+When writing responses in Arabic mixed with English/Code:
+
+1. Prefer not to bury long English paths or multi-token identifiers mid-sentence if they break text direction.
+2. Short technical terms and file names **may** appear inline inside backticks when they stay readable (e.g. راجع `term_engine.py`). Longer paths, multi-line snippets, and command blocks go on their own lines or inside fenced code blocks.
+3. Format numbered lists cleanly: write the number followed by standard English punctuation or bullet points without trailing inline English that flips the line.
+4. Use Markdown tables when comparing terms or presenting technical parameters to ensure strict left-to-right/right-to-left layout separation.

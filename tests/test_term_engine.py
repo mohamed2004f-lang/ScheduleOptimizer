@@ -711,6 +711,63 @@ def test_guard_or_windows_any_open_allows(db_conn):
     )
 
 
+def test_registration_write_allows_during_add_or_drop_window(db_conn):
+    """تعديل التسجيلات الإدارية يمرّ أثناء نافذة الإضافة حتى لو أُغلق تجديد القيد."""
+    import datetime
+
+    from backend.services.term_engine import OP_REGISTRATION_WRITE, assert_term_operation
+
+    year = "2041/2042"
+    _seed_op_window(
+        db_conn,
+        year=year,
+        window_key="registration_renewal",
+        starts="2020-01-01",
+        ends="2020-01-07",
+    )
+    _seed_op_window(
+        db_conn,
+        year=year,
+        window_key="registration_new",
+        starts="2020-01-01",
+        ends="2020-01-07",
+    )
+    _seed_op_window(
+        db_conn,
+        year=year,
+        window_key="add_courses",
+        starts=None,
+        ends="2026-10-29",
+    )
+    assert_term_operation(
+        db_conn,
+        operation=OP_REGISTRATION_WRITE,
+        semester="خريف 41-42",
+        now=datetime.date(2026, 10, 17),
+    )
+
+    _seed_op_window(
+        db_conn,
+        year=year,
+        window_key="add_courses",
+        starts=None,
+        ends="2020-01-01",
+    )
+    _seed_op_window(
+        db_conn,
+        year=year,
+        window_key="drop_courses",
+        starts=None,
+        ends="2026-12-23",
+    )
+    assert_term_operation(
+        db_conn,
+        operation=OP_REGISTRATION_WRITE,
+        semester="خريف 41-42",
+        now=datetime.date(2026, 11, 15),
+    )
+
+
 def test_guard_closed_term_master_blocks(db_conn):
     import pytest
 

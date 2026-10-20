@@ -1303,20 +1303,14 @@ def backfill_teaching_groups_for_semester(
     return stats
 
 
-def ensure_schedule_slot_teaching_group(conn, section_id: int) -> int | None:
-    """
-    بعد إضافة حصة جدول: اربطها بمجموعة تدريس single افتراضية إن أمكن.
-    يتخطى إن نقص القسم أو الأستاذ (تظهر في التدقيق كيتيمة).
-    """
+def _schedule_slot_context(conn, section_id: int) -> dict[str, Any] | None:
     sid = int(section_id or 0)
-    if sid <= 0 or not table_exists(conn, "teaching_groups"):
+    if sid <= 0 or not table_exists(conn, "schedule"):
         return None
     if "teaching_group_id" not in {c.lower() for c in fetch_table_columns(conn, "schedule")}:
         return None
-
     pk = _schedule_section_pk_expr_bare(conn)
-    cur = conn.cursor()
-    row = cur.execute(
+    row = conn.cursor().execute(
         f"""
         SELECT course_name, semester, department_id, instructor_id, teaching_group_id
         FROM schedule
@@ -1328,23 +1322,43 @@ def ensure_schedule_slot_teaching_group(conn, section_id: int) -> int | None:
     if not row:
         return None
     if hasattr(row, "keys"):
-        cname = (row["course_name"] or "").strip()
-        sem = (row["semester"] or "").strip()
-        dept = int(row["department_id"] or 0)
-        iid = int(row["instructor_id"] or 0)
-        existing_tg = int(row["teaching_group_id"] or 0)
-    else:
-        cname = (row[0] or "").strip()
-        sem = (row[1] or "").strip()
-        dept = int(row[2] or 0)
-        iid = int(row[3] or 0)
-        existing_tg = int(row[4] or 0)
-    if existing_tg > 0:
-        return existing_tg
-    if not cname or not sem or dept <= 0 or iid <= 0:
+        return {
+            "section_id": sid,
+            "course_name": (row["course_name"] or "").strip(),
+            "semester": (row["semester"] or "").strip(),
+            "department_id": int(row["department_id"] or 0),
+            "instructor_id": int(row["instructor_id"] or 0),
+            "teaching_group_id": int(row["teaching_group_id"] or 0),
+        }
+    return {
+        "section_id": sid,
+        "course_name": (row[0] or "").strip(),
+        "semester": (row[1] or "").strip(),
+        "department_id": int(row[2] or 0),
+        "instructor_id": int(row[3] or 0),
+        "teaching_group_id": int(row[4] or 0),
+    }
+
+
+def ensure_schedule_slot_teaching_group(conn, section_id: int) -> int | None:
+    """
+    بعد إضافة حصة جدول: اربطها بمجموعة تدريس single افتراضية إن أمكن.
+    يتخطى إن نقص القسم أو الأستاذ (تظهر في التدقيق كيتيمة).
+    """
+    ctx = _schedule_slot_context(conn, section_id)
+    if not ctx:
+        return None
+    if int(ctx.get("teaching_group_id") or 0) > 0:
+        return int(ctx["teaching_group_id"])
+    cname = str(ctx.get("course_name") or "")
+    sem = str(ctx.get("semester") or "")
+    dept = int(ctx.get("department_id") or 0)
+    iid = int(ctx.get("instructor_id") or 0)
+    sid = int(ctx.get("section_id") or 0)
+    if not cname or not sem or dept <= 0 or iid <= 0 or not table_exists(conn, "teaching_groups"):
         return None
 
-    existing = cur.execute(
+    existing = conn.cursor().execute(
         """
         SELECT id FROM teaching_groups
         WHERE lower(trim(course_name)) = lower(trim(?))
@@ -1371,6 +1385,112 @@ def ensure_schedule_slot_teaching_group(conn, section_id: int) -> int | None:
         link_schedule_slots(conn, gid, [sid])
         return gid
     return None
+
+
+def attach_schedule_slot_teaching_group(
+    conn,
+    section_id: int,
+    *,
+    teaching_group_id: int | None = None,
+    group_code: str | None = None,
+    group_kind: str | None = None,
+    allow_reassign: bool = False,
+) -> int | None:
+    """
+    ربط حصة مضافة بمجموعة تدريس صريحة أو إنشاؤها حسب النية.
+    - teaching_group_id: ربط بمجموعة موجودة (نفس المقرر/الفصل/القسم).
+    - group_kind + group_code: إنشاء/جلب مجموعة ثم الربط.
+    - بلا اختيار: سلوك ensure (single) إن لم يكن المقرر مقسوماً مسبقاً.
+    - allow_reassign: عند التعديل يسمح بتغيير المجموعة الحالية.
+    """
+    ctx = _schedule_slot_context(conn, section_id)
+    if not ctx:
+        return None
+    current_gid = int(ctx.get("teaching_group_id") or 0)
+    explicit_gid = int(teaching_group_id or 0)
+    has_intent = bool(explicit_gid > 0 or (group_kind or "").strip() or (group_code or "").strip())
+    if current_gid > 0 and not allow_reassign:
+        return current_gid
+    if current_gid > 0 and allow_reassign and not has_intent:
+        return current_gid
+    if current_gid > 0 and allow_reassign and explicit_gid == current_gid:
+        return current_gid
+    cname = str(ctx.get("course_name") or "")
+    sem = str(ctx.get("semester") or "")
+    dept = int(ctx.get("department_id") or 0)
+    iid = int(ctx.get("instructor_id") or 0)
+    sid = int(ctx.get("section_id") or 0)
+    if not cname or not sem or dept <= 0 or sid <= 0 or not table_exists(conn, "teaching_groups"):
+        return None
+
+    existing = list_teaching_groups(
+        conn, semester=sem, department_id=dept, course_name=cname
+    )
+    existing = [g for g in existing if int(g.get("department_id") or 0) == dept]
+    by_id = {int(g["id"]): g for g in existing if g.get("id")}
+    needs_explicit = len(existing) > 1 or any(
+        (g.get("group_kind") or "") == GROUP_KIND_SPLIT for g in existing
+    )
+
+    if explicit_gid > 0:
+        g = by_id.get(explicit_gid) or get_teaching_group(conn, explicit_gid)
+        if not g:
+            raise ValueError("مجموعة التدريس غير موجودة")
+        if int(g.get("department_id") or 0) != dept:
+            raise ValueError("مجموعة التدريس خارج قسم الحصة")
+        if (g.get("course_name") or "").strip().lower() != cname.lower():
+            raise ValueError("مجموعة التدريس لا تطابق المقرر")
+        if (g.get("semester") or "").strip() != sem:
+            raise ValueError("مجموعة التدريس لا تطابق الفصل")
+        link_schedule_slots(conn, explicit_gid, [sid])
+        return explicit_gid
+
+    gkind_raw = (group_kind or "").strip().lower()
+    gcode_raw = (group_code or "").strip()
+    if gkind_raw or gcode_raw:
+        gkind = gkind_raw if gkind_raw in VALID_GROUP_KINDS else (
+            GROUP_KIND_SPLIT if gcode_raw and normalize_group_code(gcode_raw) != DEFAULT_GROUP_CODE
+            else GROUP_KIND_SINGLE
+        )
+        gcode = DEFAULT_GROUP_CODE if gkind == GROUP_KIND_SINGLE else normalize_group_code(gcode_raw or "A")
+        if iid <= 0:
+            raise ValueError("اختر أستاذاً من الدليل لربط/إنشاء مجموعة التدريس")
+        match = next(
+            (
+                g
+                for g in existing
+                if normalize_group_code(str(g.get("group_code") or "")) == gcode
+            ),
+            None,
+        )
+        if match:
+            gid = int(match["id"])
+        else:
+            rec = create_teaching_group(
+                conn,
+                course_name=cname,
+                semester=sem,
+                department_id=dept,
+                instructor_id=iid,
+                group_code=gcode,
+                group_kind=gkind,
+            )
+            gid = int(rec.get("id") or 0)
+        if gid:
+            link_schedule_slots(conn, gid, [sid])
+            return gid
+        return None
+
+    if needs_explicit:
+        raise ValueError("اختر مجموعة التدريس (A/B) لهذه الحصة قبل الإضافة")
+
+    if len(existing) == 1:
+        gid = int(existing[0].get("id") or 0)
+        if gid:
+            link_schedule_slots(conn, gid, [sid])
+            return gid
+
+    return ensure_schedule_slot_teaching_group(conn, sid)
 
 
 def audit_teaching_groups(
@@ -1917,6 +2037,13 @@ def list_course_group_roster(
                 "instructor_name": iname,
                 "badge": badge,
             }
+        gen_id_empty = 0
+        try:
+            from backend.core.department_scope_policy import resolve_college_general_department_id
+
+            gen_id_empty = int(resolve_college_general_department_id(conn) or 0)
+        except Exception:
+            gen_id_empty = 0
         return {
             "course_name": cname,
             "semester": sem,
@@ -1924,6 +2051,7 @@ def list_course_group_roster(
             "unassigned": [],
             "sibling_labels": empty_labels,
             "sibling_meta": empty_meta,
+            "general_department_id": gen_id_empty or None,
             "totals": {"registered": 0, "assigned": 0, "unassigned": 0},
         }
 
@@ -1936,12 +2064,32 @@ def list_course_group_roster(
     cur = conn.cursor()
     tg_sel = "r.teaching_group_id" if has_tg else "NULL AS teaching_group_id"
     sem_sel = "COALESCE(r.semester, '')" if has_sem else "''"
+    gen_dept_id = 0
+    try:
+        from backend.core.department_scope_policy import resolve_college_general_department_id
+
+        gen_dept_id = int(resolve_college_general_department_id(conn) or 0)
+    except Exception:
+        gen_dept_id = 0
+    has_dept_tbl = table_exists(conn, "departments")
+    dept_join = (
+        "LEFT JOIN departments d ON d.id = st.department_id" if has_dept_tbl else ""
+    )
+    dept_id_sel = "st.department_id"
+    dept_name_sel = (
+        "COALESCE(d.name_ar, d.code, '') AS department_name"
+        if has_dept_tbl
+        else "'' AS department_name"
+    )
     rows = cur.execute(
         f"""
         SELECT r.id, r.student_id, COALESCE(st.student_name, '') AS student_name,
-               {tg_sel}, {sem_sel} AS reg_semester
+               {tg_sel}, {sem_sel} AS reg_semester,
+               {dept_id_sel} AS department_id,
+               {dept_name_sel}
         FROM registrations r
         INNER JOIN students st ON st.student_id = r.student_id AND {active_stu}
+        {dept_join}
         WHERE lower(trim(r.course_name)) = lower(trim(?))
         ORDER BY st.student_name, r.student_id
         """,
@@ -1955,21 +2103,29 @@ def list_course_group_roster(
             sname = str(row["student_name"] or "").strip()
             tgid = int(row["teaching_group_id"] or 0) if has_tg else 0
             rsem = str(row["reg_semester"] or "").strip()
+            sdept = int(row["department_id"] or 0) if row["department_id"] is not None else 0
+            dname = str(row["department_name"] or "").strip()
         else:
             rid = int(row[0] or 0)
             sid = str(row[1] or "").strip()
             sname = str(row[2] or "").strip()
             tgid = int(row[3] or 0) if has_tg else 0
             rsem = str(row[4] or "").strip()
+            sdept = int(row[5] or 0) if row[5] is not None else 0
+            dname = str(row[6] or "").strip()
         if not sid:
             continue
         if has_sem and not _registration_matches_semester(rsem, sem):
             continue
+        is_general = bool(gen_dept_id and sdept == gen_dept_id)
         item = {
             "registration_id": rid,
             "student_id": sid,
             "student_name": sname or sid,
             "teaching_group_id": tgid or None,
+            "department_id": sdept or None,
+            "department_name": dname or ("الاتجاه العام" if is_general else ""),
+            "is_general_department": is_general,
         }
         if tgid and tgid in by_gid:
             by_gid[tgid].append(item)
@@ -2021,6 +2177,7 @@ def list_course_group_roster(
         "unassigned": unassigned,
         "sibling_labels": sibling_map,
         "sibling_meta": sibling_meta,
+        "general_department_id": gen_dept_id or None,
         "totals": {
             "registered": registered,
             "assigned": assigned_n,

@@ -202,7 +202,88 @@ def test_single_group_setup_assigns_all_registrations(db_conn):
     assert roster["totals"]["assigned"] == 4
 
 
+def test_roster_includes_student_department_buckets(db_conn):
+    """روستر يحمل قسم الطالب + تمييز الاتجاه العام عن الأقسام التخصصية."""
+    uid = uuid.uuid4().hex[:6]
+    cur = db_conn.cursor()
+    # GENERAL
+    row = cur.execute(
+        "SELECT id FROM departments WHERE UPPER(COALESCE(code,'')) IN ('GENERAL','GEN','GS') LIMIT 1"
+    ).fetchone()
+    if row:
+        gen_id = int(row[0])
+    else:
+        cur.execute(
+            "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES ('GENERAL', 'اتجاه عام', 'General', 1)"
+        )
+        gen_id = int(cur.execute("SELECT id FROM departments WHERE code='GENERAL' LIMIT 1").fetchone()[0])
+    cur.execute(
+        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
+        (f"CV{uid}".upper()[:12], f"مدني {uid}", "Civil"),
+    )
+    civil_id = int(cur.execute("SELECT id FROM departments WHERE code=?", (f"CV{uid}".upper()[:12],)).fetchone()[0])
+    sem = f"خريف 44-{uid[:2]}"
+    course = f"رياضيات عامة {uid}"
+    cur.execute(
+        "INSERT OR IGNORE INTO courses (course_name, course_code, units, owning_department_id) VALUES (?, ?, 3, ?)",
+        (course, f"GS{uid}"[:8], gen_id),
+    )
+    cur.execute(
+        "INSERT INTO instructors (name, type, is_active, department_id) VALUES (?, 'internal', 1, ?)",
+        (f"د. عام {uid}", gen_id),
+    )
+    inst_id = int(cur.lastrowid)
+    for code, day in (("A", "السبت"), ("B", "الأحد")):
+        cur.execute(
+            """
+            INSERT INTO teaching_groups
+                (course_name, semester, department_id, group_code, group_kind, instructor_id, is_active)
+            VALUES (?, ?, ?, ?, 'split', ?, 1)
+            """,
+            (course, sem, gen_id, code, inst_id),
+        )
+        gid = int(cur.lastrowid)
+        cur.execute(
+            """
+            INSERT INTO schedule
+                (course_name, day, time, room, instructor_id, semester, department_id, teaching_group_id)
+            VALUES (?, ?, '09:00-11:00', 'G1', ?, ?, ?, ?)
+            """,
+            (course, day, inst_id, sem, gen_id, gid),
+        )
+    sid_gen = f"G{uid}"
+    sid_cv = f"C{uid}"
+    cur.execute(
+        "INSERT INTO students (student_id, student_name, department_id, enrollment_status) VALUES (?, ?, ?, 'active')",
+        (sid_gen, "طالب عام", gen_id),
+    )
+    cur.execute(
+        "INSERT INTO students (student_id, student_name, department_id, enrollment_status) VALUES (?, ?, ?, 'active')",
+        (sid_cv, "طالب مدني", civil_id),
+    )
+    groups = tg.list_teaching_groups(db_conn, semester=sem, department_id=gen_id, course_name=course)
+    gid_a = int(next(g for g in groups if g.get("group_code") == "A")["id"])
+    for sid in (sid_gen, sid_cv):
+        cur.execute(
+            "INSERT INTO registrations (student_id, course_name, semester, teaching_group_id) VALUES (?, ?, ?, ?)",
+            (sid, course, sem, gid_a),
+        )
+    db_conn.commit()
+
+    roster = tg.list_course_group_roster(
+        db_conn, course_name=course, semester=sem, department_id=gen_id
+    )
+    assert roster.get("general_department_id") == gen_id
+    g_a = next(g for g in roster["groups"] if g["teaching_group_id"] == gid_a)
+    by_sid = {m["student_id"]: m for m in g_a["members"]}
+    assert by_sid[sid_gen]["is_general_department"] is True
+    assert by_sid[sid_cv]["is_general_department"] is False
+    assert by_sid[sid_cv]["department_id"] == civil_id
+    assert "مدني" in (by_sid[sid_cv].get("department_name") or "")
+
+
 def test_roster_api(auth_client, db_conn):
+
     seed = _seed(db_conn)
     r = auth_client.get(
         f"/schedule/teaching_groups/roster?course_name={seed['course']}&semester={seed['semester']}&department_id={seed['dept_id']}"

@@ -527,6 +527,7 @@
       const showFailedReport = (caps && caps.v >= 1) ? !!caps.nav_failed_courses_report : staffReportsFallback;
       const showNotRegReport = (caps && caps.v >= 1) ? !!caps.nav_not_registered_courses_report : staffReportsFallback;
       const showUncompletedReport = (caps && caps.v >= 1) ? !!caps.nav_uncompleted_courses_report : staffReportsFallback;
+      const showPrereqRegReport = (caps && caps.v >= 1) ? !!caps.nav_prereq_registration_report : staffReportsFallback;
       const showGradeAuditReport = (caps && caps.v >= 1) ? !!caps.nav_grade_course_mapping_audit : staffReportsFallback;
       const showAnalyticsReport = (caps && caps.v >= 1) ? !!caps.nav_analytics_report : staffReportsFallback;
       const showDeptReportsHub = (caps && caps.v >= 1)
@@ -540,6 +541,7 @@
           ['navFailedCoursesReport', showFailedReport],
           ['navNotRegisteredCoursesReport', showNotRegReport],
           ['navUncompletedCoursesReport', showUncompletedReport],
+          ['navPrereqRegistrationReport', showPrereqRegReport],
           ['navGradeCourseAudit', showGradeAuditReport],
           ['navCourseRegistrationReport', showCourseReg],
           ['navAnalytics', showAnalyticsReport],
@@ -718,6 +720,7 @@
           'navFailedCoursesReport',
           'navNotRegisteredCoursesReport',
           'navUncompletedCoursesReport',
+          'navPrereqRegistrationReport',
           'navGradeCourseAudit',
           'navCourseRegistrationReport',
           'navScheduleVersions',
@@ -913,6 +916,7 @@
           'navGradeDrafts', 'navElectivesReport',
           'navRegistrationChangesReport', 'navFailedCoursesReport',
           'navNotRegisteredCoursesReport', 'navUncompletedCoursesReport',
+          'navPrereqRegistrationReport',
           'navGradeCourseAudit', 'navCourseRegistrationReport', 'navAnalytics',
           'navDeptReportsHub',
         ].forEach(id => {
@@ -1596,6 +1600,7 @@
             'navDeptReportsHub', 'navDeptReportsHubDivider',
             'navPerformance', 'navElectivesReport', 'navRegistrationChangesReport',
             'navFailedCoursesReport', 'navNotRegisteredCoursesReport', 'navUncompletedCoursesReport',
+            'navPrereqRegistrationReport',
             'navGradeCourseAudit', 'navCourseRegistrationReport',
             'navDeptReportsAnalyticsDivider', 'navAnalytics',
           ]);
@@ -1607,6 +1612,7 @@
             'navDeptReportsHub', 'navDeptReportsHubDivider',
             'navPerformance', 'navElectivesReport', 'navRegistrationChangesReport',
             'navFailedCoursesReport', 'navNotRegisteredCoursesReport', 'navUncompletedCoursesReport',
+            'navPrereqRegistrationReport',
             'navGradeCourseAudit', 'navCourseRegistrationReport',
             'navDeptReportsAnalyticsDivider', 'navAnalytics',
           ]);
@@ -1760,6 +1766,8 @@
         ['/not_registered_courses_report_page','navNotRegisteredCoursesReport'],
         ['/grade_course_mapping_audit_page','navGradeCourseAudit'],
         ['/course_registration_report_page','navCourseRegistrationReport'],
+        ['/registration_review_report_page','navPrereqRegistrationReport'],
+        ['/prereq_registration_report_page','navPrereqRegistrationReport'],
         ['/schedule_versions_page','navScheduleVersions'],
         ['/exam_schedule_versions_page','navExamScheduleVersions'],
         ['/performance_report','navPerformance'],

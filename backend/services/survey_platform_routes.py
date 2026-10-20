@@ -10,6 +10,7 @@ import io
 
 from flask import abort, jsonify, redirect, render_template, request, send_file, session, url_for
 
+from backend.core.security import rate_limit
 from backend.core.auth import (
     SESSION_ACTIVE_MODE,
     _normalize_role,
@@ -827,7 +828,28 @@ def register_survey_platform_routes(bp) -> None:
         )
 
     @bp.route("/surveys/api/invite/<token>/submit", methods=["POST"])
+    @rate_limit(max_requests=20, window_seconds=60)
     def survey_invite_submit_api(token: str):
+        from flask import current_app
+        from backend.core.auth_throttle import increment_window
+        from backend.services.survey_invites import hash_survey_invite_token
+
+        # حد إضافي لكل رمز دعوة (بالإضافة لحد الـ IP) — يُتخطى في الاختبارات
+        if not current_app.config.get("TESTING"):
+            tok = (token or "").strip()
+            if tok:
+                try:
+                    tok_key = hash_survey_invite_token(tok)[:24]
+                except Exception:
+                    tok_key = tok[:24]
+                hits = increment_window(f"invite_sub:{tok_key}", 60)
+                if hits > 12:
+                    return jsonify({
+                        "status": "error",
+                        "message": "تم تجاوز الحد المسموح من الطلبات لهذا الرابط. يرجى المحاولة لاحقاً.",
+                        "code": "RATE_LIMIT_EXCEEDED",
+                    }), 429
+
         data = request.get_json(force=True) if request.is_json else request.form
         profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
         if not profile:
@@ -1198,19 +1220,40 @@ def register_survey_platform_routes(bp) -> None:
                     conn, sem_a, sem_b, department_id=dept_id
                 )
             chart_data = build_trends_chart_data(conn, department_id=dept_id)
-            external_cycles = list_available_cycles_for_trends(conn)
-            closed_ext = list_closed_cycles(conn, limit=30)
+            # لقطات الدورات الخارجية نطاق كلية — لا تُعرض لرئيس القسم
+            role_n = _normalize_role((session.get("user_role") or "").strip())
+            show_college_external = role_n in (
+                "admin",
+                "admin_main",
+                "system_admin",
+                "college_dean",
+                "academic_vice_dean",
+            ) or is_college_quality_lead_session()
+            external_cycles: list[str] = []
+            closed_ext: list = []
+            external_comparison = None
+            external_chart_data: dict = {
+                "cycles": [],
+                "overall_avg": [],
+                "surveys": [],
+                "has_data": False,
+            }
             cycle_a = (request.args.get("cycle_a") or "").strip()
             cycle_b = (request.args.get("cycle_b") or "").strip()
-            if not cycle_a and len(external_cycles) > 1:
-                cycle_b = external_cycles[0]
-                cycle_a = external_cycles[1]
-            elif not cycle_b and external_cycles:
-                cycle_b = external_cycles[0]
-            external_comparison = None
-            if cycle_a and cycle_b:
-                external_comparison = compare_cycle_snapshots(conn, cycle_a, cycle_b)
-            external_chart_data = build_external_trends_chart_data(conn)
+            if show_college_external:
+                external_cycles = list_available_cycles_for_trends(conn)
+                closed_ext = list_closed_cycles(conn, limit=30)
+                if not cycle_a and len(external_cycles) > 1:
+                    cycle_b = external_cycles[0]
+                    cycle_a = external_cycles[1]
+                elif not cycle_b and external_cycles:
+                    cycle_b = external_cycles[0]
+                if cycle_a and cycle_b:
+                    external_comparison = compare_cycle_snapshots(conn, cycle_a, cycle_b)
+                external_chart_data = build_external_trends_chart_data(conn)
+            else:
+                cycle_a = ""
+                cycle_b = ""
             closure_reminder = closure_reminder_status(conn, sem, dept_id)
         return render_template(
             "survey_trends.html",

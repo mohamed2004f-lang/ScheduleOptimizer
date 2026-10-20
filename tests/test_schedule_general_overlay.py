@@ -1,4 +1,4 @@
-"""اختبارات حقن حصص الاتجاه العام + اختيار المجموعة ونقل التسجيلات."""
+"""اختبارات حقن حصص الاتجاه العام + التعيين الفردي (بدون نقل جماعي)."""
 
 from __future__ import annotations
 
@@ -137,28 +137,22 @@ def test_overlay_shows_bound_group_slots(db_conn):
     assert items[0].get("stage_badge") == "عام"
 
 
-def test_select_moves_only_dept_students_and_capacity(db_conn):
+def test_select_no_longer_mass_moves_and_clears_binding(db_conn):
+    """النقل الجماعي متوقف — لا تُحدَّث تسجيلات القسم ويُمسح الربط القديم."""
     world = _seed_overlay_world(db_conn)
-    # طالب من قسم آخر على A — لا يُنقل
     cur = db_conn.cursor()
+    # ربط قديم (أسلوب القسم الموحّد)
+    sgo.ensure_bindings_schema(db_conn)
     cur.execute(
-        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES (?, ?, ?, 1)",
-        (f"EL{world['uid']}".upper()[:12], "كهرباء", "Elec"),
-    )
-    other = int(
-        cur.execute("SELECT id FROM departments WHERE code=?", (f"EL{world['uid']}".upper()[:12],)).fetchone()[0]
-    )
-    cur.execute(
-        "INSERT INTO students (student_id, student_name, department_id, enrollment_status) VALUES (?, 'آخر', ?, 'active')",
-        (f"OX{world['uid']}", other),
-    )
-    cur.execute(
-        "INSERT INTO registrations (student_id, course_name, semester, teaching_group_id) VALUES (?, ?, ?, ?)",
-        (f"OX{world['uid']}", world["course"], world["sem"], world["groups"]["A"]),
+        """
+        INSERT INTO department_general_group_bindings
+            (semester, consumer_department_id, course_name, teaching_group_id, updated_by)
+        VALUES (?, ?, ?, ?, 'legacy')
+        """,
+        (world["sem"], world["mech_id"], world["course"], world["groups"]["A"]),
     )
     db_conn.commit()
 
-    # السعة على A = 2 وممتلئة بطلبة الميكانيكا + الآخر؛ النقل إلى B بسعة 50
     result = sgo.select_general_group_for_department(
         db_conn,
         course_name=world["course"],
@@ -169,43 +163,26 @@ def test_select_moves_only_dept_students_and_capacity(db_conn):
         force_admin=True,
     )
     db_conn.commit()
-    assert result["moved_count"] == 2
-    assert result["teaching_group_id"] == world["groups"]["B"]
+    assert result["code"] == "PER_STUDENT_ONLY"
+    assert result["moved_count"] == 0
+    assert result["mode"] == "per_student"
+    assert result.get("binding_cleared") is True
 
-    # طالب القسم الآخر بقي على A
-    row = cur.execute(
-        "SELECT teaching_group_id FROM registrations WHERE student_id = ?",
-        (f"OX{world['uid']}",),
-    ).fetchone()
-    assert int(row[0]) == world["groups"]["A"]
+    # تسجيلات الميكانيكا بقيت على A
+    rows = cur.execute(
+        """
+        SELECT teaching_group_id FROM registrations
+        WHERE course_name = ? AND student_id LIKE ?
+        """,
+        (world["course"], f"S{world['uid']}%"),
+    ).fetchall()
+    assert len(rows) == 2
+    assert all(int(r[0]) == world["groups"]["A"] for r in rows)
 
-    # الربط محفوظ
     bindings = sgo.list_bindings(
         db_conn, semester=world["sem"], consumer_department_id=world["mech_id"]
     )
-    assert bindings[world["course"].lower()] == world["groups"]["B"]
-
-    # فشل السعة: أنشئ مجموعة C بسعة 1 وانقل إليها
-    cur.execute(
-        """
-        INSERT INTO teaching_groups
-            (course_name, semester, department_id, group_code, group_kind, instructor_id, capacity_max, is_active)
-        VALUES (?, ?, ?, 'C', 'split', ?, 1, 1)
-        """,
-        (world["course"], world["sem"], world["gen_id"], world["inst_id"]),
-    )
-    gid_c = int(cur.lastrowid)
-    db_conn.commit()
-    with pytest.raises(ValueError, match="سعة"):
-        sgo.select_general_group_for_department(
-            db_conn,
-            course_name=world["course"],
-            semester=world["sem"],
-            teaching_group_id=gid_c,
-            consumer_department_id=world["mech_id"],
-            actor="test",
-            force_admin=True,
-        )
+    assert world["course"].lower() not in bindings
 
 
 def test_registration_options_include_general(db_conn):
@@ -514,8 +491,8 @@ def test_options_dept_on_group_differs_from_course_total_when_unlinked(db_conn):
         assert int(o.get("dept_on_group_count") or 0) != int(o.get("dept_enrolled_count") or 0)
 
 
-def test_select_assigns_unlinked_dept_registrations_and_binding(db_conn):
-    """اختيار مجموعة يربط تسجيلات القسم بلا teaching_group_id ويحفظ الـbinding."""
+def test_select_does_not_assign_unlinked_registrations(db_conn):
+    """select لا يربط التسجيلات بلا مجموعة — التعيين فردي فقط."""
     world = _seed_overlay_world(db_conn)
     cur = db_conn.cursor()
     cur.execute(
@@ -537,9 +514,9 @@ def test_select_assigns_unlinked_dept_registrations_and_binding(db_conn):
         force_admin=True,
     )
     db_conn.commit()
-    assert result["status"] == "ok"
-    assert result["moved_count"] == 2
-    assert result["teaching_group_id"] == world["groups"]["B"]
+    assert result["code"] == "PER_STUDENT_ONLY"
+    assert result["moved_count"] == 0
+    assert int(result.get("distribution", {}).get("unlinked") or 0) == 2
 
     rows = cur.execute(
         """
@@ -549,19 +526,37 @@ def test_select_assigns_unlinked_dept_registrations_and_binding(db_conn):
         (world["course"], f"S{world['uid']}%"),
     ).fetchall()
     assert len(rows) == 2
-    assert all(int(r[0]) == world["groups"]["B"] for r in rows)
+    assert all(r[0] in (None, 0) for r in rows)
 
-    bindings = sgo.list_bindings(
-        db_conn, semester=world["sem"], consumer_department_id=world["mech_id"]
+    disc = sgo.discover_general_courses_for_department(
+        db_conn, consumer_department_id=world["mech_id"], semester=world["sem"]
     )
-    assert bindings[world["course"].lower()] == world["groups"]["B"]
+    row = next(c for c in disc["courses"] if c["course_name"].lower() == world["course"].lower())
+    assert row["needs_choice"] is True
+    assert int(row.get("dept_unlinked_count") or 0) == 2
 
-    opts = sgo.list_general_group_options(
-        db_conn,
-        course_name=world["course"],
-        semester=world["sem"],
-        consumer_department_id=world["mech_id"],
+
+def test_overlay_includes_both_groups_when_students_split(db_conn):
+    """عند توزيع فردي على A و B تُحقَن شعبنا المجموعتين في شبكة القسم."""
+    world = _seed_overlay_world(db_conn)
+    cur = db_conn.cursor()
+    cur.execute(
+        "UPDATE registrations SET teaching_group_id = ? WHERE student_id = ?",
+        (world["groups"]["B"], f"S{world['uid']}1"),
     )
-    by_code = {str(o.get("group_code")): o for o in (opts.get("options") or [])}
-    assert int(by_code["B"].get("dept_on_group_count") or 0) == 2
-    assert int(by_code["A"].get("dept_on_group_count") or 0) == 0
+    db_conn.commit()
+    items = sgo.fetch_overlay_schedule_items(
+        db_conn, consumer_department_id=world["mech_id"], semester=world["sem"]
+    )
+    gids = {int(x.get("teaching_group_id") or 0) for x in items}
+    assert world["groups"]["A"] in gids
+    assert world["groups"]["B"] in gids
+    resolved = sgo.resolve_effective_general_groups(
+        db_conn, consumer_department_id=world["mech_id"], semester=world["sem"]
+    )
+    meta = resolved["by_course"][world["course"].lower()]
+    assert meta.get("multi_group") is True
+    assert set(meta.get("teaching_group_ids") or []) == {
+        world["groups"]["A"],
+        world["groups"]["B"],
+    }

@@ -701,3 +701,297 @@ def planning_course_hints(cur, student_id: str) -> dict[str, Any]:
         )
     hints.sort(key=lambda x: (-x["unlocks_count"], x["course"]))
     return {"student_id": student_id, "priorities": hints[:80]}
+
+
+# -----------------------------
+# تقرير قسم: مراجعة التسجيل (أسبقية + حمل الوحدات)
+# -----------------------------
+
+# حدود حمل الوحدات — موحّدة مع فلتر قائمة التسجيل
+REG_LOAD_MIN_UNITS = 12
+REG_LOAD_MAX_UNITS = 18
+
+PREREQ_ISSUE_KIND_LABELS_AR: dict[str, str] = {
+    "coregister_new": "متطلب + تابع معاً (أول مرة)",
+    "coregister_retry": "إعادة متطلب راسب + تابع",
+    "failed_not_retaking": "تابع مسجّل ومتطلب راسب وغير معاد",
+    "missing": "تابع مسجّل ومتطلب مفقود من الكشف",
+    "in_progress": "متطلب مسجّل دون درجة نهائية",
+    "no_grade": "متطلب في الكشف بلا درجة نهائية",
+    "load_under_12": f"حمل وحدات أقل من {REG_LOAD_MIN_UNITS}",
+    "load_over_18": f"حمل وحدات أكثر من {REG_LOAD_MAX_UNITS}",
+}
+
+REGISTRATION_REVIEW_KIND_LABELS_AR = PREREQ_ISSUE_KIND_LABELS_AR
+
+_LOAD_KINDS = frozenset({"load_under_12", "load_over_18"})
+_PREREQ_KINDS = frozenset(k for k in PREREQ_ISSUE_KIND_LABELS_AR if k not in _LOAD_KINDS)
+
+
+def _classify_prereq_issue(status: str, grade: Any) -> str | None:
+    """يصنّف حالة متطلب غير منجز لتقرير القسم."""
+    st = (status or "").strip()
+    if st == STATUS_PASSED:
+        return None
+    if st == STATUS_IN_PLAN:
+        if grade is not None and not _grade_passes(grade):
+            return "coregister_retry"
+        return "coregister_new"
+    if st == STATUS_IN_PROGRESS:
+        return "in_progress"
+    if st == STATUS_FAILED:
+        return "failed_not_retaking"
+    if st == STATUS_MISSING:
+        return "missing"
+    if st == STATUS_NO_GRADE:
+        return "no_grade"
+    return None
+
+
+def _classify_load_issue(total_units: float) -> str | None:
+    if total_units < REG_LOAD_MIN_UNITS:
+        return "load_under_12"
+    if total_units > REG_LOAD_MAX_UNITS:
+        return "load_over_18"
+    return None
+
+
+def _course_units_map(cur) -> dict[str, float]:
+    out: dict[str, float] = {}
+    try:
+        rows = cur.execute(
+            "SELECT course_name, COALESCE(units, 0) FROM courses"
+        ).fetchall()
+    except Exception:
+        return out
+    for r in rows or []:
+        if hasattr(r, "keys"):
+            cn = str(r["course_name"] or "").strip()
+            u = r["units"] if "units" in r.keys() else r[1]
+        else:
+            cn = str(r[0] or "").strip()
+            u = r[1]
+        if not cn:
+            continue
+        try:
+            out[cn] = float(u or 0)
+        except (TypeError, ValueError):
+            out[cn] = 0.0
+    return out
+
+
+def build_prereq_registration_issues_report(
+    conn,
+    allowed_student_ids: set[str] | None,
+    *,
+    kind: str | None = None,
+    course_q: str | None = None,
+    prereq_q: str | None = None,
+    group: str | None = None,
+) -> dict[str, Any]:
+    """
+    مراجعة التسجيل الفعلي: مشاكل الأسبقية + انحراف حمل الوحدات (<12 أو >18).
+
+    group: all | prereq | load
+    """
+    cur = conn.cursor()
+    kind_f = (kind or "").strip().lower()
+    course_f = (course_q or "").strip().casefold()
+    prereq_f = (prereq_q or "").strip().casefold()
+    group_f = (group or "all").strip().lower()
+    if group_f not in ("all", "prereq", "load"):
+        group_f = "all"
+    want_prereq = group_f in ("all", "prereq")
+    want_load = group_f in ("all", "load")
+    # فلتر مقرر/متطلب يخص صفوف الأسبقية فقط
+    if course_f or prereq_f:
+        want_load = False
+        want_prereq = True
+
+    if allowed_student_ids is not None and not allowed_student_ids:
+        return {
+            "items": [],
+            "summary": {
+                "total": 0,
+                "by_kind": {},
+                "kind_labels": dict(PREREQ_ISSUE_KIND_LABELS_AR),
+                "load_min": REG_LOAD_MIN_UNITS,
+                "load_max": REG_LOAD_MAX_UNITS,
+            },
+        }
+
+    st_cols = set()
+    try:
+        from backend.database.database import fetch_table_columns
+
+        st_cols = {c.lower() for c in fetch_table_columns(conn, "students")}
+    except Exception:
+        st_cols = set()
+
+    active_clause = ""
+    if "enrollment_status" in st_cols:
+        active_clause = " AND COALESCE(s.enrollment_status, 'active') = 'active'"
+
+    if allowed_student_ids is None:
+        reg_rows = cur.execute(
+            f"""
+            SELECT r.student_id, r.course_name, COALESCE(s.student_name, '') AS student_name
+            FROM registrations r
+            LEFT JOIN students s ON s.student_id = r.student_id
+            WHERE TRIM(COALESCE(r.course_name, '')) <> ''{active_clause}
+            ORDER BY r.student_id, r.course_name
+            """
+        ).fetchall()
+    else:
+        ids = sorted({str(x).strip() for x in allowed_student_ids if str(x).strip()})
+        if not ids:
+            return {
+                "items": [],
+                "summary": {
+                    "total": 0,
+                    "by_kind": {},
+                    "kind_labels": dict(PREREQ_ISSUE_KIND_LABELS_AR),
+                    "load_min": REG_LOAD_MIN_UNITS,
+                    "load_max": REG_LOAD_MAX_UNITS,
+                },
+            }
+        placeholders = ",".join("?" for _ in ids)
+        reg_rows = cur.execute(
+            f"""
+            SELECT r.student_id, r.course_name, COALESCE(s.student_name, '') AS student_name
+            FROM registrations r
+            LEFT JOIN students s ON s.student_id = r.student_id
+            WHERE r.student_id IN ({placeholders})
+              AND TRIM(COALESCE(r.course_name, '')) <> ''{active_clause}
+            ORDER BY r.student_id, r.course_name
+            """,
+            ids,
+        ).fetchall()
+
+    by_student: dict[str, dict[str, Any]] = {}
+    for row in reg_rows or []:
+        if hasattr(row, "keys"):
+            sid = str(row["student_id"] or "").strip()
+            cname = str(row["course_name"] or "").strip()
+            sname = str(row["student_name"] or "").strip()
+        else:
+            sid = str(row[0] or "").strip()
+            cname = str(row[1] or "").strip()
+            sname = str(row[2] or "").strip()
+        if not sid or not cname:
+            continue
+        bucket = by_student.setdefault(sid, {"student_name": sname, "courses": []})
+        if sname and not bucket["student_name"]:
+            bucket["student_name"] = sname
+        if cname not in bucket["courses"]:
+            bucket["courses"].append(cname)
+
+    units_map = _course_units_map(cur)
+    items: list[dict[str, Any]] = []
+    by_kind: dict[str, int] = defaultdict(int)
+
+    for sid, meta in by_student.items():
+        courses = meta["courses"]
+        if not courses:
+            continue
+
+        total_units = 0.0
+        for cn in courses:
+            total_units += float(units_map.get(cn, 0) or 0)
+
+        if want_load:
+            load_kind = _classify_load_issue(total_units)
+            if load_kind and (not kind_f or kind_f == load_kind):
+                if load_kind == "load_under_12":
+                    label = (
+                        f"إجمالي الوحدات المسجّلة: {total_units:g} "
+                        f"(أقل من {REG_LOAD_MIN_UNITS}) — عدد المقررات: {len(courses)}"
+                    )
+                else:
+                    label = (
+                        f"إجمالي الوحدات المسجّلة: {total_units:g} "
+                        f"(أكثر من {REG_LOAD_MAX_UNITS}) — عدد المقررات: {len(courses)}"
+                    )
+                row_out = {
+                    "student_id": sid,
+                    "student_name": meta.get("student_name") or "",
+                    "dependent_course": "",
+                    "prereq_course": "",
+                    "prereq_grade": None,
+                    "prereq_status": "",
+                    "total_units": total_units,
+                    "registered_count": len(courses),
+                    "kind": load_kind,
+                    "kind_label_ar": PREREQ_ISSUE_KIND_LABELS_AR.get(load_kind, load_kind),
+                    "label_ar": label,
+                    "matched_course": "",
+                    "issue_group": "load",
+                }
+                items.append(row_out)
+                by_kind[load_kind] += 1
+
+        if want_prereq and (not kind_f or kind_f in _PREREQ_KINDS):
+            eval_result = evaluate_prereqs_for_student(
+                cur,
+                sid,
+                courses,
+                proposed_courses=courses,
+                registered_now=set(courses),
+            )
+            courses_out = eval_result.get("courses") or {}
+            for dependent, block in courses_out.items():
+                for req in block.get("requirements") or []:
+                    issue_kind = _classify_prereq_issue(req.get("status"), req.get("grade"))
+                    if not issue_kind:
+                        continue
+                    if kind_f and kind_f != issue_kind:
+                        continue
+                    prereq_name = (req.get("prereq") or "").strip()
+                    if course_f and course_f not in (dependent or "").casefold():
+                        continue
+                    if prereq_f and prereq_f not in prereq_name.casefold():
+                        continue
+                    row_out = {
+                        "student_id": sid,
+                        "student_name": meta.get("student_name") or "",
+                        "dependent_course": dependent,
+                        "prereq_course": prereq_name,
+                        "prereq_grade": req.get("grade"),
+                        "prereq_status": req.get("status"),
+                        "total_units": total_units,
+                        "registered_count": len(courses),
+                        "kind": issue_kind,
+                        "kind_label_ar": PREREQ_ISSUE_KIND_LABELS_AR.get(issue_kind, issue_kind),
+                        "label_ar": req.get("label_ar") or "",
+                        "matched_course": req.get("matched_course") or "",
+                        "issue_group": "prereq",
+                    }
+                    items.append(row_out)
+                    by_kind[issue_kind] += 1
+
+    items.sort(
+        key=lambda r: (
+            0 if r.get("issue_group") == "load" else 1,
+            r.get("kind") or "",
+            (r.get("student_name") or "").casefold(),
+            r.get("student_id") or "",
+            r.get("dependent_course") or "",
+            r.get("prereq_course") or "",
+        )
+    )
+    return {
+        "items": items,
+        "summary": {
+            "total": len(items),
+            "students": len({it["student_id"] for it in items}),
+            "by_kind": dict(by_kind),
+            "kind_labels": dict(PREREQ_ISSUE_KIND_LABELS_AR),
+            "load_min": REG_LOAD_MIN_UNITS,
+            "load_max": REG_LOAD_MAX_UNITS,
+            "group": group_f,
+        },
+    }
+
+
+# اسم أوضح للتقرير الموسّع (نفس التنفيذ)
+build_registration_review_report = build_prereq_registration_issues_report

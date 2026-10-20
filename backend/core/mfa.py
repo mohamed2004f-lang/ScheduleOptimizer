@@ -13,7 +13,9 @@ SESSION_MFA_PENDING = "mfa_pending"
 SESSION_MFA_USER = "mfa_user"
 SESSION_MFA_SETUP = "mfa_setup_required"
 SESSION_MFA_CTX = "mfa_ctx"
+# مفتاح قديم في كوكي الجلسة — يُمسح فقط؛ السر يُخزَّن على الخادم
 SESSION_MFA_SETUP_SECRET = "mfa_setup_secret"
+MFA_SETUP_SECRET_TTL_SECONDS = 900
 
 MFA_ROLES = frozenset(
     {
@@ -152,6 +154,44 @@ def clear_user_totp(username: str) -> bool:
     except Exception:
         logger.exception("clear_user_totp failed username=%s", username)
         return False
+
+
+def _mfa_setup_cache_key(username: str) -> str:
+    return f"mfa_setup:{(username or '').strip().casefold()}"
+
+
+def store_mfa_setup_secret(username: str, secret: str) -> None:
+    """يحفظ سر الإعداد على الخادم (Redis/ذاكرة) وليس في كوكي الجلسة."""
+    from backend.core.auth_throttle import kv_set
+
+    user = (username or "").strip()
+    sec = (secret or "").strip()
+    if not user or not sec:
+        return
+    kv_set(_mfa_setup_cache_key(user), sec, MFA_SETUP_SECRET_TTL_SECONDS)
+    # إزالة أي سر قديم عالق في كوكي الجلسة الموقّعة
+    session.pop(SESSION_MFA_SETUP_SECRET, None)
+    session.modified = True
+
+
+def load_mfa_setup_secret(username: str) -> Optional[str]:
+    from backend.core.auth_throttle import kv_get
+
+    user = (username or "").strip()
+    if not user:
+        return None
+    val = kv_get(_mfa_setup_cache_key(user))
+    return (val or "").strip() or None
+
+
+def clear_mfa_setup_secret(username: str) -> None:
+    from backend.core.auth_throttle import kv_delete
+
+    user = (username or "").strip()
+    if user:
+        kv_delete(_mfa_setup_cache_key(user))
+    session.pop(SESSION_MFA_SETUP_SECRET, None)
+    session.modified = True
 
 
 def park_mfa_session(login_ctx: dict, *, setup: bool) -> None:

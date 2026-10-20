@@ -169,6 +169,19 @@ def reset_throttle_state() -> None:
     _redis_failed = False
 
 
+def kv_set(key: str, value: str, ttl: int) -> None:
+    """قيمة مؤقتة على الخادم (Redis أو ذاكرة العملية) — ليست في كوكي الجلسة."""
+    _store().set(f"{_PREFIX}kv:{key}", str(value), int(ttl))
+
+
+def kv_get(key: str) -> Optional[str]:
+    return _store().get(f"{_PREFIX}kv:{key}")
+
+
+def kv_delete(key: str) -> None:
+    _store().delete(f"{_PREFIX}kv:{key}")
+
+
 def increment_window(key: str, window_seconds: int) -> int:
     """عداد نافذة زمنية (مثلاً محاولات IP)."""
     return _store().incr(f"{_PREFIX}win:{key}", int(window_seconds))

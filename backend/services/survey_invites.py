@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import hmac
 import json
+import os
 import secrets
 from typing import Any
 
@@ -468,11 +470,58 @@ def deactivate_invites_for_cycle(conn, cycle_label: str) -> int:
     return int(cur.rowcount or 0)
 
 
-def _phone_hash(phone: str) -> str:
-    normalized = "".join(ch for ch in (phone or "") if ch.isdigit())
+def _phone_pepper() -> bytes:
+    custom = (os.environ.get("ALUMNI_PHONE_PEPPER") or "").strip()
+    if custom:
+        return hashlib.sha256(f"so-alumni-phone-pepper|{custom}".encode("utf-8")).digest()
+    secret = (os.environ.get("SECRET_KEY") or "").strip()
+    if not secret:
+        try:
+            from config import SECRET_KEY as cfg_key
+
+            secret = str(cfg_key or "").strip()
+        except Exception:
+            secret = ""
+    if not secret:
+        secret = "so-alumni-phone-dev"
+    return hashlib.sha256(f"so-alumni-phone-v1|{secret}".encode("utf-8")).digest()
+
+
+def _normalize_phone_digits(phone: str) -> str:
+    return "".join(ch for ch in (phone or "") if ch.isdigit())
+
+
+def _phone_hash_legacy(normalized: str) -> str:
     if not normalized:
         return ""
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:32]
+
+
+def _phone_hash(phone: str) -> str:
+    """HMAC-SHA256 مع pepper (SECRET_KEY أو ALUMNI_PHONE_PEPPER)."""
+    normalized = _normalize_phone_digits(phone)
+    if not normalized:
+        return ""
+    return hmac.new(_phone_pepper(), normalized.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+
+
+def _phone_hash_matches(stored_hash: str, phone: str) -> bool:
+    """يطابق التجزئة الحالية أو التجزئة القديمة (sha256 بلا pepper)."""
+    stored = (stored_hash or "").strip()
+    if not stored:
+        return False
+    normalized = _normalize_phone_digits(phone)
+    if not normalized:
+        return False
+    current = _phone_hash(normalized)
+    legacy = _phone_hash_legacy(normalized)
+
+    def _eq(a: str, b: str) -> bool:
+        if not a or not b or len(a) != len(b):
+            return False
+        return hmac.compare_digest(a, b)
+
+    return _eq(stored, current) or _eq(stored, legacy)
 
 
 def _normalize_person_name(name: str) -> str:
@@ -720,6 +769,32 @@ def validate_respondent_profile(template_code: str, profile: dict, conn=None) ->
     raise ValueError("قالب غير مدعوم")
 
 
+def consume_invite_use(conn, invite_id: int) -> None:
+    """
+    يزيد use_count ذرياً بشرط عدم تجاوز max_uses.
+    يمنع سباق طلبين متزامنين من تجاوز حد الاستخدام.
+    """
+    iid = int(invite_id or 0)
+    if iid <= 0:
+        raise ValueError("دعوة غير صالحة")
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE survey_invites
+        SET use_count = COALESCE(use_count, 0) + 1
+        WHERE id = ?
+          AND COALESCE(is_active, 1) = 1
+          AND (
+            COALESCE(max_uses, 0) <= 0
+            OR COALESCE(use_count, 0) < COALESCE(max_uses, 0)
+          )
+        """,
+        (iid,),
+    )
+    if int(cur.rowcount or 0) <= 0:
+        raise ValueError("تم استخدام هذا الرابط بالكامل")
+
+
 def _check_duplicate_submission(conn, invite: dict, profile: dict) -> None:
     kind = (invite.get("invite_kind") or "").strip()
     if kind == "personal" and int(invite.get("use_count") or 0) > 0:
@@ -761,7 +836,8 @@ def _check_duplicate_submission(conn, invite: dict, profile: dict) -> None:
                     )
 
     phone_hash = profile.get("phone_hash") or ""
-    if not phone_hash:
+    phone_raw = (profile.get("_phone_raw_for_dup") or "").strip()
+    if not phone_hash and not phone_raw:
         return
     for row in rows or []:
         raw = row[0] if not hasattr(row, "keys") else row["respondent_profile_json"]
@@ -769,7 +845,12 @@ def _check_duplicate_submission(conn, invite: dict, profile: dict) -> None:
             existing = json.loads(raw or "{}")
         except Exception:
             existing = {}
-        if existing.get("phone_hash") == phone_hash:
+        existing_hash = (existing.get("phone_hash") or "").strip()
+        if not existing_hash:
+            continue
+        if phone_hash and hmac.compare_digest(existing_hash, phone_hash):
+            raise ValueError("تم تسجيل رد بهذا الرقم في هذه الحملة مسبقاً")
+        if phone_raw and _phone_hash_matches(existing_hash, phone_raw):
             raise ValueError("تم تسجيل رد بهذا الرقم في هذه الحملة مسبقاً")
 
 
@@ -783,7 +864,10 @@ def submit_invite_survey(
 ) -> int:
     invite = validate_invite(conn, token)
     template_code = (invite.get("template_code") or "").strip()
+    phone_raw = ((profile or {}).get("phone") or "").strip()
     cleaned_profile = validate_respondent_profile(template_code, profile, conn=conn)
+    if phone_raw:
+        cleaned_profile["_phone_raw_for_dup"] = phone_raw
     if template_code == "alumni":
         dept_id = cleaned_profile.get("department_id")
         if isinstance(dept_id, int):
@@ -794,6 +878,7 @@ def submit_invite_survey(
             for d in cleaned_profile["hire_department_ids"]
         ]
     _check_duplicate_submission(conn, invite, cleaned_profile)
+    cleaned_profile.pop("_phone_raw_for_dup", None)
 
     template = get_template_by_code(conn, template_code)
     assert template
@@ -881,10 +966,8 @@ def submit_invite_survey(
             (rid, int(qid), int(rating)),
         )
 
-    cur.execute(
-        "UPDATE survey_invites SET use_count = COALESCE(use_count, 0) + 1 WHERE id = ?",
-        (invite_id,),
-    )
+    # ذري: إن فشل الاستهلاك تُلغى المعاملة عند الـ rollback قبل commit
+    consume_invite_use(conn, invite_id)
     return rid
 
 

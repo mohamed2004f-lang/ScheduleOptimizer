@@ -865,6 +865,55 @@ def _effective_schedule_department_scope_id(conn) -> int | None:
     return resolve_effective_department_scope_id(conn, uname)
 
 
+def _specialty_blocked_from_general_course(conn, course_name: str | None) -> str | None:
+    """
+    يمنع رؤساء الأقسام التخصصية من إضافة/تعديل حصص مقررات الاتجاه العام.
+    يعيد رسالة خطأ أو None إن مسموح.
+    """
+    cname = (course_name or "").strip()
+    if not cname:
+        return None
+    try:
+        from backend.core.department_scope_policy import (
+            course_is_college_general,
+            resolve_college_general_department_id,
+        )
+        from backend.services import schedule_general_overlay as sgo
+    except Exception:
+        return None
+    try:
+        if not course_is_college_general(conn, cname):
+            return None
+    except Exception:
+        return None
+    role_n = _normalize_role((session.get("user_role") or "").strip())
+    if role_n in ("admin", "admin_main", "system_admin"):
+        # أدمن بلا نطاق قسم تخصصي: مسموح
+        scope = _effective_schedule_department_scope_id(conn)
+        if scope is None:
+            return None
+        gen_id = resolve_college_general_department_id(conn)
+        if gen_id and int(scope) == int(gen_id):
+            return None
+        if not sgo.is_specialty_consumer_department(conn, scope):
+            return None
+        # أدمن بنطاق تخصصي: نفس القيد
+    else:
+        scope = _effective_schedule_department_scope_id(conn)
+        if scope is None:
+            return None
+        gen_id = resolve_college_general_department_id(conn)
+        if gen_id and int(scope) == int(gen_id):
+            return None
+        if not sgo.is_specialty_consumer_department(conn, scope):
+            return None
+    return (
+        "مقررات الاتجاه العام تُدار من رئيس قسم الاتجاه العام فقط. "
+        "يمكنك متابعة أوقاتها من لوحة الاتجاه العام أو جدول الاتجاه العام الكامل، "
+        "ولا تُضاف أو تُعدَّل من جدول قسمك."
+    )
+
+
 def _resolve_schedule_row_department_id(conn, course_name: str | None) -> int | None:
     """قسم صف الجدول: نطاق المنفّذ أولاً، ثم قسم المقرر إن وُجد."""
     uname = (session.get("user") or session.get("username") or "").strip()
@@ -1722,13 +1771,8 @@ def general_groups_options():
     "head_of_department",
 )
 def general_groups_select():
-    """اختيار مجموعة GENERAL ونقل تسجيلات طلبة القسم."""
+    """متوقف عن النقل الجماعي — يُرجع PER_STUDENT_ONLY ويمسح الربط القسمي القديم."""
     from backend.services import schedule_general_overlay as sgo
-    from backend.services.term_engine import (
-        OP_SCHEDULE_WRITE,
-        assert_term_operation,
-        http_term_blocked,
-    )
 
     data = request.get_json(silent=True) or {}
     course_name = (data.get("course_name") or "").strip()
@@ -1737,44 +1781,14 @@ def general_groups_select():
         teaching_group_id = int(data.get("teaching_group_id") or 0)
     except (TypeError, ValueError):
         teaching_group_id = 0
-    allow_conflicts = bool(data.get("allow_conflicts"))
-    confirm = bool(data.get("confirm"))
-    if not course_name or teaching_group_id <= 0:
-        return jsonify({"status": "error", "message": "course_name و teaching_group_id مطلوبان"}), 400
-    if not confirm:
-        return jsonify(
-            {
-                "status": "error",
-                "message": "أكّد النقل: confirm=true — سيتم نقل تسجيلات طلبة قسمك",
-                "code": "CONFIRM_REQUIRED",
-            }
-        ), 400
+    if not course_name:
+        return jsonify({"status": "error", "message": "course_name مطلوب"}), 400
 
     actor = (session.get("user") or session.get("username") or "").strip()
     with get_connection() as conn:
         ok, dept, force_admin = _general_groups_actor_ok(conn)
         if not ok or not dept:
             return jsonify({"status": "error", "message": "غير مصرح أو نطاق غير تخصصي"}), 403
-        # العميد/الوكيل: عرض فقط — لا نقل إلا بصلاحية تعديل الجدول
-        role_n = _normalize_role((session.get("user_role") or "").strip())
-        if role_n in ("college_dean", "academic_vice_dean") and not force_admin:
-            try:
-                from backend.core.auth_capabilities import resolve_request_capabilities
-
-                caps = resolve_request_capabilities()
-                if not (caps or {}).get("can_manage_schedule_edit"):
-                    return jsonify({"status": "error", "message": "عرض فقط — لا يمكن نقل التسجيلات"}), 403
-            except Exception:
-                return jsonify({"status": "error", "message": "عرض فقط — لا يمكن نقل التسجيلات"}), 403
-        try:
-            assert_term_operation(
-                conn, operation=OP_SCHEDULE_WRITE, department_id=int(dept)
-            )
-        except Exception as te:
-            blocked = http_term_blocked(te)
-            if blocked is not None:
-                return blocked
-            return jsonify({"status": "error", "message": str(te)}), 423
         try:
             result = sgo.select_general_group_for_department(
                 conn,
@@ -1784,7 +1798,7 @@ def general_groups_select():
                 consumer_department_id=int(dept),
                 actor=actor,
                 force_admin=force_admin,
-                allow_conflicts=allow_conflicts,
+                allow_conflicts=bool(data.get("allow_conflicts")),
             )
             conn.commit()
             try:
@@ -1794,17 +1808,13 @@ def general_groups_select():
                     cache.clear()
             except Exception:
                 pass
-            return jsonify(result)
+            # 409: لم يُنفَّذ نقل — المسار الصحيح هو التعيين الفردي
+            status_code = 409 if (result or {}).get("code") == "PER_STUDENT_ONLY" else 200
+            return jsonify(result), status_code
         except PermissionError as e:
             return jsonify({"status": "error", "message": str(e), "code": "PUBLISHED_LOCK"}), 403
         except ValueError as e:
-            msg = str(e)
-            code = "VALIDATION"
-            if "سعة" in msg:
-                code = "CAPACITY"
-            elif "تعارض" in msg:
-                code = "CONFLICT"
-            return jsonify({"status": "error", "message": msg, "code": code}), 400
+            return jsonify({"status": "error", "message": str(e), "code": "VALIDATION"}), 400
         except Exception as e:
             logger.exception("general_groups_select failed")
             try:
@@ -2343,6 +2353,13 @@ def teaching_groups_registration_options():
                 "needs_choice": len(opts) > 1,
             })
         courses: set[str] = set()
+        # مقررات مرسلة صراحة من واجهة التعديل (تسجيلات حالية + مضافة)
+        extra_courses = (request.args.get("courses") or "").strip()
+        if extra_courses:
+            for part in extra_courses.split(","):
+                cn = (part or "").strip()
+                if cn:
+                    courses.add(cn)
         if table_exists(conn, "registrations"):
             rows = conn.cursor().execute(
                 "SELECT DISTINCT course_name FROM registrations WHERE student_id = ?",
@@ -2351,8 +2368,17 @@ def teaching_groups_registration_options():
             courses.update((r[0] or "").strip() for r in rows if (r[0] or "").strip())
         if table_exists(conn, "schedule"):
             sdept = tg_svc.student_department_id(conn, student_id)
+            gen_id = 0
+            try:
+                from backend.core.department_scope_policy import resolve_college_general_department_id
+
+                gen_id = int(resolve_college_general_department_id(conn) or 0)
+            except Exception:
+                gen_id = 0
             for slot in tg_svc._fetch_schedule_slots_for_semester(conn, sem):
-                if sdept > 0 and int(slot.get("department_id") or 0) not in (0, sdept):
+                slot_dept = int(slot.get("department_id") or 0)
+                # قسم الطالب أو الاتجاه العام (A/B للمقررات المشتركة/العامة)
+                if sdept > 0 and slot_dept not in (0, sdept) and not (gen_id and slot_dept == gen_id):
                     continue
                 cn = (slot.get("course_name") or "").strip()
                 if cn:
@@ -3008,6 +3034,11 @@ def add_schedule_row():
 
         dept_id = None
         with get_connection() as conn:
+            blocked = _specialty_blocked_from_general_course(conn, data.get("course_name"))
+            if blocked:
+                return jsonify(
+                    {"status": "error", "message": blocked, "code": "GENERAL_COURSE_LOCKED"}
+                ), 403
             dept_id = _resolve_schedule_row_department_id(conn, data.get("course_name"))
             try:
                 assert_term_operation(
@@ -3032,16 +3063,31 @@ def add_schedule_row():
         last = res.get("section_id")
         teaching_group_id = None
         try:
+            explicit_tg = data.get("teaching_group_id")
+            try:
+                explicit_tg_i = int(explicit_tg) if explicit_tg not in (None, "") else 0
+            except (TypeError, ValueError):
+                explicit_tg_i = 0
+            gcode_in = (data.get("group_code") or "").strip() or None
+            gkind_in = (data.get("group_kind") or "").strip() or None
             with get_connection() as conn:
                 touch_schedule_updated_at(conn)
                 if last:
-                    teaching_group_id = tg_svc.ensure_schedule_slot_teaching_group(conn, int(last))
+                    teaching_group_id = tg_svc.attach_schedule_slot_teaching_group(
+                        conn,
+                        int(last),
+                        teaching_group_id=explicit_tg_i or None,
+                        group_code=gcode_in,
+                        group_kind=gkind_in,
+                    )
                     try:
                         conn.commit()
                     except Exception:
                         pass
+        except ValueError as ve:
+            return jsonify({"status": "error", "message": str(ve), "code": "TEACHING_GROUP"}), 400
         except Exception:
-            logger.exception("ensure teaching_group after add_schedule_row failed")
+            logger.exception("attach teaching_group after add_schedule_row failed")
         _invalidate_schedule_list_cache()
     except ValidationError as e:
         return jsonify({"status": "error", "message": str(e)}), 400
@@ -3199,6 +3245,7 @@ def update_schedule_row():
             ).fetchone()
             sem = (fields.get("semester") or "").strip()
             dept_id = None
+            cname = fields.get("course_name")
             if row:
                 if hasattr(row, "keys"):
                     if not sem:
@@ -3212,6 +3259,11 @@ def update_schedule_row():
                     cname = fields.get("course_name") or row[2]
                 if dept_id is None and cname:
                     dept_id = _resolve_schedule_row_department_id(conn, cname)
+            blocked = _specialty_blocked_from_general_course(conn, cname)
+            if blocked:
+                return jsonify(
+                    {"status": "error", "message": blocked, "code": "GENERAL_COURSE_LOCKED"}
+                ), 403
             # منع تعديل صفوف فصل سابق
             try:
                 from backend.services.term_engine import (
@@ -3247,22 +3299,48 @@ def update_schedule_row():
                 return http_term_blocked(exc)
 
         res = ScheduleService.update_schedule_row(int(section_id), **fields)
+        teaching_group_id_out = None
         try:
+            explicit_tg = data.get("teaching_group_id")
+            try:
+                explicit_tg_i = int(explicit_tg) if explicit_tg not in (None, "") else 0
+            except (TypeError, ValueError):
+                explicit_tg_i = 0
+            gcode_in = (data.get("group_code") or "").strip() or None
+            gkind_in = (data.get("group_kind") or "").strip() or None
             with get_connection() as conn:
                 touch_schedule_updated_at(conn)
+                try:
+                    teaching_group_id_out = tg_svc.attach_schedule_slot_teaching_group(
+                        conn,
+                        int(section_id),
+                        teaching_group_id=explicit_tg_i or None,
+                        group_code=gcode_in,
+                        group_kind=gkind_in,
+                        allow_reassign=True,
+                    )
+                    try:
+                        conn.commit()
+                    except Exception:
+                        pass
+                except ValueError as ve:
+                    return jsonify(
+                        {"status": "error", "message": str(ve), "code": "TEACHING_GROUP"}
+                    ), 400
                 # إن تغيّر أستاذ الحصة وكانت مربوطة بمجموعة: حدّث الرئيسي وزامن الحصص
                 new_iid = fields.get("instructor_id")
                 if new_iid not in (None, ""):
                     try:
-                        pk = schedule_pk_column(conn)
-                        row_tg = conn.cursor().execute(
-                            f"SELECT teaching_group_id FROM schedule WHERE {pk} = ? LIMIT 1",
-                            (int(section_id),),
-                        ).fetchone()
-                        tgid = 0
-                        if row_tg is not None:
-                            raw = _schedule_row_get(row_tg, "teaching_group_id", index=0, default=0)
-                            tgid = int(raw or 0)
+                        tgid = int(teaching_group_id_out or 0)
+                        if tgid <= 0:
+                            pk = schedule_pk_column(conn)
+                            row_tg = conn.cursor().execute(
+                                f"SELECT teaching_group_id FROM schedule WHERE {pk} = ? LIMIT 1",
+                                (int(section_id),),
+                            ).fetchone()
+                            if row_tg is not None:
+                                raw = _schedule_row_get(row_tg, "teaching_group_id", index=0, default=0)
+                                tgid = int(raw or 0)
                         if tgid > 0:
                             team = tg_svc.list_group_instructors(conn, tgid)
                             asst = [
@@ -3284,12 +3362,17 @@ def update_schedule_row():
                     except Exception:
                         logger.exception("sync teaching_group primary after schedule update failed")
         except Exception:
-            pass
+            logger.exception("teaching_group attach after update_schedule_row failed")
         _invalidate_schedule_list_cache()
         try:
-            log_activity(action="update_schedule_row", details=f"section_id={section_id}")
+            log_activity(
+                action="update_schedule_row",
+                details=f"section_id={section_id}, teaching_group_id={teaching_group_id_out}",
+            )
         except Exception:
             pass
+        if isinstance(res, dict):
+            res = {**res, "teaching_group_id": teaching_group_id_out}
         return jsonify(res), 200
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
@@ -3632,6 +3715,104 @@ def get_time_slots():
     return jsonify({"status": "ok", **out}), 200
 
 
+def _remap_schedule_day_times(
+    conn,
+    *,
+    remaps: list[dict],
+    department_id: int | None,
+) -> dict[str, int]:
+    """
+    ينقل صفوف schedule.time حسب قائمة {day, from, to}.
+    يقيّد بنطاق القسم إن وُجد، وبالفصل الحالي عند الإمكان.
+    """
+    if not remaps or not table_exists(conn, "schedule"):
+        return {"updated": 0, "skipped": 0, "pairs": 0}
+    from backend.services.term_engine import (
+        current_term_match_context,
+        schedule_semester_matches_term_context,
+    )
+
+    ctx = None
+    try:
+        ctx = current_term_match_context(conn)
+    except Exception:
+        ctx = None
+
+    cur = conn.cursor()
+    updated = 0
+    skipped = 0
+    pairs = 0
+    # تجنّب التعارض عند التبديل: نُنفّذ عبر وسيط نادر إن لزم
+    for item in remaps:
+        if not isinstance(item, dict):
+            skipped += 1
+            continue
+        day = _canonical_schedule_day_label(str(item.get("day") or "").strip())
+        old_t = _canonical_time_slot_label(_normalize_time_slot_str(str(item.get("from") or "")))
+        new_t = _canonical_time_slot_label(_normalize_time_slot_str(str(item.get("to") or "")))
+        if not day or not old_t or not new_t or old_t == new_t:
+            skipped += 1
+            continue
+        if not _validate_time_slot_format(old_t) or not _validate_time_slot_format(new_t):
+            skipped += 1
+            continue
+        pairs += 1
+        params: list = [day, old_t]
+        dept_sql = ""
+        if department_id is not None and int(department_id) > 0:
+            dept_sql = " AND department_id = ? "
+            params.append(int(department_id))
+        rows = cur.execute(
+            f"""
+            SELECT {schedule_pk_column(conn)} AS sid, COALESCE(semester, '') AS semester, time
+            FROM schedule
+            WHERE day = ? AND time = ?
+            {dept_sql}
+            """,
+            tuple(params),
+        ).fetchall() or []
+        pk = schedule_pk_column(conn)
+        pending_no_pk = 0
+        for r in rows:
+            if hasattr(r, "keys"):
+                sid_raw = r["sid"]
+                sem = str(r["semester"] or "").strip()
+            else:
+                sid_raw = r[0]
+                sem = str(r[1] or "").strip()
+            try:
+                sid = int(sid_raw or 0)
+            except (TypeError, ValueError):
+                sid = 0
+            if ctx and sem and not schedule_semester_matches_term_context(sem, ctx):
+                skipped += 1
+                continue
+            if sid <= 0:
+                pending_no_pk += 1
+                continue
+            cur.execute(
+                f"UPDATE schedule SET time = ? WHERE {pk} = ?",
+                (new_t, sid),
+            )
+            if cur.rowcount:
+                updated += 1
+            else:
+                skipped += 1
+        if pending_no_pk:
+            # صفوف بلا مفتاح صالح: دفعة واحدة بمطابقة اليوم+الوقت (+القسم)
+            upd_params: list = [new_t, day, old_t]
+            upd_sql = "UPDATE schedule SET time = ? WHERE day = ? AND time = ?"
+            if department_id is not None and int(department_id) > 0:
+                upd_sql += " AND (department_id = ? OR department_id IS NULL)"
+                upd_params.append(int(department_id))
+            cur.execute(upd_sql, tuple(upd_params))
+            n = int(cur.rowcount or 0)
+            updated += n
+            if n < pending_no_pk:
+                skipped += pending_no_pk - n
+    return {"updated": updated, "skipped": skipped, "pairs": pairs}
+
+
 @schedule_bp.route("/time_slots", methods=["POST"])
 @role_required("admin", "admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def save_time_slots():
@@ -3640,10 +3821,13 @@ def save_time_slots():
     body:
       - slots: ["09:00-11:00", ...]  (اتحاد — متوافق مع السابق)
       - by_day: {"السبت": ["08:00-10:00", ...], ...}  اختياري — يحدّث الاتحاد أيضاً
+      - time_remaps: [{"day":"السبت","from":"09:00-11:00","to":"09:00-12:00"}, ...]
+        اختياري — ينقل مقررات الجدول مع إعادة تسمية الفترة
     """
     data = request.get_json(force=True) or {}
     by_day_raw = data.get("by_day")
     slots = data.get("slots") or []
+    time_remaps = data.get("time_remaps") if isinstance(data.get("time_remaps"), list) else []
 
     cleaned_by_day: dict[str, list[str]] = {}
     if isinstance(by_day_raw, dict):
@@ -3690,16 +3874,34 @@ def save_time_slots():
     actor = (session.get("user") or session.get("username") or "").strip() or "system"
     with get_connection() as conn:
         dept = _resolve_time_slots_department_id(conn)
+        remap_stats = {"updated": 0, "skipped": 0, "pairs": 0}
+        if time_remaps:
+            try:
+                remap_stats = _remap_schedule_day_times(
+                    conn, remaps=time_remaps, department_id=dept
+                )
+            except Exception:
+                logger.exception("time_remaps failed")
+                return jsonify(
+                    {"status": "error", "message": "تعذّر نقل مقررات الفترات المعدّلة"}
+                ), 500
         key = _setting_key_time_slots(conn, dept)
         _save_app_setting_json(conn, key, {"slots": cleaned}, actor)
         if cleaned_by_day:
             key_day = _setting_key_time_slots_by_day(conn, dept)
             _save_app_setting_json(conn, key_day, {"by_day": cleaned_by_day}, actor)
+        try:
+            touch_schedule_updated_at(conn)
+        except Exception:
+            pass
         conn.commit()
         try:
             log_activity(
                 action="save_time_slots",
-                details=f"key={key}, dept={dept}, slots={len(cleaned)}, by_day={len(cleaned_by_day)}",
+                details=(
+                    f"key={key}, dept={dept}, slots={len(cleaned)}, by_day={len(cleaned_by_day)}, "
+                    f"remapped={remap_stats.get('updated')}, remap_pairs={remap_stats.get('pairs')}"
+                ),
             )
         except Exception:
             pass
@@ -3707,6 +3909,11 @@ def save_time_slots():
         by_day_info = _get_time_slots_by_day_setting(conn, dept)
         out["by_day"] = by_day_info.get("by_day") or {}
         out["by_day_source"] = by_day_info.get("source") or "none"
+        out["time_remap"] = remap_stats
+        try:
+            _invalidate_schedule_list_cache()
+        except Exception:
+            pass
 
     return jsonify({"status": "ok", **out}), 200
 
@@ -3725,10 +3932,38 @@ def schedule_display_layout():
             dept_id = None
     with get_connection() as conn:
         from backend.core.schedule_stage_layout import build_display_layout_payload
+        from backend.core.department_scope_policy import (
+            course_is_college_general,
+            resolve_college_general_department_id,
+        )
+        from backend.services import schedule_general_overlay as sgo
 
         payload = build_display_layout_payload(
             conn, uname or None, department_id=dept_id if dept_id and dept_id > 0 else None
         )
+        scope = _effective_schedule_department_scope_id(conn)
+        gen_id = resolve_college_general_department_id(conn)
+        is_specialty = bool(
+            scope and sgo.is_specialty_consumer_department(conn, int(scope))
+        )
+        general_names: list[str] = []
+        if is_specialty and table_exists(conn, "courses"):
+            try:
+                rows = conn.cursor().execute(
+                    "SELECT course_name FROM courses WHERE COALESCE(course_name,'') <> ''"
+                ).fetchall() or []
+                for r in rows:
+                    cn = str(
+                        (r["course_name"] if hasattr(r, "keys") else r[0]) or ""
+                    ).strip()
+                    if cn and course_is_college_general(conn, cn):
+                        general_names.append(cn)
+            except Exception:
+                logger.exception("list college general course names for layout failed")
+        payload["is_specialty_consumer"] = is_specialty
+        payload["block_add_general_courses"] = is_specialty
+        payload["general_department_id"] = int(gen_id) if gen_id else None
+        payload["college_general_course_names"] = sorted(set(general_names))
     return jsonify({"status": "ok", **payload}), 200
 
 

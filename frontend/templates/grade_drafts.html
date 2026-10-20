@@ -356,6 +356,13 @@
       return Number.isNaN(n) ? null : n;
     }
 
+    function esc(s) {
+      if (s == null) return '';
+      const d = document.createElement('div');
+      d.textContent = String(s);
+      return d.innerHTML;
+    }
+
     function computeTotal(coursework, midterm, finalExam, partial, final_, total) {
         const cw = parseNum(coursework);
         const md = parseNum(midterm);
@@ -446,8 +453,8 @@
       const comp = computeTotalForPhase(row);
       const carried = carriedScore(row);
       const cells = [
-        '<td class="mono">' + row.student_id + '</td>',
-        '<td>' + (row.student_name || '') + '</td>'
+        '<td class="mono">' + esc(row.student_id) + '</td>',
+        '<td>' + esc(row.student_name || '') + '</td>'
       ];
       if (phase === 'partial' || phase === 'combined') {
         cells.push(
@@ -633,8 +640,8 @@
     }
 
     function formatCourseGroupCell(courseName, obj) {
-      const cn = courseName || (obj && obj.course_name) || '';
-      const sub = courseGroupSubtitle(obj);
+      const cn = esc(courseName || (obj && obj.course_name) || '');
+      const sub = esc(courseGroupSubtitle(obj));
       return sub
         ? (cn + ' <span class="text-muted small">(' + sub + ')</span>')
         : cn;
@@ -689,11 +696,11 @@
       items.forEach(it => {
         const tr = document.createElement('tr');
         tr.innerHTML =
-          '<td>' + (it.student_id || '') + '</td>' +
+          '<td>' + esc(it.student_id || '') + '</td>' +
           '<td>' + formatCourseGroupCell(it.course_name, findSectionByScope(it.section_id, it.teaching_group_id) || { section_id: it.section_id, group_display_label: it.group_display_label }) + '</td>' +
-          '<td>' + (it.case_type || '') + '</td>' +
-          '<td>' + (it.reason || '') + '</td>' +
-          '<td><span class="badge bg-secondary">' + (it.status || '') + '</span></td>';
+          '<td>' + esc(it.case_type || '') + '</td>' +
+          '<td>' + esc(it.reason || '') + '</td>' +
+          '<td><span class="badge bg-secondary">' + esc(it.status || '') + '</span></td>';
         tbody.appendChild(tr);
       });
     }
@@ -780,14 +787,14 @@
       items.forEach(it => {
         const tr = document.createElement('tr');
         tr.innerHTML =
-          '<td>' + (it.student_id || '') + '</td>' +
+          '<td>' + esc(it.student_id || '') + '</td>' +
           '<td>' + formatCourseGroupCell(it.course_name, findSectionByScope(it.section_id, it.teaching_group_id) || { section_id: it.section_id, group_display_label: it.group_display_label }) + '</td>' +
-          '<td>' + (it.case_type || '') + '</td>' +
-          '<td>' + (it.reason || '') + '</td>' +
-          '<td><span class="badge bg-warning text-dark">' + (it.status || '') + '</span></td>' +
+          '<td>' + esc(it.case_type || '') + '</td>' +
+          '<td>' + esc(it.reason || '') + '</td>' +
+          '<td><span class="badge bg-warning text-dark">' + esc(it.status || '') + '</span></td>' +
           '<td>' +
-            '<button class="btn btn-sm btn-success me-1" data-sp-approve="' + it.id + '">اعتماد</button>' +
-            '<button class="btn btn-sm btn-outline-danger" data-sp-reject="' + it.id + '">رفض</button>' +
+            '<button class="btn btn-sm btn-success me-1" data-sp-approve="' + esc(it.id) + '">اعتماد</button>' +
+            '<button class="btn btn-sm btn-outline-danger" data-sp-reject="' + esc(it.id) + '">رفض</button>' +
           '</td>';
         tbody.appendChild(tr);
       });
@@ -1286,7 +1293,7 @@
       const r = await fetch('/grades/drafts/' + state.draftId + '/outcome-assessment', { credentials: 'include' });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
-        document.getElementById('oaItemsList').innerHTML = '<span class="text-muted">' + (j.message || 'تعذر تحميل بنود المخرجات') + '</span>';
+        document.getElementById('oaItemsList').innerHTML = '<span class="text-muted">' + esc(j.message || 'تعذر تحميل بنود المخرجات') + '</span>';
         return;
       }
       state.oaClos = j.clos || [];
@@ -1298,7 +1305,7 @@
       });
       const cloSel = document.getElementById('oaNewClo');
       if (cloSel) {
-        cloSel.innerHTML = state.oaClos.map(c => '<option value="' + c.id + '">' + (c.code || '') + ' — ' + (c.title_ar || '') + '</option>').join('') ||
+        cloSel.innerHTML = state.oaClos.map(c => '<option value="' + esc(c.id) + '">' + esc(c.code || '') + ' — ' + esc(c.title_ar || '') + '</option>').join('') ||
           '<option value="">لا CLO</option>';
       }
       renderOaItems(readOnly);
@@ -1313,7 +1320,7 @@
       }
       el.innerHTML = state.oaItems.map((it, idx) =>
         '<div class="border rounded p-1 mb-1 d-flex justify-content-between">' +
-        '<span><strong>' + (it.label || '') + '</strong> — ' + (it.clo_code || '') + ' (' + (it.assessment_type || '') + ', من ' + (it.max_score || 100) + ')</span>' +
+        '<span><strong>' + esc(it.label || '') + '</strong> — ' + esc(it.clo_code || '') + ' (' + esc(it.assessment_type || '') + ', من ' + esc(it.max_score || 100) + ')</span>' +
         (readOnly ? '' : '<button type="button" class="btn btn-sm btn-link text-danger oa-del-item" data-idx="' + idx + '">حذف</button>') +
         '</div>'
       ).join('');
@@ -1514,12 +1521,12 @@
             bls.forEach(b => {
               const tr = document.createElement('tr');
               const topicCount = (b.topics || []).length;
-              tr.innerHTML = '<td>' + (b.course_name || '') + '</td><td>' + (b.created_by || '—') + '</td><td>' +
-                (b.version || 1) + '</td><td>' + topicCount + '</td><td>' +
+              tr.innerHTML = '<td>' + esc(b.course_name || '') + '</td><td>' + esc(b.created_by || '—') + '</td><td>' +
+                esc(b.version || 1) + '</td><td>' + esc(topicCount) + '</td><td>' +
                 '<div class="d-grid gap-1" style="min-width:130px;">' +
                 '<a class="btn btn-sm btn-outline-primary" href="/course_delivery_hod_page">مراجعة</a>' +
-                '<button type="button" class="btn btn-sm btn-success" data-syllabus-approve="' + b.id + '">اعتماد</button>' +
-                '<button type="button" class="btn btn-sm btn-danger" data-syllabus-reject="' + b.id + '">إرجاع</button>' +
+                '<button type="button" class="btn btn-sm btn-success" data-syllabus-approve="' + esc(b.id) + '">اعتماد</button>' +
+                '<button type="button" class="btn btn-sm btn-danger" data-syllabus-reject="' + esc(b.id) + '">إرجاع</button>' +
                 '</div></td>';
               syllabusBody.appendChild(tr);
             });
@@ -1595,11 +1602,11 @@
         tbody.innerHTML = '';
         list.forEach(p => {
           const tr = document.createElement('tr');
-          tr.innerHTML = '<td>' + formatCourseGroupCell(p.course_name, p) + '</td><td>' + (p.instructor_name || '') + '</td><td>' + (p.submitted_at || '—') + '</td><td>' +
+          tr.innerHTML = '<td>' + formatCourseGroupCell(p.course_name, p) + '</td><td>' + esc(p.instructor_name || '') + '</td><td>' + esc(p.submitted_at || '—') + '</td><td>' +
             '<div class="d-grid gap-1" style="min-width:130px;">' +
-            '<button type="button" class="btn btn-sm btn-danger" data-return="' + p.id + '">رفض وإرجاع</button>' +
-            '<button type="button" class="btn btn-sm btn-success" data-approve="' + p.id + '">اعتماد</button>' +
-            '<button type="button" class="btn btn-sm btn-outline-secondary" data-preview="' + p.id + '">معاينة</button>' +
+            '<button type="button" class="btn btn-sm btn-danger" data-return="' + esc(p.id) + '">رفض وإرجاع</button>' +
+            '<button type="button" class="btn btn-sm btn-success" data-approve="' + esc(p.id) + '">اعتماد</button>' +
+            '<button type="button" class="btn btn-sm btn-outline-secondary" data-preview="' + esc(p.id) + '">معاينة</button>' +
             '</div></td>';
           tbody.appendChild(tr);
         });
@@ -1644,12 +1651,12 @@
         const tr = document.createElement('tr');
         tr.innerHTML =
           '<td>' + formatCourseGroupCell(it.course_name, findSectionByScope(it.section_id, it.teaching_group_id) || { section_id: it.section_id, group_display_label: it.group_display_label }) + '</td>' +
-          '<td>' + (it.instructor_name || it.requested_by || '') + '</td>' +
-          '<td>' + (it.reason || '') + '</td>' +
-          '<td><span class="badge bg-warning text-dark">' + (it.status || '') + '</span></td>' +
+          '<td>' + esc(it.instructor_name || it.requested_by || '') + '</td>' +
+          '<td>' + esc(it.reason || '') + '</td>' +
+          '<td><span class="badge bg-warning text-dark">' + esc(it.status || '') + '</span></td>' +
           '<td>' +
-            '<button type="button" class="btn btn-sm btn-success me-1" data-corr-approve="' + it.id + '">اعتماد التصحيح</button>' +
-            '<button type="button" class="btn btn-sm btn-outline-danger" data-corr-reject="' + it.id + '">رفض الطلب</button>' +
+            '<button type="button" class="btn btn-sm btn-success me-1" data-corr-approve="' + esc(it.id) + '">اعتماد التصحيح</button>' +
+            '<button type="button" class="btn btn-sm btn-outline-danger" data-corr-reject="' + esc(it.id) + '">رفض الطلب</button>' +
           '</td>';
         tbody.appendChild(tr);
       });
@@ -1720,12 +1727,12 @@
         tr.setAttribute('data-search-text', searchText);
         tr.innerHTML =
           '<td>' + formatCourseGroupCell(d.course_name, d) + '</td>' +
-          '<td>' + (d.instructor_name || '') + '</td>' +
-          '<td><span class="badge bg-secondary">' + (d.status || '') + '</span></td>' +
-          '<td>' + (d.updated_at || '—') + '</td>' +
+          '<td>' + esc(d.instructor_name || '') + '</td>' +
+          '<td><span class="badge bg-secondary">' + esc(d.status || '') + '</span></td>' +
+          '<td>' + esc(d.updated_at || '—') + '</td>' +
           '<td>' +
             (canDelete
-              ? '<button type="button" class="btn btn-sm btn-outline-danger" data-admin-delete-draft="' + d.id + '">حذف</button>'
+              ? '<button type="button" class="btn btn-sm btn-outline-danger" data-admin-delete-draft="' + esc(d.id) + '">حذف</button>'
               : '<span class="text-muted small">غير متاح</span>') +
           '</td>';
         tbody.appendChild(tr);
@@ -1818,23 +1825,23 @@
         const tr = document.createElement('tr');
         if (phase === 'partial') {
           tr.innerHTML =
-            '<td>' + it.student_id + '</td>' +
-            '<td class="mono">' + fmtNum(cw) + '</td>' +
-            '<td class="mono">' + fmtNum(md) + '</td>' +
-            '<td class="mono">' + fmtNum(comp) + '</td>';
+            '<td>' + esc(it.student_id) + '</td>' +
+            '<td class="mono">' + esc(fmtNum(cw)) + '</td>' +
+            '<td class="mono">' + esc(fmtNum(md)) + '</td>' +
+            '<td class="mono">' + esc(fmtNum(comp)) + '</td>';
         } else if (phase === 'final') {
           tr.innerHTML =
-            '<td>' + it.student_id + '</td>' +
-            '<td class="mono">' + fmtNum(carried) + '</td>' +
-            '<td class="mono">' + fmtNum(fe) + '</td>' +
-            '<td class="mono">' + fmtNum(comp) + '</td>';
+            '<td>' + esc(it.student_id) + '</td>' +
+            '<td class="mono">' + esc(fmtNum(carried)) + '</td>' +
+            '<td class="mono">' + esc(fmtNum(fe)) + '</td>' +
+            '<td class="mono">' + esc(fmtNum(comp)) + '</td>';
         } else {
           tr.innerHTML =
-            '<td>' + it.student_id + '</td>' +
-            '<td class="mono">' + fmtNum(cw) + '</td>' +
-            '<td class="mono">' + fmtNum(md) + '</td>' +
-            '<td class="mono">' + fmtNum(fe) + '</td>' +
-            '<td class="mono">' + fmtNum(comp) + '</td>';
+            '<td>' + esc(it.student_id) + '</td>' +
+            '<td class="mono">' + esc(fmtNum(cw)) + '</td>' +
+            '<td class="mono">' + esc(fmtNum(md)) + '</td>' +
+            '<td class="mono">' + esc(fmtNum(fe)) + '</td>' +
+            '<td class="mono">' + esc(fmtNum(comp)) + '</td>';
         }
         pb.appendChild(tr);
       });

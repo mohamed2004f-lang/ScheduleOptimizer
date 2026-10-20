@@ -51,6 +51,79 @@ def test_employer_identity_panel(db_conn):
     assert "graduate_outcomes" in panel
 
 
+def test_consume_invite_use_rejects_when_exhausted(db_conn):
+    """الاستهلاك الذري يمنع تجاوز max_uses."""
+    from backend.services.survey_invites import consume_invite_use
+
+    ensure_survey_invite_schema(db_conn)
+    ensure_survey_templates_seeded(db_conn)
+    invite = create_survey_invite(
+        db_conn,
+        template_code="employer_strategic",
+        cycle_label="دورة حد استخدام",
+        invite_kind="personal",
+        expires_days=7,
+        created_by="test",
+    )
+    db_conn.commit()
+    iid = int(invite["id"])
+    consume_invite_use(db_conn, iid)
+    db_conn.commit()
+    row = db_conn.execute(
+        "SELECT use_count, max_uses FROM survey_invites WHERE id = ?",
+        (iid,),
+    ).fetchone()
+    use_count = int(row[0] if not hasattr(row, "keys") else row["use_count"])
+    max_uses = int(row[1] if not hasattr(row, "keys") else row["max_uses"])
+    assert max_uses == 1
+    assert use_count == 1
+    import pytest
+
+    with pytest.raises(ValueError, match="بالكامل"):
+        consume_invite_use(db_conn, iid)
+
+
+def test_personal_invite_second_submit_blocked(db_conn):
+    ensure_survey_invite_schema(db_conn)
+    ensure_survey_templates_seeded(db_conn)
+    invite = create_survey_invite(
+        db_conn,
+        template_code="employer_strategic",
+        cycle_label="دورة شخصية مرة واحدة",
+        invite_kind="personal",
+        expires_days=7,
+        created_by="test",
+    )
+    db_conn.commit()
+    token = invite["token"]
+    ctx = invite_fill_context(db_conn, token)
+    answers = {str(q["id"]): 4 for q in ctx["questions"]}
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT INTO departments (code, name_ar, name_en, is_active) VALUES ('PERS1', 'قسم شخصي', 'P1', 1)"
+    )
+    dept_id = int(cur.lastrowid)
+    db_conn.commit()
+    profile = {
+        "org_type": "private",
+        "org_name": "شركة مرة واحدة",
+        "hires_graduates": "yes",
+        "hire_department_ids": [dept_id],
+        "hire_department_needs": [{"department_id": dept_id, "specialty_needs_text": "اختبار"}],
+    }
+    rid = submit_invite_survey(
+        db_conn, token=token, profile=profile, answers_payload={"answers": answers}
+    )
+    db_conn.commit()
+    assert rid > 0
+    import pytest
+
+    with pytest.raises(ValueError):
+        submit_invite_survey(
+            db_conn, token=token, profile=profile, answers_payload={"answers": answers}
+        )
+
+
 def test_invite_create_submit_aggregate(db_conn):
     ensure_survey_invite_schema(db_conn)
     ensure_survey_templates_seeded(db_conn)

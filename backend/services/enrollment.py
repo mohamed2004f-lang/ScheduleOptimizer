@@ -295,12 +295,13 @@ def _word_rewrite_label_dots(cell, text: str, *, center: bool = False, size_pt: 
     return True
 
 
-def _fix_registration_docx_bidi(path: str) -> None:
+def _fix_registration_docx_bidi(path: str, *, form_date: str | None = None) -> None:
     """بعد docxtpl: إصلاح الخلايا المختلطة عربي/لاتيني بطريقة Word الأصلية."""
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import Pt
 
+    date_fallback = (form_date or "").strip() or f"....... / ........ / {datetime.date.today().year}"
     doc = Document(path)
     for table in doc.tables:
         # مهم: نحتفظ بمرجع عنصر w:tc نفسه وليس id() — لأن id() يُعاد استخدامه بعد GC
@@ -327,6 +328,10 @@ def _fix_registration_docx_bidi(path: str) -> None:
                             size_pt = float(r.font.size.pt)
                             break
                 if raw.startswith("التاريخ"):
+                    # احتفظ بصيغة النقاط+السنة من التصيير، وإلا استخدم احتياط السنة الحالية
+                    rest = raw[len("التاريخ") :].lstrip(" :：")
+                    rest = rest.rstrip("م").strip()
+                    date_txt = rest if (rest and any(ch.isdigit() for ch in rest)) else date_fallback
                     for paragraph in cell.paragraphs[1:]:
                         paragraph._element.getparent().remove(paragraph._element)
                     p = cell.paragraphs[0]
@@ -335,7 +340,7 @@ def _fix_registration_docx_bidi(path: str) -> None:
                     r1 = p.add_run("التاريخ: ")
                     r1.font.size = Pt(size_pt)
                     _word_set_run_rtl(r1, rtl=True)
-                    r2 = p.add_run("..../..../20")
+                    r2 = p.add_run(date_txt)
                     r2.font.size = Pt(size_pt)
                     _word_set_run_rtl(r2, rtl=False)
                     r3 = p.add_run(" م")
@@ -974,6 +979,8 @@ def _build_registration_form_context(student_id: str, semester_param: str, sourc
     grade_estimate = _classify_status_from_gpa(cumulative_gpa)
     status = _registration_form_status_label(sid, transcript, grade_estimate)
     semester_full, term_season, academic_year = _split_semester_display(semester_label)
+    # يوم/شهر يدويان (نقاط) + سنة الطباعة فقط
+    form_date = f"....... / ........ / {datetime.date.today().year}"
 
     context = {
         "department": department,
@@ -989,6 +996,7 @@ def _build_registration_form_context(student_id: str, semester_param: str, sourc
         "status": status,
         "total_units": total_units,
         "courses": courses,
+        "form_date": form_date,
     }
     return context
 
@@ -2346,7 +2354,7 @@ def print_registration_form(student_id):
         doc.save(tmp.name)
         tmp.close()
         try:
-            _fix_registration_docx_bidi(tmp.name)
+            _fix_registration_docx_bidi(tmp.name, form_date=ctx.get("form_date"))
         except Exception:
             current_app.logger.exception("registration form Word bidi fix failed")
         # اسم ملف آمن لـ Windows/Word: بدون / أو حروف عربية قد تفسد المسار

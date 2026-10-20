@@ -153,7 +153,8 @@
     function studentCheckRow(s, tgid, kind, q) {
       const name = String(s.student_name || s.student_id || '');
       const sid = String(s.student_id || '');
-      const hay = (name + ' ' + sid).toLowerCase();
+      const dept = String(s.department_name || '');
+      const hay = (name + ' ' + sid + ' ' + dept).toLowerCase();
       if (q && !hay.includes(q)) return '';
       const fromOther = kind === 'candidate' && !!(s.from_group_badge || s.from_group_label || s.in_other_group);
       const badgeText = s.from_group_badge || (s.from_group_label ? `من مجموعة ${s.from_group_label}` : (s.in_other_group ? 'مجموعة أخرى' : ''));
@@ -165,6 +166,79 @@
         <input type="checkbox" class="form-check-input roster-cb" data-kind="${kind}" data-tgid="${tgid}" data-from-other="${fromOther ? '1' : '0'}" data-from-badge="${esc(badgeText)}" value="${esc(sid)}">
         <span class="form-check-label small">${esc(name)} <span class="text-muted">${esc(sid)}</span>${badgeHtml}</span>
       </label>`;
+    }
+
+    /** تقسيم: اتجاه عام | أقسام (ترويسات) | غير محدد */
+    function partitionStudentsByDeptBucket(students, q, tgid, kind) {
+      const general = [];
+      const byDept = new Map(); // key -> { id, name, items: [] }
+      const unknown = [];
+      (students || []).forEach(s => {
+        const rowHtml = studentCheckRow(s, tgid, kind, q);
+        if (!rowHtml) return;
+        const entry = { s, html: rowHtml };
+        if (s.is_general_department) {
+          general.push(entry);
+          return;
+        }
+        const did = Number(s.department_id || 0);
+        const dname = String(s.department_name || '').trim();
+        if (!did || !dname) {
+          unknown.push(entry);
+          return;
+        }
+        const key = String(did);
+        if (!byDept.has(key)) {
+          byDept.set(key, { id: did, name: dname, items: [] });
+        }
+        byDept.get(key).items.push(entry);
+      });
+      const specialty = [...byDept.values()].sort((a, b) =>
+        String(a.name).localeCompare(String(b.name), 'ar')
+      );
+      return { general, specialty, unknown };
+    }
+
+    function renderDeptGroupedList(students, tgid, kind, q, emptyMsg) {
+      const parts = partitionStudentsByDeptBucket(students, q, tgid, kind);
+      const blocks = [];
+      const genN = parts.general.length;
+      const specN = parts.specialty.reduce((n, d) => n + d.items.length, 0);
+      const unkN = parts.unknown.length;
+      if (!genN && !specN && !unkN) {
+        return `<div class="small text-muted">${esc(emptyMsg)}</div>`;
+      }
+      if (genN) {
+        blocks.push(
+          `<div class="tg-roster-bucket mb-2">` +
+          `<div class="small fw-semibold border-bottom pb-1 mb-1">طلبة الاتجاه العام <span class="text-muted">(${genN})</span></div>` +
+          parts.general.map(x => x.html).join('') +
+          `</div>`
+        );
+      }
+      if (specN) {
+        const deptBlocks = parts.specialty.map(d =>
+          `<div class="tg-roster-dept mb-2">` +
+          `<div class="small fw-semibold text-secondary border-bottom pb-1 mb-1">${esc(d.name)} <span class="text-muted">(${d.items.length})</span></div>` +
+          d.items.map(x => x.html).join('') +
+          `</div>`
+        ).join('');
+        blocks.push(
+          `<div class="tg-roster-bucket mb-2">` +
+          `<div class="small fw-semibold border-bottom pb-1 mb-1">طلبة الأقسام <span class="text-muted">(${specN})</span></div>` +
+          deptBlocks +
+          `</div>`
+        );
+      }
+      if (unkN) {
+        blocks.push(
+          `<div class="tg-roster-bucket mb-2">` +
+          `<div class="small fw-semibold text-muted border-bottom pb-1 mb-1">غير محدد <span>(${unkN})</span></div>` +
+          parts.unknown.map(x => x.html).join('') +
+          `</div>`
+        );
+      }
+      return blocks.join('');
     }
 
     function renderRosterIntoPanel(off, tgid, roster) {
@@ -197,12 +271,10 @@
       const candEl = body.querySelector('.roster-candidates');
       const memEl = body.querySelector('.roster-members');
       if (candEl) {
-        candEl.innerHTML = candidates.map(s => studentCheckRow(s, gid, 'candidate', q)).join('')
-          || '<div class="small text-muted">لا مرشحين</div>';
+        candEl.innerHTML = renderDeptGroupedList(candidates, gid, 'candidate', q, 'لا مرشحين');
       }
       if (memEl) {
-        memEl.innerHTML = members.map(s => studentCheckRow(s, gid, 'member', q)).join('')
-          || '<div class="small text-muted">لا طلبة في هذه المجموعة</div>';
+        memEl.innerHTML = renderDeptGroupedList(members, gid, 'member', q, 'لا طلبة في هذه المجموعة');
       }
     }
 

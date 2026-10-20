@@ -1639,7 +1639,12 @@ OP_EXAM_WRITE = "exam_write"
 OP_EXAM_PUBLISH = "exam_publish"
 
 OPERATION_WINDOWS: dict[str, tuple[str, ...]] = {
-    OP_REGISTRATION_WRITE: ("registration_renewal", "registration_new"),
+    OP_REGISTRATION_WRITE: (
+        "registration_renewal",
+        "registration_new",
+        "add_courses",
+        "drop_courses",
+    ),
     OP_ENROLLMENT_PLAN_WRITE: ("registration_renewal", "registration_new"),
     OP_ENROLLMENT_PLAN_APPROVE: ("registration_renewal", "registration_new"),
     OP_ADD_COURSE: ("add_courses", "registration_renewal", "registration_new"),

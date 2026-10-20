@@ -221,12 +221,12 @@
             <h5 class="mb-0">اعتمادات المشرفين (إشعار) <span class="badge text-bg-secondary" id="txCorrCountBadge">0</span></h5>
           </button>
           <button type="button" class="btn btn-outline-secondary btn-sm" id="btnReloadTxCorr">تحديث</button>
-        </div>
+          </div>
         <div id="txCorrBody" hidden>
           <p class="small text-muted mb-2 mt-2">المشرف يعتمد درجات طلبته مباشرة؛ هذه القائمة للإطلاع فقط (آخر الاعتمادات).</p>
           <div id="txCorrList" class="small"></div>
-        </div>
-      </div>
+          </div>
+          </div>
     </div>
 
     <div id="transcriptArea">
@@ -250,7 +250,7 @@
           <div class="modal-body">
             <div class="row g-2 align-items-end mb-2">
               <div class="col-md-5">
-                <label class="form-label">فصل</label>
+            <label class="form-label">فصل</label>
                 <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
                   <span id="gradeEditorScopePreview" class="badge text-bg-primary d-none" aria-hidden="true"></span>
                 </div>
@@ -259,16 +259,16 @@
                 {% set typ_year_id = 'gradeSemesterYear' %}
                 {% include "partials/term_year_picker.html" %}
                 <input type="hidden" id="gradeSemesterInput" value="">
-              </div>
-              <div class="col-md-4">
-                <label class="form-label">إضافة مقرر</label>
-                <div class="input-group">
-                  <select id="courseSelect" class="form-select"></select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">إضافة مقرر</label>
+            <div class="input-group">
+              <select id="courseSelect" class="form-select"></select>
                   <button type="button" id="btnAddCourseRow" class="btn btn-outline-primary">أضف</button>
-                </div>
-              </div>
+            </div>
+          </div>
               <div class="col-md-3">
-                <label class="form-label">سبب التعديل <span id="gradeNoteRequiredMark" class="text-danger d-none">*</span></label>
+            <label class="form-label">سبب التعديل <span id="gradeNoteRequiredMark" class="text-danger d-none">*</span></label>
                 <input id="gradeNote" class="form-control" placeholder="سبب التصحيح بعد النشر">
               </div>
             </div>
@@ -323,27 +323,27 @@
                   <label class="form-label mb-0 small">الجهة المنتقل منها</label>
                   <input id="transferExternalLabel" class="form-control form-control-sm" placeholder="مثال: كلية الهندسة — جامعة …">
                 </div>
-              </div>
-            </div>
+          </div>
+        </div>
 
-            <div class="table-responsive">
+        <div class="table-responsive">
               <table id="gradeTable" class="table table-sm table-bordered mb-0">
-                <thead class="table-light">
-                  <tr><th>م</th><th>المقرر</th><th>الرمز</th><th class="text-center">الوحدات</th><th class="text-center">الدرجة</th><th class="text-center">إجراءات</th></tr>
-                </thead>
-                <tbody></tbody>
-              </table>
-            </div>
+            <thead class="table-light">
+              <tr><th>م</th><th>المقرر</th><th>الرمز</th><th class="text-center">الوحدات</th><th class="text-center">الدرجة</th><th class="text-center">إجراءات</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
             <div class="small text-muted mt-2" id="gradeEditorHelpText">
-              بعد إدخال المقررات والدرجات، اضغط <strong>حفظ درجات الفصل</strong> لإضافة النتيجة إلى كشف الطالب.
-            </div>
+            بعد إدخال المقررات والدرجات، اضغط <strong>حفظ درجات الفصل</strong> لإضافة النتيجة إلى كشف الطالب.
+          </div>
           </div>
           <div class="modal-footer">
             <button type="button" id="btnCloseEditor" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">إغلاق</button>
             <button type="button" id="btnSaveGradesInline" class="btn btn-success btn-sm">حفظ درجات الفصل</button>
-          </div>
         </div>
       </div>
+    </div>
     </div>
     <!-- توافق مع المعرّف القديم -->
     <div id="gradeEditorCard" class="d-none" aria-hidden="true"></div>
@@ -859,7 +859,7 @@ function renderTranscript(data){
     `;
     if (CAN_MANAGE_TRANSCRIPT) {
       if (CURRENT_ROLE === 'admin_main') {
-        actionsHtml += `
+      actionsHtml += `
         <button class="btn btn-sm btn-outline-secondary btn-rename-sem" data-sem="${escape(sem)}">تعديل اسم الفصل</button>`;
       }
       actionsHtml += `
@@ -1604,25 +1604,25 @@ async function saveOrProposeGrades(){
   if (!isGradeEditorOpen()) {
     setMsg('افتح نافذة إدخال الفصل أولاً', 'warning');
     openGradeEditor();
-    return;
-  }
+      return;
+    }
   const sem = readGradeSemesterLabel();
   if (!sem) {
     setMsg('اختر الفصل والعام الدراسي من القوائم في محرر الدرجات ثم حاول الحفظ', 'warning');
-    return;
-  }
+      return;
+    }
   if (EDIT_ROWS.length === 0) { setMsg('أضف مقرراً واحداً على الأقل قبل الحفظ', 'warning'); return; }
   const reason = String((document.getElementById('gradeNote') || {}).value || '').trim();
   const needReason = REQUIRE_TRANSCRIPT_REASON || CAN_PROPOSE_TRANSCRIPT;
   if (needReason && reason.length < 5) {
     setMsg('سبب التعديل مطلوب (٥ أحرف على الأقل).', 'warning');
-    return;
-  }
+        return;
+      }
   if (CAN_PROPOSE_TRANSCRIPT && !CAN_MANAGE_TRANSCRIPT) {
     if (!isPreviousTermLabel(sem)) {
       setMsg('للمشرف: يُسمح بطلب تصحيح فصول سابقة فقط (ليس الفصل الحالي).', 'warning');
-      return;
-    }
+        return;
+      }
   }
   const grades = EDIT_ROWS.map(r => ({
     course_name: r.course_name,
@@ -1873,12 +1873,12 @@ const semesterFilter = document.getElementById('semesterFilter'); if(semesterFil
     const addBtn = document.getElementById('btnAddGradeRow');
     if (addBtn) addBtn.textContent = 'إدخال نتيجة فصل يدوياً';
     if (REQUIRE_TRANSCRIPT_REASON) {
-      const egReq = document.getElementById('egReasonRequiredMark');
-      if (egReq) egReq.classList.remove('d-none');
-      const noteReq = document.getElementById('gradeNoteRequiredMark');
-      if (noteReq) noteReq.classList.remove('d-none');
-      const egHint = document.getElementById('egReasonHint');
-      if (egHint) egHint.textContent = 'مطلوب لرئيس القسم — يُسجَّل مع هوية المعدّل في التدقيق.';
+    const egReq = document.getElementById('egReasonRequiredMark');
+    if (egReq) egReq.classList.remove('d-none');
+    const noteReq = document.getElementById('gradeNoteRequiredMark');
+    if (noteReq) noteReq.classList.remove('d-none');
+    const egHint = document.getElementById('egReasonHint');
+    if (egHint) egHint.textContent = 'مطلوب لرئيس القسم — يُسجَّل مع هوية المعدّل في التدقيق.';
     }
   }
 

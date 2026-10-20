@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>تسجيل الدخول — منظومة الإدارة الأكاديمية</title>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
@@ -25,6 +26,7 @@
     <div id="loginStatus"></div>
 
     <form id="loginForm" method="post" action="/auth/login">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="mb-3">
         <label for="username" class="form-label">اسم المستخدم أو الرقم</label>
         <input type="text" class="form-control" id="username" name="username" required autocomplete="username" placeholder="مثال: ahmed أو 20201234">

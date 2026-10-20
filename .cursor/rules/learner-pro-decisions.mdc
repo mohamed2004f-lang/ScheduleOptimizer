@@ -1,0 +1,14 @@
+---
+description: Plain Arabic guidance for the learner; always pick professional production options
+alwaysApply: true
+---
+
+# Learner-friendly, professional decisions
+
+When the user asks in Arabic (or seems unsure which option to pick):
+
+1. Explain briefly in plain Arabic: the problem, the recommended option, and why it is best for this system.
+2. Always recommend and implement the professional production choice (security, maintainability, existing patterns). Do not choose a weaker “beginner tutorial” approach just to simplify.
+3. Offer at most 2 alternatives in one short comparison table (pros of the recommended path only need 1–2 bullets).
+4. Keep code/changes professional and surgical; keep explanations short — no long lectures unless the user asks «اشرح أكثر».
+5. For UI: prefer the `scheduleoptimizer-ui-rtl` skill patterns; for architecture trade-offs state the best option first.

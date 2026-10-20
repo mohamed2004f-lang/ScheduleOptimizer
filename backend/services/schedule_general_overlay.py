@@ -1,4 +1,7 @@
-"""حقن حصص الاتجاه العام في جداول الأقسام التخصصية + اختيار المجموعة ونقل التسجيلات."""
+"""حقن حصص الاتجاه العام في جداول الأقسام التخصصية.
+
+تعيين مجموعة A/B فردي لكل طالب (خطة / تسجيل فعلي) — لا نقل جماعي على مستوى القسم.
+"""
 
 from __future__ import annotations
 
@@ -197,8 +200,8 @@ def resolve_effective_general_groups(
     semester: str | None = None,
 ) -> dict[str, Any]:
     """
-    يحدّد مجموعة GENERAL الفعّالة لكل مقرر للقسم المستهلك.
-    يفضّل الربط الصريح؛ وإلا أغلبية تسجيلات طلبة القسم.
+    يحدّد مجموعات GENERAL الفعّالة لكل مقرر حسب تسجيلات طلبة القسم (فردي).
+    الربط القسمي القديم لا يفرض مجموعة موحّدة ولا يُستخدم للتعيين.
     """
     sem = _normalize_semester(conn, semester)
     gen_id = _general_dept_id(conn)
@@ -218,36 +221,32 @@ def resolve_effective_general_groups(
     )
     by_course: dict[str, dict[str, Any]] = {}
     split_warnings: list[dict[str, Any]] = []
-    all_courses = set(bindings.keys()) | set(reg_counts.keys())
-    for cname in sorted(all_courses):
+    for cname in sorted(reg_counts.keys()):
         counts = reg_counts.get(cname) or {}
-        bound = bindings.get(cname)
-        if bound:
-            by_course[cname] = {
-                "course_name": cname,
-                "teaching_group_id": int(bound),
-                "source": "binding",
-                "dept_enrolled": int(counts.get(int(bound), 0)),
-                "group_counts": {str(k): int(v) for k, v in counts.items()},
-            }
-            continue
         if not counts:
             continue
-        if len(counts) > 1:
+        gids = sorted(int(g) for g in counts.keys() if int(g) > 0)
+        if len(gids) > 1:
             split_warnings.append(
                 {
                     "course_name": cname,
                     "group_counts": {str(k): int(v) for k, v in counts.items()},
-                    "message": "طلابك موزّعون على أكثر من مجموعة اتجاه عام — اختر مجموعة موحّدة",
+                    "message": (
+                        "طلابك موزّعون على أكثر من مجموعة اتجاه عام — "
+                        "عيّن مجموعة كل طالب من الخطة أو التسجيل الفعلي"
+                    ),
+                    "informational": True,
                 }
             )
         best_gid = max(counts.keys(), key=lambda g: (counts[g], -int(g)))
         by_course[cname] = {
             "course_name": cname,
             "teaching_group_id": int(best_gid),
+            "teaching_group_ids": gids,
             "source": "registrations",
-            "dept_enrolled": int(counts[best_gid]),
+            "dept_enrolled": int(sum(counts.values())),
             "group_counts": {str(k): int(v) for k, v in counts.items()},
+            "multi_group": len(gids) > 1,
         }
     return {
         "semester": sem,
@@ -255,6 +254,7 @@ def resolve_effective_general_groups(
         "split_warnings": split_warnings,
         "bindings": bindings,
         "general_department_id": int(gen_id),
+        "assignment_mode": "per_student",
     }
 
 
@@ -338,8 +338,8 @@ def fetch_overlay_schedule_items(
     pk_col: str = "id",
 ) -> list[dict[str, Any]]:
     """
-    صفوف overlay لشبكة القسم: فقط الشعبة التي عليها طلبة القسم / الربط الصريح.
-    باقي شعب الاتجاه العام لا تُحقَن هنا (تظهر في لوحة الاختيار + جدول GENERAL الكامل).
+    صفوف overlay لشبكة القسم: كل شعب الاتجاه العام التي عليها طلبة القسم
+    (قد تكون A و B معاً عند التوزيع الفردي). باقي الشعب في جدول GENERAL الكامل.
     """
     if not is_specialty_consumer_department(conn, consumer_department_id):
         return []
@@ -354,13 +354,20 @@ def fetch_overlay_schedule_items(
         conn, resolved, consumer_department_id=int(consumer_department_id)
     )
     by_course = resolved.get("by_course") or {}
-    group_ids = sorted(
-        {
-            int(v["teaching_group_id"])
-            for v in by_course.values()
-            if int(v.get("teaching_group_id") or 0) > 0
-        }
-    )
+    group_ids: list[int] = []
+    seen_gids: set[int] = set()
+    for v in by_course.values():
+        ids = v.get("teaching_group_ids")
+        if isinstance(ids, (list, tuple)) and ids:
+            cand = [int(x) for x in ids if int(x or 0) > 0]
+        else:
+            one = int(v.get("teaching_group_id") or 0)
+            cand = [one] if one > 0 else []
+        for gid in cand:
+            if gid not in seen_gids:
+                seen_gids.add(gid)
+                group_ids.append(gid)
+    group_ids.sort()
     gen_id = int(resolved.get("general_department_id") or 0) or (_general_dept_id(conn) or 0)
     if not gen_id:
         return []
@@ -444,10 +451,16 @@ def fetch_overlay_schedule_items(
             continue
         gid = int(_row_get(r, "teaching_group_id", 8, 0) or 0)
         meta = by_course.get(cname.lower()) or {}
-        # شبكة القسم: فقط شعبة الربط/الأغلبية — لا كل شعب المقرر
-        if meta and int(meta.get("teaching_group_id") or 0) > 0:
-            if gid and int(meta.get("teaching_group_id") or 0) != gid:
-                continue
+        # شبكة القسم: كل الشعب التي عليها طلبة القسم (فردي A/B)
+        allowed_ids = {
+            int(x)
+            for x in (meta.get("teaching_group_ids") or [])
+            if int(x or 0) > 0
+        }
+        if not allowed_ids and int(meta.get("teaching_group_id") or 0) > 0:
+            allowed_ids = {int(meta["teaching_group_id"])}
+        if allowed_ids and gid and gid not in allowed_ids:
+            continue
         gcode = str(_row_get(r, "group_code", 10, "—") or "—")
         if gid:
             dept_count = count_dept_students_on_group(
@@ -806,7 +819,20 @@ def list_general_group_options(
                     consumer_department_id=int(consumer_department_id),
                 ),
                 "slots": slot_list,
-                "is_current": bool(current and int(current.get("teaching_group_id") or 0) == gid),
+                "is_current": bool(
+                    current
+                    and (
+                        gid in {
+                            int(x)
+                            for x in (current.get("teaching_group_ids") or [])
+                            if int(x or 0) > 0
+                        }
+                        or (
+                            not current.get("teaching_group_ids")
+                            and int(current.get("teaching_group_id") or 0) == gid
+                        )
+                    )
+                ),
             }
         )
     return {
@@ -814,8 +840,10 @@ def list_general_group_options(
         "semester": sem,
         "options": options,
         "current_teaching_group_id": int(current["teaching_group_id"]) if current else None,
+        "current_teaching_group_ids": list(current.get("teaching_group_ids") or []) if current else [],
         "split_warning": split_warning,
         "binding_source": (current or {}).get("source"),
+        "assignment_mode": "per_student",
     }
 
 
@@ -877,6 +905,45 @@ def _ensure_general_single_group_from_schedule(
     if saved:
         return int(saved[0].get("id") or 0) or None
     return None
+
+
+def _count_dept_unlinked_for_course(
+    conn,
+    *,
+    course_name: str,
+    semester: str,
+    consumer_department_id: int,
+) -> int:
+    """عدد مسجّلي القسم في المقرر بلا teaching_group_id."""
+    if not table_exists(conn, "registrations"):
+        return 0
+    reg_cols = {c.lower() for c in fetch_table_columns(conn, "registrations")}
+    if "teaching_group_id" not in reg_cols:
+        return 0
+    from backend.core.enrollment_status_policy import operational_status_sql
+
+    active_stu = operational_status_sql("st")
+    cname = (course_name or "").strip()
+    has_sem = "semester" in reg_cols
+    rows = conn.cursor().execute(
+        f"""
+        SELECT DISTINCT r.student_id, {("r.semester" if has_sem else "''")} AS rsem
+        FROM registrations r
+        INNER JOIN students st ON st.student_id = r.student_id AND {active_stu}
+        WHERE lower(trim(r.course_name)) = lower(trim(?))
+          AND st.department_id = ?
+          AND (r.teaching_group_id IS NULL OR r.teaching_group_id = 0)
+        """,
+        (cname, int(consumer_department_id)),
+    ).fetchall() or []
+    if not has_sem:
+        return len(rows)
+    n = 0
+    for r in rows:
+        rsem = str(_row_get(r, "rsem", 1, "") or "")
+        if _semester_matches_ops(conn, rsem, semester) or not rsem:
+            n += 1
+    return n
 
 
 def _dept_students_registered_for_course(
@@ -1049,6 +1116,32 @@ def _exams_note_for_migration(
     )
 
 
+def _clear_department_general_binding(
+    conn,
+    *,
+    semester: str,
+    consumer_department_id: int,
+    course_name: str,
+) -> bool:
+    """يمسح الربط القسمي القديم (إن وُجد) حتى لا يُفهم كفرض مجموعة موحّدة."""
+    if not table_exists(conn, "department_general_group_bindings"):
+        return False
+    cname = (course_name or "").strip()
+    if not cname:
+        return False
+    cur = conn.cursor()
+    cur.execute(
+        """
+        DELETE FROM department_general_group_bindings
+        WHERE semester = ?
+          AND consumer_department_id = ?
+          AND lower(trim(course_name)) = lower(trim(?))
+        """,
+        (semester, int(consumer_department_id), cname),
+    )
+    return int(cur.rowcount or 0) > 0
+
+
 def select_general_group_for_department(
     conn,
     *,
@@ -1061,155 +1154,73 @@ def select_general_group_for_department(
     allow_conflicts: bool = False,
 ) -> dict[str, Any]:
     """
-    ينقل تسجيلات طلبة القسم إلى مجموعة GENERAL المختارة ويحدّث الربط.
-    معاملة واحدة + فحص سعة + تعارضات أوقات.
+    متوقف عن النقل الجماعي.
+
+    التعيين فردي فقط (خطة / تسجيل فعلي). يمسح الربط القسمي القديم إن وُجد،
+    ويُرجع PER_STUDENT_ONLY مع توزيع الطلبة الحالي على المجموعات.
     """
+    del force_admin, allow_conflicts  # لم تعد تُستخدم بعد إيقاف النقل الجماعي
     cname = (course_name or "").strip()
     sem = _normalize_semester(conn, semester)
     gid = int(teaching_group_id or 0)
     dept = int(consumer_department_id or 0)
-    if not cname or gid <= 0 or dept <= 0:
-        raise ValueError("course_name و teaching_group_id و department مطلوبون")
+    if not cname or dept <= 0:
+        raise ValueError("course_name و department مطلوبون")
     if not is_specialty_consumer_department(conn, dept):
-        raise ValueError("اختيار المجموعة متاح للأقسام التخصصية فقط")
+        raise ValueError("متابعة المجموعات متاحة للأقسام التخصصية فقط")
     gen_id = _general_dept_id(conn)
     if not gen_id:
         raise ValueError("قسم الاتجاه العام غير معرّف")
 
     from backend.core.department_scope_policy import course_is_college_general
-    from backend.services.utilities import get_schedule_published_at, log_activity
+    from backend.services.utilities import log_activity
 
     if not course_is_college_general(conn, cname):
         raise ValueError("المقرر ليس من الاتجاه العام")
 
-    # قفل بعد النشر: admin فقط
-    if not force_admin and get_schedule_published_at(conn) is not None:
-        raise PermissionError("الجدول معتمد/منشور — اختيار المجموعة متاح للمسؤول فقط")
-
     ensure_bindings_schema(conn)
     cur = conn.cursor()
-    g = cur.execute(
-        """
-        SELECT id, department_id, capacity_max, is_active, group_code
-        FROM teaching_groups
-        WHERE id = ? LIMIT 1
-        """,
-        (gid,),
-    ).fetchone()
-    if not g:
-        raise ValueError("مجموعة التدريس غير موجودة")
-    if int(_row_get(g, "department_id", 1, 0) or 0) != int(gen_id):
-        raise ValueError("المجموعة المختارة ليست من الاتجاه العام")
-    if int(_row_get(g, "is_active", 3, 1) or 0) != 1:
-        raise ValueError("المجموعة غير نشطة")
+    group_code = ""
+    if gid > 0:
+        g = cur.execute(
+            """
+            SELECT id, department_id, is_active, group_code
+            FROM teaching_groups
+            WHERE id = ? LIMIT 1
+            """,
+            (gid,),
+        ).fetchone()
+        if g:
+            if int(_row_get(g, "department_id", 1, 0) or 0) == int(gen_id):
+                group_code = str(_row_get(g, "group_code", 3, "") or "")
 
     student_ids = _dept_students_registered_for_course(
         conn, course_name=cname, semester=sem, consumer_department_id=dept
     )
-    # من هم بالفعل على المجموعة الهدف
-    already: set[str] = set()
-    if student_ids:
-        placeholders = ",".join("?" for _ in student_ids)
-        rows = cur.execute(
-            f"""
-            SELECT student_id FROM registrations
-            WHERE teaching_group_id = ?
-              AND lower(trim(course_name)) = lower(trim(?))
-              AND student_id IN ({placeholders})
+    distribution: dict[str, int] = {}
+    for sid in student_ids:
+        row = cur.execute(
+            """
+            SELECT teaching_group_id FROM registrations
+            WHERE student_id = ? AND lower(trim(course_name)) = lower(trim(?))
+            LIMIT 1
             """,
-            (gid, cname, *student_ids),
-        ).fetchall() or []
-        already = {str(_row_get(r, "student_id", 0, "") or "") for r in rows}
+            (sid, cname),
+        ).fetchone()
+        tg = int(_row_get(row, "teaching_group_id", 0, 0) or 0) if row else 0
+        key = str(tg) if tg > 0 else "unlinked"
+        distribution[key] = int(distribution.get(key, 0)) + 1
 
-    to_move = [s for s in student_ids if s not in already]
-    cap_raw = _row_get(g, "capacity_max", 2, None)
-    try:
-        capacity_max = int(cap_raw) if cap_raw not in (None, "") else None
-    except (TypeError, ValueError):
-        capacity_max = None
-    if capacity_max is not None and capacity_max <= 0:
-        capacity_max = None  # سعة 0 = غير محددة (لا تمنع الاختيار)
-    enrolled = count_registrations_for_teaching_group(conn, gid)
-    # المسجّلون من هذا القسم على مجموعات أخرى سيُنقلون (لا يزيدون العدد مرتين إن كانوا على الهدف)
-    projected = enrolled + len(to_move)
-    if capacity_max is not None and projected > capacity_max:
-        raise ValueError(
-            f"تجاوز السعة: المسجّلون={enrolled} + سيتم نقل {len(to_move)} "
-            f"> السعة {capacity_max}"
-        )
-
-    conflicts = find_student_conflicts_for_group(
-        conn,
-        student_ids=to_move,
-        teaching_group_id=gid,
-        semester=sem,
-        course_name=cname,
+    binding_cleared = _clear_department_general_binding(
+        conn, semester=sem, consumer_department_id=dept, course_name=cname
     )
-    if conflicts and not allow_conflicts:
-        raise ValueError(
-            f"تعارض أوقات لـ {len({c['student_id'] for c in conflicts})} طالباً مع جدول القسم — "
-            "راجع الأوقات أو أكّد مع allow_conflicts"
-        )
-
-    # مجموعات المصدر قبل النقل (للتدقيق والامتحانات)
-    from_ids: list[int] = []
-    if student_ids:
-        placeholders = ",".join("?" for _ in student_ids)
-        rows = cur.execute(
-            f"""
-            SELECT DISTINCT teaching_group_id FROM registrations
-            WHERE lower(trim(course_name)) = lower(trim(?))
-              AND student_id IN ({placeholders})
-              AND teaching_group_id IS NOT NULL
-            """,
-            (cname, *student_ids),
-        ).fetchall() or []
-        from_ids = [int(_row_get(r, "teaching_group_id", 0, 0) or 0) for r in rows]
-
-    moved = 0
-    if to_move:
-        placeholders = ",".join("?" for _ in to_move)
-        cur.execute(
-            f"""
-            UPDATE registrations
-            SET teaching_group_id = ?
-            WHERE lower(trim(course_name)) = lower(trim(?))
-              AND student_id IN ({placeholders})
-            """,
-            (gid, cname, *to_move),
-        )
-        moved = int(cur.rowcount or 0)
-
-    from backend.database.database import is_postgresql
-
     actor_s = (actor or "").strip()
-    if table_exists(conn, "department_general_group_bindings"):
-        conflict_target = (
-            "EXCLUDED" if is_postgresql() else "excluded"
-        )
-        cur.execute(
-            f"""
-            INSERT INTO department_general_group_bindings
-                (semester, consumer_department_id, course_name, teaching_group_id, updated_by, updated_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT (semester, consumer_department_id, course_name)
-            DO UPDATE SET
-                teaching_group_id = {conflict_target}.teaching_group_id,
-                updated_by = {conflict_target}.updated_by,
-                updated_at = CURRENT_TIMESTAMP
-            """,
-            (sem, dept, cname, gid, actor_s),
-        )
-
-    exam_note = _exams_note_for_migration(
-        conn, course_name=cname, from_group_ids=from_ids, to_group_id=gid
-    )
     details = (
-        f"dept={dept}, course={cname}, semester={sem}, "
-        f"to_group={gid}, moved={moved}, from={from_ids}, actor={actor_s}"
+        f"per_student_only dept={dept}, course={cname}, semester={sem}, "
+        f"ref_group={gid}, binding_cleared={binding_cleared}, actor={actor_s}"
     )
     try:
-        log_activity(action="select_general_group", details=details, actor=actor_s or None)
+        log_activity(action="select_general_group_blocked", details=details, actor=actor_s or None)
     except Exception:
         pass
     try:
@@ -1221,21 +1232,26 @@ def select_general_group_for_department(
             actor=actor_s,
         )
     except Exception:
-        logger.exception("acknowledge after select failed")
+        logger.exception("acknowledge after select(per-student) failed")
 
+    msg = (
+        "النقل الجماعي متوقف. عيّن مجموعة التدريس (A/B) لكل طالب من "
+        "الخطة الدراسية أو التسجيل الفعلي — طالب واحد = مجموعة واحدة فقط."
+    )
     return {
-        "status": "ok",
+        "status": "error",
+        "code": "PER_STUDENT_ONLY",
+        "mode": "per_student",
+        "message": msg,
         "course_name": cname,
         "semester": sem,
-        "teaching_group_id": gid,
-        "group_code": str(_row_get(g, "group_code", 4, "") or ""),
-        "moved_count": moved,
+        "teaching_group_id": gid or None,
+        "group_code": group_code,
+        "moved_count": 0,
         "dept_registered_count": len(student_ids),
-        "capacity_max": capacity_max,
-        "enrolled_after": count_registrations_for_teaching_group(conn, gid),
-        "conflicts_bypassed": len(conflicts) if allow_conflicts else 0,
-        "exam_note": exam_note,
-        "split_resolved": True,
+        "distribution": distribution,
+        "binding_cleared": binding_cleared,
+        "split_resolved": False,
     }
 
 
@@ -1735,19 +1751,23 @@ def discover_general_courses_for_department(
         never_seen = not prev_fp and bool(fp) and fp != "empty"
         meta = (resolved.get("by_course") or {}).get(key) or {}
         has_binding = key in (resolved.get("bindings") or {})
-        needs_choice = bool(split_by.get(key)) or (
-            len(options) > 1 and not has_binding and not meta.get("teaching_group_id")
-        )
-        if len(options) > 1 and not has_binding and meta.get("source") == "registrations":
-            # أغلبية موجودة لكن انقسام أو لم يُثبَّت ربط
-            if split_by.get(key):
-                needs_choice = True
+        # يلزم تعيين فردي فقط إن وُجدت مجموعات متعددة وتسجيلات بلا teaching_group_id
+        unlinked_n = 0
+        if len(options) > 1 and int(reg_keys.get(key) or 0) > 0:
+            unlinked_n = _count_dept_unlinked_for_course(
+                conn,
+                course_name=cname,
+                semester=sem,
+                consumer_department_id=dept,
+            )
+        needs_choice = unlinked_n > 0
         if times_changed:
             times_changed_count += 1
         if needs_choice:
             needs_choice_count += 1
         in_schedule = bool(slots_preview) or (
-            bool(meta.get("teaching_group_id")) and bool(options)
+            bool(meta.get("teaching_group_ids") or meta.get("teaching_group_id"))
+            and bool(options)
         )
         sources = []
         if key in reg_keys:
@@ -1762,6 +1782,7 @@ def discover_general_courses_for_department(
                 "course_key": key,
                 "dept_registered_count": int(reg_keys.get(key) or 0),
                 "dept_planned_count": int(plan_keys.get(key) or 0),
+                "dept_unlinked_count": int(unlinked_n),
                 "sources": sources,
                 "groups_count": len(options),
                 "options": options,
@@ -1769,6 +1790,8 @@ def discover_general_courses_for_department(
                 "current_teaching_group_id": opts_payload.get("current_teaching_group_id"),
                 "binding_source": meta.get("source"),
                 "has_binding": has_binding,
+                "multi_group": bool(meta.get("multi_group")),
+                "assignment_mode": "per_student",
                 "in_schedule_overlay": in_schedule,
                 "needs_choice": needs_choice,
                 "split_warning": split_by.get(key),
@@ -1831,9 +1854,11 @@ def enrich_resolve_with_single_group_auto(
         by_course[key] = {
             "course_name": key,
             "teaching_group_id": gid,
+            "teaching_group_ids": [gid],
             "source": "auto_single",
             "dept_enrolled": int(cnt),
             "group_counts": {str(gid): int(cnt)},
+            "multi_group": False,
         }
     resolved = dict(resolved)
     resolved["by_course"] = by_course
