@@ -4518,46 +4518,43 @@ def _build_stage_matrix_excel_bytes(
     department_name: str = "",
     term_label: str = "",
 ) -> bytes:
-    """Excel بنفس شبكة الطباعة: يوم|وقت|3×(مقرر|أستاذ|قاعة) وترويسة مقررات المرحلة."""
+    """Excel بنفس شبكة الطباعة: يوم|وقت|3×(مقرر|أستاذ|قاعة) وترويسة مقررات دراسية."""
     import io
 
     import xlsxwriter
 
-    from backend.core.schedule_stage_layout import STAGE_BUCKETS
+    from backend.core.schedule_stage_layout import (
+        PACK_COLUMN_LABEL,
+        PACK_COLUMNS,
+        assign_pack_display_columns,
+    )
 
     days_order = _days_ar()
     day_rank = {d: i for i, d in enumerate(days_order)}
-    # day -> time -> bucket -> [rows]
-    grid: dict[str, dict[str, dict[str, list]]] = {}
+    # day -> time -> [rows] ثم تعبئة أعمدة متوازنة
+    slot_rows: dict[str, dict[str, list]] = {}
     times_seen: set[str] = set()
     for r in rows or []:
         day = _canonical_schedule_day_label(str(r.get("day") or "").strip())
         time = _canonical_time_slot_label(str(r.get("time") or "").strip())
         if not day or not time:
             continue
-        bucket = str(r.get("stage_bucket") or "general_or_y1").strip() or "general_or_y1"
-        if bucket not in STAGE_BUCKETS:
-            bucket = "general_or_y1"
         times_seen.add(time)
-        grid.setdefault(day, {}).setdefault(time, {b: [] for b in STAGE_BUCKETS})
-        for b in STAGE_BUCKETS:
-            grid[day][time].setdefault(b, [])
-        grid[day][time][bucket].append(r)
+        slot_rows.setdefault(day, {}).setdefault(time, []).append(r)
 
     times_ordered = sorted(times_seen, key=_time_slot_sort_key)
     data_rows: list[tuple[str, str]] = []
     for day in days_order:
-        if day not in grid:
+        if day not in slot_rows:
             continue
         for time in times_ordered:
-            if time in grid[day]:
+            if time in slot_rows[day]:
                 data_rows.append((day, time))
-    # أيام غير قياسية
-    for day in sorted(grid.keys(), key=lambda d: day_rank.get(d, 999)):
+    for day in sorted(slot_rows.keys(), key=lambda d: day_rank.get(d, 999)):
         if day in days_order:
             continue
         for time in times_ordered:
-            if time in grid[day]:
+            if time in slot_rows[day]:
                 data_rows.append((day, time))
 
     buf = io.BytesIO()
@@ -4611,19 +4608,18 @@ def _build_stage_matrix_excel_bytes(
     ws.write(1, 0, " · ".join(meta_bits), fmt_meta)
 
     header_r = 3
-    # صف ترويسة الكتل + يوم/وقت بدمج صفين
     ws.merge_range(header_r, 0, header_r + 1, 0, "اليوم", fmt_day)
     ws.merge_range(header_r, 1, header_r + 1, 1, "الوقت", fmt_time)
-    for bi, _b in enumerate(STAGE_BUCKETS):
+    for bi, _b in enumerate(PACK_COLUMNS):
         c0 = 2 + bi * 3
-        ws.merge_range(header_r, c0, header_r, c0 + 2, "مقررات المرحلة", fmt_block)
+        ws.merge_range(header_r, c0, header_r, c0 + 2, PACK_COLUMN_LABEL, fmt_block)
         ws.write(header_r + 1, c0, "المقرر", fmt_sub)
         ws.write(header_r + 1, c0 + 1, "الأستاذ", fmt_sub)
         ws.write(header_r + 1, c0 + 2, "القاعة", fmt_sub)
 
     ws.set_column(0, 0, 12)
     ws.set_column(1, 1, 14)
-    for bi in range(len(STAGE_BUCKETS)):
+    for bi in range(len(PACK_COLUMNS)):
         c0 = 2 + bi * 3
         ws.set_column(c0, c0, 22)
         ws.set_column(c0 + 1, c0 + 1, 18)
@@ -4633,7 +4629,7 @@ def _build_stage_matrix_excel_bytes(
     last_day = None
     day_start = r
     for day, time in data_rows:
-        buckets = grid.get(day, {}).get(time) or {}
+        packed = assign_pack_display_columns(slot_rows.get(day, {}).get(time) or [])
         if day != last_day:
             if last_day is not None and r - 1 > day_start:
                 try:
@@ -4644,8 +4640,8 @@ def _build_stage_matrix_excel_bytes(
             day_start = r
         ws.write(r, 0, day, fmt_day)
         ws.write(r, 1, time, fmt_time)
-        for bi, b in enumerate(STAGE_BUCKETS):
-            items = buckets.get(b) or []
+        for bi, b in enumerate(PACK_COLUMNS):
+            items = packed.get(b) or []
             courses = [_excel_course_label(it) for it in items]
             insts = [_excel_instructor_label(it) for it in items]
             rooms = [str(it.get("room") or "").strip() or "—" for it in items]
@@ -4653,8 +4649,7 @@ def _build_stage_matrix_excel_bytes(
             ws.write(r, c0, _excel_cell_join(courses) if items else "", fmt_cell)
             ws.write(r, c0 + 1, _excel_cell_join(insts) if items else "", fmt_cell)
             ws.write(r, c0 + 2, _excel_cell_join(rooms) if items else "", fmt_room)
-        # ارتفاع تقريبي حسب عدد المقررات في أكثر كتلة ازدحاماً
-        max_n = max((len(buckets.get(b) or []) for b in STAGE_BUCKETS), default=0)
+        max_n = max((len(packed.get(b) or []) for b in PACK_COLUMNS), default=0)
         ws.set_row(r, max(18, 16 + max_n * 14))
         r += 1
     if last_day is not None and r - 1 > day_start:

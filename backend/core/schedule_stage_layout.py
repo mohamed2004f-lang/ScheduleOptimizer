@@ -1,11 +1,16 @@
-"""تصنيف مقررات الجدول لعرض المراحل (عرض فقط — لا يغيّر صفوف schedule)."""
+"""تصنيف وعرض مصفوفة الجدول (عرض فقط — لا يغيّر صفوف schedule).
+
+أعمدة الشبكة الثلاثة = مسارات تعبئة متوازنة (ليس محتوى سنة دراسية).
+stage_bucket الأكاديمي يبقى للشارات فقط.
+"""
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
-# كتل العرض في مصفوفة المراحل
-BUCKET_GENERAL_OR_Y1 = "general_or_y1"  # اتجاه عام + مستوى 2 (ومستوى 0/1 غير العام)
+# شارات/توافق قديم — لا تُستخدم لتعيين عمود العرض
+BUCKET_GENERAL_OR_Y1 = "general_or_y1"
 BUCKET_Y3 = "y3"
 BUCKET_Y4Y5 = "y4y5"
 
@@ -17,6 +22,14 @@ STAGE_BUCKET_LABELS = {
     BUCKET_Y4Y5: "الرابعة + الخامسة",
 }
 
+# أعمدة التعبئة البصرية في مصفوفة الأقسام العلمية
+PACK_COL_1 = "pack_1"
+PACK_COL_2 = "pack_2"
+PACK_COL_3 = "pack_3"
+PACK_COLUMNS = (PACK_COL_1, PACK_COL_2, PACK_COL_3)
+PACK_COLUMN_LABEL = "مقررات دراسية"
+PACK_COLUMN_LABELS = {c: PACK_COLUMN_LABEL for c in PACK_COLUMNS}
+
 LAYOUT_STAGE_MATRIX = "stage_matrix"
 LAYOUT_PERSONAL_WEEKLY = "personal_weekly"
 
@@ -27,9 +40,8 @@ def classify_stage_bucket(
     is_college_general: bool = False,
 ) -> str:
     """
-    تصنيف مقرر لعمود المرحلة.
-    الاتجاه العام دائماً في الكتلة الأولى حتى لو رمزه GS 201.
-    وإلا: أول رقم في الجزء الرقمي (ME 205→2، ME 301→3، ME 401/501→4/5).
+    تصنيف أكاديمي للشارة فقط (لا يحدد عمود العرض).
+    الاتجاه العام → general_or_y1؛ وإلا حسب أول رقم في الرمز.
     """
     if is_college_general:
         return BUCKET_GENERAL_OR_Y1
@@ -41,6 +53,36 @@ def classify_stage_bucket(
     if level == 3:
         return BUCKET_Y3
     return BUCKET_Y4Y5
+
+
+def course_pack_sort_key(row: dict[str, Any] | None) -> tuple:
+    """اتجاه عام أولاً، ثم أقل رمز رقمي، ثم الرمز، ثم الاسم."""
+    item = row or {}
+    is_gen = 0 if item.get("is_college_general") else 1
+    code = str(item.get("course_code") or "").strip().upper()
+    m = re.search(r"\d+", code)
+    num = int(m.group(0)) if m else 10**9
+    name = str(item.get("course_name") or "").strip().lower()
+    return (is_gen, num, code, name)
+
+
+def assign_pack_display_columns(
+    courses: list[dict[str, Any]] | None,
+    *,
+    column_count: int = 3,
+) -> dict[str, list[dict[str, Any]]]:
+    """
+    توزيع مقررات نفس اليوم/الوقت على أعمدة التعبئة:
+    ترتيب (عام ثم أقل رمز) → العمود الأقل ازدحاماً (تعادل → عمود أصغر رقماً).
+    """
+    n = max(1, int(column_count or 3))
+    ids = tuple(f"pack_{i}" for i in range(1, n + 1))
+    cols: dict[str, list[dict[str, Any]]] = {cid: [] for cid in ids}
+    ordered = sorted(list(courses or []), key=course_pack_sort_key)
+    for row in ordered:
+        best = min(range(1, n + 1), key=lambda i: (len(cols[f"pack_{i}"]), i))
+        cols[f"pack_{best}"].append(row)
+    return cols
 
 
 def stage_badge_for_row(
@@ -217,6 +259,6 @@ def build_display_layout_payload(
         "use_display_tracks": use_display_tracks,
         "display_tracks": display_tracks,
         "buckets": [
-            {"id": b, "label": STAGE_BUCKET_LABELS[b]} for b in STAGE_BUCKETS
+            {"id": c, "label": PACK_COLUMN_LABELS[c]} for c in PACK_COLUMNS
         ],
     }

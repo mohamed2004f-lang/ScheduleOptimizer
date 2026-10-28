@@ -1,15 +1,17 @@
 /**
  * راسمات الجدول الجديدة:
  * - أسبوع شخصي: يوم | وقت | مقرر | أستاذ | قاعة (ما لديه فقط)
- * - مصفوفة مراحل: يوم | وقت | 3 كتل × (مقرر|أستاذ|قاعة)
+ * - مصفوفة أقسام علمية: يوم | وقت | 3 أعمدة تعبئة × (مقرر|أستاذ|قاعة)
+ *   التوزيع: اتجاه عام أولاً ثم أقل رمز → العمود الأقل ازدحاماً
  */
 (function (global) {
   'use strict';
 
+  const PACK_COLUMN_LABEL = 'مقررات دراسية';
   const BUCKETS = [
-    { id: 'general_or_y1', label: 'اتجاه عام + السنة الأولى بالقسم' },
-    { id: 'y3', label: 'المرحلة الثالثة' },
-    { id: 'y4y5', label: 'الرابعة + الخامسة' },
+    { id: 'pack_1', label: PACK_COLUMN_LABEL },
+    { id: 'pack_2', label: PACK_COLUMN_LABEL },
+    { id: 'pack_3', label: PACK_COLUMN_LABEL },
   ];
 
   function esc(s) {
@@ -47,10 +49,45 @@
     return String(day || '').trim();
   }
 
-  function rowBucket(row) {
-    const b = String(row && row.stage_bucket || '').trim();
-    if (b === 'y3' || b === 'y4y5' || b === 'general_or_y1') return b;
-    return 'general_or_y1';
+  function coursePackSortKey(row) {
+    const isGen = row && row.is_college_general ? 0 : 1;
+    const code = String((row && row.course_code) || '').trim().toUpperCase();
+    const m = code.match(/\d+/);
+    const num = m ? parseInt(m[0], 10) : 1e9;
+    const name = String((row && row.course_name) || '').trim().toLowerCase();
+    return [isGen, num, code, name];
+  }
+
+  function comparePackSortKeys(a, b) {
+    const ka = coursePackSortKey(a);
+    const kb = coursePackSortKey(b);
+    for (let i = 0; i < ka.length; i++) {
+      if (ka[i] < kb[i]) return -1;
+      if (ka[i] > kb[i]) return 1;
+    }
+    return 0;
+  }
+
+  /**
+   * توزيع مقررات نفس الفترة على 3 أعمدة: عام/أقل رمز أولاً → الأقل ازدحاماً (تعادل → عمود أصغر).
+   * @returns {{ pack_1: Array, pack_2: Array, pack_3: Array }}
+   */
+  function assignPackDisplayColumns(courses) {
+    const cols = { pack_1: [], pack_2: [], pack_3: [] };
+    const ordered = (Array.isArray(courses) ? courses.slice() : []).sort(comparePackSortKeys);
+    ordered.forEach((row) => {
+      let best = 1;
+      let bestLen = cols.pack_1.length;
+      for (let i = 2; i <= 3; i++) {
+        const len = cols[`pack_${i}`].length;
+        if (len < bestLen) {
+          best = i;
+          bestLen = len;
+        }
+      }
+      cols[`pack_${best}`].push(row);
+    });
+    return cols;
   }
 
   /**
@@ -579,8 +616,8 @@
   }
 
   /**
-   * مصفوفة مراحل للأقسام التخصصية.
-   * صف واحد لكل (يوم، وقت) — بلا rowspan وبلا صفوف إجراءات منفصلة (تفادي تداخل اليوم/الوقت).
+   * مصفوفة أعمدة تعبئة للأقسام التخصصية (3× مقرر|أستاذ|قاعة).
+   * صف واحد لكل (يوم، وقت) — بلا rowspan.
    */
   function buildStageMatrixTimetableHtml(scheduleRows, opts) {
     opts = opts || {};
@@ -594,12 +631,11 @@
       const d = canonicalDay(row.day);
       const t = String(row.time || '').trim();
       if (!d || !t) return;
-      const key = `${d}|${t}|${rowBucket(row)}`;
+      const key = `${d}|${t}`;
       if (!slotsMap[key]) slotsMap[key] = [];
       slotsMap[key].push(row);
     });
 
-    // خلايا جدول حقيقية (مقرر|أستاذ|قاعة) بحدود كاملة + ترويسة «مقررات المرحلة»
     const isPrint = !!opts.printMode;
     const stageOpts = Object.assign({}, opts, { stacked: false, plainCourses: true });
     const tableExtra = isPrint ? ' timetable--stages-print' : ' timetable--stages-ruled';
@@ -612,7 +648,7 @@
     BUCKETS.forEach((b) => {
       html +=
         `<th colspan="3" class="stage-block-header stage-block-header--unified" data-stage-bucket="${escAttr(b.id)}">` +
-        `مقررات المرحلة` +
+        esc(b.label || PACK_COLUMN_LABEL) +
         `</th>`;
     });
     html += '</tr><tr>';
@@ -628,14 +664,9 @@
       html += `<tr class="stage-time-row${idx === 0 ? ' is-day-start' : ''}">`;
       html += dayHeaderCellHtml(day, stageOpts, idx === 0 ? 'start' : 'cont');
       html += timeCellHtml(day, time, stageOpts);
+      const packed = assignPackDisplayColumns(slotsMap[`${day}|${time}`] || []);
       BUCKETS.forEach((b) => {
-        let courses = slotsMap[`${day}|${time}|${b.id}`] || [];
-        // موازنة ترتيب الكتلة الأولى دون تقسيم بصري يكسر حدود الأعمدة
-        if (b.id === 'general_or_y1' && courses.length > 1) {
-          const lanes = balanceEarlyStageLanes(courses);
-          courses = (lanes[1] || []).concat(lanes[2] || []);
-        }
-        html += renderBucketThreeTds(courses, day, time, b.id, stageOpts);
+        html += renderBucketThreeTds(packed[b.id] || [], day, time, b.id, stageOpts);
       });
       html += '</tr>';
     }
@@ -743,19 +774,14 @@
         }
       });
 
-      // مؤشر عام+قسم2 في نفس اللحظة (عبر data إن وُجدت الشارات المخفية)
+      // مؤشر عام+قسم2 في نفس اللحظة (أي عمود تعبئة)
       let mixedGeneralDept = false;
       try {
-        const cells = root.querySelectorAll(
-          `.stage-col--course[data-slot-day="${CSS.escape(day)}"][data-slot-time="${CSS.escape(time)}"][data-stage-bucket="general_or_y1"] .stage-badge--general, ` +
-            `.stage-bucket-cell[data-slot-day="${CSS.escape(day)}"][data-slot-time="${CSS.escape(time)}"][data-stage-bucket="general_or_y1"] .stage-badge--general, ` +
-            `.time-slot-cell[data-slot-day="${CSS.escape(day)}"][data-slot-time="${CSS.escape(time)}"] .stage-badge--general`
-        );
-        const y2 = root.querySelectorAll(
-          `.stage-col--course[data-slot-day="${CSS.escape(day)}"][data-slot-time="${CSS.escape(time)}"][data-stage-bucket="general_or_y1"] .stage-badge--y2, ` +
-            `.stage-bucket-cell[data-slot-day="${CSS.escape(day)}"][data-slot-time="${CSS.escape(time)}"][data-stage-bucket="general_or_y1"] .stage-badge--y2, ` +
-            `.time-slot-cell[data-slot-day="${CSS.escape(day)}"][data-slot-time="${CSS.escape(time)}"] .stage-badge--y2`
-        );
+        const cellSel =
+          `.stage-col--course[data-slot-day="${CSS.escape(day)}"][data-slot-time="${CSS.escape(time)}"], ` +
+          `.time-slot-cell[data-slot-day="${CSS.escape(day)}"][data-slot-time="${CSS.escape(time)}"]`;
+        const cells = root.querySelectorAll(`${cellSel} .stage-badge--general`);
+        const y2 = root.querySelectorAll(`${cellSel} .stage-badge--y2`);
         if (cells.length && y2.length) mixedGeneralDept = true;
       } catch (_e) {}
 
@@ -808,6 +834,7 @@
   }
 
   global.SCHEDULE_STAGE_BUCKETS = BUCKETS;
+  global.SCHEDULE_PACK_COLUMN_LABEL = PACK_COLUMN_LABEL;
   global.buildPersonalWeeklyTimetableHtml = buildPersonalWeeklyTimetableHtml;
   global.buildStageMatrixTimetableHtml = buildStageMatrixTimetableHtml;
   global.scheduleTimesByDayFromRows = timesByDayFromRows;
@@ -817,4 +844,5 @@
   global.scheduleRowGroupCode = rowGroupCode;
   global.balanceEarlyStageLanes = balanceEarlyStageLanes;
   global.earlyLaneFromGroupCode = earlyLaneFromGroupCode;
+  global.assignPackDisplayColumns = assignPackDisplayColumns;
 })(typeof window !== 'undefined' ? window : globalThis);
