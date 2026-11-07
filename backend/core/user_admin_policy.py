@@ -186,11 +186,15 @@ def filter_users_for_actor(actor_session, users: list[dict]) -> list[dict]:
     return [u for u in users if not user_dict_is_protected(u)]
 
 
-def assignable_roles_for_actor(actor_session) -> list[dict]:
-    """أدوار/قوالب يمكن اختيارها في الواجهة."""
+def assignable_roles_for_actor(actor_session, conn=None) -> list[dict]:
+    """أدوار/قوالب يمكن اختيارها في الواجهة (النشطة فقط)."""
     from backend.core.permissions import list_role_profiles_for_ui
 
-    profiles = list_role_profiles_for_ui(include_system_admin=is_system_admin_session(actor_session))
+    profiles = list_role_profiles_for_ui(
+        include_system_admin=is_system_admin_session(actor_session),
+        conn=conn,
+        include_inactive=False,
+    )
     if is_college_dean_session(actor_session):
         return [
             p for p in profiles

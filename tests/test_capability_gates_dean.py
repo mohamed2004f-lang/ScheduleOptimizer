@@ -167,10 +167,12 @@ def test_resolve_hod_keeps_schedule_edit(app):
         assert caps.get("can_migrate_registrations_to_transcript") is False
 
 
-def test_admin_permissions_page(auth_client):
-    page = auth_client.get("/admin/permissions")
-    assert page.status_code == 200
-    assert "لوحة الصلاحيات".encode("utf-8") in page.data
+def test_admin_permissions_page_redirects_to_users_profiles(auth_client):
+    page = auth_client.get("/admin/permissions", follow_redirects=False)
+    assert page.status_code == 302
+    loc = page.headers.get("Location") or ""
+    assert "/users_admin" in loc
+    assert "tab=profiles" in loc
 
 
 def test_permissions_catalog_api(auth_client):
@@ -191,6 +193,8 @@ def test_profile_detail_panel_permissions(auth_client):
     panel = set(body.get("panel_permissions") or [])
     stored = set(body.get("permissions") or [])
     assert body.get("leadership_defaults_applied") is True
+    assert body.get("locked") is True
+    assert body.get("editable") is False
     assert "can_manage_term_ops_college" in panel
     assert "nav_view_class_schedule" in panel
     if "can_manage_students" not in stored:

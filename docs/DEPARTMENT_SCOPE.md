@@ -70,6 +70,8 @@
 - `/schedule/import/excel` — مقررات القسم + `department_id`
 - `/schedule/export/*` — صفوف الجدول للقسم
 - `/students/course_registration_counts/*` — طلاب + مقررات القسم
+- `/students/attendance_allowed_courses` (+ تصدير الحضور) — مصدر القائمة = **تسجيلات طلبة النطاق**؛ فلترة المقرر عبر سياسة العرض (`courses_department_scope_filter`: قسم + GENERAL + غير المملوك + مشترك)، مع OR لصفوف `schedule.department_id` للفصل الحالي عند ملكية خاطئة. **رئيس تخصص** يرى كل مقررات طلبته المسجّل بها (قسم / مشترك / اتجاه عام) — لا فلتر `owning_department_id` صارم.
+- **مجموعات التدريس أ/ب:** سجل الحضور يبقى `(طالب × مقرر × أسبوع)`؛ كشف الطلبة يُصفّى بـ `registrations.teaching_group_id`. المدرّس يرى مجموعته فقط؛ الرئيس يرى «الكل» + كل مجموعة.
 
 ## ترحيل البيانات القديمة
 

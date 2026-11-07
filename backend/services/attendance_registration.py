@@ -142,13 +142,20 @@ def _verify_course_access(
     get_current_term_fn,
     normalize_sid_fn,
     course_name: str,
+    *,
+    teaching_group_id: int | None = None,
 ) -> dict[str, Any]:
-    """يستخدم منطق التصدير للتحقق من صلاحية المقرر."""
+    """يستخدم منطق التصدير للتحقق من صلاحية المقرر (مع تصفية المجموعة اختياريًا)."""
+    from backend.services.attendance_export_core import parse_attendance_course_option
+
+    cname, tgid_from_opt = parse_attendance_course_option(course_name)
+    tgid = teaching_group_id if teaching_group_id is not None else tgid_from_opt
     r = collect_attendance_export_state(
         get_connection_fn,
         get_current_term_fn,
         normalize_sid_fn,
-        course_name_lock=course_name,
+        course_name_lock=cname or course_name,
+        teaching_group_id_lock=tgid,
     )
     if r["kind"] == "http":
         return {"ok": False, "response": r["response"]}
@@ -158,7 +165,8 @@ def _verify_course_access(
             "response": (jsonify({"status": "error", "message": "المقرر غير متاح"}), 404),
         }
     allowed = r.get("selected_courses") or []
-    if len(allowed) != 1 or _attendance_course_key(allowed[0]) != _attendance_course_key(course_name):
+    expect_key = _attendance_course_key(cname or course_name)
+    if len(allowed) != 1 or _attendance_course_key(allowed[0]) != expect_key:
         return {
             "ok": False,
             "response": (jsonify({"status": "error", "message": "المقرر غير مسموح لحسابك"}), 403),
@@ -173,12 +181,19 @@ def build_registration_roster(
     *,
     course_name: str,
     week_number: int | None = None,
+    teaching_group_id: int | None = None,
 ) -> dict[str, Any]:
     course_name = (course_name or "").strip()
     if not course_name:
         return {"ok": False, "response": (jsonify({"status": "error", "message": "حدد المقرر"}), 400)}
 
-    chk = _verify_course_access(get_connection_fn, get_current_term_fn, normalize_sid_fn, course_name)
+    chk = _verify_course_access(
+        get_connection_fn,
+        get_current_term_fn,
+        normalize_sid_fn,
+        course_name,
+        teaching_group_id=teaching_group_id,
+    )
     if not chk.get("ok"):
         return chk
 
@@ -224,6 +239,8 @@ def build_registration_roster(
             "week_number": wk,
             "term_weeks": term_weeks,
             "semester_label": state.get("semester_label") or "",
+            "teaching_group_id": state.get("teaching_group_id"),
+            "group_label": state.get("group_label") or "",
             "students": students_out,
             "status_options": [
                 {"value": "present", "label": "حضور"},
@@ -243,6 +260,7 @@ def save_registration_marks(
     course_name: str,
     week_number: int,
     marks: list[dict[str, Any]],
+    teaching_group_id: int | None = None,
 ) -> dict[str, Any]:
     course_name = (course_name or "").strip()
     if not course_name:
@@ -263,7 +281,13 @@ def save_registration_marks(
             ),
         }
 
-    chk = _verify_course_access(get_connection_fn, get_current_term_fn, normalize_sid_fn, course_name)
+    chk = _verify_course_access(
+        get_connection_fn,
+        get_current_term_fn,
+        normalize_sid_fn,
+        course_name,
+        teaching_group_id=teaching_group_id,
+    )
     if not chk.get("ok"):
         return chk
 
@@ -355,6 +379,7 @@ def save_registration_marks(
         normalize_sid_fn,
         course_name=cn,
         week_number=wk,
+        teaching_group_id=state.get("teaching_group_id"),
     )
     if not roster.get("ok"):
         return roster

@@ -122,10 +122,48 @@ def test_dean_can_handover_hod_office_to_instructor(app, db_conn):
     assert src["role"] == "instructor"
     assert tgt["role"] == "head_of_department"
     assert int(tgt.get("department_id") or 0) == int(names["dep_id"])
+    # المصدر يعود لقالب instructor النشط عند وجود instructor_id
+    from backend.core.permissions import get_profile_by_id
+
+    src_prof = get_profile_by_id(db_conn, src.get("role_profile_id"))
+    assert src_prof is not None
+    assert src_prof.get("code") == "instructor"
     grants, _denies = load_user_overrides(db_conn, names["instructor"])
     assert CAN_ADD_DEPARTMENT_USERS in grants
     src_grants, _ = load_user_overrides(db_conn, names["hod"])
     assert CAN_ADD_DEPARTMENT_USERS not in src_grants
+
+
+def test_handover_rejects_archived_office_profile(app, db_conn):
+    names = _seed_handover_users(db_conn)
+    cur = db_conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO role_profiles (code, name_ar, base_role, scope_mode, is_system, is_active)
+        VALUES ('custom_archived_office', 'منصب مؤرشف', 'staff', 'college', 0, 0)
+        """
+    )
+    pid = cur.execute(
+        "SELECT id FROM role_profiles WHERE code = 'custom_archived_office'"
+    ).fetchone()[0]
+    cur.execute(
+        "UPDATE users SET role = 'staff', role_profile_id = ? WHERE username = ?",
+        (pid, names["hod"]),
+    )
+    db_conn.commit()
+    with app.test_client() as client:
+        assert _login(client, names["admin_main"]).status_code == 200
+        res = client.post(
+            "/role_profiles/handover",
+            json={
+                "from_username": names["hod"],
+                "to_username": names["instructor"],
+                "transfer_office": True,
+                "transfer_overrides": False,
+                "revert_source": True,
+            },
+        )
+        assert res.status_code == 400
 
 
 def test_dean_cannot_handover_college_dean_office(app, db_conn):

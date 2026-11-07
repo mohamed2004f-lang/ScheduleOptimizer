@@ -1197,10 +1197,12 @@ def admin_backup_page():
 
 
 @admin_bp.route("/permissions")
-@role_required("admin_main", "system_admin")
+@role_required("admin_main", "system_admin", "college_dean")
 def admin_permissions_page():
-    """لوحة صلاحيات تفصيلية — قوالب أدوار وتجاوزات مستخدم."""
-    return render_template("permissions_admin.html")
+    """توجيه موحّد: محرر القوالب في إدارة المستخدمين (إلغاء ازدواجية لوحة قديمة)."""
+    from flask import redirect
+
+    return redirect("/users_admin?tab=profiles", code=302)
 
 
 @admin_bp.route("/backup/status", methods=["GET"])

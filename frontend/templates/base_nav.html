@@ -223,7 +223,7 @@
 <meta name="show-dev-hints" content="{{ '1' if show_dev_hints else '0' }}">
 <script nonce="{{ csp_nonce }}" src="/static/js/common.js?v=20260817"></script>
 <script nonce="{{ csp_nonce }}" src="/static/js/capability-ui.js?v=20261010caps"></script>
-<script nonce="{{ csp_nonce }}" src="/static/js/schedule-stage-grid.js?v=20261010a"></script>
+<script nonce="{{ csp_nonce }}" src="/static/js/schedule-stage-grid.js?v=20261029cols2"></script>
 <script nonce="{{ csp_nonce }}" src="/static/js/guide-catalog.js"></script>
 <script nonce="{{ csp_nonce }}" src="/static/js/page-guide.js"></script>
 <script nonce="{{ csp_nonce }}" src="/static/js/quality-assistant-fab.js" defer></script>
@@ -583,6 +583,7 @@
             <li><a class="dropdown-item" id="navRegistrations" href="/registrations_form">التسجيلات الفعلية</a></li>
             <li><a class="dropdown-item" id="navEnrollmentPlans" href="/enrollment_plans">الإشراف وتسجيل المقررات</a></li>
             <li><a class="dropdown-item" id="navRegistrationRequests" href="/registration_requests_page">طلبات الإضافة والإسقاط</a></li>
+            <li><a class="dropdown-item" id="navStudentAccountRequests" href="/student_account/approvals" style="display:none;">طلبات إنشاء حساب طالب</a></li>
             <li><a class="dropdown-item" id="navTermOpsAffairs" href="/term_ops">تشغيل الفصل</a></li>
             <li><a class="dropdown-item" id="navAttendance" href="/attendance_export">الحضور والغياب</a></li>
             <li><a class="dropdown-item" id="navGraduates" href="/graduates_page">قائمة الخريجين</a></li>
@@ -749,7 +750,7 @@
           </a>
           <ul class="dropdown-menu" aria-labelledby="adminSettingsMenu" id="adminSettingsMenuList">
             <li><a class="dropdown-item" id="navUsersAdmin" href="/users_admin">المستخدمون</a></li>
-            <li><a class="dropdown-item" id="navPermissionsAdmin" href="/admin/permissions" style="display:none;">لوحة الصلاحيات</a></li>
+            <li><a class="dropdown-item" id="navPermissionsAdmin" href="/users_admin?tab=profiles" style="display:none;" aria-hidden="true">قوالب الأدوار</a></li>
             <li><a class="dropdown-item" id="navDepartmentPolicyHead" href="/department_policy_head_page" style="display:none;">اقتراح سياسة نظام التخرج</a></li>
             <li><a class="dropdown-item" id="navDepartmentPolicyApprovals" href="/department_policy_approvals_page" style="display:none;">اعتماد سياسات الأقسام</a></li>
             <li><a class="dropdown-item" id="navAdminBackup" href="/admin/backup_page" style="display:none;">النسخ الاحتياطي الكامل</a></li>

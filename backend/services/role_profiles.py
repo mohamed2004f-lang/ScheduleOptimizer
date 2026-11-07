@@ -14,6 +14,16 @@ from backend.core.permissions import (
     load_profile_permission_keys,
     load_user_overrides,
 )
+from backend.core.role_profile_policy import (
+    CREATABLE_BASE_ROLES,
+    assert_profile_creatable,
+    assert_profile_editable,
+    can_manage_role_profiles,
+    normalize_scope_mode,
+    profile_flags,
+    role_profile_admin_enabled,
+    sanitize_permission_keys,
+)
 from backend.core.user_admin_policy import (
     ADMIN_ONLY_HANDOVER_OFFICES,
     HANDOVER_EXCLUDED_ROLES,
@@ -25,7 +35,7 @@ from backend.core.user_admin_policy import (
     user_dict_is_protected,
 )
 from backend.repositories import users_repo
-from .utilities import get_connection
+from .utilities import get_connection, log_activity
 
 role_profiles_bp = Blueprint("role_profiles", __name__)
 logger = logging.getLogger(__name__)
@@ -87,10 +97,46 @@ def _office_label(conn, user: dict) -> str:
     return _OFFICE_ROLE_LABELS_AR.get(role, role or "منصب")
 
 
+def _active_profile_id_by_code(conn, code: str) -> int | None:
+    cur = conn.cursor()
+    try:
+        row = cur.execute(
+            """
+            SELECT id FROM role_profiles
+            WHERE code = ? AND COALESCE(is_active, 1) = 1
+            LIMIT 1
+            """,
+            (code,),
+        ).fetchone()
+    except Exception:
+        return _profile_id_by_code(conn, code)
+    if not row:
+        return None
+    try:
+        return int(row[0] if not hasattr(row, "keys") else row["id"])
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
 def _fallback_after_office(conn, user: dict) -> tuple[str, int | None, str | None]:
     if user.get("instructor_id") is not None:
-        return "instructor", _profile_id_by_code(conn, "instructor"), None
-    return "staff", None, None
+        return "instructor", _active_profile_id_by_code(conn, "instructor"), None
+    staff_pid = _active_profile_id_by_code(conn, "college_registrar") or _active_profile_id_by_code(
+        conn, "staff"
+    )
+    return "staff", staff_pid, None
+
+
+def _source_office_profile_inactive(conn, src: dict) -> bool:
+    from backend.core.permissions import get_profile_by_id
+
+    pid = src.get("role_profile_id")
+    if pid is None:
+        return False
+    prof = get_profile_by_id(conn, pid)
+    if not prof:
+        return False
+    return int(prof.get("is_active") if prof.get("is_active") is not None else 1) == 0
 
 
 def _handover_items(conn, src: dict, *, actor_session) -> tuple[list[dict], str | None]:
@@ -105,9 +151,14 @@ def _handover_items(conn, src: dict, *, actor_session) -> tuple[list[dict], str 
         actor_session
     )
     blocked = None
+    archived_office = False
     if role == "system_admin" and has_office:
         blocked = "لا يمكن نقل منصب مسؤول النظام."
         office_restricted = True
+    if has_office and _source_office_profile_inactive(conn, src):
+        archived_office = True
+        office_restricted = True
+        blocked = blocked or "قالب المنصب مؤرشف — انقل الصلاحيات الإضافية فقط أو أعد تفعيل القالب."
 
     items = []
     if has_office:
@@ -117,7 +168,7 @@ def _handover_items(conn, src: dict, *, actor_session) -> tuple[list[dict], str 
                 "key": "office",
                 "label_ar": label,
                 "enabled": not office_restricted and blocked is None,
-                "default": not office_restricted and blocked is None,
+                "default": not office_restricted and blocked is None and not archived_office,
                 "restricted": bool(office_restricted or blocked),
                 "note_ar": (
                     blocked
@@ -176,17 +227,43 @@ def _handover_items(conn, src: dict, *, actor_session) -> tuple[list[dict], str 
 @role_profiles_bp.route("/catalog", methods=["GET"])
 @role_required("system_admin", "college_dean", "academic_vice_dean", "admin_main")
 def permission_catalog():
-    return jsonify({"groups": catalog_grouped()})
+    from backend.core.permissions import GRANTABLE_USER_OVERRIDE_KEYS, PERMISSION_CATALOG
+
+    label_by_key = {p["key"]: p.get("label_ar") or p["key"] for p in PERMISSION_CATALOG}
+    grantable = [
+        {"key": k, "label_ar": label_by_key.get(k, k)}
+        for k in sorted(GRANTABLE_USER_OVERRIDE_KEYS)
+    ]
+    return jsonify({
+        "groups": catalog_grouped(),
+        "grantable_override_keys": grantable,
+        "admin_enabled": role_profile_admin_enabled(),
+        "can_manage": can_manage_role_profiles(session),
+    })
 
 
 @role_profiles_bp.route("/list", methods=["GET"])
 @role_required("system_admin", "college_dean", "academic_vice_dean", "admin_main", "head_of_department")
 def list_profiles():
     include_sys = is_system_admin_session(session)
-    profiles = list_role_profiles_for_ui(include_system_admin=include_sys)
+    include_inactive = can_manage_role_profiles(session)
+    with get_connection() as conn:
+        profiles = list_role_profiles_for_ui(
+            include_system_admin=include_sys,
+            conn=conn,
+            include_inactive=include_inactive,
+        )
+        assignable = assignable_roles_for_actor(session, conn=conn)
+    for p in profiles:
+        flags = profile_flags(p)
+        p["locked"] = flags["locked"]
+        p["editable"] = flags["editable"] and can_manage_role_profiles(session) and role_profile_admin_enabled()
     return jsonify({
         "profiles": profiles,
-        "assignable": assignable_roles_for_actor(session),
+        "assignable": assignable,
+        "admin_enabled": role_profile_admin_enabled(),
+        "can_manage": can_manage_role_profiles(session),
+        "creatable_base_roles": sorted(CREATABLE_BASE_ROLES),
     })
 
 
@@ -196,23 +273,233 @@ def profile_detail(code: str):
     from backend.core.capability_gates import panel_effective_keys_for_profile
     from backend.core.permissions import GRANTABLE_USER_OVERRIDE_KEYS
 
-    prof = get_profile_by_code(code)
-    if not prof:
-        return jsonify({"status": "error", "message": "القالب غير موجود"}), 404
-    if prof.get("code") == "system_admin" and not is_system_admin_session(session):
-        return jsonify({"status": "error", "message": "القالب غير موجود"}), 404
     with get_connection() as conn:
-        keys = load_profile_permission_keys(conn, None, code)
+        prof = get_profile_by_code(code, conn=conn)
+        if not prof:
+            return jsonify({"status": "error", "message": "القالب غير موجود"}), 404
+        if prof.get("code") == "system_admin" and not is_system_admin_session(session):
+            return jsonify({"status": "error", "message": "القالب غير موجود"}), 404
+        pid = prof.get("id")
+        keys = load_profile_permission_keys(conn, pid, code)
     stored = set(keys or ())
     effective = panel_effective_keys_for_profile(code, stored)
-    # اللوحة تعرض فقط المفاتيح القابلة للمنح + الافتراضات الفعّالة ضمنها
     panel_keys = sorted((effective | stored) & set(GRANTABLE_USER_OVERRIDE_KEYS))
+    flags = profile_flags(prof)
+    editable = (
+        flags["editable"]
+        and can_manage_role_profiles(session)
+        and role_profile_admin_enabled()
+    )
     return jsonify({
         "profile": prof,
         "permissions": sorted(stored),
         "panel_permissions": panel_keys,
+        "locked": flags["locked"],
+        "editable": editable,
+        "admin_enabled": role_profile_admin_enabled(),
         "leadership_defaults_applied": (prof.get("code") or code) in ("college_dean", "academic_vice_dean"),
     })
+
+
+def _replace_profile_permissions(conn, profile_id: int, keys: set[str]) -> None:
+    cur = conn.cursor()
+    for k in keys:
+        _ensure_permission_definition(conn, k)
+    cur.execute("DELETE FROM role_profile_permissions WHERE profile_id = ?", (int(profile_id),))
+    for k in sorted(keys):
+        cur.execute(
+            """
+            INSERT INTO role_profile_permissions (profile_id, permission_key, granted)
+            VALUES (?, ?, 1)
+            ON CONFLICT(profile_id, permission_key) DO UPDATE SET granted = 1
+            """,
+            (int(profile_id), k),
+        )
+
+
+@role_profiles_bp.route("/<code>/permissions", methods=["PUT"])
+@role_required("system_admin", "admin_main")
+def put_profile_permissions(code: str):
+    """استبدال صلاحيات قالب غير مقفول من كتالوج الصلاحيات الكامل."""
+    data = request.get_json(force=True) or {}
+    keys_in = data.get("permission_keys")
+    if keys_in is None:
+        keys_in = data.get("permissions")
+    if not isinstance(keys_in, list):
+        return jsonify({"status": "error", "message": "permission_keys يجب أن تكون قائمة"}), 400
+
+    actor = (session.get("user") or "").strip() or "system"
+    with get_connection() as conn:
+        from backend.boot.role_profiles_seed import ensure_role_profile_tables, _is_pg
+
+        ensure_role_profile_tables(conn, pg=_is_pg(conn))
+        prof = get_profile_by_code(code, conn=conn)
+        ok, err = assert_profile_editable(session, prof)
+        if not ok:
+            status = 404 if err == "القالب غير موجود." else 403
+            return jsonify({"status": "error", "message": err or "غير مسموح"}), status
+        pid = int(prof["id"])
+        before = load_profile_permission_keys(conn, pid, code)
+        final_keys = sanitize_permission_keys(keys_in)
+        _replace_profile_permissions(conn, pid, final_keys)
+        conn.commit()
+        log_activity(
+            action="role_profile.permissions_updated",
+            details=(
+                f"code={code}; before={len(before or [])}; after={len(final_keys)}; "
+                f"sample={','.join(sorted(final_keys)[:12])}"
+            ),
+            actor=actor,
+        )
+        logger.info("PUT profile permissions code=%s keys=%s actor=%s", code, len(final_keys), actor)
+
+    return jsonify({
+        "status": "ok",
+        "profile_code": code,
+        "permissions": sorted(final_keys),
+        "message": "تم حفظ صلاحيات القالب",
+    }), 200
+
+
+@role_profiles_bp.route("", methods=["POST"])
+@role_required("system_admin", "admin_main")
+def create_profile():
+    """إنشاء قالب مخصص فوق دور أساسي مسموح."""
+    data = request.get_json(force=True) or {}
+    code = (data.get("code") or "").strip().lower()
+    name_ar = (data.get("name_ar") or "").strip()
+    base_role = (data.get("base_role") or "").strip().lower()
+    scope_mode = normalize_scope_mode(data.get("scope_mode"))
+    description_ar = (data.get("description_ar") or "").strip() or None
+    keys_in = data.get("permission_keys") if isinstance(data.get("permission_keys"), list) else data.get("permissions")
+    if not name_ar:
+        return jsonify({"status": "error", "message": "name_ar مطلوب"}), 400
+    ok, err = assert_profile_creatable(session, code=code, base_role=base_role)
+    if not ok:
+        return jsonify({"status": "error", "message": err or "غير مسموح"}), 400
+
+    actor = (session.get("user") or "").strip() or "system"
+    final_keys = sanitize_permission_keys(keys_in or [])
+    with get_connection() as conn:
+        from backend.boot.role_profiles_seed import ensure_role_profile_tables, _is_pg
+
+        ensure_role_profile_tables(conn, pg=_is_pg(conn))
+        cur = conn.cursor()
+        exists = cur.execute("SELECT 1 FROM role_profiles WHERE code = ? LIMIT 1", (code,)).fetchone()
+        if exists:
+            return jsonify({"status": "error", "message": "رمز القالب مستخدم مسبقاً"}), 409
+        cur.execute(
+            """
+            INSERT INTO role_profiles
+            (code, name_ar, base_role, scope_mode, is_system, description_ar, default_home_path, is_active)
+            VALUES (?, ?, ?, ?, 0, ?, NULL, 1)
+            """,
+            (code, name_ar, base_role, scope_mode, description_ar),
+        )
+        row = cur.execute("SELECT id FROM role_profiles WHERE code = ?", (code,)).fetchone()
+        pid = int(row[0] if not hasattr(row, "keys") else row["id"])
+        if final_keys:
+            _replace_profile_permissions(conn, pid, final_keys)
+        conn.commit()
+        log_activity(
+            action="role_profile.created",
+            details=f"code={code}; base_role={base_role}; keys={len(final_keys)}",
+            actor=actor,
+        )
+
+    return jsonify({
+        "status": "ok",
+        "profile": {
+            "id": pid,
+            "code": code,
+            "name_ar": name_ar,
+            "base_role": base_role,
+            "scope_mode": scope_mode,
+            "is_system": 0,
+            "is_active": 1,
+            "description_ar": description_ar,
+        },
+        "permissions": sorted(final_keys),
+        "message": "تم إنشاء القالب",
+    }), 200
+
+
+@role_profiles_bp.route("/<code>", methods=["PATCH"])
+@role_required("system_admin", "admin_main")
+def patch_profile(code: str):
+    """تعديل بيانات قالب غير مقفول (بدون تغيير الرمز/الدور الأساسي)."""
+    data = request.get_json(force=True) or {}
+    actor = (session.get("user") or "").strip() or "system"
+    with get_connection() as conn:
+        from backend.boot.role_profiles_seed import ensure_role_profile_tables, _is_pg
+
+        ensure_role_profile_tables(conn, pg=_is_pg(conn))
+        prof = get_profile_by_code(code, conn=conn)
+        ok, err = assert_profile_editable(session, prof)
+        if not ok:
+            status = 404 if err == "القالب غير موجود." else 403
+            return jsonify({"status": "error", "message": err or "غير مسموح"}), status
+        name_ar = (data.get("name_ar") if "name_ar" in data else prof.get("name_ar") or "").strip()
+        description_ar = data.get("description_ar") if "description_ar" in data else prof.get("description_ar")
+        if description_ar is not None:
+            description_ar = str(description_ar).strip() or None
+        scope_mode = normalize_scope_mode(
+            data.get("scope_mode") if "scope_mode" in data else prof.get("scope_mode")
+        )
+        if not name_ar:
+            return jsonify({"status": "error", "message": "name_ar مطلوب"}), 400
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE role_profiles
+            SET name_ar = ?, description_ar = ?, scope_mode = ?
+            WHERE code = ?
+            """,
+            (name_ar, description_ar, scope_mode, code),
+        )
+        conn.commit()
+        log_activity(
+            action="role_profile.updated",
+            details=f"code={code}; name_ar={name_ar}; scope_mode={scope_mode}",
+            actor=actor,
+        )
+        updated = get_profile_by_code(code, conn=conn)
+    return jsonify({"status": "ok", "profile": updated, "message": "تم تحديث القالب"}), 200
+
+
+@role_profiles_bp.route("/<code>/archive", methods=["POST"])
+@role_required("system_admin", "admin_main")
+def archive_profile(code: str):
+    """أرشفة منطقية لقالب غير مقفول."""
+    data = request.get_json(silent=True) or {}
+    activate = _as_bool(data.get("activate"), False)
+    actor = (session.get("user") or "").strip() or "system"
+    with get_connection() as conn:
+        from backend.boot.role_profiles_seed import ensure_role_profile_tables, _is_pg
+
+        ensure_role_profile_tables(conn, pg=_is_pg(conn))
+        prof = get_profile_by_code(code, conn=conn)
+        ok, err = assert_profile_editable(session, prof)
+        if not ok:
+            status = 404 if err == "القالب غير موجود." else 403
+            return jsonify({"status": "error", "message": err or "غير مسموح"}), status
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE role_profiles SET is_active = ? WHERE code = ?",
+            (1 if activate else 0, code),
+        )
+        conn.commit()
+        log_activity(
+            action="role_profile.archived" if not activate else "role_profile.updated",
+            details=f"code={code}; is_active={1 if activate else 0}",
+            actor=actor,
+        )
+        updated = get_profile_by_code(code, conn=conn)
+    return jsonify({
+        "status": "ok",
+        "profile": updated,
+        "message": "تم تفعيل القالب" if activate else "تم أرشفة القالب",
+    }), 200
 
 
 @role_profiles_bp.route("/handover_options", methods=["GET"])
@@ -280,6 +567,12 @@ def handover_permissions():
             return jsonify({
                 "status": "error",
                 "message": "حسابات الطلبة مستثناة من نقل المناصب الإدارية",
+            }), 400
+
+        if transfer_office and _source_office_profile_inactive(conn, src):
+            return jsonify({
+                "status": "error",
+                "message": "لا يمكن نقل قالب مؤرشف كمنصب — انقل الاستثناءات فقط أو فعّل القالب أولاً",
             }), 400
 
         items, blocked = _handover_items(conn, src, actor_session=session)
@@ -434,6 +727,13 @@ def get_user_overrides():
         grants, denies = load_user_overrides(conn, username)
     from backend.core.permissions import CAN_ADD_DEPARTMENT_USERS
 
+    from backend.core.permissions import GRANTABLE_USER_OVERRIDE_KEYS, PERMISSION_CATALOG
+
+    label_by_key = {p["key"]: p.get("label_ar") or p["key"] for p in PERMISSION_CATALOG}
+    grantable = [
+        {"key": k, "label_ar": label_by_key.get(k, k)}
+        for k in sorted(GRANTABLE_USER_OVERRIDE_KEYS)
+    ]
     return jsonify({
         "status": "ok",
         "username": username,
@@ -442,81 +742,51 @@ def get_user_overrides():
         "denies": sorted(denies),
         "can_add_department_users": CAN_ADD_DEPARTMENT_USERS in grants
         and CAN_ADD_DEPARTMENT_USERS not in denies,
+        "grantable_override_keys": grantable,
     })
-
-
-@role_profiles_bp.route("/catalog", methods=["GET"])
-@role_required("admin_main", "system_admin")
-def permissions_catalog():
-    """كتالوج الصلاحيات مجمّعاً للوحة الأدمن الرئيسي."""
-    return jsonify({"status": "ok", "groups": catalog_grouped()}), 200
 
 
 @role_profiles_bp.route("/profile_permissions", methods=["POST"])
 @role_required("admin_main", "system_admin")
 def save_profile_permissions():
-    """استبدال صلاحيات قالب دور (مفاتيح التشغيل القابلة للمنح)."""
-    from backend.core.permissions import GRANTABLE_USER_OVERRIDE_KEYS, get_profile_by_code
-
+    """توافق قديم: يوجّه إلى استبدال صلاحيات القالب الكامل."""
     data = request.get_json(force=True) or {}
-    code = (data.get("profile_code") or "").strip()
-    keys_in = data.get("permissions")
+    code = (data.get("profile_code") or data.get("code") or "").strip()
+    keys_in = data.get("permission_keys")
+    if keys_in is None:
+        keys_in = data.get("permissions")
     if not code:
         return jsonify({"status": "error", "message": "profile_code مطلوب"}), 400
     if not isinstance(keys_in, list):
         return jsonify({"status": "error", "message": "permissions يجب أن تكون قائمة"}), 400
-    prof = get_profile_by_code(code)
-    if not prof:
-        return jsonify({"status": "error", "message": "القالب غير موجود"}), 404
-    if code == "system_admin":
-        return jsonify({"status": "error", "message": "لا يمكن تعديل قالب مسؤول النظام من هنا"}), 400
-
-    # ادمج مفاتيح القالب الأساسية + المخزّنة غير القابلة للمنح مع مفاتيح اللوحة
-    base_seed = set(prof.get("permissions") or [])
-    managed = set(GRANTABLE_USER_OVERRIDE_KEYS)
-    requested = {str(k).strip() for k in keys_in if str(k).strip()}
-    invalid = requested - managed
-    if invalid:
-        return jsonify({
-            "status": "error",
-            "message": "مفاتيح غير مسموح تعديلها: " + ", ".join(sorted(invalid)[:8]),
-        }), 400
-
-    actor = (session.get("user") or "").strip() or "system"
+    # إعادة استخدام مسار PUT
     with get_connection() as conn:
         from backend.boot.role_profiles_seed import ensure_role_profile_tables, _is_pg
 
         ensure_role_profile_tables(conn, pg=_is_pg(conn))
-        cur = conn.cursor()
-        row = cur.execute("SELECT id FROM role_profiles WHERE code = ? LIMIT 1", (code,)).fetchone()
-        if not row:
-            return jsonify({"status": "error", "message": "القالب غير موجود في قاعدة البيانات — أعد تشغيل التهيئة"}), 404
-        pid = int(row[0] if not hasattr(row, "keys") else row["id"])
-        existing = load_profile_permission_keys(conn, pid, code)
-        final_keys = (set(existing or ()) - managed) | (base_seed - managed) | requested
-        for k in final_keys:
-            _ensure_permission_definition(conn, k)
-        cur.execute("DELETE FROM role_profile_permissions WHERE profile_id = ?", (pid,))
-        for k in sorted(final_keys):
-            cur.execute(
-                """
-                INSERT INTO role_profile_permissions (profile_id, permission_key, granted)
-                VALUES (?, ?, 1)
-                ON CONFLICT(profile_id, permission_key) DO UPDATE SET granted = 1
-                """,
-                (pid, k),
-            )
+        prof = get_profile_by_code(code, conn=conn)
+        ok, err = assert_profile_editable(session, prof)
+        if not ok:
+            status = 404 if (err or "").startswith("القالب غير موجود") else 403
+            return jsonify({"status": "error", "message": err or "غير مسموح"}), status
+        pid = int(prof["id"])
+        before = load_profile_permission_keys(conn, pid, code)
+        final_keys = sanitize_permission_keys(keys_in)
+        _replace_profile_permissions(conn, pid, final_keys)
         conn.commit()
-        logger.info("profile permissions saved code=%s keys=%s actor=%s", code, len(final_keys), actor)
-
-    from backend.core.capability_gates import panel_effective_keys_for_profile
-
-    panel_keys = sorted(panel_effective_keys_for_profile(code, final_keys) & managed)
+        actor = (session.get("user") or "").strip() or "system"
+        log_activity(
+            action="role_profile.permissions_updated",
+            details=(
+                f"code={code}; before={len(before or [])}; after={len(final_keys)}; "
+                f"sample={','.join(sorted(final_keys)[:12])}"
+            ),
+            actor=actor,
+        )
     return jsonify({
         "status": "ok",
         "profile_code": code,
         "permissions": sorted(final_keys),
-        "panel_permissions": panel_keys,
         "message": "تم حفظ صلاحيات القالب",
     }), 200
 
@@ -544,6 +814,10 @@ def set_user_override():
         return jsonify({"status": "error", "message": "granted مطلوب (true/false)"}), 400
     if not username:
         return jsonify({"status": "error", "message": "username مطلوب"}), 400
+    from backend.core.permissions import FORBIDDEN_USER_OVERRIDE_KEYS
+
+    if permission_key in FORBIDDEN_USER_OVERRIDE_KEYS:
+        return jsonify({"status": "error", "message": "صلاحية حساسة لا تُمنح كاستثناء فردي"}), 400
     if permission_key not in GRANTABLE_USER_OVERRIDE_KEYS:
         return jsonify({"status": "error", "message": "صلاحية غير مسموح منحها من هنا"}), 400
 
@@ -607,6 +881,11 @@ def set_user_override():
                     (tgt.get("username") or username, permission_key),
                 )
         conn.commit()
+        log_activity(
+            action="user_override.set" if granted else "user_override.clear",
+            details=f"username={username}; key={permission_key}; granted={int(granted)}",
+            actor=actor,
+        )
         logger.info(
             "user override username=%s key=%s granted=%s actor=%s",
             username, permission_key, granted, actor,

@@ -399,6 +399,14 @@
       {
         const elHeadPolicy = document.getElementById('navDepartmentPolicyHead');
         if (elHeadPolicy) elHeadPolicy.style.display = (role === 'head_of_department') ? '' : 'none';
+        const elStuAcctReq = document.getElementById('navStudentAccountRequests');
+        if (elStuAcctReq) {
+          elStuAcctReq.style.display = (
+            role === 'head_of_department'
+            || role === 'admin_main' || role === 'system_admin' || role === 'admin'
+            || role === 'college_dean'
+          ) ? '' : 'none';
+        }
         const elMainPolicy = document.getElementById('navDepartmentPolicyApprovals');
         if (elMainPolicy) elMainPolicy.style.display = (role === 'admin_main' || role === 'college_dean' || role === 'system_admin') ? '' : 'none';
       }
@@ -469,7 +477,8 @@
           if (elRules) elRules.style.display = navRules ? '' : 'none';
           if (elProjectStatus) elProjectStatus.style.display = '';
           if (elAdminBackup) elAdminBackup.style.display = showPermsPanel ? '' : 'none';
-          if (elPermissionsAdmin) elPermissionsAdmin.style.display = showPermsPanel ? '' : 'none';
+          // لوحة الصلاحيات القديمة أُلغيت — المحرر في /users_admin?tab=profiles
+          if (elPermissionsAdmin) elPermissionsAdmin.style.display = 'none';
           if (elCc) elCc.style.display = (navCollegeCatalog || role === 'head_of_department') ? '' : 'none';
           if (elShared) elShared.style.display = (navCollegeSharedCatalog || role === 'head_of_department') ? '' : 'none';
         }
@@ -1619,11 +1628,12 @@
         }
         reorderMenuByIds('studentAffairsMenuList', [
           'navStudents', 'navRegistrations', 'navEnrollmentPlans', 'navRegistrationRequests',
+          'navStudentAccountRequests',
           'navAttendance', 'navGraduates', 'navWithdrawnFiles',
         ]);
         if (roleKey === 'admin_main') {
           reorderMenuByIds('adminSettingsMenuList', [
-            'navUsersAdmin', 'navPermissionsAdmin', 'navAdminBackup', 'navDepartmentPolicyApprovals',
+            'navUsersAdmin', 'navAdminBackup', 'navDepartmentPolicyApprovals',
             'navProjectStatus', 'navAcademicRules', 'navCollegeCatalog', 'navCollegeSharedCatalog',
           ]);
         } else if (roleKey === 'college_dean') {
@@ -1822,7 +1832,7 @@
         ['/results','navResults'],
         ['/notifications_center','navNotificationsTop'],
         ['/users_admin','navUsersAdmin'],
-        ['/admin/permissions','navPermissionsAdmin'],
+        ['/student_account/approvals','navStudentAccountRequests'],
         ['/department_policy_head_page','navDepartmentPolicyHead'],
         ['/department_policy_approvals_page','navDepartmentPolicyApprovals'],
         ['/admin/project_status','navProjectStatus'],

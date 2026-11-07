@@ -640,8 +640,20 @@
     const stageOpts = Object.assign({}, opts, { stacked: false, plainCourses: true });
     const tableExtra = isPrint ? ' timetable--stages-print' : ' timetable--stages-ruled';
 
+    // colgroup ضروري: صف الترويسة الأول بـ colspan يساوي عرض المقرر/الأستاذ/القاعة
     let html =
-      `<table class="timetable timetable--stages${tableExtra}${compactClass}${cleanClass}"><thead>` +
+      `<table class="timetable timetable--stages${tableExtra}${compactClass}${cleanClass}">` +
+      `<colgroup>` +
+      `<col class="col-day" />` +
+      `<col class="col-time" />`;
+    BUCKETS.forEach(() => {
+      html +=
+        `<col class="col-course" />` +
+        `<col class="col-inst" />` +
+        `<col class="col-room" />`;
+    });
+    html +=
+      `</colgroup><thead>` +
       `<tr>` +
       `<th rowspan="2" class="day-header">اليوم</th>` +
       `<th rowspan="2" class="time-header">الوقت</th>`;
@@ -660,9 +672,15 @@
     });
     html += '</tr></thead><tbody>';
 
-    function appendStageTimeRow(day, time, idx) {
-      html += `<tr class="stage-time-row${idx === 0 ? ' is-day-start' : ''}">`;
-      html += dayHeaderCellHtml(day, stageOpts, idx === 0 ? 'start' : 'cont');
+    function appendStageTimeRow(day, time, idx, timesLen) {
+      const isStart = idx === 0;
+      const isEnd = idx === timesLen - 1;
+      const rowClass =
+        'stage-time-row' +
+        (isStart ? ' is-day-start' : '') +
+        (isEnd ? ' is-day-end' : '');
+      html += `<tr class="${rowClass}">`;
+      html += dayHeaderCellHtml(day, stageOpts, isStart ? 'start' : 'cont');
       html += timeCellHtml(day, time, stageOpts);
       const packed = assignPackDisplayColumns(slotsMap[`${day}|${time}`] || []);
       BUCKETS.forEach((b) => {
@@ -679,7 +697,7 @@
       }
       if (!times.length) return;
       anyRow = true;
-      times.forEach((time, idx) => appendStageTimeRow(day, time, idx));
+      times.forEach((time, idx) => appendStageTimeRow(day, time, idx, times.length));
     });
 
     if (!anyRow) {
@@ -687,7 +705,7 @@
         ? unionFallback
         : ['09:00-11:00', '11:00-12:00', '12:00-13:00'];
       const day0 = daysList()[0];
-      defTimes.forEach((time, idx) => appendStageTimeRow(day0, time, idx));
+      defTimes.forEach((time, idx) => appendStageTimeRow(day0, time, idx, defTimes.length));
     }
 
     html += '</tbody></table>';

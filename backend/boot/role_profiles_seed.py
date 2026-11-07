@@ -5,8 +5,11 @@ from __future__ import annotations
 import logging
 
 from backend.core.permissions import PERMISSION_CATALOG, ROLE_PROFILE_SEED
+from backend.core.role_profile_policy import LOCKED_PROFILE_CODES
 
 logger = logging.getLogger(__name__)
+
+_SEED_CODES = frozenset(p["code"] for p in ROLE_PROFILE_SEED)
 
 # مفاتيح تشغيل قسم يجب ألا تبقى ممنوحة افتراضياً لقالب العميد/الوكيل
 _LEADERSHIP_STALE_DEPT_OPS = (
@@ -42,7 +45,8 @@ ROLE_PROFILES_DDL = [
         scope_mode TEXT NOT NULL DEFAULT 'none',
         is_system INTEGER NOT NULL DEFAULT 0,
         description_ar TEXT,
-        default_home_path TEXT
+        default_home_path TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1
     )
     """,
     """
@@ -83,7 +87,8 @@ ROLE_PROFILES_DDL_PG = [
         scope_mode TEXT NOT NULL DEFAULT 'none',
         is_system INTEGER NOT NULL DEFAULT 0,
         description_ar TEXT,
-        default_home_path TEXT
+        default_home_path TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1
     )
     """,
     """
@@ -113,14 +118,28 @@ def ensure_role_profile_tables(conn, *, pg: bool = False) -> None:
             cur.execute(stmt)
         except Exception:
             logger.exception("role profile DDL failed")
+    # ترقية: عمود is_active للقواعد القديمة
+    try:
+        if pg:
+            cur.execute(
+                "ALTER TABLE role_profiles ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1"
+            )
+        else:
+            cols = [r[1] for r in cur.execute("PRAGMA table_info(role_profiles)").fetchall()]
+            if "is_active" not in cols:
+                cur.execute(
+                    "ALTER TABLE role_profiles ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
+                )
+    except Exception:
+        logger.debug("role_profiles.is_active column ensure skipped", exc_info=True)
     conn.commit()
 
 
 def seed_role_profiles(conn) -> dict:
-    """يُعبّئ التعاريف والقوالب إن لم تكن موجودة."""
+    """يُعبّئ التعاريف والقوالب إن لم تكن موجودة — دون مسح تخصيصات القوالب المخصصة."""
     ensure_role_profile_tables(conn, pg=_is_pg(conn))
     cur = conn.cursor()
-    stats = {"permissions": 0, "profiles": 0, "links": 0}
+    stats = {"permissions": 0, "profiles": 0, "links": 0, "links_inserted": 0, "custom_skipped": 0}
     for i, p in enumerate(PERMISSION_CATALOG):
         cur.execute(
             """
@@ -132,10 +151,16 @@ def seed_role_profiles(conn) -> dict:
         )
         stats["permissions"] += 1
     for prof in ROLE_PROFILE_SEED:
+        code = prof["code"]
+        existing = cur.execute(
+            "SELECT id, COALESCE(is_system, 0) FROM role_profiles WHERE code = ? LIMIT 1",
+            (code,),
+        ).fetchone()
+        existed = existing is not None
         cur.execute(
             """
-            INSERT INTO role_profiles (code, name_ar, base_role, scope_mode, is_system, default_home_path)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO role_profiles (code, name_ar, base_role, scope_mode, is_system, default_home_path, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, 1)
             ON CONFLICT(code) DO UPDATE SET
               name_ar = excluded.name_ar,
               base_role = excluded.base_role,
@@ -144,7 +169,7 @@ def seed_role_profiles(conn) -> dict:
               default_home_path = excluded.default_home_path
             """,
             (
-                prof["code"],
+                code,
                 prof["name_ar"],
                 prof["base_role"],
                 prof.get("scope_mode", "none"),
@@ -153,20 +178,53 @@ def seed_role_profiles(conn) -> dict:
             ),
         )
         stats["profiles"] += 1
-        row = cur.execute("SELECT id FROM role_profiles WHERE code = ?", (prof["code"],)).fetchone()
+        row = cur.execute("SELECT id FROM role_profiles WHERE code = ?", (code,)).fetchone()
         if not row:
             continue
-        pid = row[0] if not hasattr(row, "keys") else row["id"]
-        for pk in prof.get("permissions") or []:
-            cur.execute(
-                """
-                INSERT INTO role_profile_permissions (profile_id, permission_key, granted)
-                VALUES (?, ?, 1)
-                ON CONFLICT(profile_id, permission_key) DO UPDATE SET granted = 1
-                """,
-                (int(pid), pk),
-            )
-            stats["links"] += 1
+        pid = int(row[0] if not hasattr(row, "keys") else row["id"])
+        locked = code in LOCKED_PROFILE_CODES
+        if locked:
+            # مزامنة كاملة للقوالب المقفلة
+            for pk in prof.get("permissions") or []:
+                cur.execute(
+                    """
+                    INSERT INTO role_profile_permissions (profile_id, permission_key, granted)
+                    VALUES (?, ?, 1)
+                    ON CONFLICT(profile_id, permission_key) DO UPDATE SET granted = 1
+                    """,
+                    (pid, pk),
+                )
+                stats["links"] += 1
+        else:
+            # قوالب seed غير مقفلة: أضف المفاتيح الناقصة فقط (لا تُلغِ تخصيصات سابقة)
+            for pk in prof.get("permissions") or []:
+                cur.execute(
+                    """
+                    INSERT INTO role_profile_permissions (profile_id, permission_key, granted)
+                    VALUES (?, ?, 1)
+                    ON CONFLICT(profile_id, permission_key) DO NOTHING
+                    """,
+                    (pid, pk),
+                )
+                try:
+                    if cur.rowcount:
+                        stats["links_inserted"] += 1
+                except Exception:
+                    pass
+                stats["links"] += 1
+        if existed and not locked and int(prof.get("is_system") or 0) == 0:
+            stats["custom_skipped"] += 0  # placeholder for metrics clarity
+    # لا تلمس قوالب DB غير الموجودة في seed (مخصصة)
+    try:
+        custom_rows = cur.execute(
+            "SELECT code FROM role_profiles WHERE code NOT IN ({})".format(
+                ",".join("?" for _ in _SEED_CODES)
+            ),
+            tuple(_SEED_CODES),
+        ).fetchall()
+        stats["custom_profiles"] = len(custom_rows or [])
+    except Exception:
+        stats["custom_profiles"] = 0
     sanitize = sanitize_leadership_profile_permissions(conn)
     stats["leadership_sanitized"] = sanitize
     conn.commit()

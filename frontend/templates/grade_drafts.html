@@ -216,7 +216,15 @@
                 <option value="">اختر مسودة مرسلة...</option>
               </select>
               <button type="button" class="btn btn-sm btn-danger" id="btnQuickRejectPending">رفض وإرجاع</button>
+              <select id="pendingInstructorFilter" class="form-select form-select-sm" style="max-width:220px;" title="تصفية حسب الأستاذ">
+                <option value="">كل الأساتذة</option>
+              </select>
+              <div class="form-check mb-0">
+                <input class="form-check-input" type="checkbox" id="pendingGroupByInstructor">
+                <label class="form-check-label small" for="pendingGroupByInstructor">تجميع حسب الأستاذ</label>
+              </div>
             </div>
+            <p class="form-text small mb-0 mt-1">«عرض المقرر» يجمع درجات كل المجموعات للقراءة فقط — الاعتماد لكل مسودة على حدة.</p>
           </div>
           <div class="table-responsive">
             <table class="table table-sm mb-0">
@@ -324,6 +332,35 @@
               <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
               <button type="button" class="btn btn-outline-danger" id="btnRejectFromModal">رفض وإرجاع</button>
               <button type="button" class="btn btn-success" id="btnApproveFromModal">اعتماد ونشر</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal fade" id="courseOverviewModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="courseOverviewTitle">درجات المقرر — كل المجموعات</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+            </div>
+            <div class="modal-body">
+              <div id="courseOverviewMeta" class="small text-muted mb-2"></div>
+              <div id="courseOverviewDrafts" class="mb-3"></div>
+              <div class="table-responsive">
+                <table class="table table-sm table-bordered">
+                  <thead class="table-light">
+                    <tr>
+                      <th>الطالب</th><th>المجموعة</th><th>الأستاذ</th><th>المرحلة</th>
+                      <th>أعمال</th><th>جزئي</th><th>نهائي</th><th>المحسوب</th><th>الحالة</th>
+                    </tr>
+                  </thead>
+                  <tbody id="courseOverviewBody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
             </div>
           </div>
         </div>
@@ -1593,32 +1630,9 @@
             await returnDraft(id);
           };
         }
-        if (!list.length) {
-          tbody.innerHTML = '';
-          empty.classList.remove('d-none');
-          return;
-        }
-        empty.classList.add('d-none');
-        tbody.innerHTML = '';
-        list.forEach(p => {
-          const tr = document.createElement('tr');
-          tr.innerHTML = '<td>' + formatCourseGroupCell(p.course_name, p) + '</td><td>' + esc(p.instructor_name || '') + '</td><td>' + esc(p.submitted_at || '—') + '</td><td>' +
-            '<div class="d-grid gap-1" style="min-width:130px;">' +
-            '<button type="button" class="btn btn-sm btn-danger" data-return="' + esc(p.id) + '">رفض وإرجاع</button>' +
-            '<button type="button" class="btn btn-sm btn-success" data-approve="' + esc(p.id) + '">اعتماد</button>' +
-            '<button type="button" class="btn btn-sm btn-outline-secondary" data-preview="' + esc(p.id) + '">معاينة</button>' +
-            '</div></td>';
-          tbody.appendChild(tr);
-        });
-        tbody.querySelectorAll('[data-preview]').forEach(btn => {
-          btn.addEventListener('click', () => previewDraft(Number(btn.getAttribute('data-preview'))));
-        });
-        tbody.querySelectorAll('[data-approve]').forEach(btn => {
-          btn.addEventListener('click', () => approveDraft(Number(btn.getAttribute('data-approve'))));
-        });
-        tbody.querySelectorAll('[data-return]').forEach(btn => {
-          btn.addEventListener('click', () => returnDraft(Number(btn.getAttribute('data-return'))));
-        });
+        window.__approverPendingDrafts = list;
+        fillPendingInstructorFilter(list);
+        renderApproverPendingDrafts();
       } catch (e) {
         console.error(e);
         tbody.innerHTML = '<tr><td colspan="4">تعذر تحميل القائمة</td></tr>';
@@ -1627,6 +1641,164 @@
       loadCorrectionRequests().catch(() => {});
       loadApproverSpecialCases().catch(() => {});
     }
+
+    function fillPendingInstructorFilter(list) {
+      const sel = document.getElementById('pendingInstructorFilter');
+      if (!sel) return;
+      const prev = sel.value;
+      const map = new Map();
+      (list || []).forEach(p => {
+        const id = Number(p.instructor_id || 0);
+        if (!id) return;
+        if (!map.has(id)) map.set(id, p.instructor_name || ('#' + id));
+      });
+      sel.innerHTML = '<option value="">كل الأساتذة</option>';
+      Array.from(map.entries()).sort((a, b) => String(a[1]).localeCompare(String(b[1]), 'ar')).forEach(([id, name]) => {
+        const op = document.createElement('option');
+        op.value = String(id);
+        op.textContent = name;
+        sel.appendChild(op);
+      });
+      if (prev && map.has(Number(prev))) sel.value = prev;
+    }
+
+    function renderApproverPendingDrafts() {
+      const tbody = document.getElementById('pendingBody');
+      const empty = document.getElementById('pendingEmpty');
+      if (!tbody || !empty) return;
+      const all = window.__approverPendingDrafts || [];
+      const filterId = (document.getElementById('pendingInstructorFilter') || {}).value || '';
+      const groupBy = !!(document.getElementById('pendingGroupByInstructor') || {}).checked;
+      let list = all.slice();
+      if (filterId) list = list.filter(p => String(p.instructor_id || '') === String(filterId));
+      if (groupBy) {
+        list.sort((a, b) => {
+          const na = (a.instructor_name || '').localeCompare(b.instructor_name || '', 'ar');
+          if (na !== 0) return na;
+          return (a.course_name || '').localeCompare(b.course_name || '', 'ar');
+        });
+      }
+      if (!list.length) {
+        tbody.innerHTML = '';
+        empty.classList.remove('d-none');
+        return;
+      }
+      empty.classList.add('d-none');
+      tbody.innerHTML = '';
+      let lastInst = null;
+      list.forEach(p => {
+        if (groupBy) {
+          const key = String(p.instructor_id || '') + '|' + (p.instructor_name || '');
+          if (key !== lastInst) {
+            lastInst = key;
+            const hr = document.createElement('tr');
+            hr.className = 'table-light';
+            hr.innerHTML = '<td colspan="4" class="fw-semibold small py-2">' + esc(p.instructor_name || 'بدون أستاذ') + '</td>';
+            tbody.appendChild(hr);
+          }
+        }
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td>' + formatCourseGroupCell(p.course_name, p) + '</td><td>' + esc(p.instructor_name || '') + '</td><td>' + esc(p.submitted_at || '—') + '</td><td>' +
+          '<div class="d-grid gap-1" style="min-width:130px;">' +
+          '<button type="button" class="btn btn-sm btn-danger" data-return="' + esc(p.id) + '">رفض وإرجاع</button>' +
+          '<button type="button" class="btn btn-sm btn-success" data-approve="' + esc(p.id) + '">اعتماد</button>' +
+          '<button type="button" class="btn btn-sm btn-outline-secondary" data-preview="' + esc(p.id) + '">معاينة</button>' +
+          '<button type="button" class="btn btn-sm btn-outline-primary" data-overview-course="' + esc(p.course_name) + '">عرض المقرر</button>' +
+          '</div></td>';
+        tbody.appendChild(tr);
+      });
+      tbody.querySelectorAll('[data-preview]').forEach(btn => {
+        btn.addEventListener('click', () => previewDraft(Number(btn.getAttribute('data-preview'))));
+      });
+      tbody.querySelectorAll('[data-approve]').forEach(btn => {
+        btn.addEventListener('click', () => approveDraft(Number(btn.getAttribute('data-approve'))));
+      });
+      tbody.querySelectorAll('[data-return]').forEach(btn => {
+        btn.addEventListener('click', () => returnDraft(Number(btn.getAttribute('data-return'))));
+      });
+      tbody.querySelectorAll('[data-overview-course]').forEach(btn => {
+        btn.addEventListener('click', () => openApproverCourseOverview(btn.getAttribute('data-overview-course') || ''));
+      });
+    }
+
+    function draftPhaseLabelAr(ph) {
+      const p = (ph || '').toLowerCase();
+      if (p === 'partial') return 'جزئي';
+      if (p === 'final') return 'نهائي';
+      if (p === 'combined') return 'مجمّع';
+      return ph || '—';
+    }
+
+    function draftStatusLabelAr(st) {
+      const s = (st || '').trim();
+      if (s === 'Submitted') return 'مرسلة';
+      if (s === 'Approved') return 'معتمدة';
+      if (s === 'Rejected') return 'مرفوضة';
+      if (s === 'Draft') return 'مسودة';
+      return s || '—';
+    }
+
+    async function openApproverCourseOverview(courseName) {
+      const title = document.getElementById('courseOverviewTitle');
+      const meta = document.getElementById('courseOverviewMeta');
+      const draftsEl = document.getElementById('courseOverviewDrafts');
+      const body = document.getElementById('courseOverviewBody');
+      if (!courseName) return;
+      if (title) title.textContent = 'درجات المقرر — ' + courseName;
+      if (meta) meta.textContent = 'جاري التحميل…';
+      if (draftsEl) draftsEl.innerHTML = '';
+      if (body) body.innerHTML = '<tr><td colspan="9" class="text-muted text-center">…</td></tr>';
+      const modalEl = document.getElementById('courseOverviewModal');
+      if (modalEl && window.bootstrap) bootstrap.Modal.getOrCreateInstance(modalEl).show();
+      try {
+        const r = await fetch('/grades/drafts/course_overview?course_name=' + encodeURIComponent(courseName), { credentials: 'include' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          if (meta) meta.textContent = j.message || 'تعذر التحميل';
+          if (body) body.innerHTML = '';
+          return;
+        }
+        if (meta) {
+          meta.textContent = 'الفصل: ' + (j.semester || '—') +
+            ' — مسودات: ' + (j.draft_count || 0) +
+            ' — صفوف: ' + (j.student_count || 0) +
+            ' (قراءة فقط)';
+        }
+        if (draftsEl) {
+          const ds = j.drafts || [];
+          draftsEl.innerHTML = ds.length
+            ? '<ul class="small mb-0">' + ds.map(d =>
+                '<li>' + esc(d.group_display_label || 'مجموعة') + ' — ' + esc(d.instructor_name || '') +
+                ' — ' + draftPhaseLabelAr(d.draft_phase) + ' — ' + draftStatusLabelAr(d.status) +
+                ' (' + (d.item_count || 0) + ')</li>'
+              ).join('') + '</ul>'
+            : '<p class="small text-muted mb-0">لا مسودات.</p>';
+        }
+        if (body) {
+          const students = j.students || [];
+          body.innerHTML = students.length
+            ? students.map(s =>
+                '<tr><td>' + esc(s.student_name || '') +
+                '<div class="small text-muted" dir="ltr">' + esc(s.student_id || '') + '</div></td>' +
+                '<td>' + esc(s.group_display_label || '—') + '</td>' +
+                '<td>' + esc(s.instructor_name || '') + '</td>' +
+                '<td>' + draftPhaseLabelAr(s.draft_phase) + '</td>' +
+                '<td>' + esc(s.coursework ?? '—') + '</td>' +
+                '<td>' + esc(s.midterm ?? '—') + '</td>' +
+                '<td>' + esc(s.final_exam ?? '—') + '</td>' +
+                '<td>' + esc(s.computed_total ?? '—') + '</td>' +
+                '<td>' + draftStatusLabelAr(s.draft_status) + '</td></tr>'
+              ).join('')
+            : '<tr><td colspan="9" class="text-muted text-center">لا درجات.</td></tr>';
+        }
+      } catch (e) {
+        console.error(e);
+        if (meta) meta.textContent = 'خطأ في الاتصال';
+      }
+    }
+
+    document.getElementById('pendingInstructorFilter')?.addEventListener('change', renderApproverPendingDrafts);
+    document.getElementById('pendingGroupByInstructor')?.addEventListener('change', renderApproverPendingDrafts);
 
     async function loadCorrectionRequests() {
       const tbody = document.getElementById('correctionReqBody');

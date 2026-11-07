@@ -264,19 +264,43 @@
           return;
         }
         function courseLabel(item) {
-          let label = item.course_code
-            ? `${item.course_name} — ${item.course_code}`
-            : item.course_name;
+          let label = item.display_name || item.course_name || '';
+          if (item.course_code && !(item.display_name || '').includes(item.course_code)) {
+            label = item.course_code ? `${label} (${item.course_code})` : label;
+          }
           if (item.registration_only) label += ' [تسجيل فقط]';
           return label;
         }
-        const sorted = rows.sort((a, b) => (a.course_name || '').localeCompare(b.course_name || '', 'ar'));
+        function optionValue(item) {
+          if (item.option_key) return item.option_key;
+          const tgid = item.teaching_group_id;
+          if (tgid) return `${item.course_name}||${tgid}`;
+          return `${item.course_name || ''}||`;
+        }
+        function parseOption(val) {
+          const text = String(val || '');
+          const idx = text.indexOf('||');
+          if (idx < 0) return { course: text, teachingGroupId: null };
+          const course = text.slice(0, idx);
+          const rest = text.slice(idx + 2).trim();
+          const n = parseInt(rest, 10);
+          return { course, teachingGroupId: Number.isFinite(n) && n > 0 ? n : null };
+        }
+        window.__attendanceParseOption = parseOption;
+        const sorted = rows.sort((a, b) => {
+          const ca = (a.course_name || '').localeCompare(b.course_name || '', 'ar');
+          if (ca !== 0) return ca;
+          const ga = Number(a.teaching_group_id || 0);
+          const gb = Number(b.teaching_group_id || 0);
+          return ga - gb;
+        });
         if (select) {
           select.innerHTML = '';
           sorted.forEach((item) => {
             const opt = document.createElement('option');
-            opt.value = item.course_name;
+            opt.value = optionValue(item);
             opt.textContent = courseLabel(item);
+            if (item.teaching_group_id) opt.dataset.teachingGroupId = String(item.teaching_group_id);
             select.appendChild(opt);
           });
         }
@@ -284,8 +308,9 @@
           registerSelect.innerHTML = '';
           sorted.forEach((item) => {
             const opt = document.createElement('option');
-            opt.value = item.course_name;
+            opt.value = optionValue(item);
             opt.textContent = courseLabel(item);
+            if (item.teaching_group_id) opt.dataset.teachingGroupId = String(item.teaching_group_id);
             registerSelect.appendChild(opt);
           });
         }
@@ -371,7 +396,9 @@
         feedback.className = 'small text-muted';
         feedback.textContent = 'جاري التحميل...';
       }
-      const course = courseSel?.value || '';
+      const raw = courseSel?.value || '';
+      const parsed = (window.__attendanceParseOption || ((v) => ({ course: v, teachingGroupId: null })))(raw);
+      const course = parsed.course || '';
       const week = weekSel?.value || '1';
       if (!course) {
         if (feedback) {
@@ -381,7 +408,10 @@
         return;
       }
       try {
-        const url = `/students/attendance/register/roster?course=${encodeURIComponent(course)}&week=${encodeURIComponent(week)}`;
+        let url = `/students/attendance/register/roster?course=${encodeURIComponent(course)}&week=${encodeURIComponent(week)}`;
+        if (parsed.teachingGroupId) {
+          url += `&teaching_group_id=${encodeURIComponent(parsed.teachingGroupId)}`;
+        }
         const resp = await fetch(url, { credentials: 'include' });
         const json = await resp.json().catch(() => null);
         if (!resp.ok) {
@@ -394,7 +424,8 @@
         renderRosterTable(json);
         if (feedback) {
           feedback.className = 'small text-success';
-          feedback.textContent = `تم تحميل ${(json.students || []).length} طالب — الأسبوع ${json.week_number}`;
+          const g = json.group_label ? ` — مجموعة ${json.group_label}` : '';
+          feedback.textContent = `تم تحميل ${(json.students || []).length} طالب${g} — الأسبوع ${json.week_number}`;
         }
       } catch (e) {
         console.error(e);
@@ -409,7 +440,9 @@
       const feedback = document.getElementById('register-feedback');
       const courseSel = document.getElementById('register-course-select');
       const weekSel = document.getElementById('register-week-select');
-      const course = courseSel?.value || '';
+      const raw = courseSel?.value || '';
+      const parsed = (window.__attendanceParseOption || ((v) => ({ course: v, teachingGroupId: null })))(raw);
+      const course = parsed.course || '';
       const week = Number(weekSel?.value || 1);
       if (!course || !rosterData) return;
       const marks = [];
@@ -424,11 +457,13 @@
         feedback.textContent = 'جاري الحفظ...';
       }
       try {
+        const payload = { course_name: course, week_number: week, marks };
+        if (parsed.teachingGroupId) payload.teaching_group_id = parsed.teachingGroupId;
         const resp = await fetch('/students/attendance/register/save', {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ course_name: course, week_number: week, marks }),
+          body: JSON.stringify(payload),
         });
         const json = await resp.json().catch(() => null);
         if (!resp.ok) {

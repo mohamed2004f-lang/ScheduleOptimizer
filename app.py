@@ -22,6 +22,7 @@ from backend.services.registration_requests import registration_requests_bp
 from backend.services.notifications import notifications_bp
 from backend.services.users import users_bp
 from backend.services.role_profiles import role_profiles_bp
+from backend.services.student_account_requests import student_account_bp
 from backend.services.academic_calendar import academic_calendar_bp
 from backend.services.academic_rules import ACADEMIC_RULES_ROLES, academic_rules_bp
 from backend.services.instructors import instructors_bp
@@ -279,6 +280,7 @@ app.register_blueprint(registration_requests_bp, url_prefix="/")
 app.register_blueprint(notifications_bp, url_prefix="/notifications")
 app.register_blueprint(users_bp, url_prefix="/users")
 app.register_blueprint(role_profiles_bp, url_prefix="/role_profiles")
+app.register_blueprint(student_account_bp, url_prefix="/student_account")
 app.register_blueprint(academic_calendar_bp, url_prefix="/academic_calendar")
 from backend.services.term_ops_routes import term_ops_bp
 from backend.services.term_offerings import term_offerings_bp

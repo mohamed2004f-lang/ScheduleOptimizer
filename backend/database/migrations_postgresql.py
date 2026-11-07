@@ -1385,8 +1385,26 @@ def _ensure_tables_postgresql() -> None:
         except Exception as e:
             logger.warning("term_engine backfill (postgresql): %s", e)
         try:
-            from backend.boot.role_profiles_seed import migrate_legacy_admin_to_system, seed_role_profiles
+            from backend.services.student_account_requests import _ensure_table as _ensure_sar
 
+            _ensure_sar(conn)
+        except Exception as e:
+            logger.warning("student_account_requests schema (postgresql): %s", e)
+
+        try:
+            from backend.boot.role_profiles_seed import (
+                ensure_role_profile_tables,
+                migrate_legacy_admin_to_system,
+                seed_role_profiles,
+            )
+
+            ensure_role_profile_tables(conn, pg=True)
+            try:
+                cur.execute(
+                    "ALTER TABLE role_profiles ADD COLUMN IF NOT EXISTS is_active INTEGER NOT NULL DEFAULT 1"
+                )
+            except Exception:
+                pass
             seed_role_profiles(conn)
             try:
                 from config import ADMIN_USERNAME

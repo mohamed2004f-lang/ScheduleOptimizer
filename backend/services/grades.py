@@ -1193,7 +1193,8 @@ def draft_roster_for_course():
 @grades_bp.route("/drafts/pending", methods=["GET"])
 @role_required("admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
 def list_pending_grade_drafts():
-    """مسودات بانتظار الاعتماد للفصل الحالي."""
+    """مسودات بانتظار الاعتماد للفصل الحالي. اختياري: instructor_id للتصفية."""
+    instructor_filter = request.args.get("instructor_id", type=int)
     with get_connection() as conn:
         semester_label = _current_semester_label(conn)
         cur = conn.cursor()
@@ -1201,22 +1202,165 @@ def list_pending_grade_drafts():
             return jsonify({"status": "ok", "pending": [], "semester": ""}), 200
         gd_cols = {c.lower() for c in fetch_table_columns(conn, "grade_drafts")}
         tgid_col = ", d.teaching_group_id" if "teaching_group_id" in gd_cols else ""
-        rows = cur.execute(
-            f"""
-            SELECT d.id, d.semester, d.course_name, d.section_id{tgid_col}, d.grading_mode, d.status,
+        dp_col = ", d.draft_phase" if "draft_phase" in gd_cols else ""
+        sql = f"""
+            SELECT d.id, d.semester, d.course_name, d.section_id{tgid_col}{dp_col}, d.grading_mode, d.status,
                    d.created_at, d.updated_at, d.submitted_at,
                    d.instructor_id, COALESCE(i.name, '') AS instructor_name
             FROM grade_drafts d
             LEFT JOIN instructors i ON i.id = d.instructor_id
             WHERE d.semester = ? AND d.status = 'Submitted'
-            ORDER BY d.submitted_at DESC, d.course_name, d.section_id
-            """,
-            (semester_label,),
-        ).fetchall()
+        """
+        params: list = [semester_label]
+        if instructor_filter is not None and instructor_filter > 0:
+            sql += " AND d.instructor_id = ?"
+            params.append(int(instructor_filter))
+        sql += " ORDER BY d.submitted_at DESC, d.course_name, d.section_id"
+        rows = cur.execute(sql, tuple(params)).fetchall()
         pending = [dict(r) for r in rows] if rows else []
         _enrich_drafts_with_group_labels(conn, pending)
         pending = filter_items_for_course_hod_scope(conn, _current_user_name(), pending)
     return jsonify({"status": "ok", "pending": pending, "semester": semester_label}), 200
+
+
+@grades_bp.route("/drafts/course_overview", methods=["GET"])
+@role_required("admin_main", "system_admin", "college_dean", "academic_vice_dean", "head_of_department")
+def grade_drafts_course_overview():
+    """
+    معاينة قراءة فقط: كل مسودات مقرر في الفصل الحالي عبر مجموعات التدريس.
+    query: course_name (مطلوب)، draft_phase اختياري، statuses=Submitted,Approved (افتراضي).
+    """
+    course_name = (request.args.get("course_name") or "").strip()
+    if not course_name:
+        return jsonify({"status": "error", "message": "course_name مطلوب"}), 400
+    phase_raw = (request.args.get("draft_phase") or "").strip().lower()
+    statuses_raw = (request.args.get("statuses") or "Submitted,Approved").strip()
+    wanted_statuses = [
+        s.strip() for s in statuses_raw.split(",") if s.strip()
+    ] or ["Submitted", "Approved"]
+
+    with get_connection() as conn:
+        semester_label = _current_semester_label(conn)
+        if not semester_label:
+            return jsonify({
+                "status": "ok",
+                "course_name": course_name,
+                "semester": "",
+                "drafts": [],
+                "students": [],
+            }), 200
+
+        cur = conn.cursor()
+        gd_cols = {c.lower() for c in fetch_table_columns(conn, "grade_drafts")}
+        tgid_col = ", d.teaching_group_id" if "teaching_group_id" in gd_cols else ""
+        dp_col = ", d.draft_phase" if "draft_phase" in gd_cols else ""
+        st_ph = ",".join("?" for _ in wanted_statuses)
+        sql = f"""
+            SELECT d.id, d.semester, d.course_name, d.section_id{tgid_col}{dp_col},
+                   d.grading_mode, d.status, d.submitted_at, d.approved_at,
+                   d.instructor_id, COALESCE(i.name, '') AS instructor_name
+            FROM grade_drafts d
+            LEFT JOIN instructors i ON i.id = d.instructor_id
+            WHERE d.semester = ?
+              AND lower(trim(d.course_name)) = lower(trim(?))
+              AND d.status IN ({st_ph})
+        """
+        params: list = [semester_label, course_name] + wanted_statuses
+        if phase_raw in ("partial", "final", "combined"):
+            if "draft_phase" in gd_cols:
+                sql += " AND COALESCE(d.draft_phase, 'combined') = ?"
+                params.append(phase_raw)
+        sql += " ORDER BY d.instructor_id, d.teaching_group_id, d.id"
+        rows = cur.execute(sql, tuple(params)).fetchall()
+        drafts = [dict(r) for r in rows] if rows else []
+        _enrich_drafts_with_group_labels(conn, drafts)
+        actor = _current_user_name()
+        drafts = filter_items_for_course_hod_scope(conn, actor, drafts)
+        if not drafts:
+            # تحقق أن المقرر ضمن نطاق الرئيس أصلاً
+            from backend.core.department_scope_policy import (
+                actor_bypasses_course_department_guard,
+                hod_may_operate_on_course,
+            )
+            if not actor_bypasses_course_department_guard(conn, actor):
+                if not hod_may_operate_on_course(conn, actor, course_name, semester=semester_label):
+                    return jsonify({"status": "error", "message": "المقرر خارج نطاق قسمك"}), 403
+            return jsonify({
+                "status": "ok",
+                "course_name": course_name,
+                "semester": semester_label,
+                "drafts": [],
+                "students": [],
+                "message": "لا مسودات مرسلة/معتمدة لهذا المقرر في الفصل الحالي",
+            }), 200
+
+        draft_ids = [int(d["id"]) for d in drafts if d.get("id")]
+        draft_meta = {int(d["id"]): d for d in drafts}
+        students_out: list[dict] = []
+        if draft_ids:
+            ph = ",".join("?" for _ in draft_ids)
+            item_rows = cur.execute(
+                f"""
+                SELECT gi.draft_id, gi.student_id,
+                       COALESCE(st.student_name, '') AS student_name,
+                       gi.coursework, gi.midterm, gi.final_exam,
+                       gi.absent_midterm, gi.absent_final_exam,
+                       gi.computed_total, gi.partial, gi.final, gi.total
+                FROM grade_draft_items gi
+                LEFT JOIN students st ON st.student_id = gi.student_id
+                WHERE gi.draft_id IN ({ph})
+                ORDER BY COALESCE(st.student_name, ''), gi.student_id
+                """,
+                tuple(draft_ids),
+            ).fetchall()
+            for row in item_rows or []:
+                drow = dict(row) if hasattr(row, "keys") else {
+                    "draft_id": row[0],
+                    "student_id": row[1],
+                    "student_name": row[2],
+                    "coursework": row[3],
+                    "midterm": row[4],
+                    "final_exam": row[5],
+                    "absent_midterm": row[6],
+                    "absent_final_exam": row[7],
+                    "computed_total": row[8],
+                    "partial": row[9],
+                    "final": row[10],
+                    "total": row[11],
+                }
+                meta = draft_meta.get(int(drow.get("draft_id") or 0)) or {}
+                students_out.append({
+                    "student_id": (drow.get("student_id") or "").strip(),
+                    "student_name": (drow.get("student_name") or "").strip(),
+                    "draft_id": int(drow.get("draft_id") or 0),
+                    "draft_status": meta.get("status") or "",
+                    "draft_phase": meta.get("draft_phase") or "",
+                    "instructor_id": meta.get("instructor_id"),
+                    "instructor_name": meta.get("instructor_name") or "",
+                    "teaching_group_id": meta.get("teaching_group_id"),
+                    "group_display_label": meta.get("group_display_label") or "",
+                    "coursework": drow.get("coursework"),
+                    "midterm": drow.get("midterm"),
+                    "final_exam": drow.get("final_exam"),
+                    "absent_midterm": drow.get("absent_midterm"),
+                    "absent_final_exam": drow.get("absent_final_exam"),
+                    "computed_total": drow.get("computed_total"),
+                })
+
+        # إحصاء مسودات للواجهة
+        for d in drafts:
+            did = int(d.get("id") or 0)
+            d["item_count"] = sum(1 for s in students_out if int(s.get("draft_id") or 0) == did)
+
+    return jsonify({
+        "status": "ok",
+        "course_name": course_name,
+        "semester": semester_label,
+        "drafts": drafts,
+        "students": students_out,
+        "draft_count": len(drafts),
+        "student_count": len(students_out),
+    }), 200
 
 
 @grades_bp.route("/drafts/deletable", methods=["GET"])

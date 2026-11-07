@@ -57,6 +57,25 @@
 
     <div id="panelDrafts" class="card mb-3 d-none">
       <div class="card-header fw-semibold">مسودات درجات بانتظار الاعتماد</div>
+      <div class="card-body border-bottom py-2">
+        <div class="row g-2 align-items-end">
+          <div class="col-md-4">
+            <label for="draftInstructorFilter" class="form-label small mb-0">تصفية حسب الأستاذ</label>
+            <select id="draftInstructorFilter" class="form-select form-select-sm">
+              <option value="">كل الأساتذة</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <div class="form-check mt-3">
+              <input class="form-check-input" type="checkbox" id="draftGroupByInstructor">
+              <label class="form-check-label small" for="draftGroupByInstructor">تجميع حسب الأستاذ</label>
+            </div>
+          </div>
+          <div class="col-md-5 text-md-start">
+            <p class="form-text small mb-0">الاعتماد يبقى لكل مسودة مجموعة. «عرض المقرر» يجمع كل المجموعات للقراءة فقط.</p>
+          </div>
+        </div>
+      </div>
       <div class="card-body p-0">
         <div class="table-responsive">
           <table class="table table-sm mb-0">
@@ -65,6 +84,42 @@
           </table>
         </div>
         <div id="pendingDraftsEmpty" class="p-3 text-muted small d-none">لا مسودات بانتظار الاعتماد.</div>
+      </div>
+    </div>
+
+    <div class="modal fade" id="courseOverviewModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="courseOverviewTitle">درجات المقرر — كل المجموعات</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+          </div>
+          <div class="modal-body">
+            <div id="courseOverviewMeta" class="small text-muted mb-2"></div>
+            <div id="courseOverviewDrafts" class="mb-3"></div>
+            <div class="table-responsive">
+              <table class="table table-sm table-bordered align-middle">
+                <thead class="table-light">
+                  <tr>
+                    <th>الطالب</th>
+                    <th>المجموعة</th>
+                    <th>الأستاذ</th>
+                    <th>المرحلة</th>
+                    <th>أعمال</th>
+                    <th>جزئي</th>
+                    <th>نهائي</th>
+                    <th>المحسوب</th>
+                    <th>حالة المسودة</th>
+                  </tr>
+                </thead>
+                <tbody id="courseOverviewBody"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -371,35 +426,172 @@
         };
       });
 
-      const drafts = j.pending_grade_drafts || [];
+      window.__hodPendingDrafts = j.pending_grade_drafts || [];
+      fillInstructorFilter(window.__hodPendingDrafts);
+      renderPendingDrafts();
+    }
+
+    function fillInstructorFilter(drafts) {
+      const sel = document.getElementById('draftInstructorFilter');
+      if (!sel) return;
+      const prev = sel.value;
+      const map = new Map();
+      (drafts || []).forEach(d => {
+        const id = Number(d.instructor_id || 0);
+        if (!id) return;
+        if (!map.has(id)) map.set(id, d.instructor_name || ('#' + id));
+      });
+      sel.innerHTML = '<option value="">كل الأساتذة</option>';
+      Array.from(map.entries()).sort((a, b) => String(a[1]).localeCompare(String(b[1]), 'ar')).forEach(([id, name]) => {
+        const op = document.createElement('option');
+        op.value = String(id);
+        op.textContent = name;
+        sel.appendChild(op);
+      });
+      if (prev && map.has(Number(prev))) sel.value = prev;
+    }
+
+    function renderPendingDrafts() {
+      const gdBody = document.getElementById('pendingDraftsBody');
+      const gdEmpty = document.getElementById('pendingDraftsEmpty');
+      if (!gdBody || !gdEmpty) return;
+      const all = window.__hodPendingDrafts || [];
+      const filterId = (document.getElementById('draftInstructorFilter') || {}).value || '';
+      const groupBy = !!(document.getElementById('draftGroupByInstructor') || {}).checked;
+      let drafts = all.slice();
+      if (filterId) {
+        drafts = drafts.filter(d => String(d.instructor_id || '') === String(filterId));
+      }
+      if (groupBy) {
+        drafts.sort((a, b) => {
+          const na = (a.instructor_name || '').localeCompare(b.instructor_name || '', 'ar');
+          if (na !== 0) return na;
+          return (a.course_name || '').localeCompare(b.course_name || '', 'ar');
+        });
+      }
       gdBody.innerHTML = '';
       if (!drafts.length) {
         gdEmpty.classList.remove('d-none');
-      } else {
-        gdEmpty.classList.add('d-none');
-        drafts.forEach(d => {
-          const tr = document.createElement('tr');
-          const sub = d.group_display_label || (d.section_id ? ('حصة #' + d.section_id) : '');
-          tr.innerHTML =
-            '<td>' + esc(d.course_name) + (sub ? (' <span class="text-muted small">(' + esc(sub) + ')</span>') : '') + '</td>' +
-            '<td>' + esc(d.instructor_name || '') + '</td>' +
-            '<td>' + phaseLabel(d.draft_phase) + '</td>' +
-            '<td>' + esc(d.submitted_at || '—') + '</td>' +
-            '<td><div class="d-flex gap-1 flex-wrap">' +
-            '<button type="button" class="btn btn-sm btn-success gd-approve" data-id="' + d.id + '">اعتماد</button>' +
-            '<button type="button" class="btn btn-sm btn-outline-danger gd-reject" data-id="' + d.id + '">إرجاع</button>' +
-            '<a class="btn btn-sm btn-outline-primary" href="/grade_drafts">معاينة</a>' +
-            '</div></td>';
-          gdBody.appendChild(tr);
-        });
-        gdBody.querySelectorAll('.gd-approve').forEach(btn => {
-          btn.onclick = () => approveDraft(Number(btn.getAttribute('data-id')));
-        });
-        gdBody.querySelectorAll('.gd-reject').forEach(btn => {
-          btn.onclick = () => rejectDraft(Number(btn.getAttribute('data-id')));
-        });
+        return;
+      }
+      gdEmpty.classList.add('d-none');
+      let lastInst = null;
+      drafts.forEach(d => {
+        if (groupBy) {
+          const key = String(d.instructor_id || '') + '|' + (d.instructor_name || '');
+          if (key !== lastInst) {
+            lastInst = key;
+            const hr = document.createElement('tr');
+            hr.className = 'table-light';
+            hr.innerHTML = '<td colspan="5" class="fw-semibold small py-2">' + esc(d.instructor_name || 'بدون أستاذ') + '</td>';
+            gdBody.appendChild(hr);
+          }
+        }
+        const tr = document.createElement('tr');
+        const sub = d.group_display_label || (d.section_id ? ('حصة #' + d.section_id) : '');
+        tr.innerHTML =
+          '<td>' + esc(d.course_name) + (sub ? (' <span class="text-muted small">(' + esc(sub) + ')</span>') : '') + '</td>' +
+          '<td>' + esc(d.instructor_name || '') + '</td>' +
+          '<td>' + phaseLabel(d.draft_phase) + '</td>' +
+          '<td>' + esc(d.submitted_at || '—') + '</td>' +
+          '<td><div class="d-flex gap-1 flex-wrap">' +
+          '<button type="button" class="btn btn-sm btn-success gd-approve" data-id="' + d.id + '">اعتماد</button>' +
+          '<button type="button" class="btn btn-sm btn-outline-danger gd-reject" data-id="' + d.id + '">إرجاع</button>' +
+          '<button type="button" class="btn btn-sm btn-outline-secondary gd-overview" data-course="' + esc(d.course_name) + '">عرض المقرر</button>' +
+          '<a class="btn btn-sm btn-outline-primary" href="/grade_drafts">معاينة المسودة</a>' +
+          '</div></td>';
+        gdBody.appendChild(tr);
+      });
+      gdBody.querySelectorAll('.gd-approve').forEach(btn => {
+        btn.onclick = () => approveDraft(Number(btn.getAttribute('data-id')));
+      });
+      gdBody.querySelectorAll('.gd-reject').forEach(btn => {
+        btn.onclick = () => rejectDraft(Number(btn.getAttribute('data-id')));
+      });
+      gdBody.querySelectorAll('.gd-overview').forEach(btn => {
+        btn.onclick = () => openCourseOverview(btn.getAttribute('data-course') || '');
+      });
+    }
+
+    function statusLabelAr(st) {
+      const s = (st || '').trim();
+      if (s === 'Submitted') return 'مرسلة';
+      if (s === 'Approved') return 'معتمدة';
+      if (s === 'Rejected') return 'مرفوضة';
+      if (s === 'Draft') return 'مسودة';
+      return s || '—';
+    }
+
+    async function openCourseOverview(courseName) {
+      const title = document.getElementById('courseOverviewTitle');
+      const meta = document.getElementById('courseOverviewMeta');
+      const draftsEl = document.getElementById('courseOverviewDrafts');
+      const body = document.getElementById('courseOverviewBody');
+      if (!courseName) return;
+      if (title) title.textContent = 'درجات المقرر — ' + courseName;
+      if (meta) meta.textContent = 'جاري التحميل…';
+      if (draftsEl) draftsEl.innerHTML = '';
+      if (body) body.innerHTML = '<tr><td colspan="9" class="text-muted text-center">…</td></tr>';
+      const modalEl = document.getElementById('courseOverviewModal');
+      if (modalEl && window.bootstrap) {
+        bootstrap.Modal.getOrCreateInstance(modalEl).show();
+      }
+      try {
+        const url = '/grades/drafts/course_overview?course_name=' + encodeURIComponent(courseName);
+        const r = await fetch(url, { credentials: 'include' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          if (meta) meta.textContent = j.message || 'تعذر التحميل';
+          if (body) body.innerHTML = '';
+          return;
+        }
+        if (meta) {
+          meta.textContent = 'الفصل: ' + (j.semester || '—') +
+            ' — مسودات: ' + (j.draft_count || 0) +
+            ' — صفوف طلبة: ' + (j.student_count || 0) +
+            ' (قراءة فقط — الاعتماد من صف المسودة)';
+        }
+        if (draftsEl) {
+          const ds = j.drafts || [];
+          draftsEl.innerHTML = ds.length
+            ? '<ul class="small mb-0">' + ds.map(d =>
+                '<li>' + esc(d.group_display_label || 'مجموعة') +
+                ' — ' + esc(d.instructor_name || '') +
+                ' — ' + phaseLabel(d.draft_phase) +
+                ' — ' + statusLabelAr(d.status) +
+                ' (' + (d.item_count || 0) + ' طالب)' +
+                '</li>'
+              ).join('') + '</ul>'
+            : '<p class="small text-muted mb-0">لا مسودات.</p>';
+        }
+        if (body) {
+          const students = j.students || [];
+          if (!students.length) {
+            body.innerHTML = '<tr><td colspan="9" class="text-muted text-center">لا درجات.</td></tr>';
+          } else {
+            body.innerHTML = students.map(s =>
+              '<tr>' +
+              '<td>' + esc(s.student_name || '') + '<div class="small text-muted" dir="ltr">' + esc(s.student_id || '') + '</div></td>' +
+              '<td>' + esc(s.group_display_label || '—') + '</td>' +
+              '<td>' + esc(s.instructor_name || '') + '</td>' +
+              '<td>' + phaseLabel(s.draft_phase) + '</td>' +
+              '<td>' + esc(s.coursework ?? '—') + '</td>' +
+              '<td>' + esc(s.midterm ?? '—') + '</td>' +
+              '<td>' + esc(s.final_exam ?? '—') + '</td>' +
+              '<td>' + esc(s.computed_total ?? '—') + '</td>' +
+              '<td>' + statusLabelAr(s.draft_status) + '</td>' +
+              '</tr>'
+            ).join('');
+          }
+        }
+      } catch (e) {
+        console.error(e);
+        if (meta) meta.textContent = 'خطأ في الاتصال';
       }
     }
+
+    document.getElementById('draftInstructorFilter')?.addEventListener('change', renderPendingDrafts);
+    document.getElementById('draftGroupByInstructor')?.addEventListener('change', renderPendingDrafts);
 
     loadPolicy();
     loadPending();

@@ -13,13 +13,17 @@
     <div class="page-header mb-3">
       <h1 class="page-title h4 mb-1">لوحة الصلاحيات</h1>
       <p class="text-muted small mb-0">
-        تشغيل/إيقاف صلاحيات العرض والتعديل لكل نطاق، وتجاوزات لمستخدم محدد.
-        تصفية القسم للعميد/الوكيل = عرض فقط؛ التعديل التشغيلي للأقسام يُفعَّل صراحة من هنا.
-        مسارات الاعتماد المستقبلية تظهر مطفأة حتى تفعيلها لاحقاً.
+        عرض صلاحيات القوالب وتجاوزات مستخدم محدد.
+        قوالب القيادة (عميد / وكيل / مسؤول رئيسي / مسؤول نظام) <strong>مقفولة للعرض فقط</strong>.
+        تعديل قوالب الموظفين وإنشاء قوالب مخصصة من
+        <a href="/users">إدارة المستخدمين ← قوالب الأدوار</a>.
       </p>
     </div>
 
     <div class="alert alert-warning small" id="msgBox" style="display:none;"></div>
+    <div class="alert alert-secondary small d-none" id="lockedHint" role="status">
+      هذا القالب مقفول — يمكنك الاطلاع على الصلاحيات فقط ولا يمكن حفظ تغييرات عليه.
+    </div>
 
     <ul class="nav nav-tabs mb-3" role="tablist">
       <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tabProfile" type="button">قوالب الأدوار</button></li>
@@ -33,9 +37,10 @@
             <label class="form-label small">القالب</label>
             <select class="form-select form-select-sm" id="profileSelect"></select>
           </div>
-          <div class="col-md-3">
+          <div class="col-md-5">
             <button type="button" class="btn btn-primary btn-sm" id="btnLoadProfile">تحميل</button>
             <button type="button" class="btn btn-success btn-sm" id="btnSaveProfile">حفظ القالب</button>
+            <span id="profileLockBadge" class="badge bg-secondary d-none ms-1">مقفول</span>
           </div>
         </div>
         <div id="profileCards" class="row g-3"></div>
@@ -68,12 +73,27 @@
     let profileKeys = new Set();
     let userGrants = new Set();
     let userDenies = new Set();
+    let profileEditable = false;
+    let grantableOverrideKeys = new Set();
 
     function showMsg(text, kind) {
       const el = document.getElementById('msgBox');
       el.style.display = text ? '' : 'none';
       el.className = 'alert alert-' + (kind || 'warning') + ' small';
       el.textContent = text || '';
+    }
+
+    function setProfileEditMode(editable) {
+      profileEditable = !!editable;
+      const saveBtn = document.getElementById('btnSaveProfile');
+      const badge = document.getElementById('profileLockBadge');
+      const hint = document.getElementById('lockedHint');
+      if (saveBtn) {
+        saveBtn.disabled = !profileEditable;
+        saveBtn.classList.toggle('d-none', !profileEditable);
+      }
+      badge?.classList.toggle('d-none', profileEditable);
+      hint?.classList.toggle('d-none', profileEditable);
     }
 
     async function fetchJSON(url, opts) {
@@ -89,6 +109,7 @@
     function renderCards(containerId, mode) {
       const root = document.getElementById(containerId);
       root.innerHTML = '';
+      const readOnly = mode === 'profile' && !profileEditable;
       catalogGroups.filter(g => MANAGED_GROUPS.has(g.group_key)).forEach(g => {
         const col = document.createElement('div');
         col.className = 'col-md-6';
@@ -98,6 +119,9 @@
         body.className = 'card-body';
         body.innerHTML = '<h6 class="card-title mb-2">' + (g.group_label_ar || g.group_key) + '</h6>';
         (g.items || []).forEach(item => {
+          if (mode === 'user' && grantableOverrideKeys.size && !grantableOverrideKeys.has(item.key)) {
+            return;
+          }
           const id = mode + '_' + item.key;
           const wrap = document.createElement('div');
           wrap.className = 'form-check form-switch mb-1';
@@ -105,13 +129,15 @@
             ? profileKeys.has(item.key)
             : userGrants.has(item.key) && !userDenies.has(item.key);
           wrap.innerHTML =
-            '<input class="form-check-input" type="checkbox" role="switch" id="' + id + '" data-key="' + item.key + '"' + (checked ? ' checked' : '') + '>' +
+            '<input class="form-check-input" type="checkbox" role="switch" id="' + id + '" data-key="' + item.key + '"' +
+            (checked ? ' checked' : '') + (readOnly ? ' disabled' : '') + '>' +
             '<label class="form-check-label small" for="' + id + '">' + (item.label_ar || item.key) +
             (g.group_key === 'approvals_future' ? ' <span class="badge text-bg-secondary">مستقبلي</span>' : '') +
             (g.group_key === 'dangerous' ? ' <span class="badge text-bg-danger">خطِر</span>' : '') +
             '</label>';
           body.appendChild(wrap);
         });
+        if (!body.querySelector('input')) return;
         card.appendChild(body);
         col.appendChild(card);
         root.appendChild(col);
@@ -133,6 +159,9 @@
         return;
       }
       catalogGroups = r.json.groups || [];
+      grantableOverrideKeys = new Set(
+        (r.json.grantable_override_keys || []).map(function (it) { return it.key || it; })
+      );
     }
 
     async function loadProfiles() {
@@ -143,7 +172,10 @@
         if (p.code === 'system_admin') return;
         const o = document.createElement('option');
         o.value = p.code;
-        o.textContent = (p.name_ar || p.code) + ' (' + p.code + ')';
+        const lockMark = p.locked ? ' [مقفول]' : '';
+        o.textContent = (p.name_ar || p.code) + ' (' + p.code + ')' + lockMark;
+        o.dataset.locked = p.locked ? '1' : '0';
+        o.dataset.editable = p.editable ? '1' : '0';
         sel.appendChild(o);
       });
     }
@@ -160,28 +192,31 @@
         ? r.json.panel_permissions
         : (r.json.permissions || []);
       profileKeys = new Set(panel);
+      setProfileEditMode(!!r.json.editable);
       renderCards('profileCards', 'profile');
       const leadHint = r.json.leadership_defaults_applied
         ? ' — افتراضات القيادة: عرض ON، تعديل أقسام OFF، تشغيل كلية ON'
         : '';
-      showMsg('تم تحميل قالب: ' + code + leadHint, 'success');
+      const lockHint = r.json.locked ? ' (عرض فقط — مقفول)' : '';
+      showMsg('تم تحميل قالب: ' + code + leadHint + lockHint, r.json.locked ? 'info' : 'success');
     }
 
     async function saveProfile() {
+      if (!profileEditable) {
+        showMsg('هذا القالب مقفول ولا يمكن حفظه من الواجهة', 'warning');
+        return;
+      }
       const code = document.getElementById('profileSelect').value;
       const permissions = collectChecked('profileCards');
-      const r = await fetchJSON('/role_profiles/profile_permissions', {
-        method: 'POST',
-        body: JSON.stringify({ profile_code: code, permissions: permissions })
+      const r = await fetchJSON('/role_profiles/' + encodeURIComponent(code) + '/permissions', {
+        method: 'PUT',
+        body: JSON.stringify({ permission_keys: permissions })
       });
       if (!r.ok) {
         showMsg((r.json && r.json.message) || 'فشل الحفظ', 'danger');
         return;
       }
-      const panel = (r.json && r.json.panel_permissions && r.json.panel_permissions.length)
-        ? r.json.panel_permissions
-        : ((r.json && r.json.permissions) || permissions);
-      profileKeys = new Set(panel);
+      profileKeys = new Set((r.json && r.json.permissions) || permissions);
       renderCards('profileCards', 'profile');
       showMsg('تم حفظ صلاحيات القالب', 'success');
     }
@@ -232,6 +267,7 @@
     document.getElementById('btnLoadProfile').addEventListener('click', loadProfileDetail);
     document.getElementById('btnSaveProfile').addEventListener('click', saveProfile);
     document.getElementById('btnLoadUser').addEventListener('click', loadUserOverrides);
+    document.getElementById('profileSelect').addEventListener('change', loadProfileDetail);
 
     (async function init() {
       await loadCatalog();

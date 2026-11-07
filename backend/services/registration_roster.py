@@ -217,21 +217,34 @@ def registration_attendance_course_rows(
             return []
         # فلترة لاحقة بعد الجلب
 
-    dept_join = ""
-    dept_and = ""
-    dept_params: tuple = ()
-    if dept_scope_id is not None:
+    # شبكة أمان: مقرر بجدول القسم الحالي يظهر رغم ملكية خاطئة
+    # (سياسة _scope_clauses تغطي قسم + GENERAL + NULL + مشترك؛ لا فلتر owning صارم).
+    schedule_or_params: tuple = ()
+    if dept_scope_id is not None and course_and:
         try:
             scols = fetch_table_columns(conn, "schedule")
-            ccols = fetch_table_columns(conn, "courses")
         except Exception:
-            scols, ccols = [], []
-        if "department_id" in scols:
-            dept_and = " AND COALESCE(c.owning_department_id, -987654321) = ? "
-            dept_params = (int(dept_scope_id),)
-        elif "owning_department_id" in (ccols or []):
-            dept_and = " AND COALESCE(c.owning_department_id, -987654321) = ? "
-            dept_params = (int(dept_scope_id),)
+            scols = []
+        if "department_id" in (scols or []):
+            sem_sql, sem_bind = build_schedule_semester_match(
+                "__sch_att.semester", term_name, term_year
+            )
+            inner = course_and.strip()
+            if inner.upper().startswith("AND"):
+                inner = inner[3:].strip()
+            course_and = f"""
+          AND (
+            ({inner})
+            OR EXISTS (
+              SELECT 1 FROM schedule __sch_att
+              WHERE lower(trim(COALESCE(__sch_att.course_name, '')))
+                    = lower(trim(COALESCE(r.course_name, '')))
+                AND COALESCE(__sch_att.department_id, -987654321) = ?
+                AND ({sem_sql})
+            )
+          )
+            """
+            schedule_or_params = (int(dept_scope_id),) + tuple(sem_bind)
 
     q = f"""
         SELECT DISTINCT r.course_name,
@@ -245,10 +258,9 @@ def registration_attendance_course_rows(
           {student_and}
           {course_and}
           {extra_where}
-          {dept_and}
         ORDER BY r.course_name
     """
-    params = scope_params + tuple(extra_params) + dept_params
+    params = scope_params + schedule_or_params + tuple(extra_params)
     try:
         rows = cur.execute(q, params).fetchall()
     except Exception:

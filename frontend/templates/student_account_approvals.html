@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>طلبات إنشاء حسابات الطلبة</title>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  {% include "base_nav.html" %}
+  <main class="container-main container-1100 theme-formal">
+    <div class="page-header mb-3">
+      <h1 class="page-title h4 mb-1">طلبات إنشاء حسابات الطلبة</h1>
+      <p class="text-muted small mb-0">مراجعة طلبات التسجيل الذاتي لقسمك — الموافقة تنشئ الحساب فوراً.</p>
+    </div>
+    <div id="msgBox"></div>
+    <div class="d-flex flex-wrap gap-2 mb-3 align-items-center">
+      <label class="small mb-0" for="statusFilter">الحالة</label>
+      <select id="statusFilter" class="form-select form-select-sm" style="max-width:12rem">
+        <option value="pending" selected>قيد المراجعة</option>
+        <option value="approved">موافَق</option>
+        <option value="rejected">مرفوض</option>
+        <option value="all">الكل</option>
+      </select>
+      <button type="button" class="btn btn-sm btn-outline-primary" id="btnReload">تحديث</button>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-sm table-bordered align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>#</th>
+            <th>الطالب</th>
+            <th>التواصل</th>
+            <th>ملاحظة</th>
+            <th>الوقت</th>
+            <th>إجراء</th>
+          </tr>
+        </thead>
+        <tbody id="reqBody">
+          <tr><td colspan="6" class="text-muted">جاري التحميل...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+  <script nonce="{{ csp_nonce }}" src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+  <script nonce="{{ csp_nonce }}">
+  (function () {
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
+    function esc(s) {
+      return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    function showMsg(text, kind) {
+      const el = document.getElementById('msgBox');
+      el.innerHTML = text ? ('<div class="alert alert-' + (kind || 'info') + ' py-2">' + esc(text) + '</div>') : '';
+    }
+    async function fetchJSON(url, opts) {
+      const headers = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-CSRFToken': csrf
+      };
+      let body = opts && opts.body;
+      if (body && typeof body === 'object') {
+        if (!body.csrf_token) body.csrf_token = csrf;
+        body = JSON.stringify(body);
+      }
+      const r = await fetch(url, Object.assign({ credentials: 'same-origin', headers }, opts || {}, body !== undefined ? { body } : {}));
+      let j = null;
+      try { j = await r.json(); } catch (e) {}
+      return { ok: r.ok, json: j };
+    }
+
+    async function loadList() {
+      const st = document.getElementById('statusFilter').value;
+      const tbody = document.getElementById('reqBody');
+      tbody.innerHTML = '<tr><td colspan="6" class="text-muted">جاري التحميل...</td></tr>';
+      const r = await fetchJSON('/student_account/requests?status=' + encodeURIComponent(st));
+      if (!r.ok) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-danger">' + esc((r.json && r.json.message) || 'فشل التحميل') + '</td></tr>';
+        return;
+      }
+      const items = Array.isArray(r.json?.items) ? r.json.items : [];
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-muted">لا توجد طلبات.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = items.map((it) => {
+        const corr = Number(it.whatsapp_correction) === 1;
+        const wa = corr
+          ? ('مسجّل: <code dir="ltr">' + esc(it.stored_phone || '—') + '</code><br>بديل: <code dir="ltr">' + esc(it.alternate_whatsapp || it.whatsapp_phone || '') + '</code>')
+          : ('<code dir="ltr">' + esc(it.whatsapp_phone || '—') + '</code>');
+        const actions = it.status === 'pending'
+          ? ('<button type="button" class="btn btn-sm btn-success btn-approve" data-id="' + it.id + '">موافقة</button> '
+            + '<button type="button" class="btn btn-sm btn-outline-danger btn-reject" data-id="' + it.id + '">رفض</button>')
+          : ('<span class="badge bg-secondary">' + esc(it.status) + '</span>'
+            + (it.created_username ? ' <code>' + esc(it.created_username) + '</code>' : ''));
+        return '<tr>'
+          + '<td>' + esc(it.id) + '</td>'
+          + '<td><strong>' + esc(it.student_name) + '</strong><div class="small font-monospace" dir="ltr">' + esc(it.student_id) + '</div></td>'
+          + '<td class="small">بريد: ' + esc(it.email || '—') + '<br>واتساب: ' + wa + '</td>'
+          + '<td class="small">' + esc(it.note || '—') + '</td>'
+          + '<td class="small" dir="ltr">' + esc(it.requested_at || '') + '</td>'
+          + '<td>' + actions + '</td>'
+          + '</tr>';
+      }).join('');
+
+      tbody.querySelectorAll('.btn-approve').forEach((btn) => {
+        btn.addEventListener('click', () => decide(btn.getAttribute('data-id'), 'approve'));
+      });
+      tbody.querySelectorAll('.btn-reject').forEach((btn) => {
+        btn.addEventListener('click', () => decide(btn.getAttribute('data-id'), 'reject'));
+      });
+    }
+
+    async function decide(id, decision) {
+      let note = '';
+      if (decision === 'reject') {
+        note = prompt('سبب الرفض (اختياري):') || '';
+        if (note === null) return;
+      } else if (!confirm('الموافقة وإنشاء حساب الطالب؟')) {
+        return;
+      }
+      showMsg('جاري التنفيذ...', 'info');
+      const r = await fetchJSON('/student_account/requests/' + encodeURIComponent(id) + '/decide', {
+        method: 'POST',
+        body: { decision, review_note: note }
+      });
+      showMsg((r.json && r.json.message) || (r.ok ? 'تم' : 'فشل'), r.ok ? 'success' : 'danger');
+      if (r.ok) await loadList();
+    }
+
+    document.getElementById('btnReload').addEventListener('click', loadList);
+    document.getElementById('statusFilter').addEventListener('change', loadList);
+    loadList();
+  })();
+  </script>
+</body>
+</html>

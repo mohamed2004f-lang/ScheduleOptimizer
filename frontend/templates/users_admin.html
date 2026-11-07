@@ -84,6 +84,9 @@
             <select id="roleProfileSelect" class="form-select form-select-sm">
               <option value="">— بدون قالب —</option>
             </select>
+            <div class="form-text small" id="roleProfileQualityHint">
+              مناصب الجودة (رئيس ضمان الجودة / منسق جودة القسم): اختر الدور «عضو هيئة تدريس» + رقم الأستاذ + القالب المناسب.
+            </div>
           </div>
           <div class="col-md-4 d-none" id="studentIdWrap">
             <label class="form-label" for="studentIdInput">الرقم الدراسي</label>
@@ -130,6 +133,12 @@
           </ul>
         </div>
         <div id="userMsg" class="mt-2"></div>
+        <div id="userOverridesPanel" class="border rounded p-2 mt-3 d-none">
+          <div class="fw-semibold small mb-1">صلاحيات إضافية (استثناءات الحساب)</div>
+          <p class="text-muted small mb-2 mb-0">مفاتيح آمنة قابلة للمنح فوق القالب — لا تشمل صلاحيات النظام الحساسة.</p>
+          <div id="userOverridesChecks" class="small"></div>
+          <div id="userOverridesMsg" class="small mt-1"></div>
+        </div>
       </div>
     </div>
 
@@ -222,9 +231,72 @@
     <div class="tab-pane fade d-none" id="tabProfiles" role="tabpanel">
       <div class="card mb-3">
         <div class="card-body">
-          <h5 class="card-title">قوالب الأدوار الوظيفية</h5>
-          <p class="text-muted small">قوالب جاهزة لتوزيع الصلاحيات — لا يظهر «مسؤول النظام» إلا لمسؤول النظام.</p>
+          <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+            <div>
+              <h5 class="card-title mb-1">قوالب الأدوار الوظيفية</h5>
+              <p class="text-muted small mb-0">
+                المحرر الرسمي للصلاحيات حسب الوظيفة. القالب يضبط «ماذا يرى»؛ الدور الأساسي يحرس الخادم.
+                القوالب القيادية مقفولة. الاستثناءات الفردية من بطاقة المستخدم في تبويب «المستخدمون».
+              </p>
+            </div>
+            <button type="button" id="btnNewRoleProfile" class="btn btn-sm btn-primary d-none">قالب جديد</button>
+          </div>
+          <div id="roleProfilesAdminHint" class="alert alert-light border small d-none mb-2"></div>
           <div id="roleProfilesList" class="small"></div>
+          <div id="roleProfileEditor" class="border rounded p-3 mt-3 d-none">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+              <h6 class="mb-0" id="roleProfileEditorTitle">تعديل صلاحيات القالب</h6>
+              <div class="d-flex gap-2">
+                <button type="button" id="btnArchiveRoleProfile" class="btn btn-sm btn-outline-warning d-none">أرشفة</button>
+                <button type="button" id="btnCloseRoleProfileEditor" class="btn btn-sm btn-outline-secondary">إغلاق</button>
+              </div>
+            </div>
+            <div id="roleProfileEditorMeta" class="small text-muted mb-2"></div>
+            <div id="roleProfileDiffPreview" class="alert alert-info small d-none mb-2"></div>
+            <div id="roleProfilePermGroups" class="small" style="max-height:420px;overflow:auto"></div>
+            <div class="mt-3 d-flex gap-2">
+              <button type="button" id="btnSaveRoleProfilePerms" class="btn btn-sm btn-success d-none">حفظ الصلاحيات</button>
+              <span id="roleProfileEditorMsg" class="small align-self-center"></span>
+            </div>
+          </div>
+          <div id="roleProfileCreateBox" class="border rounded p-3 mt-3 d-none">
+            <h6>إنشاء قالب مخصص</h6>
+            <div class="row g-2">
+              <div class="col-md-4">
+                <label class="form-label small" for="newProfileName">الاسم</label>
+                <input id="newProfileName" class="form-control form-control-sm" maxlength="80">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label small" for="newProfileCode">الرمز (لاتيني)</label>
+                <input id="newProfileCode" class="form-control form-control-sm" placeholder="custom_finance_clerk" maxlength="41">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label small" for="newProfileBaseRole">الدور الأساسي</label>
+                <select id="newProfileBaseRole" class="form-select form-select-sm">
+                  <option value="staff">staff</option>
+                  <option value="instructor">instructor</option>
+                  <option value="head_of_department">head_of_department</option>
+                </select>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label small" for="newProfileScope">النطاق</label>
+                <select id="newProfileScope" class="form-select form-select-sm">
+                  <option value="college">college</option>
+                  <option value="department">department</option>
+                  <option value="none">none</option>
+                </select>
+              </div>
+              <div class="col-md-8">
+                <label class="form-label small" for="newProfileDesc">وصف (اختياري)</label>
+                <input id="newProfileDesc" class="form-control form-control-sm">
+              </div>
+            </div>
+            <div class="mt-2 d-flex gap-2">
+              <button type="button" id="btnCreateRoleProfile" class="btn btn-sm btn-primary">إنشاء</button>
+              <button type="button" id="btnCancelCreateRoleProfile" class="btn btn-sm btn-outline-secondary">إلغاء</button>
+              <span id="roleProfileCreateMsg" class="small align-self-center"></span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -664,6 +736,23 @@
         }
         syncSupervisorAvailability();
         syncRoleHeadHints();
+        syncRoleProfileVisibility();
+        const rpSel = document.getElementById('roleProfileSelect');
+        if(rpSel && u.role_profile_code){
+          if(!Array.from(rpSel.options).some(o => o.value === u.role_profile_code)){
+            const opt = document.createElement('option');
+            opt.value = u.role_profile_code;
+            opt.textContent = (u.display_title_ar || u.role_profile_code) + ' (الحالي)';
+            rpSel.appendChild(opt);
+          }
+          rpSel.value = u.role_profile_code;
+          if(intish(u.role_profile_active) === 0){
+            setUserMsg('warning', 'هذا الحساب مربوط بقالب مؤرشف — سيبقى دخوله يعمل، لكن عيّن قالباً نشطاً عند التعديل.');
+          }
+        } else if(rpSel){
+          rpSel.value = '';
+        }
+        loadUserOverridesPanel(u.username, u.role);
         const card = document.getElementById('directUserCard');
         if(card){
           card.classList.add('border', 'border-primary');
@@ -673,6 +762,58 @@
         setUserMsg('info', 'تم تحميل بيانات «' + (u.username || '') + '» في النموذج أعلاه — عدّل ثم اضغط حفظ المستخدم.');
       });
       return item;
+    }
+
+    async function loadUserOverridesPanel(username, role){
+      const panel = document.getElementById('userOverridesPanel');
+      const box = document.getElementById('userOverridesChecks');
+      const msg = document.getElementById('userOverridesMsg');
+      if(!panel || !box) return;
+      if(!canManageUserOverridesUi() || !username){
+        panel.classList.add('d-none');
+        return;
+      }
+      panel.classList.remove('d-none');
+      box.textContent = 'جاري التحميل...';
+      if(msg) msg.textContent = '';
+      const res = await fetchJSON('/role_profiles/user_overrides?username=' + encodeURIComponent(username));
+      if(!res.ok){
+        box.textContent = (res.json && res.json.message) || 'تعذر تحميل الاستثناءات';
+        return;
+      }
+      const grants = new Set(Array.isArray(res.json?.grants) ? res.json.grants : []);
+      let keys = Array.isArray(res.json?.grantable_override_keys) ? res.json.grantable_override_keys : GRANTABLE_OVERRIDE_KEYS;
+      if(!keys.length && !GRANTABLE_OVERRIDE_KEYS.length){
+        const cat = await fetchJSON('/role_profiles/catalog');
+        if(cat.ok && Array.isArray(cat.json?.grantable_override_keys)){
+          GRANTABLE_OVERRIDE_KEYS = cat.json.grantable_override_keys;
+          keys = GRANTABLE_OVERRIDE_KEYS;
+        }
+      } else if(keys.length){
+        GRANTABLE_OVERRIDE_KEYS = keys;
+      }
+      const isPrincipal = ['admin','admin_main','system_admin'].includes(CURRENT_ROLE || '');
+      const filtered = keys.filter((it)=>{
+        const key = it.key || it;
+        if(key === 'can_add_department_users') return role === 'head_of_department';
+        return isPrincipal;
+      });
+      if(!filtered.length){
+        box.innerHTML = '<div class="text-muted">لا توجد استثناءات قابلة للمنح لهذا الدور من حسابك.</div>';
+        return;
+      }
+      box.innerHTML = filtered.map((it)=>{
+        const key = it.key || it;
+        const label = it.label_ar || key;
+        const checked = grants.has(key) ? 'checked' : '';
+        return `<label class="d-block mb-1"><input type="checkbox" class="form-check-input me-1 uo-perm" data-key="${escHtml(key)}" ${checked}> ${escHtml(label)} <code class="text-muted">${escHtml(key)}</code></label>`;
+      }).join('');
+      box.querySelectorAll('.uo-perm').forEach((chk)=>{
+        chk.addEventListener('change', async ()=>{
+          await setUserOverrideKey(username, chk.getAttribute('data-key'), chk.checked, chk);
+          if(msg) msg.textContent = chk.checked ? 'تم التحديث' : 'تم الإلغاء';
+        });
+      });
     }
 
     function applyUsersFilter(){
@@ -1066,6 +1207,15 @@
     let CURRENT_ROLE = null;
     let CURRENT_CAPS = {};
     let DEPT_NAME_BY_ID = {};
+    let CACHED_ROLE_PROFILES = [];
+    let ROLE_PROFILE_ADMIN = { enabled: false, canManage: false };
+    let EDITING_PROFILE_CODE = null;
+    let EDITING_PROFILE_BASELINE = new Set();
+    let GRANTABLE_OVERRIDE_KEYS = [];
+    const LEADERSHIP_ROLES_NO_PROFILE = new Set([
+      'college_dean', 'academic_vice_dean', 'admin_main', 'system_admin', 'admin'
+    ]);
+    const PROFILE_BASE_ROLES = new Set(['staff', 'instructor', 'head_of_department']);
 
     function hodCanAddDeptUsers(){
       return CURRENT_ROLE === 'head_of_department' && !!CURRENT_CAPS.can_add_department_users;
@@ -1075,23 +1225,70 @@
       return ['admin','admin_main','system_admin','college_dean'].includes(CURRENT_ROLE || '');
     }
 
-    async function setHodAddDeptUsers(username, granted, chkEl){
+    function canManageUserOverridesUi(){
+      return ['admin','admin_main','system_admin','college_dean'].includes(CURRENT_ROLE || '');
+    }
+
+    async function setUserOverrideKey(username, permissionKey, granted, chkEl){
       const res = await fetchJSON('/role_profiles/user_overrides', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
           username,
-          permission_key: 'can_add_department_users',
+          permission_key: permissionKey,
           granted: !!granted,
         }),
       });
       if(!res.ok){
         if(chkEl) chkEl.checked = !granted;
-        setUserMsg('danger', (res.json && res.json.message) || 'تعذر حفظ صلاحية رئيس القسم');
+        setUserMsg('danger', (res.json && res.json.message) || 'تعذر حفظ الصلاحية الإضافية');
         return;
       }
       setUserMsg('success', (res.json && res.json.message) || (granted ? 'تم منح الصلاحية' : 'تم إلغاء الصلاحية'));
       await loadUsers();
+    }
+
+    async function setHodAddDeptUsers(username, granted, chkEl){
+      return setUserOverrideKey(username, 'can_add_department_users', granted, chkEl);
+    }
+
+    function syncRoleProfileVisibility(){
+      const role = document.getElementById('roleSelect')?.value || '';
+      const wrap = document.getElementById('roleProfileWrap');
+      const sel = document.getElementById('roleProfileSelect');
+      const actorIsHead = CURRENT_ROLE === 'head_of_department';
+      const show = !actorIsHead && PROFILE_BASE_ROLES.has(role) && !LEADERSHIP_ROLES_NO_PROFILE.has(role);
+      wrap?.classList.toggle('d-none', !show);
+      if(!show && sel) sel.value = '';
+      filterRoleProfileSelectByBaseRole(role);
+    }
+
+    function filterRoleProfileSelectByBaseRole(baseRole){
+      const sel = document.getElementById('roleProfileSelect');
+      if(!sel) return;
+      const keep = sel.value;
+      const empty = document.createElement('option');
+      empty.value = '';
+      empty.textContent = '— بدون قالب —';
+      sel.innerHTML = '';
+      sel.appendChild(empty);
+      const list = Array.isArray(CACHED_ROLE_PROFILES) ? CACHED_ROLE_PROFILES : [];
+      list.forEach((p)=>{
+        if(intish(p.is_active) === 0) return;
+        if(baseRole && p.base_role && p.base_role !== baseRole) return;
+        if(LEADERSHIP_ROLES_NO_PROFILE.has(p.code)) return;
+        const opt = document.createElement('option');
+        opt.value = p.code || '';
+        const archived = intish(p.is_active) === 0 ? ' [مؤرشف]' : '';
+        opt.textContent = (p.name_ar || p.code) + ' (' + (p.base_role || '') + ')' + archived;
+        sel.appendChild(opt);
+      });
+      if(keep && Array.from(sel.options).some(o => o.value === keep)) sel.value = keep;
+    }
+
+    function intish(v){
+      if(v === false || v === 0 || v === '0') return 0;
+      return 1;
     }
 
     async function loadDepartmentsForHod(){
@@ -1231,14 +1428,12 @@
       document.getElementById('btnUsersValidationReport')?.classList.toggle('d-none', !isPrivileged);
       document.getElementById('btnUsersAuditLog')?.classList.toggle('d-none', !isPrivileged);
       document.getElementById('usersAdminDiagnostics')?.classList.toggle('d-none', !isPrivileged);
-      // قالب الدور في النموذج: مخفي لرئيس القسم؛ يظهر لباقي الأدوار الإدارية
-      document.getElementById('roleProfileWrap')?.classList.toggle('d-none', isHead);
+      syncRoleProfileVisibility();
       syncRoleLinkFields();
     }
 
     async function loadRoleProfiles(){
       const box = document.getElementById('roleProfilesList');
-      const sel = document.getElementById('roleProfileSelect');
       if(!box) return;
       box.textContent = 'جاري التحميل...';
       const res = await fetchJSON('/role_profiles/list');
@@ -1248,24 +1443,200 @@
       }
       const profiles = Array.isArray(res.json?.profiles) ? res.json.profiles : [];
       const assignable = Array.isArray(res.json?.assignable) ? res.json.assignable : profiles;
-      if(sel){
-        const keep = sel.querySelector('option[value=""]');
-        sel.innerHTML = '';
-        if(keep) sel.appendChild(keep);
-        assignable.forEach(p=>{
-          const opt = document.createElement('option');
-          opt.value = p.code || '';
-          opt.textContent = (p.name_ar || p.code) + ' (' + (p.base_role || '') + ')';
-          sel.appendChild(opt);
-        });
+      CACHED_ROLE_PROFILES = assignable;
+      ROLE_PROFILE_ADMIN.enabled = !!res.json?.admin_enabled;
+      ROLE_PROFILE_ADMIN.canManage = !!res.json?.can_manage;
+      const hint = document.getElementById('roleProfilesAdminHint');
+      const btnNew = document.getElementById('btnNewRoleProfile');
+      if(hint){
+        if(ROLE_PROFILE_ADMIN.canManage && !ROLE_PROFILE_ADMIN.enabled){
+          hint.classList.remove('d-none');
+          hint.textContent = 'محرر القوالب معطّل (ENABLE_ROLE_PROFILE_ADMIN). العرض فقط.';
+        } else if(ROLE_PROFILE_ADMIN.canManage && ROLE_PROFILE_ADMIN.enabled){
+          hint.classList.remove('d-none');
+          hint.textContent = 'يمكنك تعديل صلاحيات القوالب غير المقفلة وإنشاء قوالب مخصصة فوق staff/instructor/head_of_department.';
+        } else {
+          hint.classList.add('d-none');
+        }
       }
+      btnNew?.classList.toggle('d-none', !(ROLE_PROFILE_ADMIN.canManage && ROLE_PROFILE_ADMIN.enabled));
+      syncRoleProfileVisibility();
       if(!profiles.length){
         box.textContent = 'لا توجد قوالب.';
         return;
       }
-      box.innerHTML = '<ul class="list-group">' + profiles.map(p =>
-        `<li class="list-group-item d-flex justify-content-between"><span><strong>${p.name_ar||p.code}</strong> <code>${p.code}</code></span><span class="text-muted">${p.base_role||''} · ${p.scope_mode||'none'}</span></li>`
-      ).join('') + '</ul>';
+      box.innerHTML = '<ul class="list-group">' + profiles.map(p => {
+        const locked = !!p.locked;
+        const editable = !!p.editable;
+        const inactive = intish(p.is_active) === 0;
+        const badges = [
+          locked ? '<span class="badge bg-secondary">مقفول</span>' : '',
+          inactive ? '<span class="badge bg-warning text-dark">مؤرشف</span>' : '',
+        ].filter(Boolean).join(' ');
+        const actions = editable
+          ? `<button type="button" class="btn btn-sm btn-outline-primary btn-edit-profile" data-code="${escHtml(p.code)}">تعديل الصلاحيات</button>`
+          : `<button type="button" class="btn btn-sm btn-outline-secondary btn-view-profile" data-code="${escHtml(p.code)}">عرض</button>`;
+        return `<li class="list-group-item d-flex flex-wrap justify-content-between align-items-center gap-2">
+          <span><strong>${escHtml(p.name_ar||p.code)}</strong> <code>${escHtml(p.code)}</code> ${badges}
+          <span class="text-muted d-block">${escHtml(p.base_role||'')} · ${escHtml(p.scope_mode||'none')}</span></span>
+          <span>${actions}</span>
+        </li>`;
+      }).join('') + '</ul>';
+      box.querySelectorAll('.btn-edit-profile, .btn-view-profile').forEach((btn)=>{
+        btn.addEventListener('click', ()=> openRoleProfileEditor(btn.getAttribute('data-code'), btn.classList.contains('btn-edit-profile')));
+      });
+    }
+
+    async function openRoleProfileEditor(code, allowEdit){
+      const editor = document.getElementById('roleProfileEditor');
+      const groupsBox = document.getElementById('roleProfilePermGroups');
+      const title = document.getElementById('roleProfileEditorTitle');
+      const meta = document.getElementById('roleProfileEditorMeta');
+      const saveBtn = document.getElementById('btnSaveRoleProfilePerms');
+      const archiveBtn = document.getElementById('btnArchiveRoleProfile');
+      const msg = document.getElementById('roleProfileEditorMsg');
+      const diff = document.getElementById('roleProfileDiffPreview');
+      if(!editor || !groupsBox || !code) return;
+      document.getElementById('roleProfileCreateBox')?.classList.add('d-none');
+      editor.classList.remove('d-none');
+      groupsBox.textContent = 'جاري التحميل...';
+      if(msg) msg.textContent = '';
+      diff?.classList.add('d-none');
+      const [detailRes, catalogRes] = await Promise.all([
+        fetchJSON('/role_profiles/detail/' + encodeURIComponent(code)),
+        fetchJSON('/role_profiles/catalog'),
+      ]);
+      if(!detailRes.ok){
+        groupsBox.textContent = (detailRes.json && detailRes.json.message) || 'تعذر تحميل القالب';
+        return;
+      }
+      const prof = detailRes.json?.profile || {};
+      const perms = new Set(Array.isArray(detailRes.json?.permissions) ? detailRes.json.permissions : []);
+      EDITING_PROFILE_CODE = code;
+      EDITING_PROFILE_BASELINE = new Set(perms);
+      const editable = allowEdit && !!detailRes.json?.editable;
+      if(title) title.textContent = (editable ? 'تعديل صلاحيات: ' : 'عرض صلاحيات: ') + (prof.name_ar || code);
+      if(meta){
+        meta.innerHTML = `الرمز <code>${escHtml(code)}</code> · الدور الأساسي <code>${escHtml(prof.base_role||'')}</code>`
+          + (detailRes.json?.locked ? ' · <span class="badge bg-secondary">مقفول</span>' : '');
+      }
+      saveBtn?.classList.toggle('d-none', !editable);
+      archiveBtn?.classList.toggle('d-none', !editable || !!detailRes.json?.locked);
+      if(archiveBtn){
+        archiveBtn.textContent = intish(prof.is_active) === 0 ? 'إعادة تفعيل' : 'أرشفة';
+        archiveBtn.dataset.activate = intish(prof.is_active) === 0 ? '1' : '0';
+      }
+      const groups = Array.isArray(catalogRes.json?.groups) ? catalogRes.json.groups : [];
+      if(!groups.length){
+        groupsBox.textContent = 'لا يوجد كتالوج صلاحيات.';
+        return;
+      }
+      groupsBox.innerHTML = groups.map((g)=>{
+        const items = (g.items || g.permissions || []).map((it)=>{
+          const key = it.key || it;
+          const label = it.label_ar || key;
+          const checked = perms.has(key) ? 'checked' : '';
+          const disabled = editable ? '' : 'disabled';
+          return `<label class="d-block mb-1"><input type="checkbox" class="form-check-input me-1 rp-perm" value="${escHtml(key)}" ${checked} ${disabled}> ${escHtml(label)} <code class="text-muted">${escHtml(key)}</code></label>`;
+        }).join('');
+        return `<div class="mb-3"><div class="fw-semibold mb-1">${escHtml(g.label_ar || g.group_label_ar || g.group_key || '')}</div>${items}</div>`;
+      }).join('');
+      if(editable){
+        groupsBox.querySelectorAll('.rp-perm').forEach((chk)=>{
+          chk.addEventListener('change', refreshRoleProfileDiffPreview);
+        });
+        refreshRoleProfileDiffPreview();
+      }
+    }
+
+    function selectedRoleProfileKeys(){
+      return new Set(Array.from(document.querySelectorAll('#roleProfilePermGroups .rp-perm:checked')).map(el => el.value));
+    }
+
+    function refreshRoleProfileDiffPreview(){
+      const diff = document.getElementById('roleProfileDiffPreview');
+      if(!diff) return;
+      const next = selectedRoleProfileKeys();
+      const added = [...next].filter(k => !EDITING_PROFILE_BASELINE.has(k)).sort();
+      const removed = [...EDITING_PROFILE_BASELINE].filter(k => !next.has(k)).sort();
+      if(!added.length && !removed.length){
+        diff.classList.add('d-none');
+        diff.textContent = '';
+        return;
+      }
+      diff.classList.remove('d-none');
+      diff.innerHTML = `معاينة قبل الحفظ — إضافة: <strong>${added.length}</strong> · إزالة: <strong>${removed.length}</strong>`
+        + (added.length ? `<div class="mt-1">+ ${added.slice(0,8).map(escHtml).join(', ')}${added.length>8?'…':''}</div>` : '')
+        + (removed.length ? `<div class="mt-1">− ${removed.slice(0,8).map(escHtml).join(', ')}${removed.length>8?'…':''}</div>` : '');
+    }
+
+    async function saveRoleProfilePermissions(){
+      if(!EDITING_PROFILE_CODE) return;
+      const msg = document.getElementById('roleProfileEditorMsg');
+      const keys = [...selectedRoleProfileKeys()];
+      if(msg) msg.textContent = 'جاري الحفظ...';
+      const res = await fetchJSON('/role_profiles/' + encodeURIComponent(EDITING_PROFILE_CODE) + '/permissions', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ permission_keys: keys }),
+      });
+      if(msg){
+        msg.textContent = res.ok ? (res.json?.message || 'تم الحفظ') : (res.json?.message || 'فشل الحفظ');
+        msg.className = 'small align-self-center ' + (res.ok ? 'text-success' : 'text-danger');
+      }
+      if(res.ok){
+        EDITING_PROFILE_BASELINE = new Set(keys);
+        refreshRoleProfileDiffPreview();
+        await loadRoleProfiles();
+      }
+    }
+
+    async function archiveEditingRoleProfile(){
+      if(!EDITING_PROFILE_CODE) return;
+      const btn = document.getElementById('btnArchiveRoleProfile');
+      const activate = btn?.dataset?.activate === '1';
+      if(!activate && !confirm('أرشفة هذا القالب؟ سيختفي من قائمة التعيين ويبقى للمستخدمين الحاليين.')) return;
+      const res = await fetchJSON('/role_profiles/' + encodeURIComponent(EDITING_PROFILE_CODE) + '/archive', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ activate }),
+      });
+      const msg = document.getElementById('roleProfileEditorMsg');
+      if(msg){
+        msg.textContent = res.ok ? (res.json?.message || 'تم') : (res.json?.message || 'فشل');
+        msg.className = 'small align-self-center ' + (res.ok ? 'text-success' : 'text-danger');
+      }
+      if(res.ok){
+        await loadRoleProfiles();
+        openRoleProfileEditor(EDITING_PROFILE_CODE, true);
+      }
+    }
+
+    async function createRoleProfile(){
+      const msg = document.getElementById('roleProfileCreateMsg');
+      const payload = {
+        name_ar: (document.getElementById('newProfileName')?.value || '').trim(),
+        code: (document.getElementById('newProfileCode')?.value || '').trim().toLowerCase(),
+        base_role: document.getElementById('newProfileBaseRole')?.value || 'staff',
+        scope_mode: document.getElementById('newProfileScope')?.value || 'college',
+        description_ar: (document.getElementById('newProfileDesc')?.value || '').trim(),
+        permission_keys: [],
+      };
+      if(msg) msg.textContent = 'جاري الإنشاء...';
+      const res = await fetchJSON('/role_profiles', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      if(msg){
+        msg.textContent = res.ok ? (res.json?.message || 'تم الإنشاء') : (res.json?.message || 'فشل');
+        msg.className = 'small align-self-center ' + (res.ok ? 'text-success' : 'text-danger');
+      }
+      if(res.ok){
+        document.getElementById('roleProfileCreateBox')?.classList.add('d-none');
+        await loadRoleProfiles();
+        if(payload.code) openRoleProfileEditor(payload.code, true);
+      }
     }
 
     async function runHandover(){
@@ -1388,8 +1759,23 @@
         roleEl.addEventListener('change', ()=>{
           syncSupervisorAvailability();
           syncRoleHeadHints();
+          syncRoleProfileVisibility();
         });
       }
+      document.getElementById('btnNewRoleProfile')?.addEventListener('click', ()=>{
+        document.getElementById('roleProfileEditor')?.classList.add('d-none');
+        document.getElementById('roleProfileCreateBox')?.classList.remove('d-none');
+      });
+      document.getElementById('btnCancelCreateRoleProfile')?.addEventListener('click', ()=>{
+        document.getElementById('roleProfileCreateBox')?.classList.add('d-none');
+      });
+      document.getElementById('btnCreateRoleProfile')?.addEventListener('click', createRoleProfile);
+      document.getElementById('btnCloseRoleProfileEditor')?.addEventListener('click', ()=>{
+        document.getElementById('roleProfileEditor')?.classList.add('d-none');
+        EDITING_PROFILE_CODE = null;
+      });
+      document.getElementById('btnSaveRoleProfilePerms')?.addEventListener('click', saveRoleProfilePermissions);
+      document.getElementById('btnArchiveRoleProfile')?.addEventListener('click', archiveEditingRoleProfile);
       await loadDepartmentsForHod();
       await loadUsers();
       await loadValidDirectLinkOptions();
@@ -1404,6 +1790,20 @@
         await loadUsersValidationReport();
         await loadUsersAuditLog();
       }
+      // فتح تبويب القوالب عند ?tab=profiles أو #tabProfiles (بعد توحيد لوحة الصلاحيات)
+      try {
+        const params = new URLSearchParams(window.location.search || '');
+        const tab = (params.get('tab') || '').trim().toLowerCase();
+        const hash = (window.location.hash || '').replace(/^#/, '').toLowerCase();
+        if (tab === 'profiles' || hash === 'tabprofiles' || hash === 'profiles') {
+          const btn = document.getElementById('tab-profiles-btn');
+          if (btn && typeof bootstrap !== 'undefined' && bootstrap.Tab) {
+            bootstrap.Tab.getOrCreateInstance(btn).show();
+          } else if (btn) {
+            btn.click();
+          }
+        }
+      } catch (e) {}
     });
 
     async function loadUsersValidationReport(){

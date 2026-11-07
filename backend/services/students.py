@@ -5110,7 +5110,10 @@ def _attendance_status_label_ar(code: str) -> str:
         return "تأخر"
     if c == "excused":
         return "معذور"
-    return code or "—"
+    # خلايا الأسابيع غير المسجّلة تبقى فارغة (بدون — أو -)
+    if not c or c in ("-", "—", "–", "none", "null"):
+        return ""
+    return str(code or "").strip()
 
 
 def _normalize_attendance_print_orientation() -> str:
@@ -5120,6 +5123,8 @@ def _normalize_attendance_print_orientation() -> str:
 
 def _attendance_print_context(course: str, *, print_orientation: str | None = None):
     """يُرجع (None, dict للقالب) أو (tuple استجابة خطأ, None)."""
+    from backend.services.attendance_export_core import parse_attendance_course_option
+
     if print_orientation is None:
         print_orientation = _normalize_attendance_print_orientation()
     elif print_orientation not in ("portrait", "landscape"):
@@ -5128,8 +5133,20 @@ def _attendance_print_context(course: str, *, print_orientation: str | None = No
     if not course:
         return (jsonify({"status": "error", "message": "حدد اسم المقرر"}), 400), None
 
+    cname, tgid = parse_attendance_course_option(course)
+    tgid_arg = request.args.get("teaching_group_id")
+    if tgid is None and tgid_arg not in (None, ""):
+        try:
+            tgid = int(tgid_arg)
+        except (TypeError, ValueError):
+            tgid = None
+
     r = _collect_attendance_export_state(
-        get_connection, get_current_term, normalize_sid, course_name_lock=course
+        get_connection,
+        get_current_term,
+        normalize_sid,
+        course_name_lock=cname or course,
+        teaching_group_id_lock=tgid,
     )
     if r["kind"] == "http":
         return r["response"], None
@@ -5143,6 +5160,7 @@ def _attendance_print_context(course: str, *, print_orientation: str | None = No
     students_list = r["course_students"].get(cn, [])
     attendance_map = r["attendance_map"]
     semester_label = r["semester_label"] or ""
+    group_label = (r.get("group_label") or "").strip()
 
     course_code = ""
     instructor_name = ""
@@ -5155,13 +5173,32 @@ def _attendance_print_context(course: str, *, print_orientation: str | None = No
         if crow:
             course_code = crow[0] or ""
         if semester_label:
-            irow = cur.execute(
-                """
-                SELECT COALESCE(instructor,'') FROM schedule
-                WHERE course_name = ? AND semester = ? LIMIT 1
-                """,
-                (cn, semester_label),
-            ).fetchone()
+            irow = None
+            tg_id = r.get("teaching_group_id")
+            if tg_id:
+                try:
+                    irow = cur.execute(
+                        """
+                        SELECT COALESCE(instructor,'') FROM schedule
+                        WHERE course_name = ? AND semester = ?
+                          AND teaching_group_id = ?
+                        LIMIT 1
+                        """,
+                        (cn, semester_label, int(tg_id)),
+                    ).fetchone()
+                except Exception:
+                    irow = None
+            if not irow:
+                try:
+                    irow = cur.execute(
+                        """
+                        SELECT COALESCE(instructor,'') FROM schedule
+                        WHERE course_name = ? AND semester = ? LIMIT 1
+                        """,
+                        (cn, semester_label),
+                    ).fetchone()
+                except Exception:
+                    irow = None
             if irow:
                 instructor_name = irow[0] or ""
 
@@ -5180,11 +5217,13 @@ def _attendance_print_context(course: str, *, print_orientation: str | None = No
         })
 
     generated_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    display_course = f"{cn} — مجموعة {group_label}" if group_label and group_label != "الكل" else cn
     ctx = {
-        "course_name": cn,
+        "course_name": display_course,
         "course_code": course_code,
         "semester_label": semester_label,
         "instructor_name": instructor_name,
+        "group_label": group_label,
         "weeks": weeks,
         "week_numbers": list(range(1, weeks + 1)),
         "table_rows": table_rows,
@@ -5239,6 +5278,17 @@ def attendance_register_config():
     return jsonify({"status": "ok", "term_weeks": weeks})
 
 
+def _parse_optional_teaching_group_id(raw) -> int | None | object:
+    """None = غير مُرسل؛ int؛ أو 'bad' عند قيمة غير صالحة."""
+    if raw in (None, ""):
+        return None
+    try:
+        tgid = int(raw)
+    except (TypeError, ValueError):
+        return "bad"
+    return tgid if tgid > 0 else None
+
+
 @students_bp.route("/attendance/register/roster")
 @login_required
 def attendance_register_roster():
@@ -5251,12 +5301,16 @@ def attendance_register_roster():
             week_number = int(week_raw)
         except (TypeError, ValueError):
             return jsonify({"status": "error", "message": "رقم أسبوع غير صالح"}), 400
+    tgid = _parse_optional_teaching_group_id(request.args.get("teaching_group_id"))
+    if tgid == "bad":
+        return jsonify({"status": "error", "message": "معرّف مجموعة غير صالح"}), 400
     result = build_registration_roster(
         get_connection,
         get_current_term,
         normalize_sid,
         course_name=course,
         week_number=week_number,
+        teaching_group_id=tgid,
     )
     if not result.get("ok"):
         return result["response"]
@@ -5274,6 +5328,9 @@ def attendance_register_save():
     except (TypeError, ValueError):
         return jsonify({"status": "error", "message": "رقم أسبوع غير صالح"}), 400
     marks = data.get("marks") or data.get("students") or []
+    tgid = _parse_optional_teaching_group_id(data.get("teaching_group_id"))
+    if tgid == "bad":
+        return jsonify({"status": "error", "message": "معرّف مجموعة غير صالح"}), 400
     result = save_registration_marks(
         get_connection,
         get_current_term,
@@ -5281,6 +5338,7 @@ def attendance_register_save():
         course_name=course,
         week_number=week_number,
         marks=marks,
+        teaching_group_id=tgid,
     )
     if not result.get("ok"):
         return result["response"]
@@ -5354,6 +5412,16 @@ def attendance_allowed_courses():
         rows = registration_attendance_course_rows(
             conn, cur, term_name, term_year, actor, **kwargs
         )
+        from backend.services.attendance_export_core import expand_attendance_course_options
+
+        instr_id = kwargs.get("instructor_id")
+        courses = expand_attendance_course_options(
+            conn,
+            rows,
+            semester=semester_label,
+            role_bucket=role_bucket,
+            instructor_id=int(instr_id) if instr_id is not None else None,
+        )
 
     schedule_published = False
     try:
@@ -5362,17 +5430,6 @@ def attendance_allowed_courses():
     except Exception:
         pass
 
-    courses = [
-        {
-            "course_name": r["course_name"],
-            "course_code": r["course_code"],
-            "units": r["units"],
-            "in_schedule": r.get("in_schedule", False),
-            "registration_only": r.get("registration_only", False),
-        }
-        for r in rows
-        if r and r.get("course_name")
-    ]
     return jsonify({
         "status": "ok",
         "courses": courses,

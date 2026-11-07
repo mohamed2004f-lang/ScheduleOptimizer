@@ -1087,6 +1087,17 @@ html[data-theme="dark"] .product-home-credit,
   border-spacing: 0;
   table-layout: fixed;
 }
+/* أقسام علمية: قاعة ضيقة جداً — المساحة للمقرر (colgroup يفرض العرض فعلياً) */
+.timetable.timetable--stages{
+  --sched-day-w: 4.75rem;
+  --sched-time-w: 5.35rem;
+  --sched-room-w: 3.15rem;
+  --sched-course-w: 9rem;
+  --sched-inst-w: 6.5rem;
+  min-width: 920px;
+  width: max-content;
+  max-width: none;
+}
 .timetable.timetable--stages thead th.day-header,
 .timetable.timetable--personal thead th.day-header,
 .timetable.timetable--stages tbody th.day-header,
@@ -1197,19 +1208,156 @@ html[data-theme="dark"] .product-home-credit,
   padding: 5px 6px;
 }
 .timetable.timetable--stages-ruled td.stage-col--course,
-.timetable.timetable--stages-print td.stage-col--course{
-  min-width: 6.5rem;
+.timetable.timetable--stages-print td.stage-col--course,
+.timetable.timetable--stages th.sub-time-header--course{
+  width: var(--sched-course-w);
+  min-width: var(--sched-course-w);
+  max-width: none;
 }
 .timetable.timetable--stages-ruled td.stage-col--inst,
-.timetable.timetable--stages-print td.stage-col--inst{
-  min-width: 5rem;
+.timetable.timetable--stages-print td.stage-col--inst,
+.timetable.timetable--stages th.sub-time-header--inst{
+  width: var(--sched-inst-w);
+  min-width: var(--sched-inst-w);
+  max-width: none;
 }
 .timetable.timetable--stages-ruled td.stage-col--room,
-.timetable.timetable--stages-print td.stage-col--room{
-  width: 3.4rem;
-  max-width: 3.8rem;
+.timetable.timetable--stages-print td.stage-col--room,
+.timetable.timetable--stages th.sub-time-header--room{
+  width: var(--sched-room-w);
+  min-width: var(--sched-room-w);
+  max-width: var(--sched-room-w);
   text-align: center;
+  padding-left: 1px;
+  padding-right: 1px;
+  font-size: 11px;
+  letter-spacing: -0.03em;
 }
+.timetable.timetable--stages th.sub-time-header--room{
+  font-size: 10px;
+  padding-left: 0;
+  padding-right: 0;
+  overflow: hidden;
+  text-overflow: clip;
+}
+/* نص المقرر/الأستاذ في سطر واحد قدر الإمكان؛ القطع مع … إن طال جداً */
+.timetable.timetable--stages td.stage-col--course .course-plain-label,
+.timetable.timetable--stages td.stage-col--course .course-btn--plain,
+.timetable.timetable--stages td.stage-col--course .slot-course-name,
+.timetable.timetable--stages td.stage-col--inst .slot-text,
+.timetable.timetable--stages td.stage-col--inst .slot-inst-primary{
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.timetable.timetable--stages td.stage-col--room .slot-text{
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  max-width: 100%;
+}
+.timetable.timetable--stages td.stage-col--course,
+.timetable.timetable--stages td.stage-col--inst{
+  padding-left: 4px;
+  padding-right: 4px;
+}
+.timetable.timetable--stages .time-slot-time-label{
+  font-size: 11px;
+  letter-spacing: -0.02em;
+}
+.timetable.timetable--stages th.day-header .day-header-name,
+.timetable.timetable--stages tbody th.day-header .day-header-name{
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/*
+ * فواصل الأيام/الأعمدة — بعد قواعد stage-col حتى لا يلغيها border: 1px.
+ * أفقياً: أعلى وأسفل كل يوم عبر كل الخلايا حتى نهاية الأعمدة الثلاثة.
+ * عمودياً: من الترويسة إلى آخر صف لكل الأيام (وقت | 1 | 2 | 3 | حافة).
+ */
+.timetable.timetable--stages{
+  border: 3px double #1e3a5f !important;
+}
+.timetable.timetable--stages thead tr:last-child > th{
+  border-bottom: 3px double #1e3a5f !important;
+}
+.timetable.timetable--stages .stage-time-row.is-day-start > th,
+.timetable.timetable--stages .stage-time-row.is-day-start > td{
+  border-top: 3px double #334155 !important;
+}
+.timetable.timetable--stages .stage-time-row.is-day-end > th,
+.timetable.timetable--stages .stage-time-row.is-day-end > td{
+  border-bottom: 3px double #334155 !important;
+}
+.timetable.timetable--stages thead th.day-header,
+.timetable.timetable--stages tbody th.day-header{
+  border-inline-start: 3px double #1e3a5f !important;
+}
+.timetable.timetable--stages thead th.time-header,
+.timetable.timetable--stages tbody td.time-slot-time{
+  border-inline-end: 3px double #1e3a5f !important;
+}
+.timetable.timetable--stages th.stage-block-header[data-stage-bucket="pack_1"],
+.timetable.timetable--stages th.sub-time-header--course[data-stage-bucket="pack_1"],
+.timetable.timetable--stages td.stage-col--course[data-stage-bucket="pack_1"]{
+  border-inline-start: 3px double #1e3a5f !important;
+}
+.timetable.timetable--stages th.stage-block-header[data-stage-bucket="pack_2"],
+.timetable.timetable--stages th.stage-block-header[data-stage-bucket="pack_3"],
+.timetable.timetable--stages th.sub-time-header--course[data-stage-bucket="pack_2"],
+.timetable.timetable--stages th.sub-time-header--course[data-stage-bucket="pack_3"],
+.timetable.timetable--stages td.stage-col--course[data-stage-bucket="pack_2"],
+.timetable.timetable--stages td.stage-col--course[data-stage-bucket="pack_3"]{
+  border-inline-start: 3px double #1e3a5f !important;
+}
+.timetable.timetable--stages th.stage-block-header[data-stage-bucket="pack_3"],
+.timetable.timetable--stages th.sub-time-header--room[data-stage-bucket="pack_3"],
+.timetable.timetable--stages td.stage-col--room[data-stage-bucket="pack_3"]{
+  border-inline-end: 3px double #1e3a5f !important;
+}
+
+.timetable.timetable--stages-print{
+  border: 3px double #0f172a !important;
+}
+.timetable.timetable--stages-print thead tr:last-child > th{
+  border-bottom: 3px double #0f172a !important;
+}
+.timetable.timetable--stages-print .stage-time-row.is-day-start > th,
+.timetable.timetable--stages-print .stage-time-row.is-day-start > td{
+  border-top: 3px double #0f172a !important;
+}
+.timetable.timetable--stages-print .stage-time-row.is-day-end > th,
+.timetable.timetable--stages-print .stage-time-row.is-day-end > td{
+  border-bottom: 3px double #0f172a !important;
+}
+.timetable.timetable--stages-print thead th.day-header,
+.timetable.timetable--stages-print tbody th.day-header{
+  border-inline-start: 3px double #0f172a !important;
+}
+.timetable.timetable--stages-print thead th.time-header,
+.timetable.timetable--stages-print tbody td.time-slot-time{
+  border-inline-end: 3px double #0f172a !important;
+}
+.timetable.timetable--stages-print th.stage-block-header[data-stage-bucket="pack_1"],
+.timetable.timetable--stages-print th.sub-time-header--course[data-stage-bucket="pack_1"],
+.timetable.timetable--stages-print td.stage-col--course[data-stage-bucket="pack_1"],
+.timetable.timetable--stages-print th.stage-block-header[data-stage-bucket="pack_2"],
+.timetable.timetable--stages-print th.stage-block-header[data-stage-bucket="pack_3"],
+.timetable.timetable--stages-print th.sub-time-header--course[data-stage-bucket="pack_2"],
+.timetable.timetable--stages-print th.sub-time-header--course[data-stage-bucket="pack_3"],
+.timetable.timetable--stages-print td.stage-col--course[data-stage-bucket="pack_2"],
+.timetable.timetable--stages-print td.stage-col--course[data-stage-bucket="pack_3"]{
+  border-inline-start: 3px double #0f172a !important;
+}
+.timetable.timetable--stages-print th.stage-block-header[data-stage-bucket="pack_3"],
+.timetable.timetable--stages-print th.sub-time-header--room[data-stage-bucket="pack_3"],
+.timetable.timetable--stages-print td.stage-col--room[data-stage-bucket="pack_3"]{
+  border-inline-end: 3px double #0f172a !important;
+}
+
 .stage-col-item{
   line-height: 1.35;
 }
@@ -1313,23 +1461,61 @@ html[data-theme="dark"] .product-home-credit,
   padding: 5px 3px;
   line-height: 1.2;
 }
-.timetable.timetable--stages th.sub-time-header--course,
 .timetable.timetable--personal th.sub-time-header--course{
   width: auto;
   min-width: 7rem;
 }
-.timetable.timetable--stages th.sub-time-header--inst,
 .timetable.timetable--personal th.sub-time-header--inst{
   width: auto;
   min-width: 5.5rem;
 }
-.timetable.timetable--stages th.sub-time-header--room,
 .timetable.timetable--personal th.sub-time-header--room{
   width: 3.2rem;
   max-width: 3.5rem;
   padding-left: 2px;
   padding-right: 2px;
   white-space: nowrap;
+}
+/* مصفوفة الأقسام: اعرض عبر col + متغيرات — لا تُلغَ لاحقاً */
+.timetable.timetable--stages col.col-day{ width: var(--sched-day-w); }
+.timetable.timetable--stages col.col-time{ width: var(--sched-time-w); }
+.timetable.timetable--stages col.col-course{ width: var(--sched-course-w); }
+.timetable.timetable--stages col.col-inst{ width: var(--sched-inst-w); }
+.timetable.timetable--stages col.col-room{ width: var(--sched-room-w); }
+.timetable.timetable--stages th.sub-time-header--course{
+  width: var(--sched-course-w) !important;
+  min-width: var(--sched-course-w) !important;
+  max-width: none !important;
+}
+.timetable.timetable--stages th.sub-time-header--inst{
+  width: var(--sched-inst-w) !important;
+  min-width: var(--sched-inst-w) !important;
+  max-width: none !important;
+}
+.timetable.timetable--stages th.sub-time-header--room{
+  width: var(--sched-room-w) !important;
+  min-width: var(--sched-room-w) !important;
+  max-width: var(--sched-room-w) !important;
+  padding-left: 1px !important;
+  padding-right: 1px !important;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.timetable.timetable--stages-ruled td.stage-col--course,
+.timetable.timetable--stages-print td.stage-col--course{
+  width: var(--sched-course-w) !important;
+  min-width: var(--sched-course-w) !important;
+}
+.timetable.timetable--stages-ruled td.stage-col--inst,
+.timetable.timetable--stages-print td.stage-col--inst{
+  width: var(--sched-inst-w) !important;
+  min-width: var(--sched-inst-w) !important;
+}
+.timetable.timetable--stages-ruled td.stage-col--room,
+.timetable.timetable--stages-print td.stage-col--room{
+  width: var(--sched-room-w) !important;
+  min-width: var(--sched-room-w) !important;
+  max-width: var(--sched-room-w) !important;
 }
 /* طباعة: نفس شبكة الشاشة + ترويسة «مقررات حسب المراحل» */
 .timetable.timetable--stages-print{

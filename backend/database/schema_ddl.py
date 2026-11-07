@@ -627,6 +627,71 @@ TABLES_SCHEMA = {
         )
     """,
 
+    'permission_definitions': """
+        CREATE TABLE IF NOT EXISTS permission_definitions (
+            key TEXT PRIMARY KEY,
+            group_key TEXT NOT NULL,
+            group_label_ar TEXT NOT NULL,
+            label_ar TEXT NOT NULL,
+            description_ar TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        )
+    """,
+
+    'role_profiles': """
+        CREATE TABLE IF NOT EXISTS role_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT UNIQUE NOT NULL,
+            name_ar TEXT NOT NULL,
+            base_role TEXT NOT NULL,
+            scope_mode TEXT NOT NULL DEFAULT 'none',
+            is_system INTEGER NOT NULL DEFAULT 0,
+            description_ar TEXT,
+            default_home_path TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1
+        )
+    """,
+
+    'role_profile_permissions': """
+        CREATE TABLE IF NOT EXISTS role_profile_permissions (
+            profile_id INTEGER NOT NULL,
+            permission_key TEXT NOT NULL,
+            granted INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (profile_id, permission_key)
+        )
+    """,
+
+    'user_permission_overrides': """
+        CREATE TABLE IF NOT EXISTS user_permission_overrides (
+            username TEXT NOT NULL,
+            permission_key TEXT NOT NULL,
+            granted INTEGER NOT NULL,
+            PRIMARY KEY (username, permission_key)
+        )
+    """,
+
+    'student_account_requests': """
+        CREATE TABLE IF NOT EXISTS student_account_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT NOT NULL,
+            student_name TEXT NOT NULL DEFAULT '',
+            department_id INTEGER,
+            email TEXT,
+            stored_phone TEXT,
+            whatsapp_phone TEXT NOT NULL,
+            whatsapp_correction INTEGER NOT NULL DEFAULT 0,
+            alternate_whatsapp TEXT,
+            note TEXT,
+            password_hash TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            requested_at TEXT NOT NULL,
+            reviewed_at TEXT,
+            reviewed_by TEXT,
+            review_note TEXT,
+            created_username TEXT
+        )
+    """,
+
     'user_invites': """
         CREATE TABLE IF NOT EXISTS user_invites (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

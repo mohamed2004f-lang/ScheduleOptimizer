@@ -77,6 +77,7 @@ PERMISSION_CATALOG: list[dict[str, Any]] = [
     {"key": "nav_supervision", "group_key": "nav", "group_label_ar": "التنقل", "label_ar": "إسناد الطلبة للمشرفين"},
     {"key": "nav_staff_operations_menu", "group_key": "nav", "group_label_ar": "التنقل", "label_ar": "شريط الإدارة الكامل"},
     {"key": "nav_my_assigned_courses", "group_key": "nav", "group_label_ar": "التنقل", "label_ar": "مقرراتي"},
+    {"key": "nav_instructor_portal_menu", "group_key": "nav", "group_label_ar": "التنقل", "label_ar": "بوابة هيئة التدريس"},
     {"key": "nav_student_portal", "group_key": "nav", "group_label_ar": "التنقل", "label_ar": "بوابة الطالب"},
 ]
 
@@ -193,22 +194,23 @@ ROLE_PROFILE_SEED: list[dict[str, Any]] = [
     },
     {
         "code": "college_quality_head",
-        "name_ar": "رئيس ضمان الجودة",
-        "base_role": "staff",
+        "name_ar": "رئيس ضمان الجودة بالكلية",
+        "base_role": "instructor",
         "scope_mode": "college",
         "permissions": [
             "nav_academic_quality_dashboard", "nav_surveys_results",
-            "nav_evaluation_survey_admin", "can_edit_accreditation_catalog",
-            "nav_dashboard",
+            "nav_evaluation_survey_admin", "nav_college_archive",
+            "nav_dashboard", "nav_instructor_portal_menu", "nav_my_assigned_courses",
         ],
     },
     {
         "code": "dept_quality_coordinator",
         "name_ar": "منسق جودة القسم",
-        "base_role": "staff",
+        "base_role": "instructor",
         "scope_mode": "department",
         "permissions": [
             "nav_academic_quality_dashboard", "nav_surveys_results", "nav_dashboard",
+            "nav_instructor_portal_menu", "nav_my_assigned_courses",
         ],
     },
     {
@@ -275,6 +277,7 @@ GRANTABLE_USER_OVERRIDE_KEYS = frozenset({
     "can_approve_enrollment_unit_exception",
     "can_transfer_student_department",
     "can_rename_student_id",
+    "can_switch_department_scope",
     "nav_student_affairs_menu",
     "nav_planning_menu",
     "nav_view_class_schedule",
@@ -284,6 +287,16 @@ GRANTABLE_USER_OVERRIDE_KEYS = frozenset({
     "nav_view_enrollment_plans",
     "nav_term_ops",
     "nav_term_offerings",
+    "nav_surveys_results",
+    "nav_department_reports",
+    "nav_performance_report",
+})
+
+# مفاتيح حساسة لا تُمنح كاستثناء فردي
+FORBIDDEN_USER_OVERRIDE_KEYS = frozenset({
+    "can_view_system_accounts",
+    "can_assign_system_admin",
+    "nav_admin_settings",
 })
 
 
@@ -291,7 +304,91 @@ def role_profiles_enabled() -> bool:
     return (os.environ.get("ENABLE_ROLE_PROFILES") or "1").strip().lower() not in ("0", "false", "no")
 
 
-def list_role_profiles_for_ui(*, include_system_admin: bool = False) -> list[dict]:
+def _profile_row_to_ui_dict(row) -> dict:
+    if hasattr(row, "keys"):
+        d = dict(row)
+        return {
+            "id": d.get("id"),
+            "code": d.get("code"),
+            "name_ar": d.get("name_ar"),
+            "base_role": d.get("base_role"),
+            "scope_mode": d.get("scope_mode") or "none",
+            "is_system": int(d.get("is_system") or 0),
+            "is_active": int(d.get("is_active") if d.get("is_active") is not None else 1),
+            "description_ar": d.get("description_ar"),
+            "default_home_path": d.get("default_home_path"),
+        }
+    return {
+        "id": row[0],
+        "code": row[1],
+        "name_ar": row[2],
+        "base_role": row[3],
+        "scope_mode": (row[4] if len(row) > 4 else None) or "none",
+        "is_system": int(row[5] if len(row) > 5 else 0),
+        "is_active": int(row[6] if len(row) > 6 and row[6] is not None else 1),
+        "description_ar": row[7] if len(row) > 7 else None,
+        "default_home_path": row[8] if len(row) > 8 else None,
+    }
+
+
+def list_role_profiles_from_db(
+    conn,
+    *,
+    include_system_admin: bool = False,
+    include_inactive: bool = False,
+) -> list[dict]:
+    """قائمة القوالب من قاعدة البيانات (مصدر الحقيقة)."""
+    if conn is None:
+        return []
+    cur = conn.cursor()
+    try:
+        rows = cur.execute(
+            """
+            SELECT id, code, name_ar, base_role, scope_mode, is_system,
+                   COALESCE(is_active, 1) AS is_active, description_ar, default_home_path
+            FROM role_profiles
+            ORDER BY is_system DESC, name_ar, code
+            """
+        ).fetchall()
+    except Exception:
+        try:
+            rows = cur.execute(
+                """
+                SELECT id, code, name_ar, base_role, scope_mode, is_system,
+                       1 AS is_active, description_ar, default_home_path
+                FROM role_profiles
+                ORDER BY is_system DESC, name_ar, code
+                """
+            ).fetchall()
+        except Exception:
+            logger.exception("list_role_profiles_from_db failed")
+            return []
+    out: list[dict] = []
+    for r in rows:
+        item = _profile_row_to_ui_dict(r)
+        if item.get("is_system") and item.get("code") == "system_admin" and not include_system_admin:
+            continue
+        if not include_inactive and int(item.get("is_active") or 1) == 0:
+            continue
+        out.append(item)
+    return out
+
+
+def list_role_profiles_for_ui(
+    *,
+    include_system_admin: bool = False,
+    conn=None,
+    include_inactive: bool = False,
+) -> list[dict]:
+    """قائمة القوالب للواجهة — DB أولاً مع fallback للـ seed."""
+    if conn is not None:
+        db_rows = list_role_profiles_from_db(
+            conn,
+            include_system_admin=include_system_admin,
+            include_inactive=include_inactive,
+        )
+        if db_rows:
+            return db_rows
     out = []
     for p in ROLE_PROFILE_SEED:
         if p.get("is_system") and p["code"] == "system_admin" and not include_system_admin:
@@ -301,14 +398,54 @@ def list_role_profiles_for_ui(*, include_system_admin: bool = False) -> list[dic
             "name_ar": p["name_ar"],
             "base_role": p["base_role"],
             "scope_mode": p.get("scope_mode", "none"),
+            "is_system": int(p.get("is_system") or 0),
+            "is_active": 1,
         })
     return out
 
 
-def get_profile_by_code(code: str | None) -> dict | None:
+def get_profile_by_code(code: str | None, conn=None) -> dict | None:
     if not code:
         return None
-    return _PROFILE_BY_CODE.get((code or "").strip())
+    c = (code or "").strip()
+    if conn is not None:
+        try:
+            cur = conn.cursor()
+            try:
+                row = cur.execute(
+                    """
+                    SELECT id, code, name_ar, base_role, scope_mode, is_system,
+                           COALESCE(is_active, 1) AS is_active, description_ar, default_home_path
+                    FROM role_profiles WHERE code = ? LIMIT 1
+                    """,
+                    (c,),
+                ).fetchone()
+            except Exception:
+                row = cur.execute(
+                    """
+                    SELECT id, code, name_ar, base_role, scope_mode, is_system,
+                           1 AS is_active, description_ar, default_home_path
+                    FROM role_profiles WHERE code = ? LIMIT 1
+                    """,
+                    (c,),
+                ).fetchone()
+            if row:
+                return _profile_row_to_ui_dict(row)
+        except Exception:
+            logger.exception("get_profile_by_code db failed code=%s", c)
+    seed = _PROFILE_BY_CODE.get(c)
+    if not seed:
+        return None
+    return {
+        "code": seed["code"],
+        "name_ar": seed["name_ar"],
+        "base_role": seed["base_role"],
+        "scope_mode": seed.get("scope_mode", "none"),
+        "is_system": int(seed.get("is_system") or 0),
+        "is_active": 1,
+        "permissions": list(seed.get("permissions") or []),
+        "default_home_path": seed.get("default_home_path"),
+    }
 
 
 def get_profile_by_id(conn, profile_id: int | None) -> dict | None:
@@ -316,19 +453,27 @@ def get_profile_by_id(conn, profile_id: int | None) -> dict | None:
         return None
     try:
         cur = conn.cursor()
-        row = cur.execute(
-            "SELECT id, code, name_ar, base_role, scope_mode, is_system, default_home_path "
-            "FROM role_profiles WHERE id = ?",
-            (int(profile_id),),
-        ).fetchone()
+        try:
+            row = cur.execute(
+                """
+                SELECT id, code, name_ar, base_role, scope_mode, is_system,
+                       COALESCE(is_active, 1) AS is_active, description_ar, default_home_path
+                FROM role_profiles WHERE id = ?
+                """,
+                (int(profile_id),),
+            ).fetchone()
+        except Exception:
+            row = cur.execute(
+                """
+                SELECT id, code, name_ar, base_role, scope_mode, is_system,
+                       1 AS is_active, description_ar, default_home_path
+                FROM role_profiles WHERE id = ?
+                """,
+                (int(profile_id),),
+            ).fetchone()
         if not row:
             return None
-        if hasattr(row, "keys"):
-            return dict(row)
-        return {
-            "id": row[0], "code": row[1], "name_ar": row[2], "base_role": row[3],
-            "scope_mode": row[4], "is_system": row[5], "default_home_path": row[6],
-        }
+        return _profile_row_to_ui_dict(row)
     except Exception:
         return _PROFILE_BY_CODE.get(str(profile_id))
 

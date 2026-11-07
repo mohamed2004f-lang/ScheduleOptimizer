@@ -27,6 +27,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-for-pytest")
 # فرض بيئة الاختبار حتى لا تُستبدل بصمت من FLASK_ENV=production في .env أو في البيئة
 os.environ["FLASK_ENV"] = "testing"
 os.environ["MFA_ENFORCE"] = "0"
+os.environ.setdefault("ENABLE_ROLE_PROFILE_ADMIN", "1")
 
 
 def _use_postgres_repos() -> bool:
@@ -1498,6 +1499,8 @@ def _setup_shared_db():
         "backend.services.registration_requests",
         "backend.services.notifications",
         "backend.services.users",
+        "backend.services.role_profiles",
+        "backend.services.student_account_requests",
         "backend.services.academic_calendar",
         "backend.services.term_ops_routes",
         "backend.services.term_offerings",

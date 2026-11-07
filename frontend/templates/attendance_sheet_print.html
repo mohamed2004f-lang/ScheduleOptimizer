@@ -93,11 +93,14 @@
       overflow-x: auto;
       margin-bottom: 12px;
     }
-    /* عرض كامل: عمود الاسم يستفيد من المساحة بعد الرقم وأعمدة الأسابيع */
+    /*
+      عرض تلقائي: أعمدة م/رقم/اسم تضيق حسب المحتوى (أطول اسم)،
+      وأعمدة الأسابيع تأخذ الباقي بالتساوي.
+    */
     table.report {
       width: 100%;
       border-collapse: collapse;
-      table-layout: fixed;
+      table-layout: auto;
     }
     table.report th, table.report td {
       border: 1px solid #333;
@@ -112,39 +115,38 @@
     }
     table.report th.col-seq,
     table.report td.sticky-seq {
+      width: 1%;
       white-space: nowrap;
       font-weight: 700;
       font-size: 8.5pt;
     }
-    /* الرقم الدراسي: يسمح بسطرين كحد أقصى حتى لا يتداخل مع اسم الطالب في الطباعة الأفقية */
     table.report th.col-id {
-      white-space: normal;
-      line-height: 1.2;
+      width: 1%;
+      white-space: nowrap;
       font-size: 7.5pt;
       padding: 3px 4px;
+      line-height: 1.2;
     }
     table.report td.sticky-id {
-      white-space: normal;
-      line-height: 1.15;
-      overflow-wrap: anywhere;
-      word-break: break-all;
-    }
-    table.report th.col-name,
-    table.report td.sticky-name {
-      text-align: right;
-    }
-    table.report td.sticky-name {
-      font-size: 8.5pt;
-      white-space: normal;
-      overflow-wrap: break-word;
-      word-break: break-word;
-      line-height: 1.25;
-    }
-    table.report td.sticky-id {
+      width: 1%;
+      white-space: nowrap;
       font-family: Consolas, 'Segoe UI', monospace;
       direction: ltr;
       text-align: center;
       font-size: 7.5pt;
+    }
+    table.report th.col-name,
+    table.report td.sticky-name {
+      width: 1%;
+      max-width: 28em;
+      text-align: right;
+      white-space: nowrap;
+    }
+    table.report td.sticky-name {
+      font-size: 8.5pt;
+      line-height: 1.25;
+      padding-left: 8px;
+      padding-right: 8px;
     }
     table.report th.week-band {
       font-size: 7pt;
@@ -165,9 +167,8 @@
       padding: 3px 2px;
       font-size: 7pt;
       line-height: 1.2;
-      white-space: normal;
-      word-break: break-word;
-      overflow-wrap: break-word;
+      white-space: nowrap;
+      min-width: 1.6em;
     }
     .signatures {
       margin-top: 20px;
@@ -178,11 +179,14 @@
       line-height: 1.9;
       max-width: 100%;
     }
-    /* توقيعات بعرض عمود الاسم ومحاذاة مع الجدول (RTL) */
     .signatures-instructor {
       box-sizing: border-box;
       text-align: right;
       direction: rtl;
+      width: fit-content;
+      min-width: 12em;
+      max-width: 40%;
+      margin-inline-start: 0;
     }
     .signatures .label-inline {
       display: flex;
@@ -194,7 +198,7 @@
     .signatures .label-inline span:first-child { white-space: nowrap; }
     .signatures .label-inline .rule {
       flex: 1;
-      min-width: 0;
+      min-width: 8em;
       border-bottom: 1px solid #333;
       min-height: 1.1em;
     }
@@ -223,8 +227,8 @@
 </head>
 <body>
   <div class="no-print">
-    <button type="button" onclick="window.print()">طباعة</button>
-    <button type="button" class="secondary" onclick="window.close()">إغلاق</button>
+    <button type="button" id="btnSheetPrint">طباعة</button>
+    <button type="button" class="secondary" id="btnSheetClose">إغلاق</button>
     <div class="orientation-controls" role="group" aria-label="اتجاه الصفحة">
       <span class="orient-title">اتجاه الصفحة (معاينة وطباعة):</span>
       <label>
@@ -238,8 +242,20 @@
     </div>
     <p class="print-hint">يُطبَّق اتجاه الصفحة أعلاه على المعاينة وعلى <strong>طباعة المتصفح</strong> (A4). عند تغيير الاتجاه تُحدَّث الصفحة تلقائياً.</p>
   </div>
-  <script>
+  <script nonce="{{ csp_nonce }}">
     (function () {
+      var btnPrint = document.getElementById('btnSheetPrint');
+      if (btnPrint) {
+        btnPrint.addEventListener('click', function () {
+          window.print();
+        });
+      }
+      var btnClose = document.getElementById('btnSheetClose');
+      if (btnClose) {
+        btnClose.addEventListener('click', function () {
+          window.close();
+        });
+      }
       document.querySelectorAll('input[name="pageOrient"]').forEach(function (el) {
         el.addEventListener('change', function () {
           if (!this.checked) return;
@@ -272,22 +288,8 @@
     <div><strong>تاريخ الإصدار:</strong> {{ generated_at }}</div>
   </div>
 
-  {# توزيع عرض الجدول: تسلسل، رقم دراسي (أوسع قليلاً للفّ على سطرين)، أسابيع، الباقي لاسم الطالب #}
-  {% set pct_seq = 4 %}
-  {% set pct_id = 9 %}
-  {% set pct_weeks_total = 58 %}
-  {% set pct_week = (pct_weeks_total / weeks) if weeks else 0 %}
-  {% set pct_name = 100 - pct_seq - pct_id - pct_weeks_total %}
   <div class="table-report-host">
   <table class="report">
-    <colgroup>
-      <col class="col-seq" style="width: {{ pct_seq }}%;">
-      <col class="col-id" style="width: {{ pct_id }}%;">
-      <col class="col-name" style="width: {{ pct_name }}%;">
-      {% for w in week_numbers %}
-      <col class="col-week" style="width: {{ pct_week }}%;">
-      {% endfor %}
-    </colgroup>
     <thead>
       <tr>
         <th class="col-seq" rowspan="2">م</th>
@@ -308,7 +310,7 @@
         <td class="sticky-id">{{ row.student_id }}</td>
         <td class="sticky-name">{{ row.student_name }}</td>
         {% for cell in row.weeks %}
-        <td class="week-cell">{{ cell }}</td>
+        <td class="week-cell">{% if cell %}{{ cell }}{% endif %}</td>
         {% endfor %}
       </tr>
       {% endfor %}
@@ -320,7 +322,7 @@
   </div>
 
   <div class="signatures">
-    <div class="signatures-instructor" style="width: {{ pct_name }}%; margin-inline-start: {{ pct_seq + pct_id }}%;">
+    <div class="signatures-instructor">
       <div class="label-inline">
         <span>اسم أستاذ المقرر</span>
         <span class="rule"></span>

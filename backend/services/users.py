@@ -831,7 +831,11 @@ def list_users():
     role_norm = _normalize_role(_current_role())
     privileged = _actor_is_privileged_users_admin()
     if privileged:
-        from backend.core.permissions import CAN_ADD_DEPARTMENT_USERS, load_usernames_granted_permission
+        from backend.core.permissions import (
+            CAN_ADD_DEPARTMENT_USERS,
+            get_profile_by_id,
+            load_usernames_granted_permission,
+        )
         from backend.core.user_admin_policy import is_principal_admin_session
 
         with get_connection() as conn:
@@ -849,6 +853,15 @@ def list_users():
                     totp_map = {}
             else:
                 totp_map = {}
+            for u in items:
+                pid = u.get("role_profile_id")
+                if pid is not None:
+                    prof = get_profile_by_id(conn, pid)
+                    if prof:
+                        u["role_profile_code"] = prof.get("code")
+                        u["role_profile_active"] = int(
+                            prof.get("is_active") if prof.get("is_active") is not None else 1
+                        )
         for u in items:
             if _normalize_role(u.get("role") or "") == "head_of_department":
                 un = (u.get("username") or "").strip().lower()
@@ -859,7 +872,8 @@ def list_users():
     _diag_env = (os.environ.get("SHOW_USER_LIST_STORAGE_DIAGNOSTICS") or "").strip().lower()
     verbose_meta = _diag_env in ("1", "true", "yes") and role_norm in ("admin_main", "system_admin")
     meta = _admin_storage_meta(verbose_storage_hint=verbose_meta)
-    meta["assignable_roles"] = assignable_roles_for_actor(session)
+    with get_connection() as conn_assign:
+        meta["assignable_roles"] = assignable_roles_for_actor(session, conn=conn_assign)
     meta["can_view_system_accounts"] = not exclude_sys
     logger.info(
         "users/list count=%s backend=%s storage=%s verbose_meta=%s",
@@ -1089,15 +1103,39 @@ def add_user():
                     instructor_id=instructor_id,
                 )
             role_profile_id = None
+            quality_college_lead = None  # None = لا تلمس العلم؛ 0/1 = اضبط
+            quality_dept_coord = None
             if role_profile_code and privileged:
                 from backend.core.permissions import get_profile_by_code
 
-                prof = get_profile_by_code(role_profile_code)
+                prof = get_profile_by_code(role_profile_code, conn=conn)
                 if prof and prof.get("code") != "system_admin":
+                    if int(prof.get("is_active") if prof.get("is_active") is not None else 1) == 0:
+                        return jsonify({
+                            "status": "error",
+                            "message": "لا يمكن تعيين قالب مؤرشف — فعّله أولاً أو اختر قالباً نشطاً",
+                        }), 400
+                    pcode = (prof.get("code") or "").strip()
+                    # مناصب الجودة في الكلية تُسند لعضو هيئة تدريس (وليس staff)
+                    if pcode in ("college_quality_head", "dept_quality_coordinator"):
+                        if role != "instructor":
+                            return jsonify({
+                                "status": "error",
+                                "message": "قالب الجودة يُعيَّن مع الدور الأساسي «عضو هيئة تدريس» مع ربط رقم الأستاذ",
+                            }), 400
+                        if instructor_id is None:
+                            return jsonify({
+                                "status": "error",
+                                "message": "مناصب الجودة تتطلب ربط رقم عضو هيئة التدريس",
+                            }), 400
+                        if pcode == "college_quality_head":
+                            quality_college_lead = 1
+                        else:
+                            quality_dept_coord = 1
                     try:
                         row_p = cur.execute(
-                            "SELECT id FROM role_profiles WHERE code = ?",
-                            (prof["code"],),
+                            "SELECT id FROM role_profiles WHERE code = ? AND COALESCE(is_active, 1) = 1",
+                            (pcode,),
                         ).fetchone()
                         if row_p:
                             role_profile_id = int(row_p[0] if not hasattr(row_p, "keys") else row_p["id"])
@@ -1245,6 +1283,28 @@ def add_user():
                         409,
                     )
                 return jsonify({"status": "error", "message": "تعذر التحقق من حفظ المستخدم؛ لم يتم إيجاد السجل بعد العملية."}), 500
+            if quality_college_lead is not None or quality_dept_coord is not None:
+                try:
+                    if quality_college_lead is not None:
+                        cur.execute(
+                            """
+                            UPDATE users SET is_college_quality_lead = ?
+                            WHERE lower(username) = lower(?)
+                            """,
+                            (int(quality_college_lead), username),
+                        )
+                    if quality_dept_coord is not None:
+                        cur.execute(
+                            """
+                            UPDATE users SET is_dept_quality_coordinator = ?
+                            WHERE lower(username) = lower(?)
+                            """,
+                            (int(quality_dept_coord), username),
+                        )
+                    row = users_repo.fetch_user_row_after_write_ci(conn, username)
+                    user_out = _user_dict_from_row(row) or user_out
+                except Exception:
+                    logger.exception("quality flags update failed username=%s", username)
             _log_user_audit(
                 conn,
                 action="users.created" if was_created else "users.updated",

@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>طلب إنشاء حساب طالب</title>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="auth-page">
+  <div class="auth-card" style="max-width:520px">
+    <div class="auth-logo">
+      <img src="/static/images/mech_logo_small.png" alt="شعار كلية الهندسة">
+    </div>
+    <h1 class="auth-title">طلب إنشاء حساب طالب</h1>
+    <p class="auth-subtitle small text-muted mb-3">
+      أدخل رقمك الدراسي للتحقق من بياناتك، ثم أكمل الطلب ليراجعه رئيس القسم.
+    </p>
+    <div id="msgBox"></div>
+
+    <div class="mb-3">
+      <label class="form-label" for="studentIdInput">الرقم الدراسي</label>
+      <div class="input-group">
+        <input id="studentIdInput" class="form-control" dir="ltr" autocomplete="off" placeholder="مثال: 20201234">
+        <button type="button" class="btn btn-outline-primary" id="btnLookup">تحقق</button>
+      </div>
+    </div>
+
+    <div id="lookupPanel" class="d-none border rounded p-3 mb-3 bg-light">
+      <div class="small text-muted mb-1">البيانات من سجلات الكلية (للقراءة فقط)</div>
+      <div><strong id="dispName">—</strong></div>
+      <div class="small" id="dispDept">—</div>
+      <div class="small font-monospace" dir="ltr" id="dispId">—</div>
+    </div>
+
+    <form id="regForm" class="d-none">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="mb-3">
+        <label class="form-label" for="emailInput">البريد الإلكتروني</label>
+        <input id="emailInput" type="email" class="form-control" dir="ltr" autocomplete="email">
+        <div class="form-text">اختياري إن وُجد في السجل؛ يُفضّل إدخاله لإشعارات لاحقة.</div>
+      </div>
+
+      <div class="mb-3" id="waNewWrap">
+        <label class="form-label" for="whatsappInput">رقم الواتساب <span class="text-danger">*</span></label>
+        <input id="whatsappInput" class="form-control" dir="ltr" placeholder="0912345678 أو 2189…">
+        <div class="form-text">إلزامي إذا لم يكن مخزّناً مسبقاً.</div>
+      </div>
+
+      <div class="mb-3 d-none" id="waStoredWrap">
+        <label class="form-label">رقم الواتساب المسجّل</label>
+        <input id="whatsappStored" class="form-control" dir="ltr" readonly>
+        <div class="form-check mt-2">
+          <input class="form-check-input" type="checkbox" id="waWrongChk">
+          <label class="form-check-label" for="waWrongChk">الرقم غير صحيح</label>
+        </div>
+        <div id="waAltWrap" class="d-none mt-2">
+          <label class="form-label" for="whatsappAlt">رقم واتساب بديل <span class="text-danger">*</span></label>
+          <input id="whatsappAlt" class="form-control" dir="ltr">
+          <label class="form-label mt-2" for="noteInput">ملاحظة لرئيس القسم <span class="text-danger">*</span></label>
+          <textarea id="noteInput" class="form-control" rows="2" maxlength="500" placeholder="مثال: الرقم المخزّن قديم، البديل هو رقم والدي…"></textarea>
+        </div>
+      </div>
+
+      <div class="mb-3 d-none" id="noteOptionalWrap">
+        <label class="form-label" for="noteOptional">ملاحظة (اختياري)</label>
+        <textarea id="noteOptional" class="form-control" rows="2" maxlength="500"></textarea>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label" for="passwordInput">كلمة المرور <span class="text-danger">*</span></label>
+        <input id="passwordInput" type="password" class="form-control" autocomplete="new-password" minlength="8" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label" for="password2Input">تأكيد كلمة المرور <span class="text-danger">*</span></label>
+        <input id="password2Input" type="password" class="form-control" autocomplete="new-password" minlength="8" required>
+      </div>
+
+      <button type="submit" class="btn btn-primary w-100" id="btnSubmit">إرسال الطلب لرئيس القسم</button>
+    </form>
+
+    <div class="mt-3 text-center">
+      <a href="/login" class="small">العودة لتسجيل الدخول</a>
+    </div>
+  </div>
+
+  <script nonce="{{ csp_nonce }}" src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+  <script nonce="{{ csp_nonce }}">
+  (function () {
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    let lookup = null;
+
+    function showMsg(text, kind) {
+      const el = document.getElementById('msgBox');
+      if (!text) { el.innerHTML = ''; return; }
+      el.innerHTML = '<div class="alert alert-' + (kind || 'warning') + ' py-2">' + text + '</div>';
+    }
+
+    async function fetchJSON(url, opts) {
+      const headers = Object.assign({
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-CSRFToken': csrf
+      }, (opts && opts.headers) || {});
+      const body = opts && opts.body;
+      if (body && typeof body === 'object' && !(body instanceof FormData)) {
+        if (!body.csrf_token) body.csrf_token = csrf;
+        opts = Object.assign({}, opts, { body: JSON.stringify(body) });
+      }
+      const r = await fetch(url, Object.assign({ credentials: 'same-origin', headers }, opts || {}));
+      let j = null;
+      try { j = await r.json(); } catch (e) {}
+      return { ok: r.ok, status: r.status, json: j };
+    }
+
+    function applyLookup(data) {
+      lookup = data;
+      document.getElementById('lookupPanel').classList.remove('d-none');
+      document.getElementById('regForm').classList.remove('d-none');
+      document.getElementById('dispName').textContent = data.student_name || '—';
+      document.getElementById('dispId').textContent = data.student_id || '';
+      const dept = [data.department_name_ar, data.department_code].filter(Boolean).join(' · ');
+      document.getElementById('dispDept').textContent = dept || 'بدون قسم ظاهر';
+      document.getElementById('emailInput').value = data.email_stored || '';
+
+      const needWa = !!data.whatsapp_required;
+      document.getElementById('waNewWrap').classList.toggle('d-none', !needWa);
+      document.getElementById('waStoredWrap').classList.toggle('d-none', needWa);
+      document.getElementById('noteOptionalWrap').classList.toggle('d-none', !needWa);
+      document.getElementById('whatsappStored').value = data.whatsapp_stored || '';
+      document.getElementById('waWrongChk').checked = false;
+      document.getElementById('waAltWrap').classList.add('d-none');
+      document.getElementById('whatsappAlt').value = '';
+      document.getElementById('noteInput').value = '';
+      document.getElementById('noteOptional').value = '';
+    }
+
+    async function doLookup() {
+      const sid = (document.getElementById('studentIdInput').value || '').trim();
+      if (!sid) { showMsg('أدخل الرقم الدراسي', 'warning'); return; }
+      showMsg('جاري التحقق...', 'info');
+      document.getElementById('regForm').classList.add('d-none');
+      document.getElementById('lookupPanel').classList.add('d-none');
+      lookup = null;
+      const r = await fetchJSON('/student_account/lookup?student_id=' + encodeURIComponent(sid));
+      if (!r.ok) {
+        showMsg((r.json && r.json.message) || 'تعذر التحقق', 'danger');
+        return;
+      }
+      showMsg('', 'info');
+      applyLookup(r.json);
+    }
+
+    document.getElementById('btnLookup').addEventListener('click', doLookup);
+    document.getElementById('studentIdInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); doLookup(); }
+    });
+    document.getElementById('waWrongChk').addEventListener('change', function () {
+      document.getElementById('waAltWrap').classList.toggle('d-none', !this.checked);
+    });
+
+    document.getElementById('regForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!lookup) { showMsg('تحقق من الرقم الدراسي أولاً', 'warning'); return; }
+      const correction = !!document.getElementById('waWrongChk').checked && !lookup.whatsapp_required;
+      const payload = {
+        student_id: lookup.student_id,
+        email: (document.getElementById('emailInput').value || '').trim(),
+        password: document.getElementById('passwordInput').value || '',
+        password_confirm: document.getElementById('password2Input').value || '',
+        whatsapp_correction: correction,
+        whatsapp_phone: document.getElementById('whatsappInput').value || '',
+        alternate_whatsapp: document.getElementById('whatsappAlt').value || '',
+        note: correction
+          ? (document.getElementById('noteInput').value || '')
+          : (document.getElementById('noteOptional').value || '')
+      };
+      showMsg('جاري الإرسال...', 'info');
+      const r = await fetchJSON('/student_account/request', { method: 'POST', body: payload });
+      if (!r.ok) {
+        showMsg((r.json && r.json.message) || 'فشل الإرسال', 'danger');
+        return;
+      }
+      document.getElementById('regForm').classList.add('d-none');
+      showMsg((r.json && r.json.message) || 'تم إرسال الطلب', 'success');
+    });
+  })();
+  </script>
+</body>
+</html>

@@ -30,6 +30,7 @@ services:
       - FLASK_DEBUG=0
       - ENABLE_CSP=1
       - ENABLE_CSP_LEGACY=0
+      - ENABLE_ROLE_PROFILE_ADMIN=${ENABLE_ROLE_PROFILE_ADMIN:-1}
       - ADMIN_USERNAME=${ADMIN_USERNAME:?يجب تعيين ADMIN_USERNAME في ملف .env}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:?يجب تعيين ADMIN_PASSWORD في ملف .env}
       - SECRET_KEY=${SECRET_KEY:?يجب تعيين SECRET_KEY في ملف .env}

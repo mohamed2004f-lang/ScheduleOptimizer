@@ -153,3 +153,40 @@ def test_system_admin_catalog_includes_hod_add_users():
 
     caps = compute_system_admin_capabilities()
     assert caps.get(CAN_ADD_DEPARTMENT_USERS) is True
+
+
+def test_staff_caps_follow_db_profile_permissions(db_conn):
+    """تعديل صلاحيات قالب staff في DB ينعكس على merge بدون إعادة seed تمسحها."""
+    from backend.boot.role_profiles_seed import seed_role_profiles
+    from backend.core.auth import compute_capabilities
+    from backend.core.permissions import (
+        get_profile_by_code,
+        load_profile_permission_keys,
+        merge_capabilities_with_profile,
+    )
+
+    seed_role_profiles(db_conn)
+    prof = get_profile_by_code("college_registrar", conn=db_conn)
+    assert prof and prof.get("id")
+    pid = int(prof["id"])
+    cur = db_conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO role_profile_permissions (profile_id, permission_key, granted)
+        VALUES (?, 'nav_performance_report', 1)
+        ON CONFLICT(profile_id, permission_key) DO UPDATE SET granted = 1
+        """,
+        (pid,),
+    )
+    db_conn.commit()
+    keys = load_profile_permission_keys(db_conn, pid, "college_registrar")
+    assert "nav_performance_report" in keys
+    base = compute_capabilities("staff", 0, None)
+    out = merge_capabilities_with_profile(
+        base,
+        profile_keys=keys,
+        grant_overrides=set(),
+        deny_overrides=set(),
+        profile_meta=prof,
+    )
+    assert out.get("nav_performance_report") is True

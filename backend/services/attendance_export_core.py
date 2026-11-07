@@ -158,6 +158,201 @@ _SQL_REG_ACTIVE_STUDENT = (
     "AND COALESCE(st.enrollment_status, 'active') = 'active'"
 )
 
+# قيمة خيار المقرر/المجموعة في الواجهة: "اسم المقرر||" أو "اسم المقرر||123"
+ATTENDANCE_OPTION_SEP = "||"
+
+
+def parse_attendance_course_option(raw: str | None) -> tuple[str, int | None]:
+    """يفصل اسم المقرر عن teaching_group_id الاختياري من قيمة الخيار."""
+    text = (raw or "").strip()
+    if not text:
+        return "", None
+    if ATTENDANCE_OPTION_SEP not in text:
+        return text, None
+    name, _, rest = text.partition(ATTENDANCE_OPTION_SEP)
+    cname = name.strip()
+    rest = rest.strip()
+    if not rest:
+        return cname, None
+    try:
+        tgid = int(rest)
+    except (TypeError, ValueError):
+        return cname, None
+    return cname, tgid if tgid > 0 else None
+
+
+def format_attendance_course_option(
+    course_name: str, teaching_group_id: int | None = None
+) -> str:
+    cname = (course_name or "").strip()
+    if teaching_group_id is not None and int(teaching_group_id) > 0:
+        return f"{cname}{ATTENDANCE_OPTION_SEP}{int(teaching_group_id)}"
+    return f"{cname}{ATTENDANCE_OPTION_SEP}"
+
+
+def _regs_have_teaching_group_id(conn) -> bool:
+    try:
+        return "teaching_group_id" in (fetch_table_columns(conn, "registrations") or [])
+    except Exception:
+        return False
+
+
+def _instructor_member_of_group(group: dict[str, Any], instructor_id: int) -> bool:
+    iid = int(instructor_id or 0)
+    if iid <= 0:
+        return False
+    if int(group.get("instructor_id") or 0) == iid:
+        return True
+    if int(group.get("primary_instructor_id") or 0) == iid:
+        return True
+    for m in group.get("instructors") or []:
+        if int(m.get("instructor_id") or 0) == iid:
+            return True
+    return False
+
+
+def expand_attendance_course_options(
+    conn,
+    course_rows: list[dict[str, Any]],
+    *,
+    semester: str | None,
+    role_bucket: str,
+    instructor_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """
+    يوسّع مقررات الحضور بخيارات مجموعات التدريس عند التقسيم أ/ب.
+    السجل يبقى على مستوى المقرر؛ الخيار يصفّي كشف الطلبة فقط.
+    """
+    from backend.services.teaching_groups import (
+        GROUP_KIND_SPLIT,
+        group_code_label,
+        list_teaching_groups,
+    )
+
+    sem = (semester or "").strip()
+    rb = (role_bucket or "").strip()
+    out: list[dict[str, Any]] = []
+
+    for row in course_rows or []:
+        cname = (row.get("course_name") or "").strip()
+        if not cname:
+            continue
+        base = {
+            "course_name": cname,
+            "course_code": (row.get("course_code") or "").strip(),
+            "units": int(row.get("units") or 0),
+            "in_schedule": bool(row.get("in_schedule", False)),
+            "registration_only": bool(row.get("registration_only", False)),
+        }
+        groups: list[dict[str, Any]] = []
+        if sem:
+            try:
+                groups = list_teaching_groups(conn, semester=sem, course_name=cname)
+            except Exception:
+                groups = []
+        split_groups = [
+            g for g in groups if (g.get("group_kind") or "").strip().lower() == GROUP_KIND_SPLIT
+        ]
+
+        if not split_groups:
+            out.append(
+                {
+                    **base,
+                    "teaching_group_id": None,
+                    "group_code": "",
+                    "group_label": "",
+                    "option_key": format_attendance_course_option(cname, None),
+                    "display_name": cname,
+                }
+            )
+            continue
+
+        if rb == "instructor" and instructor_id is not None:
+            mine = [g for g in split_groups if _instructor_member_of_group(g, int(instructor_id))]
+            targets = mine if mine else []
+            if not targets:
+                # مقرر مسموح عبر الجدول بلا عضوية مجموعة — كشف كامل (توافق)
+                out.append(
+                    {
+                        **base,
+                        "teaching_group_id": None,
+                        "group_code": "",
+                        "group_label": "",
+                        "option_key": format_attendance_course_option(cname, None),
+                        "display_name": cname,
+                    }
+                )
+                continue
+            for g in targets:
+                tgid = int(g.get("id") or 0)
+                if tgid <= 0:
+                    continue
+                gcode = (g.get("group_code") or "").strip()
+                glabel = group_code_label(gcode)
+                out.append(
+                    {
+                        **base,
+                        "teaching_group_id": tgid,
+                        "group_code": gcode,
+                        "group_label": glabel,
+                        "option_key": format_attendance_course_option(cname, tgid),
+                        "display_name": f"{cname} — مجموعة {glabel}",
+                    }
+                )
+            continue
+
+        # رئيس قسم / إدارة / مشرف: الكل + كل مجموعة
+        out.append(
+            {
+                **base,
+                "teaching_group_id": None,
+                "group_code": "",
+                "group_label": "الكل",
+                "option_key": format_attendance_course_option(cname, None),
+                "display_name": f"{cname} — الكل",
+            }
+        )
+        for g in split_groups:
+            tgid = int(g.get("id") or 0)
+            if tgid <= 0:
+                continue
+            gcode = (g.get("group_code") or "").strip()
+            glabel = group_code_label(gcode)
+            out.append(
+                {
+                    **base,
+                    "teaching_group_id": tgid,
+                    "group_code": gcode,
+                    "group_label": glabel,
+                    "option_key": format_attendance_course_option(cname, tgid),
+                    "display_name": f"{cname} — مجموعة {glabel}",
+                }
+            )
+    return out
+
+
+def merge_course_group_filters(
+    selected: list[tuple[str, int | None]],
+) -> dict[str, set[int] | None]:
+    """
+    course_name → None (كل المجموعات) أو مجموعة معرّفات مسموحة.
+    خيار «الكل» يطغى على خيارات مجموعات لنفس المقرر.
+    """
+    filters: dict[str, set[int] | None] = {}
+    for cname, tgid in selected:
+        name = (cname or "").strip()
+        if not name:
+            continue
+        if name not in filters:
+            filters[name] = set() if tgid is not None else None
+        if filters[name] is None:
+            continue
+        if tgid is None:
+            filters[name] = None
+        else:
+            filters[name].add(int(tgid))
+    return filters
+
 
 def attendance_export_role_bucket() -> str:
     """يتوافق مع منطق /attendance_allowed_courses (أدوار رئيس القسم بحسب الوضع النشط)."""
@@ -376,40 +571,67 @@ def collect_attendance_export_state(
     get_current_term: Callable,
     normalize_sid: Callable,
     course_name_lock: str | None = None,
+    teaching_group_id_lock: int | None = None,
 ) -> dict[str, Any]:
     """
     يُرجع أحد:
  - {"kind": "http", "response": (response, status)}
     - {"kind": "empty_excel", "summaries": list, "weeks": int}
     - {"kind": "ok", ...} بيانات الجداول والأسابيع
+
+    course_name_lock قد يكون اسم مقرر فقط أو خياراً مشفّراً (مقرر||مجموعة).
+    teaching_group_id_lock يصفّي كشف الطلبة دون تغيير مفتاح سجل الحضور.
     """
+    selected_pairs: list[tuple[str, int | None]] = []
     if course_name_lock:
-        raw_courses = [course_name_lock.strip()]
+        cname, tgid = parse_attendance_course_option(course_name_lock.strip())
+        if teaching_group_id_lock is not None:
+            try:
+                tgid = int(teaching_group_id_lock)
+            except (TypeError, ValueError):
+                tgid = None
+            if tgid is not None and tgid <= 0:
+                tgid = None
+        if cname:
+            selected_pairs.append((cname, tgid))
     else:
         raw_courses = request.args.getlist("course") or request.args.getlist("courses")
         if not raw_courses:
             single_courses = request.args.get("courses") or request.args.get("course")
             if single_courses:
                 raw_courses = [single_courses]
-
-    def _normalize_courses(values):
-        out = []
-        for val in values or []:
+        # teaching_group_id متكرر بالتوازي مع course (اختياري)
+        raw_tgids = request.args.getlist("teaching_group_id")
+        for idx, val in enumerate(raw_courses or []):
             if not val:
                 continue
-            parts = [p.strip() for p in str(val).split(",") if p.strip()]
-            out.extend(parts if len(parts) > 1 else [parts[0]] if parts else [])
-        seen = set()
-        ordered = []
-        for item in out:
-            key = item.lower()
-            if key in seen:
+            # قيم مفصولة بفاصلة نادرة؛ لا نقسم أسماء المقررات العربية
+            parts = [str(val).strip()] if str(val).strip() else []
+            for item in parts:
+                cname, tgid = parse_attendance_course_option(item)
+                if not cname:
+                    continue
+                if tgid is None and idx < len(raw_tgids):
+                    try:
+                        tgid = int(raw_tgids[idx])
+                        if tgid <= 0:
+                            tgid = None
+                    except (TypeError, ValueError):
+                        tgid = None
+                selected_pairs.append((cname, tgid))
+        # إزالة تكرار نفس (مقرر، مجموعة)
+        seen_pair: set[tuple[str, int | None]] = set()
+        ordered_pairs: list[tuple[str, int | None]] = []
+        for cname, tgid in selected_pairs:
+            key = (cname.lower(), tgid)
+            if key in seen_pair:
                 continue
-            seen.add(key)
-            ordered.append(item)
-        return ordered
+            seen_pair.add(key)
+            ordered_pairs.append((cname, tgid))
+        selected_pairs = ordered_pairs
 
-    selected_courses = _normalize_courses(raw_courses)
+    selected_courses = _dedupe_course_list([c for c, _ in selected_pairs])
+    course_tg_filters = merge_course_group_filters(selected_pairs) if selected_pairs else {}
 
     MAX_WEEKS = 30
     try:
@@ -623,15 +845,23 @@ def collect_attendance_export_state(
 
         if not selected_courses:
             selected_courses = list(all_courses)
+            course_tg_filters = {c: None for c in selected_courses}
         else:
             resolved = []
+            remapped_filters: dict[str, set[int] | None] = {}
             for val in selected_courses:
                 match = normalized_map.get(_attendance_course_key(val))
-                if match:
-                    resolved.append(match)
-                else:
-                    resolved.append(val)
+                canon = match if match else val
+                if not match:
                     missing_courses.append(val)
+                old_f = course_tg_filters.get(val, course_tg_filters.get(canon))
+                if canon not in remapped_filters:
+                    remapped_filters[canon] = old_f
+                elif remapped_filters[canon] is None or old_f is None:
+                    remapped_filters[canon] = None
+                elif old_f is not None:
+                    remapped_filters[canon] = set(remapped_filters[canon] or set()) | set(old_f)
+                resolved.append(canon)
             seen_rc = set()
             filtered = []
             for c in resolved:
@@ -641,6 +871,9 @@ def collect_attendance_export_state(
                 seen_rc.add(key)
                 filtered.append(c)
             selected_courses = filtered
+            course_tg_filters = {
+                c: remapped_filters.get(c) for c in selected_courses
+            }
 
         if allowed_course_set is not None:
             allowed_by_key: dict[str, str] = {}
@@ -655,6 +888,68 @@ def collect_attendance_export_state(
                 for c in selected_courses
                 if c and _attendance_course_key(c) in allowed_by_key
             ]
+            course_tg_filters = {
+                c: course_tg_filters.get(c) for c in selected_courses if c
+            }
+
+        # مدرّس: أجبر تصفية مجموعاته عند وجود عضوية مجموعات مقسومة
+        active_tg_label = ""
+        active_tg_id: int | None = None
+        if role_bucket == "instructor":
+            iid = session.get("instructor_id")
+            try:
+                iid_int = int(iid) if iid is not None else None
+            except (TypeError, ValueError):
+                iid_int = None
+            if iid_int and semester_label:
+                from backend.services.teaching_groups import (
+                    GROUP_KIND_SPLIT,
+                    list_teaching_groups,
+                )
+
+                for cname in list(selected_courses):
+                    try:
+                        groups = list_teaching_groups(
+                            conn, semester=semester_label, course_name=cname
+                        )
+                    except Exception:
+                        groups = []
+                    mine = {
+                        int(g["id"])
+                        for g in groups
+                        if (g.get("group_kind") or "").strip().lower() == GROUP_KIND_SPLIT
+                        and int(g.get("id") or 0) > 0
+                        and _instructor_member_of_group(g, iid_int)
+                    }
+                    if not mine:
+                        continue
+                    cur_f = course_tg_filters.get(cname)
+                    if cur_f is None:
+                        course_tg_filters[cname] = set(mine)
+                    else:
+                        course_tg_filters[cname] = set(cur_f) & mine
+                    if not course_tg_filters[cname]:
+                        selected_courses = [c for c in selected_courses if c != cname]
+                        course_tg_filters.pop(cname, None)
+
+        if selected_pairs and len(selected_pairs) == 1:
+            _cn0, _tg0 = selected_pairs[0]
+            if _tg0 is not None:
+                active_tg_id = int(_tg0)
+            elif selected_courses:
+                f0 = course_tg_filters.get(selected_courses[0])
+                if isinstance(f0, set) and len(f0) == 1:
+                    active_tg_id = next(iter(f0))
+
+        if active_tg_id:
+            try:
+                from backend.services.teaching_groups import get_teaching_group, group_code_label
+
+                ginfo = get_teaching_group(conn, active_tg_id)
+                if ginfo:
+                    active_tg_label = group_code_label(ginfo.get("group_code"))
+            except Exception:
+                active_tg_label = ""
 
         if not selected_courses:
             summaries.append(
@@ -684,6 +979,8 @@ def collect_attendance_export_state(
                 )
                 return {"kind": "empty_excel", "summaries": summaries, "weeks": weeks}
 
+        has_reg_tg = _regs_have_teaching_group_id(conn)
+        tg_select = ", r.teaching_group_id" if has_reg_tg else ", NULL AS teaching_group_id"
         where_clauses = []
         params = []
         if selected_courses:
@@ -707,6 +1004,7 @@ def collect_attendance_export_state(
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         reg_query = f"""
             SELECT r.course_name, r.student_id, COALESCE(st.student_name, '') AS student_name
+                   {tg_select}
             FROM registrations r
             {_SQL_REG_ACTIVE_STUDENT}
             {where_clause}
@@ -716,15 +1014,25 @@ def collect_attendance_export_state(
         for row in reg_rows:
             cname = row[0]
             sid = normalize_sid(row[1])
+            sname = row[2] or ""
+            raw_tg = row[3] if len(row) > 3 else None
+            try:
+                row_tgid = int(raw_tg) if raw_tg not in (None, "") else None
+            except (TypeError, ValueError):
+                row_tgid = None
             if not cname or not sid:
                 continue
+            allowed_tg = course_tg_filters.get(cname)
+            if allowed_tg is not None:
+                if row_tgid is None or row_tgid not in allowed_tg:
+                    continue
             if cname not in course_students:
                 course_students[cname] = []
                 course_seen[cname] = set()
             if sid in course_seen[cname]:
                 continue
             course_seen[cname].add(sid)
-            course_students[cname].append({"student_id": sid, "student_name": row[2] or ""})
+            course_students[cname].append({"student_id": sid, "student_name": sname})
 
         attendance_map: dict = {}
         if selected_courses:
@@ -761,4 +1069,10 @@ def collect_attendance_export_state(
             "attendance_map": attendance_map,
             "missing_courses": missing_courses,
             "semester_label": semester_label or "",
+            "teaching_group_id": active_tg_id,
+            "group_label": active_tg_label,
+            "course_group_filters": {
+                k: (sorted(v) if isinstance(v, set) else None)
+                for k, v in course_tg_filters.items()
+            },
         }
