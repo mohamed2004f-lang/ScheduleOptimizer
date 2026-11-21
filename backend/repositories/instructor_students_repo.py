@@ -120,13 +120,47 @@ def students_for_instructor_department(
     instructor_id: int,
     department_id: int,
     semester: str | None = None,
-) -> tuple[list[dict], list[str]]:
+    course_names_filter: list[str] | None = None,
+) -> tuple[list[dict], list[str], list[dict]]:
     """
     طلاب القسم المسجّلون في مقررات يدرّسها الأستاذ في ذلك القسم،
     مع توسيع أسماء المقررات عبر تكافؤ الأقسام.
+
+    يعيد: (طلاب فريدون, كل مقررات الجدول للأستاذ, مجموعات {مقرر → طلاب}).
+    course_names_filter: إن وُجد يقتصر التجميع على هذه الأسماء (من جدول الأستاذ).
     """
-    raw_courses = course_names_for_instructor_department(conn, instructor_id, department_id, semester)
-    base = set(raw_courses)
-    expanded = expand_course_names_for_department(conn, department_id, base)
-    students = students_registered_in_department_for_courses(conn, department_id, expanded)
-    return students, sorted(expanded)
+    raw_courses = sorted(
+        course_names_for_instructor_department(conn, instructor_id, department_id, semester)
+    )
+    filter_set: set[str] | None = None
+    if course_names_filter is not None:
+        filter_set = {
+            str(c or "").strip()
+            for c in course_names_filter
+            if str(c or "").strip()
+        }
+        if not filter_set:
+            return [], raw_courses, []
+
+    selected = [
+        cn for cn in raw_courses if filter_set is None or cn in filter_set
+    ]
+    courses_out: list[dict] = []
+    flat_by_id: dict[str, dict] = {}
+    for cn in selected:
+        expanded = expand_course_names_for_department(conn, department_id, {cn})
+        studs = students_registered_in_department_for_courses(conn, department_id, expanded)
+        courses_out.append(
+            {
+                "course_name": cn,
+                "equivalent_names": sorted(n for n in expanded if n != cn),
+                "students": studs,
+                "student_count": len(studs),
+            }
+        )
+        for s in studs:
+            sid = str(s.get("student_id") or "").strip()
+            if sid and sid not in flat_by_id:
+                flat_by_id[sid] = s
+    students = sorted(flat_by_id.values(), key=lambda x: str(x.get("student_id") or ""))
+    return students, raw_courses, courses_out

@@ -1,7 +1,7 @@
 """تصنيف وعرض مصفوفة الجدول (عرض فقط — لا يغيّر صفوف schedule).
 
-أعمدة الشبكة الثلاثة = مسارات تعبئة متوازنة (ليس محتوى سنة دراسية).
-stage_bucket الأكاديمي يبقى للشارات فقط.
+أعمدة التعبئة: عمود مفضّل حسب المرحلة + Round-robin داخل اليوم لنفس المرحلة
++ تفريغ عند تعارض نفس الوقت. stage_bucket يبقى للشارات أيضاً.
 """
 
 from __future__ import annotations
@@ -56,31 +56,183 @@ def classify_stage_bucket(
 
 
 def course_pack_sort_key(row: dict[str, Any] | None) -> tuple:
-    """اتجاه عام أولاً، ثم أقل رمز رقمي، ثم الرمز، ثم الاسم."""
+    """يدوي أولاً، ثم مرحلة مفضّلة، ثم عام، ثم أقل رمز رقمي، ثم الرمز، ثم الاسم."""
     item = row or {}
+    manual = 0 if manual_pack_prefer_index(item) is not None else 1
+    prefer = stage_pack_prefer_index(item)
     is_gen = 0 if item.get("is_college_general") else 1
     code = str(item.get("course_code") or "").strip().upper()
     m = re.search(r"\d+", code)
     num = int(m.group(0)) if m else 10**9
     name = str(item.get("course_name") or "").strip().lower()
-    return (is_gen, num, code, name)
+    return (manual, prefer, is_gen, num, code, name)
+
+
+def manual_pack_prefer_index(
+    row: dict[str, Any] | None,
+    *,
+    column_count: int = 3,
+) -> int | None:
+    """تجاوز يدوي من مجموعة التدريس: pack_display_column / display_column / tg_display_column."""
+    item = row or {}
+    n = max(1, int(column_count or 3))
+    for key in ("pack_display_column", "display_column", "tg_display_column"):
+        raw = item.get(key)
+        if raw is None or raw == "":
+            continue
+        try:
+            idx = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= idx <= n:
+            return idx
+    return None
+
+
+def stage_pack_prefer_index(row: dict[str, Any] | None) -> int:
+    """
+    عمود مفضّل حسب المرحلة (أو التجاوز اليدوي إن وُجد):
+    1 ← مرحلة 1 / اتجاه عام
+    2 ← مرحلتا 2–3
+    3 ← مرحلتا 4–5 (+ أعلى)
+    """
+    item = row or {}
+    manual = manual_pack_prefer_index(item)
+    if manual is not None:
+        return manual
+    if item.get("is_college_general"):
+        return 1
+    from backend.services.college_catalog import infer_level_from_course_code
+
+    level = int(infer_level_from_course_code(item.get("course_code")) or 0)
+    if level <= 1:
+        return 1
+    if level <= 3:
+        return 2
+    return 3
+
+
+def course_pack_identity(row: dict[str, Any] | None) -> str:
+    """مفتاح ثابت للمقرر عبر الأوقات (رمز|اسم|مجموعة) لتثبيت عمود العرض."""
+    item = row or {}
+    code = str(item.get("course_code") or "").strip().upper()
+    name = str(item.get("course_name") or "").strip().lower()
+    group = str(
+        item.get("group_code")
+        or item.get("group_code_label")
+        or item.get("teaching_group_id")
+        or ""
+    ).strip().upper()
+    if code or name:
+        return f"{code}|{name}|{group}"
+    sid = item.get("section_id") or item.get("id") or ""
+    return f"sid:{sid}"
+
+
+def sticky_pack_lookup_key(day: str | None, row: dict[str, Any] | None) -> str:
+    """مفتاح التثبيت: يوم|هوية المقرر."""
+    d = str(day or (row or {}).get("day") or "").strip()
+    return f"{d}|{course_pack_identity(row)}"
+
+
+def build_sticky_pack_map(
+    rows: list[dict[str, Any]] | None,
+    *,
+    column_count: int = 3,
+) -> dict[str, str]:
+    """
+    تثبيت عمود لكل مقرر داخل اليوم:
+    - عمود البداية = مفضّل المرحلة (1 / 2–3 / 4–5)
+    - مقررات نفس المرحلة في نفس اليوم → Round-robin من عمود البداية
+    المفتاح: «يوم|هوية».
+    """
+    n = max(1, int(column_count or 3))
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for row in rows or []:
+        day = str(row.get("day") or "").strip()
+        by_day.setdefault(day, []).append(row)
+
+    out: dict[str, str] = {}
+    for day, day_rows in by_day.items():
+        reps: dict[str, dict[str, Any]] = {}
+        for row in day_rows:
+            kid = course_pack_identity(row)
+            if kid not in reps:
+                reps[kid] = row
+        # 1) تثبيت يدوي صريح
+        auto_kids: list[str] = []
+        for kid in sorted(reps.keys(), key=lambda k: course_pack_sort_key(reps[k])):
+            manual = manual_pack_prefer_index(reps[kid], column_count=n)
+            if manual is not None:
+                out[f"{day}|{kid}"] = f"pack_{manual}"
+            else:
+                auto_kids.append(kid)
+        # 2) الباقي: RR حسب المرحلة داخل اليوم
+        by_rank: dict[int, list[str]] = {1: [], 2: [], 3: []}
+        for kid in auto_kids:
+            rank = stage_pack_prefer_index(reps[kid])
+            by_rank.setdefault(rank, []).append(kid)
+        for rank, kids in by_rank.items():
+            start = ((int(rank) - 1) % n) + 1
+            for i, kid in enumerate(kids):
+                col = ((start - 1 + i) % n) + 1
+                out[f"{day}|{kid}"] = f"pack_{col}"
+    return out
 
 
 def assign_pack_display_columns(
     courses: list[dict[str, Any]] | None,
     *,
     column_count: int = 3,
+    sticky_map: dict[str, str] | None = None,
+    day: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """
-    توزيع مقررات نفس اليوم/الوقت على أعمدة التعبئة:
-    ترتيب (عام ثم أقل رمز) → العمود الأقل ازدحاماً (تعادل → عمود أصغر رقماً).
+    توزيع مقررات نفس اليوم/الوقت على أعمدة التعبئة.
+
+    1) عمود مفضّل من sticky اليوم (مرحلة + RR) أو من المرحلة مباشرة.
+    2) إن كان المفضّل فارغاً في الصف → ضعه فيه.
+    3) وإلا فرّغ لأقرب عمود فارغ (لفّ دائري).
+    4) إن امتلأت الأعمدة → الأقل ازدحاماً (تعادل → أقرب للمفضّل ثم رقم أصغر).
     """
     n = max(1, int(column_count or 3))
     ids = tuple(f"pack_{i}" for i in range(1, n + 1))
     cols: dict[str, list[dict[str, Any]]] = {cid: [] for cid in ids}
     ordered = sorted(list(courses or []), key=course_pack_sort_key)
+    sticky = sticky_map or {}
+
+    def _prefer_index(row: dict[str, Any]) -> int:
+        key = sticky_pack_lookup_key(day, row)
+        pref = sticky.get(key) or sticky.get(course_pack_identity(row))
+        if isinstance(pref, str) and pref.startswith("pack_"):
+            try:
+                idx = int(pref.split("_", 1)[1])
+                if 1 <= idx <= n:
+                    return idx
+            except (TypeError, ValueError):
+                pass
+        return stage_pack_prefer_index(row)
+
     for row in ordered:
-        best = min(range(1, n + 1), key=lambda i: (len(cols[f"pack_{i}"]), i))
+        prefer = _prefer_index(row)
+        placed = False
+        for offset in range(n):
+            idx = ((prefer - 1 + offset) % n) + 1
+            cid = f"pack_{idx}"
+            if not cols[cid]:
+                cols[cid].append(row)
+                placed = True
+                break
+        if placed:
+            continue
+        best = min(
+            range(1, n + 1),
+            key=lambda i: (
+                len(cols[f"pack_{i}"]),
+                (i - prefer) % n,
+                i,
+            ),
+        )
         cols[f"pack_{best}"].append(row)
     return cols
 

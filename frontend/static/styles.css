@@ -1616,6 +1616,15 @@ body.schedule-hide-student-conflicts .conflict-row-btn[data-conflict-kind="stude
   overflow: hidden !important;
   opacity: 0 !important;
 }
+/* إخفاء الخلفية الحمراء لتعارض الطلبة حتى يُفعَّل الزر (لا يمسّ تعارض الأستاذ الأصفر) */
+.hide-student-conflicts .time-slot-cell.conflict:not(.conflict-instructor),
+body.schedule-hide-student-conflicts .time-slot-cell.conflict:not(.conflict-instructor){
+  background: transparent !important;
+}
+.hide-student-conflicts .time-slot-cell.conflict.conflict-instructor,
+body.schedule-hide-student-conflicts .time-slot-cell.conflict.conflict-instructor{
+  background: rgba(255,193,7,0.18) !important;
+}
 body.schedule-hide-student-conflicts tr.stage-actions-row.is-collapsed,
 .hide-student-conflicts tr.stage-actions-row.is-collapsed,
 body.schedule-hide-student-conflicts tr.stage-actions-row:not(.has-instructor-conflict):not(.has-manage),

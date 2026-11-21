@@ -79,6 +79,7 @@
     let CURRENT_SEM = '';
     let DISPLAY_TRACKS = [];
     let SHOW_DISPLAY_TRACKS = false;
+    let SHOW_PACK_COLUMNS = false;
     const MAX_DISPLAY_TRACKS = 4;
     /** cache: courseKey -> roster payload */
     const ROSTER_CACHE = {};
@@ -419,6 +420,37 @@
       return html;
     }
 
+    function packOptionsHtml(selected) {
+      const sel = Number(selected || 0);
+      const labels = {
+        1: 'عمود 1 — مرحلة 1 / عام',
+        2: 'عمود 2 — مرحلتا 2–3',
+        3: 'عمود 3 — مرحلتا 4–5',
+      };
+      let html = '<option value="">— تلقائي (حسب المرحلة) —</option>';
+      [1, 2, 3].forEach((idx) => {
+        const picked = sel === idx ? ' selected' : '';
+        html += `<option value="${idx}"${picked}>${esc(labels[idx])}</option>`;
+      });
+      return html;
+    }
+
+    function columnOptionsHtml(selected) {
+      if (SHOW_DISPLAY_TRACKS) return trackOptionsHtml(selected);
+      if (SHOW_PACK_COLUMNS) return packOptionsHtml(selected);
+      return '<option value="">— تلقائي —</option>';
+    }
+
+    function showColumnPicker() {
+      return !!(SHOW_DISPLAY_TRACKS || SHOW_PACK_COLUMNS);
+    }
+
+    function columnPickerLabel() {
+      return SHOW_PACK_COLUMNS && !SHOW_DISPLAY_TRACKS
+        ? 'عمود العرض في مصفوفة الجدول (يدوي)'
+        : 'عمود العرض في الجدول';
+    }
+
     function renderDisplayTracksEditor() {
       const card = document.getElementById('displayTracksCard');
       const list = document.getElementById('displayTracksList');
@@ -528,10 +560,11 @@
         const defaultInst = g0.instructor_id || g0.primary_instructor_id || (slots[0] && slots[0].instructor_id) || '';
         const asstIds = g0.assistant_instructor_ids || [];
         const linkedIds = new Set((g0.section_ids) || slots.filter(s => s.teaching_group_id).map(s => s.section_id));
-        const dcSel = SHOW_DISPLAY_TRACKS
+        const dcSel = showColumnPicker()
           ? `<div class="mb-2">
-              <label class="form-label small">عمود العرض في الجدول</label>
-              <select class="form-select form-select-sm tg-display-col" data-off="${idx}" data-group="single" style="max-width:320px">${trackOptionsHtml(g0.display_column)}</select>
+              <label class="form-label small">${esc(columnPickerLabel())}</label>
+              <select class="form-select form-select-sm tg-display-col" data-off="${idx}" data-group="single" style="max-width:320px">${columnOptionsHtml(g0.display_column)}</select>
+              ${SHOW_PACK_COLUMNS && !SHOW_DISPLAY_TRACKS ? '<div class="form-text small">اتركه تلقائياً ليستخدم التوزيع حسب المرحلة، أو ثبّت عموداً يدوياً.</div>' : ''}
             </div>`
           : '';
         body = `
@@ -554,10 +587,10 @@
           const gkey = g.group_code || ('G' + gi);
           const linked = new Set(g.section_ids || []);
           const asstIds = g.assistant_instructor_ids || [];
-          const dcSel = SHOW_DISPLAY_TRACKS
+          const dcSel = showColumnPicker()
             ? `<div class="mb-2">
-                <label class="form-label small mb-0">عمود العرض</label>
-                <select class="form-select form-select-sm tg-display-col" data-off="${idx}" data-group="${esc(gkey)}" style="max-width:280px">${trackOptionsHtml(g.display_column)}</select>
+                <label class="form-label small mb-0">${esc(columnPickerLabel())}</label>
+                <select class="form-select form-select-sm tg-display-col" data-off="${idx}" data-group="${esc(gkey)}" style="max-width:280px">${columnOptionsHtml(g.display_column)}</select>
               </div>`
             : '';
           return `
@@ -728,10 +761,10 @@
       const gcode = preset?.group_code || '';
       const iid = preset?.instructor_id || '';
       const linked = new Set(preset?.section_ids || []);
-      const dcBlock = SHOW_DISPLAY_TRACKS
+      const dcBlock = showColumnPicker()
         ? `<div class="mb-2">
-            <label class="form-label small mb-0">عمود العرض</label>
-            <select class="form-select form-select-sm split-display-col" style="max-width:280px">${trackOptionsHtml(preset?.display_column)}</select>
+            <label class="form-label small mb-0">${esc(columnPickerLabel())}</label>
+            <select class="form-select form-select-sm split-display-col" style="max-width:280px">${columnOptionsHtml(preset?.display_column)}</select>
           </div>`
         : '';
       row.innerHTML = `
@@ -883,6 +916,7 @@
         OFFERINGS = j.offerings || [];
         Object.keys(ROSTER_CACHE).forEach(k => { delete ROSTER_CACHE[k]; });
         SHOW_DISPLAY_TRACKS = !!j.show_display_tracks;
+        SHOW_PACK_COLUMNS = !!j.show_pack_columns;
         DISPLAY_TRACKS = Array.isArray(j.display_tracks) ? j.display_tracks.slice() : [];
         renderDisplayTracksEditor();
         const semInput = document.getElementById('semesterInput');

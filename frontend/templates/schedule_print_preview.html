@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>معاينة طباعة الجدول الدراسي</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20261029cols2">
+  <link rel="stylesheet" href="/static/styles.css?v=20261117packb">
   <style>
     body {
-      font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+      font-family: Tahoma, 'Segoe UI', Arial, sans-serif;
       font-size: 12px;
       line-height: 1.45;
       color: #1a1a1a;
@@ -15,8 +15,6 @@
       background: #fff;
       margin: 0;
     }
-    h1 { font-size: 20px; margin: 0 0 6px; color: #0d3b66; }
-    .meta { color: #555; margin-bottom: 12px; }
     .preview-banner {
       background: #e7f1ff; border: 1px solid #0d6efd; border-radius: 6px;
       padding: 10px 14px; margin-bottom: 14px;
@@ -44,6 +42,35 @@
     .preview-hint {
       font-size: 12px; color: #0f5132; margin: 0 0 12px;
       padding: 8px 10px; background: #d1e7dd; border-right: 3px solid #198754;
+    }
+    .official-header {
+      text-align: center;
+      margin: 0 0 10px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #333;
+    }
+    .official-header .line1 {
+      font-size: 15px;
+      font-weight: 700;
+      margin: 0 0 4px;
+    }
+    .official-header .line2 {
+      font-size: 13px;
+      margin: 0;
+      color: #222;
+    }
+    .hod-approval {
+      margin-top: 18px;
+      text-align: center;
+      font-size: 13px;
+      line-height: 1.55;
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+    .hod-approval .hod-title { font-weight: 700; margin: 0 0 4px; }
+    .hod-approval .hod-line {
+      margin: 0;
+      letter-spacing: 0.02em;
     }
     /* نفس تنسيق شاشة رئيس القسم — بلا بطاقات */
     .timetable.timetable--stages,
@@ -109,10 +136,11 @@
     @media print {
       .no-print { display: none !important; }
       body { padding: 0; font-size: 10.5px; }
-      h1 { font-size: 16px; margin-bottom: 4px; }
-      .meta { font-size: 10px; margin-bottom: 8px; }
+      .official-header .line1 { font-size: 14px; }
+      .official-header .line2 { font-size: 12px; }
       .stage-time-row { page-break-inside: avoid; }
       .timetable.timetable--stages-print { font-size: 10px; }
+      .hod-approval { margin-top: 14px; font-size: 12px; }
     }
   </style>
 </head>
@@ -129,21 +157,29 @@
   </div>
   <p class="preview-hint no-print">
     <strong>الأفضل للشواهد:</strong> استخدم «طباعة / حفظ PDF» من هنا واتجاه <strong>أفقي (Landscape)</strong>.
-    طباعة شبكية: ترويسة <strong>مقررات دراسية</strong>، بلا ألوان للمقرر، وحدود عمودية لكل من المقرر/الأستاذ/القاعة.
+    رأس رسمي + شبكة مقررات دراسية + اعتماد رئيس القسم أسفل الورقة.
   </p>
 
-  <h1>الجدول الدراسي</h1>
-  <div class="meta">
-    {% if department_name %}<strong>القسم:</strong> {{ department_name }} · {% endif %}
-    {% if term_label %}<strong>الفصل:</strong> {{ term_label }} · {% endif %}
-    <strong>تاريخ الطباعة:</strong> {{ generated_at }}
-    · <strong>العرض:</strong> {% if use_stage_matrix %}مصفوفة المراحل{% elif use_display_tracks %}أعمدة عرض{% else %}أسبوعي (يوم ثم وقت){% endif %}
+  <div class="official-header">
+    <p class="line1">{{ university_name_ar or 'جامعة درنة' }} — {{ college_name_ar or 'كلية الهندسة' }} — {{ department_name or '—' }}</p>
+    <p class="line2">
+      جدول دراسي
+      {% if term_label %} · الفصل: {{ term_label }}{% endif %}
+      {% if academic_year %} · العام الجامعي: {{ academic_year }}{% endif %}
+      · تاريخ الطباعة: {{ generated_at }}
+    </p>
   </div>
 
   <div id="printGrid"></div>
 
+  <div class="hod-approval">
+    <p class="hod-title">اعتماد رئيس القسم</p>
+    <p class="hod-line">الاسم: ................................</p>
+    <p class="hod-line">التوقيع: ........................　　التاريخ: .... / .... / ........</p>
+  </div>
+
   <script src="/static/js/common.js"></script>
-  <script src="/static/js/schedule-stage-grid.js?v=20261029cols2"></script>
+  <script src="/static/js/schedule-stage-grid.js?v=20261117packd"></script>
   <script>
     window.SCHEDULE_DAYS = window.SCHEDULE_DAYS || ['السبت','الأحد','الإثنين','الثلاثاء','الأربعاء','الخميس'];
     const ROWS = {{ rows|tojson }};

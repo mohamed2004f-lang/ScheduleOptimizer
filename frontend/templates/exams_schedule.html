@@ -8,34 +8,88 @@
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
   <style>
-    .exam-card { border: 1px solid #d8d8d8; border-radius: 8px; padding: 8px; background: #fff; min-height: 74px; }
-    .exam-card.conflict { border-color: #dc3545; background: #fff5f5; }
-    .exam-meta { font-size: 12px; color: #555; }
     .controls-no-print { gap: 8px; }
     .legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-left: 6px; }
-    /* إخفاء بطاقة الجدول من الواجهة دون فقدان المحتوى عند الطباعة */
     #examScheduleCard.exam-schedule-hidden { display: none !important; }
-    /* مقررات نفس اليوم ونفس الفترة في صف واحد (أفقي) مع التفاف عند ضيق العرض */
-    .exam-schedule-card .exam-day-courses-row {
-      display: flex;
-      flex-direction: row;
-      flex-wrap: wrap;
-      align-items: stretch;
-      justify-content: center;
-      gap: 8px;
-      margin-bottom: 6px;
+    .exam-schedule-card .timetable-wrapper { overflow-x: auto; }
+    .exam-schedule-card .timetable.exam-matrix-table {
+      width: auto;
+      max-width: 100%;
+      margin-inline: auto;
+      border-collapse: collapse;
+      table-layout: auto;
     }
-    .exam-schedule-card .timetable .exam-card {
-      flex: 0 1 auto;
-      min-width: 140px;
-      max-width: 260px;
-      margin-inline: 0;
-      margin-bottom: 0;
-      text-align: right;
-      border-inline-start: 4px solid var(--exam-accent, #1e6fb8);
+    .exam-schedule-card .timetable.exam-matrix-table th,
+    .exam-schedule-card .timetable.exam-matrix-table td {
+      border: 1px solid #cfd6dd;
+      padding: 8px 10px;
+      vertical-align: middle;
+      text-align: center;
+      white-space: nowrap;
     }
-    .exam-schedule-card .timetable .date-slot-cell { text-align: center; vertical-align: middle; }
-    .exam-schedule-card .timetable .exam-manage-slot-btn { margin-top: 4px; width: 100%; max-width: 280px; margin-inline: auto; }
+    .exam-schedule-card .timetable.exam-matrix-table td.exam-col-course {
+      white-space: normal;
+    }
+    .exam-schedule-card .timetable.exam-matrix-table .date-header {
+      background: #f4f7fa;
+      font-weight: 600;
+      white-space: normal;
+      max-width: 9.5rem;
+    }
+    .exam-schedule-card .timetable.exam-matrix-table .exam-time-band {
+      background: #e8f1fa;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    .exam-schedule-card .timetable.exam-matrix-table .exam-subhead {
+      background: #f8fafc;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .exam-schedule-card .timetable.exam-matrix-table td.exam-col-course { text-align: center; font-weight: 600; }
+    .exam-schedule-card .timetable.exam-matrix-table td.exam-col-instructor { text-align: center; }
+    .exam-schedule-card .timetable.exam-matrix-table th.exam-col-room,
+    .exam-schedule-card .timetable.exam-matrix-table td.exam-col-room {
+      min-width: 1cm;
+      width: 1%;
+      text-align: center;
+      font-size: 11px;
+      padding-inline: 4px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 3.2cm;
+    }
+    .exam-schedule-card .timetable.exam-matrix-table .exam-group-start {
+      border-inline-start: 2px solid #9eb6cc;
+    }
+    .exam-schedule-card .timetable.exam-matrix-table td.exam-slot-conflict {
+      background: #fff5f5;
+    }
+    .exam-schedule-card .timetable.exam-matrix-table td.exam-slot-conflict.exam-col-course {
+      border-inline-start: 4px solid #dc3545;
+    }
+    .exam-conflict-badge {
+      border: 0;
+      background: transparent;
+      color: #dc3545;
+      font-size: 12px;
+      font-weight: 700;
+      text-decoration: underline;
+      cursor: pointer;
+      padding: 0 2px;
+    }
+    .exam-conflict-badge:hover { color: #a71d2a; }
+    #conflictSummary button {
+      border: 0;
+      background: transparent;
+      color: #dc3545;
+      text-decoration: underline;
+      font-weight: 700;
+      padding: 0;
+      cursor: pointer;
+    }
+    .exam-schedule-card .timetable .exam-manage-slot-btn { margin-top: 6px; }
+    .exam-schedule-card .timetable .exam-date-cell-inner { display: flex; flex-direction: column; align-items: center; gap: 4px; }
     @media print {
       .controls-no-print, .no-print, nav, .page-subtitle { display: none !important; }
       body { background: #fff !important; }
@@ -51,7 +105,7 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">{% if _exam_entry == 'final' %}الامتحانات النهائية{% else %}الامتحانات الجزئية{% endif %}</h1>
-        <p class="page-subtitle" id="examPageSubtitle">مصفوفة <strong>تاريخ × فترة</strong> للجزئي والنهائي. التعارضات تُحسب حياً من التسجيلات (نفس التاريخ والفترة). غيّر النوع من الحقل أعلاه عند الحاجة.</p>
+        <p class="page-subtitle" id="examPageSubtitle">جدول <strong>تاريخ + مقرر / أستاذ / قاعة</strong> تحت توقيت موحّد، مع أعمدة متوازية اختيارية لتقليل التدس. التعارضات تُحسب حياً من التسجيلات.</p>
       </div>
     </div>
 
@@ -76,6 +130,18 @@
             <label class="form-label">تاريخ النهاية</label>
             <input type="date" id="endDate" class="form-control">
           </div>
+          <div>
+            <label class="form-label">التوقيت الموحّد</label>
+            <input type="text" id="examUnifiedTime" class="form-control" value="09:00-12:00" dir="ltr" placeholder="09:00-12:00" title="يظهر في رأس الأعمدة الثلاثة ويُستخدم عند إضافة امتحان">
+          </div>
+          <div>
+            <label class="form-label">أعمدة متوازية</label>
+            <select id="examParallelColumns" class="form-select" title="عدد مجموعات (مقرر / أستاذ / قاعة) جنباً إلى جنب لتقليل التدس">
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+            </select>
+          </div>
           <div class="form-check mb-2">
             <input class="form-check-input" type="checkbox" id="hideEmptyDays" checked>
             <label class="form-check-label" for="hideEmptyDays">إخفاء الأيام الفارغة</label>
@@ -83,7 +149,7 @@
           <button type="button" class="btn btn-outline-secondary" id="btnSaveDates">حفظ التواريخ</button>
           <button type="button" class="btn btn-outline-info no-print" id="btnToggleExamSlotManage" title="إظهار أو إخفاء أزرار «إدارة المقرر» في خلايا الجدول">إظهار أزرار إدارة المقررات</button>
           <button type="button" class="btn btn-primary" id="btnLoad" title="إظهار أو إخفاء الجدول بصيغة الجدول الدراسي">إخفاء الجدول</button>
-          <button type="button" class="btn btn-outline-dark" id="btnPrint">طباعة</button>
+          <button type="button" class="btn btn-outline-dark" id="btnPrint" title="معاينة طباعة رسمية (صفحة واحدة أو عدة صفحات)">طباعة</button>
           <a class="btn btn-outline-success" id="btnExcel" target="_blank">Excel</a>
           <a class="btn btn-outline-danger" id="btnPdf" target="_blank">PDF</a>
         </div>
@@ -96,7 +162,7 @@
         <div class="d-flex justify-content-between align-items-center mb-2">
           <div>
             <span class="legend-dot" style="background:#fff5f5;border:1px solid #dc3545"></span>
-            <small>خلية/مقرر عليه تعارض</small>
+            <small>صف مقرر عليه تعارض — انقر «تعارض» لعرض الطلبة</small>
           </div>
           <div id="conflictSummary" class="small text-danger"></div>
         </div>
@@ -142,9 +208,9 @@
               <div id="scheduleAssignHint" class="form-text text-muted d-none"></div>
             </div>
             <div class="col-md-5">
-              <label class="form-label">مجموعة التدريس <span class="text-muted small">(اختياري — للـ split)</span></label>
+              <label class="form-label">مجموعة التدريس <span class="text-muted small">(اختياري)</span></label>
               <select id="newTeachingGroup" class="form-select">
-                <option value="">— الكل / موحّد للمقرر —</option>
+                <option value="">جميع المجموعات — امتحان موحّد (نفس اليوم)</option>
               </select>
             </div>
             <div class="col-12">
@@ -168,11 +234,12 @@
         </div>
         <div class="modal-body">
           <div id="conflictDetails"></div>
-          <p class="text-muted mb-0">هل تريد المتابعة بإضافة الامتحان رغم هذه التعارضات؟</p>
+          <p class="text-muted mb-0" id="conflictsConfirmHint">هل تريد المتابعة بإضافة الامتحان رغم هذه التعارضات؟</p>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" id="conflictsCancelBtn" data-bs-dismiss="modal">إلغاء</button>
           <button type="button" class="btn btn-warning" id="conflictsConfirmBtn">متابعة</button>
+          <button type="button" class="btn btn-primary d-none" id="conflictsViewCloseBtn" data-bs-dismiss="modal">إغلاق</button>
         </div>
       </div>
     </div>
@@ -188,22 +255,56 @@ let currentManageTime = '';
 let INSTRUCTORS = [];
 /** اسم المقرر → { instructor_id, instructor, room } من الجدول الدراسي */
 let SCHEDULE_ASSIGNMENTS = {};
+/** مجموعات التدريس للمقرر المختار في نافذة الإضافة */
+let CURRENT_COURSE_TG = [];
+/** قيمة وهمية في قائمة الأساتذة عند دمج أكثر من اسم (موحّد) */
+const UNIFIED_INSTRUCTOR_VALUE = '__unified_instructors__';
 let manageExamModalBs = null;
 /** إظهار/إخفاء أزرار «إدارة المقرر» داخل الخلايا (لمن يملك صلاحية التعديل فقط) */
 let EXAM_SLOT_MANAGE_VISIBLE = false;
 /** إظهار/إخفاء بطاقة الجدول الامتحاني (زر «عرض الجدول» / «إخفاء الجدول») */
 let EXAM_TIMETABLE_VISIBLE = true;
+const DEFAULT_EXAM_TIME = '09:00-12:00';
 
-const _examCourseColors = {};
-const _examColorPalette = ['#ffc107','#28a745','#17a2b8','#6f42c1','#fd7e14','#20c997','#e83e8c','#6610f2','#ff6b6b','#4ecdc4'];
-let _examColorIdx = 0;
-function examCourseColor(courseName){
-  const k = String(courseName||'');
-  if (!_examCourseColors[k]) {
-    _examCourseColors[k] = _examColorPalette[_examColorIdx % _examColorPalette.length];
-    _examColorIdx++;
+function getUnifiedExamTime(){
+  const el = document.getElementById('examUnifiedTime');
+  const v = String(el?.value || '').trim();
+  return v || DEFAULT_EXAM_TIME;
+}
+function setUnifiedExamTime(v){
+  const el = document.getElementById('examUnifiedTime');
+  if (!el) return;
+  el.value = String(v || DEFAULT_EXAM_TIME).trim() || DEFAULT_EXAM_TIME;
+}
+function getParallelExamColumns(){
+  const el = document.getElementById('examParallelColumns');
+  const n = parseInt(String(el?.value || '1'), 10);
+  if (n === 2 || n === 3) return n;
+  return 1;
+}
+function setParallelExamColumns(v){
+  const el = document.getElementById('examParallelColumns');
+  if (!el) return;
+  const n = parseInt(String(v || '1'), 10);
+  el.value = (n === 2 || n === 3) ? String(n) : '1';
+}
+function renderExamSlotTriple(e, conflictIdx, dateStr, groupIdx){
+  const startCls = groupIdx > 0 ? ' exam-group-start' : '';
+  if (!e) {
+    return `<td class="exam-col-course text-muted${startCls}">—</td>`
+      + `<td class="exam-col-instructor text-muted">—</td>`
+      + `<td class="exam-col-room text-muted">—</td>`;
   }
-  return _examCourseColors[k];
+  const courseName = String(e.course_name || '').trim();
+  const isConflict = conflictIdx.has(`${dateStr}|${norm(courseName)}`);
+  const conflictCls = isConflict ? ' exam-slot-conflict' : '';
+  const conflictTag = isConflict
+    ? ` <button type="button" class="exam-conflict-badge no-print" data-conflict-date="${esc(dateStr)}" data-conflict-course="${esc(courseName)}" title="عرض الطلبة المتعارضين">تعارض</button>`
+    : '';
+  const room = String(e.room || '').trim() || '—';
+  return `<td class="exam-col-course${startCls}${conflictCls}">${esc(courseName || '—')}${conflictTag}</td>`
+    + `<td class="exam-col-instructor${conflictCls}">${esc(e.instructor || '—')}</td>`
+    + `<td class="exam-col-room${conflictCls}" dir="ltr" title="${esc(room)}">${esc(room)}</td>`;
 }
 
 function updateExamSlotManageToggleButton(){
@@ -242,7 +343,7 @@ function showModalExamMsg(msg, kind='info'){
 function openManageExamModal(dateStr, timeStr){
   showModalExamMsg('');
   currentManageDate = dateStr || '';
-  currentManageTime = (timeStr || '').trim();
+  currentManageTime = (timeStr || getUnifiedExamTime() || '').trim() || getUnifiedExamTime();
   const dl = document.getElementById('modalExamDateLabel');
   const tl = document.getElementById('modalExamTimeLabel');
   if (dl) dl.textContent = currentManageDate ? `${fmtDate(currentManageDate)} (${currentManageDate})` : '—';
@@ -327,16 +428,28 @@ function loadSavedDates(){
     if(!p?.startDate || !p?.endDate) return false;
     document.getElementById('startDate').value=p.startDate;
     document.getElementById('endDate').value=p.endDate;
+    if (p.examTime) setUnifiedExamTime(p.examTime);
+    if (p.parallelColumns != null) setParallelExamColumns(p.parallelColumns);
     return true;
   }catch(_e){ return false; }
 }
+function persistExamPeriodLocal(){
+  const startDate=document.getElementById('startDate')?.value;
+  const endDate=document.getElementById('endDate')?.value;
+  if(!startDate||!endDate) return false;
+  localStorage.setItem(storageKey(), JSON.stringify({
+    startDate,
+    endDate,
+    examTime: getUnifiedExamTime(),
+    parallelColumns: getParallelExamColumns(),
+  }));
+  return true;
+}
 function saveDates(){
-  const startDate=document.getElementById('startDate').value;
-  const endDate=document.getElementById('endDate').value;
-  if(!startDate||!endDate){ showToolbarMsg('يرجى إدخال البداية والنهاية','warning'); return; }
-  localStorage.setItem(storageKey(), JSON.stringify({startDate,endDate}));
-  showToolbarMsg('تم حفظ التواريخ','success');
+  if(!persistExamPeriodLocal()){ showToolbarMsg('يرجى إدخال البداية والنهاية','warning'); return; }
+  showToolbarMsg('تم حفظ التواريخ والتوقيت','success');
   setTimeout(()=> showToolbarMsg(''), 2200);
+  if (EXAM_TIMETABLE_VISIBLE) loadExamSchedule();
 }
 
 function applyExamViewOnlyUi(){
@@ -359,6 +472,11 @@ function applyExamViewOnlyUi(){
     el.classList.add('d-none');
     if (el.setAttribute) el.setAttribute('aria-hidden', 'true');
   });
+  const timeEl = document.getElementById('examUnifiedTime');
+  if (timeEl) {
+    timeEl.readOnly = true;
+    timeEl.classList.add('bg-light');
+  }
   document.querySelectorAll('.no-print').forEach((el) => {
     el.style.display = 'none';
   });
@@ -462,6 +580,107 @@ function applyScheduleDefaultsForCourse(courseName){
   if(roomInp && a.room) roomInp.value = a.room;
   if(instSel && !matched) instSel.value = '';
 }
+
+function clearUnifiedInstructorOption(){
+  const sel = document.getElementById('newInstructor');
+  if(!sel) return;
+  [...sel.querySelectorAll(`option[value="${UNIFIED_INSTRUCTOR_VALUE}"]`)].forEach((o) => o.remove());
+}
+
+function uniqueInstructorNamesFromGroups(groups){
+  const seen = new Set();
+  const names = [];
+  const pushName = (raw) => {
+    const n = String(raw || '').trim();
+    if(!n) return;
+    const key = normInst(n);
+    if(!key || seen.has(key)) return;
+    seen.add(key);
+    names.push(n);
+  };
+  (groups || []).forEach((g) => {
+    const team = Array.isArray(g?.instructors) ? g.instructors : [];
+    if(team.length){
+      team.forEach((m) => pushName(m?.instructor_name));
+    } else {
+      pushName(g?.instructor_name);
+    }
+  });
+  return names;
+}
+
+function resolveInstructorTextForSubmit(){
+  const instSel = document.getElementById('newInstructor');
+  if(!instSel) return '';
+  const instId = instSel.value;
+  if(instId === UNIFIED_INSTRUCTOR_VALUE){
+    return (instSel.selectedOptions[0]?.textContent || '').trim();
+  }
+  const instObj = INSTRUCTORS.find((x) => String(x.id) === String(instId));
+  return instObj ? (instObj.name || '').trim() : '';
+}
+
+/** عند «جميع المجموعات»: دمج أسماء الأساتذة الفريدة؛ عند مجموعة واحدة: أستاذها. */
+function applyInstructorFromTeachingGroup(){
+  const tgSel = document.getElementById('newTeachingGroup');
+  const instSel = document.getElementById('newInstructor');
+  const hint = document.getElementById('scheduleAssignHint');
+  if(!tgSel || !instSel) return;
+  clearUnifiedInstructorOption();
+  const tgid = String(tgSel.value || '').trim();
+  if(tgid){
+    const g = CURRENT_COURSE_TG.find((x) => String(x.id || x.teaching_group_id) === tgid);
+    if(!g){
+      if(hint){ hint.classList.add('d-none'); hint.textContent = ''; }
+      return;
+    }
+    const iid = g.primary_instructor_id || g.instructor_id;
+    const name = (g.instructor_name || g.instructors_display || '').trim();
+    let matched = false;
+    if(iid) matched = ensureInstructorOption(instSel, iid, name);
+    if(!matched && name) matched = pickInstructorForAssignment({ instructor: name, instructor_id: iid });
+    if(!matched) instSel.value = '';
+    if(hint){
+      if(name){
+        hint.textContent = 'من مجموعة التدريس: ' + name;
+        hint.classList.remove('d-none');
+      } else {
+        hint.classList.add('d-none');
+        hint.textContent = '';
+      }
+    }
+    return;
+  }
+  const names = uniqueInstructorNamesFromGroups(CURRENT_COURSE_TG);
+  if(!names.length){
+    const courseSel = document.getElementById('newCourseSelect');
+    if(courseSel?.value) applyScheduleDefaultsForCourse(courseSel.value);
+    return;
+  }
+  if(names.length === 1){
+    const g = CURRENT_COURSE_TG.find((x) => normInst(x.instructor_name) === normInst(names[0]));
+    const iid = g ? (g.primary_instructor_id || g.instructor_id) : null;
+    let matched = false;
+    if(iid) matched = ensureInstructorOption(instSel, iid, names[0]);
+    if(!matched) matched = pickInstructorForAssignment({ instructor: names[0], instructor_id: iid });
+    if(hint){
+      hint.textContent = 'موحّد — أستاذ المجموعات: ' + names[0];
+      hint.classList.remove('d-none');
+    }
+    return;
+  }
+  const combined = names.join(' + ');
+  const opt = document.createElement('option');
+  opt.value = UNIFIED_INSTRUCTOR_VALUE;
+  opt.textContent = combined;
+  instSel.appendChild(opt);
+  instSel.value = UNIFIED_INSTRUCTOR_VALUE;
+  if(hint){
+    hint.textContent = 'موحّد — أساتذة المجموعات: ' + combined;
+    hint.classList.remove('d-none');
+  }
+}
+
 async function loadInstructors(){
   const r=await fetch('/instructors/list', { credentials: 'include' });
   const data=r.ok?await r.json():{};
@@ -491,25 +710,92 @@ function buildConflictIndex(conflicts){
   return idx;
 }
 
+function filterConflictsForCourse(conflicts, examDate, courseName){
+  const d = String(examDate || '').trim();
+  const cn = norm(courseName);
+  return (conflicts || []).filter((c) => {
+    if (d && String(c.exam_date || '').trim() !== d) return false;
+    if (!cn) return true;
+    const list = String(c.conflicting_courses || '').split(',').map((x) => norm(x)).filter(Boolean);
+    return list.includes(cn);
+  });
+}
+
+function renderConflictDetailsTable(conflicts, { courseName = '', examDate = '', title = '' } = {}){
+  const list = conflicts || [];
+  let html = '';
+  if (title) html += `<p class="mb-2"><strong>${esc(title)}</strong></p>`;
+  if (courseName || examDate) {
+    html += `<p class="mb-2">`;
+    if (courseName) html += `<strong>المقرر:</strong> ${esc(courseName)} `;
+    if (examDate) html += `| <strong>التاريخ:</strong> ${esc(examDate)}`;
+    html += `</p>`;
+  }
+  html += `<p class="small text-muted mb-2">عدد الحالات: <strong>${list.length}</strong></p>`;
+  if (!list.length) {
+    html += '<p class="text-muted mb-0">لا توجد تفاصيل طلبة لهذه الحالة.</p>';
+    return html;
+  }
+  html += '<div class="table-responsive"><table class="table table-sm table-bordered">';
+  html += '<thead class="table-light"><tr><th>الطالب (الرقم + الاسم)</th><th>التاريخ</th><th>الفترة</th><th>المقررات المتعارضة</th></tr></thead><tbody>';
+  list.forEach((c) => {
+    const sid = esc(c.student_id || '');
+    const sname = esc(c.student_name || 'غير مسجل الاسم');
+    html += `<tr>
+      <td><strong>${sid}</strong> — ${sname}</td>
+      <td>${esc(c.exam_date || examDate || '')}</td>
+      <td dir="ltr">${esc(c.exam_time || '')}</td>
+      <td>${esc(c.conflicting_courses || '')}</td>
+    </tr>`;
+  });
+  html += '</tbody></table></div>';
+  return html;
+}
+
+function setConflictsModalMode(mode){
+  // mode: 'confirm' | 'view'
+  const hint = document.getElementById('conflictsConfirmHint');
+  const confirmBtn = document.getElementById('conflictsConfirmBtn');
+  const cancelBtn = document.getElementById('conflictsCancelBtn');
+  const closeBtn = document.getElementById('conflictsViewCloseBtn');
+  const isView = mode === 'view';
+  if (hint) hint.classList.toggle('d-none', isView);
+  if (confirmBtn) confirmBtn.classList.toggle('d-none', isView);
+  if (cancelBtn) cancelBtn.classList.toggle('d-none', isView);
+  if (closeBtn) closeBtn.classList.toggle('d-none', !isView);
+}
+
+function openConflictDetailsView({ examDate = '', courseName = '', all = false } = {}){
+  const modalEl = document.getElementById('conflictsModal');
+  if (!modalEl || typeof bootstrap === 'undefined') return;
+  const details = document.getElementById('conflictDetails');
+  const titleEl = modalEl.querySelector('.modal-title');
+  const filtered = all
+    ? (currentConflicts || [])
+    : filterConflictsForCourse(currentConflicts, examDate, courseName);
+  if (titleEl) titleEl.textContent = all ? 'تفاصيل تعارضات الطلبة' : 'تعارضات الطلبة لهذا المقرر';
+  if (details) {
+    details.innerHTML = renderConflictDetailsTable(filtered, {
+      courseName: all ? '' : courseName,
+      examDate: all ? '' : examDate,
+      title: all ? 'جميع حالات التعارض الحالية في الجدول' : '',
+    });
+  }
+  setConflictsModalMode('view');
+  bootstrap.Modal.getOrCreateInstance(modalEl).show();
+}
+
 function showConflictsModal(conflicts, courseName, examDate){
   return new Promise((resolve)=>{
     const modalEl = document.getElementById('conflictsModal');
     const modal = new bootstrap.Modal(modalEl);
     const details = document.getElementById('conflictDetails');
-    let html = `<p><strong>المقرر:</strong> ${esc(courseName)} | <strong>التاريخ:</strong> ${esc(examDate)}</p>`;
-    html += '<div class="table-responsive"><table class="table table-sm table-bordered">';
-    html += '<thead class="table-light"><tr><th>الطالب (الرقم + الاسم)</th><th>المقرر</th><th>المقررات المتعارضة</th></tr></thead><tbody>';
-    (conflicts || []).forEach(c=>{
-      const sid = esc(c.student_id || '');
-      const sname = esc(c.student_name || 'غير مسجل الاسم');
-      html += `<tr>
-        <td><strong>${sid}</strong> — ${sname}</td>
-        <td>${esc(courseName || '')}</td>
-        <td>${esc(c.conflicting_courses || '')}</td>
-      </tr>`;
-    });
-    html += '</tbody></table></div>';
-    details.innerHTML = html;
+    const titleEl = modalEl.querySelector('.modal-title');
+    if (titleEl) titleEl.textContent = '⚠️ تم اكتشاف تعارضات';
+    setConflictsModalMode('confirm');
+    if (details) {
+      details.innerHTML = renderConflictDetailsTable(conflicts || [], { courseName, examDate });
+    }
 
     const confirmOld = document.getElementById('conflictsConfirmBtn');
     const cancelOld = document.getElementById('conflictsCancelBtn');
@@ -517,6 +803,8 @@ function showConflictsModal(conflicts, courseName, examDate){
     const cancelBtn = cancelOld.cloneNode(true);
     confirmOld.parentNode.replaceChild(confirmBtn, confirmOld);
     cancelOld.parentNode.replaceChild(cancelBtn, cancelOld);
+    confirmBtn.classList.remove('d-none');
+    cancelBtn.classList.remove('d-none');
 
     let settled = false;
     const done = (v) => {
@@ -531,18 +819,34 @@ function showConflictsModal(conflicts, courseName, examDate){
   });
 }
 
+function updateConflictSummaryUi(){
+  const el = document.getElementById('conflictSummary');
+  if (!el) return;
+  const n = (currentConflicts || []).length;
+  if (!n) {
+    el.textContent = 'لا توجد تعارضات حالياً';
+    return;
+  }
+  el.innerHTML = `<button type="button" id="btnShowAllConflicts" title="عرض قائمة الطلبة المتعارضين">عدد حالات التعارض: ${n} — عرض التفاصيل</button>`;
+  document.getElementById('btnShowAllConflicts')?.addEventListener('click', () => {
+    openConflictDetailsView({ all: true });
+  });
+}
+
 function renderManageList(){
-  const list = currentExamData.filter(e=>e.exam_date===currentManageDate && (e.exam_time||'').trim()===currentManageTime);
+  // كل امتحانات اليوم؛ الإضافة الجديدة تستخدم التوقيت الموحّد
+  const list = currentExamData.filter(e=>e.exam_date===currentManageDate);
   const el = document.getElementById('existingCoursesList');
   const cntEl = document.getElementById('modalExamSlotCount');
   if (cntEl) cntEl.textContent = String(list.length);
   if(!el) return;
-  if(!list.length){ el.innerHTML='<p class="text-muted">لا توجد امتحانات في هذه الفترة.</p>'; return; }
+  if(!list.length){ el.innerHTML='<p class="text-muted">لا توجد امتحانات في هذا اليوم.</p>'; return; }
   let html='<ul class="list-group">';
   list.forEach(e=>{
     const tgBit = e.teaching_group_id ? ` · مجموعة #${esc(e.teaching_group_id)}` : '';
+    const timeBit = e.exam_time ? ` · <span dir="ltr">${esc(e.exam_time)}</span>` : '';
     html += `<li class="list-group-item d-flex justify-content-between align-items-center">
-      <span>${esc(e.course_name)}${tgBit} ${e.room?`(${esc(e.room)})`:''} ${e.instructor?`- ${esc(e.instructor)}`:''}</span>
+      <span>${esc(e.course_name)}${tgBit}${timeBit} ${e.room?`(${esc(e.room)})`:''} ${e.instructor?`- ${esc(e.instructor)}`:''}</span>
       <span class="d-flex gap-1">
         <button class="btn btn-sm btn-outline-secondary" data-edit="${e.exam_id}">تعديل</button>
         <button class="btn btn-sm btn-danger" data-del="${e.exam_id}">حذف</button>
@@ -608,81 +912,119 @@ async function loadExamSchedule(){
   renderExamRegistrationInsights(covJson);
   currentConflicts = Array.isArray(confJson.conflicts)?confJson.conflicts:[];
   const conflictIdx = buildConflictIndex(currentConflicts);
-  document.getElementById('conflictSummary').textContent = currentConflicts.length ? `عدد حالات التعارض: ${currentConflicts.length}` : 'لا توجد تعارضات حالياً';
+  updateConflictSummaryUi();
 
   const allDates = datesBetween(start,end);
   const inRangeRows = currentExamData.filter(e => (e.exam_date||'')>=start && (e.exam_date||'')<=end);
-  const times = [...new Set(inRangeRows.map(e=>(e.exam_time||'').trim()).filter(Boolean))];
-  if(!times.length) times.push('09:00-12:00');
+  const unifiedTime = getUnifiedExamTime();
   let dates = allDates;
   const hideEmptyEl = document.getElementById('hideEmptyDays');
-  if(hideEmptyEl && hideEmptyEl.checked){
-    const hasRows = new Set(inRangeRows.map(e=>e.exam_date));
-    dates = allDates.filter(d => hasRows.has(d));
+  const occupiedDates = new Set(inRangeRows.map(e=>e.exam_date));
+  // عند جدول فارغ بالكامل: لا تُخفِ الأيام — وإلا تختفي شبكة التواريخ وأزرار «إدارة المقرر»
+  if(hideEmptyEl && hideEmptyEl.checked && occupiedDates.size > 0){
+    dates = allDates.filter(d => occupiedDates.has(d));
   }
 
   const el=document.getElementById('examScheduleList');
   if(!dates.length){
     let msg = 'لا توجد أيام بها امتحانات ضمن الفترة المحددة.';
     if (!currentExamData.length) {
-      if (pubJson && pubJson.published === false) {
+      if (EXAM_READONLY && pubJson && pubJson.published === false) {
         msg = 'جدول الامتحانات غير منشور بعد. اطلب من الإدارة اعتماد/نشر الجدول، أو تأكد من إدخال مواعيد الامتحانات.';
+      } else if (!EXAM_READONLY) {
+        msg = 'لا توجد مواعيد بعد. ألغِ تفعيل «إخفاء الأيام الفارغة» إن لزم، ثم اضغط «إدارة المقرر» على أي تاريخ لإضافة الامتحانات. الاعتماد والنشر يكون بعد اكتمال الجدول.';
       } else {
         msg = 'لا توجد مواعيد امتحانات في النظام لهذا النوع. جرّب توسيع فترة التاريخ أو راجع الإدارة.';
       }
+    } else if (!EXAM_READONLY) {
+      msg = 'لا توجد أيام ضمن الفترة. وسّع تاريخ البداية/النهاية ثم احفظ، أو ألغِ «إخفاء الأيام الفارغة».';
     }
     el.innerHTML = `<div class="text-muted p-2">${esc(msg)}</div>`;
     return;
   }
-  let html='<table class="timetable"><thead><tr>';
-  html += '<th class="date-header">التاريخ / الفترة</th>';
-  times.forEach(ti=>{ html += `<th class="time-header">${esc(ti)}</th>`; });
-  html+='</tr></thead><tbody>';
-    dates.forEach(d=>{
-    html += `<tr><th class="date-header day-header">${esc(fmtDate(d))}</th>`;
-    times.forEach(ti=>{
-      const cellRows = inRangeRows.filter(e => e.exam_date===d && (e.exam_time||'').trim()===ti);
-      html += '<td class="date-slot-cell">';
-      html += '<div class="exam-day-courses-row">';
-      cellRows.forEach(e=>{
-        const isConflict = conflictIdx.has(`${d}|${norm(e.course_name)}`);
-        const accent = isConflict ? '#dc3545' : examCourseColor(e.course_name);
-        html += `<div class="exam-card ${isConflict?'conflict':''}" style="--exam-accent:${accent}">
-          <div><strong>${esc(e.course_name)}</strong></div>
-          <div class="exam-meta">${e.room?`القاعة: ${esc(e.room)}`:'—'} ${e.instructor?`| الأستاذ: ${esc(e.instructor)}`:''}</div>
-          ${isConflict?'<div class="text-danger small">تعارض</div>':''}
-        </div>`;
-      });
-      html += '</div>';
-      if(!EXAM_READONLY && EXAM_SLOT_MANAGE_VISIBLE){
-        html += `<button type="button" class="btn btn-outline-primary btn-sm manage-courses-btn exam-manage-slot-btn no-print" data-manage-date="${d}" data-manage-time="${esc(ti)}">إدارة المقرر</button>`;
+
+  const parallelCols = getParallelExamColumns();
+
+  let html = '<table class="timetable exam-matrix-table"><thead>';
+  html += '<tr>';
+  html += '<th class="date-header" rowspan="2">التاريخ</th>';
+  for (let g = 0; g < parallelCols; g++) {
+    const startCls = g > 0 ? ' exam-group-start' : '';
+    html += `<th class="time-header exam-time-band${startCls}" colspan="3" dir="ltr">${esc(unifiedTime)}</th>`;
+  }
+  html += '</tr><tr>';
+  for (let g = 0; g < parallelCols; g++) {
+    const startCls = g > 0 ? ' exam-group-start' : '';
+    html += `<th class="exam-subhead${startCls}">المقرر</th>`;
+    html += '<th class="exam-subhead">الأستاذ</th>';
+    html += '<th class="exam-subhead exam-col-room">القاعة</th>';
+  }
+  html += '</tr></thead><tbody>';
+
+  dates.forEach((d) => {
+    const dayRows = inRangeRows
+      .filter((e) => e.exam_date === d)
+      .slice()
+      .sort((a, b) => String(a.course_name || '').localeCompare(String(b.course_name || ''), 'ar'));
+    const manageBtn = (!EXAM_READONLY && EXAM_SLOT_MANAGE_VISIBLE)
+      ? `<button type="button" class="btn btn-outline-primary btn-sm manage-courses-btn exam-manage-slot-btn no-print" data-manage-date="${d}" data-manage-time="${esc(unifiedTime)}">إدارة المقرر</button>`
+      : '';
+    const dateInner = `<div class="exam-date-cell-inner"><span>${esc(fmtDate(d))}</span>${manageBtn}</div>`;
+    const gridRows = dayRows.length
+      ? Math.max(1, Math.ceil(dayRows.length / parallelCols))
+      : 1;
+
+    for (let r = 0; r < gridRows; r++) {
+      html += '<tr>';
+      if (r === 0) {
+        html += `<th class="date-header day-header" rowspan="${gridRows}">${dateInner}</th>`;
       }
-      html += '</td>';
-    });
-    html += '</tr>';
+      for (let g = 0; g < parallelCols; g++) {
+        const exam = dayRows.length ? (dayRows[r * parallelCols + g] || null) : null;
+        html += renderExamSlotTriple(exam, conflictIdx, d, g);
+      }
+      html += '</tr>';
+    }
   });
-  html+='</tbody></table>';
-  el.innerHTML=html;
-  if(!EXAM_READONLY){
-    el.querySelectorAll('button[data-manage-date]').forEach(btn=>{
-      btn.addEventListener('click', ()=>{
-        openManageExamModal(btn.dataset.manageDate, btn.dataset.manageTime || '');
+
+  html += '</tbody></table>';
+  el.innerHTML = html;
+  if (!EXAM_READONLY) {
+    el.querySelectorAll('button[data-manage-date]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        openManageExamModal(btn.dataset.manageDate, btn.dataset.manageTime || getUnifiedExamTime());
       });
     });
   }
+  el.querySelectorAll('button[data-conflict-course]').forEach((btn) => {
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      openConflictDetailsView({
+        examDate: btn.dataset.conflictDate || '',
+        courseName: btn.dataset.conflictCourse || '',
+      });
+    });
+  });
 }
 
 const newCourseSelectEl = document.getElementById('newCourseSelect');
 async function loadTeachingGroupsForCourse(courseName){
   const sel = document.getElementById('newTeachingGroup');
   if (!sel) return;
-  sel.innerHTML = '<option value="">— الكل / موحّد للمقرر —</option>';
+  CURRENT_COURSE_TG = [];
+  clearUnifiedInstructorOption();
+  sel.innerHTML = '<option value="">جميع المجموعات — امتحان موحّد (نفس اليوم)</option>';
   const cn = String(courseName || '').trim();
-  if (!cn) return;
+  if (!cn) {
+    applyInstructorFromTeachingGroup();
+    return;
+  }
   try {
     const r = await fetch(`/schedule/teaching_groups?course_name=${encodeURIComponent(cn)}`, { credentials: 'include' });
     const j = await r.json().catch(() => ({}));
     const groups = Array.isArray(j.groups) ? j.groups : (Array.isArray(j) ? j : []);
+    CURRENT_COURSE_TG = groups;
     groups.forEach(g => {
       const id = g.id || g.teaching_group_id;
       if (!id) return;
@@ -692,7 +1034,10 @@ async function loadTeachingGroupsForCourse(courseName){
       opt.textContent = String(label);
       sel.appendChild(opt);
     });
-  } catch (_e) {}
+  } catch (_e) {
+    CURRENT_COURSE_TG = [];
+  }
+  applyInstructorFromTeachingGroup();
 }
 if (newCourseSelectEl) {
   newCourseSelectEl.addEventListener('change', () => {
@@ -700,18 +1045,21 @@ if (newCourseSelectEl) {
     loadTeachingGroupsForCourse(newCourseSelectEl.value);
   });
 }
+const newTeachingGroupEl = document.getElementById('newTeachingGroup');
+if (newTeachingGroupEl) {
+  newTeachingGroupEl.addEventListener('change', () => applyInstructorFromTeachingGroup());
+}
 const addCourseFormEl = document.getElementById('addCourseForm');
 if (addCourseFormEl) {
   addCourseFormEl.addEventListener('submit', async (e)=>{
     e.preventDefault();
     if(EXAM_READONLY) return;
-    if(!currentManageDate || !currentManageTime){ showModalExamMsg('اختر خانة إدارة أولاً','warning'); return; }
+    if(!currentManageDate){ showModalExamMsg('اختر خانة إدارة أولاً','warning'); return; }
+    currentManageTime = getUnifiedExamTime();
     const t=document.getElementById('examType').value;
     const course=document.getElementById('newCourseSelect').value;
     const room=document.getElementById('newRoom').value;
-    const instId=document.getElementById('newInstructor').value;
-    const instObj=INSTRUCTORS.find(x=>String(x.id)===String(instId));
-    const instructor=instObj ? (instObj.name||'').trim() : '';
+    const instructor=resolveInstructorTextForSubmit();
     const teaching_group_id = document.getElementById('newTeachingGroup')?.value || '';
     if(!course){ showModalExamMsg('اختر مقرراً','warning'); return; }
 
@@ -735,8 +1083,10 @@ if (addCourseFormEl) {
       e.target.reset();
       const hint = document.getElementById('scheduleAssignHint');
       if(hint){ hint.classList.add('d-none'); hint.textContent = ''; }
+      CURRENT_COURSE_TG = [];
+      clearUnifiedInstructorOption();
       const tgSel = document.getElementById('newTeachingGroup');
-      if (tgSel) tgSel.innerHTML = '<option value="">— الكل / موحّد للمقرر —</option>';
+      if (tgSel) tgSel.innerHTML = '<option value="">جميع المجموعات — امتحان موحّد (نفس اليوم)</option>';
       await loadExamSchedule();
       renderManageList();
     } else {
@@ -776,23 +1126,35 @@ if (btnToggleExamSlotManageEl) {
 }
 const btnLoadEl = document.getElementById('btnLoad');
 if (btnLoadEl) btnLoadEl.addEventListener('click', toggleExamScheduleVisibility);
+function openExamPrintPreview(){
+  const t = document.getElementById('examType')?.value || 'midterm';
+  const start = document.getElementById('startDate')?.value || '';
+  const end = document.getElementById('endDate')?.value || '';
+  const parallel = getParallelExamColumns();
+  const qs = new URLSearchParams();
+  if (start) qs.set('start', start);
+  if (end) qs.set('end', end);
+  qs.set('time', getUnifiedExamTime());
+  qs.set('parallel', String(parallel));
+  qs.set('mode', 'multi');
+  const url = `/exams/${encodeURIComponent(t)}/print_preview?${qs.toString()}`;
+  window.open(url, '_blank');
+}
 const btnPrintEl = document.getElementById('btnPrint');
-if (btnPrintEl) btnPrintEl.addEventListener('click', ()=>window.print());
+if (btnPrintEl) btnPrintEl.addEventListener('click', openExamPrintPreview);
 const hideEmptyDaysEl = document.getElementById('hideEmptyDays');
 if (hideEmptyDaysEl) hideEmptyDaysEl.addEventListener('change', loadExamSchedule);
 
-['startDate','endDate'].forEach((id) => {
+['startDate','endDate','examUnifiedTime','examParallelColumns'].forEach((id) => {
   const inp = document.getElementById(id);
   if (!inp) return;
   inp.addEventListener('change', () => {
-    // في وضع العرض فقط لا يوجد زر «حفظ التواريخ» — نحفظ الفترة محلياً ونحدّث الجدول
-    try {
-      const startDate = document.getElementById('startDate')?.value;
-      const endDate = document.getElementById('endDate')?.value;
-      if (startDate && endDate) {
-        localStorage.setItem(storageKey(), JSON.stringify({ startDate, endDate }));
-      }
-    } catch (_e) {}
+    try { persistExamPeriodLocal(); } catch (_e) {}
+    if (id === 'examUnifiedTime') {
+      const tl = document.getElementById('modalExamTimeLabel');
+      if (tl && currentManageDate) tl.textContent = getUnifiedExamTime();
+      currentManageTime = getUnifiedExamTime();
+    }
     if (EXAM_TIMETABLE_VISIBLE) loadExamSchedule();
   });
 });
@@ -806,6 +1168,7 @@ window.addEventListener('load', async ()=>{
     const ed = document.getElementById('endDate');
     if (sd) sd.value = s.toISOString().split('T')[0];
     if (ed) ed.value = e.toISOString().split('T')[0];
+    setUnifiedExamTime(DEFAULT_EXAM_TIME);
   }
   await initPermissions();
   updateExportLinks();

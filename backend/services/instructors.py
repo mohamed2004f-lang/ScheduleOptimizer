@@ -811,7 +811,8 @@ def unlink_instructor_department(instructor_id: int):
 def instructor_students_by_department(instructor_id: int):
     """
     طلاب القسم المسجّلون في مقررات يدرّسها الأستاذ في ذلك القسم (مع توسعة التكافؤ).
-    Query: department_id (إجباري)، semester (اختياري لتصفية صفوف الجدول).
+    Query: department_id (إجباري)، semester (اختياري)،
+    course_names / course_name (اختياري — فلترة مقررات الجدول).
     """
     actor = _current_actor_username()
     dept_raw = request.args.get("department_id")
@@ -824,12 +825,25 @@ def instructor_students_by_department(instructor_id: int):
     semester = request.args.get("semester")
     sem = str(semester).strip() if semester not in (None, "") else None
 
+    raw_filter = request.args.getlist("course_names") or request.args.getlist("course_name")
+    if not raw_filter:
+        single = request.args.get("course_names") or request.args.get("course_name")
+        if single:
+            raw_filter = [p.strip() for p in str(single).split(",") if p.strip()]
+    course_filter = [str(c).strip() for c in (raw_filter or []) if str(c).strip()] or None
+
     with get_connection() as conn:
         if not _can_access_instructor_admin_endpoint(conn, actor, instructor_id):
             return jsonify({"status": "error", "message": "غير مصرّح"}), 403
         if not instructor_linked_to_department(conn, instructor_id, dept_id):
             return jsonify({"status": "error", "message": "الأستاذ غير مرتبط بهذا القسم"}), 400
-        students, courses = students_for_instructor_department(conn, instructor_id, dept_id, sem)
+        students, available_courses, courses = students_for_instructor_department(
+            conn,
+            instructor_id,
+            dept_id,
+            sem,
+            course_names_filter=course_filter,
+        )
         return jsonify(
             {
                 "status": "ok",
@@ -837,7 +851,9 @@ def instructor_students_by_department(instructor_id: int):
                 "department_id": dept_id,
                 "semester": sem,
                 "students": students,
-                "course_names_resolved": courses,
+                "course_names_resolved": available_courses,
+                "available_courses": available_courses,
+                "courses": courses,
             }
         )
 

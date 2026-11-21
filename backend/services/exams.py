@@ -1356,20 +1356,19 @@ def exam_schedule_coverage(exam_type):
         return jsonify({"error": "internal"}), 500
 
 
-@exams_bp.route('/<exam_type>/rows')
-@login_required
-def list_exam_rows(exam_type):
+def _exam_rows_dicts(exam_type: str) -> list[dict]:
+    """صفوف الامتحانات حسب دور العارض (نفس نطاق list_exam_rows)."""
     if exam_type not in VALID_TYPES:
-        return jsonify([])
+        return []
     if not _user_can_view_exam_rows(exam_type):
-        return jsonify([])
+        return []
     role = _normalize_role((session.get("user_role") or "").strip())
     with get_connection() as conn:
         cur = conn.cursor()
         if role == "student":
             sid = (session.get("student_id") or session.get("user") or "").strip()
             if not sid:
-                return jsonify([])
+                return []
             has_tg = _exams_has_teaching_group_col(conn)
             tg_select = ", e.teaching_group_id" if has_tg else ""
             tg_join = ""
@@ -1393,17 +1392,16 @@ def list_exam_rows(exam_type):
                 """,
                 (exam_type, sid),
             ).fetchall()
-            return jsonify([dict(r) for r in rows])
+            return [dict(r) for r in (rows or [])]
         has_tg = _exams_has_teaching_group_col(conn)
         select_cols = "id AS exam_id, course_name, exam_date, exam_time, room, instructor"
         if has_tg:
             select_cols += ", teaching_group_id"
 
-        # أستاذ/مشرف (وموضع التدريس لرئيس القسم): مقررات تكليفه في الفصل الحالي فقط
         if _is_instructor_scoped_exam_viewer():
             course_keys, tg_ids = _instructor_current_term_exam_scope(conn, cur)
             if not course_keys and not tg_ids:
-                return jsonify([])
+                return []
             rows = cur.execute(
                 f"SELECT {select_cols} FROM exams WHERE exam_type=? ORDER BY exam_date, exam_time",
                 (exam_type,),
@@ -1415,7 +1413,7 @@ def list_exam_rows(exam_type):
                     item, course_keys=course_keys, tg_ids=tg_ids
                 ):
                     out.append(item)
-            return jsonify(out)
+            return out
 
         dep = _effective_department_scope_id(conn)
         if dep is None:
@@ -1423,7 +1421,7 @@ def list_exam_rows(exam_type):
                 f"SELECT {select_cols} FROM exams WHERE exam_type=? ORDER BY exam_date, exam_time",
                 (exam_type,),
             ).fetchall()
-            return jsonify([dict(r) for r in rows])
+            return [dict(r) for r in (rows or [])]
         visible = _dept_visible_exam_course_keys(conn, cur, dep_id=int(dep))
         rows = cur.execute(
             f"""
@@ -1438,7 +1436,82 @@ def list_exam_rows(exam_type):
             item = dict(r)
             if _norm_exam_course_key(item.get("course_name") or "") in visible:
                 out.append(item)
-        return jsonify(out)
+        return out
+
+
+@exams_bp.route('/<exam_type>/rows')
+@login_required
+def list_exam_rows(exam_type):
+    if exam_type not in VALID_TYPES:
+        return jsonify([])
+    return jsonify(_exam_rows_dicts(exam_type))
+
+
+@exams_bp.route('/<exam_type>/print_preview')
+@login_required
+def exam_print_preview(exam_type):
+    """معاينة طباعة رسمية بسيطة للجدول الامتحاني (صفحة واحدة أو عدة صفحات)."""
+    if exam_type not in VALID_TYPES:
+        return "نوع امتحان غير صالح", 400
+    if not _user_can_view_exam_rows(exam_type):
+        return "جدول الامتحانات غير متاح للعرض/الطباعة", 403
+
+    start = (request.args.get("start") or "").strip()
+    end = (request.args.get("end") or "").strip()
+    exam_time = (request.args.get("time") or "09:00-12:00").strip() or "09:00-12:00"
+    try:
+        parallel = int(request.args.get("parallel") or 1)
+    except (TypeError, ValueError):
+        parallel = 1
+    if parallel not in (1, 2, 3):
+        parallel = 1
+    print_mode = (request.args.get("mode") or "multi").strip().lower()
+    if print_mode not in ("single", "multi"):
+        print_mode = "multi"
+
+    university = "جامعة درنة"
+    college = "كلية الهندسة"
+    department = "كل الأقسام"
+    term_label = ""
+    with get_connection() as conn:
+        try:
+            tname, tyear = get_current_term(conn=conn)
+            term_label = f"{(tname or '').strip()} {(tyear or '').strip()}".strip()
+        except Exception:
+            term_label = ""
+        dep = _effective_department_scope_id(conn)
+        if dep is not None:
+            try:
+                cur = conn.cursor()
+                dr = cur.execute(
+                    "SELECT COALESCE(name_ar, code, '') FROM departments WHERE id = ? LIMIT 1",
+                    (int(dep),),
+                ).fetchone()
+                if dr:
+                    department = str(dr[0] or "").strip() or department
+            except Exception:
+                pass
+
+    rows = _exam_rows_dicts(exam_type)
+    exam_type_ar = "نهائي" if exam_type == "final" else "جزئي"
+    generated_at = datetime.now().strftime("%Y-%m-%d")
+
+    return render_template(
+        "exams_print_preview.html",
+        exam_type=exam_type,
+        exam_type_ar=exam_type_ar,
+        university_name_ar=university,
+        college_name_ar=college,
+        department_name_ar=department,
+        term_label=term_label,
+        generated_at=generated_at,
+        start_date=start,
+        end_date=end,
+        exam_time=exam_time,
+        parallel_columns=parallel,
+        print_mode=print_mode,
+        rows=rows,
+    )
 
 @exams_bp.route('/<exam_type>/check_conflicts', methods=['POST'])
 @login_required
@@ -1885,25 +1958,80 @@ def export_exams(exam_type):
     with get_connection() as conn:
         exams = _exam_dicts_for_export_or_results(conn, exam_type)
     if fmt == 'txt':
-        # tab-separated text
-        df = pd.DataFrame(exams)
+        export_rows = [
+            {
+                "التاريخ": e.get("exam_date") or "",
+                "المقرر": e.get("course_name") or "",
+                "الأستاذ": e.get("instructor") or "",
+                "القاعة": e.get("room") or "",
+                "التوقيت": e.get("exam_time") or "",
+            }
+            for e in (exams or [])
+        ]
+        df = pd.DataFrame(export_rows, columns=["التاريخ", "المقرر", "الأستاذ", "القاعة", "التوقيت"])
         buf = io.BytesIO()
         buf.write(df.to_csv(index=False, sep='\t', encoding='utf-8').encode('utf-8'))
         buf.seek(0)
         fname = f"exams_{exam_type}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.txt"
         return send_file(buf, mimetype='text/plain', as_attachment=True, download_name=fname)
     elif fmt in ('xlsx','xls'):
-        df = pd.DataFrame(exams)
+        # أعمدة مطابقة لعرض الواجهة: تاريخ ثم مقرر/أستاذ/قاعة + التوقيت الموحّد
+        export_rows = [
+            {
+                "التاريخ": e.get("exam_date") or "",
+                "المقرر": e.get("course_name") or "",
+                "الأستاذ": e.get("instructor") or "",
+                "القاعة": e.get("room") or "",
+                "التوقيت": e.get("exam_time") or "",
+            }
+            for e in (exams or [])
+        ]
+        df = pd.DataFrame(export_rows, columns=["التاريخ", "المقرر", "الأستاذ", "القاعة", "التوقيت"])
         return excel_response_from_df(df, filename_prefix=f"exams_{exam_type}")
     elif fmt == 'pdf':
-        # build simple html
-        rows_html = ''.join([f"<tr><td>{e.get('course_name','')}</td><td>{e.get('exam_date','')}</td><td>{e.get('exam_time','')}</td><td>{e.get('room','')}</td></tr>" for e in exams])
+        type_ar = "نهائي" if exam_type == "final" else "جزئي"
+        rows_html = "".join(
+            [
+                "<tr>"
+                f"<td>{e.get('exam_date','')}</td>"
+                f"<td>{e.get('course_name','')}</td>"
+                f"<td>{e.get('instructor','')}</td>"
+                f"<td>{e.get('room','')}</td>"
+                f"<td dir='ltr'>{e.get('exam_time','')}</td>"
+                "</tr>"
+                for e in (exams or [])
+            ]
+        )
         meta_bits = ""
         if ver_info:
-            meta_bits = f"<p style='font-size:11px;color:#444'>الفصل: {ver_info.get('semester') or '—'} | النسخة الأرشيفية: #{int(ver_info.get('version_no') or 0)}</p>"
+            meta_bits = (
+                f"<p style='font-size:11px;color:#444'>الفصل: {ver_info.get('semester') or '—'} "
+                f"| النسخة الأرشيفية: #{int(ver_info.get('version_no') or 0)}</p>"
+            )
         html = f"""
-        <html><head><meta charset='utf-8'><style>table{{width:100%;border-collapse:collapse}}th,td{{border:1px solid #ccc;padding:6px}}</style></head>
-        <body><h2>Exams - {exam_type}</h2>{meta_bits}<table><thead><tr><th>Course</th><th>Date</th><th>Time</th><th>Room</th></tr></thead><tbody>{rows_html}</tbody></table></body></html>
+        <html dir="rtl"><head><meta charset="utf-8">
+        <style>
+          body{{font-family:Tahoma,Arial,sans-serif}}
+          table{{width:100%;border-collapse:collapse}}
+          th,td{{border:1px solid #ccc;padding:6px;text-align:center}}
+          th{{background:#e8f1fa}}
+        </style></head>
+        <body>
+          <h2>جدول الامتحانات — {type_ar}</h2>
+          {meta_bits}
+          <table>
+            <thead>
+              <tr>
+                <th>التاريخ</th>
+                <th>المقرر</th>
+                <th>الأستاذ</th>
+                <th>القاعة</th>
+                <th>التوقيت</th>
+              </tr>
+            </thead>
+            <tbody>{rows_html}</tbody>
+          </table>
+        </body></html>
         """
         return pdf_response_from_html(html, filename_prefix=f"exams_{exam_type}")
     else:
@@ -1986,6 +2114,38 @@ def exam_conflicts(exam_type):
         if role == "student":
             sid = (session.get("student_id") or session.get("user") or "").strip()
             out = [c for c in out if (c.get("student_id") or "").strip() == sid]
+        # إثراء بأسماء الطلبة لعرض التفاصيل في الواجهة
+        try:
+            student_ids = sorted(
+                {
+                    (c.get("student_id") or "").strip()
+                    for c in out
+                    if (c.get("student_id") or "").strip()
+                }
+            )
+            name_map: dict[str, str] = {}
+            if student_ids:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT student_id, COALESCE(student_name,'') AS student_name FROM students WHERE student_id IN ({})".format(
+                        ",".join("?" for _ in student_ids)
+                    ),
+                    student_ids,
+                )
+                for row in cur.fetchall() or []:
+                    if hasattr(row, "keys"):
+                        name_map[str(row["student_id"] or "").strip()] = str(
+                            row["student_name"] or ""
+                        ).strip()
+                    else:
+                        name_map[str(row[0] or "").strip()] = str(row[1] or "").strip()
+            for c in out:
+                sid = (c.get("student_id") or "").strip()
+                c["student_name"] = name_map.get(sid, "")
+        except Exception:
+            logger.exception("exam_conflicts: failed to enrich student names")
+            for c in out:
+                c.setdefault("student_name", "")
         return jsonify({"conflicts": out, "source": "live_registrations" if live else "query"})
 
 @exams_bp.route('/<exam_type>/results_data')

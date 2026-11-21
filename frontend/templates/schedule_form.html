@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>محرر جدول المقررات</title>
   <link href="/static/vendor/bootstrap/bootstrap.rtl.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20261029cols2">
+  <link rel="stylesheet" href="/static/styles.css?v=20261117conflict">
 </head>
 <body>
   {% include "base_nav.html" %}
@@ -95,7 +95,7 @@
       <div class="card mb-3 filter-section" id="instructorDeptStudentsCard">
         <div class="card-body">
           <h6 class="mb-2">طلاب الأستاذ حسب القسم</h6>
-          <p class="small text-muted mb-2">أداة إدارية: عرض الطلاب المسجّلين في مقررات الأستاذ المختار ضمن القسم والفصل الدراسي.</p>
+          <p class="small text-muted mb-2">أداة إدارية: اختر مقررات الأستاذ ثم اعرض الطلاب تحت كل مقرر منفرداً ضمن القسم والفصل.</p>
           <div class="row g-2 align-items-end">
             <div class="col-md-3">
               <label class="form-label small mb-0">الأستاذ</label>
@@ -106,7 +106,6 @@
               <select id="isdDepartment" class="form-select form-select-sm"></select>
             </div>
             <div class="col-md-3">
-              <label class="form-label small mb-0">الفصل (اختياري)</label>
               <label class="form-label small mb-0" for="isdSemesterSeason">الفصل (اختياري)</label>
               <div class="d-flex gap-1">
                 <select id="isdSemesterSeason" class="form-select form-select-sm" style="max-width:6.5rem">
@@ -123,6 +122,14 @@
             <div class="col-md-3">
               <button type="button" class="btn btn-primary btn-sm" id="btnIsdLoad">عرض الطلاب</button>
             </div>
+          </div>
+          <div id="isdCoursesWrap" class="mt-2 d-none">
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+              <span class="small fw-semibold mb-0">مقررات الأستاذ</span>
+              <button type="button" class="btn btn-outline-secondary btn-sm py-0" id="btnIsdSelectAllCourses">تحديد الكل</button>
+              <button type="button" class="btn btn-outline-secondary btn-sm py-0" id="btnIsdClearCourses">إلغاء التحديد</button>
+            </div>
+            <div id="isdCoursesList" class="border rounded p-2 bg-light" style="max-height:10rem;overflow:auto"></div>
           </div>
           <div id="isdOut" class="small mt-2"></div>
         </div>
@@ -152,7 +159,7 @@
                       <label class="form-check-label" for="optSlotManage">أزرار إدارة المقررات في الخلايا</label>
                     </div>
                     <div class="form-check mb-1">
-                      <input class="form-check-input" type="checkbox" id="optStudentConflicts" checked>
+                      <input class="form-check-input" type="checkbox" id="optStudentConflicts">
                       <label class="form-check-label" for="optStudentConflicts">تعارضات الطلبة</label>
                     </div>
                     <div class="form-check mb-1 d-none" id="optShowGeneralOverlayWrap">
@@ -162,7 +169,7 @@
                     <div class="form-text small mt-1 mb-0" id="optStudentConflictsHint"></div>
                   </div>
                 </div>
-                <button type="button" class="btn btn-outline-danger btn-sm" id="btnToggleStudentConflicts" title="إظهار/إخفاء شارات تعارض الطلبة (تُحسب من التسجيلات والجدول الحالي)">تعارضات الطلبة</button>
+                <button type="button" class="btn btn-outline-danger btn-sm" id="btnToggleStudentConflicts" title="إظهار/إخفاء تمييز تعارضات الطلبة (اللون الأحمر + الشارات)">تعارضات الطلبة</button>
                 <a id="btnSchedulePrintPreview" class="btn btn-outline-dark btn-sm" href="/schedule/print_preview" target="_blank">طباعة</a>
                 <button id="btnRun" class="btn btn-success btn-sm" type="button">إنتاج الجداول</button>
                 <a href="/results" class="btn btn-outline-secondary btn-sm">النتائج</a>
@@ -767,7 +774,7 @@ let SCHEDULE_LAYOUT = {
   use_display_tracks: false,
   display_tracks: [],
 };
-let SHOW_STUDENT_CONFLICTS = true;
+let SHOW_STUDENT_CONFLICTS = false;
 try {
   const sc = localStorage.getItem('scheduleShowStudentConflicts');
   if (sc === '0') SHOW_STUDENT_CONFLICTS = false;
@@ -1039,12 +1046,12 @@ async function refreshConflictsAndPaint(seq){
     if (seq != null && seq !== _loadScheduleSeq) return;
     lastConflicts = stu || [];
     lastInstructorConflicts = inst || [];
-    markConflictCellsFromData(lastConflicts);
     markInstructorConflictCellsFromData(lastInstructorConflicts);
+    // لون تعارض الطلبة فقط عند التفعيل — وإلا يُمسَح عبر applyStudentConflictsVisibility
     paintConflictsOntoGrid();
     const total = lastConflicts.reduce((s, c) => s + (Array.isArray(c.entries) ? c.entries.length : 0), 0);
-    // رسالة تنبيه مرة مع تحميل الجدول فقط (وليس مع التحديث الدوري)
-    if (total > 0 && seq != null && seq === _loadScheduleSeq) {
+    // رسالة تنبيه فقط عندما يكون تمييز الطلبة ظاهراً
+    if (SHOW_STUDENT_CONFLICTS && total > 0 && seq != null && seq === _loadScheduleSeq) {
       showMsg(`تم العثور على ${total} حالة تعارض في التسجيلات`, 'warning', 5000);
     }
   } catch (e) {
@@ -2095,6 +2102,22 @@ async function saveTimeSlotsSetting(opts){
   }
 }
 
+function applyStudentConflictCellStyles(){
+  // اللون الأحمر يظهر فقط عند تفعيل تعارضات الطلبة؛ تعارض الأستاذ يبقى أصفر
+  if (SHOW_STUDENT_CONFLICTS) {
+    markConflictCellsFromData(lastConflicts || []);
+    return;
+  }
+  document.querySelectorAll('.time-slot-cell.conflict').forEach((cell) => {
+    cell.classList.remove('conflict');
+    if (cell.classList.contains('conflict-instructor')) {
+      cell.style.background = 'rgba(255,193,7,0.18)';
+    } else {
+      cell.style.background = '';
+    }
+  });
+}
+
 function applyStudentConflictsVisibility(){
   const root = document.getElementById('scheduleList');
   const wrap = document.querySelector('.timetable-scroll-hint');
@@ -2109,6 +2132,8 @@ function applyStudentConflictsVisibility(){
     btn.classList.toggle('active', !!SHOW_STUDENT_CONFLICTS);
     btn.setAttribute('aria-pressed', SHOW_STUDENT_CONFLICTS ? 'true' : 'false');
   }
+
+  applyStudentConflictCellStyles();
 
   if (typeof collapseScheduleActionRows === 'function' && root) {
     collapseScheduleActionRows(root, hide);
@@ -2128,12 +2153,12 @@ function applyStudentConflictsVisibility(){
     );
     if (!SHOW_STUDENT_CONFLICTS) {
       hint.textContent = stored
-        ? `مخفي الآن — طُوي ${stored} تعارض طلبة (من التسجيلات والجدول الحالي).`
+        ? `مخفي الآن — ${stored} تعارض طلبة جاهز (اضغط الزر لإظهار اللون والشارات).`
         : 'مخفي — لا تعارضات طلبة حالياً.';
     } else {
       hint.textContent = stored
-        ? `${stored} شارة تعارض طلبة ظاهرة (تُحسب مباشرة دون إنتاج الجداول).`
-        : 'لا شارات طلبة حالياً — تُحسب من التسجيلات عند تطابق أوقات المقررات.';
+        ? `${stored} تعارض طلبة ظاهر (لون أحمر + شارات).`
+        : 'لا تعارضات طلبة حالياً — تُحسب من التسجيلات عند تطابق أوقات المقررات.';
     }
   }
 }
@@ -2756,43 +2781,155 @@ async function setupInstructorDeptStudentPanel(auth) {
       console.error(e);
     }
   }
+  const coursesWrap = document.getElementById('isdCoursesWrap');
+  const coursesList = document.getElementById('isdCoursesList');
+  const out = document.getElementById('isdOut');
   const btn = document.getElementById('btnIsdLoad');
+  const btnAll = document.getElementById('btnIsdSelectAllCourses');
+  const btnClear = document.getElementById('btnIsdClearCourses');
+
+  function isdSelectedCourseNames() {
+    if (!coursesList) return [];
+    return Array.from(coursesList.querySelectorAll('input.isd-course-cb:checked'))
+      .map((el) => String(el.value || '').trim())
+      .filter(Boolean);
+  }
+
+  function renderIsdCourseChecks(names, preferSelected) {
+    if (!coursesList || !coursesWrap) return;
+    const list = Array.isArray(names) ? names.filter(Boolean) : [];
+    const keep = new Set(
+      Array.isArray(preferSelected) && preferSelected.length
+        ? preferSelected
+        : isdSelectedCourseNames()
+    );
+    const selectAll = keep.size === 0;
+    if (!list.length) {
+      coursesWrap.classList.add('d-none');
+      coursesList.innerHTML = '<span class="text-muted small">لا مقررات لهذا الأستاذ في القسم/الفصل.</span>';
+      return;
+    }
+    coursesWrap.classList.remove('d-none');
+    coursesList.innerHTML = list.map((cn, i) => {
+      const checked = selectAll || keep.has(cn) ? ' checked' : '';
+      const id = 'isdCourse_' + i;
+      return `<div class="form-check">
+        <input class="form-check-input isd-course-cb" type="checkbox" value="${escapeHtml(cn)}" id="${id}"${checked}>
+        <label class="form-check-label" for="${id}">${escapeHtml(cn)}</label>
+      </div>`;
+    }).join('');
+  }
+
+  function renderIsdCoursesStudents(courses) {
+    const blocks = Array.isArray(courses) ? courses : [];
+    if (!blocks.length) {
+      return '<span class="text-muted">لا طلاب للمقررات المحددة.</span>';
+    }
+    return blocks.map((c) => {
+      const name = escapeHtml(c.course_name || '—');
+      const n = Number(c.student_count != null ? c.student_count : ((c.students || []).length));
+      const eq = Array.isArray(c.equivalent_names) ? c.equivalent_names.filter(Boolean) : [];
+      const eqHtml = eq.length
+        ? `<div class="text-muted small mb-1">يشمل أيضاً: ${eq.map((x) => escapeHtml(x)).join('، ')}</div>`
+        : '';
+      const studs = Array.isArray(c.students) ? c.students : [];
+      const listHtml = studs.length
+        ? `<ul class="mb-0">${studs.map((s) =>
+            `<li><span dir="ltr">${escapeHtml(s.student_id || '')}</span> — ${escapeHtml(s.student_name || '')}</li>`
+          ).join('')}</ul>`
+        : '<div class="text-muted">لا طلاب مسجّلين.</div>';
+      return `<div class="border rounded p-2 mb-2 bg-white">
+        <div class="fw-semibold mb-1">${name} <span class="badge bg-secondary">${n}</span></div>
+        ${eqHtml}
+        ${listHtml}
+      </div>`;
+    }).join('');
+  }
+
+  function isdQueryBase() {
+    syncIsdSemester();
+    const iid = selI && selI.value;
+    const did = selD && selD.value;
+    const semEl = document.getElementById('isdSemester');
+    const sem = semEl && semEl.value.trim();
+    if (!iid || !did) return null;
+    let url = `/instructors/${encodeURIComponent(iid)}/students_by_department?department_id=${encodeURIComponent(did)}`;
+    if (sem) url += `&semester=${encodeURIComponent(sem)}`;
+    return { url, iid, did, sem };
+  }
+
+  async function loadIsdCoursesOnly() {
+    const q = isdQueryBase();
+    if (!q) {
+      if (coursesWrap) coursesWrap.classList.add('d-none');
+      if (coursesList) coursesList.innerHTML = '';
+      return;
+    }
+    try {
+      const r = await fetch(q.url, { credentials: 'include' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        if (out) out.innerHTML = '<span class="text-danger">' + escapeHtml(j.message || r.status) + '</span>';
+        return;
+      }
+      const names = j.available_courses || j.course_names_resolved || [];
+      renderIsdCourseChecks(names, names.slice());
+      if (out) out.innerHTML = '';
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  selI?.addEventListener('change', loadIsdCoursesOnly);
+  selD?.addEventListener('change', loadIsdCoursesOnly);
+  seasonEl?.addEventListener('change', () => { syncIsdSemester(); loadIsdCoursesOnly(); });
+  yearEl?.addEventListener('change', () => { syncIsdSemester(); loadIsdCoursesOnly(); });
+  btnAll?.addEventListener('click', () => {
+    coursesList?.querySelectorAll('input.isd-course-cb').forEach((el) => { el.checked = true; });
+  });
+  btnClear?.addEventListener('click', () => {
+    coursesList?.querySelectorAll('input.isd-course-cb').forEach((el) => { el.checked = false; });
+  });
+
   if (btn) {
     btn.addEventListener('click', async () => {
-      const iid = selI && selI.value;
-      const did = selD && selD.value;
-      const semEl = document.getElementById('isdSemester');
-      if (typeof syncIsdSemester === 'function') syncIsdSemester();
-      else {
-        const s = (document.getElementById('isdSemesterSeason')||{}).value || '';
-        const y = (document.getElementById('isdSemesterYear')||{}).value || '';
-        if (semEl) semEl.value = [s, y].filter(Boolean).join(' ').trim();
-      }
-      const sem = semEl && semEl.value.trim();
-      const out = document.getElementById('isdOut');
-      if (!iid || !did) {
+      const q = isdQueryBase();
+      if (!q) {
         if (out) out.innerHTML = '<span class="text-danger">اختر الأستاذ والقسم</span>';
         return;
       }
-      let url = `/instructors/${encodeURIComponent(iid)}/students_by_department?department_id=${encodeURIComponent(did)}`;
-      if (sem) url += `&semester=${encodeURIComponent(sem)}`;
+      const selected = isdSelectedCourseNames();
+      if (!selected.length) {
+        // إن لم تُحمَّل المقررات بعد، حمّل الكل ثم أعد
+        if (!coursesList || !coursesList.querySelector('input.isd-course-cb')) {
+          await loadIsdCoursesOnly();
+        }
+      }
+      const picked = isdSelectedCourseNames();
+      if (!picked.length) {
+        if (out) out.innerHTML = '<span class="text-danger">حدّد مقرراً واحداً على الأقل</span>';
+        return;
+      }
+      let url = q.url;
+      picked.forEach((cn) => {
+        url += `&course_names=${encodeURIComponent(cn)}`;
+      });
       if (out) out.textContent = '…';
       try {
-        const r = await fetch(url);
+        const r = await fetch(url, { credentials: 'include' });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) {
           if (out) out.innerHTML = '<span class="text-danger">' + escapeHtml(j.message || r.status) + '</span>';
           return;
         }
-        const studs = j.students || [];
-        const crs = j.course_names_resolved || [];
+        const available = j.available_courses || j.course_names_resolved || [];
+        renderIsdCourseChecks(available, picked);
+        const courses = Array.isArray(j.courses) ? j.courses : [];
+        const uniqueCount = (j.students || []).length;
         if (out) {
           out.innerHTML =
-            '<div class="mb-1"><strong>المقررات المستخدمة:</strong> ' +
-            (crs.length ? crs.map((c) => escapeHtml(c)).join('، ') : '—') +
-            '</div><ul class="mb-0">' +
-            studs.map((s) => '<li>' + escapeHtml(s.student_id) + ' — ' + escapeHtml(s.student_name) + '</li>').join('') +
-            '</ul>';
+            `<div class="mb-2 text-muted">مقررات معروضة: ${courses.length} · طلاب فريدون: ${uniqueCount}</div>` +
+            renderIsdCoursesStudents(courses);
         }
       } catch (e) {
         console.error(e);

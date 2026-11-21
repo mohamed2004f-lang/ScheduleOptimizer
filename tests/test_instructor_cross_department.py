@@ -132,7 +132,24 @@ class TestInstructorCrossDepartmentApi:
         ids = {s.get("student_id") for s in studs}
         assert "S001" in ids
         crs = j.get("course_names_resolved") or []
-        assert "رياضيات 1" in crs and "رياضيات موازي" in crs
+        assert "رياضيات 1" in crs
+        # أسماء الجدول للأستاذ (قبل توسعة التكافؤ في التسجيل)
+        available = j.get("available_courses") or crs
+        assert "رياضيات 1" in available
+        courses = j.get("courses") or []
+        by_name = {c.get("course_name"): c for c in courses}
+        assert "رياضيات 1" in by_name
+        math_studs = {s.get("student_id") for s in (by_name["رياضيات 1"].get("students") or [])}
+        assert "S001" in math_studs
+        # فلترة بمقرر غير موجود في جدول الأستاذ → لا طلاب
+        r2 = auth_client.get(
+            f"/instructors/1/students_by_department?department_id={did}&semester=خريف 44-45"
+            "&course_names=NO_SUCH_COURSE"
+        )
+        assert r2.status_code == 200
+        j2 = r2.get_json()
+        assert (j2.get("courses") or []) == []
+        assert (j2.get("students") or []) == []
 
 
 class TestInstructorLinkUnlinkAndListFields:

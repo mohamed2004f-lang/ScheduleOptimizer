@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>معاينة طباعة — الامتحانات {{ exam_type_ar }}</title>
+  <style>
+    :root {
+      --exam-print-body: 13px;
+      --exam-print-header1: 15px;
+      --exam-print-header2: 13px;
+      --exam-print-table: 13px;
+      --exam-print-subhead: 12px;
+      --exam-print-time: 13px;
+      --exam-print-approval: 13px;
+      --exam-print-single-zoom: 0.88;
+    }
+    body.font-size-small {
+      --exam-print-body: 11px;
+      --exam-print-header1: 13px;
+      --exam-print-header2: 11px;
+      --exam-print-table: 11px;
+      --exam-print-subhead: 10px;
+      --exam-print-time: 11px;
+      --exam-print-approval: 11px;
+      --exam-print-single-zoom: 0.8;
+    }
+    body.font-size-medium {
+      --exam-print-body: 13px;
+      --exam-print-header1: 15px;
+      --exam-print-header2: 13px;
+      --exam-print-table: 13px;
+      --exam-print-subhead: 12px;
+      --exam-print-time: 13px;
+      --exam-print-approval: 13px;
+      --exam-print-single-zoom: 0.88;
+    }
+    body.font-size-large {
+      --exam-print-body: 15px;
+      --exam-print-header1: 17px;
+      --exam-print-header2: 14px;
+      --exam-print-table: 15px;
+      --exam-print-subhead: 13px;
+      --exam-print-time: 14px;
+      --exam-print-approval: 14px;
+      --exam-print-single-zoom: 0.95;
+    }
+    body {
+      font-family: Tahoma, 'Segoe UI', Arial, sans-serif;
+      font-size: var(--exam-print-body);
+      line-height: 1.45;
+      color: #111;
+      margin: 0;
+      padding: 14px 18px;
+      background: #fff;
+    }
+    .preview-banner {
+      background: #e7f1ff;
+      border: 1px solid #0d6efd;
+      border-radius: 6px;
+      padding: 10px 14px;
+      margin-bottom: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .preview-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    .preview-opt {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 13px; color: #0d3b66; cursor: pointer; user-select: none;
+    }
+    .preview-opt select {
+      font-size: 13px;
+      padding: 2px 6px;
+      border: 1px solid #94a3b8;
+      border-radius: 4px;
+    }
+    .btn-print {
+      padding: 6px 14px; border: 1px solid #198754; background: #198754;
+      color: #fff; border-radius: 4px; cursor: pointer; font-weight: 600;
+    }
+    .official-header {
+      text-align: center;
+      margin: 0 0 10px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #333;
+    }
+    .official-header .line1 {
+      font-size: var(--exam-print-header1);
+      font-weight: 700;
+      margin: 0 0 4px;
+    }
+    .official-header .line2 {
+      font-size: var(--exam-print-header2);
+      margin: 0;
+      color: #222;
+    }
+    .week-block { width: 100%; margin-bottom: 14px; }
+    .week-block .official-header { margin-top: 4px; }
+    .exam-matrix-table {
+      width: auto;
+      max-width: 100%;
+      margin-inline: auto;
+      border-collapse: collapse;
+      table-layout: auto;
+      font-size: var(--exam-print-table);
+    }
+    .exam-matrix-table th,
+    .exam-matrix-table td {
+      border: 1px solid #334155;
+      padding: 6px 8px;
+      vertical-align: middle;
+      text-align: center;
+      white-space: nowrap;
+    }
+    .exam-matrix-table td.exam-col-course {
+      white-space: normal;
+      text-align: center;
+      font-weight: 700;
+    }
+    .exam-matrix-table .date-header {
+      background: #f1f5f9;
+      font-weight: 700;
+      text-align: center;
+      white-space: normal;
+      max-width: 9.5rem;
+    }
+    .exam-matrix-table .exam-time-band {
+      background: #e2e8f0;
+      font-weight: 800;
+      font-size: var(--exam-print-time);
+    }
+    .exam-matrix-table .exam-subhead {
+      background: #f8fafc;
+      font-size: var(--exam-print-subhead);
+      font-weight: 700;
+    }
+    .exam-matrix-table th.exam-col-room,
+    .exam-matrix-table td.exam-col-room {
+      min-width: 1cm;
+      width: 1%;
+      max-width: 3.2cm;
+      text-align: center;
+      padding-inline: 3px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .exam-matrix-table .exam-group-start { border-inline-start: 2px solid #64748b; }
+    .muted { color: #64748b; }
+    .hod-approval {
+      margin-top: 18px;
+      text-align: center;
+      font-size: var(--exam-print-approval);
+      line-height: 1.55;
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+    .hod-approval .hod-title { font-weight: 700; margin: 0 0 4px; }
+    .hod-approval .hod-line {
+      margin: 0;
+      letter-spacing: 0.02em;
+    }
+    @page { size: A4 landscape; margin: 8mm; }
+    body.print-mode-multi .week-block {
+      break-after: page;
+      page-break-after: always;
+    }
+    body.print-mode-multi .week-block:last-child {
+      break-after: auto;
+      page-break-after: auto;
+    }
+    body.print-mode-single .week-block {
+      break-after: avoid;
+      page-break-after: avoid;
+      margin-bottom: 6px;
+    }
+    body.print-mode-single .week-block .official-header.repeat-header { display: none; }
+    body.print-mode-single .week-block:first-child .official-header.repeat-header { display: block; }
+    @media print {
+      .no-print { display: none !important; }
+      body { padding: 0; }
+      body.print-mode-single {
+        zoom: var(--exam-print-single-zoom);
+      }
+      body.print-mode-single .exam-matrix-table th,
+      body.print-mode-single .exam-matrix-table td { padding: 4px 5px; }
+    }
+  </style>
+</head>
+<body class="print-mode-{{ print_mode }} font-size-medium">
+  <div class="preview-banner no-print">
+    <span><strong>معاينة طباعة الامتحانات</strong> — راجع ثم اطبع أو احفظ PDF.</span>
+    <div class="preview-actions">
+      <label class="preview-opt">
+        <input type="radio" name="printMode" value="multi" {% if print_mode == 'multi' %}checked{% endif %}>
+        عدة صفحات
+      </label>
+      <label class="preview-opt">
+        <input type="radio" name="printMode" value="single" {% if print_mode == 'single' %}checked{% endif %}>
+        صفحة واحدة
+      </label>
+      <label class="preview-opt" for="examPrintFontSize">
+        حجم الخط
+        <select id="examPrintFontSize" title="حجم خط المعاينة والطباعة">
+          <option value="small">صغير</option>
+          <option value="medium" selected>متوسط</option>
+          <option value="large">كبير</option>
+        </select>
+      </label>
+      <button type="button" class="btn-print" id="btnPreviewPrint">طباعة / حفظ PDF</button>
+    </div>
+  </div>
+
+  <div id="printRoot"></div>
+
+<script>
+const ROWS = {{ rows|tojson }};
+const META = {
+  university: {{ university_name_ar|tojson }},
+  college: {{ college_name_ar|tojson }},
+  department: {{ department_name_ar|tojson }},
+  examTypeAr: {{ exam_type_ar|tojson }},
+  term: {{ term_label|tojson }},
+  generatedAt: {{ generated_at|tojson }},
+  start: {{ start_date|tojson }},
+  end: {{ end_date|tojson }},
+  time: {{ exam_time|tojson }},
+  parallel: {{ parallel_columns|int }},
+};
+
+function esc(s){
+  return String(s || '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+}
+function datesBetween(start, end){
+  const out = [];
+  if (!start || !end) return out;
+  const s = new Date(start);
+  const e = new Date(end);
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime()) || s > e) return out;
+  const c = new Date(s);
+  while (c <= e) {
+    out.push(new Date(c).toISOString().split('T')[0]);
+    c.setDate(c.getDate() + 1);
+  }
+  return out;
+}
+function fmtDate(d){
+  const x = new Date(d);
+  if (Number.isNaN(x.getTime())) return d;
+  const days = ['الأحد','الإثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
+  const months = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  return `${days[x.getDay()]} ${x.getDate()} ${months[x.getMonth()]} (${d})`;
+}
+function officialHeaderHtml(repeat){
+  const period = (META.start && META.end) ? ` · الفترة: ${esc(META.start)} → ${esc(META.end)}` : '';
+  const termBit = META.term ? ` · الفصل: ${esc(META.term)}` : '';
+  return `<div class="official-header${repeat ? ' repeat-header' : ''}">
+    <p class="line1">${esc(META.university)} — ${esc(META.college)} — ${esc(META.department)}</p>
+    <p class="line2">جدول الامتحانات ${esc(META.examTypeAr)}${termBit} · التاريخ: ${esc(META.generatedAt)}${period}</p>
+  </div>`;
+}
+function hodApprovalHtml(){
+  return `<div class="hod-approval">
+    <p class="hod-title">اعتماد رئيس القسم</p>
+    <p class="hod-line">الاسم: ................................</p>
+    <p class="hod-line">التوقيع: ........................　　التاريخ: .... / .... / ........</p>
+  </div>`;
+}
+function slotTriple(exam, groupIdx){
+  const startCls = groupIdx > 0 ? ' exam-group-start' : '';
+  if (!exam) {
+    return `<td class="exam-col-course muted${startCls}">—</td>`
+      + `<td class="exam-col-instructor muted">—</td>`
+      + `<td class="exam-col-room muted">—</td>`;
+  }
+  const room = String(exam.room || '').trim() || '—';
+  return `<td class="exam-col-course${startCls}">${esc(exam.course_name || '—')}</td>`
+    + `<td class="exam-col-instructor">${esc(exam.instructor || '—')}</td>`
+    + `<td class="exam-col-room" dir="ltr" title="${esc(room)}">${esc(room)}</td>`;
+}
+function buildMatrixTable(dates, rowsByDate, parallel, timeLabel){
+  let html = '<table class="exam-matrix-table"><thead><tr>';
+  html += '<th class="date-header" rowspan="2">التاريخ</th>';
+  for (let g = 0; g < parallel; g++) {
+    const startCls = g > 0 ? ' exam-group-start' : '';
+    html += `<th class="exam-time-band${startCls}" colspan="3" dir="ltr">${esc(timeLabel)}</th>`;
+  }
+  html += '</tr><tr>';
+  for (let g = 0; g < parallel; g++) {
+    const startCls = g > 0 ? ' exam-group-start' : '';
+    html += `<th class="exam-subhead${startCls}">المقرر</th>`;
+    html += '<th class="exam-subhead">الأستاذ</th>';
+    html += '<th class="exam-subhead exam-col-room">القاعة</th>';
+  }
+  html += '</tr></thead><tbody>';
+
+  dates.forEach((d) => {
+    const dayRows = (rowsByDate.get(d) || []).slice().sort((a, b) =>
+      String(a.course_name || '').localeCompare(String(b.course_name || ''), 'ar')
+    );
+    const gridRows = dayRows.length ? Math.max(1, Math.ceil(dayRows.length / parallel)) : 1;
+    for (let r = 0; r < gridRows; r++) {
+      html += '<tr>';
+      if (r === 0) {
+        html += `<th class="date-header" rowspan="${gridRows}">${esc(fmtDate(d))}</th>`;
+      }
+      for (let g = 0; g < parallel; g++) {
+        const exam = dayRows.length ? (dayRows[r * parallel + g] || null) : null;
+        html += slotTriple(exam, g);
+      }
+      html += '</tr>';
+    }
+  });
+  html += '</tbody></table>';
+  return html;
+}
+function chunkWeeks(dates){
+  const chunks = [];
+  for (let i = 0; i < dates.length; i += 7) {
+    chunks.push(dates.slice(i, i + 7));
+  }
+  return chunks.length ? chunks : [[]];
+}
+function resolveDates(rows){
+  let dates = datesBetween(META.start, META.end);
+  if (dates.length) return dates;
+  const set = new Set();
+  (rows || []).forEach((e) => {
+    const d = String(e.exam_date || '').trim();
+    if (d) set.add(d);
+  });
+  return [...set].sort();
+}
+function render(){
+  const modeEl = document.querySelector('input[name="printMode"]:checked');
+  const mode = modeEl ? modeEl.value : 'multi';
+  document.body.classList.remove('print-mode-multi', 'print-mode-single');
+  document.body.classList.add(mode === 'single' ? 'print-mode-single' : 'print-mode-multi');
+
+  const parallel = META.parallel === 2 || META.parallel === 3 ? META.parallel : 1;
+  const timeLabel = META.time || '09:00-12:00';
+  const allDates = resolveDates(ROWS);
+  const occupied = new Set((ROWS || []).map((e) => e.exam_date).filter(Boolean));
+  // للطباعة: أخفِ الأيام الفارغة إن وُجدت امتحانات
+  const dates = occupied.size
+    ? allDates.filter((d) => occupied.has(d))
+    : allDates;
+  const rowsByDate = new Map();
+  (ROWS || []).forEach((e) => {
+    const d = String(e.exam_date || '').trim();
+    if (!d) return;
+    if (META.start && d < META.start) return;
+    if (META.end && d > META.end) return;
+    if (!rowsByDate.has(d)) rowsByDate.set(d, []);
+    rowsByDate.get(d).push(e);
+  });
+
+  const root = document.getElementById('printRoot');
+  if (!dates.length) {
+    root.innerHTML = officialHeaderHtml(false)
+      + '<p class="muted">لا توجد أيام/امتحانات للطباعة ضمن الفترة.</p>'
+      + hodApprovalHtml();
+    return;
+  }
+
+  const weeks = mode === 'single' ? [dates] : chunkWeeks(dates);
+  let html = '';
+  weeks.forEach((weekDates, idx) => {
+    html += '<div class="week-block">';
+    html += officialHeaderHtml(idx > 0);
+    html += buildMatrixTable(weekDates, rowsByDate, parallel, timeLabel);
+    html += '</div>';
+  });
+  html += hodApprovalHtml();
+  root.innerHTML = html;
+}
+
+const FONT_LS_KEY = 'exam_print_font_size';
+function applyFontSize(size){
+  const allowed = size === 'small' || size === 'large' ? size : 'medium';
+  document.body.classList.remove('font-size-small', 'font-size-medium', 'font-size-large');
+  document.body.classList.add('font-size-' + allowed);
+  const sel = document.getElementById('examPrintFontSize');
+  if (sel) sel.value = allowed;
+  try { localStorage.setItem(FONT_LS_KEY, allowed); } catch (_e) {}
+}
+document.querySelectorAll('input[name="printMode"]').forEach((el) => {
+  el.addEventListener('change', render);
+});
+const fontSizeEl = document.getElementById('examPrintFontSize');
+if (fontSizeEl) {
+  fontSizeEl.addEventListener('change', () => applyFontSize(fontSizeEl.value));
+  let saved = 'medium';
+  try {
+    const raw = localStorage.getItem(FONT_LS_KEY);
+    if (raw === 'small' || raw === 'medium' || raw === 'large') saved = raw;
+  } catch (_e) {}
+  applyFontSize(saved);
+}
+document.getElementById('btnPreviewPrint')?.addEventListener('click', () => window.print());
+render();
+</script>
+</body>
+</html>

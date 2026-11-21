@@ -1600,7 +1600,11 @@ def list_schedule_rows():
                     raw_dc = _cell("tg_display_column", 14, None)
                     if raw_dc is not None and raw_dc != "":
                         try:
-                            item["display_column"] = int(raw_dc)
+                            dc_i = int(raw_dc)
+                            item["tg_display_column"] = dc_i
+                            item["display_column"] = dc_i
+                            if 1 <= dc_i <= 3:
+                                item["pack_display_column"] = dc_i
                         except (TypeError, ValueError):
                             pass
                 if not schedule_semester_matches_term_context(item.get("semester"), ctx):
@@ -1625,31 +1629,38 @@ def list_schedule_rows():
             except Exception:
                 logger.exception("schedule row stage enrichment failed")
             try:
+                from backend.core.schedule_stage_layout import (
+                    LAYOUT_STAGE_MATRIX,
+                    resolve_schedule_layout_mode,
+                )
                 from backend.services import schedule_display_tracks as sdt
 
-                tracks_n = sdt.DEFAULT_TRACK_COUNT
-                try:
-                    from backend.core.department_scope_policy import (
-                        actor_manages_college_general_scope,
-                        resolve_college_general_department_id,
-                    )
-
-                    uname = (session.get("user") or session.get("username") or "").strip()
-                    dept_for_tracks = None
-                    if actor_manages_college_general_scope(conn, uname or None):
-                        dept_for_tracks = resolve_college_general_department_id(conn)
-                    elif dept_id:
-                        dept_for_tracks = int(dept_id)
-                    if dept_for_tracks:
-                        tracks = sdt.list_display_tracks(
-                            conn,
-                            semester=term_part or None,
-                            department_id=int(dept_for_tracks),
+                uname = (session.get("user") or session.get("username") or "").strip()
+                layout_mode = resolve_schedule_layout_mode(conn, uname or None)
+                # مصفوفة المراحل: لا نُعدّل display_column الآلي لأعمدة الاتجاه العام
+                if layout_mode != LAYOUT_STAGE_MATRIX:
+                    tracks_n = sdt.DEFAULT_TRACK_COUNT
+                    try:
+                        from backend.core.department_scope_policy import (
+                            actor_manages_college_general_scope,
+                            resolve_college_general_department_id,
                         )
-                        tracks_n = len(tracks) or sdt.DEFAULT_TRACK_COUNT
-                except Exception:
-                    pass
-                sdt.enrich_schedule_rows_display_columns(conn, result, tracks_n=tracks_n)
+
+                        dept_for_tracks = None
+                        if actor_manages_college_general_scope(conn, uname or None):
+                            dept_for_tracks = resolve_college_general_department_id(conn)
+                        elif dept_id:
+                            dept_for_tracks = int(dept_id)
+                        if dept_for_tracks:
+                            tracks = sdt.list_display_tracks(
+                                conn,
+                                semester=term_part or None,
+                                department_id=int(dept_for_tracks),
+                            )
+                            tracks_n = len(tracks) or sdt.DEFAULT_TRACK_COUNT
+                    except Exception:
+                        pass
+                    sdt.enrich_schedule_rows_display_columns(conn, result, tracks_n=tracks_n)
             except Exception:
                 logger.exception("schedule row display_column enrichment failed")
             try:
@@ -2143,6 +2154,19 @@ def teaching_groups_setup_list():
             if tracks_dept
             else []
         )
+        show_pack_columns = False
+        try:
+            from backend.core.schedule_stage_layout import (
+                LAYOUT_STAGE_MATRIX,
+                resolve_schedule_layout_mode,
+            )
+
+            show_pack_columns = (
+                resolve_schedule_layout_mode(conn, uname or None, department_id=scope)
+                == LAYOUT_STAGE_MATRIX
+            )
+        except Exception:
+            show_pack_columns = False
     needs_setup = sum(1 for o in offerings if o.get("needs_setup"))
     health = "ok"
     if (audit.get("unlinked_count") or 0) > 0 or (reg_audit.get("unlinked_count") or 0) > 0:
@@ -2155,6 +2179,7 @@ def teaching_groups_setup_list():
         "semester": sem or "",
         "offerings": offerings,
         "show_display_tracks": show_tracks,
+        "show_pack_columns": show_pack_columns,
         "display_tracks_department_id": tracks_dept,
         "display_tracks": display_tracks,
         "audit": {
@@ -4054,7 +4079,11 @@ def schedule_print_preview():
                 raw_dc = _cell("tg_display_column", 14, None)
                 if raw_dc is not None and raw_dc != "":
                     try:
-                        item["display_column"] = int(raw_dc)
+                        dc_i = int(raw_dc)
+                        item["tg_display_column"] = dc_i
+                        item["display_column"] = dc_i
+                        if 1 <= dc_i <= 3:
+                            item["pack_display_column"] = dc_i
                     except (TypeError, ValueError):
                         pass
             if not schedule_semester_matches_term_context(item.get("semester"), ctx):
@@ -4080,8 +4109,10 @@ def schedule_print_preview():
         try:
             from backend.services import schedule_display_tracks as sdt
 
-            tracks_n = len(layout.get("display_tracks") or []) or sdt.DEFAULT_TRACK_COUNT
-            sdt.enrich_schedule_rows_display_columns(conn, result, tracks_n=tracks_n)
+            # مصفوفة المراحل تعتمد pack_display_column اليدوي — لا تُعاد كتابته بتوزيع المسارات
+            if not bool(layout.get("use_stage_matrix")):
+                tracks_n = len(layout.get("display_tracks") or []) or sdt.DEFAULT_TRACK_COUNT
+                sdt.enrich_schedule_rows_display_columns(conn, result, tracks_n=tracks_n)
         except Exception:
             logger.exception("print_preview display_column enrichment failed")
         try:
@@ -4113,6 +4144,19 @@ def schedule_print_preview():
                     dept_name = str(dr[0] or "")
             except Exception:
                 dept_name = ""
+        academic_year = ""
+        try:
+            academic_year = str(
+                (ctx or {}).get("ops_year_label")
+                or (ctx or {}).get("academic_year")
+                or ""
+            ).strip()
+        except Exception:
+            academic_year = ""
+        if not academic_year and term_label:
+            from backend.services.term_engine import normalize_academic_year
+
+            academic_year = normalize_academic_year(term_label) or ""
 
     return render_template(
         "schedule_print_preview.html",
@@ -4122,7 +4166,10 @@ def schedule_print_preview():
         use_display_tracks=use_display_tracks,
         display_tracks=display_tracks,
         term_label=term_label,
+        academic_year=academic_year,
         department_name=dept_name,
+        university_name_ar="جامعة درنة",
+        college_name_ar="كلية الهندسة",
         generated_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
     )
 
@@ -4456,6 +4503,16 @@ def _load_enriched_schedule_rows_for_export(conn) -> dict:
             item["department_id"] = _cell("department_id", 10)
             item["group_code"] = gcode
             item["group_code_label"] = tg_svc.group_code_label(gcode)
+            raw_dc = _cell("tg_display_column", 14, None)
+            if raw_dc is not None and raw_dc != "":
+                try:
+                    dc_i = int(raw_dc)
+                    item["tg_display_column"] = dc_i
+                    item["display_column"] = dc_i
+                    if 1 <= dc_i <= 3:
+                        item["pack_display_column"] = dc_i
+                except (TypeError, ValueError):
+                    pass
         if not schedule_semester_matches_term_context(item.get("semester"), ctx):
             continue
         result.append(item)
@@ -4527,13 +4584,15 @@ def _build_stage_matrix_excel_bytes(
         PACK_COLUMN_LABEL,
         PACK_COLUMNS,
         assign_pack_display_columns,
+        build_sticky_pack_map,
     )
 
     days_order = _days_ar()
     day_rank = {d: i for i, d in enumerate(days_order)}
-    # day -> time -> [rows] ثم تعبئة أعمدة متوازنة
+    # day -> time -> [rows] ثم تعبئة أعمدة متوازنة (تثبيت مقرر → عمود)
     slot_rows: dict[str, dict[str, list]] = {}
     times_seen: set[str] = set()
+    normalized_rows: list[dict] = []
     for r in rows or []:
         day = _canonical_schedule_day_label(str(r.get("day") or "").strip())
         time = _canonical_time_slot_label(str(r.get("time") or "").strip())
@@ -4541,6 +4600,15 @@ def _build_stage_matrix_excel_bytes(
             continue
         times_seen.add(time)
         slot_rows.setdefault(day, {}).setdefault(time, []).append(r)
+        normalized_rows.append(r)
+    # ضمان تطابق مفتاح اليوم بين sticky والتعبئة
+    sticky_rows: list[dict] = []
+    for r in normalized_rows:
+        item = dict(r)
+        item["day"] = _canonical_schedule_day_label(str(item.get("day") or "").strip())
+        item["time"] = _canonical_time_slot_label(str(item.get("time") or "").strip())
+        sticky_rows.append(item)
+    sticky_map = build_sticky_pack_map(sticky_rows, column_count=len(PACK_COLUMNS))
 
     times_ordered = sorted(times_seen, key=_time_slot_sort_key)
     data_rows: list[tuple[str, str]] = []
@@ -4598,10 +4666,9 @@ def _build_stage_matrix_excel_bytes(
         {"align": "center", "valign": "top", "border": 1, "text_wrap": True, "font_size": 10}
     )
 
-    ws.write(0, 0, "الجدول الدراسي", fmt_title)
-    meta_bits = []
-    if department_name:
-        meta_bits.append(f"القسم: {department_name}")
+    dept = (department_name or "").strip() or "—"
+    ws.write(0, 0, f"جامعة درنة — كلية الهندسة — {dept}", fmt_title)
+    meta_bits = ["جدول دراسي"]
     if term_label:
         meta_bits.append(f"الفصل: {term_label}")
     meta_bits.append(f"تاريخ التصدير: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
@@ -4629,7 +4696,11 @@ def _build_stage_matrix_excel_bytes(
     last_day = None
     day_start = r
     for day, time in data_rows:
-        packed = assign_pack_display_columns(slot_rows.get(day, {}).get(time) or [])
+        packed = assign_pack_display_columns(
+            slot_rows.get(day, {}).get(time) or [],
+            sticky_map=sticky_map,
+            day=day,
+        )
         if day != last_day:
             if last_day is not None and r - 1 > day_start:
                 try:

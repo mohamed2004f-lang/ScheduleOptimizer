@@ -2,7 +2,7 @@
  * راسمات الجدول الجديدة:
  * - أسبوع شخصي: يوم | وقت | مقرر | أستاذ | قاعة (ما لديه فقط)
  * - مصفوفة أقسام علمية: يوم | وقت | 3 أعمدة تعبئة × (مقرر|أستاذ|قاعة)
- *   التوزيع: اتجاه عام أولاً ثم أقل رمز → العمود الأقل ازدحاماً
+ *   التوزيع: عمود مفضّل حسب المرحلة + RR داخل اليوم لنفس المرحلة + تفريغ الصف
  */
 (function (global) {
   'use strict';
@@ -49,13 +49,48 @@
     return String(day || '').trim();
   }
 
+  function inferLevelFromCourseCodeLocal(courseCode) {
+    const code = String(courseCode || '').trim().toUpperCase();
+    if (!code) return 0;
+    if (typeof global.inferLevelFromCourseCode === 'function') {
+      return Number(global.inferLevelFromCourseCode(code) || 0) || 0;
+    }
+    const m = code.match(/\d+/);
+    if (!m) return 0;
+    return parseInt(String(m[0])[0], 10) || 0;
+  }
+
+  function manualPackPreferIndex(row, columnCount) {
+    const n = Math.max(1, Number(columnCount) || 3);
+    const keys = ['pack_display_column', 'display_column', 'tg_display_column'];
+    for (let i = 0; i < keys.length; i++) {
+      const raw = row && row[keys[i]];
+      if (raw === null || raw === undefined || raw === '') continue;
+      const idx = Number(raw);
+      if (Number.isFinite(idx) && idx >= 1 && idx <= n) return Math.floor(idx);
+    }
+    return null;
+  }
+
+  function stagePackPreferIndex(row) {
+    const manual = manualPackPreferIndex(row, 3);
+    if (manual != null) return manual;
+    if (row && row.is_college_general) return 1;
+    const level = inferLevelFromCourseCodeLocal((row && row.course_code) || '');
+    if (level <= 1) return 1;
+    if (level <= 3) return 2;
+    return 3;
+  }
+
   function coursePackSortKey(row) {
+    const manual = manualPackPreferIndex(row, 3) != null ? 0 : 1;
+    const prefer = stagePackPreferIndex(row);
     const isGen = row && row.is_college_general ? 0 : 1;
     const code = String((row && row.course_code) || '').trim().toUpperCase();
     const m = code.match(/\d+/);
     const num = m ? parseInt(m[0], 10) : 1e9;
     const name = String((row && row.course_name) || '').trim().toLowerCase();
-    return [isGen, num, code, name];
+    return [manual, prefer, isGen, num, code, name];
   }
 
   function comparePackSortKeys(a, b) {
@@ -68,21 +103,115 @@
     return 0;
   }
 
+  function coursePackIdentity(row) {
+    const code = String((row && row.course_code) || '').trim().toUpperCase();
+    const name = String((row && row.course_name) || '').trim().toLowerCase();
+    const group = String(
+      (row && (row.group_code || row.group_code_label || row.teaching_group_id)) || ''
+    ).trim().toUpperCase();
+    if (code || name) return `${code}|${name}|${group}`;
+    const sid = (row && (row.section_id || row.id)) || '';
+    return `sid:${sid}`;
+  }
+
+  function stickyPackLookupKey(day, row) {
+    const d = canonicalDay(day || (row && row.day) || '');
+    return `${d}|${coursePackIdentity(row)}`;
+  }
+
   /**
-   * توزيع مقررات نفس الفترة على 3 أعمدة: عام/أقل رمز أولاً → الأقل ازدحاماً (تعادل → عمود أصغر).
+   * تثبيت عمود لكل مقرر داخل اليوم: بداية من عمود المرحلة + RR لنفس المرحلة.
+   * المفتاح: يوم|هوية → pack_N
+   */
+  function buildStickyPackMap(rows, columnCount) {
+    const n = Math.max(1, Number(columnCount) || 3);
+    const byDay = {};
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+      const day = canonicalDay((row && row.day) || '');
+      if (!day) return;
+      if (!byDay[day]) byDay[day] = [];
+      byDay[day].push(row);
+    });
+    const out = {};
+    Object.keys(byDay).forEach((day) => {
+      const reps = {};
+      byDay[day].forEach((row) => {
+        const kid = coursePackIdentity(row);
+        if (!reps[kid]) reps[kid] = row;
+      });
+      const autoKids = [];
+      Object.keys(reps)
+        .sort((a, b) => comparePackSortKeys(reps[a], reps[b]))
+        .forEach((kid) => {
+          const manual = manualPackPreferIndex(reps[kid], n);
+          if (manual != null) {
+            out[`${day}|${kid}`] = `pack_${manual}`;
+          } else {
+            autoKids.push(kid);
+          }
+        });
+      const byRank = { 1: [], 2: [], 3: [] };
+      autoKids.forEach((kid) => {
+        const rank = stagePackPreferIndex(reps[kid]);
+        if (!byRank[rank]) byRank[rank] = [];
+        byRank[rank].push(kid);
+      });
+      Object.keys(byRank).forEach((rankKey) => {
+        const rank = Number(rankKey) || 1;
+        const kids = byRank[rank] || [];
+        const start = ((rank - 1) % n) + 1;
+        kids.forEach((kid, i) => {
+          const col = ((start - 1 + i) % n) + 1;
+          out[`${day}|${kid}`] = `pack_${col}`;
+        });
+      });
+    });
+    return out;
+  }
+
+  /**
+   * توزيع مقررات نفس الفترة: مفضّل sticky/مرحلة → تفريغ دائري → تكديس عند الامتلاء.
    * @returns {{ pack_1: Array, pack_2: Array, pack_3: Array }}
    */
-  function assignPackDisplayColumns(courses) {
+  function assignPackDisplayColumns(courses, stickyMap, day) {
+    const n = 3;
     const cols = { pack_1: [], pack_2: [], pack_3: [] };
+    const sticky = stickyMap && typeof stickyMap === 'object' ? stickyMap : null;
     const ordered = (Array.isArray(courses) ? courses.slice() : []).sort(comparePackSortKeys);
+
+    function preferIndex(row) {
+      if (sticky) {
+        const key = stickyPackLookupKey(day, row);
+        const pref = sticky[key] || sticky[coursePackIdentity(row)];
+        if (typeof pref === 'string' && pref.indexOf('pack_') === 0) {
+          const idx = parseInt(pref.split('_')[1], 10);
+          if (idx >= 1 && idx <= n) return idx;
+        }
+      }
+      return stagePackPreferIndex(row);
+    }
+
     ordered.forEach((row) => {
+      const prefer = preferIndex(row);
+      let placed = false;
+      for (let offset = 0; offset < n; offset++) {
+        const idx = ((prefer - 1 + offset) % n) + 1;
+        const cid = `pack_${idx}`;
+        if (!cols[cid].length) {
+          cols[cid].push(row);
+          placed = true;
+          break;
+        }
+      }
+      if (placed) return;
       let best = 1;
-      let bestLen = cols.pack_1.length;
-      for (let i = 2; i <= 3; i++) {
+      for (let i = 2; i <= n; i++) {
         const len = cols[`pack_${i}`].length;
-        if (len < bestLen) {
+        const bestLen = cols[`pack_${best}`].length;
+        const dist = (i - prefer + n) % n;
+        const bestDist = (best - prefer + n) % n;
+        if (len < bestLen || (len === bestLen && (dist < bestDist || (dist === bestDist && i < best)))) {
           best = i;
-          bestLen = len;
         }
       }
       cols[`pack_${best}`].push(row);
@@ -639,6 +768,7 @@
     const isPrint = !!opts.printMode;
     const stageOpts = Object.assign({}, opts, { stacked: false, plainCourses: true });
     const tableExtra = isPrint ? ' timetable--stages-print' : ' timetable--stages-ruled';
+    const stickyMap = buildStickyPackMap(rows, BUCKETS.length);
 
     // colgroup ضروري: صف الترويسة الأول بـ colspan يساوي عرض المقرر/الأستاذ/القاعة
     let html =
@@ -682,7 +812,7 @@
       html += `<tr class="${rowClass}">`;
       html += dayHeaderCellHtml(day, stageOpts, isStart ? 'start' : 'cont');
       html += timeCellHtml(day, time, stageOpts);
-      const packed = assignPackDisplayColumns(slotsMap[`${day}|${time}`] || []);
+      const packed = assignPackDisplayColumns(slotsMap[`${day}|${time}`] || [], stickyMap, day);
       BUCKETS.forEach((b) => {
         html += renderBucketThreeTds(packed[b.id] || [], day, time, b.id, stageOpts);
       });
@@ -863,4 +993,8 @@
   global.balanceEarlyStageLanes = balanceEarlyStageLanes;
   global.earlyLaneFromGroupCode = earlyLaneFromGroupCode;
   global.assignPackDisplayColumns = assignPackDisplayColumns;
+  global.buildStickyPackMap = buildStickyPackMap;
+  global.coursePackIdentity = coursePackIdentity;
+  global.stagePackPreferIndex = stagePackPreferIndex;
+  global.manualPackPreferIndex = manualPackPreferIndex;
 })(typeof window !== 'undefined' ? window : globalThis);
